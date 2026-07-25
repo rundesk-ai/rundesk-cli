@@ -9,8 +9,7 @@ the parts are and how something moves through them. Follow a link to learn what 
 ## What this is
 
 `rundesk` is the command a person uses to run a small team of AI assistants on their own computer and
-reach them from a chat app. This is its Python rewrite. Today it does the two parts that come before
-everything else: putting itself on your machine and keeping itself current, and running the long-lived
+reach them from a chat app. Today it does the two parts that come before everything else: putting itself on your machine and keeping itself current, and running the long-lived
 process the assistants will work inside — starting it, keeping it up, telling you what it is doing, and
 ending everything it started when it goes. The assistants themselves are not here yet. It is a
 self-hosted tool, not something sold; there is no revenue model.

@@ -6,20 +6,19 @@ screen, stable, PII-free.*
 ## Story
 
 `rundesk` is the command line for a lightweight, provider-agnostic multi-agent gateway: a person runs a
-small team of AI coding agents on their own machine and talks to them from a chat app. This repository is
-the **standard-library Python rewrite of that command**, built from the outside in. Two layers are here:
-this copy of rundesk on a machine, and the **gateway** — the long-lived process an agent will work inside,
-one per name, kept up by the machine itself and owning every program it starts. The agents are not here
-yet; the verbs that will reach them are registered and say so plainly until they land.
+small team of AI coding agents on their own machine and talks to them from a chat app. It is **standard
+library Python**, and it is built from the outside in. Two layers are here: this copy of rundesk on a
+machine, and the **gateway** — the long-lived process an agent will work inside, one per name, kept up by
+the machine itself and owning every program it starts. The agents are not here yet; the verbs that will
+reach them are registered and say so plainly until they land.
 
 ## Why it exists
 
-The original command is TypeScript on Node, and Node was the only thing it made a user install: the agent
-brains it drives are native binaries, so nothing else on the machine needed a runtime. Python is already on
-every Mac, needs no build step and no package manager, which turns installing into downloading a file and
-putting it on a PATH.
+The agent brains rundesk drives are native binaries, so nothing on the machine needs a runtime of its own.
+Python is already on every Mac, needs no build step and no package manager, which turns installing into
+downloading a file and putting it on a PATH — no toolchain, and nothing for a person to set up first.
 
-The rewrite goes outside in because each layer has to be trustworthy before the next can rest on it.
+Building goes outside in because each layer has to be trustworthy before the next can rest on it.
 Install, update and uninstall came first: that is what a person meets. The gateway came next, because an
 agent is a program that runs for hours and spawns programs of its own — so what owns it, what ends it, and
 what happens when the machine takes it away have to be settled before there is anything to own. rundesk

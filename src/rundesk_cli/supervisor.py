@@ -232,10 +232,11 @@ def stop(name: str, where: str | None = None, root: Path | None = None,
 def ours(path: Path, root: Path | None = None) -> bool:
     """Is this job one *this install* wrote?
 
-    A job named like ours is not necessarily ours. The command this rewrite replaces
-    uses the same names for its own jobs, and they are on the same machines — so a job
-    is ours only if it runs the command that lives in this install. Getting this wrong
-    means `rundesk stop` standing down somebody else's live agents.
+    A job named like ours is not necessarily ours. Anything else that names its jobs the
+    same way — another install of rundesk, or another tool entirely — puts them in the
+    same directory, so a job is ours only if it runs the command that lives in *this*
+    install. Getting this wrong means `rundesk stop` standing down somebody else's live
+    agents.
     """
     try:
         with open(path, "rb") as file:
