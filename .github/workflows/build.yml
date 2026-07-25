@@ -6,20 +6,46 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} · python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The floor: the oldest Python a fresh macOS ships. If this breaks, someone who has
+          # installed nothing cannot run rundesk, which is the whole reason it is Python.
+          - { os: ubuntu-latest, python: '3.9' }
+          # A current one, because most people have installed something newer.
+          - { os: ubuntu-latest, python: '3.13' }
+          # The platform this is actually for.
+          - { os: macos-latest, python: '3.13' }
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.9'   # the oldest Python a fresh macOS ships
+          python-version: ${{ matrix.python }}
 
+      # ---------------------------------------------------------------- it is all valid
       - name: Everything parses
-        run: |
-          python -c "import ast, glob; [ast.parse(open(f).read()) for f in glob.glob('src/rundesk_cli/*.py') + glob.glob('tests/*.py')]; print('parse OK')"
+        run: python -c "import ast, glob; [ast.parse(open(f).read()) for f in glob.glob('src/rundesk_cli/*.py') + glob.glob('tests/*.py')]; print('parse OK')"
 
       - name: The installer is valid shell
         run: bash -n install.sh
 
+      # ---------------------------------------------------------------- the knowledge base
+      - name: The docs are valid
+        run: python .knowledge/scripts/doc-lint .knowledge
+
+      - name: The doc linter has teeth
+        # Shipped with the knowledge system: it proves the linter fails on what it claims to
+        # catch. A linter nobody tests is a green tick that means nothing.
+        run: python .knowledge/scripts/test_doc_lint.py
+
+      - name: Every proven requirement names a test that exists
+        run: python .knowledge/scripts/check-evidence
+
+      # ---------------------------------------------------------------- the code
       - name: The command surface
         run: python tests/test_cli.py
 
@@ -29,13 +55,46 @@ jobs:
       - name: Putting it on a machine, and taking it off
         run: python tests/test_install.py
 
-      - name: The docs are valid
-        run: python .knowledge/scripts/doc-lint .knowledge
-
-      - name: Every proven requirement names a test that exists
-        run: python .knowledge/scripts/check-evidence
-
-      - name: The command answers when installed
+      # ---------------------------------------------------------------- the real thing
+      - name: A real install leaves a working command
         run: |
-          RUNDESK_BIN_DIR="$HOME/.local/bin" ./install.sh
-          "$HOME/.local/bin/rundesk" version
+          set -euo pipefail
+          export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
+          ./install.sh
+          "$RUNDESK_BIN_DIR/rundesk" version
+          if "$RUNDESK_BIN_DIR/rundesk" start agent-x; then
+            echo "::error::a command that is not built reported success"; exit 1
+          fi
+
+      - name: Everything rundesk needs came with it
+        # The guarantee an install makes: nothing is left for a person to put in place. If
+        # anything is declared, it is installed, it fits together, and it can be imported.
+        run: |
+          set -euo pipefail
+          if grep -qvE '^[[:space:]]*(#|$)' requirements.txt; then
+            test -d .venv || { echo "::error::requirements are declared but no virtualenv was made"; exit 1; }
+            .venv/bin/python -m pip check
+            .venv/bin/python - <<'IMPORTS'
+          import pathlib, re, importlib
+          for line in pathlib.Path("requirements.txt").read_text().splitlines():
+              line = line.split("#")[0].strip()
+              if not line:
+                  continue
+              name = re.split(r"[=<>!\[ ]", line)[0]
+              module = {"discord.py": "discord"}.get(name, name.replace("-", "_"))
+              importlib.import_module(module)
+              print(f"{name} -> import {module} works")
+          IMPORTS
+          else
+            test ! -d .venv || { echo "::error::a virtualenv was made for no declared requirements"; exit 1; }
+            echo "nothing declared, and nothing installed — as intended"
+          fi
+
+      - name: Uninstalling leaves nothing behind
+        run: |
+          set -euo pipefail
+          export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
+          ./install.sh --uninstall
+          test ! -e "$RUNDESK_BIN_DIR/rundesk" || { echo "::error::the command is still on the PATH"; exit 1; }
+          test ! -d .venv || { echo "::error::what the install put in place was left behind"; exit 1; }
+          test -f rundesk || { echo "::error::uninstalling deleted the checkout"; exit 1; }

@@ -124,11 +124,17 @@ python3 tests/test_updater.py                      # version, update, and their 
 python3 tests/test_install.py                      # putting it on a machine, and taking it off
 bash -n install.sh                                 # the installer is valid shell
 python3 .knowledge/scripts/doc-lint .knowledge     # the docs are valid
+python3 .knowledge/scripts/test_doc_lint.py        # …and the doc linter has teeth
 python3 .knowledge/scripts/check-evidence          # every ✅ names a test that exists
 ```
 
-**The gate:** all seven. `check-evidence` is not optional — `doc-lint` cannot tell whether a cited test
-is real, and this repo has already shipped four contracts citing tests copied from another repository.
+**The gate:** all eight, then a real `./install.sh` and `./install.sh --uninstall`. `check-evidence` is not
+optional — `doc-lint` cannot tell whether a cited test is real, and this repo has already shipped four
+contracts citing tests copied from another repository.
+
+CI runs the same list on the oldest Python a fresh macOS ships and on a current one, on Linux and on
+macOS, and finishes by installing for real: the command answers, everything declared is present and
+importable, and uninstalling leaves nothing but the checkout.
 
 ## Documentation duties
 
