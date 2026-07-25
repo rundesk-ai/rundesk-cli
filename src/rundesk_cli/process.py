@@ -98,6 +98,16 @@ POLL_SECONDS = 1.0
 #: the durable record is a concern of its own, and not this module's.
 RETAINED_LINES = 200
 
+#: The most a retained tail may hold, whatever the count (R-PROC-12). Counting items
+#: bounds nothing when one item may be megabytes: two hundred records at the record cap
+#: is most of a gigabyte, per stream, for one conversation.
+TAIL_BYTES = 256 * 1024
+
+#: What one held record costs before its own bytes are counted (R-PROC-12). Without it a
+#: receiver that has stopped reading can be handed any number of empty records — or gaps,
+#: which have no bytes at all — and the bound never notices.
+HELD_OVERHEAD = 64
+
 #: The most one record of structured output may be before it is dropped rather than
 #: passed on in pieces (R-PROC-18). Counted in bytes, which is what is actually held —
 #: unlike `MAX_LINE_CHARS`, whose characters may be several times as many bytes.
@@ -204,28 +214,42 @@ class Held:
     def lost(self) -> int:
         return self._lost
 
+    @staticmethod
+    def _weight(one) -> int:
+        """What holding this costs. Never nothing, or a bound counts to infinity."""
+        return HELD_OVERHEAD + (0 if isinstance(one, Gap) else len(one))
+
     def offer(self, record: bytes) -> None:
         """Take this, whatever state the receiver is in. Never waits, never raises."""
         self._waiting.append(record)
-        self._bytes += len(record)
+        self._bytes += self._weight(record)
         self._arrived.set()
         dropped = 0
         # Never the one just offered: a bound smaller than a single record would
         # otherwise drop everything and deliver nothing at all.
+        merged = 0
         while self._bytes > self._held and len(self._waiting) > 1:
             went = self._waiting.popleft()
+            self._bytes -= self._weight(went)
             if isinstance(went, Gap):
-                dropped += went.records  # gaps merge rather than pile up
+                merged += went.records  # gaps merge rather than pile up
                 continue
-            self._bytes -= len(went)
             dropped += 1
-        if dropped:
-            self._waiting.appendleft(Gap(dropped, "fell behind"))
+        if dropped or merged:
+            self._waiting.appendleft(Gap(dropped + merged, "fell behind"))
+            self._bytes += self._weight(self._waiting[0])
+            # Only what was lost *now*. A merged gap was counted when it was made, and
+            # counting it again turned eight lost records into thirty-six.
             self._lost += dropped
+
+    def waiting(self) -> int:
+        """How many records are still held, undelivered."""
+        return sum(1 for one in self._waiting if not isinstance(one, Gap))
 
     def lose(self, records: int, why: str) -> None:
         """Say that records were lost here, without ever having held them."""
         self._waiting.append(Gap(records, why))
+        self._bytes += self._weight(self._waiting[-1])
         self._lost += records
         self._arrived.set()
 
@@ -238,8 +262,7 @@ class Held:
         while True:
             if self._waiting:
                 it = self._waiting.popleft()
-                if not isinstance(it, Gap):
-                    self._bytes -= len(it)
+                self._bytes -= self._weight(it)
                 if not self._waiting:
                     self._arrived.clear()
                 return it
@@ -265,6 +288,7 @@ class _Lines:
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self._pending = ""
         self._tail: deque = deque(maxlen=RETAINED_LINES)
+        self._held_bytes = 0
 
     def feed(self, chunk: bytes) -> None:
         self._pending += self._decoder.decode(chunk)
@@ -284,8 +308,19 @@ class _Lines:
             self._emit(self._pending)
             self._pending = ""
 
+    def _keep(self, one) -> None:
+        """Hold this for the diagnosis tail, and let the oldest go once it is too much.
+
+        Bounded in bytes as well as in count (R-PROC-12): two hundred of anything says
+        nothing about how much that is, and one thing a program says may be megabytes.
+        """
+        self._tail.append(one)
+        self._held_bytes += len(one)
+        while self._held_bytes > TAIL_BYTES and len(self._tail) > 1:
+            self._held_bytes -= len(self._tail.popleft())
+
     def _emit(self, line: str) -> None:
-        self._tail.append(line)
+        self._keep(line)
         if self._on_line is not None:
             # Allowed to raise, and the loop above takes the program with it. A receiver
             # that cannot cope with what it is being handed is a reason to stop, for
@@ -317,6 +352,7 @@ class _Records:
         self._pending = bytearray()
         self._skipping = False
         self._tail: deque = deque(maxlen=RETAINED_LINES)
+        self._held_bytes = 0
 
     def feed(self, chunk: bytes) -> None:
         self._pending += chunk
@@ -353,10 +389,12 @@ class _Records:
         self._pending.clear()
         self._skipping = False
 
+    _keep = _Lines._keep
+
     def _emit(self, record: bytes) -> None:
         if record.endswith(b"\r"):
             record = record[:-1]  # exactly one, and only at the end: the rest is data
-        self._tail.append(record)
+        self._keep(record)
         self._held.offer(record)
 
     @property
@@ -401,6 +439,8 @@ class Program:
     _ended: bool = field(default=False, repr=False, init=False)
     _writable: bool = field(default=True, repr=False, init=False)
     _refused: int = field(default=0, repr=False, init=False)
+    _undelivered: int = field(default=0, repr=False, init=False)
+    _heard: float = field(default=0.0, repr=False, init=False)
     #: What it said went wrong, when that is kept apart. Read rather than handed over:
     #: nothing parses it, and it is where a provider says why it died.
     _errors: object = field(default=None, repr=False, init=False)
@@ -422,6 +462,17 @@ class Program:
     def refused(self) -> int:
         """How many records the receiver failed on. Its failing is not the program's."""
         return self._refused
+
+    @property
+    def undelivered(self) -> int:
+        """How many records were never handed over at all (R-PROC-17).
+
+        Separate from `refused`, which is a receiver that was handed one and could not
+        cope. This is the drain running out before a slow receiver had taken everything —
+        and it used to be silent, so a run that lost forty-nine of fifty records still
+        reported that it had finished.
+        """
+        return self._undelivered
 
     async def start(self) -> None:
         if not self.argv:
@@ -488,6 +539,10 @@ class Program:
         went_silent = False
         overran = False
         began = time.monotonic()
+        # Measured from the last thing it said on *either* stream (R-PROC-7). Counted on
+        # stdout alone, a provider working steadily and reporting only diagnostics goes
+        # quiet by this measure while it is plainly busy, and is ended for it.
+        self._heard = time.monotonic()
         # Started before anything is read, and run whatever the receiver is doing: this
         # is what keeps the streams we are not framing from filling up (R-PROC-16).
         beside = []
@@ -501,7 +556,6 @@ class Program:
         # work: that only resolves once every pipe is closed too, and anything the
         # program left running is holding one — the exit would land hours late, or never.
         reader: asyncio.Future | None = None
-        quiet_for = 0.0
         drained_by: float | None = None
         try:
             while True:
@@ -536,13 +590,12 @@ class Program:
                     reader = None
                     if not chunk:
                         break  # the pipe closed: nothing holds it and nothing is coming
-                    quiet_for = 0.0  # measured per stretch, never summed (R-PROC-6)
+                    self._heard = time.monotonic()  # per stretch, never summed (R-PROC-6)
                     frame.feed(chunk)
                     continue
                 if gone:
                     break  # drained as far as it will drain — something it left holds the pipe
-                quiet_for += spell
-                if self.silence is not None and quiet_for >= self.silence:
+                if self.silence is not None and time.monotonic() - self._heard >= self.silence:
                     went_silent = True
                     break
         except BaseException:
@@ -611,6 +664,10 @@ class Program:
                 with contextlib.suppress(BaseException):
                     await one
         beside.clear()
+        if held is not None:
+            # What the receiver never got. Said rather than discarded: a drain that ran
+            # out of patience is a real answer, and one nobody was being given.
+            self._undelivered += held.waiting()
 
     async def _became(self, output: str, overran: bool, went_silent: bool) -> Result:
         """Reap it, take what it left running, and say what became of it.
@@ -644,6 +701,7 @@ class Program:
             chunk = await self._proc.stderr.read(READ_BYTES)
             if not chunk:
                 break
+            self._heard = time.monotonic()
             frame.feed(chunk)
         frame.finish()
 
@@ -667,6 +725,10 @@ class Program:
                     # without awaiting it and without a word.
                     await said
             except asyncio.CancelledError:
+                # Taken off the queue and never finished with. Counted here or it is
+                # accounted for nowhere: the queue no longer holds it, and the receiver
+                # never saw the end of it.
+                self._undelivered += 1
                 raise
             except BaseException:
                 # A receiver that fails is not a reason to end the program. It may still

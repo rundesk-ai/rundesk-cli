@@ -72,6 +72,10 @@ class NotOurs(Exception):
     """A job named like one of ours, which this install did not write."""
 
 
+class Unsure(Exception):
+    """The machine did not answer, so what it holds is unknown rather than absent."""
+
+
 @dataclass
 class Spoke:
     """What the machine said when it was asked to do something."""
@@ -184,17 +188,36 @@ def loaded(name: str, asking: Callable[..., Spoke] = ask) -> bool:
     job is taken away without the file going with it, and reporting the file as though
     it were the job tells an owner their gateway is looked after when nothing is.
     """
-    return asking("print", f"{domain()}/{label(name)}").ok
+    said = asking("print", f"{domain()}/{label(name)}")
+    if not said.answered:
+        # Silence is not "there is no such job". Read that way, a busy machine turns a
+        # supervised gateway into one that looks hand-started — and whatever is deciding
+        # on that basis decides wrongly. Raised, so nothing quietly guesses.
+        raise Unsure(f"the machine did not say whether it holds the job for '{name}'")
+    return said.ok
+
+
+def _still_holds(name: str, asking: Callable[..., Spoke]) -> bool:
+    """Does the machine still hold this job? Silence counts as *yes*.
+
+    The safe way round: acting on "it is gone" while the machine has not said so is what
+    deletes a description of a job that is still running. Waiting longer than necessary
+    costs a few seconds.
+    """
+    try:
+        return loaded(name, asking)
+    except Unsure:
+        return True
 
 
 def _gone_from(name: str, asking: Callable[..., Spoke], patience: float = SETTLE_SECONDS) -> bool:
-    """Wait for the machine to finish taking a job away."""
+    """Wait for the machine to finish taking a job away, and say whether it did."""
     deadline = time.monotonic() + patience
     while time.monotonic() < deadline:
-        if not loaded(name, asking):
+        if not _still_holds(name, asking):
             return True
         time.sleep(0.2)
-    return not loaded(name, asking)
+    return not _still_holds(name, asking)
 
 
 def install(
@@ -246,10 +269,10 @@ def _let_go(name: str, said: Spoke, asking: Callable[..., Spoke] = ask) -> bool:
     Silence is the third, and it is *not* the second: a machine too busy to answer has
     told us nothing at all.
     """
-    if said.ok:
-        return True
-    answer = asking("print", f"{domain()}/{label(name)}")
-    return answer.answered and not answer.ok
+    # An accepted bootout is a request taken, not a job released — launchd finishes in
+    # its own time, and the plist was being deleted while it still held the job. So the
+    # machine is asked, either way, until it says the job is gone.
+    return _gone_from(name, asking)
 
 
 def _only_ours(name: str, where: str | None = None, root: Path | None = None) -> None:

@@ -911,7 +911,7 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
         Machine.asked = []
         return Machine()
 
-    def _gateways(self, standing, gone_after_stop=True, comes_up=True):
+    def _gateways(self, standing, gone_after_stop=True, comes_up=True, working=()):
         outer = self
 
         class Gateways:
@@ -924,6 +924,9 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
                         return outer.Standing(name, running=not gone_after_stop) \
                             if gone_after_stop else it
                 return outer.Standing(name, running=False)
+
+            def what_is_running(self, name):
+                return list(working)
 
             def fitness(self, root=None):
                 return None
@@ -963,6 +966,17 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
         stopped, refused = cli._stand_all_down(self._gateways([self.Standing("alpha")]), machine)
         self.assertEqual([], stopped)
         self.assertIn("would not stop", refused)
+
+    def test_work_begun_while_the_update_was_starting_is_not_taken_down(self):
+        """R-UPD-23 — what is in flight is asked once, before any of this. A turn that
+        began between that answer and this moment would be killed by the very stop that
+        exists to protect it, so it is asked again with nothing left in between."""
+        machine = self._machine(loaded=("alpha",))
+        stopped, refused = cli._stand_all_down(
+            self._gateways([self.Standing("alpha")], working=("a-turn",)), machine)
+        self.assertEqual([], stopped)
+        self.assertIn("began work", refused)
+        self.assertEqual([], machine.asked, "it stopped a gateway that had just taken work")
 
     def test_a_gateway_that_does_not_come_back_is_reported_rather_than_passed_over(self):
         """R-UPD-22 — a release needing something this install does not have starts a

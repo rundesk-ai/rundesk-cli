@@ -452,7 +452,15 @@ def _sweep_predecessor(record: Path, log: logging.Logger, noting=None) -> list[s
             time.sleep(ORPHAN_GRACE_SECONDS)
             if not _still_there(pgid):
                 break
-        said(name, "the gateway it was running under is gone", pgid, not _still_there(pgid))
+        gone = not _still_there(pgid)
+        said(name, "the gateway it was running under is gone", pgid, gone)
+        if not gone:
+            # Asked of the machine, not assumed from having signalled. A signal that
+            # could not be sent used to break out of the escalation and still count as
+            # ended — so a successor reported an orphan swept, and then wrote its own
+            # record over the only thing that named the group still running.
+            log.error("could not end '%s' (group %s) — it is still out there", name, pgid)
+            continue
         swept.append(name)
     return swept
 
@@ -950,6 +958,11 @@ class Gateway:
             # is where a program says why it died, so it goes where anything else worth
             # explaining in the morning goes (R-GW-18).
             self.log.warning("'%s' also said: %s", held, program.errors[-600:])
+        if program.undelivered:
+            # The receiver never got these at all. Distinct from refusing them, and the
+            # difference decides whether what it did receive can be made sense of.
+            self.log.warning("'%s': the receiver never got %d record(s)",
+                             held, program.undelivered)
         if program.refused:
             # The receiver's trouble, not the program's (R-PROC-17) — but a receiver
             # silently dropping everything it was handed looks exactly like a program
@@ -1104,7 +1117,16 @@ class Gateway:
             # a crash between starting and finishing, and a supervisor that brings the
             # gateway back within seconds, ran the same schedule twice for the one
             # minute it was due (R-SCH-9).
-            self._remember(one.name, "started", fired)
+            #
+            # And *only* if it was written down. Starting anyway leaves work that has
+            # visibly happened with nothing durable saying it did, so the same
+            # side-effecting run repeats on the way back up — which is the very thing
+            # writing it first is for.
+            if not self._remember(one.name, "started", fired):
+                self.log.error("schedule '%s' was not started: its firing could not be "
+                               "written down, and a run nothing records may happen twice",
+                               one.name)
+                continue
             asyncio.ensure_future(self._run_scheduled(one, fired))
 
     async def _run_scheduled(self, one, fired: datetime) -> None:
@@ -1175,13 +1197,21 @@ class Gateway:
         gateway restarting then read that later minute as the last one to have fired —
         so every schedule due in between was passed over as already done.
         """
-        self._outcomes[name] = {
-            "at": (at or datetime.now()).strftime(schedule.A_MINUTE), "outcome": outcome,
-        }
+        minute = (at or datetime.now()).strftime(schedule.A_MINUTE)
+        # Never backwards. A long run finishing after a later occurrence was already
+        # recorded would otherwise put the earlier minute back, and a gateway reading it
+        # on the way up would take that later minute for one that had never fired —
+        # and run it again (R-SCH-9).
+        was = self._outcomes.get(name, {}).get("at")
+        if isinstance(was, str) and was > minute:
+            minute, outcome = was, f"{outcome} (for {(at or datetime.now()).strftime(schedule.A_MINUTE)})"
+        self._outcomes[name] = {"at": minute, "outcome": outcome}
         try:
             _written_whole(ran_path(self.name, self.schedules), json.dumps(self._outcomes, indent=2))
         except OSError as why:
             self.log.warning("could not write down what '%s' did: %s", name, why)
+            return False
+        return True
 
     def _say(self) -> None:
         """Update the record, and never let failing to do so stop the work.

@@ -159,7 +159,20 @@ def _stand_all_down(gateways, machine) -> tuple:
     for it in gateways.every():
         if not it.running:
             continue
-        if not machine.loaded(it.name):
+        try:
+            kept = machine.loaded(it.name)
+        except machine.Unsure:
+            # The machine did not answer. Not knowing whether we could start it again is
+            # not permission to take it down.
+            return stopped, (f"the machine did not say whether it keeps '{it.name}', so it "
+                             f"was not taken down for an update")
+        # Asked again, immediately before stopping it: the check for work in flight
+        # happened before any of this, and a turn that began in between is one this would
+        # otherwise kill (R-UPD-23).
+        if gateways.what_is_running(it.name):
+            return stopped, (f"'{it.name}' began work while the update was starting, so "
+                             f"nothing was replaced under it")
+        if not kept:
             # Asked of the machine, never of the directory: a job description sitting in
             # `LaunchAgents` is not a job the machine is keeping.
             return stopped, (
@@ -274,7 +287,13 @@ def cmd_start(args: argparse.Namespace, gateways, machine) -> int:
         # behind when its job was taken away, answers everything exactly as a supervised
         # one does — and will not come back when it exits or when the machine reboots.
         # Reporting that as success is telling an owner they are covered when they are not.
-        if not machine.available() or machine.loaded(name):
+        try:
+            kept = machine.available() and machine.loaded(name)
+        except machine.Unsure:
+            print(f"{name}: ALREADY RUNNING (pid {already.pid}) — the machine did not say "
+                  f"whether it is keeping it", file=sys.stderr)
+            return 1
+        if not machine.available() or kept:
             print(f"{name}: ALREADY RUNNING (pid {already.pid})")
             return 0
         print(f"{name}: FAILED — running unsupervised (pid {already.pid}); it will not come back",
@@ -462,14 +481,17 @@ def cmd_status(_args: argparse.Namespace, gateways, machine) -> int:
         # Whether the supervisor is keeping this gateway is asked of the supervisor. A
         # job description sitting in a directory is not a job being kept, and the two
         # come apart exactly when something has gone wrong — which is when it is read.
-        kept = has_supervisor and name in described and machine.loaded(name)
+        try:
+            kept = has_supervisor and name in described and machine.loaded(name)
+        except machine.Unsure:
+            kept = None   # asked, and not told — which is not the same as "no"
         doing = gateways.what_is_running(name) if it.running else []
         rows.append((
             name,
             ("WEDGED" if it.stale else "RUNNING") if it.running else "STOPPED",
             str(it.pid) if it.running else "-",
             _how_long(it.started) if it.running else "-",
-            "yes" if kept else "no",
+            "yes" if kept else ("?" if kept is None else "no"),
             _version_of(it),
             (f"{len(doing)} ({', '.join(sorted(doing))})" if doing else "idle") if it.running else "-",
         ))
