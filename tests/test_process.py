@@ -638,6 +638,23 @@ class TheAwkwardCases(Quickened):
         self.assertEqual(process.SILENT, result.reason)
         self.assertTrue(gone_within(pid))
 
+    async def test_a_group_that_vanishes_while_being_ended_is_not_chased(self):
+        """R-PROC-4 — the program can go between deciding to end it and saying so, and
+        there is then nothing to escalate to."""
+        program = process.Program(forever())
+        await program.start()
+        pid = program.pid
+        real = os.killpg
+
+        def vanished(_pgid, _sig):
+            raise ProcessLookupError("it went by itself")
+
+        self.addCleanup(setattr, process.os, "killpg", real)
+        process.os.killpg = vanished
+        await program.end()  # returns rather than escalating against nothing
+        process.os.killpg = real
+        real(pid, signal.SIGKILL)
+
     async def test_reading_a_program_that_was_never_started_is_refused(self):
         """R-PROC-4 — a mistake in rundesk's own wiring says so rather than waiting on
         a program that does not exist."""

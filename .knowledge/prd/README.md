@@ -29,6 +29,9 @@ high-level map.
 - **Base** — _(none yet)_
 - **Command**
   - [command-surface](./command-surface.md) — every operation the command offers, and how one that is not built behaves.
+- **Platform**
+  - [platform-process](./platform-process.md) — a program rundesk runs, and how it keeps hold of it while it does.
+  - [platform-gateway](./platform-gateway.md) — the part that stays running, one of each name, and what it takes with it.
 - **Lifecycle**
   - [lifecycle-install](./lifecycle-install.md) — getting rundesk onto a machine, and knowing it worked.
   - [lifecycle-update](./lifecycle-update.md) — which version this is, which has been published, and moving between them.

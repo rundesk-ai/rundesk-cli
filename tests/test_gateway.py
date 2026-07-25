@@ -200,6 +200,14 @@ class WhereAGatewayKeepsWhatItNeeds(WithARunDirectory):
         os.environ.pop("RUNDESK_RUN_DIR", None)
         self.assertEqual(Path.home() / ".rundesk" / "run", gateway.home())
 
+    def test_what_it_writes_goes_beside_the_run_directory_by_default(self):
+        """R-GW-18 — history and state are kept apart, so giving a name back cannot take
+        the record of what happened with it."""
+        self.addCleanup(os.environ.__setitem__, "RUNDESK_LOG_DIR", os.environ["RUNDESK_LOG_DIR"])
+        del os.environ["RUNDESK_LOG_DIR"]
+        self.assertEqual(Path.home() / ".rundesk" / "logs", gateway.logs_home())
+        self.assertNotEqual(gateway.home(), gateway.logs_home())
+
     def test_where_it_keeps_things_can_be_said(self):
         """R-GW-12 — so a machine can run one for real without touching the owner's own."""
         self.addCleanup(os.environ.pop, "RUNDESK_RUN_DIR", None)
@@ -753,6 +761,28 @@ class WhoseProcessIsItAnyway(WithARunDirectory):
         self.assertEqual([], gw.swept)
         self.assertIsNone(stranger.returncode)
         self.assertIn("cannot prove it is ours", gateway.log_path("orphaned", self.logs).read_text())
+
+    async def test_a_record_that_does_not_say_what_was_running_is_left_alone(self):
+        """R-GW-19 — a record whose entries are not numbers at all says nothing about
+        what to end, and guessing is how the wrong thing gets ended."""
+        (self.where / "orphaned.json").write_text(
+            json.dumps({"name": "orphaned", "working": {"a-conversation": "not a number"}})
+        )
+        gw = self.made("orphaned")
+        gw.claim()
+        self.assertEqual([], gw.swept)
+        self.assertIn("does not say what was running", gateway.log_path("orphaned", self.logs).read_text())
+
+    async def test_a_lock_that_cannot_be_opened_is_not_read_as_running(self):
+        """R-GW-9 — a lock nobody can open proves nothing, and reporting a gateway as
+        running on the strength of a file we could not read is the lie to avoid."""
+        gw = self.made("guarded")
+        gw.claim()
+        gw.release()
+        lock = self.where / "guarded.lock"
+        lock.chmod(0o000)
+        self.addCleanup(lock.chmod, 0o600)
+        self.assertFalse(gateway.standing("guarded", self.where).running)
 
     def test_when_a_process_started_is_answered_for_one_that_exists(self):
         """R-GW-16 — the fingerprint the whole guard rests on."""

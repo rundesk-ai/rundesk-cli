@@ -8,5 +8,4 @@ Add a row when you add a draft; `doc-lint` fails the build if one is missing.
 
 | Draft | Proposes | Reserved namespace |
 |---|---|---|
-| [platform-process](./platform-process.md) | Any program rundesk starts on the owner's behalf, and how rundesk keeps hold of it. | `PROC` |
-| [platform-gateway](./platform-gateway.md) | The part of rundesk that stays running, and what the machine tending it guarantees. | `GW` |
+| _(no drafts yet)_ | | |
