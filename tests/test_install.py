@@ -200,7 +200,8 @@ class DependencyTests(Sandbox):
         done = self.install_needing(self.needs("# nothing needed", ""))
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertFalse((REPO / ".venv").exists(), "a virtualenv was made for no dependencies")
-        self.assertNotIn("into", done.stdout.split("linked")[0], done.stdout)
+        self.assertNotIn("installing what rundesk needs", done.stdout,
+                         "the installer said it was installing dependencies it does not have")
 
     def test_what_rundesk_needs_goes_inside_its_own_install(self):
         # Never the machine's Python. Modern ones refuse to be written to anyway, and a tool
@@ -351,6 +352,49 @@ class WhatIsInstalledTests(unittest.TestCase):
         tags = script.index("archive/refs/tags/")
         self.assertLess(tags, branch, "the branch is preferred over the released tag")
         self.assertIn("no release published yet", script, "a repository with no release could not be installed")
+
+
+class SaysWhatItIsDoingTests(Sandbox):
+    """A person watching a terminal has no other way to tell working from hung.
+
+    These are cheap assertions on wording, which is normally a smell. They are here because
+    the alternative failure is invisible: a step goes quiet, nobody notices for a release,
+    and the report is "it hangs" — for an installer that is piped into bash and an update
+    that replaces the running program, that guess ends in Ctrl-C at the worst moment.
+    """
+
+    def test_an_install_says_what_it_is_doing_as_it_goes(self):
+        done = self.install()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        for said in ("installing rundesk", "linked", "checked that it runs"):
+            self.assertIn(said, done.stdout, f"an install never said {said!r}")
+
+    def test_an_install_says_where_it_is_putting_things(self):
+        # Two paths matter to a person afterwards: what went on the PATH, and what it
+        # points at. Both are named, so an install can be undone by hand if it has to be.
+        done = self.install()
+        self.assertIn(str(self.bindir / "rundesk"), done.stdout, "it never said what it put on the PATH")
+        self.assertIn(str(REPO / "rundesk"), done.stdout, "it never said what that points at")
+
+    def test_removing_rundesk_says_what_it_took_and_what_it_left(self):
+        self.install()
+        settings = self.home / ".config" / "rundesk"
+        settings.mkdir(parents=True)
+
+        gone = self.uninstall()
+
+        self.assertIn("removing rundesk", gone.stdout, "removal began without saying so")
+        self.assertIn(str(self.bindir / "rundesk"), gone.stdout, "it never said what it took")
+        self.assertIn(str(settings), gone.stdout, "it never said the settings were left behind")
+        self.assertIn("rundesk uninstalled", gone.stdout)
+
+    def test_removing_nothing_does_not_report_having_removed_rundesk(self):
+        # "rundesk uninstalled." after finding nothing reads as though something was there.
+        gone = self.uninstall()
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertIn("nothing to remove", gone.stdout)
+        self.assertNotIn("rundesk uninstalled", gone.stdout,
+                         "it claimed to have uninstalled something it never found")
 
 
 class WhatItWillNotDeleteTests(Sandbox):

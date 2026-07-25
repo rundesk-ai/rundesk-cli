@@ -57,7 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
     for name, help_text in COMING_SOON.items():
-        planned = sub.add_parser(name, help=help_text, description=help_text)
+        # Marked where the list is, not only when the verb is invoked. Eleven of fourteen
+        # commands are planned, and a list that reads as fourteen working ones sends a
+        # newcomer to try each in turn to find out which three do anything.
+        planned = sub.add_parser(name, help=f"{help_text} [coming soon]",
+                                 description=f"{help_text} — planned, not built yet.")
         # Whatever a planned command will eventually take, it takes nothing today —
         # but it must not choke on being given arguments, or the message it prints
         # would be argparse's rather than ours.

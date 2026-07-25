@@ -478,6 +478,49 @@ class MalformedArchiveTests(unittest.TestCase):
             self.assertEqual((install / "rundesk").read_text(), "# 0.1.0\n", "a bad archive still changed the install")
 
 
+class SaysWhatItIsDoingTests(unittest.TestCase):
+    """An update was silent from the moment it started until it finished.
+
+    It downloads over a network and then replaces the program running it. Silence there
+    reads as a hang, and the reflex for a hang is Ctrl-C — which is the exact thing that
+    used to leave an install with no `src` at all.
+    """
+
+    def setUp(self):
+        self._work = tempfile.TemporaryDirectory()
+        self.root = Path(self._work.name)
+        self.install = self.root / "install"
+        (self.install / "src" / "rundesk_cli").mkdir(parents=True)
+        (self.install / "rundesk").write_text("# 0.1.0\n")
+
+    def tearDown(self):
+        self._work.cleanup()
+
+    def test_an_update_names_each_step_as_it_reaches_it(self):
+        top = _release(self.root, "0.2.0")
+        archive = self.root / "rel.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(top, arcname=top.name)
+
+        code, said = _with_download(archive.read_bytes(),
+                                    lambda: updater.download_and_apply(self.install, "v0.2.0"))
+
+        self.assertEqual(code, 0, said)
+        for step in ("downloading v0.2.0", "unpacking", "putting v0.2.0 in place", "updated to v0.2.0"):
+            self.assertIn(step, said, f"an update never said {step!r}")
+
+    def test_an_update_says_where_it_is_writing(self):
+        top = _release(self.root, "0.2.0")
+        archive = self.root / "rel.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(top, arcname=top.name)
+
+        _, said = _with_download(archive.read_bytes(),
+                                 lambda: updater.download_and_apply(self.install, "v0.2.0"))
+
+        self.assertIn(str(self.install), said, "an update never said which install it was changing")
+
+
 class RecoveryTests(unittest.TestCase):
     """The paths that only run when something has already gone wrong.
 

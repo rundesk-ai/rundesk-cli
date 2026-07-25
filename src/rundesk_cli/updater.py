@@ -176,10 +176,15 @@ def download_and_apply(repo_root: Path, tag: str) -> int:
 
 
 def _download_and_apply(repo_root: Path, tag: str) -> int:
+    # An update replaces the program that is running it, over a network, on somebody's
+    # machine. Saying which step is under way costs nothing and is the difference between
+    # waiting and wondering whether to reach for Ctrl-C — which is the one thing that used
+    # to break an install.
     url = ARCHIVE_URL.format(tag=tag)
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with tempfile.TemporaryDirectory() as work:
         archive = Path(work) / "rundesk.tar.gz"
+        print(f"downloading {tag}", flush=True)
         try:
             with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT) as response:
                 archive.write_bytes(response.read())
@@ -189,6 +194,7 @@ def _download_and_apply(repo_root: Path, tag: str) -> int:
 
         unpacked = Path(work) / "unpacked"
         unpacked.mkdir()
+        print(f"unpacking {_size(archive)}", flush=True)
         try:
             with tarfile.open(archive) as tar:
                 _safe_extract(tar, unpacked)
@@ -200,6 +206,7 @@ def _download_and_apply(repo_root: Path, tag: str) -> int:
         if len(roots) != 1:
             print(f"{tag} did not unpack the way a release archive should")
             return 1
+        print(f"putting {tag} in place at {repo_root}", flush=True)
         try:
             _copy_over(roots[0], repo_root)
         except OSError as err:
@@ -208,8 +215,17 @@ def _download_and_apply(repo_root: Path, tag: str) -> int:
             print(f"could not put {tag} in place: {err}")
             return 1
 
-    print(f"updated to {tag}")
+    print(f"updated to {tag}. Run 'rundesk version' to confirm.")
     return 0
+
+
+def _size(path: Path) -> str:
+    """A downloaded size a person can read, so 'unpacking' names something real."""
+    try:
+        kb = path.stat().st_size / 1024
+    except OSError:
+        return "the release"
+    return f"{kb / 1024:.1f} MB" if kb >= 1024 else f"{kb:.0f} KB"
 
 
 def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:

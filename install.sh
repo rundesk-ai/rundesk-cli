@@ -83,6 +83,7 @@ require_python() {
 # ---------------------------------------------------------------- uninstall
 if [[ "${1:-}" == "--uninstall" ]]; then
   check_install_dir
+  echo "removing rundesk"
   removed=0
   for dir in /usr/local/bin "$HOME/.local/bin" "${RUNDESK_BIN_DIR:-}"; do
     [[ -n "$dir" && -L "$dir/rundesk" ]] || continue
@@ -104,7 +105,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
 
   # The virtualenv is the installer's, wherever it put it — a checkout does not come with one.
   for venv in "$INSTALL_DIR/.venv" "${SCRIPT_DIR:-/nonexistent}/.venv"; do
-    [[ -d "$venv" ]] && { rm -rf "$venv"; echo "removed $venv"; }
+    [[ -d "$venv" ]] && { rm -rf "$venv"; echo "removed what rundesk installed for itself: $venv"; removed=1; }
   done
 
   # Only a directory this installer laid down is its to delete. A clone carries history and
@@ -113,10 +114,14 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     if is_someones_work "$INSTALL_DIR"; then
       echo "left $INSTALL_DIR alone — it is a checkout, not something this installer created."
     else
-      rm -rf "$INSTALL_DIR"; echo "removed $INSTALL_DIR"
+      rm -rf "$INSTALL_DIR"; echo "removed $INSTALL_DIR"; removed=1
     fi
   fi
-  echo "rundesk uninstalled."
+  if [[ "$removed" == 0 ]]; then
+    echo "nothing of rundesk was found on this machine; nothing to remove."
+  else
+    echo "rundesk uninstalled."
+  fi
   exit 0
 fi
 
@@ -124,10 +129,13 @@ fi
 require_python
 check_install_dir
 
+echo "installing rundesk"
+
 if is_local_checkout; then
   REPO_ROOT="$SCRIPT_DIR"
   echo "installing from this checkout: $REPO_ROOT"
 else
+  echo "installing into $INSTALL_DIR"
   command -v curl >/dev/null 2>&1 || die "curl is required to download rundesk."
   command -v tar  >/dev/null 2>&1 || die "tar is required to unpack rundesk."
   # Before anything is fetched: what is already there may not be ours to replace.
@@ -157,6 +165,7 @@ uncommitted work with it. Move it aside, or set RUNDESK_INSTALL_DIR somewhere el
   fi
   curl -fsSL "$source_url" -o "$work/rundesk.tar.gz" ||
     die "could not download rundesk from $REPO_SLUG."
+  echo "unpacking $(du -h "$work/rundesk.tar.gz" | cut -f1 | tr -d ' ')"
   tar -xzf "$work/rundesk.tar.gz" -C "$work"
   extracted="$(find "$work" -maxdepth 1 -type d -name 'rundesk-cli-*' | head -1)"
   [[ -n "$extracted" ]] || die "the downloaded archive did not look like a rundesk release."
@@ -171,16 +180,18 @@ fi
 # reason about that has already lost them.
 REQUIREMENTS="${RUNDESK_REQUIREMENTS:-$REPO_ROOT/requirements.txt}"
 if [[ -f "$REQUIREMENTS" ]] && grep -qvE '^\s*(#|$)' "$REQUIREMENTS"; then
-  echo "installing what rundesk needs, into $REPO_ROOT/.venv"
+  echo "installing what rundesk needs into $REPO_ROOT/.venv — this is the slow part"
   python3 -m venv "$REPO_ROOT/.venv" || die "could not create the virtualenv rundesk keeps its dependencies in."
   "$REPO_ROOT/.venv/bin/python" -m pip install --quiet --upgrade pip ||
     die "could not prepare the virtualenv's installer."
   "$REPO_ROOT/.venv/bin/python" -m pip install --quiet -r "$REQUIREMENTS" ||
     die "could not install what rundesk needs (see $REQUIREMENTS)."
+  echo "checking they fit together"
   # Installed is not the same as usable: pip will happily leave a set of packages that
   # cannot satisfy each other. Better to fail here than at the first turn.
   "$REPO_ROOT/.venv/bin/python" -m pip check --quiet ||
     die "what rundesk needs was installed, but the versions do not fit together."
+  echo "everything rundesk needs is in place"
 fi
 
 SHIM="$REPO_ROOT/rundesk"
@@ -208,6 +219,7 @@ echo "linked $BINDIR/rundesk -> $SHIM"
 # Refuse to claim success until the command actually answers: an installer that
 # reports done and leaves something that cannot run is the worst of both.
 "$BINDIR/rundesk" version >/dev/null 2>&1 || die "rundesk was installed but would not run."
+echo "checked that it runs"
 
 case ":$PATH:" in
   *":$BINDIR:"*) ;;
