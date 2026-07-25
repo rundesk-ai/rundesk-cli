@@ -343,6 +343,37 @@ def _record_path(name: str, where: Path) -> Path:
     return where / f"{checked(name)}.json"
 
 
+#: A name no gateway would be given, used to read what each path helper adds to a name off
+#: the path it hands back. It is the shortest thing `checked` accepts.
+_PROBE = "0"
+
+#: What is written beside a name by something other than a path helper: the guard a change
+#: is held under, the file a whole write is staged in, and the two the machine captures of a
+#: gateway that never reached its own log.
+ALSO_WRITTEN = frozenset({".changing", ".writing", ".out", ".err"})
+
+
+def reserved_suffixes() -> frozenset[str]:
+    """Everything a gateway writes after its own name.
+
+    Asked of the helpers that build the paths rather than listed here, because a list of
+    these is a list that stops being true: a gateway named `foo.ran` and one named `foo`
+    want one file between them, and the way that comes back is a sidecar added later that
+    nobody thought to write down twice.
+
+    Read by whatever decides a name is usable. Nothing here refuses one — a gateway's names
+    are what they already are, and narrowing them is a separate decision from choosing what
+    an agent may be called.
+    """
+    where = Path(os.sep)
+    made = (
+        _lock_path(_PROBE, where), _record_path(_PROBE, where), log_path(_PROBE, where),
+        schedules_path(_PROBE, where), ran_path(_PROBE, where), seen_path(_PROBE, where),
+        interrupted_path(_PROBE, where),
+    )
+    return frozenset({path.name[len(_PROBE):] for path in made} | ALSO_WRITTEN)
+
+
 #: What a declared requirement is called once it is installed, where the two differ.
 IMPORTED_AS = {"discord.py": "discord"}
 

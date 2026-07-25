@@ -30,6 +30,9 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   the CI runner's own agent with it — the step then hung forever with an empty log, no timeout applied and
   cancels did nothing, because nothing was left alive to answer. macOS returns an error instead, so it
   passed there every time. Replace `os.killpg` and assert on what was asked.
+- **`gateway.note()` makes no directory and swallows its `OSError`**, so arranging a log in a scratch
+  directory that does not exist yet leaves you with silence and a `FileNotFoundError` two assertions
+  later, in the reader. Make the log directory in `setUp`; do not assume the first write makes it.
 - Running `tests/test_gateway.py` without `RUNDESK_SCHEDULES_DIR` redirected writes stray `<name>.seen.json`
   into the owner's real `~/.rundesk/schedules` — `RUNDESK_RUN_DIR` and `RUNDESK_LOG_DIR` alone are not
   enough, because the schedule checkpoint lives beside the schedules, not with the run state.
