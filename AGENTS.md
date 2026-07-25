@@ -118,6 +118,55 @@ The decision is what breaks; the transport is not. Pass it in and the whole modu
 ❌ def run(current, latest=latest_version_online):   # bound once, at import — a test cannot reach it
 ```
 
+### Determinism is designed, not hoped for
+
+A decision receives every variable input — clock, environment, machine state and external reply — through
+an argument or a replaceable collaborator resolved at call time.
+
+```python
+✅ def due(schedule, now): return schedule.matches(now)
+❌ def due(schedule): return schedule.matches(datetime.now())
+```
+
+- Elapsed time and deadlines use `time.monotonic()`; wall time is only for calendar decisions, display and
+  durable timestamps. Never compare the two.
+- An `async def` never calls blocking sleep or a synchronous subprocess. Small local metadata reads and
+  atomic writes may stay synchronous; anything unbounded leaves the event loop. Every new task has an owner
+  that observes its exception and awaits, cancels or drains it during shutdown.
+- User-visible and persisted output never relies on set, mapping or filesystem iteration order; sort it.
+- A new persisted read-modify-write holds one lock across the read, decision and write. Unreadable state is
+  not empty state and is never written back as empty.
+- Broad exception handling exists only at cleanup and process boundaries, where it re-raises or produces a
+  truthful failure outcome.
+- Tests isolate every external surface they touch: the network, `HOME`, launchd and Rundesk state
+  directories. Use real processes and clocks only when their operating-system behavior is the subject.
+- Do not modify unrelated existing code merely to satisfy this section; a current violation needs an
+  accepted finding under the review threshold above.
+
+### One domain verb has one meaning
+
+Use Rundesk's domain nouns — gateway, program, schedule, run, job, record, outcome and interruption — and
+name the effect, not the mechanism.
+
+```python
+✅ def loaded(job): ...
+✅ schedules = read_schedules(gateway)
+❌ def check_thing(data): ...
+```
+
+- `cmd_<verb>` adapts a CLI command; `read` / `load` / `find` / `list` do not mutate; `write` / `save` /
+  `remember` mutate durable state; `claim` / `release` change ownership; `start` / `stop` / `end` describe
+  runtime lifecycle. Do not reuse one of these verbs for a different effect.
+- Predicates read as yes-or-no questions at the call site; an `is_` or `has_` prefix is optional when the
+  bare domain word already does so, such as `loaded(job)` or `tag_matches(tag, version)`.
+- Collections are plural, one domain object is singular and units appear where ambiguity is possible
+  (`timeout_seconds`, `held_bytes`, `started_at`).
+- Placeholder names such as `one`, `it`, `said`, `done`, `data` and `info` stay inside tiny expressions
+  where the role is unmistakable; longer scopes use the domain noun.
+- Comments explain the invariant or failure being prevented, not the syntax below them.
+- Apply these rules to new names and names already changing for an accepted task. Never create a rename-only
+  task to retrofit untouched code.
+
 ### Say what is not built, and exit non-zero
 
 ```python

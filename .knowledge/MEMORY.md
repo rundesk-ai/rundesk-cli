@@ -20,6 +20,10 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   redirected still discovers and stops **live gateways** through the ambient state directories. Point
   `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR`, `RUNDESK_SCHEDULES_DIR` and `RUNDESK_JOBS_DIR` at scratch too
   before running the destructive half of the gate.
+- The documented plain-`python3` suites can fail gateway fitness when `requirements.txt` is non-empty,
+  because only the install's `.venv` has those dependencies and the CI test job does not install them.
+  Until the gate installs or invokes the declared environment, run source suites with `.venv/bin/python`
+  and never report the clean plain-Python matrix as green.
 
 - `asyncio`'s `Process.wait()` resolves when **every pipe closes**, not when the process exits. Anything
   the program left running inherited the far end and holds it open, so waiting on the exit lands hours
