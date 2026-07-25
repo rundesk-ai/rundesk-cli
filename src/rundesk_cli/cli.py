@@ -15,10 +15,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -419,10 +417,11 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     decides what is rundesk's and what is the owner's, and a second copy of that decision
     is how an uninstall comes to delete a home it should have kept.
 
-    **Run from a copy.** The installer deletes the install directory entry by entry, and
-    itself with it — a script being read by the shell while its file is unlinked is a
-    script that can stop mid-line. Copied out first, what runs is a whole file that no
-    longer lives where the deleting happens.
+    **Run where it stands**, which is what `install.sh --uninstall` by hand has always
+    done. Running it from a copy elsewhere looked safer and was not: the installer finds
+    the command it placed by comparing the symlink against its own directory, so a copy in
+    a temporary directory matched nothing and left the command on the PATH — removing
+    rundesk and leaving behind the one thing R-RM-1 is about.
     """
     installer = REPO_ROOT / "install.sh"
     if not installer.is_file():
@@ -451,17 +450,15 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 
 
 def _remove_this_install(installer: Path, asked: list[str]) -> int:
-    """Run the installer's own removal, from a copy, and say how it ended.
+    """Run the installer's own removal, where it stands, and say how it ended.
 
-    From a copy because the installer deletes the install directory entry by entry and
-    itself with it: a script the shell is still reading while its file is unlinked is a
-    script that can stop mid-line. What runs is a whole file somewhere else.
+    Where it stands, because the installer works out what it placed relative to its own
+    directory: run from anywhere else it recognises none of it, and the command it linked
+    onto the PATH is left behind by the very thing meant to remove it. This is the same
+    invocation someone types by hand, which is what the installer is written against.
     """
-    with tempfile.TemporaryDirectory(prefix="rundesk-uninstall-") as aside:
-        copy = Path(aside) / installer.name
-        shutil.copy2(installer, copy)
-        copy.chmod(0o755)
-        return subprocess.run(["bash", str(copy), *asked], cwd=aside).returncode
+    return subprocess.run(["bash", str(installer), *asked],
+                          cwd=str(installer.parent)).returncode
 
 
 def cmd_not_available(name: str, act: str | None = None) -> int:
@@ -894,16 +891,20 @@ def cmd_agents(args: argparse.Namespace, gateways, machine, agents) -> int:
         except machine.Unsure:
             kept = None   # asked, and not told — which is not the same as "no"
         doing = gateways.what_is_running(name, agents.resolved(name).run) if it.running else []
+        # A loaded job is one fact; the gateway process and PID are another (R-GW-34).
+        # Calling the first "supervised" claimed a relationship the machine never proved:
+        # a manually started same-name process can coexist with a loaded dormant job.
+        job = "LOADED" if kept else ("UNKNOWN" if kept is None else "NOT LOADED")
         rows.append((
             name + ("" if agents.exists(name) else " *"),
             ("WEDGED" if it.stale else "RUNNING") if it.running else "STOPPED",
             str(it.pid) if it.running else "-",
             _how_long(it.started) if it.running else "-",
-            "yes" if kept else ("?" if kept is None else "no"),
+            job,
             _version_of(it),
             (f"{len(doing)} ({', '.join(sorted(doing))})" if doing else "idle") if it.running else "-",
         ))
-    _as_table(("AGENT", "STATE", "PID", "UPTIME", "SUPERVISED", "VERSION", "WORK"), rows)
+    _as_table(("AGENT", "STATE", "PID", "UPTIME", "LAUNCHD JOB", "VERSION", "WORK"), rows)
     if orphaned:
         print()
         print(f"* no agent yet — running since before there were any: {', '.join(orphaned)}")
