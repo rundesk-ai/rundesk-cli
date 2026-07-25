@@ -45,12 +45,20 @@ def alive(pid: int) -> bool:
     return True
 
 
-def gone_within(pid: int, seconds: float = 10.0) -> bool:
+async def gone_within(pid: int, seconds: float = 10.0) -> bool:
+    """Wait for a pid to really be gone, giving the loop its turn while waiting.
+
+    Awaited, not slept through. A program we started is our own child, so it stays a
+    zombie — and `os.kill(pid, 0)` still finds it — until something reaps it, and the
+    only thing that does is the `wait()` running on this loop. Blocking here starves
+    that reaper, so this would report every ended program as still running and only
+    pass when the reaping happened to land before the check.
+    """
     deadline = time.time() + seconds
     while time.time() < deadline:
         if not alive(pid):
             return True
-        time.sleep(0.05)
+        await asyncio.sleep(0.05)
     return not alive(pid)
 
 
@@ -239,7 +247,7 @@ class HowLongAProgramMayTake(Quickened):
         pid = program.pid
         result = await asyncio.wait_for(program.wait(), 20)
         self.assertEqual(process.OVERRAN, result.reason)
-        self.assertTrue(gone_within(pid))
+        self.assertTrue(await gone_within(pid))
 
     async def test_running_a_long_time_is_not_by_itself_a_reason_to_be_ended(self):
         """R-PROC-13 — the ceiling is a backstop, never the instrument. A session that
@@ -284,7 +292,7 @@ class HowLongAProgramMayTake(Quickened):
                 pid = program.pid
                 result = await asyncio.wait_for(program.wait(), 20)
                 self.assertEqual(process.OVERRAN, result.reason)
-                self.assertTrue(gone_within(pid))
+                self.assertTrue(await gone_within(pid))
 
     async def test_a_program_that_closes_its_output_and_goes_quiet_is_told_apart(self):
         """R-PROC-8 — silence running out first is a different answer from the ceiling
@@ -306,7 +314,7 @@ class HowLongAProgramMayTake(Quickened):
         result = await program.wait()
         self.assertEqual(process.SILENT, result.reason)
         self.assertFalse(program.alive)
-        self.assertTrue(gone_within(pid))
+        self.assertTrue(await gone_within(pid))
 
     async def test_pauses_do_not_add_up_across_the_things_it_says(self):
         """R-PROC-6 — the case a long session actually looks like: quiet while each tool
@@ -405,7 +413,7 @@ class EndingAProgram(Quickened):
         self.assertTrue(alive(grandchild))
         await program.end()
         await waiting
-        self.assertTrue(gone_within(grandchild), "what it started outlived it")
+        self.assertTrue(await gone_within(grandchild), "what it started outlived it")
 
     async def test_what_a_finished_program_left_behind_is_ended_anyway_if_it_will_not_go(self):
         """R-PROC-11 — the leftover of a program that finished on its own, which does not
@@ -431,7 +439,7 @@ class EndingAProgram(Quickened):
         grandchild = await self._reported_pid(told)
         self.assertIsNotNone(grandchild)
         await asyncio.wait_for(waiting, 30.0)
-        self.assertTrue(gone_within(grandchild), "a leftover that ignored the first signal survived")
+        self.assertTrue(await gone_within(grandchild), "a leftover that ignored the first signal survived")
 
     async def test_ending_waits_for_the_whole_tree_not_just_the_one_we_started(self):
         """R-PROC-5, R-PROC-11 — the one we started leaving is not the tree leaving. A
@@ -489,7 +497,7 @@ class EndingAProgram(Quickened):
         ending.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await ending
-        self.assertTrue(gone_within(pid), "giving up on ending it left it running")
+        self.assertTrue(await gone_within(pid), "giving up on ending it left it running")
         await asyncio.wait_for(waiting, 20)
 
     async def test_a_first_signal_that_does_not_land_is_not_the_end_of_it(self):
@@ -513,7 +521,7 @@ class EndingAProgram(Quickened):
         await program.end()
         await waiting
         self.assertIn(signal.SIGKILL, attempts, "it never tried harder than the signal that failed")
-        self.assertTrue(gone_within(pid))
+        self.assertTrue(await gone_within(pid))
 
     async def test_what_a_finished_program_left_behind_does_not_outlive_it(self):
         """R-PROC-11 — a program that exits cleanly does not take its children with it:
@@ -533,7 +541,7 @@ class EndingAProgram(Quickened):
         self.assertIsNotNone(grandchild)
         result = await asyncio.wait_for(waiting, 20.0)
         self.assertEqual(process.FINISHED, result.reason)
-        self.assertTrue(gone_within(grandchild), "what it left behind outlived it")
+        self.assertTrue(await gone_within(grandchild), "what it left behind outlived it")
 
     async def test_a_finished_program_is_not_waited_on_for_the_whole_silence(self):
         """R-PROC-6 — a leftover holding the pipe must not make a finished turn look
@@ -576,7 +584,7 @@ class EndingAProgram(Quickened):
         waiting.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await waiting
-        self.assertTrue(gone_within(pid))
+        self.assertTrue(await gone_within(pid))
 
     async def test_everything_still_running_is_ended_together(self):
         """R-PROC-11 — what the gateway reaches for when it is told to stop."""
@@ -588,7 +596,7 @@ class EndingAProgram(Quickened):
         await process.end_all(programs)
         await asyncio.gather(*waiting)
         for pid in pids:
-            self.assertTrue(gone_within(pid))
+            self.assertTrue(await gone_within(pid))
 
 
 class ManyAtOnce(Quickened):
@@ -728,7 +736,7 @@ class TheAwkwardCases(Quickened):
         with self.assertRaises(RuntimeError):
             await program.wait(refuses)
         self.assertFalse(program.alive, "it survived its own reader failing")
-        self.assertTrue(gone_within(pid))
+        self.assertTrue(await gone_within(pid))
 
     async def test_the_last_character_is_not_lost_for_being_half_written(self):
         """R-PROC-3 — a program killed mid-write leaves part of a character behind, and
@@ -770,7 +778,7 @@ class TheAwkwardCases(Quickened):
         pid = program.pid
         result = await asyncio.wait_for(program.wait(), 20)
         self.assertEqual(process.SILENT, result.reason)
-        self.assertTrue(gone_within(pid))
+        self.assertTrue(await gone_within(pid))
 
     async def test_a_group_that_vanishes_while_being_ended_is_not_chased(self):
         """R-PROC-4 — the program can go between deciding to end it and saying so, and

@@ -66,6 +66,45 @@ class WithARunDirectory(unittest.IsolatedAsyncioTestCase):
         """Write this gateway's schedules — and only this gateway's."""
         (self.schedules / f"{name}.json").write_text(json.dumps(list(written)))
 
+    # -- waiting for something to be true, without stopping it becoming true -----------
+    #
+    # Every one of these yields between looks. Blocking the loop here starves the very
+    # tasks being waited on: a program the gateway started is this process's own child,
+    # and stays a zombie that `os.kill(pid, 0)` still finds until the `wait()` running on
+    # this loop reaps it — so a helper that slept through would report every ended
+    # program as still running, and pass only when the reaping happened to land first.
+
+    async def _up(self, gw, seconds: float = 5.0):
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if gateway.standing(gw.name, self.where).running:
+                return
+            await asyncio.sleep(0.02)
+        self.fail(f"gateway '{gw.name}' never came up")
+
+    async def _holding(self, gw, seconds: float = 5.0):
+        """Wait until the gateway holds work that has really been started.
+
+        Registered is not started: `start` puts work into `running` before it has a
+        process, so a test that waited only for the name to appear could act on it while
+        `pid` was still None — and while a shutdown sweeping what is alive would not see
+        it at all.
+        """
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if gw.running and all(p.alive for p in gw.running.values()):
+                return
+            await asyncio.sleep(0.02)
+        self.fail(f"gateway '{gw.name}' never took hold of its program")
+
+    async def _gone(self, pid: int, seconds: float = 10.0) -> bool:
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if not gateway._still_there(pid):
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
 
 class OnlyOneOfEachName(WithARunDirectory):
     async def test_only_one_gateway_of_a_name_runs_at_a_time(self):
@@ -337,13 +376,6 @@ class NeverTheSameWorkTwice(WithARunDirectory):
         await process.end_all(list(gw.running.values()))
         await asyncio.gather(*running)
 
-    async def _holding(self, gw, seconds: float = 5.0):
-        deadline = time.time() + seconds
-        while time.time() < deadline:
-            if gw.running:
-                return
-            await asyncio.sleep(0.02)
-        self.fail("the gateway never took hold of the program")
 
 
 class OneGatewaysTroubleIsNotAnothers(WithARunDirectory):
@@ -396,13 +428,6 @@ class OneGatewaysTroubleIsNotAnothers(WithARunDirectory):
         await process.end_all(list(one.running.values()) + list(two.running.values()))
         await asyncio.gather(ones, twos)
 
-    async def _holding(self, gw, seconds: float = 5.0):
-        deadline = time.time() + seconds
-        while time.time() < deadline:
-            if gw.running:
-                return
-            await asyncio.sleep(0.02)
-        self.fail(f"gateway '{gw.name}' never took hold of its program")
 
 
 class GoingAway(WithARunDirectory):
@@ -443,7 +468,37 @@ class GoingAway(WithARunDirectory):
         # was running without ending it leaves this waiting forever, and an unbounded
         # wait turns that regression into a stuck build rather than a failing test.
         self.assertEqual(process.ENDED, (await asyncio.wait_for(running, 15)).reason)
-        self.assertTrue(self._gone(pid), "a program outlived the gateway running it")
+        self.assertTrue(await self._gone(pid), "a program outlived the gateway running it")
+
+    async def test_work_that_starts_as_the_gateway_goes_away_is_not_left_running(self):
+        """R-GW-8 — the gap between taking work and having a process for it.
+
+        `start` registers work before it has spawned anything, so a shutdown sweeping
+        what is *alive* passes straight over work still being spawned: it is neither
+        running to be ended nor stopped from starting. It then comes up moments after the
+        gateway has gone, with `running` already cleared — an orphan nothing will ever
+        end, under a name whose next start has no idea it is there.
+        """
+        gw = self.made()
+        gw.claim()
+        spawning, carry_on = asyncio.Event(), asyncio.Event()
+        real = process.Program.start
+        self.addCleanup(setattr, process.Program, "start", real)
+
+        async def dawdle(program):
+            spawning.set()
+            await carry_on.wait()
+            await real(program)
+
+        process.Program.start = dawdle
+        running = asyncio.ensure_future(gw.start(FOREVER, as_name="late", silence=None))
+        await asyncio.wait_for(spawning.wait(), 5)
+        held = gw.running["late"]
+        self.assertIsNone(held.pid, "the window this is about had already closed")
+        await asyncio.wait_for(gw._go(), 10)  # finds nothing alive, and clears up
+        carry_on.set()
+        self.assertEqual(process.ENDED, (await asyncio.wait_for(running, 15)).reason)
+        self.assertTrue(await self._gone(held.pid), "it outlived the gateway that started it")
 
     async def test_asking_a_gateway_to_stop_both_refuses_work_and_ends_the_waiting(self):
         """R-GW-6 — two separate effects, and a version with only the second passes
@@ -485,31 +540,8 @@ class GoingAway(WithARunDirectory):
         self.assertNotEqual(0, left_running, "it went with work still running and said it was fine")
         self.assertFalse(gateway.standing(gw.name, self.where).running)
 
-    async def _up(self, gw, seconds: float = 5.0):
-        deadline = time.time() + seconds
-        while time.time() < deadline:
-            if gateway.standing(gw.name, self.where).running:
-                return
-            await asyncio.sleep(0.02)
-        self.fail("the gateway never came up")
 
-    async def _holding(self, gw, seconds: float = 5.0):
-        deadline = time.time() + seconds
-        while time.time() < deadline:
-            if gw.running:
-                return
-            await asyncio.sleep(0.02)
-        self.fail("the gateway never took hold of the program")
 
-    def _gone(self, pid: int, seconds: float = 10.0) -> bool:
-        deadline = time.time() + seconds
-        while time.time() < deadline:
-            try:
-                os.kill(pid, 0)
-            except (ProcessLookupError, PermissionError):
-                return True
-            time.sleep(0.05)
-        return False
 
 
 class WhatADeadGatewayLeftBehind(WithARunDirectory):
@@ -529,7 +561,7 @@ class WhatADeadGatewayLeftBehind(WithARunDirectory):
         gw = self.made("orphaned")
         gw.claim()
         self.assertEqual(["a-conversation"], gw.swept)
-        self.assertTrue(await self._gone(left))
+        self.assertTrue(await self._gone(left.pid))
 
     async def test_taking_a_name_nobody_left_anything_under_is_ordinary(self):
         """R-GW-16 — the common case costs nothing and says nothing."""
@@ -573,13 +605,6 @@ class WhatADeadGatewayLeftBehind(WithARunDirectory):
         after = json.loads((self.where / f"{gw.name}.json").read_text())
         self.assertEqual({}, after["working"], "work that finished was still recorded as running")
 
-    async def _gone(self, proc, seconds: float = 10.0) -> bool:
-        deadline = time.time() + seconds
-        while time.time() < deadline:
-            if not gateway._still_there(proc.pid):
-                return True
-            await asyncio.sleep(0.05)
-        return False
 
 
 class WhatHappenedAndWhen(WithARunDirectory):
@@ -897,7 +922,7 @@ class WorkNobodyIsComingBackFor(WithARunDirectory):
         left = await self._stray("an-agent-since-renamed")
         gw = self.made("something-else-entirely")
         gw.claim()
-        self.assertTrue(await self._gone(left), "work under a forgotten name outlived everything")
+        self.assertTrue(await self._gone(left.pid), "work under a forgotten name outlived everything")
         self.assertIn("nobody has started since", gateway.log_path(gw.name, self.logs).read_text())
 
     async def test_a_record_with_nothing_left_running_is_not_kept_forever(self):
@@ -926,13 +951,6 @@ class WorkNobodyIsComingBackFor(WithARunDirectory):
         await process.end_all([theirs])
         await running
 
-    async def _gone(self, proc, seconds: float = 10.0) -> bool:
-        deadline = time.time() + seconds
-        while time.time() < deadline:
-            if not gateway._still_there(proc.pid):
-                return True
-            await asyncio.sleep(0.05)
-        return False
 
 
 class WorkThatStartsItself(WithARunDirectory):

@@ -817,6 +817,15 @@ class Gateway:
             await program.start()
             self._say()  # now it has a process group worth recording
             self.log.info("started '%s' (group %s)", held, program.pid)
+            if self._stopping:
+                # Born into a shutdown, and so invisible to it. Registration above happens
+                # before there is a process, and going away ends what is *alive* — work
+                # still being spawned is neither running to be ended nor stopped from
+                # starting, so it came up moments after the gateway had gone and outlived
+                # the one thing that would ever end it (R-GW-8). Nothing else can do it:
+                # by now `running` has been swept and cleared.
+                self.log.warning("ending '%s': it started as the gateway was going away", held)
+                await program.end()
             outcome = await program.wait(on_line)
         finally:
             self.running.pop(held, None)
