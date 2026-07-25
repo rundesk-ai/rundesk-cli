@@ -283,5 +283,87 @@ def _with_download(payload, call):
         updater.urllib.request.urlopen = real
     return code, out.getvalue()
 
+
+class AskingTheForgeTests(unittest.TestCase):
+    """The one function that actually talks to GitHub — stubbed everywhere else, so tested here."""
+
+    def test_the_published_tag_is_read_out_of_the_release(self):
+        code, _ = _with_json(b'{"tag_name": "v0.4.0", "name": "0.4.0"}', updater.latest_version_online)
+        self.assertEqual(code, "v0.4.0")
+
+    def test_a_release_with_no_tag_is_not_turned_into_one(self):
+        # A shape we did not expect must read as "could not tell", never as a version.
+        for payload in (b'{}', b'{"tag_name": ""}', b'{"tag_name": null}', b'[]'):
+            with self.subTest(payload=payload):
+                got, _ = _with_json(payload, updater.latest_version_online)
+                self.assertIsNone(got)
+
+    def test_a_forge_that_cannot_be_reached_says_nothing_rather_than_guessing(self):
+        for boom in (urllib.error.URLError("no route"), TimeoutError(), OSError("refused")):
+            with self.subTest(boom=type(boom).__name__):
+                got, _ = _with_json(boom, updater.latest_version_online)
+                self.assertIsNone(got)
+
+    def test_a_reply_that_is_not_json_is_survived(self):
+        got, _ = _with_json(b"<html>rate limited</html>", updater.latest_version_online)
+        self.assertIsNone(got)
+
+    def test_it_asks_the_releases_endpoint_for_this_repository(self):
+        # A wrong URL is invisible from the outside: everything would simply report
+        # "could not reach the forge" forever, which reads like being offline.
+        self.assertIn("rundesk-ai/rundesk-cli", updater.RELEASES_LATEST_URL)
+        self.assertIn("releases/latest", updater.RELEASES_LATEST_URL)
+
+
+class MalformedArchiveTests(unittest.TestCase):
+    def test_an_archive_that_is_not_shaped_like_a_release_is_refused(self):
+        # One top-level directory is what a release archive is. Two means we are looking at
+        # something else, and copying it over an install would scatter it.
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            for name in ("one", "two"):
+                (root / "staged" / name).mkdir(parents=True)
+                (root / "staged" / name / "f.txt").write_text(name)
+            archive = root / "odd.tar.gz"
+            with tarfile.open(archive, "w:gz") as tar:
+                for name in ("one", "two"):
+                    tar.add(root / "staged" / name, arcname=name)
+
+            install = root / "install"
+            install.mkdir()
+            (install / "rundesk").write_text("# 0.1.0\n")
+
+            code, said = _with_download(archive.read_bytes(),
+                                        lambda: updater.download_and_apply(install, "v0.2.0"))
+
+            self.assertEqual(code, 1)
+            self.assertIn("did not unpack", said)
+            self.assertEqual((install / "rundesk").read_text(), "# 0.1.0\n", "a bad archive still changed the install")
+
+
+def _with_json(payload, call):
+    """Run `call` with the forge replaced — bytes to serve, or an error to raise."""
+    class _Response:
+        def __init__(self, data): self._data = data
+        def read(self): return self._data
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+
+    def fake_urlopen(_request, timeout=None):
+        if isinstance(payload, BaseException):
+            raise payload
+        return _Response(payload)
+
+    real = updater.urllib.request.urlopen
+    updater.urllib.request.urlopen = fake_urlopen
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            got = call()
+    finally:
+        updater.urllib.request.urlopen = real
+    return got, out.getvalue()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

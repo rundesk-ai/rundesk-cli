@@ -55,6 +55,10 @@ def latest_version_online() -> str | None:
     except (urllib.error.URLError, TimeoutError, ValueError, OSError):
         # Unreachable is not the same as up to date, and `run` says so.
         return None
+    # A shape we did not expect — an array, a rate-limit page parsed as JSON — reads as
+    # "could not tell", never as a crash. This runs behind whatever the user typed.
+    if not isinstance(payload, dict):
+        return None
     tag = payload.get("tag_name")
     return tag if isinstance(tag, str) and tag else None
 

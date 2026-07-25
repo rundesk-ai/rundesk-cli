@@ -8,6 +8,13 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- A test class appended **after** the `if __name__ == "__main__": unittest.main()` block never runs —
+  Python reaches the runner before the class is defined, and the count silently stays where it was.
+  Keep that block last in every test file, and check the "Ran N tests" number moved.
+- Coverage without a dependency: `trace.Trace(count=1)` over both suites **in one process**
+  (`t.results().write_results(show_missing=True, coverdir=…)`, then grep `>>>>>>`). Running
+  `python3 -m trace` once per test file overwrites the previous file's `.cover` and reports nonsense.
+
 - _(none yet)_
 
 ---
