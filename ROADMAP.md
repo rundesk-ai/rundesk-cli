@@ -182,7 +182,7 @@ works (R-CMD-8, R-CMD-9, R-CMD-10).
 - Finding 31 — `schedules add --run` swallowing later options. Nothing new was added to that grammar
   because of it.
 
-## Phase 1 — Make the Agent the Thing You Operate
+## Phase 1 — Make the Agent the Thing You Operate — **done**
 
 **Outcome:** Rundesk creates, lists and diagnoses an isolated agent, and the command surface operates
 agents rather than gateways — without a provider being run.
@@ -331,12 +331,37 @@ live and whether a supervised one resolves them the same way. Finding **32** —
 `stop` mean every agent, or is it a usage error? The surface says a verb's next word says whose, and
 leaving it out currently means all of them, silently.
 
-### Exit proof
+### Exit proof — met
 
 A fresh agent is created, inspected, started, stopped and diagnosed entirely offline, and every one of
 those is typed against the agent's name rather than a gateway's. Agent management cannot resolve one
 agent's owned paths as another's. Provider filesystem containment is explicitly deferred; this phase
 proves only separate discovery, configuration, session and cwd defaults.
+
+**What was decided, and what it cost.** Everything of one agent's lives in one directory — its home, the
+private homes providers are given, and the three its gateway keeps things in. That ended finding 19 by
+construction rather than by guarding against it: a name can no longer claim a file belonging to another,
+because there is no shared directory to claim it in. The three directories from before agents are kept and
+read, so a gateway running since then goes on working and is adopted only when its owner asks.
+
+Finding 32 was answered as a usage error: a bare `stop` or `restart` refuses and touches nothing, and
+`--all` is how the fan-out is asked for. Finding 31 was answered by the grammar — the agent is a
+positional, so nothing can swallow it, and what to run is the words after `--`, so an option typed there
+is refused rather than handed to the program. Finding 33 was answered by `uninstall` running the
+installer's own removal and propagating what it returned.
+
+`agent-home` and `agent-gateway` are ratified. Two rows in them are ❌ on purpose: an agent loading its own
+home rather than its owner's cannot be shown without a provider, and channels do not exist yet. Both are
+what the phases after this are for.
+
+### Left open, deliberately
+
+- Which files each provider actually loads is inherited from probes of the build this replaces, not
+  re-proven against installed versions. Phase 3 re-probes before anything claims it.
+- Finding 28's larger half — a command reading a supervised gateway's directories out of its own job —
+  is not done. What this phase owed it is: the job carries the agent's directories, so the two agree.
+- Running a schedule by hand happens in the terminal, not inside the agent's gateway. There is nothing to
+  ask a running gateway with, and inventing one was not this phase's work.
 
 ## Phase 2 — Resolve a Binding Without a Provider Anywhere Near It
 
@@ -643,15 +668,14 @@ agent.
 
 ## Ready-for-Next-Phase Verdict
 
-Phase 0 is done, so Rundesk is ready to **build agents**. It is not ready to begin Discord or a live
-provider adapter.
+Phases 0 and 1 are done, so Rundesk is ready to **resolve a binding**. It is not ready to begin Discord or
+a live provider adapter.
 
 The next implementation sequence should be:
 
 1. ~~Make the dependency/test gate truthful and declare the approved product/CLI surface.~~ **Done.**
-2. Build the agent and its home, and refactor the command surface so agents are what a person operates
-   and gateways are how they run. **Both halves of Phase 1, together** — either alone leaves an agent
-   nobody can start, or a gateway still managed by hand beside its agent.
+2. ~~Build the agent and its home, and refactor the command surface so agents are what a person operates
+   and gateways are how they run.~~ **Done.**
 3. Prove binding and run-ID resolution with fakes — the smallest thing that lets a source pick a provider.
 4. Close the provider-facing runtime risks, then take one provider turn to the terminal.
 5. **Reach that agent through Discord**, so the product is tested where it is actually used.

@@ -38,6 +38,9 @@ high-level map.
   - [platform-process](./platform-process.md) — a program rundesk runs, and how it keeps hold of it while it does.
   - [platform-gateway](./platform-gateway.md) — the part that stays running, one of each name, and what it takes with it.
   - [platform-schedule](./platform-schedule.md) — work rundesk begins because the time came, belonging to one gateway each.
+- **Agent**
+  - [agent-home](./agent-home.md) — the named identity work is run for, the home it loads from, and how far apart two of them are kept.
+  - [agent-gateway](./agent-gateway.md) — the one gateway an agent runs in, made with it and taken away with it.
 - **Lifecycle**
   - [lifecycle-install](./lifecycle-install.md) — getting rundesk onto a machine, and knowing it worked.
   - [lifecycle-update](./lifecycle-update.md) — which version this is, which has been published, and moving between them.

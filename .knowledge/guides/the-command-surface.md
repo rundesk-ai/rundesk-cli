@@ -97,10 +97,11 @@ neighbours. Both rules were broken before they were written down:
 - **`[--flag]` for what is optional to pass, `<value>` for a value you supply** — never `[<both>]` on
   one token.
 
-**One verb is not on the rule yet.** `schedules` names its agent with `--gateway` rather than as the next
-word, and puts the schedule's name last instead of first. It is built, and moving it is a change to a
-shipped grammar — Phase 1 does it, along with making the agent the subject of the gateway verbs. Read it
-as the exception it is, not as a second pattern.
+**Every verb is on the rule now.** `schedules` named its agent with `--gateway`; it is the word after the
+verb like every other. That was not tidying: as an option it sat in the one place `--run`'s remainder
+swallowed, so `--gateway beta` typed after the program became an argument *to the program* and the schedule
+landed on a different agent, reported as success. The old spelling is still registered and refused with the
+new one rather than removed, so a script that used it is answered rather than dumped on.
 
 ## Overlaps that were removed, and why
 
@@ -112,10 +113,10 @@ are recorded because the reasoning is what stops them coming back.
 | `run` and `runs` — one letter apart, and one of them starts work that costs money | The verb became **`ask`**. A run is still what an occurrence is called, so `runs` still lists them. The nearest pair on the surface is now `ask` and `agents`. |
 | `status` and `agents` both listed agents | **`agents`** answers "what do I have and what is it doing". **`status`** answers "how is rundesk" — version, supervisor, install fitness. Two questions, two commands. |
 | `bindings` as a verb, beside `channels` | Removed. Which provider and model answer is an **option where the entry point is made** (`channels ava add ops --kind discord --provider claude`), and the agent supplies what was left out. Reaching an agent from Discord is one command, not two. A binding is still what a run resolved — it is just not something anyone maintains. |
-| `serve` beside `start` — both run an agent | Folded into **`start`**, which takes where it runs rather than there being a second verb for it. `serve` survives only as what an already-written launchd job invokes, so nothing installed breaks. |
+| `serve` beside `start` — both run an agent | Folded into **`start --here`**, which takes where it runs rather than there being a second verb for it. `serve` is still *accepted* — every launchd job already on disk invokes it — but it is not offered: no `help`, so argparse leaves it out of `--help` and the reference skips it. What is hidden is declared once, in `HIDDEN`, and the suite asserts both halves: out of the help, and still running. |
 | `show <run>` beside `replay <run>` — both look back at one run | One **`show`**, with a flag for the stream. A distinction that needs a paragraph to explain is one a consumer will get wrong. |
 | `remove` beside `stop --remove` — two ways to remove | One way: **`remove`**. |
-| `uninstall` printing instructions and exiting zero | It removes rundesk, or it fails. A command that reports success without doing the thing is the failure this product is most careful about. |
+| `uninstall` printing instructions and exiting zero | It removes rundesk, or it fails. A command that reports success without doing the thing is the failure this product is most careful about. It runs the installer's own removal rather than a second copy of the decision about what is rundesk's and what is the owner's. |
 
 ## What a verb that is not built does
 
@@ -138,6 +139,25 @@ always called this.
 
 A planned verb also accepts the arguments it will eventually take (`R-CMD-7`), so a script written
 against tomorrow's rundesk gets our refusal today rather than argparse's.
+
+## Saying whose, and meaning all of them
+
+Leaving the word out is **not** how you say "all of them" — it is not saying. A bare `rundesk restart`
+reads as the one you have, and it used to cycle every gateway on the machine without disclosing that it
+would. `stop` and `restart` now refuse with the usage code and touch nothing; `--all` is how an owner asks
+for the fan-out, which is otherwise unchanged.
+
+The same rule made the implicit default go. `start`, `serve`, `logs` and `schedules` used to fall back to
+the one gateway that existed before there were agents to name one after. With agents, guessing which one
+was meant is guessing whose work to touch.
+
+## What has no agent yet
+
+A gateway from before agents existed keeps working: it is started, stopped, logged and scheduled exactly as
+it was, against the directories it already uses. `agents` lists it and marks it, because still running and
+absent from the one command that says what you have is the worst of both. `rundesk add <name>` gives it an
+agent and moves what it wrote into the agent's own directories — asked for, never automatic, and refused
+while it is running, since moving what a running gateway reads leaves it writing where nothing looks.
 
 ## Adding a verb
 
