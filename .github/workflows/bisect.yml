@@ -36,31 +36,36 @@ jobs:
         run: mkdir -p .venv/lib/python3.13
 
       - name: Every class, on its own, with a bound
+        shell: bash
         run: |
-          set -uo pipefail
-          classes=$(sed -n 's/^class \([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' "${{ inputs.suite }}")
-          echo "found: $classes"
+          # No -e. The runner sets it by default, and a class that fails then aborts the
+          # whole script before the next one runs — which is how the first attempt exited
+          # silently at class one and told us nothing.
+          set +e
+          suite="${{ inputs.suite }}"
+          seconds="${{ inputs.seconds }}"
+          classes=$(sed -n 's/^class \([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' "$suite")
           stuck=""
           for one in $classes; do
-            python -u "${{ inputs.suite }}" "$one" > one.log 2>&1 &
+            # Said before it runs, not after: if this harness dies, the last line printed
+            # is still the class it died on.
+            echo "-> $one"
+            python -u "$suite" "$one" > one.log 2>&1 &
             ran=$!
-            ended=0
-            for _ in $(seq "${{ inputs.seconds }}"); do
-              kill -0 "$ran" 2>/dev/null || { ended=1; break; }
+            waited=0
+            while kill -0 "$ran" 2>/dev/null && [ "$waited" -lt "$seconds" ]; do
               sleep 1
+              waited=$((waited + 1))
             done
-            if [ "$ended" = 0 ]; then
-              echo "STUCK    $one"
+            if kill -0 "$ran" 2>/dev/null; then
+              echo "   STUCK after ${waited}s"
               stuck="$stuck $one"
-              kill -9 "$ran" 2>/dev/null || true
+              kill -9 "$ran" 2>/dev/null
             else
-              wait "$ran"; code=$?
-              [ "$code" = 0 ] && echo "ok       $one" || { echo "FAILED   $one (exit $code)"; tail -20 one.log; }
+              wait "$ran"
+              code=$?
+              if [ "$code" -eq 0 ]; then echo "   ok"; else echo "   FAILED exit=$code"; tail -5 one.log; fi
             fi
           done
           echo
-          if [ -n "$stuck" ]; then
-            echo "::error::stuck:$stuck"
-            exit 1
-          fi
-          echo "nothing hung"
+          echo "STUCK CLASSES:${stuck:- none}"
