@@ -81,26 +81,75 @@ jobs:
 
       # -- the platform: what runs, and what keeps it running ------------------------
       - name: platform-process — a program rundesk runs, and keeping hold of it
-        run: python -u tests/test_process.py -v
+        run: |
+          # Into a file, never the runner's own pipe. A suite that leaks a process
+          # leaks the step's stdout with it, and the runner then waits for a stream
+          # that nothing will close — the step hangs after Python has already exited,
+          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
+          set +e; python -u tests/test_process.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
 
       - name: platform-gateway — one gateway per name, and what it takes with it
-        run: python -u tests/test_gateway.py -v
+        run: |
+          # Into a file, never the runner's own pipe. A suite that leaks a process
+          # leaks the step's stdout with it, and the runner then waits for a stream
+          # that nothing will close — the step hangs after Python has already exited,
+          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
+          set +e; python -u tests/test_gateway.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
 
       - name: platform-gateway — handing a gateway to the machine that keeps it up
-        run: python -u tests/test_supervisor.py -v
+        run: |
+          # Into a file, never the runner's own pipe. A suite that leaks a process
+          # leaks the step's stdout with it, and the runner then waits for a stream
+          # that nothing will close — the step hangs after Python has already exited,
+          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
+          set +e; python -u tests/test_supervisor.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
 
       - name: platform-schedule — work that starts itself, because the time came
-        run: python -u tests/test_schedule.py -v
+        run: |
+          # Into a file, never the runner's own pipe. A suite that leaks a process
+          # leaks the step's stdout with it, and the runner then waits for a stream
+          # that nothing will close — the step hangs after Python has already exited,
+          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
+          set +e; python -u tests/test_schedule.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
 
       # -- the surface, and this copy of rundesk on a machine ------------------------
       - name: command-surface — every verb, and what it honestly refuses
-        run: python -u tests/test_cli.py -v
+        run: |
+          # Into a file, never the runner's own pipe. A suite that leaks a process
+          # leaks the step's stdout with it, and the runner then waits for a stream
+          # that nothing will close — the step hangs after Python has already exited,
+          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
+          set +e; python -u tests/test_cli.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
 
       - name: lifecycle-update — which version this is, and moving between them
-        run: python -u tests/test_updater.py -v
+        run: |
+          # Into a file, never the runner's own pipe. A suite that leaks a process
+          # leaks the step's stdout with it, and the runner then waits for a stream
+          # that nothing will close — the step hangs after Python has already exited,
+          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
+          set +e; python -u tests/test_updater.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
 
       - name: lifecycle-install — putting it on a machine, and taking it off
-        run: python -u tests/test_install.py -v
+        run: |
+          # Into a file, never the runner's own pipe. A suite that leaks a process
+          # leaks the step's stdout with it, and the runner then waits for a stream
+          # that nothing will close — the step hangs after Python has already exited,
+          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
+          set +e; python -u tests/test_install.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
 
   # ------------------------------------------------------------------ installing this checkout
   # The suites above prove the install *logic*. This runs the installer for real and then

@@ -15,3 +15,6 @@ dist/
 # OS / editor
 .DS_Store
 *.swp
+
+# What a CI step captures a suite into, so a leaked process cannot hold the runner open.
+suite.log
