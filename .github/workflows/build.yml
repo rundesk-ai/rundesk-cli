@@ -1,0 +1,32 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'   # the oldest Python a fresh macOS ships
+
+      - name: Everything parses
+        run: |
+          python -c "import ast, glob; [ast.parse(open(f).read()) for f in glob.glob('src/rundesk_cli/*.py') + glob.glob('tests/*.py')]; print('parse OK')"
+
+      - name: The installer is valid shell
+        run: bash -n install.sh
+
+      - name: The command surface
+        run: python tests/test_cli.py
+
+      - name: Version, update, and what they refuse to claim
+        run: python tests/test_updater.py
+
+      - name: The command answers when installed
+        run: |
+          RUNDESK_BIN_DIR="$HOME/.local/bin" ./install.sh
+          "$HOME/.local/bin/rundesk" version

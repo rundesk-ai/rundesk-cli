@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Local environment / credentials — never commit
+.env
+
+# OS / editor
+.DS_Store
+*.swp

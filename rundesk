@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""rundesk — the installable entry point.
+
+This file is the executable the installer symlinks onto your PATH. It resolves its
+own real location (`.resolve()` follows the symlink back into the checkout), puts
+the bundled `src` on `sys.path`, and hands off to `cli.main`. It owns no logic.
+"""
+
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from rundesk_cli.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
