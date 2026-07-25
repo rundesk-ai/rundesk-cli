@@ -24,11 +24,6 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   because only the install's `.venv` has those dependencies and the CI test job does not install them.
   Until the gate installs or invokes the declared environment, run source suites with `.venv/bin/python`
   and never report the clean plain-Python matrix as green.
-- **`tests/test_install.py` destroys the checkout's own `.venv`.** `DependencyTests` builds, asserts on and
-  `rmtree`s `REPO/.venv` itself — no env var redirects that. On a machine where the owner installed from
-  this checkout it errors twice, fails once, and leaves the live install unable to start (fitness refuses
-  a gateway whose dependencies are gone). Restore with `./install.sh`. Copy the checkout and point the
-  installer at the copy, the way `EverythingNeededTests` already does, before running that file again.
 - **`os.killpg(0, …)` signals the caller's own process group.** A test written to prove a signal can be
   refused killed the test run, the shell around it and everything else in the group — exit 1, no output,
   nothing to read. Use group `1` (the machine's own, refused to anyone but root) and skip under root.
