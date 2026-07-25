@@ -12,15 +12,18 @@ run toward `base-`: a higher layer may cite a lower one, never the reverse.
 2. command-    — the command line itself: what it offers, and how a verb behaves
 3. platform-   — the runtime rundesk is: what stays up, and what it keeps hold of
 4. agent-      — the named identity work is run for: its home, and what it loads
-5. lifecycle-  — this copy of rundesk on a machine: how it arrives, moves and leaves
+5. channel-    — the surfaces an agent is reached on, and what arrives from them
+6. lifecycle-  — this copy of rundesk on a machine: how it arrives, moves and leaves
 ```
 
 `platform-` sits under `agent-` because an agent is reached through what stays running, while a gateway
-knows nothing of whose work it is holding. `agent-` sits under `lifecycle-` because moving this copy of
-rundesk has to account for the agents on the machine, while an agent knows nothing of how rundesk arrived.
+knows nothing of whose work it is holding. `agent-` sits under `channel-` because a channel dispatches
+work for an agent, while an agent is the same agent whatever it is reached on. `channel-` sits under
+`lifecycle-` because moving this copy of rundesk has to account for what is connected, while a channel
+knows nothing of how rundesk arrived.
 
-The gateway's remaining components — a brain and a channel — are not declared yet. Each is the owner's
-call at the time its work arrives, and adding one is a row here.
+The remaining component — a brain — is not declared yet. It is the owner's call at the time its work
+arrives, and adding one is a row here.
 
 ## Contents — maintained by hand
 

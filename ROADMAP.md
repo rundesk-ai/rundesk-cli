@@ -97,7 +97,7 @@ authorized local invocation can.
 - Keep persistence small and file-based until measured behavior requires something else. A run ID and
   minimal routing/session records do not require a database.
 - Treat component ontology, persisted schemas and migrations as owner decisions before implementation.
-  `agent-` is now declared; this roadmap does not add or ratify `provider-` or `channel-`.
+  `agent-` and `channel-` are now declared; this roadmap does not add or ratify `provider-`.
 - **A credential never arrives as a command-line argument, and never leaves in output.** Anything on a
   command line is readable through the process list and kept in shell history. A channel's token is read
   from an environment variable, from a file the owner already controls, or asked for on a terminal — and
@@ -378,6 +378,11 @@ session and outcome by one run ID. The same sanitized stream passes offline repl
 **Outcome:** one authorized Discord channel/thread can send text to one proven provider binding and receive
 streamed results. Approvals and provider questions remain explicitly unsupported in this phase.
 
+What a channel must do is drafted in `channel-messaging` (`R-CH-n`) and what Discord does with it in
+`channel-discord` (`R-DIS-n`), both carried over from the Node build, which had all of this working:
+threads opened on being named, reactions marking a turn seen, finished, stopped or failed, and steering
+through Discord's own commands rather than words typed into the chat.
+
 Build the Discord wire against a fake brain first, then attach it to the Phase 3 adapter. The already
 pinned `discord.py` dependency must earn its place through the same install and test path as the product;
 do not add a second Discord stack.
@@ -419,10 +424,19 @@ The first slice needs:
 
 - explicit Discord channel/thread to binding lookup;
 - authorized user/server/channel checks before run admission;
+- a thread opened on being named, and answered in without being named again (R-DIS-1, R-DIS-3);
+- the turn marked as it goes — seen, then how it ended (R-DIS-5, R-DIS-7, R-DIS-8);
+- stopping and forgetting a conversation, offered as Discord's own commands (R-CH-9, R-CH-10, R-DIS-10);
 - prompt acknowledgement within Discord's limit;
 - coalesced text edits and bounded/safe handling of long output;
 - an asynchronous delivery queue whose failure cannot kill provider work;
 - local retention of the final run outcome when Discord is unavailable.
+
+**Stopping and forgetting are not approvals.** They are gestures aimed at the conversation, not at the
+provider's permission model, so they belong here while questions and approvals wait for Phase 7. What a
+control *did* arrives as the turn's own outcome, never as the command's answer — acknowledging a control
+with a lifecycle signal is what made resetting mid-turn publish the running turn's half-written output in
+the Node build (R-DIS-12).
 
 ### Tests
 
@@ -431,6 +445,9 @@ The first slice needs:
 - An unauthorized user, server or channel is refused before a run is admitted, not after.
 - A message naming a provider, model or permission policy changes none of them.
 - Output too long for one message is bounded and split or attached, never truncated in silence.
+- A stop ends the turn running in that conversation and nothing else.
+- Forgetting a conversation means the next message starts a new session, not a resumed one.
+- A control raised mid-turn does not publish the running turn's half-written output as its answer.
 
 ### Exit proof
 

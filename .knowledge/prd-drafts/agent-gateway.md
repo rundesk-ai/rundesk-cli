@@ -12,8 +12,8 @@ is how it runs rather than a second thing to keep.
 
 ## Why it exists
 
-- An owner operates agents, and never has to keep a gateway in step with one by hand.
 - No command leaves an agent with nothing running it, or something running nothing.
+- Starting and stopping are said of the agent, so nobody has to know a gateway is there at all.
 - Removing an agent does not leave work behind that its name would inherit if it came back.
 
 ## Requirements
@@ -25,9 +25,12 @@ is how it runs rather than a second thing to keep.
 | ❌ | R-AGW-3 | Every channel an agent is reachable on is held open by the gateway that runs it | — |
 | ❌ | R-AGW-4 | Taking an agent away takes the schedules and channels that were its own | — |
 | ❌ | R-AGW-5 | Taking an agent away keeps the account of what it did until a removal is asked for that too | — |
+| ❌ | R-AGW-6 | Starting an agent starts the gateway that runs it | — |
+| ❌ | R-AGW-7 | Stopping an agent stops the gateway that runs it | — |
+| ❌ | R-AGW-8 | An agent is reported as running exactly when the gateway that runs it is | — |
 
 ## Open questions
 
 - What becomes of the gateway that exists today under no agent's name, once every gateway has one.
-- Whether a gateway can be stood down while its agent stays, or whether standing one down is the agent's.
+- Whether running a gateway in this terminal stays a gateway verb, or becomes the agent's like the rest.
 - Whether an agent whose gateway will not start is reported as the agent failing or as the gateway.

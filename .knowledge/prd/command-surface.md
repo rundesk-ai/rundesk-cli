@@ -27,5 +27,5 @@ command is the only way into the product, so what it lists is what the product i
 | ✅ | R-CMD-6 | Every operation the command lists is answered by something | `every verb is reachable and none falls through`, `every operation is reachable including the ones under a verb` |
 | ✅ | R-CMD-7 | An operation that is not built accepts the arguments it will take once built | `a planned command tolerates the arguments it will take` |
 | ✅ | R-CMD-8 | An operation that is not built ends differently from one named wrongly | `a command that is not there is told apart from one typed wrong` |
-| ✅ | R-CMD-9 | An operation that is not built names an operation that is | `a planned command names something that does work` |
+| ✅ | R-CMD-9 | An operation that is not built points at a command that does work | `a planned command names something that does work` |
 | ✅ | R-CMD-10 | An operation that is not built says which part of it is missing | `a planned command says which of it is not there` |
