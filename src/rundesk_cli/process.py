@@ -287,7 +287,7 @@ class _Lines:
         self._on_line = on_line
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self._pending = ""
-        self._tail: deque = deque(maxlen=RETAINED_LINES)
+        self._tail: deque = deque()   # bounded by `_keep`, never by itself
         self._held_bytes = 0
 
     def feed(self, chunk: bytes) -> None:
@@ -313,10 +313,18 @@ class _Lines:
 
         Bounded in bytes as well as in count (R-PROC-12): two hundred of anything says
         nothing about how much that is, and one thing a program says may be megabytes.
+
+        Both bounds are enforced *here*, and the deque deliberately has no `maxlen`. A
+        deque that evicts on its own does it silently — the count stayed right while the
+        byte total kept climbing past what was actually held, until it exceeded the bound
+        on its own and started throwing away the newest lines to chase a number that had
+        nothing behind it. The tail this exists to preserve collapsed to one line.
         """
         self._tail.append(one)
         self._held_bytes += len(one)
-        while self._held_bytes > TAIL_BYTES and len(self._tail) > 1:
+        while len(self._tail) > 1 and (
+            self._held_bytes > TAIL_BYTES or len(self._tail) > RETAINED_LINES
+        ):
             self._held_bytes -= len(self._tail.popleft())
 
     def _emit(self, line: str) -> None:
@@ -351,7 +359,7 @@ class _Records:
         self._held = held
         self._pending = bytearray()
         self._skipping = False
-        self._tail: deque = deque(maxlen=RETAINED_LINES)
+        self._tail: deque = deque()   # bounded by `_keep`, never by itself
         self._held_bytes = 0
 
     def feed(self, chunk: bytes) -> None:

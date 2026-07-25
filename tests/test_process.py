@@ -1098,6 +1098,38 @@ class TheTwoStreamsKeptApart(Quickened):
         self.assertEqual(b"took 1000001", taken.records[1])
         await asyncio.wait_for(reading, 20)
 
+    async def test_a_long_run_does_not_shrink_the_tail_it_is_keeping(self):
+        """R-PROC-12 — the bound must not eat what it is there to preserve.
+
+        Counting bytes beside a deque that also evicts on its own count is a byte total
+        that only ever climbs: the deque drops the oldest silently, nothing subtracts it,
+        and once the phantom total passes the bound the newest lines start being thrown
+        away to chase it. A chatty program holding well under the byte cap collapsed to a
+        single retained line — the one thing an operator needs when it goes wrong.
+        """
+        frame = process._Lines(None)
+        for _ in range(300):
+            frame.feed(b"x" * 200 + b"\n")        # settle past both bounds
+        smallest = process.RETAINED_LINES
+        for _ in range(5000):
+            frame.feed(b"x" * 200 + b"\n")
+            smallest = min(smallest, len(frame._tail))
+        self.assertGreaterEqual(smallest, process.RETAINED_LINES - 1,
+                                "the tail shrank while holding far less than it is allowed")
+        self.assertLessEqual(frame._held_bytes, process.TAIL_BYTES)
+        # And what it thinks it holds is what it holds.
+        self.assertEqual(sum(len(one) for one in frame._tail), frame._held_bytes,
+                         "the byte total drifted away from what is actually kept")
+
+    async def test_a_tail_of_enormous_lines_is_bounded_by_bytes_not_by_count(self):
+        """R-PROC-12 — two hundred of anything says nothing about how much that is."""
+        frame = process._Lines(None)
+        for _ in range(20):
+            frame.feed(b"z" * 100000 + b"\n")
+        self.assertLess(len(frame._tail), 20, "it kept every enormous line")
+        self.assertLessEqual(frame._held_bytes, process.TAIL_BYTES + 100001)
+        self.assertEqual(sum(len(one) for one in frame._tail), frame._held_bytes)
+
     async def test_what_went_wrong_is_not_held_against_the_machine(self):
         """R-PROC-12 — read whether or not anyone wants it is not read without bound."""
         program = process.Program(
@@ -1165,6 +1197,31 @@ class WhatAReceiverIsHanded(Quickened):
         # program is not waited on for any of it.
         self.assertLess(time.monotonic() - began, 8.0, "the receiver held the program up")
         self.assertTrue(result.ok)
+
+    async def test_what_a_receiver_never_got_is_counted_rather_than_discarded(self):
+        """R-PROC-17 — the drain is bounded, so a slow enough receiver will not be handed
+        everything. Cancelling delivery and saying nothing meant a run reported that it
+        had finished while forty-nine of fifty records had quietly gone."""
+        self.addCleanup(setattr, process, "DRAIN_SECONDS", process.DRAIN_SECONDS)
+        process.DRAIN_SECONDS = 0.2
+        taken = []
+
+        async def dawdles(record):
+            await asyncio.sleep(0.2)
+            taken.append(record)
+
+        program = process.Program(
+            script("import sys",
+                   "for n in range(30): sys.stdout.write('n%d\\n' % n)",
+                   "sys.stdout.flush()"),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        result = await asyncio.wait_for(program.wait(sink=dawdles), 20)
+        self.assertTrue(result.ok)
+        self.assertGreater(program.undelivered, 0, "records went missing with nothing said")
+        self.assertEqual(30, len(taken) + program.undelivered,
+                         "what was framed is neither delivered nor accounted for")
 
     async def test_a_receiver_that_never_reads_is_told_what_it_missed(self):
         """R-PROC-17 — what is held is bounded, so a receiver far enough behind loses

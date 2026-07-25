@@ -394,7 +394,8 @@ def _note_interrupted(name: str, where: Path | None, work: str, why: str,
         pass  # a gateway that cannot write this down still has to get on with starting
 
 
-def _sweep_predecessor(record: Path, log: logging.Logger, noting=None) -> list[str]:
+def _sweep_predecessor(record: Path, log: logging.Logger, noting=None,
+                       surviving: dict | None = None) -> list[str]:
     """End whatever the last gateway of this name was still running, and say what it was.
 
     Called once, at the moment a gateway takes the name — so by definition the gateway
@@ -433,6 +434,10 @@ def _sweep_predecessor(record: Path, log: logging.Logger, noting=None) -> list[s
         if not since:
             log.warning("left '%s' (group %s) alone: the record cannot prove it is ours", name, pgid)
             said(name, "the record could not prove it was ours to end", pgid, False)
+            if surviving is not None:
+                # Still there, and still unfinished. Carried for the same reason as one
+                # that would not go: our record replaces the only thing naming it.
+                surviving[name] = was
             continue
         if started_at(pgid) != since:
             # The number now belongs to something that is not ours. Leaving a stray
@@ -460,6 +465,11 @@ def _sweep_predecessor(record: Path, log: logging.Logger, noting=None) -> list[s
             # ended — so a successor reported an orphan swept, and then wrote its own
             # record over the only thing that named the group still running.
             log.error("could not end '%s' (group %s) — it is still out there", name, pgid)
+            if surviving is not None:
+                # Handed back so the successor can keep naming it. Its own record is about
+                # to be written over this one, and this entry is the only thing that says
+                # the group exists — dropped here, nothing would ever look for it again.
+                surviving[name] = was
             continue
         swept.append(name)
     return swept
@@ -766,10 +776,15 @@ class Gateway:
         # ours starts, so the same work can never be running twice over (R-GW-15, R-GW-16).
         self._pick_up_where_it_left_off()
         self._say_what_was_missed()
+        # What the predecessor left that would not go. Kept, because the record we are
+        # about to write replaces the one naming it, and `_sweep_strays` skips our own
+        # name — so dropping it here makes a live process group permanently invisible.
+        self._inherited: dict = {}
         self.swept = _sweep_predecessor(
             _record_path(self.name, self.where), self.log,
             lambda work, why, pgid, ended: _note_interrupted(
                 self.name, self.schedules, work, why, pgid, ended),
+            self._inherited,
         )
         self.swept += _sweep_strays(self.where, self.name, self.log, self.schedules)
         if self.swept:
@@ -876,9 +891,16 @@ class Gateway:
             # A number and when it started: see `started_at`. Without the second half a
             # successor cannot tell our leftovers from whatever now shares the number.
             "working": {
-                name: {"pgid": program.pid, "since": started_at(program.pid)}
-                for name, program in self.running.items()
-                if program.pid is not None
+                # What a predecessor left running and nothing could end comes first, so
+                # our own work overwrites it only if it genuinely shares a name.
+                **{name: was for name, was in getattr(self, "_inherited", {}).items()
+                   if isinstance(was, dict) and isinstance(was.get("pgid"), int)
+                   and _still_there(was["pgid"])},
+                **{
+                    name: {"pgid": program.pid, "since": started_at(program.pid)}
+                    for name, program in self.running.items()
+                    if program.pid is not None
+                },
             },
         }
         _written_whole(_record_path(self.name, self.where), json.dumps(said))

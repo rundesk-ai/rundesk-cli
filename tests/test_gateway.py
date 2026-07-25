@@ -1114,6 +1114,35 @@ class WorkThatStartsItself(WithARunDirectory):
         self.schedules_for(gw.name, self._writes())
         self.assertTrue(await self._fired(gw), "the time came and nothing started")
 
+    async def test_a_schedule_whose_firing_cannot_be_written_down_does_not_start(self):
+        """R-SCH-9 — writing it down first is the whole guard against running it twice, so
+        starting anyway when the write failed is the guard doing nothing at all."""
+        gw = self.made()
+        gw.claim()
+        self.schedules_for(gw.name, {"name": "nightly", "when": "* * * * *", "run": list(FOREVER)})
+
+        def cannot_write(*_args, **_kw):
+            raise OSError("the disk is full")
+
+        self.addCleanup(setattr, gateway, "_written_whole", gateway._written_whole)
+        gateway._written_whole = cannot_write
+        gw._fire(self.schedule, datetime(2026, 3, 1, 9, 30))
+        await asyncio.sleep(0.2)
+        self.assertEqual({}, gw.running, "it started work it could not record having started")
+
+    async def test_what_a_schedule_last_did_never_moves_backwards(self):
+        """R-SCH-9 — a long run finishing after a later occurrence was already recorded put
+        the earlier minute back, and a gateway reading that took the later minute for one
+        that had never fired."""
+        gw = self.made()
+        gw.claim()
+        gw._remember("nightly", "started", datetime(2026, 3, 1, 9, 0))
+        gw._remember("nightly", "still running", datetime(2026, 3, 1, 9, 5))
+        gw._remember("nightly", "finished", datetime(2026, 3, 1, 9, 0))   # the late arrival
+        said = gateway.what_was_scheduled(gw.name, self.schedules)
+        self.assertEqual("2026-03-01 09:05", said["nightly"]["at"],
+                         "a late finish put the clock back and freed a minute to run again")
+
     async def test_that_a_schedule_fired_is_written_down_before_it_is_run(self):
         """R-SCH-9 — held only in memory, the fact that this minute had already fired
         died with the gateway. A crash between starting and finishing, and a supervisor
@@ -1706,6 +1735,33 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
         gw.release()
         self.assertFalse((self.where / "gateway.json").exists())
         self.assertIn("turn", gateway.what_was_interrupted("gateway", self.schedules))
+
+    async def test_work_a_successor_could_not_end_is_still_named_in_its_record(self):
+        """R-GW-16, R-GW-23 — refusing to *claim* it was ended is only half of it.
+
+        The successor writes its own record straight over the predecessor's, and the
+        stray sweep skips its own name — so a group nothing could end was named nowhere
+        the moment the new gateway came up, and no later start would ever look for it
+        again. One log line, and then permanently invisible.
+        """
+        # A group that is genuinely alive and that we cannot prove is ours, so the sweep
+        # leaves it — the shape of a leftover that will not go.
+        self._left_behind(pgid=os.getpgrp(), since=None)
+        gw = self.made()
+        gw.claim()
+        said = json.loads((self.where / "gateway.json").read_text())
+        self.assertIn("turn", said["working"],
+                      "the successor wrote over the only thing naming a live group")
+        self.assertEqual(os.getpgrp(), said["working"]["turn"]["pgid"])
+
+    async def test_what_a_successor_did_end_is_not_carried_forward(self):
+        """R-GW-16 — carrying it forever would have every gateway inherit a list of work
+        that finished years ago, and a sweep chasing groups that are long gone."""
+        self._left_behind()          # a pgid that is not there
+        gw = self.made()
+        gw.claim()
+        said = json.loads((self.where / "gateway.json").read_text())
+        self.assertEqual({}, said["working"], "it inherited work that had already gone")
 
     async def test_interruptions_do_not_pile_up_without_end(self):
         """R-GW-23 — a machine left running for months must not grow a file nobody prunes,
