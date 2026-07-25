@@ -324,9 +324,14 @@ def cmd_start(args: argparse.Namespace, gateways, machine) -> int:
     return 0
 
 
-def _came_up(name: str, gateways, patience: float = START_PATIENCE):
-    """The gateway, once it is actually there — or None if it never arrives."""
-    deadline = time.monotonic() + patience
+def _came_up(name: str, gateways, patience: float | None = None):
+    """The gateway, once it is actually there — or None if it never arrives.
+
+    The patience resolves here rather than in the signature: a default argument is bound
+    once, when this file is read, so naming the constant there freezes it and anything
+    that changed it afterwards is quietly ignored.
+    """
+    deadline = time.monotonic() + (START_PATIENCE if patience is None else patience)
     while time.monotonic() < deadline:
         now = gateways.standing(name)
         if now.running:
@@ -354,9 +359,12 @@ def cmd_restart(args: argparse.Namespace, gateways, machine) -> int:
     return _stand_down(args, gateways, machine, "restart")
 
 
-def _gone(name: str, gateways, patience: float = CYCLE_PATIENCE) -> bool:
-    """Has this gateway actually stopped? Asked of the gateway, not of the machine."""
-    deadline = time.monotonic() + patience
+def _gone(name: str, gateways, patience: float | None = None) -> bool:
+    """Has this gateway actually stopped? Asked of the gateway, not of the machine.
+
+    The patience resolves here, not in the signature — see `_came_up`.
+    """
+    deadline = time.monotonic() + (CYCLE_PATIENCE if patience is None else patience)
     while time.monotonic() < deadline:
         if not gateways.standing(name).running:
             return True

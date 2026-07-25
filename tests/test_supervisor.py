@@ -80,7 +80,20 @@ class Machine:
 
 
 class WithAJobDirectory(unittest.TestCase):
+    """Every case here, with the wait on the machine turned down.
+
+    How long rundesk gives launchd to finish letting go is real seconds in the wild and
+    nothing worth spending here: what is asserted is that it waits and then answers
+    honestly, not the duration. Set once for every case rather than per test, because the
+    two that most need it are the ones nobody remembers to turn down — the ones where the
+    machine never lets go, which spend the whole patience by definition.
+    """
+
+    SETTLE = 0.3
+
     def setUp(self):
+        self.addCleanup(setattr, supervisor, "SETTLE_SECONDS", supervisor.SETTLE_SECONDS)
+        supervisor.SETTLE_SECONDS = self.SETTLE
         self.where = Path(tempfile.mkdtemp(prefix="rundesk-jobs-"))
         self.addCleanup(shutil.rmtree, self.where, True)
         self.root = Path(tempfile.mkdtemp(prefix="rundesk-root-"))
@@ -305,8 +318,6 @@ class TakingItAllBack(WithAJobDirectory):
     def test_a_gateway_that_will_not_stop_is_reported_rather_than_assumed(self):
         """R-RM-9 — removal must not claim to have stopped what is still running."""
         supervisor.install("stubborn", self.root, self.logs, str(self.where), self.machine)
-        self.addCleanup(setattr, supervisor, "SETTLE_SECONDS", supervisor.SETTLE_SECONDS)
-        supervisor.SETTLE_SECONDS = 0.3
         taken, stubborn = supervisor.take_all_back(
             str(self.where), self.root, self.machine,
             standing=self._standing(running=("stubborn",)))
@@ -349,8 +360,6 @@ class TakingItAllBack(WithAJobDirectory):
         stubborn and the second could not see it at all — with the thing still running.
         """
         supervisor.install("stubborn", self.root, self.logs, str(self.where), self.machine)
-        self.addCleanup(setattr, supervisor, "SETTLE_SECONDS", supervisor.SETTLE_SECONDS)
-        supervisor.SETTLE_SECONDS = 0.3
         still_up = self._standing(running=("stubborn",))
         first = supervisor.take_all_back(str(self.where), self.root, self.machine, standing=still_up)
         self.assertEqual(([], ["stubborn"]), first)

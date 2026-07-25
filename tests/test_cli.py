@@ -23,6 +23,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk_cli import __version__  # noqa: E402
 from rundesk_cli import cli  # noqa: E402
+
+
+#: How long the command waits on a gateway to appear or to go. Real seconds in the wild,
+#: and nothing worth spending here: what these cases assert is that it waits and then
+#: answers honestly, never the duration. Set for the whole file rather than per case,
+#: because the ones that spend the whole wait are exactly the ones nobody remembers to
+#: turn down — a gateway that never comes up has no earlier moment to finish at.
+_REAL_PATIENCE = (cli.START_PATIENCE, cli.CYCLE_PATIENCE)
+
+
+def setUpModule():
+    cli.START_PATIENCE, cli.CYCLE_PATIENCE = 0.3, 0.3
+
+
+def tearDownModule():
+    cli.START_PATIENCE, cli.CYCLE_PATIENCE = _REAL_PATIENCE
 from rundesk_cli import gateway as real_gateway  # noqa: E402
 
 

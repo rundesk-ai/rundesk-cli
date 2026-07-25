@@ -210,9 +210,14 @@ def _still_holds(name: str, asking: Callable[..., Spoke]) -> bool:
         return True
 
 
-def _gone_from(name: str, asking: Callable[..., Spoke], patience: float = SETTLE_SECONDS) -> bool:
-    """Wait for the machine to finish taking a job away, and say whether it did."""
-    deadline = time.monotonic() + patience
+def _gone_from(name: str, asking: Callable[..., Spoke], patience: float | None = None) -> bool:
+    """Wait for the machine to finish taking a job away, and say whether it did.
+
+    The patience resolves here, not in the signature: a default argument is bound once,
+    when this file is read, so naming the constant there freezes it — and anything that
+    changed it afterwards, a test included, was quietly ignored and spent the real wait.
+    """
+    deadline = time.monotonic() + (SETTLE_SECONDS if patience is None else patience)
     while time.monotonic() < deadline:
         if not _still_holds(name, asking):
             return True
