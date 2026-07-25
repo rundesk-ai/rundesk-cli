@@ -120,7 +120,9 @@ class RemovingWhatIsRunningTests(Sandbox):
         supervisor.write("busy", REPO, self.root / "logs", str(jobs))
         # Held for real: the lock is what `standing` asks the kernel about, so this is a
         # gateway that is genuinely still running as far as everything here is concerned.
-        holding = gateway.Gateway("busy", where=run, logs=self.root / "logs")
+        # Its install is named rather than left to fall back on this checkout: claiming a
+        # name asks whether the install fits, and this case is about removal, not fitness.
+        holding = gateway.Gateway("busy", where=run, logs=self.root / "logs", root=self.root)
         holding.claim()
         self.addCleanup(holding.release)
 
@@ -250,6 +252,44 @@ class RemovalTests(Sandbox):
         purged = self.uninstall("--purge")
         self.assertEqual(purged.returncode, 0, purged.stderr)
         self.assertFalse(settings.exists(), "--purge left the settings behind")
+
+    def test_removing_rundesk_keeps_what_the_gateways_wrote_unless_asked_to_take_it(self):
+        """R-RM-10 — `rm -rf` on the install directory took the whole audit trail with the
+        program, at the one moment an owner is most likely to want it: a reinstall after
+        trouble. The command someone runs to fix the trouble was deleting the account of
+        what the trouble was (R-GW-18)."""
+        wrote = self.home / ".rundesk" / "logs"
+        scheduled = self.home / ".rundesk" / "schedules"
+        for made in (wrote, scheduled):
+            made.mkdir(parents=True)
+        (wrote / "gateway.log").write_text("what happened\n")
+        (scheduled / "gateway.json").write_text('[{"name": "nightly"}]\n')
+        (scheduled / "gateway.ran.json").write_text('{"nightly": {"outcome": "finished"}}\n')
+
+        self.install()
+        kept = self.uninstall()
+
+        self.assertEqual(kept.returncode, 0, kept.stderr)
+        self.assertEqual("what happened\n", (wrote / "gateway.log").read_text(),
+                         "an ordinary uninstall took the gateway's log")
+        self.assertTrue((scheduled / "gateway.json").exists(), "it took the owner's schedules")
+        self.assertTrue((scheduled / "gateway.ran.json").exists(),
+                        "it took the account of what the schedules did")
+        self.assertIn("--purge", kept.stdout, "it never said how to take them")
+
+    def test_purging_takes_what_the_gateways_wrote_as_well(self):
+        """R-RM-10 — the other half, so "keeps it" cannot pass by never removing anything."""
+        wrote = self.home / ".rundesk" / "logs"
+        wrote.mkdir(parents=True)
+        (wrote / "gateway.log").write_text("what happened\n")
+
+        self.install()
+        purged = self.uninstall("--purge")
+
+        self.assertEqual(purged.returncode, 0, purged.stderr)
+        self.assertFalse(wrote.exists(), "--purge left the gateway logs behind")
+        self.assertFalse((self.home / ".rundesk").exists(),
+                         "--purge left the install directory behind")
 
     def test_removing_rundesk_that_was_never_installed_says_so(self):
         # Someone running uninstall twice, or on the wrong machine, has not done anything

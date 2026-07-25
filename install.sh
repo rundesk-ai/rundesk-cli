@@ -126,6 +126,14 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   check_install_dir
   echo "removing rundesk"
   removed=0
+  purge=0
+  [[ "${2:-}" == "--purge" ]] && purge=1
+  #: What an ordinary uninstall keeps: what the owner decided, and what their gateways
+  #: wrote. These sit under the install directory only because that is where rundesk keeps
+  #: things — they are not part of the program (R-RM-4, R-RM-10, R-GW-18). A reinstall
+  #: after trouble is exactly the moment the account of what went wrong matters most, and
+  #: it was being deleted by the command someone runs to fix the trouble.
+  KEPT_FROM_INSTALL_DIR=(logs schedules)
   # Refused rather than continued: deleting the command while a gateway is still running
   # leaves an agent nobody can reach and takes away the very thing that could stop it.
   if ! stop_gateways; then
@@ -144,7 +152,7 @@ Stop it and try again, or see what is running with: rundesk status"
   [[ "$removed" == 0 ]] && echo "No rundesk symlink pointing at a rundesk install was found on PATH."
 
   config_dir="$HOME/.config/rundesk"
-  if [[ "${2:-}" == "--purge" && -d "$config_dir" ]]; then
+  if [[ "$purge" == 1 && -d "$config_dir" ]]; then
     rm -rf "$config_dir"; echo "removed $config_dir"
   elif [[ -d "$config_dir" ]]; then
     echo "Settings in $config_dir were left alone (add --purge to delete them)."
@@ -157,11 +165,32 @@ Stop it and try again, or see what is running with: rundesk status"
 
   # Only a directory this installer laid down is its to delete. A clone carries history and
   # is somebody's work, wherever it happens to sit.
+  #
+  # And inside it, the program is taken entry by entry rather than the whole directory at
+  # once, because the directory is not all program: `rm -rf "$INSTALL_DIR"` also took every
+  # gateway log, every schedule and every account of what a schedule had done. The directory
+  # itself goes only once nothing of the owner's is left in it (R-RM-8).
   if [[ -d "$INSTALL_DIR" ]]; then
     if is_someones_work "$INSTALL_DIR"; then
       echo "left $INSTALL_DIR alone — it is a checkout, not something this installer created."
     else
-      rm -rf "$INSTALL_DIR"; echo "removed $INSTALL_DIR"; removed=1
+      kept=""
+      for entry in "$INSTALL_DIR"/* "$INSTALL_DIR"/.[!.]*; do
+        [[ -e "$entry" ]] || continue
+        base="${entry##*/}"
+        if [[ "$purge" == 0 ]] && printf '%s\n' "${KEPT_FROM_INSTALL_DIR[@]}" | grep -qx "$base"; then
+          kept="${kept:+$kept, }$base"
+          continue
+        fi
+        rm -rf "$entry"
+      done
+      removed=1
+      if [[ -n "$kept" ]]; then
+        echo "removed rundesk from $INSTALL_DIR"
+        echo "kept what your gateways wrote and what you scheduled ($kept) — add --purge to delete them."
+      else
+        rmdir "$INSTALL_DIR" 2>/dev/null && echo "removed $INSTALL_DIR"
+      fi
     fi
   fi
   if [[ "$removed" == 0 ]]; then
