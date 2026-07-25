@@ -11,6 +11,10 @@ ends it — it never loads an adapter's code, and never runs a conversation itse
 program rather than a plugin is the whole point: it can be written in anything, and a brain nobody here
 has heard of is reached by the same seam as a shipped one.
 
+An adapter answers two questions: what it can do, and one turn. Both are asked of the adapter rather
+than worked out from its name, so a brain that runs no tools, keeps no conversation or reports no cost
+is a whole brain with that work absent, rather than a broken one.
+
 ## Why it exists
 
 - An owner can put their own brain, or their own conversational loop, behind any agent.
@@ -35,11 +39,15 @@ has heard of is reached by the same seam as a shipped one.
 | ❌ | R-PRV-12 | An adapter that cannot run says why before a turn is admitted | — |
 | ❌ | R-PRV-13 | An adapter that stops reporting is ended on silence rather than on a deadline | — |
 | ❌ | R-PRV-14 | What one adapter does cannot reach another agent's working directory or home | — |
+| ❌ | R-PRV-15 | An adapter says what it can do before a turn is admitted, and nothing else is assumed of it | — |
+| ❌ | R-PRV-16 | What an owner set for a brain reaches it unread and unchanged | — |
+| ❌ | R-PRV-17 | An adapter is handed the handle it last reported for that conversation, and never another conversation's | — |
+| ❌ | R-PRV-18 | An adapter is told how much of the machine a turn may touch, in words no brain owns | — |
 
 ## Open questions
 
-- Whether an adapter is told how much of the machine it may touch, or is left to its own posture.
 - What a turn does when an adapter reports a record whose shape is known but whose content is not.
-- Whether continuing an earlier conversation is the adapter's to arrange or Rundesk's to ask for.
-- Whether a shipped adapter and a stranger's are held to the same suite, or the stranger's to less.
-- Where an adapter that is not on the machine is reported — by `doctor`, at admission, or both.
+- What happens when what an adapter says it can do and what it then reports disagree.
+- Whether an adapter that cannot carry a conversation on should be given one at all.
+- Whether being sent to mid-turn belongs in this seam, and what would prove a brain supports it.
+- How a brain that has drifted from what was last measured is noticed before a turn fails on it.
