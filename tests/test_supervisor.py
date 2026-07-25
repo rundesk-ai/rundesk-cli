@@ -437,7 +437,12 @@ class HandingItOver(WithAJobDirectory):
         """R-GW-1 — the machine finishes taking a job away *after* saying it has, and
         offering the replacement into that gap is refused with an error that says
         nothing about timing. Left unwaited, every second attempt fails — and the failed
-        one leaves no job at all, so it alternates forever."""
+        one leaves no job at all, so it alternates forever.
+
+        Given real patience rather than the file's turned-down default: this case is about
+        a machine that takes several looks to let go, so it has to be allowed several.
+        """
+        supervisor.SETTLE_SECONDS = 2.0     # restored by setUp's cleanup
         machine = Machine(slow_to_let_go=3)
         for attempt in range(4):
             said = supervisor.install("gateway", self.root, self.logs, str(self.where), machine)
