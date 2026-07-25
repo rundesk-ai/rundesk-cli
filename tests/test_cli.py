@@ -730,6 +730,20 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("NOT ADDED", said)
 
+    def test_a_schedule_naming_a_program_rather_than_locating_it_is_never_added(self):
+        """R-SCH-1, R-PROC-2 — refused where it is written, not discovered at three in
+        the morning. The gateway runs with almost no PATH, so a bare name resolves in the
+        shell that typed it and nowhere else. Written down, it failed every time it fell
+        due — with nothing said anywhere an owner reads, and LAST RUN stuck at '-'."""
+        gateways = self._gateways()
+        code, said = drive(["schedules", "add", "nightly", "--when", "0 3 * * *",
+                            "--run", "codex", "exec"], gateways)
+        self.assertEqual(1, code)
+        self.assertIn("NOT ADDED", said)
+        self.assertIn("not a location", said)
+        self.assertEqual([], gateways.written_schedules("gateway"),
+                         "a schedule that can never start was written down anyway")
+
     def test_adding_a_name_that_is_taken_is_refused(self):
         """R-SCH-8 — everything about a schedule is reported by its name, so two of one
         name is two schedules nobody can tell apart."""

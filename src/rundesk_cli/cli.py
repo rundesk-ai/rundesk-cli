@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from rundesk_cli import __version__  # noqa: E402
 from rundesk_cli import gateway as _gateway  # noqa: E402
+from rundesk_cli import process  # noqa: E402
 from rundesk_cli import supervisor as _supervisor  # noqa: E402
 from rundesk_cli import updater  # noqa: E402
 
@@ -443,6 +444,14 @@ def _add_schedule(args: argparse.Namespace, gateways) -> int:
         return 1
     if not args.run:
         print(f"{args.schedule}: NOT ADDED — nothing was named to run", file=sys.stderr)
+        return 1
+    if not process.located(args.run[0]):
+        # Refused here rather than discovered at three in the morning. The gateway runs
+        # with almost no PATH, so a program named rather than located resolves in the
+        # shell that typed it and nowhere else (R-PROC-2) — and a schedule that cannot
+        # start looks exactly like one that has simply never come due.
+        print(f"{args.schedule}: NOT ADDED — '{args.run[0]}' is a name, not a location; "
+              f"give the full path (try: command -v {args.run[0]})", file=sys.stderr)
         return 1
     # Read and written under one lock: two `add`s racing would otherwise each read the
     # same list and each write theirs back, and one schedule would simply never exist

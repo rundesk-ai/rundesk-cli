@@ -217,6 +217,25 @@ def ran_path(name: str, where: Path | None = None) -> Path:
     return (where or schedules_home()) / f"{checked(name)}.ran.json"
 
 
+def seen_path(name: str, where: Path | None = None) -> Path:
+    """Where the last moment a gateway of this name was up is kept.
+
+    Beside the schedules, for the same reason `ran_path` is. Taken off the run record,
+    which a clean stop deletes (R-GW-12), this checkpoint survived a crash and not an
+    ordinary restart — so what fell due while a gateway was *deliberately* stopped, which
+    is the gap an owner is most likely to have caused and least likely to expect, was the
+    one nobody was ever told about (R-SCH-5).
+    """
+    return (where or schedules_home()) / f"{checked(name)}.seen.json"
+
+
+def last_seen(name: str = DEFAULT_NAME, where: Path | None = None) -> float | None:
+    """When a gateway of this name was last known to be up, or None if never."""
+    said = _read_json(seen_path(name, where), {})
+    when = said.get("at") if isinstance(said, dict) else None
+    return when if isinstance(when, (int, float)) else None
+
+
 def scheduled(name: str = DEFAULT_NAME, where: Path | None = None):
     """This gateway's schedules, and any that could not be understood (R-SCH-10).
 
@@ -707,9 +726,8 @@ class Gateway:
         """
         from rundesk_cli import schedule
 
-        left = _read_json(_record_path(self.name, self.where), {})
-        since = left.get("beat") if isinstance(left, dict) else None
-        if not isinstance(since, (int, float)):
+        since = last_seen(self.name, self.schedules)
+        if since is None:
             return
         was_down_since = datetime.fromtimestamp(since)
         for one, _ in [(one, None) for one in scheduled(self.name, self.schedules)[0]]:
@@ -789,6 +807,7 @@ class Gateway:
         as_name: str | None = None,
         env: dict[str, str] | None = None,
         silence: float | None = process.SILENCE_SECONDS,
+        ceiling: float | None = process.CEILING_SECONDS,
         on_line: Callable[[str], None] | None = None,
     ) -> process.Result:
         """Run a program as this gateway, and keep hold of it while it runs.
@@ -808,7 +827,8 @@ class Gateway:
             self.log.warning("refused '%s': it is already running", held)
             raise AlreadyStarted(f"'{held}' is already running under gateway '{self.name}'")
         program = process.Program(
-            argv, env=env if env is not None else process.environment(self.where), silence=silence
+            argv, env=env if env is not None else process.environment(self.where),
+            silence=silence, ceiling=ceiling,
         )
         # Registered before it is started, so two of the same name racing cannot both get
         # past the check above and into a subprocess.
@@ -911,7 +931,16 @@ class Gateway:
         self._stopping = True
         drained = True
         try:
-            await asyncio.wait_for(process.end_all(list(self.running.values())), STOP_SECONDS)
+            # Running out of time is not the only way to fail to end something. Both
+            # signals can go out, the grace period can pass, and the group can still be
+            # there — and taking "it returned" for "it went" had this report a clean
+            # shutdown and then delete the record naming the survivors (R-GW-17).
+            drained = await asyncio.wait_for(
+                process.end_all(list(self.running.values())), STOP_SECONDS
+            )
+            if not drained:
+                still = ", ".join(sorted(self.running)) or "something"
+                self.log.error("could not end %s — it is still out there", still)
         except asyncio.TimeoutError:
             # Said out loud rather than swallowed: what is left is in its own process
             # group, so this process exiting will not take it, and the next start of
@@ -959,10 +988,17 @@ class Gateway:
                 self.log.error("schedule '%s' cannot be understood: %s", name, why)
                 self._complained[name] = why
         for one in schedule.due(wanted, now, self._ran):
-            self._ran[one.name] = now.replace(second=0, microsecond=0)
-            asyncio.ensure_future(self._run_scheduled(one))
+            fired = now.replace(second=0, microsecond=0)
+            self._ran[one.name] = fired
+            # Written down before it is started, not after it finishes. Held only in
+            # memory, the fact that this minute had already fired died with the gateway:
+            # a crash between starting and finishing, and a supervisor that brings the
+            # gateway back within seconds, ran the same schedule twice for the one
+            # minute it was due (R-SCH-9).
+            self._remember(one.name, "started", fired)
+            asyncio.ensure_future(self._run_scheduled(one, fired))
 
-    async def _run_scheduled(self, one) -> None:
+    async def _run_scheduled(self, one, fired: datetime) -> None:
         """Start what a schedule named, under the schedule's own name.
 
         Under its own name on purpose: that is what makes a schedule refuse to begin
@@ -980,11 +1016,20 @@ class Gateway:
             # because the last run never ended looks exactly like one that is working.
             self.log.warning("schedule '%s' skipped: what it started last time is still running",
                              one.name)
-            self._remember(one.name, "still running")
+            self._remember(one.name, "still running", fired)
             return
         except Stopping:
             return
-        self._remember(one.name, outcome.reason)
+        except BaseException as would_not_start:  # noqa: BLE001 — see below
+            # Nobody awaits this task, so anything raised here is raised nowhere at all:
+            # asyncio reports it against the garbage-collected task, on stderr, which for
+            # a supervised gateway is a file rundesk does not read. The schedule then sat
+            # at LAST RUN '-' forever, indistinguishable from one that has never come due
+            # — while failing again every single time it fell due (R-SCH-8).
+            self.log.error("schedule '%s' could not be started: %s", one.name, would_not_start)
+            self._remember(one.name, "could not start", fired)
+            return
+        self._remember(one.name, outcome.reason, fired)
 
     async def _over_and_over(self, every: float, do, failed: str) -> None:
         """Do this at intervals, for as long as the gateway lives.
@@ -1003,10 +1048,16 @@ class Gateway:
             except BaseException as went_wrong:  # noqa: BLE001 — see the docstring
                 self.log.warning(failed, went_wrong)
 
-    def _remember(self, name: str, outcome: str) -> None:
-        """What a schedule last did, kept where anything asking can read it."""
+    def _remember(self, name: str, outcome: str, at: datetime | None = None) -> None:
+        """What a schedule last did, kept where anything asking can read it.
+
+        `at` is the minute it *fell due*, kept unchanged as the outcome is updated. Using
+        the moment of writing instead moved the time forward as a run finished, and a
+        gateway restarting then read that later minute as the last one to have fired —
+        so every schedule due in between was passed over as already done.
+        """
         self._outcomes[name] = {
-            "at": datetime.now().strftime("%Y-%m-%d %H:%M"), "outcome": outcome,
+            "at": (at or datetime.now()).strftime("%Y-%m-%d %H:%M"), "outcome": outcome,
         }
         try:
             _written_whole(ran_path(self.name, self.schedules), json.dumps(self._outcomes, indent=2))
@@ -1025,6 +1076,10 @@ class Gateway:
             return
         try:
             self._record()
+            # The same moment, kept where it outlives this gateway. The record goes when
+            # the gateway is stopped cleanly, and this is the only thing left that can
+            # say how long nothing was running (R-SCH-5).
+            _written_whole(seen_path(self.name, self.schedules), json.dumps({"at": time.time()}))
         except OSError as err:
             # A gateway that cannot say it is alive is still alive, and stopping serving
             # over it would turn a full disk into an outage.

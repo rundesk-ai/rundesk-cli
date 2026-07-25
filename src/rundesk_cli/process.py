@@ -98,6 +98,16 @@ class NotAbsolute(ValueError):
     """
 
 
+def located(program: str) -> bool:
+    """Is this a program rundesk can find, rather than a name a shell would look up?
+
+    One rule in one place. Anything that writes down a program to be run later has to
+    apply the same test `start` will, and a second copy of "is it absolute" somewhere
+    else is a second copy that can come to disagree.
+    """
+    return os.path.isabs(program)
+
+
 def resolve(name: str, path: str | None = None) -> str | None:
     """Where a program actually is, looked up once so nothing has to look again.
 
@@ -158,7 +168,7 @@ class Program:
         if not self.argv:
             raise NotAbsolute("a program to run was not named at all")
         program = self.argv[0]
-        if not os.path.isabs(program):
+        if not located(program):
             raise NotAbsolute(
                 f"'{program}' is a name, not a location — resolve it before running it"
             )
@@ -345,14 +355,19 @@ class Program:
         assert self._proc is not None
         return await self._proc.wait()
 
-    async def end(self) -> None:
+    async def end(self) -> bool:
         """End it, and everything it started, whether or not it cooperates (R-PROC-4).
 
         Asked first and taken second: a brain killed outright can leave its own session
         half-written, and the polite signal costs a few seconds at shutdown.
+
+        **True only when the group is really gone.** Returning nothing meant a shutdown
+        could not tell "ended" from "asked twice and it is still there": the gateway saw
+        no timeout, called itself drained, and deleted the record naming the surviving
+        group — so no successor of that name would ever sweep it (R-GW-17).
         """
         if self._proc is None:
-            return
+            return True  # nothing was ever started, so nothing is out there
         # The leader having gone is not the tree having gone. Returning here because the
         # one process we started has exited left everything it spawned running — and a
         # shutdown asked to end this program then reported that it had (R-PROC-5,
@@ -367,9 +382,9 @@ class Program:
         try:
             for sig in (signal.SIGTERM, signal.SIGKILL):
                 if not self._signal_group(sig):
-                    return  # nothing left in the group to signal
+                    return True  # nothing left in the group to signal
                 if await self._group_gone(GRACE_SECONDS):
-                    return
+                    return True
         except asyncio.CancelledError:
             # Out of time, but not out of obligation. A shutdown that runs out of
             # patience cancels this mid-way, having asked politely and not yet insisted —
@@ -378,7 +393,9 @@ class Program:
             self._signal_group(signal.SIGKILL)
             raise
         # Both signals sent and something is still there. Nothing further can be done to
-        # it; saying so is left to whoever asked, who can see `alive`.
+        # it — but whoever asked has to be told, because what they do next is decide
+        # whether anything is left for a successor to find.
+        return not self._signal_group(0)
 
     async def _group_gone(self, patience: float) -> bool:
         """Is *everything* in the group gone — not merely the one we started?
@@ -450,7 +467,7 @@ async def run(
     return await program.wait(on_line)
 
 
-async def end_all(programs: Iterable[Program]) -> None:
+async def end_all(programs: Iterable[Program]) -> bool:
     """End everything still running, at once rather than one after another.
 
     In turn would spend the grace period once per program, and the machine's own
@@ -460,8 +477,12 @@ async def end_all(programs: Iterable[Program]) -> None:
     and a program whose leader has exited while its children carry on is exactly the one
     with something left to end — skipping it is how a shutdown came to report itself
     drained with a whole process group still running.
+
+    True only if every one of them really went. An exception counts as not gone: whatever
+    it was, nothing here watched that program leave.
     """
-    await asyncio.gather(*(p.end() for p in programs), return_exceptions=True)
+    each = await asyncio.gather(*(p.end() for p in programs), return_exceptions=True)
+    return all(went is True for went in each)
 
 
 def environment(home: Path, path: str | None = None) -> dict[str, str]:

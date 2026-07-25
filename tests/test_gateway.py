@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -894,6 +895,35 @@ class WhatIsLeftWhenItCouldNotFinish(WithARunDirectory):
         await really_end([left])
         self.assertEqual(process.ENDED, (await asyncio.wait_for(running, 15)).reason)
 
+    async def test_a_shutdown_that_could_not_end_something_says_so_without_running_out_of_time(self):
+        """R-GW-17 — running out of time is not the only way to fail to end something.
+
+        The other way is that both signals go out, the grace period passes, and the group
+        is still there. `end` returned normally either way, so the shutdown saw no timeout,
+        called itself drained, and deleted the record naming the survivors — leaving work
+        no successor of this name would ever sweep, which is the one thing the record
+        exists to prevent. Ending is quick here; only its answer is wrong.
+        """
+        gw = self.made()
+        gw.claim()
+        running = asyncio.ensure_future(gw.start(FOREVER, as_name="unkillable", silence=None))
+        await self._holding(gw)
+        left = next(iter(gw.running.values()))
+        stubborn = process.end_all
+
+        async def would_not_go(_programs):
+            return False
+
+        self.addCleanup(setattr, process, "end_all", stubborn)
+        process.end_all = would_not_go
+        self.assertFalse(await asyncio.wait_for(gw._go(), 15),
+                         "it could not end the work and reported a clean shutdown")
+        said = json.loads((self.where / f"{gw.name}.json").read_text())
+        self.assertIn("unkillable", said["working"], "it deleted the record naming what survived")
+        process.end_all = stubborn
+        await stubborn([left])
+        await asyncio.wait_for(running, 15)
+
     async def test_work_unwinding_after_the_gateway_has_gone_does_not_rewrite_the_record(self):
         """R-GW-12 — a task finishing after its gateway left used to recreate the record
         from an already-cleared set, leaving a gateway listed forever as running nothing."""
@@ -1084,6 +1114,76 @@ class WorkThatStartsItself(WithARunDirectory):
         self.schedules_for(gw.name, self._writes())
         self.assertTrue(await self._fired(gw), "the time came and nothing started")
 
+    async def test_that_a_schedule_fired_is_written_down_before_it_is_run(self):
+        """R-SCH-9 — held only in memory, the fact that this minute had already fired
+        died with the gateway. A crash between starting and finishing, and a supervisor
+        that brings the gateway back within seconds, ran the same schedule twice over for
+        the one minute it was due. Asserted while the run is still going, because after it
+        finishes both a working version and a broken one have written the same thing."""
+        gw = self.made()
+        gw.claim()
+        self.schedules_for(gw.name, {"name": "slow", "when": "* * * * *", "run": FOREVER})
+        gw._fire(self.schedule, datetime(2026, 3, 1, 9, 30))
+        try:
+            said = gateway.what_was_scheduled(gw.name, self.schedules)
+            self.assertIn("slow", said, "nothing was written down until the run finished")
+            self.assertEqual("2026-03-01 09:30", said["slow"]["at"])
+        finally:
+            await process.end_all(list(gw.running.values()))
+
+    async def test_a_gateway_coming_straight_back_does_not_run_the_same_minute_again(self):
+        """R-SCH-9 — the point of writing it down: what a successor of this name reads is
+        what stops it firing a minute its predecessor already fired."""
+        gw = self.made()
+        gw.claim()
+        self.schedules_for(gw.name, {"name": "slow", "when": "* * * * *", "run": FOREVER})
+        minute = datetime(2026, 3, 1, 9, 30)
+        gw._fire(self.schedule, minute)
+        await process.end_all(list(gw.running.values()))
+        gw.release()
+
+        successor = self.made()
+        successor.claim()   # everything it knows, it read off the disk
+        successor._fire(self.schedule, minute)
+        self.assertEqual({}, successor.running, "it ran a minute its predecessor had already run")
+
+    async def test_a_schedule_that_cannot_be_started_says_so_where_it_can_be_read(self):
+        """R-SCH-8 — nobody awaits the task a schedule runs in, so anything raised in it
+        is raised nowhere at all: asyncio reports it on stderr, which for a supervised
+        gateway is a file rundesk does not read. The schedule sat at LAST RUN '-' forever,
+        indistinguishable from one that has simply never come due — while failing again
+        every single time it fell due."""
+        gw = self.made()
+        gw.claim()
+        # A program named rather than located: exactly what `--run codex exec` writes, and
+        # what the gateway's own environment cannot resolve.
+        self.schedules_for(gw.name, {"name": "named", "when": "* * * * *", "run": ["python3", "-c", "pass"]})
+        gw._fire(self.schedule, datetime(2026, 3, 1, 9, 30))
+        for _ in range(100):
+            if gateway.what_was_scheduled(gw.name, self.schedules).get("named", {}).get(
+                    "outcome") == "could not start":
+                break
+            await asyncio.sleep(0.05)
+        said = gateway.what_was_scheduled(gw.name, self.schedules)
+        self.assertEqual("could not start", said.get("named", {}).get("outcome"),
+                         "a schedule that could not start looks like one that never came due")
+        self.assertIn("could not be started", gateway.log_path(gw.name, self.logs).read_text())
+
+    async def test_a_gateway_can_start_work_with_no_ceiling_on_how_long_it_runs(self):
+        """R-PROC-13 — a program may be allowed to run without any ceiling, and the
+        gateway is the only thing that starts one. Unable to say so, everything it ran was
+        nailed to the 48-hour backstop, and a session meant to be persistent would be
+        ended on its second day."""
+        gw = self.made()
+        gw.claim()
+        running = asyncio.ensure_future(
+            gw.start(FOREVER, as_name="persistent", silence=None, ceiling=None)
+        )
+        await self._holding(gw)
+        self.assertIsNone(gw.running["persistent"].ceiling, "it was held to the backstop anyway")
+        await process.end_all(list(gw.running.values()))
+        await asyncio.wait_for(running, 15)
+
     async def test_a_gateway_runs_only_its_own_schedules(self):
         """R-SCH-13, R-SCH-14 — the whole of the isolation, and what makes one agent's
         schedules that agent's alone: a gateway reads its own file and has no way to
@@ -1211,19 +1311,51 @@ class WhatCarriesAcrossARestart(WithARunDirectory):
         self.assertIn("quick", carried, "restarting wiped what the schedules had done")
         self.assertEqual("finished", carried["quick"]["outcome"])
 
+    def _last_up(self, seconds_ago: float) -> None:
+        """Say when a gateway of this name was last known to be going round."""
+        gateway.seen_path("gateway", self.schedules).write_text(
+            json.dumps({"at": time.time() - seconds_ago})
+        )
+
     async def test_what_fell_due_while_nothing_ran_is_said(self):
         """R-SCH-5 — none of it is run, and saying nothing is the silence an owner
         cannot tell from a schedule that never worked."""
-        import json as _json
-        (self.where / "gateway.json").write_text(_json.dumps({
-            "name": "gateway", "pid": 999999,
-            "beat": time.time() - 3 * 60 * 60,   # nothing has run for three hours
-        }))
+        self._last_up(3 * 60 * 60)   # nothing has run for three hours
         self.schedules_for("gateway", {"name": "hourly", "when": "0 * * * *", "run": [PY, "-c", "pass"]})
         gw = self.made()
         gw.claim()
         self.assertIn("fell due", gateway.log_path(gw.name, self.logs).read_text())
         self.assertIn("was not run late", gateway.log_path(gw.name, self.logs).read_text())
+
+    async def test_what_fell_due_is_said_after_an_ordinary_stop_and_not_only_a_crash(self):
+        """R-SCH-5, R-GW-12 — where the downtime checkpoint has to live.
+
+        Read off the run record, this survived a crash and not an ordinary stop, because
+        stopping deletes that record on purpose. So the gap an owner is most likely to
+        have caused — stopping a gateway and starting it again later — was the one gap
+        nobody was ever told about, which is the inverse of what is useful.
+        """
+        self.schedules_for("gateway", {"name": "hourly", "when": "0 * * * *", "run": [PY, "-c", "pass"]})
+        first = self.made()
+        first.claim()
+        first._say()          # it was up, and said so
+        first.release()       # ...and then stopped, cleanly: the record goes
+        self.assertFalse((self.where / "gateway.json").exists(), "the record survived a clean stop")
+        self._last_up(3 * 60 * 60)   # and it stayed down for three hours
+
+        again = self.made()
+        again.claim()
+        said = gateway.log_path(again.name, self.logs).read_text()
+        self.assertIn("fell due", said, "a clean stop left nothing to measure the gap against")
+
+    async def test_being_up_leaves_something_a_later_gateway_can_measure_against(self):
+        """R-SCH-5 — the other half: nothing writes the checkpoint, and the test above
+        passes forever on a file the suite wrote itself."""
+        gw = self.made()
+        gw.claim()
+        gw._say()
+        self.assertIsNotNone(gateway.last_seen(gw.name, self.schedules),
+                             "a running gateway left nothing to say it had been up")
 
 
 class WhenClaimingGoesWrong(WithARunDirectory):

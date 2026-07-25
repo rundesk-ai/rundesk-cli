@@ -147,6 +147,11 @@ def describe(name: str, root: Path | None = None, logs: Path | None = None) -> d
             "RUNDESK_RUN_DIR": str(gateway.home()),
             "RUNDESK_LOG_DIR": str(logs),
             "RUNDESK_JOBS_DIR": os.path.expanduser(jobs_home()),
+            # Left out, this one silently split the machine in two: `rundesk schedules
+            # add` wrote where the command was pointed, and the supervised gateway read
+            # the default — so a schedule could be added, listed and shown as due by the
+            # command line while the gateway keeping the machine knew nothing of it.
+            "RUNDESK_SCHEDULES_DIR": str(gateway.schedules_home()),
         },
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},

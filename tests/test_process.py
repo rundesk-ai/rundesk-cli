@@ -594,6 +594,43 @@ class EndingAProgram(Quickened):
         self.assertEqual(process.FINISHED, result.reason)
         self.assertTrue(await gone_within(grandchild), "the leftover outlived the drain")
 
+    async def test_ending_says_whether_the_group_really_went(self):
+        """R-PROC-5, R-GW-17 — both signals can go out, the grace period can pass, and
+        the group can still be there. Saying nothing about it meant a shutdown could not
+        tell 'ended' from 'asked twice and it is still there': it saw no timeout, called
+        itself drained, and deleted the record naming the survivors."""
+        program = process.Program(forever(), silence=30.0)
+        await program.start()
+        pid = program.pid
+        waiting = asyncio.ensure_future(program.wait())
+        self.assertTrue(await program.end(), "it ended the program and would not say so")
+        self.assertTrue(await gone_within(pid))
+        await asyncio.wait_for(waiting, 20)
+
+    async def test_ending_something_that_will_not_go_says_it_did_not(self):
+        """R-PROC-5, R-GW-17 — the answer that matters, since it is the one that decides
+        whether anything is left behind for a successor to find."""
+        program = process.Program(forever(), silence=30.0)
+        await program.start()
+        waiting = asyncio.ensure_future(program.wait())
+        # Every signal lands nowhere, so the group is exactly as alive at the end as at
+        # the start — the shape of a process that cannot be killed from here.
+        self.addCleanup(setattr, os, "killpg", os.killpg)
+        real = os.killpg
+        os.killpg = lambda pgid, sig: None if sig else real(pgid, 0)
+        self.assertFalse(await program.end(), "it could not end the group and said it had")
+        self.assertFalse(await process.end_all([program]), "end_all reported them all gone")
+        os.killpg = real
+        await program.end()
+        await asyncio.wait_for(waiting, 20)
+
+    async def test_ending_nothing_at_all_is_a_success(self):
+        """R-PROC-5 — a program that was never started has left nothing out there, and a
+        shutdown that treated that as a failure would report an orphan on every start it
+        got as far as registering and no further."""
+        self.assertTrue(await process.Program(forever()).end())
+        self.assertTrue(await process.end_all([]))
+
     async def _reported(self, told: Path, seconds: float = 10.0):
         """Whatever the program wrote to `told`, once it has written it."""
         deadline = time.time() + seconds

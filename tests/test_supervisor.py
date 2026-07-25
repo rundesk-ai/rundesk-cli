@@ -371,15 +371,42 @@ class TheJobCarriesWhereThingsAre(WithAJobDirectory):
         it was pointed, and the two then disagree about whether anything is running —
         which reads as a gateway that will not start, however many times you try."""
         import os
-        for name, value in (("RUNDESK_RUN_DIR", "/tmp/rd-test-run"),
-                            ("RUNDESK_LOG_DIR", "/tmp/rd-test-logs"),
-                            ("RUNDESK_JOBS_DIR", "/tmp/rd-test-jobs")):
+        # Every place rundesk can be pointed at. Asserted as a set rather than one by
+        # one, because the fault this catches is one being *left out*: schedules was, and
+        # a supervised gateway then read the default while `rundesk schedules add` wrote
+        # where it was pointed — a schedule added, listed and shown as due by the command
+        # line, and unknown to the gateway that would have run it.
+        where = {
+            "RUNDESK_RUN_DIR": "/tmp/rd-test-run",
+            "RUNDESK_LOG_DIR": "/tmp/rd-test-logs",
+            "RUNDESK_JOBS_DIR": "/tmp/rd-test-jobs",
+            "RUNDESK_SCHEDULES_DIR": "/tmp/rd-test-schedules",
+        }
+        for name, value in where.items():
             self.addCleanup(os.environ.pop, name, None)
             os.environ[name] = value
         said = supervisor.describe("gateway", self.root)["EnvironmentVariables"]
-        self.assertEqual("/tmp/rd-test-run", said["RUNDESK_RUN_DIR"])
-        self.assertEqual("/tmp/rd-test-logs", said["RUNDESK_LOG_DIR"])
-        self.assertEqual("/tmp/rd-test-jobs", said["RUNDESK_JOBS_DIR"])
+        for name, value in where.items():
+            self.assertEqual(value, said.get(name), f"the job does not carry {name}")
+
+    def test_the_job_carries_every_place_rundesk_can_be_pointed_at(self):
+        """R-GW-9 — the guard on the one above: a new place to point rundesk that is
+        added to the module and forgotten here leaves the supervised gateway reading
+        somewhere else, which no test naming the variables by hand would ever notice."""
+        import inspect
+        import re as regex
+        from rundesk_cli import gateway as real
+
+        # Read off what the gateway actually asks the environment for, rather than a list
+        # kept by hand here — a hand-kept list has the same gap as the one in `describe`
+        # and goes stale in the same moment.
+        pointed = set(regex.findall(r'environ\.get\("(RUNDESK_[A-Z_]+_DIR)"',
+                                    inspect.getsource(real)))
+        self.assertTrue(pointed, "the gateway reads no directories from the environment at all")
+        said = supervisor.describe("gateway", self.root)["EnvironmentVariables"]
+        for variable in sorted(pointed):
+            self.assertIn(variable, said,
+                          f"the gateway reads {variable}, and the job never tells it one")
 
 
 class HandingItOver(WithAJobDirectory):
