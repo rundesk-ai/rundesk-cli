@@ -38,12 +38,8 @@ jobs:
       - name: Every class, on its own, with a bound
         run: |
           set -uo pipefail
-          classes=$(python - "${{ inputs.suite }}" <<'FIND'
-          import re, sys
-          found = re.findall(r"^class (\w+)\(", open(sys.argv[1]).read(), re.M)
-          print(" ".join(found))
-          FIND
-          )
+          classes=$(sed -n 's/^class \([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' "${{ inputs.suite }}")
+          echo "found: $classes"
           stuck=""
           for one in $classes; do
             python -u "${{ inputs.suite }}" "$one" > one.log 2>&1 &
