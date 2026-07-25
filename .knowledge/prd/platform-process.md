@@ -35,6 +35,14 @@ drive what such a program does — it decides that one runs, watches it, and end
 
 ## Open questions
 
+- Whether a program whose output is structured should have its two streams kept apart. They are folded
+  together so that what a program said arrives in the order it said it, which is right for output meant
+  to be read — and wrong for output meant to be parsed, where anything not part of the structure corrupts
+  it. Settling this belongs with whatever first drives a program that answers in a structure.
+- Whether anything is ever written *to* a program. Nothing is today, so a program that decides to read
+  its input waits on a terminal that is not there — which is why input is closed rather than left open.
+  A program that took further instruction while it ran would need this reopened.
+
 - Whether how long a program may say nothing, and how long it may run at all, are fixed for every
   program or set per kind of program.
 - A program does survive rundesk being killed outright, since it is in a group of its own and out of

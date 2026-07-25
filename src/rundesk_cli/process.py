@@ -164,12 +164,16 @@ class Program:
             )
         self._proc = await asyncio.create_subprocess_exec(
             *self.argv,
-            # Nothing is read from us. A program that decides to read its input would
-            # otherwise wait on a terminal that is not there, forever.
+            # Nothing is read from us, so a program that decides to read its input would
+            # otherwise wait on a terminal that is not there, forever. A program that took
+            # further instruction while it ran would need this reopened — an open question
+            # rather than a settled no.
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             # Folded together on purpose: two pipes means two orderings, and what a
-            # program said is only useful in the order it said it (R-PROC-3).
+            # program said is only useful in the order it said it (R-PROC-3). Right for
+            # output meant to be read; an open question for output meant to be parsed,
+            # where anything not part of the structure corrupts it.
             stderr=asyncio.subprocess.STDOUT,
             # The whole environment a program gets, chosen here rather than inherited
             # from whatever happened to start us (R-PROC-1).

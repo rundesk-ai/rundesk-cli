@@ -8,4 +8,4 @@ Add a row when you add a note; `doc-lint` fails the build if one is missing. New
 
 | Last updated | Note | Question it answers |
 |---|---|---|
-| _(no notes yet)_ | | |
+| 2026-07-25 | [Provider CLI events and Discord interaction](./2026-07-25-provider-cli-discord-interaction.md) | Can Discord carry native Codex and Claude Code activity, approvals and questions without rundesk owning their agent loops? |
