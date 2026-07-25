@@ -28,6 +28,7 @@ import logging
 import logging.handlers
 import os
 import signal
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -49,6 +50,10 @@ BEAT_SECONDS = 15.0
 #: Short: nobody is waiting on what it was doing, and a gateway is starting up behind it.
 ORPHAN_GRACE_SECONDS = 0.5
 
+#: How long to wait on the machine to say when a process started. Short: it is a local
+#: question, and a gateway must not be held up starting because an answer is slow.
+PS_TIMEOUT_SECONDS = 5.0
+
 #: How long stopping may take before the gateway stops waiting for what it is running and
 #: goes anyway (R-GW-7). Under what the supervisor allows: launchd sends SIGTERM, waits,
 #: and then sends SIGKILL — and being killed is how children get left behind.
@@ -65,6 +70,20 @@ class Unfit(Exception):
 
 class AlreadyStarted(Exception):
     """This program is already running under this gateway (R-GW-15)."""
+
+
+class NotAName(ValueError):
+    """A gateway name that would not stay inside the directory it belongs in."""
+
+
+def _checked(name: str) -> str:
+    """A gateway's name becomes the name of its lock, its record and its log, so one
+    containing a separator would put all three somewhere else entirely."""
+    if not name or not all(ch.isalnum() or ch in "-_." for ch in name) or name.strip(".") == "":
+        raise NotAName(
+            f"'{name}' is not a usable gateway name — letters, digits, dash, dot and underscore"
+        )
+    return name
 
 
 #: How much a gateway may write before it starts again, and how many it keeps. A gateway
@@ -155,7 +174,27 @@ def _still_there(pgid: int) -> bool:
     return True
 
 
-def _sweep_predecessor(record: Path) -> list[str]:
+def started_at(pid: int) -> str | None:
+    """When this process started, as the machine reports it — or None if it is gone.
+
+    A number on its own does not identify a process: the machine reissues them, and it
+    reissues them from low numbers first after a reboot, which is exactly when a record
+    written before that reboot is read. A number *and* a start time do identify one, so
+    this is what turns "something is running under that number" into "the thing we left
+    running is still there". Asked of `ps` because the standard library has no way to
+    ask, and rundesk adds no dependency to find out.
+    """
+    try:
+        said = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            capture_output=True, text=True, timeout=PS_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return said.stdout.strip() or None
+
+
+def _sweep_predecessor(record: Path, log: logging.Logger) -> list[str]:
     """End whatever the last gateway of this name was still running, and say what it was.
 
     Called once, at the moment a gateway takes the name — so by definition the gateway
@@ -176,9 +215,25 @@ def _sweep_predecessor(record: Path) -> list[str]:
     if not isinstance(left, dict) or not isinstance(left.get("working"), dict):
         return []
     swept = []
-    for name, pgid in left["working"].items():
-        if not isinstance(pgid, int) or not _still_there(pgid):
+    for name, was in left["working"].items():
+        pgid, since = (was.get("pgid"), was.get("since")) if isinstance(was, dict) else (was, None)
+        if not isinstance(pgid, int):
+            log.warning("left '%s' alone: the record does not say what was running", name)
             continue
+        if not _still_there(pgid):
+            continue  # the ordinary case: it went when its gateway did
+        if not since:
+            log.warning("left '%s' (group %s) alone: the record cannot prove it is ours", name, pgid)
+            continue
+        if started_at(pgid) != since:
+            # The number now belongs to something that is not ours. Leaving a stray
+            # program running is bad; a tree-kill aimed at a stranger because a number
+            # came round again is very much worse, and has happened to others.
+            log.warning(
+                "left '%s' alone: group %s is no longer the process we started", name, pgid
+            )
+            continue
+        log.warning("ending '%s' (group %s), left running by a gateway that is gone", name, pgid)
         for sig in (signal.SIGTERM, signal.SIGKILL):
             try:
                 os.killpg(pgid, sig)
@@ -269,7 +324,11 @@ def every(where: Path | None = None) -> list[Standing]:
     if not where.is_dir():
         return []
     names = sorted({p.stem for p in where.glob("*.lock")} | {p.stem for p in where.glob("*.json")})
-    return [standing(name, where) for name in names]
+    found = [standing(name, where) for name in names]
+    # A lock file is never removed — removing one hands its name away (see `release`) —
+    # so a name that has been gone a long time still has an empty file sitting there.
+    # It is a gateway only if it is running, or if it left a record saying what it left.
+    return [it for it in found if it.running or _record_path(it.name, where).exists()]
 
 
 class Gateway:
@@ -287,7 +346,7 @@ class Gateway:
         root: Path | None = None,
         logs: Path | None = None,
     ):
-        self.name = name
+        self.name = _checked(name)
         self.where = where or home()
         self.logs = logs or logs_home()
         self.log = _recorder(name, self.logs)
@@ -298,6 +357,10 @@ class Gateway:
         self.running: dict[str, process.Program] = {}
         self._unnamed = itertools.count()
         self._lock: int | None = None
+        self._released = False
+        #: What this gateway ended on the way in, left by whoever held the name before.
+        #: Set here as well as in `claim`, so reading it never depends on having claimed.
+        self.swept: list[str] = []
         self._stopping = False
         self._stopped = asyncio.Event()
 
@@ -329,10 +392,11 @@ class Gateway:
             self.log.error("refusing to start: could not take the lock (%s)", err)
             raise
         self._lock = handle
+        self._released = False
         # Whatever the last gateway of this name was running is, by definition, running
         # with nobody owning it: we now hold the lock it held. Taken before anything of
         # ours starts, so the same work can never be running twice over (R-GW-15, R-GW-16).
-        self.swept = _sweep_predecessor(_record_path(self.name, self.where))
+        self.swept = _sweep_predecessor(_record_path(self.name, self.where), self.log)
         if self.swept:
             self.log.warning(
                 "ended work left running by a gateway that is gone: %s", ", ".join(self.swept)
@@ -347,18 +411,30 @@ class Gateway:
             raise
         self.log.info("up — version %s, pid %s", __version__, os.getpid())
 
-    def release(self) -> None:
-        """Leave nothing of this gateway behind for the next start to find (R-GW-12).
+    def release(self, keep_record: bool = False) -> None:
+        """Give the name back, leaving nothing that misleads the next start (R-GW-12).
 
-        What it *wrote* is not that: the log is history and outlives the gateway, which
-        is the whole reason it is kept somewhere else (R-GW-18).
+        **The lock file is never removed.** A lock lives on the inode, not the path, so
+        unlinking it while another gateway holds it hands the name away: the next claim
+        makes a fresh inode and locks that one, and two gateways answer as one identity.
+        An unlocked lock file tells a reader nothing, which is what "nothing to find"
+        actually requires — `_held` asks the kernel, never the directory.
+
+        What this gateway *wrote* is not removed either: the log is history and outlives
+        the gateway, which is why it is kept somewhere else entirely (R-GW-18).
+
+        `keep_record` leaves the record in place for a successor to read. Used when going
+        away with work still running, since that record is the only thing naming it.
         """
-        _record_path(self.name, self.where).unlink(missing_ok=True)
-        _lock_path(self.name, self.where).unlink(missing_ok=True)
-        if self._lock is not None:
-            fcntl.flock(self._lock, fcntl.LOCK_UN)
-            os.close(self._lock)
-            self._lock = None
+        if self._lock is None:
+            return  # not ours to give back; releasing a name we never took is how two
+            # gateways come to hold one, since the unlink would be someone else's
+        self._released = True
+        if not keep_record:
+            _record_path(self.name, self.where).unlink(missing_ok=True)
+        fcntl.flock(self._lock, fcntl.LOCK_UN)
+        os.close(self._lock)
+        self._lock = None
 
     def _record(self) -> None:
         """What this gateway says about itself, for anything asking from outside.
@@ -380,8 +456,10 @@ class Gateway:
             "version": __version__,
             "started": self._started,
             "beat": now,
+            # A number and when it started: see `started_at`. Without the second half a
+            # successor cannot tell our leftovers from whatever now shares the number.
             "working": {
-                name: program.pid
+                name: {"pgid": program.pid, "since": started_at(program.pid)}
                 for name, program in self.running.items()
                 if program.pid is not None
             },
@@ -499,16 +577,27 @@ class Gateway:
             still = ", ".join(sorted(self.running)) or "something"
             self.log.error("gave up waiting for %s to stop — it is still out there", still)
         finally:
+            if not drained:
+                # Written before it is forgotten, and left behind on the way out: this
+                # record is the only thing that names what is still running, and the
+                # next gateway of this name is the only thing that will ever end it
+                # (R-GW-16). Erasing it here is admitting to orphans and then losing them.
+                self._say()
             self.running.clear()
-            self.release()
+            self.release(keep_record=not drained)
         self.log.info("down%s", "" if drained else " — with work still running")
-        for handler in list(self.log.handlers):
-            handler.close()
-            self.log.removeHandler(handler)
         return drained
 
     def _say(self) -> None:
-        """Update the record, and never let failing to do so stop the work."""
+        """Update the record, and never let failing to do so stop the work.
+
+        Silent once the name has been given back: the tasks that were running unwind
+        after the gateway has gone, and writing then recreates a record for a gateway
+        that no longer exists — one that says nothing is running, which is exactly the
+        lie the not-drained path above went to trouble to avoid.
+        """
+        if self._released:
+            return
         try:
             self._record()
         except OSError as err:

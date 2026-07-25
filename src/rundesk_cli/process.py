@@ -242,6 +242,14 @@ class Program:
         pending += decoder.decode(b"", final=True)
         if pending:
             emit(pending)
+        if not went_silent and self._proc.returncode is None:
+            # The pipe closing is not the program dying. One that closes what it writes
+            # out and keeps going — anything that daemonises itself, or execs something
+            # that does — reaches here alive, and waiting on it with nothing bounding the
+            # wait is a wedge nothing recovers from: the silence window is already spent,
+            # so R-PROC-7 would never fire, and the name it was started under would be
+            # held against a restart of that work for as long as the gateway lives.
+            went_silent = not await self._exits_within(self.silence)
         if went_silent:
             await self.end()
         code = await self._reap()
@@ -251,6 +259,18 @@ class Program:
         if self._ended:
             return Result(ENDED, code, "\n".join(tail))
         return Result(FINISHED if code == 0 else FAILED, code, "\n".join(tail))
+
+    async def _exits_within(self, patience: float | None) -> bool:
+        """Does it go of its own accord in the time allowed? None means however long."""
+        assert self._proc is not None
+        if patience is None:
+            await self._proc.wait()
+            return True
+        try:
+            await asyncio.wait_for(asyncio.shield(self._proc.wait()), patience)
+        except asyncio.TimeoutError:
+            return False
+        return True
 
     def _spell(self) -> float:
         """How long to read for before looking at the program again.

@@ -382,7 +382,10 @@ class GoingAway(WithARunDirectory):
         await self._up(gw)
         gw.ask_to_stop()
         await asyncio.wait_for(serving, 10)
-        self.assertEqual([], sorted(self.where.iterdir()))
+        self.assertFalse((self.where / f"{gw.name}.json").exists(), "it left its record behind")
+        self.assertFalse(gateway.standing(gw.name, self.where).running)
+        again = self.made()
+        again.claim()  # the name is immediately free, which is what "nothing to find" is for
 
     async def test_a_gateway_going_away_ends_what_it_was_running(self):
         """R-GW-8 — the whole reason every program goes through the gateway."""
@@ -425,11 +428,12 @@ class GoingAway(WithARunDirectory):
         gateway is exactly how children get left behind."""
         gw = self.made()
         gateway.STOP_SECONDS = 0.3
+        really_end = process.end_all  # kept, because the stand-in below never returns
 
         async def never(_programs):
             await asyncio.sleep(300)
 
-        self.addCleanup(setattr, process, "end_all", process.end_all)
+        self.addCleanup(setattr, process, "end_all", really_end)
         process.end_all = never
         serving = asyncio.ensure_future(gw.serve())
         await self._up(gw)
@@ -475,7 +479,11 @@ class WhatADeadGatewayLeftBehind(WithARunDirectory):
         left = await asyncio.create_subprocess_exec(*FOREVER, start_new_session=True)
         self.addCleanup(lambda: left.kill() if left.returncode is None else None)
         (self.where / "orphaned.json").write_text(
-            json.dumps({"name": "orphaned", "pid": 999999, "working": {"a-conversation": left.pid}})
+            json.dumps({
+                "name": "orphaned",
+                "pid": 999999,
+                "working": {"a-conversation": {"pgid": left.pid, "since": gateway.started_at(left.pid)}},
+            })
         )
         gw = self.made("orphaned")
         gw.claim()
@@ -492,7 +500,7 @@ class WhatADeadGatewayLeftBehind(WithARunDirectory):
         """R-GW-16 — a recorded group that is already gone is the ordinary case, not a
         thing to report as swept."""
         (self.where / "orphaned.json").write_text(
-            json.dumps({"name": "orphaned", "working": {"a-conversation": 999999}})
+            json.dumps({"name": "orphaned", "working": {"a-conversation": {"pgid": 999999, "since": "whenever"}}})
         )
         gw = self.made("orphaned")
         gw.claim()
@@ -516,7 +524,9 @@ class WhatADeadGatewayLeftBehind(WithARunDirectory):
             await asyncio.sleep(0.02)
         said = json.loads((self.where / f"{gw.name}.json").read_text())
         self.assertIn("a-conversation", said["working"])
-        self.assertEqual(next(iter(gw.running.values())).pid, said["working"]["a-conversation"])
+        self.assertEqual(
+            next(iter(gw.running.values())).pid, said["working"]["a-conversation"]["pgid"]
+        )
         await process.end_all(list(gw.running.values()))
         await running
         after = json.loads((self.where / f"{gw.name}.json").read_text())
@@ -594,7 +604,10 @@ class WhatHappenedAndWhen(WithARunDirectory):
         left = await asyncio.create_subprocess_exec(*FOREVER, start_new_session=True)
         self.addCleanup(lambda: left.kill() if left.returncode is None else None)
         (self.where / "orphaned.json").write_text(
-            json.dumps({"name": "orphaned", "working": {"a-conversation": left.pid}})
+            json.dumps({
+                "name": "orphaned",
+                "working": {"a-conversation": {"pgid": left.pid, "since": gateway.started_at(left.pid)}},
+            })
         )
         gw = self.made("orphaned")
         gw.claim()
@@ -623,6 +636,128 @@ class WhatHappenedAndWhen(WithARunDirectory):
         finally:
             gateway.Gateway._record = broken
         self.assertIn("could not update the record", self.written())
+
+
+class TheNameCannotBeGivenAwayByAccident(WithARunDirectory):
+    """A lock lives on the inode, never on the path. Removing the file while someone
+    holds it hands the name out twice, which is the one thing the lock exists to stop."""
+
+    async def test_giving_back_a_name_never_removes_the_lock_itself(self):
+        """R-GW-4 — the next claim would make a fresh inode and lock that instead."""
+        gw = self.made()
+        gw.claim()
+        gw.release()
+        self.assertTrue((self.where / f"{gw.name}.lock").exists(), "the lock file was removed")
+
+    async def test_a_gateway_that_never_claimed_cannot_give_the_name_away(self):
+        """R-GW-4 — reproduced: a second object of the same name calling release() (or
+        shutting down, which calls it) took the lock file out from under the holder, and
+        a third gateway then claimed a name that was already held."""
+        holder = self.made("shared")
+        holder.claim()
+        passerby = gateway.Gateway("shared", where=self.where, logs=self.logs)
+        passerby.release()  # never claimed, so it must touch nothing
+        third = gateway.Gateway("shared", where=self.where, logs=self.logs)
+        with self.assertRaises(gateway.AlreadyRunning):
+            third.claim()
+
+    async def test_shutting_down_a_gateway_that_never_claimed_touches_nothing(self):
+        """R-GW-4 — `_go()` releases unconditionally, and it must still be no-one else's
+        name it gives back."""
+        holder = self.made("shared")
+        holder.claim()
+        passerby = gateway.Gateway("shared", where=self.where, logs=self.logs)
+        await passerby._go()
+        self.assertTrue(gateway.standing("shared", self.where).running, "the holder lost its name")
+
+    async def test_a_name_that_would_escape_its_directory_is_refused(self):
+        """R-GW-4 — the name becomes the name of a lock, a record and a log."""
+        for bad in ("../escape", "a/b", "", "..", "with space"):
+            with self.assertRaises(gateway.NotAName, msg=f"accepted {bad!r}"):
+                gateway.Gateway(bad, where=self.where, logs=self.logs)
+
+
+class WhatIsLeftWhenItCouldNotFinish(WithARunDirectory):
+    """Going away with work still running is the one case where the record must survive:
+    it is the only thing naming what is out there, and R-GW-16 is the only thing that
+    will ever end it."""
+
+    async def test_going_with_work_still_running_leaves_the_record_naming_it(self):
+        """R-GW-16, R-GW-17 — reproduced: the path that admits it left orphans was the
+        path that erased what a successor needs to find them."""
+        gw = self.made()
+        gateway.STOP_SECONDS = 0.3
+        really_end = process.end_all  # kept, because the stand-in below never returns
+
+        async def never(_programs):
+            await asyncio.sleep(300)
+
+        self.addCleanup(setattr, process, "end_all", really_end)
+        process.end_all = never
+        serving = asyncio.ensure_future(gw.serve())
+        deadline = time.time() + 5
+        while not gateway.standing(gw.name, self.where).running and time.time() < deadline:
+            await asyncio.sleep(0.02)
+        running = asyncio.ensure_future(gw.start(FOREVER, as_name="abandoned", silence=None))
+        while not gw.running and time.time() < deadline:
+            await asyncio.sleep(0.02)
+        left = next(iter(gw.running.values()))
+        gw.ask_to_stop()
+        self.assertNotEqual(0, await asyncio.wait_for(serving, 10))
+        said = json.loads((self.where / f"{gw.name}.json").read_text())
+        self.assertIn("abandoned", said["working"], "it forgot what it left running")
+        self.assertEqual(left.pid, said["working"]["abandoned"]["pgid"])
+        process.end_all = really_end
+        await really_end([left])
+        self.assertEqual(process.ENDED, (await asyncio.wait_for(running, 15)).reason)
+
+    async def test_work_unwinding_after_the_gateway_has_gone_does_not_rewrite_the_record(self):
+        """R-GW-12 — a task finishing after its gateway left used to recreate the record
+        from an already-cleared set, leaving a gateway listed forever as running nothing."""
+        gw = self.made()
+        gw.claim()
+        gw.release()
+        gw._say()  # the shape of a late unwind
+        self.assertFalse((self.where / f"{gw.name}.json").exists())
+        self.assertEqual([], gateway.every(self.where))
+
+
+class WhoseProcessIsItAnyway(WithARunDirectory):
+    async def test_a_number_that_now_belongs_to_something_else_is_left_alone(self):
+        """R-GW-16 — numbers come round again, and low ones come round first after a
+        restart, which is exactly when a record written before it is read. Ending a
+        stranger's whole process tree is far worse than leaving one program running."""
+        stranger = await asyncio.create_subprocess_exec(*FOREVER, start_new_session=True)
+        self.addCleanup(lambda: stranger.kill() if stranger.returncode is None else None)
+        (self.where / "orphaned.json").write_text(
+            json.dumps({
+                "name": "orphaned",
+                "working": {"a-conversation": {"pgid": stranger.pid, "since": "a different time"}},
+            })
+        )
+        gw = self.made("orphaned")
+        gw.claim()
+        self.assertEqual([], gw.swept)
+        self.assertIsNone(stranger.returncode, "it ended a process that was not ours")
+        self.assertIn("no longer the process we started", gateway.log_path("orphaned", self.logs).read_text())
+
+    async def test_a_record_that_cannot_prove_what_it_left_is_left_alone(self):
+        """R-GW-16 — a record from before rundesk knew how to tell proves nothing."""
+        stranger = await asyncio.create_subprocess_exec(*FOREVER, start_new_session=True)
+        self.addCleanup(lambda: stranger.kill() if stranger.returncode is None else None)
+        (self.where / "orphaned.json").write_text(
+            json.dumps({"name": "orphaned", "working": {"a-conversation": stranger.pid}})
+        )
+        gw = self.made("orphaned")
+        gw.claim()
+        self.assertEqual([], gw.swept)
+        self.assertIsNone(stranger.returncode)
+        self.assertIn("cannot prove it is ours", gateway.log_path("orphaned", self.logs).read_text())
+
+    def test_when_a_process_started_is_answered_for_one_that_exists(self):
+        """R-GW-16 — the fingerprint the whole guard rests on."""
+        self.assertIsNotNone(gateway.started_at(os.getpid()))
+        self.assertIsNone(gateway.started_at(999999))
 
 
 class WhenClaimingGoesWrong(WithARunDirectory):
@@ -685,7 +820,8 @@ class AsARealProcess(unittest.TestCase):
         served.send_signal(signal.SIGTERM)
         code = served.wait(timeout=60)
         self.assertEqual(0, code, "the second signal killed it rather than being taken as a repeat")
-        self.assertEqual([], sorted(x.name for x in where.iterdir()), "it left something behind")
+        self.assertFalse((where / "twice.json").exists(), "it left its record behind")
+        self.assertFalse(gateway.standing("twice", where).running)
 
     def _serving(self, name: str, holding: bool = False):
         held = (
@@ -752,7 +888,7 @@ class AsARealProcess(unittest.TestCase):
         served.send_signal(signal.SIGTERM)
         self.assertEqual(0, served.wait(timeout=20), "it did not go quietly")
         self.assertFalse(gateway.standing("real", self.where).running)
-        self.assertEqual([], sorted(self.where.iterdir()), "it left something behind")
+        self.assertFalse((self.where / "real.json").exists(), "it left its record behind")
 
 
 if __name__ == "__main__":

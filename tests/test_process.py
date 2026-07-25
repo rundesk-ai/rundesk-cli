@@ -618,6 +618,26 @@ class TheAwkwardCases(Quickened):
         )
         self.assertEqual("absent absent", result.output.strip())
 
+    async def test_a_program_that_stops_talking_but_keeps_running_is_not_waited_on_forever(self):
+        """R-PROC-7 — the pipe closing is not the program dying. Anything that puts
+        itself into the background closes what it writes out and carries on, and waiting
+        on it with the silence window already spent is a wedge nothing recovers from:
+        the work's name stays held against ever restarting it."""
+        program = process.Program(
+            script(
+                "import os, sys, time",
+                "os.close(1)",
+                "os.close(2)",
+                "time.sleep(300)",
+            ),
+            silence=1.0,
+        )
+        await program.start()
+        pid = program.pid
+        result = await asyncio.wait_for(program.wait(), 20)
+        self.assertEqual(process.SILENT, result.reason)
+        self.assertTrue(gone_within(pid))
+
     async def test_reading_a_program_that_was_never_started_is_refused(self):
         """R-PROC-4 — a mistake in rundesk's own wiring says so rather than waiting on
         a program that does not exist."""
