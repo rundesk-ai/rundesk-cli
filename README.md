@@ -36,6 +36,7 @@ rundesk                             # what it can do
 rundesk version [--check]           # what is installed, and whether that is current
 rundesk update [--check]            # move to the newest published release
 rundesk uninstall                   # how to remove it
+rundesk status                      # how rundesk itself is on this machine
 ```
 
 ### The gateway
@@ -44,21 +45,18 @@ A gateway is the part that stays running. There is one per **name** — one per 
 once there are agents — so any one of them is restarted without disturbing the rest.
 
 ```sh
-rundesk serve [name]                # run one here, until it is asked to stop
-rundesk start [name]                # hand it to the machine, which keeps it running
-rundesk stop [name]                 # stand it down
-rundesk stop <name> --remove        # stand it down and take it away for good
-rundesk remove <name> [--purge]     # take a stopped one away for good
-rundesk restart [name]              # cycle one, leaving the others alone
-rundesk status                      # every gateway, and what each is working on
-rundesk logs [name] [-n]            # what one has been saying
-rundesk schedules [...]             # work that starts itself — see below
+rundesk start <agent> [--here]      # have the machine keep one running, or run it here
+rundesk stop <agent> | --all        # stand one or every agent down
+rundesk remove <agent> [--purge]    # take a stopped agent away for good
+rundesk restart <agent> | --all     # cycle one or every agent
+rundesk agents [<agent>]            # what every agent is doing, or where one keeps things
+rundesk logs <agent> [-n]           # what one has been saying
+rundesk schedules <agent> [...]     # work that starts itself — see below
 ```
 
-Leave the name out and it means the one gateway there is today — and every one of
-them, for `stop`, `restart`, `status` and `logs`, once there are several. Not for
-`remove`: standing every gateway down is a fine thing to ask for and a terrible thing
-to guess at, so removal always names one.
+`stop` and `restart` require either one agent or an explicit `--all`. Removal always names
+one: standing every gateway down is a fine thing to ask for and a terrible thing to guess
+at, so removal never does.
 
 `start` creates a gateway by writing a job the machine keeps — which is also why one
 you are finished with stays in your machine's background items until it is removed.
@@ -76,18 +74,20 @@ brings a gateway back if it falls over and starts it again after a reboot. A gat
 that *refuses* to run — a virtualenv that no longer fits, a name already held — ends
 cleanly so the machine does not spend the rest of the day restarting it.
 
-`status` asks the gateways rather than the machine, so it can show the one thing a
+`agents` asks the gateways rather than the machine, so it can show the one thing a
 supervisor cannot: up, and not going round.
 
 ```
-GATEWAY  STATE    PID    UPTIME  SUPERVISED  WORK
-gateway  RUNNING  4192   2h14m   yes         a-conversation, another
-agent-2  WEDGED   4210   6h02m   yes         idle
-agent-3  STOPPED  -      -       yes         -
+AGENT    STATE    PID    UPTIME  LAUNCHD JOB  VERSION  WORK
+ava      RUNNING  4192   2h14m   LOADED       0.1.1    2 (a-conversation, another)
+claude   WEDGED   4210   6h02m   LOADED       0.1.1    idle
+codex    STOPPED  -      -       NOT LOADED   -        -
 ```
 
-`SUPERVISED` is asked of the machine, not read off a file: a job description sitting in
-a directory is not a job launchd is keeping, and the two come apart.
+`LAUNCHD JOB` is asked of the machine, not read off a file: a job description sitting in
+a directory is not a job launchd is keeping, and the two come apart. It is reported
+separately from the gateway process state and PID because a loaded job does not prove
+which process, if any, it owns.
 
 ### Schedules
 
@@ -95,11 +95,11 @@ Work that starts itself, because the time came. Every gateway has its own — so
 are agents, each one's schedules are its own and never another's to run.
 
 ```sh
-rundesk schedules                                        # what is scheduled, and what it last did
-rundesk schedules add <name> --when <cron> --run <cmd…>  # state one
-rundesk schedules remove <name>                          # take it away
-rundesk schedules on|off <name>                          # keep it, but stop it running
-rundesk schedules --gateway <name> …                     # whose schedules
+rundesk schedules <agent>                                      # what is scheduled, and what it last did
+rundesk schedules <agent> add <name> --when <cron> -- <cmd…>   # state one
+rundesk schedules <agent> remove <name>                        # take it away
+rundesk schedules <agent> on|off <name>                        # keep it, but stop it running
+rundesk schedules <agent> run <name>                           # run it now
 ```
 
 ```
@@ -119,14 +119,13 @@ nightly   OFF    0 3 * * *    off               2026-07-24 03:00  finished
   so a program named rather than located is refused by `add` rather than discovered at
   three in the morning.
 
-The agents themselves — making one, what reaches it, which channels it answers on and what
-each run became — are registered and say **coming soon**. One verb, then whose:
-`rundesk add ava` makes an agent and the one gateway that runs it, `rundesk start ava`
-starts it, `rundesk schedules ava` is its schedules. Run `rundesk --help` for the list; it
-is read off the command rather than copied out here, so it cannot come to disagree with
-what you have installed. The whole shape is visible from the start, and a command that is
-not built exits `69` rather than reporting a success it did not earn — a number of its own,
-so a script can tell "this rundesk does not have that" from "you typed it wrong".
+An agent and its gateway now share one name and one home: `rundesk add ava` makes both,
+`rundesk start ava` starts its gateway, and `rundesk schedules ava` shows its schedules.
+Provider turns, channels, runs and usage are registered and still say **coming soon**.
+Run `rundesk --help` for the list; it is read off the command rather than copied out here,
+so it cannot come to disagree with what you have installed. A command that is not built
+exits `69` rather than reporting a success it did not earn — a number of its own, so a
+script can tell "this rundesk does not have that" from "you typed it wrong".
 
 ### What a gateway guarantees
 

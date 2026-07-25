@@ -41,7 +41,7 @@ so a later round does not spend the effort again without new reason:
 | Scheduling correctness | findings **12**, **21**, **24**, **25**, **26** |
 | Install, update and removal safety | findings **4**, **14**, **15**, **28** |
 | Source of truth and auditability | findings **26**, **27**, **28**, **29**; extensions to **12**, **17**, **19** |
-| Consumer command surface | findings **31–37**; extensions to **6**, **13**, **17**, **27**, **28** |
+| Consumer command surface | findings **31–36**; extensions to **6**, **13**, **17**, **27**, **28** |
 | Measured performance | finding **9** (second consequence) and **17**; measurements below |
 | Failure-injection coverage | see "Tests that prove only the easy half" below |
 | Security and trust boundaries | **no change needed today** — see below |
@@ -162,25 +162,24 @@ job creation in `src/rundesk_cli/supervisor.py`, state and logs in
 `start` now asks whether launchd holds a job at all. See also **finding 15**, which shows
 that the unsupervised gateway `start` learned to recognise is still invisible to uninstall.
 
-`supervisor.loaded()` answers only whether launchd holds a job with the gateway's name (`supervisor.py:183-197`). `cmd_start()` treats
-that boolean as proof that launchd owns the process currently holding the gateway
-lock (`cli.py:290-298`), and `cmd_status()` uses the same inference for its
-`SUPERVISED` column (`cli.py:484-495`). A dormant launchd job and a manually started
-same-name gateway can therefore coexist. The job is loaded, but it does not own the
-gateway PID and will not bring that process back when its terminal exits.
+`supervisor.loaded()` answers only whether launchd holds a job with the gateway's name.
+`cmd_start()` treats that boolean as proof that launchd owns the process currently holding
+the gateway lock. A dormant launchd job and a manually started same-name gateway can
+therefore coexist. The job is loaded, but it does not own the gateway PID and will not
+bring that process back when its terminal exits.
 
 Reproduced with a running gateway PID 7 and a same-name loaded job whose interface
 cannot identify an active PID:
 
 ```text
 start=(0, 'gateway: ALREADY RUNNING (pid 7)')
-status='gateway  RUNNING  7  ...  SUPERVISED yes'
 ```
 
-The missing-job fix asks the right system and still asks too weak a question. The
-smallest truthful answer is the active PID launchd owns for this job, compared with
-`Standing.pid`; a loaded job with no active PID or a different PID is not supervising
-the current gateway.
+`rundesk agents` now reports the two observable facts separately as `RUNNING 7` and
+`LAUNCHD JOB LOADED`; it no longer claims that the job supervises that PID. `start` still
+asks the right system too weak a question. The smallest truthful answer is the active PID
+launchd owns for this job, compared with `Standing.pid`; a loaded job with no active PID or
+a different PID is not supervising the current gateway.
 
 Regression criteria:
 
@@ -190,10 +189,9 @@ Regression criteria:
   manually started gateway supervised.
 - An unsupervised running gateway is reported as unsupervised with a non-zero exit.
 - An unanswered supervisor query cannot be reported as success.
-- `status` applies the same PID identity rule as `start`.
 
 Relevant implementation: `loaded()` in `src/rundesk_cli/supervisor.py`;
-`cmd_start()` and `cmd_status()` in `src/rundesk_cli/cli.py`.
+`cmd_start()` in `src/rundesk_cli/cli.py`.
 
 # Round two — 2026-07-25
 
@@ -1170,9 +1168,8 @@ compares the two, and nothing detects a difference.
 So `RUNDESK_RUN_DIR=/tmp/x rundesk start gw` produces a healthy supervised gateway whose
 lock and record live in `/tmp/x`, after which a plain command reads `~/.rundesk/run`:
 
-- `cmd_status()` finds no lock but still finds the plist through `described()`
-  (`cli.py:471-474`), so it prints the gateway as `STOPPED  -  -  SUPERVISED yes` while it
-  is up and working.
+- `cmd_agents()` finds no lock but still finds the plist through `described()`, so it
+  reports `STOPPED` and `LAUNCHD JOB LOADED` while the gateway is up and working.
 - `_named()` (`cli.py:338-346`) and `_gone()` decide `stop` and `restart` against the wrong
   directory.
 - `_in_flight()` (`cli.py:216-227`) reads no record, so `update` concludes the machine is
@@ -1185,17 +1182,17 @@ from the job's `EnvironmentVariables` whenever a job for that name exists, falli
 the environment when there is none. A warning when they differ is the cheaper stopgap and
 leaves the wrong answer in place.
 
-**Round six adds the operator-facing reader.** Even after command resolution uses the
-right directories, nothing in the CLI shows which install, run state, schedules, logs
-and launchd plist are authoritative. Add those resolved paths to `rundesk inspect
-<gateway>` or `rundesk paths [gateway]`; environment overrides must be shown exactly,
-not normalized back to defaults. Finding 27 supplies the history this view must link,
-and finding 35 supplies the rest of the owned-state inventory.
+**Round six added part of the operator-facing reader.** `rundesk agents <agent>` shows the
+paths resolved from the command's environment, but it neither reads the job's environment
+nor shows the launchd plist. The CLI must identify which install, run state, schedules,
+logs and launchd plist are authoritative; overrides must be shown exactly, not normalized
+back to defaults. Finding 27 supplies the history this view must link, and finding 35
+supplies the rest of the owned-state inventory.
 
 Regression criteria:
 
 - With a job whose `RUNDESK_RUN_DIR` differs from the ambient one and a live lock and record
-  in the job's directory, `status` does not report the gateway as stopped and `_in_flight()`
+  in the job's directory, `agents` does not report the gateway as stopped and `_in_flight()`
   sees its work.
 - `stop` and `restart` act on the gateway the job describes.
 - A name with no job keeps today's behaviour exactly.
@@ -1203,7 +1200,7 @@ Regression criteria:
   both default and overridden locations.
 
 Relevant implementation: `describe()` in `src/rundesk_cli/supervisor.py`; `home()`,
-`logs_home()` and `schedules_home()` in `src/rundesk_cli/gateway.py`; `cmd_status()`,
+`logs_home()` and `schedules_home()` in `src/rundesk_cli/gateway.py`; `cmd_agents()`,
 `_named()` and `_in_flight()` in `src/rundesk_cli/cli.py`.
 
 ## Medium impact
@@ -1312,7 +1309,7 @@ in `src/rundesk_cli/process.py`.
 # Round six — 2026-07-25
 
 Line numbers are against `43315ae`. Material that repeated an existing failure is merged
-above; findings 31–37 are only the distinct consumer command-surface gaps.
+above; findings 31–36 are only the distinct consumer command-surface gaps.
 
 ## High impact
 
@@ -1428,28 +1425,6 @@ above; findings 31–37 are only the distinct consumer command-surface gaps.
 5. **Test:** Separately inject timeout, 403, 404, malformed JSON and an empty tag. Each must
    exit nonzero, preserve the existing install, and never request the main archive. A valid
    release response must still install only its exact tag.
-
-## Medium impact
-
-### 37. Name Rundesk, gateways, work and launchd as separate subjects
-
-**Status:** Open — finding 4 covers the underlying PID/ownership truth test.
-
-1. **Command and location:** top-level help and `status`;
-   `src/rundesk_cli/cli.py:63-127`, `:472-507`.
-2. **Current output:** Subjectless verbs (`start`, `stop`, `logs`) mix Rundesk and gateway
-   operations. Status labels launchd state as `SUPERVISED yes/no/?`, although a loaded job,
-   a running gateway process and Rundesk owning that PID are different facts. Help leaves
-   gateway positional arguments undescribed.
-3. **Why it blocks:** A user cannot tell whether `stop` disables launchd, stops a gateway,
-   or stops its work. `SUPERVISED yes` sounds healthier and more durable than “launchd job
-   currently loaded”.
-4. **Replacement:** Keep the concise verbs but name their subjects in help and output.
-   Replace `SUPERVISED` with `LAUNCHD JOB: LOADED|NOT LOADED|UNKNOWN`; show gateway process
-   state/PID and work separately. Document `NAME` and every omission rule.
-5. **Test:** Semantic help/status tests must cover loaded job with no process, process with
-   no loaded job, unknown launchd response, and loaded foreign/same-name PID. No state may
-   collapse to `?` or imply process ownership it has not proved.
 
 ## Tests that prove only the easy half
 
