@@ -269,8 +269,22 @@ class FakeGateways:
     def write_schedules(self, name, keeping):
         self._written_schedules[name] = list(keeping)
 
+    @contextlib.contextmanager
+    def changing_schedules(self, name):
+        """Read, change, write back — the shape the real one holds a lock across."""
+        keeping = list(self._written_schedules.get(name, []))
+        yield keeping
+        self._written_schedules[name] = keeping
+
     def what_was_scheduled(self, name):
         return self._ran_schedules.get(name, {})
+
+    def note(self, name, said):
+        # Never the real home: without somewhere of its own to write, a stand-in that
+        # fell back to the default would put test lines in the owner's own logs.
+        assert self._written is not None, "this case writes a log line and was given nowhere to put it"
+        from rundesk_cli import gateway as real
+        real.note(name, said, self._written.parent)
 
     def log_path(self, name):
         return self._written if self._written is not None else pathlib.Path("/nowhere/x.log")

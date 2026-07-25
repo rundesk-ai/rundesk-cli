@@ -465,6 +465,33 @@ class EndingAProgram(Quickened):
         )
         await waiting
 
+    async def test_giving_up_on_ending_a_program_still_ends_it(self):
+        """R-PROC-5, R-PROC-11 — a shutdown that runs out of patience cancels this
+        part-way through, having asked politely and not yet insisted. Unwinding there
+        leaves running exactly the tree it was hurrying to end, which is how a gateway
+        that reported it was out of time also left an orphan behind."""
+        deaf = self.scratch() / "ignoring.now"
+        program = process.Program(
+            script(
+                "import signal, time, pathlib",
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+                f"pathlib.Path({str(deaf)!r}).write_text('ignoring')",
+                "time.sleep(300)",
+            ),
+            silence=30.0,
+        )
+        await program.start()
+        pid = program.pid
+        waiting = asyncio.ensure_future(program.wait())
+        self.assertIsNotNone(await self._reported(deaf), "it never got as far as ignoring us")
+        ending = asyncio.ensure_future(program.end())
+        await asyncio.sleep(0.1)          # it has asked politely and is still waiting
+        ending.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await ending
+        self.assertTrue(gone_within(pid), "giving up on ending it left it running")
+        await asyncio.wait_for(waiting, 20)
+
     async def test_a_first_signal_that_does_not_land_is_not_the_end_of_it(self):
         """R-PROC-4 — being unable to ask politely is not a reason to stop asking. Giving
         up on the first refusal left the program running and said nothing about it."""

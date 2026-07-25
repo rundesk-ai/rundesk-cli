@@ -21,21 +21,24 @@ gateway each, which is how one agent's schedules stay that agent's alone.
 
 |  | ID | Requirement | Evidence |
 |:--:|---|---|---|
-| ✅ | R-SCH-1 | A schedule states when it runs in the way schedules are ordinarily stated | `a schedule is stated the way schedules are ordinarily stated`, `a schedule says lists ranges and steps`, `a day of the week is counted from sunday`, `a day and a weekday together mean either one`, `a schedule nobody can understand says so` |
+| ✅ | R-SCH-1 | A schedule states when it runs in the way schedules are ordinarily stated | `a schedule is stated the way schedules are ordinarily stated`, `a schedule says lists ranges and steps`, `a day of the week is counted from sunday`, `whether a field was narrowed is what was written not what it adds up to`, `a day and a weekday together mean either one`, `a schedule nobody can understand says so` |
 | ✅ | R-SCH-2 | A schedule that is due starts what it names | `a schedule that is due starts what it names`, `only what is due is due`, `a schedule naming nothing to run is never added` |
 | ✅ | R-SCH-3 | What a schedule names is carried to whatever starts it, and never read on the way | `what a schedule names is carried and never read`, `a schedule naming nothing this gateway can start is reported` |
 | ✅ | R-SCH-4 | A schedule whose time passed while nothing was running is not run late | `a time that passed while nothing ran is not run late` |
-| ✅ | R-SCH-5 | A schedule whose time passed while nothing was running is reported as having been passed | `what was passed over can still be counted`, `a very long absence is counted up to a point and no further` |
+| ✅ | R-SCH-5 | A schedule whose time passed while nothing was running is reported as having been passed | `what was passed over can still be counted`, `a very long absence is counted up to a point and no further`, `what fell due while nothing ran is said` |
 | ✅ | R-SCH-6 | A schedule does not begin again while what it started last time is still running | `a schedule does not begin again while the last is still running` |
 | ✅ | R-SCH-7 | A schedule refused for still running is reported rather than passed over | `a schedule does not begin again while the last is still running` |
-| ✅ | R-SCH-8 | Every schedule reports when it next runs, when it last ran, and what became of that | `the next time is the next one after now`, `the next time is never the moment asked about`, `the next time of a weekly schedule is found`, `a schedule that can never run says never`, `schedules are listed with when each next runs`, `changing a schedule that is not there says so` |
-| ✅ | R-SCH-9 | A schedule runs once for the time it is due, however often the time is examined | `a schedule runs once for the minute it is due` |
+| ✅ | R-SCH-8 | Every schedule reports when it next runs, when it last ran, and what became of that | `the next time is the next one after now`, `the next time is never the moment asked about`, `the next time of a weekly schedule is found`, `a schedule that can never run says never`, `schedules are listed with when each next runs`, `changing a schedule that is not there says so`, `a day that only comes round every few years is still found`, `what each schedule last did survives a restart` |
+| ✅ | R-SCH-9 | A schedule runs once for the time it is due, however often the time is examined | `a schedule runs once for the minute it is due`, `a clock stepping backwards does not run a schedule again`, `a schedule that already ran this minute does not run again after a restart` |
 | ✅ | R-SCH-10 | A schedule that cannot be understood leaves every other schedule running | `one schedule nobody can understand leaves the others running`, `something that is not a schedule at all is refused by itself`, `a schedule nobody can understand is reported and the others run`, `nothing written down is no schedules rather than a failure` |
-| ✅ | R-SCH-11 | A schedule that is turned off is kept and reported, and does not run | `a schedule that is off does not run`, `a schedule that is off says so rather than a time`, `a schedule that is off is kept and shown as off`, `a schedule is turned off and on again without being lost` |
+| ✅ | R-SCH-11 | A schedule that is turned off is kept and reported, and does not run | `a schedule that is off does not run`, `a schedule that is off says so rather than a time`, `a schedule that is off is kept and shown as off`, `a schedule is turned off and on again without being lost`, `on or off has to be said as one or the other` |
 | ✅ | R-SCH-12 | Deciding what is due asks nothing of the machine beyond the time | `deciding what is due asks nothing of the machine`, `a rare schedule is found without examining every minute` |
 | ✅ | R-SCH-13 | A schedule runs only in the gateway whose schedules it is among | `a gateway runs only its own schedules`, `schedules are asked for and changed on one gateway only` |
 | ✅ | R-SCH-14 | A gateway never runs, reports or alters another gateway's schedules | `a gateway runs only its own schedules`, `schedules are asked for and changed on one gateway only` |
 
 ## Open questions
 
-- Whether the time a schedule is stated in is ever anything other than the machine's own.
+- Whether the time a schedule is stated in is ever anything other than the machine's own. It is the
+  machine's today, which is what makes an hour that repeats a thing this has to survive rather than avoid.
+- Whether two commands changing one gateway's schedules at once should wait for each other or refuse, given
+  that waiting is what they do now and neither is told it waited.

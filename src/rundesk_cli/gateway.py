@@ -20,6 +20,7 @@ gateway that was killed outright cannot make a dead gateway look alive (R-GW-10)
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import errno
 import fcntl
 import importlib.util
@@ -58,6 +59,11 @@ def checked(name: str) -> str:
     return name
 
 
+#: How a line in a gateway's log reads. One place, because anything else writing to that
+#: log has to match it, and working the format out by hand somewhere else is how the two
+#: come to differ with nothing to catch it.
+WRITTEN_AS = "%(asctime)s %(levelname)-7s %(message)s"
+
 #: How much a gateway may write before it starts again, and how many it keeps. A gateway
 #: that has been up for a month should not be able to fill a disk, and the thing you want
 #: when something happened at three in the morning is the part just before it.
@@ -72,21 +78,36 @@ def write_schedules(name: str, keeping: list, where: Path | None = None) -> None
     effect within a tick without anything being restarted — and a half-written file
     would be read as a gateway with no schedules at all.
     """
+    _written_whole(schedules_path(name, where), json.dumps(keeping, indent=2) + "\n")
+
+
+@contextlib.contextmanager
+def changing_schedules(name: str, where: Path | None = None):
+    """Read this gateway's schedules, change them, and write them back — alone.
+
+    Held for the whole read-and-write, because writing whole is not the same as changing
+    alone: two commands that each read the same list and each write theirs back leave one
+    change gone, with both having reported success. The lock is the one the kernel drops
+    however the process holding it ends, so a command that dies mid-change blocks nothing.
+    """
     target = schedules_path(name, where)
     target.parent.mkdir(parents=True, exist_ok=True)
-    beside = target.with_suffix(f".{os.getpid()}.writing")
-    beside.write_text(json.dumps(keeping, indent=2) + "\n")
-    os.replace(beside, target)
+    guard = os.open(target.with_suffix(".changing"), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        keeping = written_schedules(name, where)
+        yield keeping
+        _written_whole(target, json.dumps(keeping, indent=2) + "\n")
+    finally:
+        fcntl.flock(guard, fcntl.LOCK_UN)
+        os.close(guard)
 
 
 def written_schedules(name: str, where: Path | None = None) -> list:
     """What is written down for this gateway, as written — including what cannot be
     understood, because removing a broken schedule is the main thing anyone wants to do
     with one."""
-    try:
-        said = json.loads(schedules_path(name, where).read_text())
-    except (OSError, ValueError):
-        return []
+    said = _read_json(schedules_path(name, where), [])
     return said if isinstance(said, list) else []
 
 
@@ -102,6 +123,21 @@ def log_path(name: str, logs: Path | None = None) -> Path:
     return (logs or logs_home()) / f"{checked(name)}.log"
 
 
+def note(name: str, said: str, logs: Path | None = None) -> None:
+    """Add a line to a gateway's log from outside the gateway.
+
+    Formatted by the same formatter the gateway itself writes through, rather than
+    worked out by hand: a change to how a line reads would otherwise leave these lines
+    looking like something else, in the one account that outlives the gateway.
+    """
+    record = logging.LogRecord(f"rundesk.gateway.{name}", logging.INFO, "", 0, said, None, None)
+    try:
+        with open(log_path(name, logs), "a", encoding="utf-8") as log:
+            log.write(logging.Formatter(WRITTEN_AS).format(record) + "\n")
+    except OSError:
+        pass  # the change stands whether or not it could be written down
+
+
 def _recorder(name: str, logs: Path) -> logging.Logger:
     """A log for one gateway, and no other.
 
@@ -114,7 +150,7 @@ def _recorder(name: str, logs: Path) -> logging.Logger:
     to_file = logging.handlers.RotatingFileHandler(
         log_path(name, logs), maxBytes=LOG_BYTES, backupCount=LOG_KEEP, encoding="utf-8"
     )
-    to_file.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
+    to_file.setFormatter(logging.Formatter(WRITTEN_AS))
     keeping.addHandler(to_file)
     # Also said out loud, so a gateway run in a terminal shows its working, and one run
     # by the machine has it in whatever the machine captures.
@@ -133,6 +169,27 @@ def home() -> Path:
     return Path(os.environ.get("RUNDESK_RUN_DIR") or Path.home() / ".rundesk" / "run")
 
 
+def _written_whole(target: Path, text: str) -> None:
+    """Put this where it belongs, whole, in one move.
+
+    Beside and then renamed: a reader arriving mid-write would otherwise find half a
+    file, and half a record reads as a gateway that cannot say what version it is, while
+    half a schedules file reads as a gateway with no schedules at all.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    beside = target.with_suffix(f".{os.getpid()}.writing")
+    beside.write_text(text)
+    os.replace(beside, target)
+
+
+def _read_json(path: Path, missing):
+    """What is written there, or `missing` if there is nothing readable to read."""
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return missing
+
+
 def schedules_home() -> Path:
     """Where each gateway's schedules are kept — one file per gateway (R-SCH-13).
 
@@ -149,6 +206,17 @@ def schedules_path(name: str, where: Path | None = None) -> Path:
     return (where or schedules_home()) / f"{checked(name)}.json"
 
 
+def ran_path(name: str, where: Path | None = None) -> Path:
+    """Where what each schedule last did is kept.
+
+    Beside the schedules, not with the run state. Stopping a gateway clears what it is
+    *doing*, record and all (R-GW-12) — and what its schedules have done is history, the
+    same as the log, which is kept for exactly that reason (R-GW-18). Held with the run
+    state it would be erased by every ordinary restart.
+    """
+    return (where or schedules_home()) / f"{checked(name)}.ran.json"
+
+
 def scheduled(name: str = DEFAULT_NAME, where: Path | None = None):
     """This gateway's schedules, and any that could not be understood (R-SCH-10).
 
@@ -157,11 +225,8 @@ def scheduled(name: str = DEFAULT_NAME, where: Path | None = None):
     """
     from rundesk_cli import schedule
 
-    try:
-        said = json.loads(schedules_path(name, where).read_text())
-    except (OSError, ValueError):
-        return [], []
-    return schedule.read(said)
+    # Read once, understood here: the same file read two ways is one rule stated twice.
+    return schedule.read(written_schedules(name, where))
 
 
 def _lock_path(name: str, where: Path) -> Path:
@@ -477,15 +542,13 @@ def standing(name: str = DEFAULT_NAME, where: Path | None = None) -> Standing:
 def what_was_scheduled(name: str = DEFAULT_NAME, where: Path | None = None) -> dict:
     """When each of this gateway's schedules last ran, and what became of it (R-SCH-8).
 
-    Read from the record, because whoever is asking is a different process — the same
-    reason the record exists at all.
+    Read from a file rather than asked of the gateway, because whoever is asking is a
+    different process — and kept where history is kept, so it outlives the gateway that
+    wrote it.
     """
-    try:
-        said = json.loads(_record_path(name, where or home()).read_text())
-    except (OSError, ValueError):
-        return {}
-    ran = said.get("scheduled") if isinstance(said, dict) else None
-    return ran if isinstance(ran, dict) else {}
+    said = _read_json(ran_path(name, where), {})
+    return {name: did for name, did in said.items() if isinstance(did, dict)} \
+        if isinstance(said, dict) else {}
 
 
 def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list[str]:
@@ -600,6 +663,8 @@ class Gateway:
         # Whatever the last gateway of this name was running is, by definition, running
         # with nobody owning it: we now hold the lock it held. Taken before anything of
         # ours starts, so the same work can never be running twice over (R-GW-15, R-GW-16).
+        self._pick_up_where_it_left_off()
+        self._say_what_was_missed()
         self.swept = _sweep_predecessor(_record_path(self.name, self.where), self.log)
         self.swept += _sweep_strays(self.where, self.name, self.log)
         if self.swept:
@@ -615,6 +680,47 @@ class Gateway:
             self.release()
             raise
         self.log.info("up — version %s, pid %s", __version__, os.getpid())
+
+    def _pick_up_where_it_left_off(self) -> None:
+        """Take on what the last gateway of this name knew about its schedules.
+
+        Two things are lost otherwise, both on an ordinary restart rather than a crash.
+        A schedule that already ran this minute runs again, because what has run is held
+        in memory and a new gateway starts with none of it (R-SCH-9). And what each
+        schedule last did is wiped by the first record this gateway writes, so cycling a
+        gateway erases the only account of what its schedules have been doing (R-SCH-8).
+        """
+        self._outcomes = what_was_scheduled(self.name, self.schedules)
+        for name, did in self._outcomes.items():
+            try:
+                self._ran[name] = datetime.strptime(did["at"], "%Y-%m-%d %H:%M")
+            except (KeyError, TypeError, ValueError):
+                continue
+
+    def _say_what_was_missed(self) -> None:
+        """Say what fell due while nothing was running (R-SCH-5).
+
+        None of it is run — a time that passed is gone, and running five at once on the
+        way up is worse than not running them. But saying nothing at all is the silence
+        an owner cannot tell from a schedule that never worked, so the count is written
+        down even though nothing is done about it.
+        """
+        from rundesk_cli import schedule
+
+        left = _read_json(_record_path(self.name, self.where), {})
+        since = left.get("beat") if isinstance(left, dict) else None
+        if not isinstance(since, (int, float)):
+            return
+        was_down_since = datetime.fromtimestamp(since)
+        for one, _ in [(one, None) for one in scheduled(self.name, self.schedules)[0]]:
+            if not one.enabled:
+                continue
+            missed = schedule.passed_over(one, was_down_since, datetime.now())
+            if missed:
+                self.log.warning(
+                    "schedule '%s' fell due %d time(s) while nothing was running, and was not run late",
+                    one.name, missed,
+                )
 
     def release(self, keep_record: bool = False) -> None:
         """Give the name back, leaving nothing that misleads the next start (R-GW-12).
@@ -665,8 +771,6 @@ class Gateway:
             # started. Read back by anything asking whether this gateway is still going
             # round, because a wall clock can be stepped and this cannot.
             "since_boot": time.monotonic(),
-            # What each schedule last did, so it can be asked about from outside.
-            "scheduled": self._outcomes,
             # A number and when it started: see `started_at`. Without the second half a
             # successor cannot tell our leftovers from whatever now shares the number.
             "working": {
@@ -675,10 +779,7 @@ class Gateway:
                 if program.pid is not None
             },
         }
-        target = _record_path(self.name, self.where)
-        beside = target.with_suffix(f".{os.getpid()}.writing")
-        beside.write_text(json.dumps(said))
-        os.replace(beside, target)
+        _written_whole(_record_path(self.name, self.where), json.dumps(said))
 
     # -- what it runs -------------------------------------------------------------
 
@@ -818,14 +919,10 @@ class Gateway:
         """
         from rundesk_cli import schedule
 
-        while True:
-            try:
-                await asyncio.sleep(TICK_SECONDS)
-                self._fire(schedule, datetime.now())
-            except asyncio.CancelledError:
-                raise
-            except BaseException as went_wrong:  # noqa: BLE001 — see the docstring
-                self.log.warning("could not look at the clock: %s", went_wrong)
+        await self._over_and_over(
+            TICK_SECONDS, lambda: self._fire(schedule, datetime.now()),
+            "could not look at the clock: %s",
+        )
 
     def _fire(self, schedule, now) -> None:
         """Start everything due at this moment, and say what happened to each."""
@@ -864,12 +961,32 @@ class Gateway:
             return
         self._remember(one.name, outcome.reason)
 
+    async def _over_and_over(self, every: float, do, failed: str) -> None:
+        """Do this at intervals, for as long as the gateway lives.
+
+        Nothing short of being cancelled stops it. Both callers are tasks nobody awaits,
+        so an exception in either is raised nowhere at all — it simply ends the task, and
+        the gateway carries on having quietly stopped beating, or stopped looking at the
+        clock, with nothing to say it had.
+        """
+        while True:
+            try:
+                await asyncio.sleep(every)
+                do()
+            except asyncio.CancelledError:
+                raise
+            except BaseException as went_wrong:  # noqa: BLE001 — see the docstring
+                self.log.warning(failed, went_wrong)
+
     def _remember(self, name: str, outcome: str) -> None:
         """What a schedule last did, kept where anything asking can read it."""
         self._outcomes[name] = {
             "at": datetime.now().strftime("%Y-%m-%d %H:%M"), "outcome": outcome,
         }
-        self._say()
+        try:
+            _written_whole(ran_path(self.name, self.schedules), json.dumps(self._outcomes, indent=2))
+        except OSError as why:
+            self.log.warning("could not write down what '%s' did: %s", name, why)
 
     def _say(self) -> None:
         """Update the record, and never let failing to do so stop the work.
@@ -896,11 +1013,5 @@ class Gateway:
         stops moving, and the gateway is reported wedged for as long as it stays healthy.
         That is the inverse of the fault this exists to reveal, and the worse of the two.
         """
-        while True:
-            try:
-                await asyncio.sleep(BEAT_SECONDS)
-                self._say()
-            except asyncio.CancelledError:
-                raise
-            except BaseException as went_wrong:  # noqa: BLE001 — see the docstring
-                self.log.warning("could not say it is still going round: %s", went_wrong)
+        await self._over_and_over(
+            BEAT_SECONDS, self._say, "could not say it is still going round: %s")

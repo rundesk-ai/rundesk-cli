@@ -158,6 +158,16 @@ def cmd_coming_soon(name: str) -> int:
     return NOT_BUILT
 
 
+def _as_table(head: tuple, rows: list) -> None:
+    """Columns wide enough for what is in them. Written once, so the two things that
+    list something in columns cannot come to disagree about how."""
+    if not rows:
+        return
+    widths = [max(len(row[i]) for row in [head] + rows) for i in range(len(head))]
+    for row in [head] + rows:
+        print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
+
+
 def cmd_serve(args: argparse.Namespace, gateways) -> int:
     """Run a gateway here, in the foreground. What the machine's job invokes.
 
@@ -347,10 +357,7 @@ def cmd_status(_args: argparse.Namespace, gateways, machine) -> int:
             "yes" if kept else "no",
             (f"{len(doing)} ({', '.join(sorted(doing))})" if doing else "idle") if it.running else "-",
         ))
-    widths = [max(len(row[i]) for row in [("GATEWAY", "STATE", "PID", "UPTIME", "SUPERVISED", "WORK")] + rows)
-              for i in range(6)]
-    for row in [("GATEWAY", "STATE", "PID", "UPTIME", "SUPERVISED", "WORK")] + rows:
-        print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
+    _as_table(("GATEWAY", "STATE", "PID", "UPTIME", "SUPERVISED", "WORK"), rows)
     return 0
 
 
@@ -384,49 +391,49 @@ def _note(gateways, name: str, said: str) -> None:
     A schedule that appears or vanishes is as much a part of what happened to a gateway
     as anything it ran, and the log is the only account that outlives the gateway.
     """
-    try:
-        with open(gateways.log_path(name), "a", encoding="utf-8") as log:
-            log.write(f"{datetime.now():%Y-%m-%d %H:%M:%S,%f}"[:-3] + f" INFO    {said}\n")
-    except OSError:
-        pass  # the change stands whether or not it could be written down
+    gateways.note(name, said)
 
 
 def _add_schedule(args: argparse.Namespace, gateways) -> int:
     from rundesk_cli import schedule
 
     try:
-        schedule.Schedule(args.schedule, args.when)
+        made = schedule.Schedule(args.schedule, args.when)
     except schedule.NotASchedule as why:
         print(f"{args.schedule}: NOT ADDED — {why}", file=sys.stderr)
         return 1
     if not args.run:
         print(f"{args.schedule}: NOT ADDED — nothing was named to run", file=sys.stderr)
         return 1
-    keeping = gateways.written_schedules(args.name)
-    if any(one.get("name") == args.schedule for one in keeping if isinstance(one, dict)):
-        print(f"{args.schedule}: EXISTS — remove it first, or use a different name", file=sys.stderr)
-        return 1
-    keeping.append({"name": args.schedule, "when": args.when, "run": list(args.run)})
-    gateways.write_schedules(args.name, keeping)
+    # Read and written under one lock: two `add`s racing would otherwise each read the
+    # same list and each write theirs back, and one schedule would simply never exist
+    # while both commands reported success.
+    with gateways.changing_schedules(args.name) as keeping:
+        if any(one.get("name") == args.schedule for one in keeping if isinstance(one, dict)):
+            print(f"{args.schedule}: EXISTS — remove it first, or use a different name",
+                  file=sys.stderr)
+            return 1
+        keeping.append({"name": args.schedule, "when": args.when, "run": list(args.run)})
     _note(gateways, args.name, f"schedule '{args.schedule}' added ({args.when})")
-    print(f"{args.schedule}: ADDED — next {schedule.describe(schedule.Schedule(args.schedule, args.when), datetime.now())}")
+    print(f"{args.schedule}: ADDED — next {schedule.describe(made, datetime.now())}")
     return 0
 
 
 def _change_schedule(args: argparse.Namespace, gateways, act: str) -> int:
-    keeping = gateways.written_schedules(args.name)
-    found = [one for one in keeping if isinstance(one, dict) and one.get("name") == args.schedule]
-    if not found:
-        print(f"{args.schedule}: NOT FOUND — {args.name} has no schedule by that name", file=sys.stderr)
-        return 1
-    if act == "remove":
-        keeping = [one for one in keeping if one is not found[0]]
-        said, told = "REMOVED", f"schedule '{args.schedule}' removed"
-    else:
-        found[0]["enabled"] = act == "on"
-        said = "ON" if act == "on" else "OFF"
-        told = f"schedule '{args.schedule}' turned {said.lower()}"
-    gateways.write_schedules(args.name, keeping)
+    with gateways.changing_schedules(args.name) as keeping:
+        found = [one for one in keeping
+                 if isinstance(one, dict) and one.get("name") == args.schedule]
+        if not found:
+            print(f"{args.schedule}: NOT FOUND — {args.name} has no schedule by that name",
+                  file=sys.stderr)
+            return 1
+        if act == "remove":
+            keeping[:] = [one for one in keeping if one is not found[0]]
+            said, told = "REMOVED", f"schedule '{args.schedule}' removed"
+        else:
+            found[0]["enabled"] = act == "on"
+            said = "ON" if act == "on" else "OFF"
+            told = f"schedule '{args.schedule}' turned {said.lower()}"
     _note(gateways, args.name, told)
     print(f"{args.schedule}: {said}")
     return 0
@@ -454,10 +461,7 @@ def _list_schedules(args: argparse.Namespace, gateways) -> int:
         ran.get(one.name, {}).get("at", "-"),
         ran.get(one.name, {}).get("outcome", "-"),
     ) for one in wanted]
-    head = ("SCHEDULE", "STATE", "WHEN", "NEXT", "LAST RUN", "OUTCOME")
-    widths = [max(len(row[i]) for row in [head] + rows) for i in range(len(head))] if rows else []
-    for row in ([head] + rows if rows else []):
-        print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
+    _as_table(("SCHEDULE", "STATE", "WHEN", "NEXT", "LAST RUN", "OUTCOME"), rows)
     for name, why in refused:
         print(f"{name or '(unnamed)'}: NOT UNDERSTOOD — {why}", file=sys.stderr)
     return 1 if refused else 0

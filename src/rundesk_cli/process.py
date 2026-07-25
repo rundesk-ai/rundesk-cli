@@ -340,11 +340,19 @@ class Program:
         if self._proc is None or self._proc.returncode is not None:
             return
         self._ended = True
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            if not self._signal_group(sig):
-                return  # nothing left in the group to signal
-            if await self._group_gone(GRACE_SECONDS):
-                return
+        try:
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                if not self._signal_group(sig):
+                    return  # nothing left in the group to signal
+                if await self._group_gone(GRACE_SECONDS):
+                    return
+        except asyncio.CancelledError:
+            # Out of time, but not out of obligation. A shutdown that runs out of
+            # patience cancels this mid-way, having asked politely and not yet insisted —
+            # and unwinding there leaves running exactly the tree it was hurrying to
+            # end. The signal that cannot be ignored goes out first (R-PROC-5).
+            self._signal_group(signal.SIGKILL)
+            raise
         # Both signals sent and something is still there. Nothing further can be done to
         # it; saying so is left to whoever asked, who can see `alive`.
 

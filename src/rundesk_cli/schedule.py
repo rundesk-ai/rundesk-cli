@@ -35,10 +35,12 @@ FIELDS = (
     ("weekday", 0, 7),  # 0 and 7 are both Sunday, as they are everywhere else
 )
 
-#: How far ahead to look for the next time a schedule is due before giving up. A year of
-#: minutes covers everything statable in five fields; past it, the schedule can never run
-#: — `0 0 30 2 *` says the thirtieth of February — and saying so beats searching forever.
-LOOK_AHEAD = timedelta(days=366)
+#: How far ahead to look for the next time a schedule is due before giving up. Long
+#: enough for the rarest date that can actually arrive: the twenty-ninth of February is
+#: four years apart, and eight around a century year. A year would call that "never" for
+#: three years in every four, which is how a working schedule comes to be deleted. Past
+#: this, a schedule genuinely cannot run — `0 0 30 2 *` says the thirtieth of February.
+LOOK_AHEAD = timedelta(days=366 * 9)
 
 
 class NotASchedule(ValueError):
@@ -58,20 +60,26 @@ class Schedule:
     run: Any = None
     enabled: bool = True
     _fields: tuple = field(default=(), repr=False, compare=False)
+    #: Which fields were written as `*`. Kept because "was anything allowed here?" cannot
+    #: be answered by counting what a field ended up allowing: `0-6` allows every day of
+    #: the week and is not a restriction, but it is one value short of the full set.
+    _anything: tuple = field(default=(), repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "_fields", _understand(self.when))
+        fields, unrestricted = _understand(self.when)
+        object.__setattr__(self, "_fields", fields)
+        object.__setattr__(self, "_anything", unrestricted)
 
     def due_at(self, moment: datetime) -> bool:
         """Is this schedule due at this exact minute?"""
-        return _matches(self._fields, moment)
+        return _matches(self._fields, moment, self._anything)
 
     def next_after(self, moment: datetime) -> datetime | None:
         """The next minute this is due, after the one given — or None if never again."""
         found = moment.replace(second=0, microsecond=0) + timedelta(minutes=1)
         limit = moment + LOOK_AHEAD
         while found <= limit:
-            if _matches(self._fields, found):
+            if _matches(self._fields, found, self._anything):
                 return found
             found = _skip(self._fields, found)
         return None
@@ -97,11 +105,20 @@ def read(said: Any) -> list[Schedule]:
                 name=name,
                 when=str(one.get("when", "")),
                 run=one.get("run"),
-                enabled=bool(one.get("enabled", True)),
+                enabled=_switched(one.get("enabled", True)),
             ))
         except (NotASchedule, TypeError) as why:
             refused.append((str(name), str(why)))
     return kept, refused
+
+
+def _switched(said: Any) -> bool:
+    """On or off, and nothing else. `bool("false")` is True, and a schedules file is
+    something a person edits by hand — so a plausible typo would quietly leave a
+    schedule running rather than saying it made no sense."""
+    if not isinstance(said, bool):
+        raise NotASchedule(f"'{said}' is not on or off")
+    return said
 
 
 def due(
@@ -121,8 +138,20 @@ def due(
         one for one in schedules
         if one.enabled
         and one.due_at(this_minute)
-        and already.get(one.name) != this_minute
+        and _not_yet(already.get(one.name), this_minute)
     ]
+
+
+def _not_yet(last: datetime | None, this_minute: datetime) -> bool:
+    """Has this schedule still not run for this minute — or any minute since?
+
+    Strictly after, not merely different. A wall clock does not only stand still, it goes
+    *backwards*: an hour repeats every autumn, and a correction can step it back at any
+    time. Asking whether this minute differs from the last one lets every minute of a
+    repeated hour through, which is an hour of double-firing once a year for anything
+    that runs more often than hourly (R-SCH-9).
+    """
+    return last is None or this_minute > last
 
 
 def passed_over(one: Schedule, since: datetime, moment: datetime) -> int:
@@ -161,7 +190,7 @@ def _understand(when: str) -> tuple:
     weekday = understood[-1]
     if 7 in weekday:
         understood[-1] = frozenset(weekday | {0})
-    return tuple(understood)
+    return tuple(understood), tuple(part == "*" for part in said)
 
 
 def _values(part: str, low: int, high: int, name: str) -> frozenset:
@@ -195,7 +224,7 @@ def _number(said: str, low: int, high: int, name: str) -> int:
     return value
 
 
-def _matches(fields: tuple, moment: datetime) -> bool:
+def _matches(fields: tuple, moment: datetime, anything: tuple = ()) -> bool:
     """Does this minute satisfy all five fields?
 
     The one place this differs from what a reader expects: when *both* the day of the
@@ -206,8 +235,9 @@ def _matches(fields: tuple, moment: datetime) -> bool:
     minute, hour, day, month, weekday = fields
     if moment.minute not in minute or moment.hour not in hour or moment.month not in month:
         return False
-    day_said = len(day) < 31
-    weekday_said = len(weekday) < 8
+    # Written as `*` or not — the only honest way to ask whether a field was narrowed.
+    day_said = not (anything[2] if len(anything) > 2 else len(day) >= 31)
+    weekday_said = not (anything[4] if len(anything) > 4 else len(weekday) >= 8)
     on_day = moment.day in day
     on_weekday = _weekday(moment) in weekday
     if day_said and weekday_said:
@@ -220,6 +250,12 @@ def _weekday(moment: datetime) -> int:
     return (moment.weekday() + 1) % 7
 
 
+def _month_after(found: datetime) -> datetime:
+    """The first moment of the month after this one."""
+    year, month = (found.year + 1, 1) if found.month == 12 else (found.year, found.month + 1)
+    return datetime(year, month, 1)
+
+
 def _skip(fields: tuple, found: datetime) -> datetime:
     """Jump to the next moment worth examining, rather than trying every minute.
 
@@ -228,18 +264,15 @@ def _skip(fields: tuple, found: datetime) -> datetime:
     """
     minute, hour, day, month, _ = fields
     if found.month not in month:
-        year, next_month = (found.year + 1, 1) if found.month == 12 else (found.year, found.month + 1)
-        return datetime(year, next_month, 1)
+        return _month_after(found)
     if found.day not in day and len(day) < 31:
-        days_in = calendar.monthrange(found.year, found.month)[1]
-        if found.day >= days_in:
-            year, next_month = (found.year + 1, 1) if found.month == 12 else (found.year, found.month + 1)
-            return datetime(year, next_month, 1)
+        if found.day >= calendar.monthrange(found.year, found.month)[1]:
+            return _month_after(found)
         return datetime(found.year, found.month, found.day) + timedelta(days=1)
     if found.hour not in hour:
         return found.replace(minute=0) + timedelta(hours=1)
-    if found.minute not in minute:
-        return found + timedelta(minutes=1)
+    # Everything a jump can narrow already matches, so what is left is the day of the
+    # week — which nothing here can skip to. That one is walked, a minute at a time.
     return found + timedelta(minutes=1)
 
 

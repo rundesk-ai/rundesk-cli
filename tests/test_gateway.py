@@ -1037,6 +1037,74 @@ class WorkThatStartsItself(WithARunDirectory):
         self.assertFalse(self.told.exists(), "a gateway on its way out started new work")
 
 
+class WhatCarriesAcrossARestart(WithARunDirectory):
+    """Cycling a gateway is the most ordinary thing that happens to one, and two things
+    were lost every time it did."""
+
+    def setUp(self):
+        super().setUp()
+        from rundesk_cli import schedule
+        self.schedule = schedule
+        self.told = self.scratch() / "it-ran"
+
+    def _writes(self):
+        return {"name": "ran", "when": "* * * * *",
+                "run": [PY, "-c", f"import pathlib; pathlib.Path({str(self.told)!r}).write_text('yes')"]}
+
+    async def test_a_schedule_that_already_ran_this_minute_does_not_run_again_after_a_restart(self):
+        """R-SCH-9 — what has run is held in memory, and a new gateway starts with none
+        of it. A restart landing in the same minute ran everything a second time."""
+        from datetime import datetime
+        moment = datetime(2026, 7, 25, 9, 0)
+        first = self.made()
+        first.claim()
+        self.schedules_for(first.name, self._writes())
+        first._fire(self.schedule, moment)
+        deadline = time.time() + 10
+        while not self.told.exists() and time.time() < deadline:
+            await asyncio.sleep(0.05)
+        self.assertTrue(self.told.exists())
+        first.release()
+        self.told.unlink()
+
+        again = self.made()
+        again.claim()
+        again._fire(self.schedule, moment)   # the same minute, a new gateway
+        await asyncio.sleep(0.5)
+        self.assertFalse(self.told.exists(), "a restart ran a schedule that had already run")
+
+    async def test_what_each_schedule_last_did_survives_a_restart(self):
+        """R-SCH-8 — the first record a fresh gateway writes wiped it, so cycling erased
+        the only account of what the schedules had been doing."""
+        first = self.made()
+        first.claim()
+        self.schedules_for(first.name, {"name": "quick", "when": "* * * * *", "run": [PY, "-c", "pass"]})
+        await first.start([PY, "-c", "pass"], as_name="ignored")
+        first._remember("quick", "finished")
+        self.assertIn("quick", gateway.what_was_scheduled(first.name, self.schedules))
+        first.release()
+
+        again = self.made()
+        again.claim()
+        carried = gateway.what_was_scheduled(again.name, self.schedules)
+        self.assertIn("quick", carried, "restarting wiped what the schedules had done")
+        self.assertEqual("finished", carried["quick"]["outcome"])
+
+    async def test_what_fell_due_while_nothing_ran_is_said(self):
+        """R-SCH-5 — none of it is run, and saying nothing is the silence an owner
+        cannot tell from a schedule that never worked."""
+        import json as _json
+        (self.where / "gateway.json").write_text(_json.dumps({
+            "name": "gateway", "pid": 999999,
+            "beat": time.time() - 3 * 60 * 60,   # nothing has run for three hours
+        }))
+        self.schedules_for("gateway", {"name": "hourly", "when": "0 * * * *", "run": [PY, "-c", "pass"]})
+        gw = self.made()
+        gw.claim()
+        self.assertIn("fell due", gateway.log_path(gw.name, self.logs).read_text())
+        self.assertIn("was not run late", gateway.log_path(gw.name, self.logs).read_text())
+
+
 class WhenClaimingGoesWrong(WithARunDirectory):
     async def test_a_gateway_claiming_its_own_name_twice_is_not_a_clash(self):
         """R-GW-4 — the clash is another process holding the name, never this one

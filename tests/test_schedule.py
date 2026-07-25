@@ -61,6 +61,21 @@ class SayingWhenSomethingRuns(unittest.TestCase):
         self.assertTrue(first_or_monday.due_at(at("2026-07-27 00:00")), "a Monday, not the first")
         self.assertFalse(first_or_monday.due_at(at("2026-07-28 00:00")), "neither")
 
+    def test_whether_a_field_was_narrowed_is_what_was_written_not_what_it_adds_up_to(self):
+        """R-SCH-1 — the either/or rule turns on whether a field was left as `*`. Judging
+        that by how many values a field ended up allowing cannot tell `*` from a range
+        that happens to cover everything, and gets the rule backwards for it."""
+        # Both narrowed, so either satisfying it is enough — it runs every day.
+        spelled_out = schedule.Schedule("both", "0 0 1-5 * 0-6")
+        self.assertTrue(spelled_out.due_at(at("2026-07-10 00:00")), "a Friday, outside 1-5")
+        # Only the day narrowed, because the weekday really was left open.
+        only_the_day = schedule.Schedule("one", "0 0 1-5 * *")
+        self.assertFalse(only_the_day.due_at(at("2026-07-10 00:00")))
+        self.assertTrue(only_the_day.due_at(at("2026-07-03 00:00")))
+        # A day field written out in full is narrowed too, however many values it holds.
+        every_day_written = schedule.Schedule("wide", "0 0 1-31 * 1")
+        self.assertTrue(every_day_written.due_at(at("2026-07-10 00:00")), "a Friday, by the day")
+
     def test_a_schedule_nobody_can_understand_says_so(self):
         """R-SCH-10"""
         for nonsense in ("", "* * * *", "* * * * * *", "99 * * * *", "a * * * *",
@@ -88,6 +103,14 @@ class WhenItNextRuns(unittest.TestCase):
         mondays = schedule.Schedule("weekly", "0 9 * * 1")
         self.assertEqual(at("2026-07-27 09:00"), mondays.next_after(at("2026-07-25 09:00")))
         self.assertEqual(at("2026-08-03 09:00"), mondays.next_after(at("2026-07-27 09:00")))
+
+    def test_a_day_that_only_comes_round_every_few_years_is_still_found(self):
+        """R-SCH-8 — the twenty-ninth of February can run. Looking only a year ahead
+        would call it never for three years in every four, which is how a working
+        schedule comes to be deleted."""
+        leap = schedule.Schedule("leap", "0 0 29 2 *")
+        self.assertEqual(at("2028-02-29 00:00"), leap.next_after(at("2025-01-01 00:00")))
+        self.assertNotEqual("never", schedule.describe(leap, at("2025-01-01 00:00")))
 
     def test_a_schedule_that_can_never_run_says_never(self):
         """R-SCH-8 — the thirtieth of February is statable and unreachable, and searching
@@ -129,6 +152,22 @@ class WhatIsDueRightNow(unittest.TestCase):
         self.assertEqual([], schedule.due([self.every_minute], moment, already))
         self.assertEqual([], schedule.due([self.every_minute], moment + timedelta(seconds=30), already))
         self.assertEqual(1, len(schedule.due([self.every_minute], moment + timedelta(minutes=1), already)))
+
+    def test_a_clock_stepping_backwards_does_not_run_a_schedule_again(self):
+        """R-SCH-9 — a wall clock does not only stand still, it goes backwards: an hour
+        repeats every autumn. Asking whether this minute *differs* from the last one lets
+        every minute of that hour through, which is an hour of double-firing once a year
+        for anything running more often than hourly."""
+        every_minute = schedule.Schedule("all", "* * * * *")
+        already = {"all": at("2026-11-01 01:59")}
+        walked_back = [
+            schedule.due([every_minute], at("2026-11-01 01:00") + timedelta(minutes=n), already)
+            for n in range(60)
+        ]
+        self.assertEqual([], [one for found in walked_back for one in found],
+                         "the repeated hour ran the schedule all over again")
+        # And once the clock is genuinely past where it had got to, it runs again.
+        self.assertEqual(1, len(schedule.due([every_minute], at("2026-11-01 02:00"), already)))
 
     def test_a_schedule_that_is_off_does_not_run(self):
         """R-SCH-11"""
@@ -212,6 +251,16 @@ class ReadingWhatWasWrittenDown(unittest.TestCase):
             {"name": "good", "when": "* * * * *"}, 42, "not a schedule", None])
         self.assertEqual(["good"], [one.name for one in kept])
         self.assertEqual(3, len(refused))
+
+    def test_on_or_off_has_to_be_said_as_one_or_the_other(self):
+        """R-SCH-11 — every non-empty string is true, and this file is one a person edits
+        by hand, so a plausible typo would quietly leave a schedule running."""
+        kept, refused = schedule.read([
+            {"name": "typo", "when": "* * * * *", "enabled": "false"},
+            {"name": "fine", "when": "* * * * *", "enabled": False},
+        ])
+        self.assertEqual(["fine"], [one.name for one in kept])
+        self.assertEqual(["typo"], [name for name, _ in refused])
 
     def test_nothing_written_down_is_no_schedules_rather_than_a_failure(self):
         """R-SCH-10"""
