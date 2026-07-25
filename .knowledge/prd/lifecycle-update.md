@@ -39,3 +39,11 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-18 | An update that finds nothing newer leaves this copy alone | `up to date says so and changes nothing` |
 | ✅ | R-UPD-19 | A published version is named the same as the version the command reports | `a tag naming something else is refused`, `publishing a release actually applies the rule` |
 | ✅ | R-UPD-20 | Nothing published is told apart from being unable to ask | `nothing published is told apart from being unable to ask` |
+| ❌ | R-UPD-21 | An update leaves nothing that was running in a broken state | — nothing runs yet, so nothing does this |
+| ❌ | R-UPD-22 | An update brings back whatever it stopped in order to perform it | — nothing runs yet, so nothing does this |
+| ❌ | R-UPD-23 | An update refuses rather than interrupting work that is in flight | — nothing runs yet, so nothing does this |
+
+## Open questions
+
+- How an update stops and restarts what is running is undecided. The cheap shape is the update calling the lifecycle commands the product will already have; a registry of hooks is the expensive one, and nothing needs it yet.
+- Whether an update should refuse outright while a turn is in flight, or wait for one to finish, is undecided.
