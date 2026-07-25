@@ -540,8 +540,13 @@ def cmd_start(args: argparse.Namespace, gateways, machine, agents) -> int:
         print(f"         stop it first (pid {already.pid}), then: rundesk start {name}",
               file=sys.stderr)
         return 1
+    whose = agents.resolved(name)
     try:
-        said = machine.install(name)
+        # The agent's own directories, written into the job. A gateway the machine starts
+        # that resolved anywhere other than where the command that started it wrote is the
+        # split that has a schedule silently never run (R-AGT-9).
+        said = machine.install(name, run=whose.run, logs=whose.logs,
+                               schedules=whose.schedules, agents=agents.agents_home())
     except machine.NotOurs as why:
         print(f"{name}: FAILED — {why}", file=sys.stderr)
         return 1

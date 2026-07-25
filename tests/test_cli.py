@@ -33,8 +33,32 @@ from rundesk_cli import cli  # noqa: E402
 #: turn down — a gateway that never comes up has no earlier moment to finish at.
 _REAL_PATIENCE = (cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS)
 
+#: The real removal, put back when the file is done with.
+_REAL_REMOVAL = cli._remove_this_install
+
+
+def _never_the_real_installer(installer, asked):
+    """What `uninstall` reaches for, for the whole of this file — and never the real one.
+
+    `uninstall` removes rundesk now, and the surface cases below walk *every* verb. So the
+    case proving each verb is wired ran the real removal and took the developer's install
+    with it: gateways stopped, launchd jobs gone, run state deleted. Nothing failed and
+    nothing was said, because removing rundesk successfully is exactly what that command
+    is for — which is why this is replaced for the whole file rather than in the cases
+    that happen to think of it.
+
+    Put back in `tearDownModule`, so the module is left as it was found.
+    """
+    _asked_of_the_installer.append(asked)
+    return 0
+
+
+#: What the stand-in above was asked for, in the order it was asked.
+_asked_of_the_installer: list = []
+
 
 def setUpModule():
+    cli._remove_this_install = _never_the_real_installer
     # Both turned down together. Turning the patience down alone left a wait that had room
     # for one look and a fraction of a second's margin on the second — so a case proving a
     # cycle waits passed on a quick machine and reported a failure on a loaded one.
@@ -42,6 +66,7 @@ def setUpModule():
 
 
 def tearDownModule():
+    cli._remove_this_install = _REAL_REMOVAL
     cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS = _REAL_PATIENCE
 from rundesk_cli import agent as real_agent  # noqa: E402
 from rundesk_cli import gateway as real_gateway  # noqa: E402
@@ -297,6 +322,14 @@ class BuiltCommandTests(unittest.TestCase):
         # No network: the updater takes its source of truth as an argument.
         code = cli.updater.run(cli.REPO_ROOT, "0.1.0", check_only=True, latest=lambda: ("v9.9.9", None))
         self.assertEqual(code, 0)
+
+    def test_no_case_in_this_file_can_reach_the_real_removal(self):
+        """R-RM-1 — the guard on every other case here. Walking every verb dispatches
+        `uninstall`, and once that removes rundesk rather than describing it, the case
+        proving each verb is wired removed the developer's install: gateways stopped,
+        launchd jobs gone. It passed, because a successful removal is what it does."""
+        self.assertIsNot(cli._remove_this_install, _REAL_REMOVAL,
+                         "this file can reach the real uninstall")
 
     def test_uninstall_removes_rundesk_rather_than_explaining_how_to(self):
         """R-RM-1 — it printed instructions and exited zero, so a script reading the code
@@ -592,6 +625,9 @@ class FakeAgents:
             self._made.remove(name)
         return ["home/"]
 
+    def agents_home(self):
+        return pathlib.Path("/nowhere/agents")
+
     def paths(self, name):
         at = pathlib.Path(f"/nowhere/agents/{name}")
         return {"agent": at, "home": at / "home", "workspace": at / "home" / "workspace",
@@ -649,7 +685,8 @@ class FakeMachine:
     def loaded(self, name):
         return not self.missing and name in self.jobs
 
-    def install(self, name):
+    def install(self, name, run=None, logs=None, schedules=None, agents=None):
+        self.job_said = {'run': run, 'logs': logs, 'schedules': schedules, 'agents': agents}
         self._check(name)
         self.did.append(("install", name))
         if not self.refuses:

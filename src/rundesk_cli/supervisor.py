@@ -126,7 +126,9 @@ def ask(*args: str) -> Spoke:
     return Spoke(done.returncode == 0, (done.stdout + done.stderr).strip())
 
 
-def describe(name: str, root: Path | None = None, logs: Path | None = None) -> dict:
+def describe(name: str, root: Path | None = None, logs: Path | None = None,
+             run: Path | None = None, schedules: Path | None = None,
+             agents: Path | None = None) -> dict:
     """The job: what to run, and what the machine should do about it.
 
     `KeepAlive` is conditional rather than plain: a gateway that ended well was either
@@ -148,14 +150,20 @@ def describe(name: str, root: Path | None = None, logs: Path | None = None) -> d
         "EnvironmentVariables": {
             "PATH": PATH,
             "HOME": str(Path.home()),
-            "RUNDESK_RUN_DIR": str(gateway.home()),
+            "RUNDESK_RUN_DIR": str(run or gateway.home()),
             "RUNDESK_LOG_DIR": str(logs),
             "RUNDESK_JOBS_DIR": os.path.expanduser(jobs_home()),
+            # An agent keeps everything of its own in one directory, and which directory
+            # that is has to reach the gateway the machine starts. Passed rather than
+            # resolved here, because a gateway knows nothing of agents and this module
+            # knows only what it is handed (R-AGT-9).
+            "RUNDESK_AGENTS_DIR": str(agents) if agents else os.environ.get(
+                "RUNDESK_AGENTS_DIR", str(Path.home() / ".rundesk" / "agents")),
             # Left out, this one silently split the machine in two: `rundesk schedules
             # add` wrote where the command was pointed, and the supervised gateway read
             # the default — so a schedule could be added, listed and shown as due by the
             # command line while the gateway keeping the machine knew nothing of it.
-            "RUNDESK_SCHEDULES_DIR": str(gateway.schedules_home()),
+            "RUNDESK_SCHEDULES_DIR": str(schedules or gateway.schedules_home()),
         },
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
@@ -166,13 +174,14 @@ def describe(name: str, root: Path | None = None, logs: Path | None = None) -> d
 
 
 def write(name: str, root: Path | None = None, logs: Path | None = None,
-          where: str | None = None) -> Path:
+          where: str | None = None, run: Path | None = None,
+          schedules: Path | None = None, agents: Path | None = None) -> Path:
     """Put the job where the machine looks for it."""
     path = job_path(name, where)
     path.parent.mkdir(parents=True, exist_ok=True)
     (logs or gateway.logs_home()).mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as file:
-        plistlib.dump(describe(name, root, logs), file)
+        plistlib.dump(describe(name, root, logs, run, schedules, agents), file)
     return path
 
 
@@ -231,6 +240,9 @@ def install(
     logs: Path | None = None,
     where: str | None = None,
     asking: Callable[..., Spoke] = ask,
+    run: Path | None = None,
+    schedules: Path | None = None,
+    agents: Path | None = None,
 ) -> Spoke:
     """Write this gateway's job and hand it to the machine (R-GW-1, R-GW-2, R-GW-3).
 
@@ -247,7 +259,7 @@ def install(
     asking("bootout", f"{domain()}/{label(name)}")
     if not _gone_from(name, asking):
         return Spoke(False, "the old job is still going away, so a new one was not offered")
-    path = write(name, root, logs, where)
+    path = write(name, root, logs, where, run, schedules, agents)
     return asking("bootstrap", domain(), str(path))
 
 

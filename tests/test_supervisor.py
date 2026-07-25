@@ -404,18 +404,39 @@ class TheJobCarriesWhereThingsAre(WithAJobDirectory):
         somewhere else, which no test naming the variables by hand would ever notice."""
         import inspect
         import re as regex
+        from rundesk_cli import agent as agents
         from rundesk_cli import gateway as real
 
-        # Read off what the gateway actually asks the environment for, rather than a list
-        # kept by hand here — a hand-kept list has the same gap as the one in `describe`
-        # and goes stale in the same moment.
+        # Read off what a supervised gateway actually asks the environment for, rather
+        # than a list kept by hand here — a hand-kept list has the same gap as the one in
+        # `describe` and goes stale in the same moment. Both modules, because an agent
+        # resolves a directory of its own and the gateway the machine starts is an
+        # agent's: reading only one of them is how the next one added is left out.
         pointed = set(regex.findall(r'environ\.get\("(RUNDESK_[A-Z_]+_DIR)"',
-                                    inspect.getsource(real)))
-        self.assertTrue(pointed, "the gateway reads no directories from the environment at all")
+                                    inspect.getsource(real) + inspect.getsource(agents)))
+        self.assertTrue(pointed, "nothing reads a directory from the environment at all")
         said = supervisor.describe("gateway", self.root)["EnvironmentVariables"]
         for variable in sorted(pointed):
             self.assertIn(variable, said,
                           f"the gateway reads {variable}, and the job never tells it one")
+
+
+    def test_the_job_carries_the_directories_it_was_given_rather_than_its_own(self):
+        """R-AGT-9 — an agent keeps everything of its own in one directory, and which one
+        that is has to reach the gateway the machine starts. Resolved here instead, a
+        supervised agent would read the shared places while the command that started it
+        wrote the agent's, and neither may be wrong about whether it is running."""
+        said = supervisor.describe(
+            "ava", self.root,
+            logs=pathlib.Path("/nowhere/agents/ava/logs"),
+            run=pathlib.Path("/nowhere/agents/ava/run"),
+            schedules=pathlib.Path("/nowhere/agents/ava/schedules"),
+            agents=pathlib.Path("/nowhere/agents"),
+        )["EnvironmentVariables"]
+        self.assertEqual("/nowhere/agents/ava/run", said["RUNDESK_RUN_DIR"])
+        self.assertEqual("/nowhere/agents/ava/logs", said["RUNDESK_LOG_DIR"])
+        self.assertEqual("/nowhere/agents/ava/schedules", said["RUNDESK_SCHEDULES_DIR"])
+        self.assertEqual("/nowhere/agents", said["RUNDESK_AGENTS_DIR"])
 
 
 class HandingItOver(WithAJobDirectory):

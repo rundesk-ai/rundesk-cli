@@ -59,6 +59,11 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 - A test class appended **after** the `if __name__ == "__main__": unittest.main()` block never runs —
   Python reaches the runner before the class is defined, and the count silently stays where it was.
   Keep that block last in every test file, and check the "Ran N tests" number moved.
+- Parser-walking CLI tests dispatch the real **`uninstall`**, which now *removes rundesk* — so the case
+  proving every verb is wired stopped the developer's gateways, deleted their launchd jobs and their run
+  state, and **passed**, because a successful removal is what that command does. `tests/test_cli.py`
+  replaces `cli._remove_this_install` for the whole module in `setUpModule`; never rely on individual
+  cases remembering. Redirect every install, state and job directory too before a surface-wide case.
 - Coverage without a dependency: `trace.Trace(count=1)` over both suites **in one process**
   (`t.results().write_results(show_missing=True, coverdir=…)`, then grep `>>>>>>`). Running
   `python3 -m trace` once per test file overwrites the previous file's `.cover` and reports nonsense.

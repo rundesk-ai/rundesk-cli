@@ -32,8 +32,18 @@ written a file turned out to be — the two absences being opposite decisions �
 holds the read, the decision and the write under one `flock`, asking the machine to put what records
 what has *already happened* onto the disk before saying it is there.
 
+**Everything that is one agent's lives in one directory.** `~/.rundesk/agents/<agent>/` holds its `home/`
+(what it loads), the private homes providers are given, and the three its gateway uses — so an agent is one
+thing to look at, copy or take away, and no name can claim a file belonging to another. The three
+directories below the agents one hold what rundesk wrote *before there were agents to own it*: a gateway
+still running from then goes on reading them, and rundesk writes nothing new there. Every schedule, log and
+lock in the finished product belongs to an agent.
+
 | Where | Override | Holds | Lifetime |
 |---|---|---|---|
+| `~/.rundesk/agents/<agent>/home/` | `RUNDESK_AGENTS_DIR` | `AGENTS.md` · `CLAUDE.md` · `SOUL.md` · `USER.md` · `MEMORY.md` · `workspace/` · `skills/` | **The owner's** — kept by an ordinary uninstall, taken only by `--purge` (R-AGT-3) |
+| `~/.rundesk/agents/<agent>/providers/<provider>/` | `RUNDESK_AGENTS_DIR` | the private home a provider is given, per agent and provider pair | Rundesk's state about a pair, never the agent's knowledge (R-AGT-8) |
+| `~/.rundesk/agents/<agent>/run/` · `logs/` · `schedules/` | `RUNDESK_AGENTS_DIR` | what that agent's gateway keeps — the same files as below, in the agent's own place | As below, per agent |
 | `~/.rundesk/run/` | `RUNDESK_RUN_DIR` | `<name>.lock` (liveness, held open) · `<name>.json` (what a gateway is doing now) | **State** — cleared when a gateway stops (R-GW-12) |
 | `~/.rundesk/logs/` | `RUNDESK_LOG_DIR` | `<name>.log` (rotated) | **History** — outlives the gateway (R-GW-18) |
 | `~/.rundesk/schedules/` | `RUNDESK_SCHEDULES_DIR` | `<name>.json` (what is scheduled) · `<name>.ran.json` (when each last fired and what became of it) · `<name>.seen.json` (when a gateway of this name was last up) · `<name>.interrupted.json` (work that never got to finish, and whether it is definitely gone) · `<name>.changing` and `<name>.interrupted.changing` (held across a read-and-write, so two writers cannot lose one another's change) | **History**, beside what it describes |
@@ -42,7 +52,7 @@ what has *already happened* onto the disk before saying it is there.
 The split is the point: stopping a gateway must clear what it is *doing* without clearing what it *did*.
 Putting the schedule history with the run state erased it on every ordinary restart.
 
-## Backend / Services (src/rundesk_cli/ — 6 modules)
+## Backend / Services (src/rundesk_cli/ — 7 modules)
 
 - `src/rundesk_cli/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -51,6 +61,12 @@ Putting the schedule history with the run state erased it on every ordinary rest
   rather than reporting a success it did not earn, and rather than argparse's usage code, which would
   make a missing command indistinguishable from a typo. An entry graduates out of that table into a real
   command as it lands.
+- `src/rundesk_cli/agent.py` — the named identity work is run for: its name, its home, and where
+  everything of its own stands. Above the gateway and never beside it — it resolves an agent's three
+  directories and hands them to a `Gateway`, which is why a gateway goes on knowing nothing of whose work it
+  holds. A new agent's home is copied from `templates/agent/`, and what a home holds is read off that
+  directory rather than listed in code. What a name may be is stricter here than for a gateway: one path
+  component, standing where agents are kept, and never a word a gateway writes beside some other name.
 - `src/rundesk_cli/updater.py` — where this install stands against what is published, and moving between
   them. Every network call is behind an argument, so the whole module is exercised offline.
 - `src/rundesk_cli/process.py` — a program rundesk runs, and how it keeps hold of it: its own session so
@@ -85,6 +101,7 @@ provider. One file per contract, named for it:
 | File | Cases | Covers |
 |---|---|---|
 | `test_gateway.py` | 139 | `platform-gateway` — real processes, real signals, waits turned down |
+| `test_agent.py` | 41 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
 | `test_cli.py` | 86 | `command-surface` — walks every verb off the parser, so one wired nowhere is caught |
 | `test_process.py` | 87 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 55 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
@@ -103,10 +120,11 @@ what the gateway verbs act on as an argument rather than importing it, so the su
 and nothing of locks, records or process groups — and every one of them is tested with no gateway and
 no supervisor anywhere near it.
 
-The agent arrives **above** the gateway, never beside it: `cli` → `agent` → `gateway` → `process`. One
-agent has one gateway, made with it and taken away with it, and the agent's channels are held open
-there — so an agent knows which gateway runs it, and a gateway goes on knowing nothing of whose work it
-is holding. That is what keeps the two testable apart while the command surface operates them as one
+The agent sits **above** the gateway, never beside it: `cli` → `agent` → `gateway` → `process`. One agent
+has one gateway, made with it and taken away with it — the gateway *is* the agent's name, so there is no
+record of the pairing that could disagree with itself. `agent` resolves the three directories and hands
+them to `Gateway`, which already took them as arguments, so a gateway goes on knowing nothing of whose work
+it is holding. That is what keeps the two testable apart while the command surface operates them as one
 thing, and it is the direction to keep: never a gateway that reaches for an agent.
 
 ## Scripts And Commands

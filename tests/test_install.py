@@ -277,6 +277,35 @@ class RemovalTests(Sandbox):
                         "it took the account of what the schedules did")
         self.assertIn("--purge", kept.stdout, "it never said how to take them")
 
+    def test_removing_rundesk_keeps_every_agents_home(self):
+        """R-AGT-3 — an agent's home is what its owner wrote in it: its rules, who it works
+        for, what it has learned. Removing the program is not asking for that to go, and it
+        sits under the install directory only because that is where rundesk keeps things."""
+        home = self.home / ".rundesk" / "agents" / "ava" / "home"
+        (home / "workspace").mkdir(parents=True)
+        (home / "SOUL.md").write_text("what ava is for, in my own words\n")
+        (self.home / ".rundesk" / "agents" / "ava" / "schedules").mkdir(parents=True)
+
+        self.install()
+        kept = self.uninstall()
+
+        self.assertEqual(kept.returncode, 0, kept.stderr)
+        self.assertEqual("what ava is for, in my own words\n", (home / "SOUL.md").read_text(),
+                         "an ordinary uninstall took an agent's home")
+        self.assertTrue((home / "workspace").is_dir(), "it took the agent's workspace")
+
+    def test_purging_takes_every_agents_home_as_well(self):
+        """R-AGT-3 — the other half, so "keeps it" cannot pass by never removing anything."""
+        agents = self.home / ".rundesk" / "agents"
+        (agents / "ava" / "home").mkdir(parents=True)
+        (agents / "ava" / "home" / "SOUL.md").write_text("mine\n")
+
+        self.install()
+        purged = self.uninstall("--purge")
+
+        self.assertEqual(purged.returncode, 0, purged.stderr)
+        self.assertFalse(agents.exists(), "--purge left an agent's home behind")
+
     def test_purging_takes_what_the_gateways_wrote_as_well(self):
         """R-RM-10 — the other half, so "keeps it" cannot pass by never removing anything."""
         wrote = self.home / ".rundesk" / "logs"
