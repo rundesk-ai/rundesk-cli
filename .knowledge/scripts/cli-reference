@@ -147,44 +147,43 @@ def usage_of(parser) -> str:
         usage = pattern.sub(into, usage)
     # `REMAINDER` prints as a bare ellipsis whatever its metavar says, and an argument with
     # no name is the one thing this reference exists to stop.
-    return usage.replace("--run ...", "--run <program> ...").strip()
+    return usage.replace("--run ...", "--run <program> [<arg> ...]").strip()
 
 
 def operations(name: str, parser, summary: str = "") -> list[tuple[str, str]]:
     """Every operation this verb offers, one line each: how it is typed, and what it does.
 
-    A verb with actions under it is not one operation but several, and a reference that
-    showed only the verb would leave a reader to guess what each action takes.
+    A verb with actions under it is not one operation but several, and a verb that is
+    listed bare *and* given a name is two — a reference showing only the verb would leave
+    a reader to guess what each takes.
     """
     planned = "   [planned]" if name in cli.PLANNED else ""
-    says = (said(parser_description(parser)) or said(summary))
-    says = says.replace(" — planned, not built yet.", "").replace("[coming soon]", "").strip()
+
+    if name in cli.PLANNED:
+        # Not built, so argparse holds only a placeholder. What it will be typed with is
+        # settled, and stating that is the whole point of a reference.
+        help_text, actions = cli.PLANNED[name]
+        whose = " <agent>" if name in cli.WHOSE else ""
+        if name in cli.FORMS:
+            return [(f"rundesk {name} {takes}".rstrip(), (what or help_text) + planned)
+                    for takes, what in cli.FORMS[name]]
+        out = [(f"rundesk {name}{whose}", help_text + planned)]
+        for act, (takes, what) in sorted(actions.items()):
+            out.append((f"rundesk {name}{whose} {act} {takes}".rstrip(), what + planned))
+        return out
 
     actions = offered(parser)
     if actions:
-        # A built verb's actions are parsers of their own and carry their own usage; a
-        # planned one's are a choice, so its usage already shows where the action goes.
+        # A built verb's actions are parsers of their own and carry their own usage.
         lines_for = summaries(parser)
         out = []
         for act, one in sorted(actions.items()):
-            act_says = (said(parser_description(one)) or said(lines_for.get(act, "")))
-            act_says = act_says.replace(" — planned, not built yet.", "").replace("[coming soon]", "").strip()
-            out.append((usage_of(one), f"{act_says}{planned}"))
+            act_says = (said(parser_description(one)) or said(lines_for.get(act, ""))).strip()
+            out.append((usage_of(one), act_says))
         return out
 
-    if name in getattr(cli, "TAKES", {}):
-        # Not built, so argparse has only a placeholder to show. The shape it will be
-        # typed with is settled, and stating it is the whole point of a reference.
-        return [(f"rundesk {name} {cli.TAKES[name]}", f"{says}{planned}")]
-
-    choices = [a for a in parser._actions if a.dest == "act" and a.choices]
-    if choices:
-        # A planned verb's actions are a choice rather than parsers, so each one's line
-        # lives in the table the parser was built from — not a copy of it.
-        _help, under = cli.PLANNED[name]
-        return [(usage_of(parser).replace("<action>", act), f"{under.get(act, says)}{planned}")
-                for act in sorted(choices[0].choices)]
-    return [(usage_of(parser), f"{says}{planned}")]
+    says = (said(parser_description(parser)) or said(summary)).strip()
+    return [(usage_of(parser), says)]
 
 
 def arguments_seen(verbs: dict) -> list[tuple[str, str]]:
@@ -197,7 +196,10 @@ def arguments_seen(verbs: dict) -> list[tuple[str, str]]:
     seen: dict[str, str] = {}
     def walk(parser):
         for action in parser._actions:
-            if action.dest in ("help", "command", "args") or isinstance(action, argparse._SubParsersAction):
+            # `args` and `act` are placeholders that no emitted signature shows: a planned
+            # verb's real shape comes from `FORMS` and `PLANNED`, and its actions are each
+            # a line of their own.
+            if action.dest in ("help", "command", "args", "act") or isinstance(action, argparse._SubParsersAction):
                 continue
             name, what = described(action)
             if what and name not in seen:
@@ -206,6 +208,10 @@ def arguments_seen(verbs: dict) -> list[tuple[str, str]]:
             walk(under)
     for parser in verbs.values():
         walk(parser)
+    # The names a planned form is written with exist only in the declaration, so their
+    # meanings come from beside it rather than from an argument nothing has registered.
+    for name, what in getattr(cli, "MEANS", {}).items():
+        seen.setdefault(name, what)
     return sorted(seen.items())
 
 

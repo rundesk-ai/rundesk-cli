@@ -250,7 +250,7 @@ rundesk schedules ava remove tidy  take it away
 rundesk schedules ava on|off tidy  keep it, but stop it running
 rundesk schedules ava run tidy     run it now, due or not
 rundesk channels ava               what ava is reachable on
-rundesk channels ava add|remove|show discord
+rundesk channels ava add ops --kind discord --server <id> --provider claude
 rundesk runs ava                   what ava has run
 rundesk runs ava show <run> [--stream]
 rundesk runs ava resume|stop <run>
@@ -405,12 +405,12 @@ the fake cannot prove is Discord's own limits, and that is what the canary at th
 
 ### What `channels add` takes
 
-A channel is added **by kind**, and each kind needs different things — so the kind is a positional and
-what follows it belongs to that kind, the way `schedules add` takes what a schedule needs:
+A channel is **named the way a schedule is** — you give it a name to refer to it by later, and what it
+is comes from `--kind`. Each kind then needs different things, and those are its own options:
 
 ```text
-rundesk channels ava add discord --server <id> --channel <id> --allow <user> [--allow <user> …]
-rundesk channels ava add slack   --workspace <id> --channel <id> --allow <user>
+rundesk channels ava add ops   --kind discord --server <id> --channel <id> --allow <user> …
+rundesk channels ava add plans --kind slack   --workspace <id> --channel <id> --allow <user>
 ```
 
 Exact field names are settled **here**, against the installed Discord API rather than from a

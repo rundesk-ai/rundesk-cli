@@ -74,20 +74,20 @@ NOT_AVAILABLE = 69
 #: schedule or in this terminal is an option where that entry point is made, and the agent
 #: supplies what was left out — so reaching an agent from Discord is one command and not
 #: two, and a binding stays what a run resolved rather than a thing anyone maintains.
-PLANNED: dict[str, tuple[str, dict[str, str]]] = {
+PLANNED: dict[str, tuple[str, dict[str, tuple[str, str]]]] = {
     "add": ("make an agent, and the gateway that runs it", {}),
     "agents": ("every agent this install has, and what each is doing", {}),
     "ask": ("one turn, streamed to this terminal", {}),
     "channels": ("the channels an agent is reachable on, and who may use them", {
-        "add": "put this agent on a channel of a named kind, with what that kind needs",
-        "remove": "take this agent off a channel",
-        "show": "one channel, and who is allowed to reach this agent through it",
+        "add": ("<channel> --kind <kind>", "put this agent on a channel, named as a schedule is"),
+        "remove": ("<channel>", "take this agent off a channel"),
+        "show": ("<channel>", "one channel, and who is allowed to reach this agent through it"),
     }),
     "doctor": ("what stands between an agent and a working turn", {}),
     "runs": ("what an agent has run, and what became of each", {
-        "resume": "carry one run on from where it stopped",
-        "show": "one run — what was asked, what it cost, how it ended, and its stream",
-        "stop": "end one run, leaving the agent it belongs to running",
+        "resume": ("<run>", "carry one run on from where it stopped"),
+        "show": ("<run> [--stream]", "one run — what was asked, what it cost, and how it ended"),
+        "stop": ("<run>", "end one run, leaving the agent it belongs to running"),
     }),
 }
 
@@ -96,11 +96,29 @@ PLANNED: dict[str, tuple[str, dict[str, str]]] = {
 #: built, so that leaving it out is answered in our words rather than by a usage dump.
 WHOSE = {"channels", "runs"}
 
-#: What a planned verb will be typed with, for the verbs that take arguments of their own
-#: rather than an action. Shown in `--help` and in `CLI.md` so the shape is legible before
-#: it is built — it is still accepted and refused today, whatever it is given (R-CMD-7).
-TAKES = {"add": "<agent>", "agents": "<agent>", "ask": '<agent> "<prompt>"',
-         "doctor": "<agent>"}
+#: Every form a planned verb will be typed in, and what each form does — the bare listing
+#: and the one that names a thing are different operations, and a reference that showed
+#: only `[<agent>]` would say neither. Shown in `--help` and in `CLI.md` so the shape is
+#: legible before it is built; whatever is actually given is still accepted and refused
+#: today (R-CMD-7).
+#: What each name in a planned form stands for. Held beside the forms that use them, so a
+#: reference can say what `<run>` is without sending a reader into the source.
+MEANS: dict[str, str] = {
+    "<agent>": "which agent — the name it was made under",
+    "<prompt>": "what to ask it, in quotes",
+    "--kind <kind>": "which kind of channel it is — `discord`, and others as they land",
+    "<channel>": "what to call this channel, and what to name it by later",
+    "<run>": "which run — the id listed against each by `runs`",
+}
+
+FORMS: dict[str, list[tuple[str, str]]] = {
+    "add": [("<agent>", "")],
+    "agents": [("", "every agent this install has, and what each is doing"),
+               ("<agent>", "what one agent is, and where it keeps things")],
+    "ask": [('<agent> "<prompt>"', "")],
+    "doctor": [("", "what stands between every agent and a working turn"),
+               ("<agent>", "what stands between one agent and a working turn")],
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -116,14 +134,15 @@ def build_parser() -> argparse.ArgumentParser:
         # Marked where the list is, not only when the verb is invoked. Most of what is
         # listed is planned, and a surface that reads as working sends a newcomer to try
         # each in turn to find out which ones do anything.
-        described = "\n".join(f"  {act:<8}  {what}" for act, what in actions.items())
+        described = "\n".join(f"  {act} {takes:<12}  {what}".replace("  ", " ", 1)
+                              for act, (takes, what) in actions.items())
         planned = sub.add_parser(
             name, help=f"{help_text} [coming soon]",
             formatter_class=argparse.RawDescriptionHelpFormatter,
             description=f"{help_text} — planned, not built yet."
                         + (f"\n\nactions:\n{described}" if described else ""))
         if name in WHOSE:
-            planned.add_argument("agent", nargs="?", metavar="<agent>", help="whose — the agent's name")
+            planned.add_argument("agent", nargs="?", metavar="<agent>", help="which agent — the name it was made under")
         if actions:
             # A plain argument rather than a sub-parser, which cannot be used here: a
             # sub-parser is itself a positional and takes the *first* word after the verb,
@@ -150,55 +169,57 @@ def build_parser() -> argparse.ArgumentParser:
     # because there is one gateway today and there will be one per agent. Leaving the
     # name out means all of them wherever that can mean anything, so what these do
     # today stays true once there are several.
-    served = sub.add_parser("serve", help="run a gateway here, until it is asked to stop")
-    served.add_argument("name", nargs="?", metavar="<name>", default=_gateway.DEFAULT_NAME,
-                        help="which gateway — the only one, unless named")
+    served = sub.add_parser("serve", help="run an agent here, until it is asked to stop")
+    served.add_argument("name", nargs="?", metavar="<agent>", default=_gateway.DEFAULT_NAME,
+                        help="which agent — the only one, unless named")
 
-    started = sub.add_parser("start", help="have the machine keep a gateway running")
-    started.add_argument("name", nargs="?", metavar="<name>", default=_gateway.DEFAULT_NAME,
-                         help="which gateway — the only one, unless named")
+    started = sub.add_parser("start", help="have the machine keep an agent running")
+    started.add_argument("name", nargs="?", metavar="<agent>", default=_gateway.DEFAULT_NAME,
+                         help="which agent — the only one, unless named")
 
-    stopped = sub.add_parser("stop", help="stand a gateway down")
-    stopped.add_argument("name", nargs="?", metavar="<name>",
-                         help="which gateway — every one of them when left out")
+    stopped = sub.add_parser("stop", help="stand an agent down")
+    stopped.add_argument("name", nargs="?", metavar="<agent>",
+                         help="which agent — every one of them when left out")
     stopped.add_argument("--remove", action="store_true",
                          help="and take it away for good, once it has stopped")
     stopped.add_argument("--purge", action="store_true",
                          help="with --remove, also take its log, schedules and history")
 
-    gone = sub.add_parser("remove", help="take a gateway away for good")
+    gone = sub.add_parser("remove", help="take an agent away for good")
     # Optional to the parser and required by the command, so that asking for it wrong is
     # answered in our words rather than by an argparse usage dump. Every other gateway
     # verb defaults to one when the name is left out; this one must never guess.
-    gone.add_argument("name", nargs="?", metavar="<name>",
-                      help="which gateway — required, because this one never guesses")
+    gone.add_argument("name", nargs="?", metavar="<agent>",
+                      help="which agent — required, because this one never guesses")
     gone.add_argument("--purge", action="store_true",
                       help="also take its log, schedules and history")
 
-    cycled = sub.add_parser("restart", help="cycle a gateway, leaving the others alone")
-    cycled.add_argument("name", nargs="?", metavar="<name>",
-                        help="which gateway — every one of them when left out")
+    cycled = sub.add_parser("restart", help="cycle an agent, leaving the others alone")
+    cycled.add_argument("name", nargs="?", metavar="<agent>",
+                        help="which agent — every one of them when left out")
 
-    sub.add_parser("status", help="every gateway, and what it is doing")
+    sub.add_parser("status", help="every agent, and what it is doing")
 
-    listed = sub.add_parser("schedules", help="what a gateway runs on its own, and when")
-    listed.add_argument("--gateway", dest="name", metavar="<name>", default=_gateway.DEFAULT_NAME,
-                        help="whose schedules — a gateway's schedules are its own")
+    listed = sub.add_parser("schedules", help="what an agent runs on its own, and when")
+    listed.add_argument("--gateway", dest="name", metavar="<agent>", default=_gateway.DEFAULT_NAME,
+                        help="whose schedules — an agent's schedules are its own")
     acts = listed.add_subparsers(dest="act", metavar="<action>")
     added = acts.add_parser("add", help="add a schedule")
     added.add_argument("schedule", metavar="<schedule>", help="what to call it, and what to name it by later")
-    added.add_argument("--when", required=True, metavar="<when>", help="when it runs, stated as a schedule is")
+    added.add_argument("--when", required=True, metavar="<cron>",
+                       help="when it runs, as five cron fields — minute, hour, day, month, weekday")
     added.add_argument("--run", required=True, nargs=argparse.REMAINDER, metavar="<program>",
-                       help="what to start when it is due")
+                       help="the full path of what to start when it is due, and its arguments — "
+                            "a bare name is refused, because a gateway runs with almost no PATH")
     for act, what in (("remove", "take a schedule away"),
                       ("on", "let a schedule run"),
                       ("off", "keep a schedule but stop it running")):
         one = acts.add_parser(act, help=what)
         one.add_argument("schedule", metavar="<schedule>", help="which schedule, by the name it was added under")
 
-    said = sub.add_parser("logs", help="what a gateway has been saying")
-    said.add_argument("name", nargs="?", metavar="<name>", default=_gateway.DEFAULT_NAME,
-                      help="whose log — the only gateway, unless named")
+    said = sub.add_parser("logs", help="what an agent has been saying")
+    said.add_argument("name", nargs="?", metavar="<agent>", default=_gateway.DEFAULT_NAME,
+                      help="whose log — the only agent, unless named")
     said.add_argument("-n", "--lines", type=int, metavar="<lines>", default=LOG_LINES,
                       help="how many of the last lines to show")
     return parser

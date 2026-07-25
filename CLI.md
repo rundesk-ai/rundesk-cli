@@ -12,51 +12,57 @@ file and the command disagree. *Why* the surface is shaped this way is
 
 ```sh
 # an agent, and its life
-rundesk add <agent>                                                  make an agent, and the gateway that runs it   [planned]
-rundesk remove [--purge] <name>                                      take a gateway away for good
-rundesk agents <agent>                                               every agent this install has, and what each is doing   [planned]
-rundesk doctor <agent>                                               what stands between an agent and a working turn   [planned]
+rundesk add <agent>                                                          make an agent, and the gateway that runs it   [planned]
+rundesk remove [--purge] <agent>                                             take an agent away for good
+rundesk agents                                                               every agent this install has, and what each is doing   [planned]
+rundesk agents <agent>                                                       what one agent is, and where it keeps things   [planned]
+rundesk doctor                                                               what stands between every agent and a working turn   [planned]
+rundesk doctor <agent>                                                       what stands between one agent and a working turn   [planned]
 
 # running one
-rundesk start <name>                                                 have the machine keep a gateway running
-rundesk stop [--remove] [--purge] <name>                             stand a gateway down
-rundesk restart <name>                                               cycle a gateway, leaving the others alone
-rundesk logs [-n <lines>] <name>                                     what a gateway has been saying
-rundesk serve <name>                                                 run a gateway here, until it is asked to stop
+rundesk start <agent>                                                        have the machine keep an agent running
+rundesk stop [--remove] [--purge] <agent>                                    stand an agent down
+rundesk restart <agent>                                                      cycle an agent, leaving the others alone
+rundesk logs [-n <lines>] <agent>                                            what an agent has been saying
+rundesk serve <agent>                                                        run an agent here, until it is asked to stop
 
 # reaching it
-rundesk ask <agent> "<prompt>"                                       one turn, streamed to this terminal   [planned]
-rundesk channels <agent> add                                         put this agent on a channel of a named kind, with what that kind needs   [planned]
-rundesk channels <agent> remove                                      take this agent off a channel   [planned]
-rundesk channels <agent> show                                        one channel, and who is allowed to reach this agent through it   [planned]
-rundesk schedules add --when <when> --run <program> ... <schedule>   add a schedule
-rundesk schedules off <schedule>                                     keep a schedule but stop it running
-rundesk schedules on <schedule>                                      let a schedule run
-rundesk schedules remove <schedule>                                  take a schedule away
-rundesk runs <agent> resume                                          carry one run on from where it stopped   [planned]
-rundesk runs <agent> show                                            one run — what was asked, what it cost, how it ended, and its stream   [planned]
-rundesk runs <agent> stop                                            end one run, leaving the agent it belongs to running   [planned]
+rundesk ask <agent> "<prompt>"                                               one turn, streamed to this terminal   [planned]
+rundesk channels <agent>                                                     the channels an agent is reachable on, and who may use them   [planned]
+rundesk channels <agent> add <channel> --kind <kind>                         put this agent on a channel, named as a schedule is   [planned]
+rundesk channels <agent> remove <channel>                                    take this agent off a channel   [planned]
+rundesk channels <agent> show <channel>                                      one channel, and who is allowed to reach this agent through it   [planned]
+rundesk schedules add --when <cron> --run <program> [<arg> ...] <schedule>   add a schedule
+rundesk schedules off <schedule>                                             keep a schedule but stop it running
+rundesk schedules on <schedule>                                              let a schedule run
+rundesk schedules remove <schedule>                                          take a schedule away
+rundesk runs <agent>                                                         what an agent has run, and what became of each   [planned]
+rundesk runs <agent> resume <run>                                            carry one run on from where it stopped   [planned]
+rundesk runs <agent> show <run> [--stream]                                   one run — what was asked, what it cost, and how it ended   [planned]
+rundesk runs <agent> stop <run>                                              end one run, leaving the agent it belongs to running   [planned]
 
 # rundesk itself
-rundesk status                                                       every gateway, and what it is doing
-rundesk version [--check]                                            what is installed, and whether that is current
-rundesk update [--check]                                             move to the newest published release
-rundesk uninstall                                                    how to remove rundesk from this machine
+rundesk status                                                               every agent, and what it is doing
+rundesk version [--check]                                                    what is installed, and whether that is current
+rundesk update [--check]                                                     move to the newest published release
+rundesk uninstall                                                            how to remove rundesk from this machine
 ```
 
 ## What the arguments mean
 
 ```sh
 --check               say whether a newer release exists
---gateway <name>      whose schedules — a gateway's schedules are its own
+--gateway <agent>     whose schedules — an agent's schedules are its own
+--kind <kind>         which kind of channel it is — `discord`, and others as they land
 --purge               with --remove, also take its log, schedules and history
 --remove              and take it away for good, once it has stopped
---run <program>       what to start when it is due
---when <when>         when it runs, stated as a schedule is
+--run <program>       the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH
+--when <cron>         when it runs, as five cron fields — minute, hour, day, month, weekday
 -n, --lines <lines>   how many of the last lines to show
-<action>              what to do with them — one of add | remove | show
-<agent>               whose — the agent's name
-<name>                which gateway — the only one, unless named
+<agent>               which agent — the name it was made under
+<channel>             what to call this channel, and what to name it by later
+<prompt>              what to ask it, in quotes
+<run>                 which run — the id listed against each by `runs`
 <schedule>            what to call it, and what to name it by later
 ```
 

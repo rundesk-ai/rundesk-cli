@@ -34,7 +34,7 @@ Nested verbs are different, because there the object *is* ambiguous:
 
 ```
 rundesk add ava                    an agent — the only thing you add at this level
-rundesk channels ava add discord   a channel — qualified by the group it sits in
+rundesk channels ava add ops …     a channel — qualified by the group it sits in
 rundesk schedules ava add tidy …   a schedule — likewise
 ```
 
@@ -71,9 +71,9 @@ no room for.
 | Verb | What it is for |
 |---|---|
 | `ask <agent> "…"` | One turn, streamed to this terminal. |
-| `channels <agent>` | The channels it is reachable on, and who may use each. |
+| `channels <agent>` | The channels it is reachable on. `add <channel> --kind …`, `remove`, `show`. |
 | `schedules <agent>` | What it does because the time came, and what became of each. |
-| `runs <agent>` | What it has run, and how each ended. `show`, `resume` or `stop` one of them. |
+| `runs <agent>` | What it has run, and how each ended. `show <run>`, `resume <run>` or `stop <run>`. |
 
 ### Rundesk itself
 
@@ -84,6 +84,24 @@ no room for.
 | `update` | Move to the newest published release. |
 | `uninstall` | Take rundesk off this machine. |
 
+## Naming, so two things never read as one
+
+A name means the same thing everywhere it appears, and a thing you name is named the same way as its
+neighbours. Both rules were broken before they were written down:
+
+- **`<agent>` everywhere** — not `<name>` on one verb and `<agent>` on another. The gateway verbs took
+  `<name>` because a gateway was their subject; the subject is the agent, and the argument says so.
+- **A thing you make is named by you, and described by options.** `schedules add <schedule> --when …`
+  and `channels add <channel> --kind …` are the same shape. An earlier draft had `channels add <kind>`,
+  which made the slot after `add` mean the *type* on one verb and the *name* on another.
+- **`[--flag]` for what is optional to pass, `<value>` for a value you supply** — never `[<both>]` on
+  one token.
+
+**One verb is not on the rule yet.** `schedules` names its agent with `--gateway` rather than as the next
+word, and puts the schedule's name last instead of first. It is built, and moving it is a change to a
+shipped grammar — Phase 1 does it, along with making the agent the subject of the gateway verbs. Read it
+as the exception it is, not as a second pattern.
+
 ## Overlaps that were removed, and why
 
 Each of these was on the surface or proposed for it, and each was resolved rather than lived with. They
@@ -93,7 +111,7 @@ are recorded because the reasoning is what stops them coming back.
 |---|---|
 | `run` and `runs` — one letter apart, and one of them starts work that costs money | The verb became **`ask`**. A run is still what an occurrence is called, so `runs` still lists them. The nearest pair on the surface is now `ask` and `agents`. |
 | `status` and `agents` both listed agents | **`agents`** answers "what do I have and what is it doing". **`status`** answers "how is rundesk" — version, supervisor, install fitness. Two questions, two commands. |
-| `bindings` as a verb, beside `channels` | Removed. Which provider and model answer is an **option where the entry point is made** (`channels ava add discord --provider claude`), and the agent supplies what was left out. Reaching an agent from Discord is one command, not two. A binding is still what a run resolved — it is just not something anyone maintains. |
+| `bindings` as a verb, beside `channels` | Removed. Which provider and model answer is an **option where the entry point is made** (`channels ava add ops --kind discord --provider claude`), and the agent supplies what was left out. Reaching an agent from Discord is one command, not two. A binding is still what a run resolved — it is just not something anyone maintains. |
 | `serve` beside `start` — both run an agent | Folded into **`start`**, which takes where it runs rather than there being a second verb for it. `serve` survives only as what an already-written launchd job invokes, so nothing installed breaks. |
 | `show <run>` beside `replay <run>` — both look back at one run | One **`show`**, with a flag for the stream. A distinction that needs a paragraph to explain is one a consumer will get wrong. |
 | `remove` beside `stop --remove` — two ways to remove | One way: **`remove`**. |
@@ -105,7 +123,7 @@ Every operation the product will offer is listed from the outset (`R-CMD-1`), de
 listed (`R-CMD-2`), and refuses honestly until it is built:
 
 ```
-$ rundesk channels ava add discord
+$ rundesk channels ava add ops --kind discord
 channels add: NOT AVAILABLE — planned, not built yet
         what this rundesk can do:  rundesk --help
 $ echo $?
