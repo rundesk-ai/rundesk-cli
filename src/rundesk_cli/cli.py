@@ -84,7 +84,6 @@ NOT_AVAILABLE = 69
 #: supplies what was left out — so reaching an agent from Discord is one command and not
 #: two, and a binding stays what a run resolved rather than a thing anyone maintains.
 PLANNED: dict[str, tuple[str, dict[str, tuple[str, str]]]] = {
-    "agents": ("every agent this install has, and what each is doing", {}),
     "ask": ("one turn, streamed to this terminal", {}),
     "channels": ("the channels an agent is reachable on, and who may use them", {
         "add": ("<channel> --kind <kind>", "put this agent on a channel, named as a schedule is"),
@@ -98,6 +97,13 @@ PLANNED: dict[str, tuple[str, dict[str, tuple[str, str]]]] = {
         "stop": ("<run>", "end one run, leaving the agent it belongs to running"),
     }),
 }
+
+#: What is accepted and not offered. `serve` is what every launchd job already on disk
+#: invokes, so it goes on working forever; `start <agent> --here` is the one a person types,
+#: and both run the same gateway in this terminal. Two verbs for one thing is what this
+#: surface removes, and a job written last month is not a reason to keep one on show.
+#: Read by the reference generator, so what is hidden is said once.
+HIDDEN = {"serve"}
 
 #: The planned verbs that are about one agent's things rather than about an agent, and so
 #: name whose before saying which. Optional to the parser and required by the command once
@@ -119,9 +125,15 @@ MEANS: dict[str, str] = {
     "<run>": "which run — the id listed against each by `runs`",
 }
 
+#: A verb that can be typed bare *and* given a name is two operations, not one, and a
+#: reference showing a single line would say neither. One bracket style per thing means
+#: `[<agent>]` is not available to say "optional" — so both forms are listed, and what each
+#: does is said here. The signature itself still comes off the parser.
 FORMS: dict[str, list[tuple[str, str]]] = {
     "agents": [("", "every agent this install has, and what each is doing"),
                ("<agent>", "what one agent is, and where it keeps things")],
+    "doctor": [("", "what stands between every agent and a working turn"),
+               ("<agent>", "what stands between one agent and a working turn")],
     "ask": [('<agent> "<prompt>"', "")],
     "usage": [("", "what every agent has cost"),
               ("<agent>", "what one agent has cost"),
@@ -189,11 +201,15 @@ def build_parser() -> argparse.ArgumentParser:
     # because there is one gateway today and there will be one per agent. Leaving the
     # name out means all of them wherever that can mean anything, so what these do
     # today stays true once there are several.
-    served = sub.add_parser("serve", help="run an agent here, until it is asked to stop")
+    # No `help`, so argparse leaves it out of `--help` altogether rather than printing it
+    # with its description suppressed.
+    served = sub.add_parser("serve")
     served.add_argument("name", metavar="<agent>", help="which agent")
 
     started = sub.add_parser("start", help="have the machine keep an agent running")
     started.add_argument("name", metavar="<agent>", help="which agent")
+    started.add_argument("--here", action="store_true",
+                         help="run it in this terminal instead of handing it to the machine")
 
     stopped = sub.add_parser("stop", help="stand an agent down")
     stopped.add_argument("name", nargs="?", metavar="<agent>", help="which agent")
@@ -212,7 +228,11 @@ def build_parser() -> argparse.ArgumentParser:
     cycled.add_argument("name", nargs="?", metavar="<agent>", help="which agent")
     cycled.add_argument("--all", action="store_true", help="every agent on this machine")
 
-    sub.add_parser("status", help="every agent, and what it is doing")
+    listed_agents = sub.add_parser("agents", help="every agent this install has, and what each is doing")
+    listed_agents.add_argument("name", nargs="?", metavar="<agent>",
+                               help="one agent — what it is, and where it keeps things")
+
+    sub.add_parser("status", help="how rundesk itself is on this machine")
 
     listed = sub.add_parser("schedules", help="what an agent runs on its own, and when")
     listed.add_argument("--gateway", dest="name", metavar="<agent>", default=_gateway.DEFAULT_NAME,
@@ -428,6 +448,10 @@ def cmd_start(args: argparse.Namespace, gateways, machine, agents) -> int:
     again and nothing says a word. Reporting the hand-off as the outcome is reporting a
     success this command did not earn.
     """
+    if args.here:
+        # The same function the machine's own job reaches, so what a person types and what
+        # launchd runs cannot come to behave differently.
+        return cmd_serve(args, gateways, agents)
     name = args.name
     already = _standing(name, gateways, agents)
     if already.running:
@@ -764,22 +788,31 @@ def _stand_down(args: argparse.Namespace, gateways, machine, agents, verb: str) 
     return worst
 
 
-def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
-    """Every gateway, and what it is actually doing.
+def cmd_agents(args: argparse.Namespace, gateways, machine, agents) -> int:
+    """Every agent, and what each is doing. The table you look at first.
 
     Answered by the gateways themselves rather than by the machine, because the machine
     cannot tell a gateway that is working from one that is up and stuck (R-GW-9).
+
+    A gateway that has been running since before there were agents is listed too, marked
+    as having none. Leaving it out would be the worst of both: still running, still holding
+    a name, and invisible to the one command that says what this install has.
     """
+    if args.name:
+        return _one_agent(args.name, gateways, machine, agents)
     has_supervisor = machine.available()
     described = set(machine.described()) if has_supervisor else set()
     found = {name: _standing(name, gateways, agents)
              for name in _every_name(gateways, machine, agents)}
     if not found:
         print("no agents")
+        print("        make one:  rundesk add <agent>")
         return 0
-    rows = []
+    rows, orphaned = [], []
     for name in sorted(found):
         it = found[name]
+        if not agents.exists(name):
+            orphaned.append(name)
         # Whether the supervisor is keeping this gateway is asked of the supervisor. A
         # job description sitting in a directory is not a job being kept, and the two
         # come apart exactly when something has gone wrong — which is when it is read.
@@ -789,7 +822,7 @@ def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
             kept = None   # asked, and not told — which is not the same as "no"
         doing = gateways.what_is_running(name, agents.resolved(name).run) if it.running else []
         rows.append((
-            name,
+            name + ("" if agents.exists(name) else " *"),
             ("WEDGED" if it.stale else "RUNNING") if it.running else "STOPPED",
             str(it.pid) if it.running else "-",
             _how_long(it.started) if it.running else "-",
@@ -797,8 +830,59 @@ def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
             _version_of(it),
             (f"{len(doing)} ({', '.join(sorted(doing))})" if doing else "idle") if it.running else "-",
         ))
-    _as_table(("GATEWAY", "STATE", "PID", "UPTIME", "SUPERVISED", "VERSION", "WORK"), rows)
+    _as_table(("AGENT", "STATE", "PID", "UPTIME", "SUPERVISED", "VERSION", "WORK"), rows)
+    if orphaned:
+        print()
+        print(f"* no agent yet — running since before there were any: {', '.join(orphaned)}")
+        print(f"  give it one:  rundesk add {orphaned[0]}")
     return 0
+
+
+def _one_agent(name: str, gateways, machine, agents) -> int:
+    """What one agent is, and every place it resolves.
+
+    The paths are the point. Which install, which run state, which schedules and which log
+    are authoritative is otherwise something an owner works out by reading the source, and
+    it is exactly what they need when a supervised agent and a command disagree.
+    """
+    try:
+        where_it_is = agents.paths(name)
+    except agents.NotAnAgentName as why:
+        print(f"{name}: INVALID NAME — {why}", file=sys.stderr)
+        return 1
+    if not agents.exists(name):
+        print(f"{name}: NO SUCH AGENT", file=sys.stderr)
+        print(f"        what there is:  rundesk agents", file=sys.stderr)
+        return 1
+    it = _standing(name, gateways, agents)
+    print(f"{name}: " + (("WEDGED" if it.stale else f"RUNNING (pid {it.pid})")
+                         if it.running else "STOPPED"))
+    _as_table(("WHAT", "WHERE"),
+              [(what, str(at)) for what, at in sorted(where_it_is.items())])
+    return 0
+
+
+def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
+    """How rundesk itself is on this machine — not what it is running.
+
+    Two questions, two commands. `agents` answers "what do I have and what is it doing";
+    this answers "is the thing that runs them fit". They were one command answering
+    neither, because a list of gateways says nothing about whether the install behind them
+    can start one.
+    """
+    unfit = gateways.fitness(REPO_ROOT)
+    try:
+        supervisor = "yes" if machine.available() else "no — nothing keeps an agent up here"
+    except Exception:                                    # pragma: no cover - defensive
+        supervisor = "?"
+    _as_table(("WHAT", "IS"), [
+        ("version", __version__),
+        ("install", str(REPO_ROOT)),
+        ("fit to run", "yes" if not unfit else f"no — {unfit}"),
+        ("supervisor", supervisor),
+        ("agents", str(len(agents.known()))),
+    ])
+    return 1 if unfit else 0
 
 
 def _version_of(it) -> str:
@@ -989,6 +1073,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
         return cmd_update(args, gateways, machine, agents)
     if args.command == "uninstall":
         return cmd_uninstall(args)
+    if args.command == "agents":
+        return cmd_agents(args, gateways, machine, agents)
     if args.command == "add":
         return cmd_add(args, gateways, agents)
     if args.command == "doctor":

@@ -14,16 +14,16 @@ file and the command disagree. *Why* the surface is shaped this way is
 # an agent, and its life
 rundesk add <agent>                                                          make an agent, and the gateway that runs it
 rundesk remove [--purge] <agent>                                             take an agent away for good
-rundesk agents                                                               every agent this install has, and what each is doing   [planned]
-rundesk agents <agent>                                                       what one agent is, and where it keeps things   [planned]
-rundesk doctor <agent>                                                       what stands between an agent and a working turn
+rundesk agents                                                               every agent this install has, and what each is doing
+rundesk agents <agent>                                                       what one agent is, and where it keeps things
+rundesk doctor                                                               what stands between every agent and a working turn
+rundesk doctor <agent>                                                       what stands between one agent and a working turn
 
 # running one
-rundesk start <agent>                                                        have the machine keep an agent running
+rundesk start [--here] <agent>                                               have the machine keep an agent running
 rundesk stop [--all] <agent>                                                 stand an agent down
 rundesk restart [--all] <agent>                                              cycle an agent, leaving the others alone
 rundesk logs [-n <lines>] <agent>                                            what an agent has been saying
-rundesk serve <agent>                                                        run an agent here, until it is asked to stop
 
 # reaching it
 rundesk ask <agent> "<prompt>"                                               one turn, streamed to this terminal   [planned]
@@ -44,7 +44,7 @@ rundesk usage <agent>                                                        wha
 rundesk usage <agent> <run>                                                  what one run cost   [planned]
 
 # rundesk itself
-rundesk status                                                               every agent, and what it is doing
+rundesk status                                                               how rundesk itself is on this machine
 rundesk version [--check]                                                    what is installed, and whether that is current
 rundesk update [--check]                                                     move to the newest published release
 rundesk uninstall                                                            how to remove rundesk from this machine
@@ -56,6 +56,7 @@ rundesk uninstall                                                            how
 --all                 every agent on this machine
 --check               say whether a newer release exists
 --gateway <agent>     whose schedules — an agent's schedules are its own
+--here                run it in this terminal instead of handing it to the machine
 --kind <kind>         which kind of channel it is — `discord`, and others as they land
 --purge               also take its log, schedules and history
 --run <program>       the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH
