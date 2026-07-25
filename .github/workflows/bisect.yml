@@ -16,6 +16,9 @@ on:
       seconds:
         description: how long one class may take before it is called stuck
         default: '120'
+      classes:
+        description: only these classes, space separated; empty means every one
+        default: ''
 
 jobs:
   class-by-class:
@@ -44,12 +47,13 @@ jobs:
           set +e
           suite="${{ inputs.suite }}"
           seconds="${{ inputs.seconds }}"
-          classes=$(sed -n 's/^class \([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' "$suite")
+          classes="${{ inputs.classes }}"
+          [ -n "$classes" ] || classes=$(sed -n 's/^class \([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' "$suite")
           stuck=""
           for one in $classes; do
             # Said before it runs, not after: if this harness dies, the last line printed
             # is still the class it died on.
-            echo "-> $one"
+            echo "::notice title=running::$one"
             python -u "$suite" "$one" > one.log 2>&1 &
             ran=$!
             waited=0
@@ -58,13 +62,13 @@ jobs:
               waited=$((waited + 1))
             done
             if kill -0 "$ran" 2>/dev/null; then
-              echo "   STUCK after ${waited}s"
+              echo "::error title=STUCK::$one hung for ${waited}s"
               stuck="$stuck $one"
               kill -9 "$ran" 2>/dev/null
             else
               wait "$ran"
               code=$?
-              if [ "$code" -eq 0 ]; then echo "   ok"; else echo "   FAILED exit=$code"; tail -5 one.log; fi
+              if [ "$code" -eq 0 ]; then echo "::notice title=ok::$one"; else echo "::error title=FAILED::$one exit=$code"; tail -5 one.log; fi
             fi
           done
           echo
