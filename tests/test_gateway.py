@@ -1989,16 +1989,31 @@ class TheDecisionToEndSomebodysWork(WithARunDirectory):
         self.assertTrue(gateway._ask_group(went.pid, signal.SIGTERM),
                         "a group that had already gone was read as the machine refusing")
 
-    @unittest.skipIf(os.geteuid() == 0, "root is refused nothing, so there is no refusal to see")
     def test_a_machine_that_refuses_the_signal_is_told_from_one_that_granted_it(self):
         """R-GW-28 — the distinction the whole decision rests on, at its own level.
 
-        Group one is the machine's own, which nobody but root may signal. **Never group
-        zero**: that is the caller's own group, and asking it to die kills the test run,
-        the shell around it and everything else sharing the group.
+        **No real group is named here, and none ever should be.** `killpg` is only defined
+        as "that group" for a group id above one; at one and at zero it degenerates, and on
+        Linux group one means *every process this user may signal*. An earlier version of
+        this case asked group one to die and took the whole machine's session with it —
+        which on a runner is the job, the shell and the agent reporting the result, so the
+        step hung forever with an empty log. Group zero is the caller's own, which is no
+        better.
+
+        The refusal is the machine's answer, so the machine's answer is what is replaced.
         """
-        self.assertFalse(gateway._ask_group(1, signal.SIGKILL),
+        refused = []
+
+        def would_not(pgid, sig):
+            refused.append((pgid, sig))
+            raise PermissionError("not yours to signal")
+
+        self.addCleanup(setattr, os, "killpg", os.killpg)
+        os.killpg = would_not
+
+        self.assertFalse(gateway._ask_group(4242, signal.SIGKILL),
                          "a refused signal was reported as sent")
+        self.assertEqual([(4242, signal.SIGKILL)], refused, "it never asked at all")
 
 
 class WhatProvesWorkIsOurs(WithARunDirectory):

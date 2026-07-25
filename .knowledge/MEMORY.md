@@ -24,9 +24,12 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `requirements.txt` every case that claims a name refuses on a machine that has run the installer, and
   passes in CI, which has no `.venv`. Give any gateway a test builds a scratch `root`; only the fitness
   cases build an install. The suites are isolated now — the trap is writing the next one without it.
-- **`os.killpg(0, …)` signals the caller's own process group.** A test written to prove a signal can be
-  refused killed the test run, the shell around it and everything else in the group — exit 1, no output,
-  nothing to read. Use group `1` (the machine's own, refused to anyone but root) and skip under root.
+- **Never name a real process group in a test — `killpg` degenerates at `0` and at `1`.** It means "that
+  group" only above one. Group `0` is the caller's own, and killed the test run and its shell. Group `1`
+  looks safe and is worse: on Linux it is `kill(-1, …)`, *every process this user may signal*, so it took
+  the CI runner's own agent with it — the step then hung forever with an empty log, no timeout applied and
+  cancels did nothing, because nothing was left alive to answer. macOS returns an error instead, so it
+  passed there every time. Replace `os.killpg` and assert on what was asked.
 - Running `tests/test_gateway.py` without `RUNDESK_SCHEDULES_DIR` redirected writes stray `<name>.seen.json`
   into the owner's real `~/.rundesk/schedules` — `RUNDESK_RUN_DIR` and `RUNDESK_LOG_DIR` alone are not
   enough, because the schedule checkpoint lives beside the schedules, not with the run state.
