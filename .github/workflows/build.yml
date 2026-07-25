@@ -63,6 +63,14 @@ jobs:
       - name: The installer is valid shell
         run: bash -n install.sh
 
+      - name: This checkout has an install beside it, as a developer's does
+        # Anyone who has run the installer has a `.venv` here, and a gateway asks whether
+        # this install fits the Python running it before claiming its name. A runner never
+        # has one — so a suite that consults the checkout instead of its own scratch root
+        # passed here and failed on every machine the product is actually developed on.
+        # Made empty and on purpose: nothing below may care that it is there.
+        run: mkdir -p .venv/lib/python${{ matrix.python }}
+
       # -- the platform: what runs, and what keeps it running ------------------------
       - name: platform-process — a program rundesk runs, and keeping hold of it
         run: python tests/test_process.py
@@ -125,6 +133,33 @@ jobs:
           set -euo pipefail
           export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
           "$RUNDESK_BIN_DIR/rundesk" status
+
+      - name: An installed rundesk can actually start a gateway
+        # The step below asks `.venv/bin/python` whether what was declared imports. Nobody
+        # runs rundesk that way: the command is `#!/usr/bin/env python3` and puts the
+        # virtualenv's packages on the path itself. A gateway asks whether they load before
+        # it will claim its name — so if that hand-off ever broke, every installed gateway
+        # would refuse to start and this whole gate would stay green.
+        #
+        # Asserted on `status`, never on the exit code: refusing to start ends *well* on
+        # purpose, so that a gateway which can never run is not restarted forever.
+        run: |
+          set -euo pipefail
+          export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
+          "$RUNDESK_BIN_DIR/rundesk" serve probe &
+          serving=$!
+          for _ in $(seq 30); do
+            "$RUNDESK_BIN_DIR/rundesk" status | grep -qE '^probe +RUNNING' && break
+            sleep 1
+          done
+          if ! "$RUNDESK_BIN_DIR/rundesk" status | grep -qE '^probe +RUNNING'; then
+            echo "::error::an installed rundesk could not start a gateway"
+            "$RUNDESK_BIN_DIR/rundesk" logs probe || true
+            kill "$serving" 2>/dev/null || true
+            exit 1
+          fi
+          kill "$serving"
+          wait "$serving" || { echo "::error::the gateway did not stop cleanly"; exit 1; }
 
       - name: Everything rundesk needs came with it, and imports
         # The guarantee an install makes: nothing is left for a person to put in place. If
