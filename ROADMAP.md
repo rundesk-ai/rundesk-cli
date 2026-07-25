@@ -1,7 +1,13 @@
 # Roadmap — Agents to Provider-Controlled Channels
 
-**Planning baseline:** `eb61e2f` on 2026-07-25  
+**Planning baseline:** `1046f3f` on 2026-07-25  
 **Status:** Direction, not a ratified product contract
+
+**Starting implementation? Read in this order:** this file's Direction and Phase 1; then
+[`CLI.md`](CLI.md) for every operation as it will be typed;
+[`.knowledge/guides/the-command-surface.md`](.knowledge/guides/the-command-surface.md) for why the
+surface is shaped that way and which overlaps were already removed; then the two drafts Phase 1
+ratifies, `.knowledge/prd-drafts/agent-home.md` and `agent-gateway.md`.
 
 This roadmap gets Rundesk from a proven process/gateway/schedule substrate to named agents that can be
 reached through Discord, Slack, schedules and the terminal. It deliberately advances one testable
@@ -234,16 +240,17 @@ it is an agent. A nested `add` stays qualified by its group, so `schedules ava a
 ```sh
 rundesk add ava                    make ava, and the one gateway that runs it
 rundesk remove ava                 take both away
+rundesk agents                     every agent, and what each is doing
+rundesk agents ava                 what ava is, and where it keeps things
+rundesk doctor ava                 what stands between ava and a working turn
+
 rundesk start ava                  already ships — subject becomes the agent
+rundesk start ava --here           …in this terminal instead     (was: serve ava)
 rundesk stop ava
 rundesk restart ava
 rundesk logs ava
-rundesk doctor ava
-rundesk status                     every agent, and what each is doing
 
-rundesk agents                     every agent, and what each is doing
-rundesk agents ava                 what ava is, and where it keeps things
-
+rundesk ask ava "…"                one turn, streamed here
 rundesk schedules ava              what ava runs on its own       (was --gateway ava)
 rundesk schedules ava add tidy --when <cron> -- /bin/tidy
 rundesk schedules ava remove tidy  take it away
@@ -254,6 +261,8 @@ rundesk channels ava add ops --kind discord --server <id> --provider claude
 rundesk runs ava                   what ava has run
 rundesk runs ava show <run> [--stream]
 rundesk runs ava resume|stop <run>
+
+rundesk status                     how rundesk itself is — not a list of agents
 ```
 
 Every operation as it will be typed is in [`CLI.md`](CLI.md), generated from the parser. *Why* the
@@ -294,6 +303,33 @@ what keeps the two testable apart while the command surface operates them as one
 - Prove `doctor` detects missing files, broken links, unusable provider homes and an unfit runtime without
   starting a provider or changing state.
 - Prove the gateway module still passes its own contract with no agent anywhere near it.
+- Prove `status` answers for rundesk itself and lists no agents, and that `agents` lists them with state.
+- Prove `start <agent> --here` runs it in this terminal, and that a job written before this still starts.
+- Prove `schedules <agent>` reaches the same schedules `--gateway <agent>` used to, and that an option
+  typed after the program is no longer swallowed by it.
+- Prove `uninstall` removes rundesk and reports failure when it could not, rather than exiting zero.
+- Prove every operation `CLI.md` lists is answered, and that `CLI.md` still matches the command.
+
+### Order of work
+
+Either half alone leaves the product incoherent, so both land together — but not in one commit:
+
+1. The agent and its home, with no command touching it yet: the module, its paths, its refusals.
+2. `add` and `remove`, which is the first point a gateway is made and taken away by an agent's name.
+3. The gateway verbs change subject, one at a time, each with its own regression check.
+4. `status` splits from `agents`; `serve` folds into `start --here`; `stop --remove` goes.
+5. `schedules` moves its agent to a positional and gains `run`.
+6. `uninstall` stops being an instruction page.
+7. Ratify `agent-home.md` and `agent-gateway.md` into `prd/`, glyphs set by what now passes.
+
+### What this closes
+
+Findings **31** (`--run` swallowing later options, fixed by the positional), **33** (`uninstall`
+exiting zero), and the parts of **18**, **19**, **22** and **28** that concern where an agent's things
+live and whether a supervised one resolves them the same way. Finding **32** — a bare `stop` or
+`restart` fanning out to everything — **is a decision this phase must make**: with agents, does a bare
+`stop` mean every agent, or is it a usage error? The surface says a verb's next word says whose, and
+leaving it out currently means all of them, silently.
 
 ### Exit proof
 
@@ -366,7 +402,7 @@ budget; ownership committed before spawn; and a small admission bound. These are
 criteria; finding numbers are review evidence, not architecture.
 
 Choose the smallest currently documented surface that passes every required item above. Implement only
-that adapter and `rundesk run <agent> ...` to the terminal. Mid-turn send is not promised until a real
+that adapter and `rundesk ask <agent> "..."` to the terminal. Mid-turn send is not promised until a real
 probe proves it; some headless providers turn questions into final prose or require stop/resume.
 
 ### Tests
@@ -560,8 +596,8 @@ than restart and repeated crashes stop looping (the currently unproven R-GW-22 a
 
 ## Phase 8 — Add Provider and Channel Breadth One Adapter at a Time
 
-**Outcome:** Claude, Codex and Grok can each be selected where an entry point is made, and a second channel can reuse the
-same channel contract without changing the agent.
+**Outcome:** Claude, Codex and Grok can each be selected where an entry point is made, and a second
+channel can reuse the same channel contract without changing the agent.
 
 Add the remaining providers one at a time behind the Phase 3 conformance suite. Preserve real differences:
 do not synthesize tool events a provider does not emit, claim interactive input a protocol cannot accept
@@ -611,6 +647,9 @@ part has been proved.
 
 ## Evidence Used
 
+- The command as it stands and as it will be typed: [`CLI.md`](CLI.md), generated from the parser, and
+  [`.knowledge/guides/the-command-surface.md`](.knowledge/guides/the-command-surface.md) for the rules it
+  obeys and the overlaps already removed from it.
 - Live Python contracts and structure: [`.knowledge/BRIEF.md`](.knowledge/BRIEF.md),
   [`.knowledge/CODEMAP.md`](.knowledge/CODEMAP.md), and
   [`.knowledge/prd/`](.knowledge/prd/README.md)
