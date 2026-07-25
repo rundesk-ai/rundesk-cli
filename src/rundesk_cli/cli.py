@@ -235,19 +235,32 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="how rundesk itself is on this machine")
 
     listed = sub.add_parser("schedules", help="what an agent runs on its own, and when")
-    listed.add_argument("--gateway", dest="name", metavar="<agent>", default=_gateway.DEFAULT_NAME,
+    # The agent is the word after the verb, like every other verb here. As an option it
+    # was also in the list `--run`'s remainder swallowed, so `--gateway beta` typed after
+    # the program became an argument to the program and the schedule landed on another
+    # agent, reported as success.
+    listed.add_argument("name", metavar="<agent>",
                         help="whose schedules — an agent's schedules are its own")
+    # Registered and refused rather than removed, so the old spelling is answered in our
+    # words with the new one, instead of by an argparse dump about an unrecognized option.
+    listed.add_argument("--gateway", dest="gateway_was", metavar="<agent>",
+                        help=argparse.SUPPRESS)
     acts = listed.add_subparsers(dest="act", metavar="<action>")
     added = acts.add_parser("add", help="add a schedule")
     added.add_argument("schedule", metavar="<schedule>", help="what to call it, and what to name it by later")
     added.add_argument("--when", required=True, metavar="<cron>",
                        help="when it runs, as five cron fields — minute, hour, day, month, weekday")
-    added.add_argument("--run", required=True, nargs=argparse.REMAINDER, metavar="<program>",
-                       help="the full path of what to start when it is due, and its arguments — "
-                            "a bare name is refused, because a gateway runs with almost no PATH")
+    # After `--`, and a positional rather than an option's remainder. What follows is the
+    # program and nothing else, so an option typed after it is a usage error rather than
+    # something quietly handed to the program.
+    added.add_argument("run", nargs="+", metavar="<program>",
+                       help="after `--`, the full path of what to start when it is due, and its "
+                            "arguments — a bare name is refused, because a gateway runs with "
+                            "almost no PATH")
     for act, what in (("remove", "take a schedule away"),
                       ("on", "let a schedule run"),
-                      ("off", "keep a schedule but stop it running")):
+                      ("off", "keep a schedule but stop it running"),
+                      ("run", "run a schedule now, whether or not it is due")):
         one = acts.add_parser(act, help=what)
         one.add_argument("schedule", metavar="<schedule>", help="which schedule, by the name it was added under")
 
@@ -913,15 +926,25 @@ def _how_long(started: float | None) -> str:
     return f"{seconds // 86400}d{(seconds % 86400) // 3600:02d}h"
 
 
-def cmd_schedules(args: argparse.Namespace, gateways) -> int:
-    """List a gateway's schedules, or change them."""
+def cmd_schedules(args: argparse.Namespace, gateways, agents) -> int:
+    """List an agent's schedules, or change them."""
+    if args.gateway_was:
+        # Refused, and nothing written. The old spelling put the agent in the one place
+        # `--run`'s remainder could swallow it, so a command that looked like it worked
+        # added the schedule to a different agent (R-SCH-14).
+        print("schedules: --gateway IS NOW THE WORD AFTER THE VERB", file=sys.stderr)
+        print(f"        say:  rundesk schedules {args.gateway_was} ...", file=sys.stderr)
+        return 2
     act = getattr(args, "act", None)
+    whose = agents.resolved(args.name)
     try:
         if act == "add":
-            return _add_schedule(args, gateways)
+            return _add_schedule(args, gateways, whose)
+        if act == "run":
+            return _run_schedule(args, gateways, whose)
         if act in ("remove", "on", "off"):
-            return _change_schedule(args, gateways, act)
-        return _list_schedules(args, gateways)
+            return _change_schedule(args, gateways, whose, act)
+        return _list_schedules(args, gateways, whose)
     except _gateway.Unreadable as why:
         # Answered in one place because every path here reads the same file, and each of
         # them turned "this cannot be read" into "there is nothing there": the listing said
@@ -933,25 +956,22 @@ def cmd_schedules(args: argparse.Namespace, gateways) -> int:
         return 1
 
 
-def _note(gateways, name: str, said: str) -> None:
-    """Say what was changed, in the log of the gateway it was changed for.
+def _note(gateways, name: str, said: str, whose=None) -> None:
+    """Say what was changed, in the log of the agent it was changed for.
 
-    A schedule that appears or vanishes is as much a part of what happened to a gateway
+    A schedule that appears or vanishes is as much a part of what happened to an agent
     as anything it ran, and the log is the only account that outlives the gateway.
     """
-    gateways.note(name, said)
+    gateways.note(name, said, whose.logs if whose else None)
 
 
-def _add_schedule(args: argparse.Namespace, gateways) -> int:
+def _add_schedule(args: argparse.Namespace, gateways, whose) -> int:
     from rundesk_cli import schedule
 
     try:
         made = schedule.Schedule(args.schedule, args.when)
     except schedule.NotASchedule as why:
         print(f"{args.schedule}: NOT ADDED — {why}", file=sys.stderr)
-        return 1
-    if not args.run:
-        print(f"{args.schedule}: NOT ADDED — nothing was named to run", file=sys.stderr)
         return 1
     if not process.located(args.run[0]):
         # Refused here rather than discovered at three in the morning. The gateway runs
@@ -964,19 +984,21 @@ def _add_schedule(args: argparse.Namespace, gateways) -> int:
     # Read and written under one lock: two `add`s racing would otherwise each read the
     # same list and each write theirs back, and one schedule would simply never exist
     # while both commands reported success.
-    with gateways.changing_schedules(args.name) as keeping:
+    with gateways.changing_schedules(args.name, whose.schedules) as keeping:
         if any(one.get("name") == args.schedule for one in keeping if isinstance(one, dict)):
             print(f"{args.schedule}: EXISTS — remove it first, or use a different name",
                   file=sys.stderr)
             return 1
         keeping.append({"name": args.schedule, "when": args.when, "run": list(args.run)})
-    _note(gateways, args.name, f"schedule '{args.schedule}' added ({args.when})")
-    print(f"{args.schedule}: ADDED — next {schedule.describe(made, datetime.now())}")
+    _note(gateways, args.name, f"schedule '{args.schedule}' added ({args.when})", whose)
+    # Both named, because a schedule belongs to one agent and the success line saying only
+    # its own name could not tell you it had landed on the wrong one.
+    print(f"{args.name}/{args.schedule}: ADDED — next {schedule.describe(made, datetime.now())}")
     return 0
 
 
-def _change_schedule(args: argparse.Namespace, gateways, act: str) -> int:
-    with gateways.changing_schedules(args.name) as keeping:
+def _change_schedule(args: argparse.Namespace, gateways, whose, act: str) -> int:
+    with gateways.changing_schedules(args.name, whose.schedules) as keeping:
         found = [one for one in keeping
                  if isinstance(one, dict) and one.get("name") == args.schedule]
         if not found:
@@ -990,12 +1012,55 @@ def _change_schedule(args: argparse.Namespace, gateways, act: str) -> int:
             found[0]["enabled"] = act == "on"
             said = "ON" if act == "on" else "OFF"
             told = f"schedule '{args.schedule}' turned {said.lower()}"
-    _note(gateways, args.name, told)
-    print(f"{args.schedule}: {said}")
+    _note(gateways, args.name, told, whose)
+    print(f"{args.name}/{args.schedule}: {said}")
     return 0
 
 
-def _list_schedules(args: argparse.Namespace, gateways) -> int:
+def _run_schedule(args: argparse.Namespace, gateways, whose) -> int:
+    """Run what a schedule names, now, whether or not it is due (R-SCH-21).
+
+    Here, in this terminal, and **nothing is written down** (R-SCH-22). What is due is
+    decided from when each schedule last fired, so a run by hand that recorded itself
+    would be indistinguishable from the schedule having come due — and would stop the
+    real firing that minute. Running one to see what it does must not move when it next
+    happens on its own.
+
+    It runs here rather than inside the gateway because there is nothing to ask a gateway
+    with: this is an operator doing by hand what the clock would otherwise do, and the
+    honest place for that is the terminal that asked for it. The same environment the
+    gateway would have given it, so what it does here is what it does at three in the
+    morning (R-PROC-1).
+    """
+    from rundesk_cli import schedule
+
+    wanted, _ = gateways.scheduled(args.name, whose.schedules)
+    found = [one for one in wanted if one.name == args.schedule]
+    if not found:
+        print(f"{args.schedule}: NOT FOUND — {args.name} has no schedule by that name",
+              file=sys.stderr)
+        return 1
+    one = found[0]
+    if not one.run:
+        print(f"{args.schedule}: NOTHING TO RUN — it names no program", file=sys.stderr)
+        return 1
+    was_due = schedule.describe(one, datetime.now())
+    print(f"{args.name}/{args.schedule}: RUNNING BY HAND — {' '.join(one.run)}")
+    said = asyncio.run(process.run(
+        list(one.run),
+        env=process.environment(whose.run or _gateway.home()),
+        on_line=print,
+    ))
+    print(f"{args.name}/{args.schedule}: "
+          + ("RAN" if said.ok else f"FAILED — {said.reason}")
+          + (f" ({said.code})" if said.code else ""))
+    # Said out loud, because the whole point of running one by hand is that it changes
+    # nothing about when it runs on its own.
+    print(f"        next, unchanged: {was_due}")
+    return 0 if said.ok else 1
+
+
+def _list_schedules(args: argparse.Namespace, gateways, whose) -> int:
     """What this gateway runs on its own, when each next runs, and what became of it.
 
     This gateway's, and no other's: a gateway's schedules are its own, which is what
@@ -1003,12 +1068,12 @@ def _list_schedules(args: argparse.Namespace, gateways) -> int:
     """
     from rundesk_cli import schedule
 
-    wanted, refused = gateways.scheduled(args.name)
+    wanted, refused = gateways.scheduled(args.name, whose.schedules)
     if not wanted and not refused:
         print(f"{args.name}: NO SCHEDULES")
         return 0
     now = datetime.now()
-    ran = gateways.what_was_scheduled(args.name)
+    ran = gateways.what_was_scheduled(args.name, whose.schedules)
     rows = [(
         one.name,
         "OFF" if not one.enabled else "ON",
@@ -1092,7 +1157,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
     if args.command == "status":
         return cmd_status(args, gateways, machine, agents)
     if args.command == "schedules":
-        return cmd_schedules(args, gateways)
+        return cmd_schedules(args, gateways, agents)
     if args.command == "logs":
         return cmd_logs(args, gateways, agents)
 

@@ -137,6 +137,12 @@ UNWRAP = [
     (re.compile(r"\[(<[^>]+>)\]"), r"\1"),                     # nargs="?"
 ]
 
+#: argparse writes a positional taking one or more as `<x> [<x> ...]`, which says the same
+#: word twice and says nothing about the `--` in front of it. The `--` is grammar and not
+#: decoration — without it the first thing that looks like an option is refused — so the
+#: reference has to show it or it is describing a command nobody can type.
+REPEATED = re.compile(r"(<[^>]+>) \[\1 \.\.\.\]")
+
 
 def usage_of(parser) -> str:
     """A parser's own usage line, tidied — argparse writes it, so it cannot drift."""
@@ -145,9 +151,7 @@ def usage_of(parser) -> str:
     usage = usage.replace("[-h] ", "").replace("[-h]", "")
     for pattern, into in UNWRAP:
         usage = pattern.sub(into, usage)
-    # `REMAINDER` prints as a bare ellipsis whatever its metavar says, and an argument with
-    # no name is the one thing this reference exists to stop.
-    return usage.replace("--run ...", "--run <program> [<arg> ...]").strip()
+    return REPEATED.sub(r"-- \1 [<arg> ...]", usage).strip()
 
 
 def operations(name: str, parser, summary: str = "") -> list[tuple[str, str]]:

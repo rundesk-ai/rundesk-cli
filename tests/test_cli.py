@@ -442,27 +442,27 @@ class FakeGateways:
         if name in self._unreadable:
             raise self.Unreadable(f"{name}.json could not be read as schedules")
 
-    def scheduled(self, name):
+    def scheduled(self, name, where=None):
         from rundesk_cli import schedule
         self._still_readable(name)
         return schedule.read(self._written_schedules.get(name, []))
 
-    def written_schedules(self, name):
+    def written_schedules(self, name, where=None):
         self._still_readable(name)
         return list(self._written_schedules.get(name, []))
 
     @contextlib.contextmanager
-    def changing_schedules(self, name):
+    def changing_schedules(self, name, where=None):
         """Read, change, write back — the shape the real one holds a lock across."""
         self._still_readable(name)
         keeping = list(self._written_schedules.get(name, []))
         yield keeping
         self._written_schedules[name] = keeping
 
-    def what_was_scheduled(self, name):
+    def what_was_scheduled(self, name, where=None):
         return self._ran_schedules.get(name, {})
 
-    def note(self, name, said):
+    def note(self, name, said, logs=None):
         # Never the real home: without somewhere of its own to write, a stand-in that
         # fell back to the default would put test lines in the owner's own logs.
         assert self._written is not None, "this case writes a log line and was given nowhere to put it"
@@ -633,8 +633,14 @@ def drive(argv, gateways=None, machine=None, agents=None):
     """Run the command line and hand back what it printed and what it returned."""
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        code = cli.main(argv, gateways=gateways or FakeGateways(),
-                        machine=machine or FakeMachine(), agents=agents or FakeAgents())
+        try:
+            code = cli.main(argv, gateways=gateways or FakeGateways(),
+                            machine=machine or FakeMachine(), agents=agents or FakeAgents())
+        except SystemExit as usage:
+            # What a shell sees. Argparse refuses by exiting rather than returning, and a
+            # case proving something is refused by the grammar could not otherwise say
+            # what the caller was left with.
+            code = usage.code if isinstance(usage.code, int) else 1
     return code, out.getvalue() + err.getvalue()
 
 
@@ -1214,9 +1220,87 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
     def _gateways(self, **kw):
         return FakeGateways(written=self.written, **kw)
 
+    def test_a_schedule_can_be_run_by_hand_whether_or_not_it_is_due(self):
+        """R-SCH-21 — a real program, so this proves it ran rather than that it was asked
+        to. The schedule is due at three in the morning and this is not three."""
+        gateways = self._gateways(schedules={"ava": [
+            {"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo", "swept"]}]})
+        code, said = drive(["schedules", "ava", "run", "tidy"], gateways)
+        self.assertEqual(0, code, said)
+        self.assertIn("swept", said, "it reported running it without running it")
+        self.assertIn("RAN", said)
+
+    def test_running_a_schedule_by_hand_leaves_the_time_it_next_falls_due_alone(self):
+        """R-SCH-22 — what is due is decided from when each last fired, so a run by hand
+        that recorded itself would read as the schedule having come due, and would stop
+        the real firing that minute."""
+        scheduled = {"ava": [{"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]}
+        ran = {"ava": {"tidy": {"at": "2026-01-01 03:00", "outcome": "finished"}}}
+        gateways = self._gateways(schedules=scheduled, ran_schedules=ran)
+
+        code, said = drive(["schedules", "ava", "run", "tidy"], gateways)
+        self.assertEqual(0, code, said)
+        self.assertEqual(scheduled, gateways._written_schedules, "running by hand rewrote them")
+        self.assertEqual(ran, gateways._ran_schedules,
+                         "running by hand recorded a firing, so the real one is now skipped")
+        self.assertIn("unchanged", said)
+
+    def test_running_a_schedule_that_failed_says_so_and_fails(self):
+        """R-SCH-21 — a run reported as fine when the program ended badly is a success
+        this command did not earn."""
+        gateways = self._gateways(schedules={"ava": [
+            {"name": "nope", "when": "0 3 * * *", "run": ["/bin/sh", "-c", "exit 3"]}]})
+        code, said = drive(["schedules", "ava", "run", "nope"], gateways)
+        self.assertEqual(1, code)
+        self.assertIn("FAILED", said)
+
+    def test_running_a_schedule_that_is_not_there_says_so(self):
+        """R-SCH-21"""
+        code, said = drive(["schedules", "ava", "run", "nope"], self._gateways())
+        self.assertEqual(1, code)
+        self.assertIn("NOT FOUND", said)
+
+    def test_the_agent_is_the_word_after_the_verb(self):
+        """R-SCH-14 — as an option it sat in the one place `--run`'s remainder swallowed,
+        so `--gateway beta` typed after the program became an argument to the program and
+        the schedule landed on the default agent, reported as success."""
+        gateways = self._gateways()
+        code, said = drive(["schedules", "ava", "add", "tidy", "--when", "* * * * *",
+                            "--", "/bin/echo", "--gateway", "beta"], gateways)
+        self.assertEqual(0, code, said)
+        self.assertIn("ava", gateways._written_schedules, "it landed on some other agent")
+        self.assertEqual(["/bin/echo", "--gateway", "beta"],
+                         gateways._written_schedules["ava"][0]["run"])
+
+    def test_the_old_way_of_naming_the_agent_is_refused_with_the_new_one(self):
+        """R-SCH-14 — answered in our words with what to type, rather than by an argparse
+        dump about an option it does not recognise."""
+        gateways = self._gateways()
+        code, said = drive(["schedules", "ava", "--gateway", "beta"], gateways)
+        self.assertEqual(2, code)
+        self.assertIn("rundesk schedules beta", said, "it refused and never said what to say")
+        self.assertEqual({}, gateways._written_schedules, "it refused and wrote anyway")
+
+    def test_an_option_after_the_program_is_refused_rather_than_swallowed(self):
+        """R-SCH-3 — what to run is the words after `--` and nothing else, so a rundesk
+        option typed there is a usage error instead of an argument to the program."""
+        gateways = self._gateways()
+        code, said = drive(["schedules", "ava", "add", "tidy", "--when", "* * * * *",
+                            "/bin/echo", "-n"], gateways)
+        self.assertEqual(2, code, said)
+        self.assertEqual({}, gateways._written_schedules)
+
+    def test_adding_says_which_agent_as_well_as_which_schedule(self):
+        """R-SCH-14 — a success line naming only the schedule could not tell you it had
+        landed on the wrong agent."""
+        gateways = self._gateways()
+        _, said = drive(["schedules", "ava", "add", "tidy", "--when", "* * * * *",
+                         "--", "/bin/echo"], gateways)
+        self.assertIn("ava/tidy", said)
+
     def test_a_gateway_with_no_schedules_says_so(self):
         """R-SCH-8"""
-        code, said = drive(["schedules"], self._gateways())
+        code, said = drive(["schedules", "gateway"], self._gateways())
         self.assertEqual(0, code)
         self.assertIn("NO SCHEDULES", said)
 
@@ -1225,7 +1309,7 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         gateways = self._gateways(
             schedules={"gateway": [{"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]},
             ran_schedules={"gateway": {"tidy": {"at": "2026-07-25 03:00", "outcome": "finished"}}})
-        code, said = drive(["schedules"], gateways)
+        code, said = drive(["schedules", "gateway"], gateways)
         self.assertEqual(0, code)
         for expected in ("tidy", "0 3 * * *", "2026-07-25 03:00", "finished"):
             self.assertIn(expected, said)
@@ -1234,7 +1318,7 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         """R-SCH-11 — keeping one without running it is the whole point of turning it off."""
         gateways = self._gateways(schedules={"gateway": [
             {"name": "paused", "when": "* * * * *", "run": ["/bin/echo"], "enabled": False}]})
-        _, said = drive(["schedules"], gateways)
+        _, said = drive(["schedules", "gateway"], gateways)
         self.assertIn("paused", said)
         self.assertIn("OFF", said)
 
@@ -1243,7 +1327,7 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         gateways = self._gateways(schedules={"gateway": [
             {"name": "good", "when": "0 3 * * *", "run": ["/bin/echo"]},
             {"name": "bad", "when": "nonsense"}]})
-        code, said = drive(["schedules"], gateways)
+        code, said = drive(["schedules", "gateway"], gateways)
         self.assertEqual(1, code)
         self.assertIn("good", said)
         self.assertIn("NOT UNDERSTOOD", said)
@@ -1252,7 +1336,7 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         """R-SCH-17 — before any destructive change, the control surface had already
         turned "cannot read the configuration" into a healthy empty state: it printed
         NO SCHEDULES and exited zero for a file that still held every one of them."""
-        code, said = drive(["schedules"], self._gateways(unreadable={"gateway"}))
+        code, said = drive(["schedules", "gateway"], self._gateways(unreadable={"gateway"}))
         self.assertEqual(1, code)
         self.assertNotIn("NO SCHEDULES", said)
         self.assertIn("UNREADABLE", said)
@@ -1260,10 +1344,10 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
     def test_changing_schedules_that_cannot_be_read_says_nothing_was_changed(self):
         """R-SCH-17 — the owner needs to know their schedules are still there. Every way
         in is refused alike, because every one of them wrote an empty list over the file."""
-        for asked in (["schedules", "add", "new", "--when", "* * * * *", "--run", "/bin/echo"],
-                      ["schedules", "remove", "nightly"],
-                      ["schedules", "off", "nightly"],
-                      ["schedules", "on", "nightly"]):
+        for asked in (["schedules", "gateway", "add", "new", "--when", "* * * * *", "--", "/bin/echo"],
+                      ["schedules", "gateway", "remove", "nightly"],
+                      ["schedules", "gateway", "off", "nightly"],
+                      ["schedules", "gateway", "on", "nightly"]):
             with self.subTest(asked=asked[1]):
                 code, said = drive(asked, self._gateways(unreadable={"gateway"}))
                 self.assertEqual(1, code)
@@ -1273,8 +1357,8 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
     def test_a_schedule_is_added_and_shows_when_it_next_runs(self):
         """R-SCH-1, R-SCH-8"""
         gateways = self._gateways()
-        code, said = drive(["schedules", "add", "tidy", "--when", "*/5 * * * *",
-                            "--run", "/bin/echo", "hi"], gateways)
+        code, said = drive(["schedules", "gateway", "add", "tidy", "--when", "*/5 * * * *",
+                            "--", "/bin/echo", "hi"], gateways)
         self.assertEqual(0, code)
         self.assertIn("ADDED", said)
         self.assertEqual([{"name": "tidy", "when": "*/5 * * * *", "run": ["/bin/echo", "hi"]}],
@@ -1284,18 +1368,20 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
     def test_a_schedule_nobody_could_act_on_is_never_added(self):
         """R-SCH-1 — refused where it is written, not discovered when it fails to run."""
         gateways = self._gateways()
-        code, said = drive(["schedules", "add", "bad", "--when", "99 * * * *",
-                            "--run", "/bin/echo"], gateways)
+        code, said = drive(["schedules", "gateway", "add", "bad", "--when", "99 * * * *",
+                            "--", "/bin/echo"], gateways)
         self.assertEqual(1, code)
         self.assertIn("NOT ADDED", said)
         self.assertEqual([], gateways.written_schedules("gateway"))
 
     def test_a_schedule_naming_nothing_to_run_is_never_added(self):
-        """R-SCH-2"""
+        """R-SCH-2 — refused by the grammar rather than by the command: what to run is
+        the words after `--`, and there is no way to say none of them."""
         gateways = self._gateways()
-        code, said = drive(["schedules", "add", "empty", "--when", "* * * * *", "--run"], gateways)
-        self.assertEqual(1, code)
-        self.assertIn("NOT ADDED", said)
+        code, said = drive(["schedules", "gateway", "add", "empty", "--when", "* * * * *", "--"],
+                           gateways)
+        self.assertEqual(2, code, said)
+        self.assertEqual({}, gateways._written_schedules, "it added a schedule naming nothing")
 
     def test_a_schedule_naming_a_program_rather_than_locating_it_is_never_added(self):
         """R-SCH-1, R-PROC-2 — refused where it is written, not discovered at three in
@@ -1303,8 +1389,8 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         shell that typed it and nowhere else. Written down, it failed every time it fell
         due — with nothing said anywhere an owner reads, and LAST RUN stuck at '-'."""
         gateways = self._gateways()
-        code, said = drive(["schedules", "add", "nightly", "--when", "0 3 * * *",
-                            "--run", "codex", "exec"], gateways)
+        code, said = drive(["schedules", "gateway", "add", "nightly", "--when", "0 3 * * *",
+                            "--", "codex", "exec"], gateways)
         self.assertEqual(1, code)
         self.assertIn("NOT ADDED", said)
         self.assertIn("not a location", said)
@@ -1316,8 +1402,8 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         name is two schedules nobody can tell apart."""
         gateways = self._gateways(schedules={"gateway": [
             {"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]})
-        code, said = drive(["schedules", "add", "tidy", "--when", "* * * * *",
-                            "--run", "/bin/echo"], gateways)
+        code, said = drive(["schedules", "gateway", "add", "tidy", "--when", "* * * * *",
+                            "--", "/bin/echo"], gateways)
         self.assertEqual(1, code)
         self.assertIn("EXISTS", said)
         self.assertEqual(1, len(gateways.written_schedules("gateway")))
@@ -1327,7 +1413,7 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         gateways = self._gateways(schedules={"gateway": [
             {"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]},
             {"name": "other", "when": "0 4 * * *", "run": ["/bin/echo"]}]})
-        code, said = drive(["schedules", "remove", "tidy"], gateways)
+        code, said = drive(["schedules", "gateway", "remove", "tidy"], gateways)
         self.assertEqual(0, code)
         self.assertIn("REMOVED", said)
         self.assertEqual(["other"], [one["name"] for one in gateways.written_schedules("gateway")])
@@ -1337,9 +1423,9 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         """R-SCH-11"""
         gateways = self._gateways(schedules={"gateway": [
             {"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]})
-        drive(["schedules", "off", "tidy"], gateways)
+        drive(["schedules", "gateway", "off", "tidy"], gateways)
         self.assertIs(False, gateways.written_schedules("gateway")[0]["enabled"])
-        drive(["schedules", "on", "tidy"], gateways)
+        drive(["schedules", "gateway", "on", "tidy"], gateways)
         kept = gateways.written_schedules("gateway")
         self.assertIs(True, kept[0]["enabled"])
         self.assertEqual(1, len(kept), "turning one off and on again lost it")
@@ -1350,7 +1436,7 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         """R-SCH-8"""
         for act in ("remove", "on", "off"):
             with self.subTest(act=act):
-                code, said = drive(["schedules", act, "nope"], self._gateways())
+                code, said = drive(["schedules", "gateway", act, "nope"], self._gateways())
                 self.assertEqual(1, code)
                 self.assertIn("NOT FOUND", said)
 
@@ -1359,9 +1445,9 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         one agent's schedules that agent's alone."""
         gateways = self._gateways(schedules={"agent-two": [
             {"name": "theirs", "when": "* * * * *", "run": ["/bin/echo"]}]})
-        _, said = drive(["schedules", "--gateway", "agent-one"], gateways)
+        _, said = drive(["schedules", "agent-one"], gateways)
         self.assertIn("NO SCHEDULES", said)
-        drive(["schedules", "add", "mine", "--when", "* * * * *", "--run", "/bin/echo"], gateways)
+        drive(["schedules", "gateway", "add", "mine", "--when", "* * * * *", "--", "/bin/echo"], gateways)
         self.assertEqual(["theirs"], [one["name"] for one in gateways.written_schedules("agent-two")])
 
 
