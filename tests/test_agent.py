@@ -348,6 +348,35 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
         agent.add("ava", self.where)
         self.assertEqual(gateway.written_schedules("ava", agent.schedules_home("ava", self.where)), [])
 
+    def test_taking_an_agent_away_keeps_what_its_schedules_did(self):
+        """R-AGW-5 — what is scheduled and what each schedule last did sit side by side.
+        One is work the name would inherit and the other is the account, so a removal that
+        took the directory would take both."""
+        self.made()
+        kept = agent.schedules_home("ava", self.where)
+        gateway.ran_path("ava", kept).write_text('{"tidy": {"outcome": "ok"}}', encoding="utf-8")
+        with gateway.changing_schedules("ava", kept) as scheduled:
+            scheduled.append({"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo", "hi"]})
+
+        agent.forget("ava", self.where)
+        self.assertFalse(gateway.schedules_path("ava", kept).exists(), "the work was inherited")
+        self.assertIn("tidy", gateway.ran_path("ava", kept).read_text())
+
+    def test_where_an_agent_keeps_things_is_its_own(self):
+        """R-AGT-9 — asked once and handed on, because a command working these out for
+        itself in three places is how a gateway comes to write where nothing reads."""
+        self.made()
+        said = agent.resolved("ava", self.where)
+        self.assertEqual(said.run, agent.run_home("ava", self.where))
+        self.assertEqual(said.logs, agent.logs_home("ava", self.where))
+        self.assertEqual(said.schedules, agent.schedules_home("ava", self.where))
+
+    def test_a_name_with_no_agent_keeps_things_where_it_always_did(self):
+        """R-AGT-9 — a gateway that has no agent yet goes on being reached exactly as it
+        was, so nothing already running has to be adopted before it works."""
+        said = agent.resolved("gateway", self.where)
+        self.assertEqual((said.run, said.logs, said.schedules), (None, None, None))
+
     def test_taking_an_agent_away_keeps_the_account_of_what_it_did(self):
         """R-AGW-5 — a reinstall after trouble is the moment the account of the trouble is
         worth most, and it was being deleted by the command someone runs to fix it."""

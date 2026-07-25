@@ -191,6 +191,43 @@ def paths(name: str, where: Path | None = None) -> dict[str, Path]:
     }
 
 
+@dataclass(frozen=True)
+class Where:
+    """The three directories a gateway of this name keeps things in.
+
+    `None` for each means the ones a gateway kept things in before there were agents to own
+    them — which is what every gateway function already falls back to, so a name with no
+    agent goes on being reached exactly as it always was.
+    """
+
+    run: Path | None
+    logs: Path | None
+    schedules: Path | None
+
+
+def resolved(name: str, where: Path | None = None) -> Where:
+    """Where this name's gateway keeps things.
+
+    One answer, asked once and handed to whatever needs it, because a command resolving
+    these itself in three places is how a gateway comes to write somewhere the command that
+    configured it does not read (R-AGT-9).
+    """
+    if not exists(name, where):
+        return Where(None, None, None)
+    return Where(run_home(name, where), logs_home(name, where), schedules_home(name, where))
+
+
+def standing_before(name: str, logs: Path | None = None,
+                    schedules: Path | None = None) -> list[Path]:
+    """What a gateway of this name wrote before there were agents to own it.
+
+    Read rather than moved, so a command can say what adopting would take on before it
+    takes it on, and say nothing at all when there is nothing there.
+    """
+    return sorted(path for was, _ in _wrote_before(name, logs, schedules)
+                  for path in _the_file_and_what_it_rotated_into(was))
+
+
 def known(where: Path | None = None) -> list[str]:
     """Every agent this install has.
 
@@ -254,20 +291,30 @@ def adopt(name: str, where: Path | None = None, logs: Path | None = None,
     stopped gateway is not doing anything and its lock is an empty file whose name the next
     claim makes again.
     """
+    goes = {"logs": logs_home(name, where), "schedules": schedules_home(name, where)}
     moved = []
-    carried = (
-        (gateway.log_path(name, logs), logs_home(name, where)),
-        (gateway.schedules_path(name, schedules), schedules_home(name, where)),
-        (gateway.ran_path(name, schedules), schedules_home(name, where)),
-        (gateway.seen_path(name, schedules), schedules_home(name, where)),
-        (gateway.interrupted_path(name, schedules), schedules_home(name, where)),
-    )
-    for was, into in carried:
+    for was, into in _wrote_before(name, logs, schedules):
         for path in _the_file_and_what_it_rotated_into(was):
-            into.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(path), str(into / path.name))
+            goes[into].mkdir(parents=True, exist_ok=True)
+            shutil.move(str(path), str(goes[into] / path.name))
             moved.append(path.name)
     return sorted(moved)
+
+
+def _wrote_before(name: str, logs: Path | None, schedules: Path | None):
+    """Each thing a gateway of this name wrote before it had an agent, and which of an
+    agent's own directories it belongs in.
+
+    One list, so what adopting says it would take on and what adopting takes on cannot come
+    to disagree — a command that names one file and moves four is worse than either.
+    """
+    return (
+        (gateway.log_path(name, logs), "logs"),
+        (gateway.schedules_path(name, schedules), "schedules"),
+        (gateway.ran_path(name, schedules), "schedules"),
+        (gateway.seen_path(name, schedules), "schedules"),
+        (gateway.interrupted_path(name, schedules), "schedules"),
+    )
 
 
 def _the_file_and_what_it_rotated_into(path: Path):
@@ -296,14 +343,23 @@ def forget(name: str, where: Path | None = None, history: bool = False) -> list[
     """
     stands = directory(name, where)
     taken = []
-    going = [home(name, where), directory(name, where) / "providers", schedules_home(name, where)]
-    if history:
-        going.append(logs_home(name, where))
-    for path in going:
+    for path in (home(name, where), directory(name, where) / "providers"):
         if path.exists():
             shutil.rmtree(path)
             taken.append(path.name + "/")
-    for empty in (run_home(name, where), stands):
+    # The schedules go and the account of them stays, and they sit side by side: what is
+    # scheduled is work the name would inherit, and what each schedule last did is the
+    # account. Taking the directory would take both, so the file is named.
+    scheduled = gateway.schedules_path(name, schedules_home(name, where))
+    if scheduled.exists():
+        scheduled.unlink()
+        taken.append(scheduled.name)
+    if history:
+        for path in (logs_home(name, where), schedules_home(name, where)):
+            if path.exists():
+                shutil.rmtree(path)
+                taken.append(path.name + "/")
+    for empty in (run_home(name, where), schedules_home(name, where), stands):
         try:
             empty.rmdir()
         except OSError:

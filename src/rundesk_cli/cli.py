@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from rundesk_cli import __version__  # noqa: E402
+from rundesk_cli import agent as _agent  # noqa: E402
 from rundesk_cli import gateway as _gateway  # noqa: E402
 from rundesk_cli import process  # noqa: E402
 from rundesk_cli import supervisor as _supervisor  # noqa: E402
@@ -83,7 +84,6 @@ NOT_AVAILABLE = 69
 #: supplies what was left out — so reaching an agent from Discord is one command and not
 #: two, and a binding stays what a run resolved rather than a thing anyone maintains.
 PLANNED: dict[str, tuple[str, dict[str, tuple[str, str]]]] = {
-    "add": ("make an agent, and the gateway that runs it", {}),
     "agents": ("every agent this install has, and what each is doing", {}),
     "ask": ("one turn, streamed to this terminal", {}),
     "channels": ("the channels an agent is reachable on, and who may use them", {
@@ -91,7 +91,6 @@ PLANNED: dict[str, tuple[str, dict[str, tuple[str, str]]]] = {
         "remove": ("<channel>", "take this agent off a channel"),
         "show": ("<channel>", "one channel, and who is allowed to reach this agent through it"),
     }),
-    "doctor": ("what stands between an agent and a working turn", {}),
     "usage": ("what agents have cost, in tokens and in money", {}),
     "runs": ("what an agent has run, and what became of each", {
         "resume": ("<run>", "carry one run on from where it stopped"),
@@ -121,12 +120,9 @@ MEANS: dict[str, str] = {
 }
 
 FORMS: dict[str, list[tuple[str, str]]] = {
-    "add": [("<agent>", "")],
     "agents": [("", "every agent this install has, and what each is doing"),
                ("<agent>", "what one agent is, and where it keeps things")],
     "ask": [('<agent> "<prompt>"', "")],
-    "doctor": [("", "what stands between every agent and a working turn"),
-               ("<agent>", "what stands between one agent and a working turn")],
     "usage": [("", "what every agent has cost"),
               ("<agent>", "what one agent has cost"),
               ("<agent> <run>", "what one run cost")],
@@ -176,6 +172,18 @@ def build_parser() -> argparse.ArgumentParser:
     moved.add_argument("--check", action="store_true", help="say what would happen, and change nothing")
 
     sub.add_parser("uninstall", help="how to remove rundesk from this machine")
+
+    # The agent. Making one makes the gateway that runs it, and taking it away takes both:
+    # there is no separate step, and no way to end up with one and not the other.
+    born = sub.add_parser("add", help="make an agent, and the gateway that runs it")
+    # Optional to the parser and required by the command, the way `remove` is: asking for
+    # it wrong is answered in our words rather than by an argparse usage dump.
+    born.add_argument("name", nargs="?", metavar="<agent>",
+                      help="what to call it, and what to name it by later")
+
+    looked = sub.add_parser("doctor", help="what stands between an agent and a working turn")
+    looked.add_argument("name", nargs="?", metavar="<agent>",
+                        help="which agent — every one of them when left out")
 
     # The gateway. Every one of these takes the gateway's name and can do without it,
     # because there is one gateway today and there will be one per agent. Leaving the
@@ -472,7 +480,7 @@ def _named(args: argparse.Namespace, gateways, machine) -> list[str]:
     return sorted({it.name for it in gateways.every()} | set(machine.described()))
 
 
-def cmd_stop(args: argparse.Namespace, gateways, machine) -> int:
+def cmd_stop(args: argparse.Namespace, gateways, machine, agents) -> int:
     if not args.remove:
         return _stand_down(args, gateways, machine, "stop")
     if not args.name:
@@ -487,29 +495,110 @@ def cmd_stop(args: argparse.Namespace, gateways, machine) -> int:
         # record and the lock of something that is still running (R-GW-31).
         print(f"{args.name}: NOT REMOVED — it did not stop", file=sys.stderr)
         return stopped
-    return cmd_remove(args, gateways, machine)
+    return cmd_remove(args, gateways, machine, agents)
 
 
-def cmd_remove(args: argparse.Namespace, gateways, machine) -> int:
-    """Take a gateway away for good: its job, and what rundesk kept for it (R-GW-31).
+def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
+    """Make an agent, and the one gateway that runs it (R-AGW-1).
+
+    Making one that already exists puts back only what is missing (R-AGT-4). That is how an
+    owner repairs a home they half deleted, and it must not be how they lose the rules they
+    spent a month writing — so nothing that is there is written over, whatever is in it.
+
+    Given the name of a gateway that has been running since before there were agents, this
+    is also how that gateway gets one: what it wrote moves into the agent's own directories,
+    so that afterwards there is one place rather than two that disagree. It moves nothing
+    while that gateway is running, because a gateway reading one directory while every
+    command reads another is the fault that makes a schedule silently never run.
+    """
+    name = args.name
+    if not name:
+        print("add: NAME REQUIRED — say what to call the agent", file=sys.stderr)
+        print("        what there is already: rundesk agents", file=sys.stderr)
+        return 1
+    try:
+        agents.checked(name)
+    except agents.NotAnAgentName as why:
+        print(f"{name}: INVALID NAME — {why}", file=sys.stderr)
+        return 1
+    knew = agents.exists(name)
+    wrote = agents.standing_before(name)
+    if wrote and not knew:
+        now = gateways.standing(name)
+        if now.running:
+            print(f"{name}: NOT MADE — a gateway of that name is running (pid {now.pid})",
+                  file=sys.stderr)
+            print(f"        it has things to move, so stop it first: rundesk stop {name}",
+                  file=sys.stderr)
+            return 1
+    made = agents.add(name)
+    moved = agents.adopt(name) if wrote and not knew else []
+    if knew and not made:
+        print(f"{name}: ALREADY MADE — its home is as you left it")
+        return 0
+    print(f"{name}: MADE" if not knew else f"{name}: REPAIRED")
+    print(f"        home: {agents.home(name)}")
+    if made:
+        print(f"        put there: {', '.join(made)}")
+    if moved:
+        print(f"        brought in what it wrote before it was an agent: {', '.join(moved)}")
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace, gateways, agents) -> int:
+    """Say what stands between an agent and a working turn (R-AGT-11).
+
+    Starts no provider and changes nothing (R-AGT-12): an owner asking what is wrong is
+    usually asking because something already is, and a check that repaired what it found
+    would answer a different question the next time it was asked.
+    """
+    names = [args.name] if args.name else agents.known()
+    if not names:
+        print("no agents")
+        return 0
+    worst = 0
+    for name in names:
+        try:
+            said = agents.diagnosed(name)
+        except agents.NotAnAgentName as why:
+            print(f"{name}: INVALID NAME — {why}", file=sys.stderr)
+            worst = 1
+            continue
+        if not said:
+            print(f"{name}: READY")
+            continue
+        worst = 1
+        print(f"{name}: NOT READY", file=sys.stderr)
+        for one in said:
+            print(f"        {one.said}: {one.about}", file=sys.stderr)
+    return worst
+
+
+def cmd_remove(args: argparse.Namespace, gateways, machine, agents) -> int:
+    """Take an agent away for good: its home, its gateway's job, and what rundesk kept.
 
     Ordered so that nothing is deleted until both the machine and the gateway have let
     go. A job outlives the command it names, so removing rundesk's side first leaves the
     machine trying to start something that is not there, every few seconds and again at
     every login.
+
+    The schedules go with the agent (R-AGW-4), because adding the name back would otherwise
+    inherit work nobody asked for from an agent that no longer exists. What the agent *did*
+    stays until a removal is asked to take that too (R-AGW-5).
     """
     name = args.name
     if not name:
-        print("remove: NAME REQUIRED — say which gateway to remove", file=sys.stderr)
-        print("        what there is: rundesk status", file=sys.stderr)
+        print("remove: NAME REQUIRED — say which agent to remove", file=sys.stderr)
+        print("        what there is: rundesk agents", file=sys.stderr)
         return 1
+    whose = agents.resolved(name)
     # Asked of the gateway rather than of the machine. A gateway started by hand, or one
     # left behind when its job was taken away, has no job for the machine to report — and
     # is exactly the one that must not have its record deleted out from under it.
-    now = gateways.standing(name)
+    now = gateways.standing(name, whose.run)
     if now.running:
         print(f"{name}: STILL RUNNING (pid {now.pid}) — nothing was removed", file=sys.stderr)
-        print(f"        stop it first, or: rundesk stop {name} --remove", file=sys.stderr)
+        print(f"        stop it first: rundesk stop {name}", file=sys.stderr)
         return 1
     had_job = machine.available() and machine.exists(name)
     if had_job and not machine.known(name):
@@ -526,15 +615,18 @@ def cmd_remove(args: argparse.Namespace, gateways, machine) -> int:
         except machine.NotOurs as why:
             print(f"{name}: FAILED — {why}", file=sys.stderr)
             return 1
-    taken = gateways.forget(name, history=args.purge)
+    taken = gateways.forget(name, where=whose.run, schedules=whose.schedules,
+                            logs=whose.logs, history=args.purge)
+    if agents.exists(name):
+        taken += agents.forget(name, history=args.purge)
     if not had_job and not taken:
         print(f"{name}: NOTHING TO REMOVE — no job, and nothing kept under that name")
         return 0
     print(f"{name}: REMOVED")
     if args.purge:
-        print("        its log, schedules and history went with it")
+        print("        its home, its log and everything it did went with it")
     else:
-        print("        kept what it wrote and what you scheduled (--purge takes them too)")
+        print("        kept the account of what it did (--purge takes that too)")
     return 0
 
 
@@ -847,15 +939,16 @@ def cmd_logs(args: argparse.Namespace, gateways) -> int:
     return 0
 
 
-def main(argv: list[str], gateways=None, machine=None) -> int:
+def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
     """The command surface.
 
-    What the gateway commands act on is passed in rather than imported here, so this
-    file knows the verbs and nothing about locks, records or process groups — and so
-    every one of them is exercised without a gateway or a supervisor anywhere near it.
+    What the commands act on is passed in rather than imported here, so this file knows
+    the verbs and nothing about locks, records or process groups — and so every one of
+    them is exercised without a gateway or a supervisor anywhere near it.
     """
     gateways = gateways if gateways is not None else _gateway
     machine = machine if machine is not None else _supervisor
+    agents = agents if agents is not None else _agent
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -877,14 +970,18 @@ def main(argv: list[str], gateways=None, machine=None) -> int:
         return cmd_update(args, gateways, machine)
     if args.command == "uninstall":
         return cmd_uninstall(args)
+    if args.command == "add":
+        return cmd_add(args, gateways, agents)
+    if args.command == "doctor":
+        return cmd_doctor(args, gateways, agents)
     if args.command == "serve":
         return cmd_serve(args, gateways)
     if args.command == "start":
         return cmd_start(args, gateways, machine)
     if args.command == "stop":
-        return cmd_stop(args, gateways, machine)
+        return cmd_stop(args, gateways, machine, agents)
     if args.command == "remove":
-        return cmd_remove(args, gateways, machine)
+        return cmd_remove(args, gateways, machine, agents)
     if args.command == "restart":
         return cmd_restart(args, gateways, machine)
     if args.command == "status":

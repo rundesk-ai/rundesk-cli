@@ -43,6 +43,7 @@ def setUpModule():
 
 def tearDownModule():
     cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS = _REAL_PATIENCE
+from rundesk_cli import agent as real_agent  # noqa: E402
 from rundesk_cli import gateway as real_gateway  # noqa: E402
 
 
@@ -65,7 +66,8 @@ def run(argv: list[str], published: str | None = None) -> tuple[int, str, str]:
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
-                code = cli.main(argv, gateways=FakeGateways(), machine=FakeMachine())
+                code = cli.main(argv, gateways=FakeGateways(), machine=FakeMachine(),
+                                agents=FakeAgents())
             except SystemExit as usage:
                 # What a shell sees, which is the subject of several cases here: argparse
                 # refuses a usage error by exiting rather than returning, and a test that
@@ -222,7 +224,7 @@ class SurfaceTests(unittest.TestCase):
     def test_a_command_that_is_not_there_is_told_apart_from_one_typed_wrong(self):
         """R-CMD-5, R-CMD-8 — two situations that shared one exit code, and want opposite
         things done about them: wait for the release, or read the help."""
-        planned_code, _, _ = run(["doctor"])
+        planned_code, _, _ = run(["ask"])
         with self.assertRaises(SystemExit) as usage:
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 cli.main(["definitely-not-a-command"])
@@ -273,7 +275,7 @@ class BuiltCommandTests(unittest.TestCase):
     def test_the_planned_list_and_the_built_commands_do_not_overlap(self):
         # A command that is both "coming soon" and handled would answer twice, and
         # which answer wins would depend on the order of the checks in `main`.
-        built = {"version", "update", "uninstall",
+        built = {"version", "update", "uninstall", "add", "doctor",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
@@ -384,11 +386,16 @@ class FakeGateways:
         self.served = []
         #: What `remove` asked to be taken away, and whether it asked for the history too.
         self.forgotten = []
+        #: Which directory each question about a gateway named. An agent's gateway keeps
+        #: things in the agent's own, and a name with no agent keeps them where it always
+        #: did — a surface that stopped saying which would send both to one place.
+        self.asked_where = []
 
     def every(self):
         return list(self._standing)
 
-    def standing(self, name):
+    def standing(self, name, where=None):
+        self.asked_where.append(where)
         if self._becomes is not None:
             running = self._becomes[min(self._asked, len(self._becomes) - 1)]
             self._asked += 1
@@ -407,8 +414,9 @@ class FakeGateways:
     def what_is_running(self, name):
         return self._working.get(name, [])
 
-    def forget(self, name, history=False):
+    def forget(self, name, where=None, schedules=None, logs=None, history=False):
         self.forgotten.append((name, history))
+        self.asked_where.append(where)
         return [f"{name}.json"] + ([f"{name}.log"] if history else [])
 
     def _still_readable(self, name):
@@ -456,6 +464,67 @@ class FakeGateways:
                 return 0
 
         return One()
+
+
+class FakeAgents:
+    """The agent module, as far as the command line is concerned.
+
+    Nothing here touches a disk: what an agent's home actually holds and where it stands is
+    `tests/test_agent.py`'s, and what the surface does about it is this file's. The two
+    rules that decide whether a name is usable are borrowed rather than copied, because a
+    second answer to "may this be an agent" is one that drifts from the real one.
+    """
+
+    checked = staticmethod(real_agent.checked)
+    NotAnAgentName = real_agent.NotAnAgentName
+    Where = real_agent.Where
+
+    def __init__(self, made=(), wrote=(), complaints=None):
+        #: The agents that exist, and the directories each resolves.
+        self._made = list(made)
+        #: What a gateway of this name wrote before there were agents to own it.
+        self._wrote = list(wrote)
+        self._complaints = dict(complaints or {})
+        #: What was made, adopted and taken away, in the order it was asked for.
+        self.added, self.adopted, self.forgotten = [], [], []
+
+    def exists(self, name):
+        return name in self._made
+
+    def known(self):
+        return sorted(self._made)
+
+    def home(self, name):
+        return pathlib.Path(f"/nowhere/agents/{name}/home")
+
+    def resolved(self, name):
+        if name not in self._made:
+            return self.Where(None, None, None)
+        at = pathlib.Path(f"/nowhere/agents/{name}")
+        return self.Where(at / "run", at / "logs", at / "schedules")
+
+    def standing_before(self, name):
+        return [pathlib.Path(f"/nowhere/{one}") for one in self._wrote] if name in ("gateway",) else []
+
+    def add(self, name):
+        self.added.append(name)
+        made = [] if name in self._made else ["AGENTS.md", "home/"]
+        if name not in self._made:
+            self._made.append(name)
+        return made
+
+    def adopt(self, name):
+        self.adopted.append(name)
+        return list(self._wrote)
+
+    def forget(self, name, history=False):
+        self.forgotten.append((name, history))
+        if name in self._made:
+            self._made.remove(name)
+        return ["home/"]
+
+    def diagnosed(self, name):
+        return self._complaints.get(name, [])
 
 
 class FakeMachine:
@@ -533,11 +602,12 @@ class FakeMachine:
         return True
 
 
-def drive(argv, gateways=None, machine=None):
+def drive(argv, gateways=None, machine=None, agents=None):
     """Run the command line and hand back what it printed and what it returned."""
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        code = cli.main(argv, gateways=gateways or FakeGateways(), machine=machine or FakeMachine())
+        code = cli.main(argv, gateways=gateways or FakeGateways(),
+                        machine=machine or FakeMachine(), agents=agents or FakeAgents())
     return code, out.getvalue() + err.getvalue()
 
 
@@ -777,6 +847,90 @@ class StandingGatewaysDown(unittest.TestCase):
         self.assertIn("no gateway", said)
 
 
+class MakingAnAgent(unittest.TestCase):
+    """`add` is the one place an agent and its gateway come into being together."""
+
+    def test_making_an_agent_makes_it_and_says_where_it_stands(self):
+        """R-AGW-1"""
+        agents = FakeAgents()
+        code, said = drive(["add", "ava"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["ava"], agents.added)
+        self.assertIn("MADE", said)
+        self.assertIn("home", said, "it made an agent and never said where it put it")
+
+    def test_making_an_agent_that_exists_leaves_its_home_alone(self):
+        """R-AGT-4 — repairing a home you half deleted must not be how you lose the rules
+        you spent a month writing."""
+        agents = FakeAgents(made=["ava"])
+        code, said = drive(["add", "ava"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("ALREADY MADE", said)
+
+    def test_making_an_agent_with_no_name_is_answered_in_our_words(self):
+        """R-CMD-5 — argparse's usage dump says which token is missing; it does not say
+        what there is already."""
+        code, said = drive(["add"])
+        self.assertEqual(1, code)
+        self.assertIn("NAME REQUIRED", said)
+
+    def test_a_name_that_cannot_be_an_agents_is_refused_before_anything_is_made(self):
+        """R-AGT-5, R-AGT-6"""
+        agents = FakeAgents()
+        code, said = drive(["add", "ava.ran"], agents=agents)
+        self.assertEqual(1, code)
+        self.assertIn("INVALID NAME", said)
+        self.assertEqual([], agents.added, "it refused the name and made one anyway")
+
+    def test_adopting_a_gateway_that_has_no_agent_brings_what_it_wrote_in(self):
+        """R-AGW-1 — one place afterwards, rather than two that disagree."""
+        agents = FakeAgents(wrote=["gateway.log", "gateway.json"])
+        code, said = drive(["add", "gateway"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["gateway"], agents.adopted)
+        self.assertIn("gateway.log", said, "it moved things and never said which")
+
+    def test_a_gateway_that_is_still_running_is_not_adopted(self):
+        """R-AGW-1 — moving what a running gateway reads leaves it writing to one place
+        while every command reads another."""
+        agents = FakeAgents(wrote=["gateway.log"])
+        gateways = FakeGateways(standing=[FakeGateways.Standing("gateway", running=True, pid=7)])
+        code, said = drive(["add", "gateway"], gateways, agents=agents)
+        self.assertEqual(1, code)
+        self.assertEqual([], agents.adopted, "it moved what a running gateway is reading")
+        self.assertIn("rundesk stop gateway", said, "it refused and never said what to do")
+
+
+class DiagnosingAnAgent(unittest.TestCase):
+    def test_an_agent_with_nothing_wrong_is_ready(self):
+        """R-AGT-11"""
+        code, said = drive(["doctor", "ava"], agents=FakeAgents(made=["ava"]))
+        self.assertEqual(0, code, said)
+        self.assertIn("READY", said)
+
+    def test_an_agent_with_something_wrong_says_what_and_fails(self):
+        """R-AGT-11 — a diagnosis that exited zero would be read by a script as a working
+        agent."""
+        told = {"ava": [real_agent.Complaint("/nowhere/SOUL.md", "it is missing one it loads")]}
+        code, said = drive(["doctor", "ava"], agents=FakeAgents(made=["ava"], complaints=told))
+        self.assertEqual(1, code)
+        self.assertIn("NOT READY", said)
+        self.assertIn("SOUL.md", said)
+
+    def test_diagnosing_with_no_name_asks_after_every_agent(self):
+        """R-AGT-11"""
+        code, said = drive(["doctor"], agents=FakeAgents(made=["ava", "bo"]))
+        self.assertEqual(0, code, said)
+        self.assertIn("ava", said)
+        self.assertIn("bo", said)
+
+    def test_diagnosing_where_there_are_no_agents_says_so(self):
+        """R-AGT-11"""
+        code, said = drive(["doctor"], agents=FakeAgents())
+        self.assertEqual(0, code, said)
+        self.assertIn("no agents", said)
+
+
 class TakingAGatewayAway(unittest.TestCase):
     """Starting a gateway wrote a job the machine keeps forever; stopping one deliberately
     leaves that job alone. So a gateway an owner was finished with stayed in their
@@ -803,7 +957,7 @@ class TakingAGatewayAway(unittest.TestCase):
         self.assertIn("STILL RUNNING", said)
         self.assertEqual([], gateways.forgotten, "it deleted what a running gateway is using")
         self.assertNotIn(("take_back", "test2"), machine.did)
-        self.assertIn("--remove", said, "it never said how to do it in one step")
+        self.assertIn("rundesk stop test2", said, "it never said what to do about it")
 
     def test_removing_a_gateway_the_machine_will_not_let_go_of_removes_nothing(self):
         """R-GW-31 — the job is the only thing that finds this gateway again, so a
@@ -827,7 +981,7 @@ class TakingAGatewayAway(unittest.TestCase):
     def test_removing_a_gateway_that_was_never_there_says_so_rather_than_failing(self):
         """R-GW-31 — running it twice, or on a name that never existed, is not an error."""
         gateways = FakeGateways()
-        gateways.forget = lambda name, history=False: []
+        gateways.forget = lambda name, where=None, schedules=None, logs=None, history=False: []
         code, said = drive(["remove", "never-was"], gateways, FakeMachine())
         self.assertEqual(0, code, said)
         self.assertIn("NOTHING TO REMOVE", said)

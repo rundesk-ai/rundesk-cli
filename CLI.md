@@ -12,12 +12,11 @@ file and the command disagree. *Why* the surface is shaped this way is
 
 ```sh
 # an agent, and its life
-rundesk add <agent>                                                          make an agent, and the gateway that runs it   [planned]
+rundesk add <agent>                                                          make an agent, and the gateway that runs it
 rundesk remove [--purge] <agent>                                             take an agent away for good
 rundesk agents                                                               every agent this install has, and what each is doing   [planned]
 rundesk agents <agent>                                                       what one agent is, and where it keeps things   [planned]
-rundesk doctor                                                               what stands between every agent and a working turn   [planned]
-rundesk doctor <agent>                                                       what stands between one agent and a working turn   [planned]
+rundesk doctor <agent>                                                       what stands between an agent and a working turn
 
 # running one
 rundesk start <agent>                                                        have the machine keep an agent running
