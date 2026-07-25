@@ -93,11 +93,11 @@ else
   # The newest *published release*, not whatever is on the branch. Installing the branch
   # would hand someone a version that was never released, reporting a number no release
   # carries — and then `rundesk update` would offer to move them backwards onto it.
-  echo "looking up the newest rundesk release…"
+  echo "looking up the newest rundesk release"
   tag="$(curl -fsSL "https://api.github.com/repos/$REPO_SLUG/releases/latest" 2>/dev/null |
          sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
   if [[ -n "$tag" ]]; then
-    echo "downloading $tag…"
+    echo "downloading ${tag}"
     source_url="https://github.com/$REPO_SLUG/archive/refs/tags/$tag.tar.gz"
   else
     # Nothing published yet — a repository can be perfectly usable before its first release.
