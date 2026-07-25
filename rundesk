@@ -12,6 +12,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+# Anything beyond the standard library lives in the install's own virtualenv, put there by
+# install.sh. Added by hand rather than by activating it, so the command works from any
+# shell and needs nothing sourced first. Absent is normal: with no dependencies declared,
+# the installer makes no virtualenv at all.
+for _packages in sorted((REPO_ROOT / ".venv" / "lib").glob("python3.*/site-packages")):
+    sys.path.insert(0, str(_packages))
+
 from rundesk_cli.cli import main  # noqa: E402
 
 if __name__ == "__main__":

@@ -364,6 +364,34 @@ def _with_json(payload, call):
         updater.urllib.request.urlopen = real
     return got, out.getvalue()
 
+class PublishedNameTests(unittest.TestCase):
+    """A release tag and the version the command reports must name the same thing."""
+
+    def test_a_tag_names_the_version_it_carries(self):
+        self.assertTrue(updater.tag_matches("v0.1.0", "0.1.0"))
+        self.assertTrue(updater.tag_matches("0.1.0", "0.1.0"))
+
+    def test_a_tag_naming_something_else_is_refused(self):
+        # The failure this exists to stop: a release tagged v0.2.0 carrying code that still
+        # reports 0.1.0. Everyone who updates lands on a version that denies being it.
+        self.assertFalse(updater.tag_matches("v0.2.0", "0.1.0"))
+        self.assertFalse(updater.tag_matches("v0.1.0", "0.1.1"))
+        self.assertFalse(updater.tag_matches("v0.1", "0.1.0"))
+
+    def test_the_version_this_code_reports_would_be_accepted_by_its_own_tag(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+        from rundesk_cli import __version__
+
+        self.assertTrue(
+            updater.tag_matches(f"v{__version__}", __version__),
+            f"nothing could tag this release: __version__ is {__version__!r}",
+        )
+
+    def test_publishing_a_release_actually_applies_the_rule(self):
+        # The rule is only worth having if the thing that publishes a release runs it.
+        workflow = (Path(__file__).resolve().parent.parent / ".github" / "workflows" / "release.yml").read_text()
+        self.assertIn("tag_matches", workflow, "a release can be published without checking what it is named")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

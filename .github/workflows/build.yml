@@ -26,8 +26,14 @@ jobs:
       - name: Version, update, and what they refuse to claim
         run: python tests/test_updater.py
 
+      - name: Putting it on a machine, and taking it off
+        run: python tests/test_install.py
+
       - name: The docs are valid
         run: python .knowledge/scripts/doc-lint .knowledge
+
+      - name: Every proven requirement names a test that exists
+        run: python .knowledge/scripts/check-evidence
 
       - name: The command answers when installed
         run: |

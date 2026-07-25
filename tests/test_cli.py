@@ -164,6 +164,23 @@ class BehindOrCurrentTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(moved, [], "--check updated the install")
 
+    def test_an_update_cannot_be_pointed_at_a_version_of_your_choosing(self):
+        # There is one place to be: the newest published release. Holding at a version, or
+        # going back to an older one, is deliberately not offered — an install that can sit
+        # anywhere is a set of installs nobody can reason about.
+        for argv in (["update", "--to", "0.1.0"], ["update", "0.1.0"], ["update", "--previous"]):
+            with self.subTest(argv=argv):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as exited:
+                    cli.main(argv)
+                self.assertNotEqual(exited.exception.code, 0, f"{argv} was accepted")
+
+        # And nothing but --check is offered, so there is no version to name in the first place.
+        offered = {a for p in cli.build_parser()._subparsers._group_actions
+                   for name, sub in p.choices.items() if name == "update"
+                   for a in sum([list(x.option_strings) for x in sub._actions], [])}
+        self.assertEqual(offered - {"-h", "--help"}, {"--check"}, "update offers a way to choose a version")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -63,6 +63,17 @@ def latest_version_online() -> str | None:
     return tag if isinstance(tag, str) and tag else None
 
 
+def tag_matches(tag: str, version: str) -> bool:
+    """Does a release tag name the same version the command reports?
+
+    The one rule holding the whole update story together. A release tagged differently from
+    what `rundesk version` says is a release nobody can reason about: the command names one
+    thing, the update it offers another, and `is_newer` compares against a number that was
+    never true. Checked when a release is published, and here, so the rule itself is testable.
+    """
+    return tag.strip().lstrip("v") == version.strip()
+
+
 def describe(current: str, latest: str | None) -> str:
     if latest is None:
         return f"rundesk {current} — could not reach the forge to check for a newer release."

@@ -66,6 +66,11 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     echo "Settings in $config_dir were left alone (add --purge to delete them)."
   fi
 
+  # The virtualenv is the installer's, wherever it put it — a checkout does not come with one.
+  for venv in "$INSTALL_DIR/.venv" "${SCRIPT_DIR:-/nonexistent}/.venv"; do
+    [[ -d "$venv" ]] && { rm -rf "$venv"; echo "removed $venv"; }
+  done
+
   # A checkout is yours; only a directory this installer created is its to delete.
   if [[ -d "$INSTALL_DIR" ]] && ! is_local_checkout; then
     rm -rf "$INSTALL_DIR"; echo "removed $INSTALL_DIR"
@@ -95,6 +100,23 @@ else
   mkdir -p "$(dirname "$INSTALL_DIR")"
   mv "$extracted" "$INSTALL_DIR"
   REPO_ROOT="$INSTALL_DIR"
+fi
+
+# Anything beyond the standard library goes into the install's own virtualenv. The machine's
+# Python is never written to — modern ones refuse it anyway, and a tool that needs its user to
+# reason about that has already lost them.
+REQUIREMENTS="${RUNDESK_REQUIREMENTS:-$REPO_ROOT/requirements.txt}"
+if [[ -f "$REQUIREMENTS" ]] && grep -qvE '^\s*(#|$)' "$REQUIREMENTS"; then
+  echo "installing what rundesk needs, into $REPO_ROOT/.venv"
+  python3 -m venv "$REPO_ROOT/.venv" || die "could not create the virtualenv rundesk keeps its dependencies in."
+  "$REPO_ROOT/.venv/bin/python" -m pip install --quiet --upgrade pip ||
+    die "could not prepare the virtualenv's installer."
+  "$REPO_ROOT/.venv/bin/python" -m pip install --quiet -r "$REQUIREMENTS" ||
+    die "could not install what rundesk needs (see $REQUIREMENTS)."
+  # Installed is not the same as usable: pip will happily leave a set of packages that
+  # cannot satisfy each other. Better to fail here than at the first turn.
+  "$REPO_ROOT/.venv/bin/python" -m pip check --quiet ||
+    die "what rundesk needs was installed, but the versions do not fit together."
 fi
 
 SHIM="$REPO_ROOT/rundesk"

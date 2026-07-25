@@ -1,3 +1,6 @@
+# The install's own dependencies, put there by install.sh
+.venv/
+
 # Python
 __pycache__/
 *.py[cod]

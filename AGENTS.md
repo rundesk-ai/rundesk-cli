@@ -26,21 +26,26 @@ Load light; pull depth only when the task needs it.
 ## Hard gates — require explicit approval
 
 - **Persisted state.** Any change to schema, stored data, or migrations is confirmed first.
-- **Dependencies.** Do not add, remove, or major-version-bump a package without approval.
+- **Dependencies.** Do not add, remove, or major-version-bump a package without approval. An approved one
+  is pinned in `requirements.txt` and reaches the machine only through `install.sh`.
 - **Deletions.** Do not delete files outside the task's immediate scope without approval.
 - **Commits.** Do not commit or push unless told to.
 - **This file.** Never modify `AGENTS.md` without approval; when approved, follow
   `.knowledge/guides/docs-agents.md`.
-- **The component ontology.** `.knowledge/prd/README.md` still carries the shipped default. It is the
-  owner's call and has not been made — propose a set and get sign-off before the first PRD is written.
+- **The component ontology.** `base-` / `command-` / `lifecycle-` is declared in `.knowledge/prd/README.md`
+  and signed off. Adding a component — the gateway's own are not declared yet — is the owner's call, and
+  renaming or re-filing an existing one is worse than adding: requirement IDs are permanent.
 
 ## Never
 
 - Never touch secrets or commit credentials.
 - Never leave debug output or commented-out code in completed work.
-- **Never add a dependency.** The standard library is the whole toolbox. A user who has `python3` — which
-  macOS already ships — has everything this needs, and that property is the reason this repo exists rather
-  than the Node one it replaces. A `pip install` in the way is a user lost.
+- **Never add a dependency without approval, and never one the install does not place.** The standard
+  library is the default and the preference. What genuinely cannot be done without — a websocket client
+  for the Discord gateway, say — is declared in `requirements.txt` and installed by `install.sh` into the
+  install's own `.venv`, pinned exactly. **Never the machine's Python**: modern ones refuse to be written
+  to, and a tool that makes its user reason about that has already lost them. Nothing is ever left for a
+  person to `pip install` by hand (R-INS-3, R-INS-4).
 - **Never let a command report success it did not earn.** A verb that is planned and not built says so and
   exits `NOT_BUILT`; a script that reads `0` believes the work happened.
 - **Never let a test reach the network.** What is published and how an update is applied are arguments, so
@@ -49,9 +54,12 @@ Load light; pull depth only when the task needs it.
 ## Tech stack
 
 - **Runtime:** Python 3.9+ — the oldest version a fresh macOS ships, which is the floor CI pins. No build
-  step, no virtualenv, no packaging.
-- **Dependencies:** none, ever. Standard library only.
-- **Tests:** `unittest`, run directly (`python3 tests/test_cli.py`). No runner to install.
+  step and no packaging.
+- **Dependencies:** the standard library, and nothing else unless it cannot be done without. What is
+  needed is pinned in `requirements.txt` and installed by `install.sh` into the install's own `.venv`,
+  which the launcher puts on the path. No requirements means no virtualenv is made at all.
+- **Tests:** `unittest`, run directly (`python3 tests/test_cli.py`). No runner to install, and nothing
+  reaches the network.
 - **Distribution:** `install.sh` symlinks the checkout's `rundesk` onto a PATH directory.
 
 ## Architecture — the one rule that matters
@@ -101,22 +109,26 @@ rundesk                     the executable the installer symlinks onto PATH
 src/rundesk_cli/            one concern per module; cli.py is the surface
 tests/                      unittest, run directly, offline
 install.sh                  install, and --uninstall [--purge]
-.github/workflows/          parse, shell-check, run each test, install and run
-.knowledge/                 the knowledge system
+requirements.txt            what is needed beyond the standard library, pinned
+.venv/                      where the install puts it — made by install.sh, git-ignored
+.github/workflows/          the gate, and what a version tag publishes
+.knowledge/                 the knowledge system, and its two linters
 ```
 
 ## Build, test & run
 
 ```sh
-./rundesk                                       # the command surface
-python3 tests/test_cli.py                       # the surface, and what it refuses
-python3 tests/test_updater.py                   # version, update, and their outcomes
-bash -n install.sh                              # the installer is valid shell
-python3 .knowledge/scripts/doc-lint .knowledge  # the docs are valid
+./rundesk                                          # the command surface
+python3 tests/test_cli.py                          # the surface, and what it refuses
+python3 tests/test_updater.py                      # version, update, and their outcomes
+python3 tests/test_install.py                      # putting it on a machine, and taking it off
+bash -n install.sh                                 # the installer is valid shell
+python3 .knowledge/scripts/doc-lint .knowledge     # the docs are valid
+python3 .knowledge/scripts/check-evidence          # every ✅ names a test that exists
 ```
 
-**The gate:** all four, plus `./install.sh` into a scratch `RUNDESK_BIN_DIR` and the installed command
-answering `version`.
+**The gate:** all seven. `check-evidence` is not optional — `doc-lint` cannot tell whether a cited test
+is real, and this repo has already shipped four contracts citing tests copied from another repository.
 
 ## Documentation duties
 

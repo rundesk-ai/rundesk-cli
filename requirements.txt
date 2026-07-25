@@ -1,0 +1,8 @@
+# What rundesk needs beyond the standard library, installed by install.sh into the install's
+# own .venv — never into the machine's Python. An empty file here means no virtualenv is made
+# at all, which is the state to return to if a dependency ever stops earning its place.
+#
+# discord.py is here ahead of the channel that will import it: Python's standard library has
+# no websocket client, so a Discord gateway cannot be reached without one. Pinned exactly,
+# because an install that resolves differently on two machines is two different products.
+discord.py==2.7.1

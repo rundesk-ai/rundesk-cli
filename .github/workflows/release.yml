@@ -25,10 +25,16 @@ jobs:
         # nobody can reason about: `rundesk version` would name one thing and the
         # update it offers another.
         run: |
-          tagged="${GITHUB_REF_NAME#v}"
-          coded="$(python -c 'import sys; sys.path.insert(0, "src"); import rundesk_cli; print(rundesk_cli.__version__)')"
-          echo "tag=$tagged  code=$coded"
-          [ "$tagged" = "$coded" ] || { echo "::error::tag $GITHUB_REF_NAME does not match __version__ $coded"; exit 1; }
+          python - "$GITHUB_REF_NAME" <<'CHECK'
+          import sys
+          sys.path.insert(0, "src")
+          from rundesk_cli import __version__, updater
+          tag = sys.argv[1]
+          print(f"tag={tag}  code={__version__}")
+          if not updater.tag_matches(tag, __version__):
+              print(f"::error::tag {tag} does not name the version the command reports ({__version__})")
+              raise SystemExit(1)
+          CHECK
 
       - uses: softprops/action-gh-release@v2
         with:
