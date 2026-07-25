@@ -1,0 +1,36 @@
+name: release
+
+# Push a vX.Y.Z tag → publish a GitHub Release and attach install.sh, so
+#   https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh
+# always serves the installer that shipped with the newest release — and so
+# `rundesk update` has something to find.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: The tag and the version in the code agree
+        # A release tagged differently from what the command reports is a release
+        # nobody can reason about: `rundesk version` would name one thing and the
+        # update it offers another.
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          coded="$(python -c 'import sys; sys.path.insert(0, "src"); import rundesk_cli; print(rundesk_cli.__version__)')"
+          echo "tag=$tagged  code=$coded"
+          [ "$tagged" = "$coded" ] || { echo "::error::tag $GITHUB_REF_NAME does not match __version__ $coded"; exit 1; }
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: install.sh
+          generate_release_notes: true

@@ -26,6 +26,9 @@ jobs:
       - name: Version, update, and what they refuse to claim
         run: python tests/test_updater.py
 
+      - name: The docs are valid
+        run: python .knowledge/scripts/doc-lint .knowledge
+
       - name: The command answers when installed
         run: |
           RUNDESK_BIN_DIR="$HOME/.local/bin" ./install.sh

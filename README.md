@@ -33,6 +33,20 @@ Everything else — `agents`, `new`, `doctor`, `run`, `replay`, `serve`, `start`
 whole shape is visible from the start; a command that is not built exits non-zero
 rather than reporting a success it did not earn.
 
+## Version
+
+One source of truth: `__version__` in `src/rundesk_cli/__init__.py`. The command reports it, the updater
+compares against it, and a release tag must match it — CI fails a `vX.Y.Z` tag that disagrees.
+
+```sh
+rundesk version           # what this install is, without asking anyone
+rundesk version --check   # …and whether a newer release exists
+rundesk update            # move to it
+```
+
+Three answers, kept distinguishable on purpose: **up to date**, **vX.Y.Z is available**, and **could not
+reach the forge** — the last exits non-zero, because "could not ask" must never read as "you are current".
+
 ## Tests
 
 No test runner to install:

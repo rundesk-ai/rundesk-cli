@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import io
 import contextlib
+import os
 import sys
+import urllib.error
 import tarfile
 import tempfile
 import unittest
@@ -119,6 +121,167 @@ class ArchiveTests(unittest.TestCase):
                     updater._safe_extract(tar, dest)
             self.assertFalse((root / "escaped.txt").exists(), "the archive wrote outside its destination")
 
+
+
+class BehindTests(unittest.TestCase):
+    """Whether this install can tell it is behind — the question the whole module exists for."""
+
+    def test_the_version_in_the_code_is_one_that_can_be_compared(self):
+        # If `__version__` were ever something unparseable — "dev", "0.1.0-rc" is fine, "next"
+        # is not — `is_newer` would answer False forever and this install would never learn it
+        # was behind. Nothing else in the suite would notice.
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+        from rundesk_cli import __version__
+
+        self.assertIsNotNone(
+            updater.parse_version(__version__),
+            f"__version__ is {__version__!r}, which cannot be compared to a release tag",
+        )
+
+    def test_a_published_tag_is_compared_against_a_bare_local_version(self):
+        # The shape this actually takes in the wild: GitHub says "v0.2.0", the code says "0.1.0".
+        # A comparison that tripped on the v would report every release as not-newer.
+        self.assertTrue(updater.is_newer("v0.2.0", "0.1.0"))
+        self.assertTrue(updater.is_newer("v0.1.1", "0.1.0"))
+        self.assertFalse(updater.is_newer("v0.1.0", "0.1.0"))
+        self.assertFalse(updater.is_newer("v0.0.9", "0.1.0"))
+
+    def test_being_behind_is_said_in_words_that_name_the_way_out(self):
+        said = updater.describe("0.1.0", "v0.2.0")
+        self.assertIn("v0.2.0", said)
+        self.assertIn("rundesk update", said, "it says you are behind without saying what to do")
+
+    def test_each_of_the_three_answers_is_distinguishable(self):
+        behind = updater.describe("0.1.0", "v0.2.0")
+        current = updater.describe("0.1.0", "v0.1.0")
+        unknown = updater.describe("0.1.0", None)
+        self.assertEqual(len({behind, current, unknown}), 3, "two different situations read the same")
+        self.assertNotIn("up to date", unknown)
+
+
+def _release(root: Path, version: str) -> Path:
+    """A tree shaped like a release archive, unpacked."""
+    top = root / f"rundesk-cli-{version}"
+    (top / "src" / "rundesk_cli").mkdir(parents=True)
+    (top / "rundesk").write_text(f"#!/usr/bin/env python3\n# {version}\n")
+    (top / "install.sh").write_text(f"#!/usr/bin/env bash\n# {version}\n")
+    (top / "README.md").write_text(f"rundesk {version}\n")
+    (top / "src" / "rundesk_cli" / "__init__.py").write_text(f'__version__ = "{version}"\n')
+    return top
+
+
+class ReplacesTheInstallTests(unittest.TestCase):
+    """An update has to actually replace what is on disk — and leave what is not its business."""
+
+    def setUp(self):
+        self._work = tempfile.TemporaryDirectory()
+        self.root = Path(self._work.name)
+        # An install as it stands before the update: older content, plus things a release
+        # does not ship and must not lose.
+        self.install = self.root / "install"
+        (self.install / "src" / "rundesk_cli").mkdir(parents=True)
+        (self.install / "rundesk").write_text("# 0.1.0\n")
+        (self.install / "src" / "rundesk_cli" / "__init__.py").write_text('__version__ = "0.1.0"\n')
+        (self.install / "src" / "rundesk_cli" / "gone_next_release.py").write_text("# removed upstream\n")
+        (self.install / ".git").mkdir()
+        (self.install / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+        (self.install / "local-note.txt").write_text("mine\n")
+
+    def tearDown(self):
+        self._work.cleanup()
+
+    def test_the_new_release_replaces_what_was_there(self):
+        updater._copy_over(_release(self.root, "0.2.0"), self.install)
+
+        self.assertIn("0.2.0", (self.install / "rundesk").read_text(), "the entry point was not replaced")
+        self.assertIn(
+            '"0.2.0"',
+            (self.install / "src" / "rundesk_cli" / "__init__.py").read_text(),
+            "the version on disk still reports the old release",
+        )
+        self.assertTrue((self.install / "README.md").exists(), "a file new in the release never arrived")
+
+    def test_a_directory_is_replaced_rather_than_merged(self):
+        # A module deleted upstream must not survive inside the new tree, still importable.
+        updater._copy_over(_release(self.root, "0.2.0"), self.install)
+        self.assertFalse(
+            (self.install / "src" / "rundesk_cli" / "gone_next_release.py").exists(),
+            "a file removed upstream survived the update and is still importable",
+        )
+
+    def test_what_the_release_does_not_ship_is_left_alone(self):
+        # The checkout's own git directory, and anything the owner put beside it.
+        updater._copy_over(_release(self.root, "0.2.0"), self.install)
+        self.assertTrue((self.install / ".git" / "HEAD").exists(), "the update destroyed the git directory")
+        self.assertEqual((self.install / "local-note.txt").read_text(), "mine\n")
+
+    def test_the_entry_point_and_installer_come_out_executable(self):
+        # Copied without the bit, `rundesk` is on PATH and answers EACCES — installed, and dead.
+        updater._copy_over(_release(self.root, "0.2.0"), self.install)
+        for name in ("rundesk", "install.sh"):
+            self.assertTrue(os.access(self.install / name, os.X_OK), f"{name} came out not executable")
+
+
+class DownloadTests(unittest.TestCase):
+    """The whole path: fetch a tag, unpack it, and lay it over the install."""
+
+    def test_a_release_is_downloaded_unpacked_and_laid_over_the_install(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            install = root / "install"
+            (install / "src" / "rundesk_cli").mkdir(parents=True)
+            (install / "rundesk").write_text("# 0.1.0\n")
+
+            staged = root / "staged"
+            staged.mkdir()
+            _release(staged, "0.2.0")
+            archive = root / "release.tar.gz"
+            with tarfile.open(archive, "w:gz") as tar:
+                tar.add(staged / "rundesk-cli-0.2.0", arcname="rundesk-cli-0.2.0")
+
+            served = archive.read_bytes()
+            code, said = _with_download(served, lambda: updater.download_and_apply(install, "v0.2.0"))
+
+            self.assertEqual(code, 0, said)
+            self.assertIn("0.2.0", (install / "rundesk").read_text(), "the install was not replaced")
+            self.assertIn("updated to v0.2.0", said)
+
+    def test_a_download_that_fails_leaves_the_install_as_it_was(self):
+        with tempfile.TemporaryDirectory() as work:
+            install = Path(work) / "install"
+            install.mkdir()
+            (install / "rundesk").write_text("# 0.1.0\n")
+
+            code, said = _with_download(urllib.error.URLError("no route to host"),
+                                        lambda: updater.download_and_apply(install, "v0.2.0"))
+
+            self.assertEqual(code, 1)
+            self.assertIn("could not download", said)
+            self.assertEqual((install / "rundesk").read_text(), "# 0.1.0\n", "a failed update still changed the install")
+
+
+def _with_download(payload, call):
+    """Run `call` with the network replaced by `payload` — bytes to serve, or an error to raise."""
+    class _Response:
+        def __init__(self, data): self._data = data
+        def read(self): return self._data
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+
+    def fake_urlopen(_request, timeout=None):
+        if isinstance(payload, Exception):
+            raise payload
+        return _Response(payload)
+
+    real = updater.urllib.request.urlopen
+    updater.urllib.request.urlopen = fake_urlopen
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            code = call()
+    finally:
+        updater.urllib.request.urlopen = real
+    return code, out.getvalue()
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

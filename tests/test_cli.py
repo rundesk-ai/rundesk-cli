@@ -127,5 +127,43 @@ class BuiltCommandTests(unittest.TestCase):
         self.assertEqual(set(verbs()), built | set(cli.COMING_SOON))
 
 
+class BehindOrCurrentTests(unittest.TestCase):
+    """What a person actually types to find out whether they are behind."""
+
+    def test_version_says_what_is_installed_without_asking_anyone(self):
+        # The common case, and it must work with no network at all.
+        code, out, _ = run(["version"], published=None)
+        self.assertEqual(code, 0, "plain `version` failed because it could not reach the forge")
+        self.assertIn(__version__, out)
+
+    def test_version_check_and_update_check_agree_on_where_this_install_stands(self):
+        # Two ways in, one answer. Drifting apart is how you get told you are current by
+        # one command and behind by the other.
+        for argv in (["version", "--check"], ["update", "--check"]):
+            with self.subTest(argv=argv):
+                behind_code, behind_said, _ = run(argv, published="v99.0.0")
+                self.assertEqual(behind_code, 0)
+                self.assertIn("v99.0.0", behind_said)
+                self.assertIn("rundesk update", behind_said, "it says you are behind, not what to do")
+
+                current_code, current_said, _ = run(argv, published=f"v{__version__}")
+                self.assertEqual(current_code, 0)
+                self.assertIn("up to date", current_said)
+
+                unknown_code, unknown_said, _ = run(argv, published=None)
+                self.assertEqual(unknown_code, 1, "could-not-ask reported as success")
+                self.assertNotIn("up to date", unknown_said)
+
+    def test_check_never_moves_the_install(self):
+        # --check is a question. A question that changed the install would be a trap.
+        moved = []
+        code = cli.updater.run(
+            cli.REPO_ROOT, __version__, check_only=True,
+            latest=lambda: "v99.0.0", apply=lambda root, tag: moved.append(tag) or 0,
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(moved, [], "--check updated the install")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
