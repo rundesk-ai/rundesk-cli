@@ -191,6 +191,17 @@ def paths(name: str, where: Path | None = None) -> dict[str, Path]:
     }
 
 
+def made_of(name: str, where: Path | None = None) -> dict[str, Path]:
+    """Every directory an agent is made of — everything it resolves but itself.
+
+    The one list that making an agent and diagnosing one both read. Written out at each of
+    them instead, the two were a hand-kept copy of this and of each other: a directory added
+    here and forgotten in `add` is one a new agent silently never gets, and forgotten in
+    `diagnosed` is one whose absence is reported as ready.
+    """
+    return {what: at for what, at in paths(name, where).items() if what != "agent"}
+
+
 @dataclass(frozen=True)
 class Where:
     """The three directories a gateway of this name keeps things in.
@@ -264,9 +275,7 @@ def add(name: str, where: Path | None = None) -> list[str]:
     come apart.
     """
     made = []
-    for path in (home(name, where), workspace(name, where), skills(name, where),
-                 directory(name, where) / "providers",
-                 run_home(name, where), logs_home(name, where), schedules_home(name, where)):
+    for path in made_of(name, where).values():
         if not path.exists():
             path.mkdir(parents=True, exist_ok=True)
             made.append(path.name + "/")
@@ -386,8 +395,9 @@ def diagnosed(name: str, where: Path | None = None, root: Path | None = None) ->
     where_it_is = paths(name, where)
     if not where_it_is["home"].is_dir():
         return [Complaint(str(where_it_is["home"]), "there is no agent of that name here")]
-    for what in ("workspace", "skills", "providers", "run", "logs", "schedules"):
-        path = where_it_is[what]
+    for what, path in sorted(made_of(name, where).items()):
+        if what == "home":
+            continue  # asked above, and its absence is "there is no agent", not a fault
         if not path.is_dir():
             found.append(Complaint(str(path), f"the agent's {what} is not there"))
         elif not os.access(path, os.W_OK):

@@ -103,6 +103,30 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         says = (agent.home("ava", self.where) / "AGENTS.md").read_text()
         self.assertNotIn("](SOUL.md)", says, "the home routes by a link no provider follows")
 
+    def test_every_directory_an_agent_is_made_of_is_made_and_looked_for(self):
+        """R-AGT-2, R-AGT-11 — the teeth on both. Making an agent and diagnosing one each
+        wrote out their own copy of this list, so a directory added to what an agent
+        resolves and forgotten in one of them is one a new agent silently never gets, or
+        one whose absence is reported as ready. Read off the list itself, so the day a new
+        one lands it is made and looked for without either being edited."""
+        agent.add("ava", self.where)
+        wanted = agent.made_of("ava", self.where)
+        self.assertIn("home", wanted, "an agent is made of nothing at all")
+
+        for what, at in wanted.items():
+            self.assertTrue(at.is_dir(), f"making an agent did not make its {what}")
+
+        for what, at in wanted.items():
+            if what == "home":
+                continue
+            moved = at.with_name(at.name + ".moved")
+            at.rename(moved)
+            said = agent.diagnosed("ava", self.where, root=self.root)
+            at.parent.mkdir(parents=True, exist_ok=True)
+            moved.rename(at)
+            self.assertEqual([one.about for one in said], [str(at)],
+                             f"an agent with no {what} was not reported as missing it")
+
     def test_what_a_home_holds_is_what_there_is_a_template_for(self):
         """R-AGT-2 — a template added later lands in a new agent's home without anything
         being added to a list kept in code beside it."""
