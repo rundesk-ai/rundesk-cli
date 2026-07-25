@@ -47,6 +47,7 @@ def main() -> int:
 
     problems: list[str] = []
     cited: set[str] = set()
+    unproven: list[tuple[str, str, str, str]] = []
     rows = green = 0
 
     for home in HOMES:
@@ -75,6 +76,7 @@ def main() -> int:
                     # test — that would read as proven while the glyph says otherwise.
                     for name in names:
                         problems.append(f"{path.name}: {rid} is ❌ but names a test — {name!r}")
+                    unproven.append((path.name, rid, _claim.strip(), evidence))
 
     for problem in problems:
         print(f"check-evidence: {problem}", file=sys.stderr)
@@ -82,8 +84,18 @@ def main() -> int:
         print(f"\ncheck-evidence: {len(problems)} problem(s)", file=sys.stderr)
         return 1
 
+    # Say out loud what is not proven, and the reason standing in for proof. A ❌ is a claim
+    # about the world — "no release has been published yet", "nothing runs yet" — and the world
+    # moves. One of these stayed false for a week after it stopped being true, because nothing
+    # ever read it back. Printing them costs nothing and is the only thing that catches it.
+    if unproven:
+        print(f"\ncheck-evidence: {len(unproven)} requirement(s) not proven — is each reason still true?")
+        for filename, rid, claim, reason in unproven:
+            print(f"  {rid:<12} {claim}")
+            print(f"  {'':<12} {filename}: {reason.lstrip('— ').strip() or 'no reason given'}")
+
     untouched = sorted(set(tests) - cited)
-    print(f"check-evidence: OK ({rows} rows, {green} proven, {len(tests)} tests, {len(untouched)} uncited)")
+    print(f"\ncheck-evidence: OK ({rows} rows, {green} proven, {len(tests)} tests, {len(untouched)} uncited)")
     return 0
 
 

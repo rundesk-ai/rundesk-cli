@@ -353,6 +353,54 @@ class WhatIsInstalledTests(unittest.TestCase):
         self.assertIn("no release published yet", script, "a repository with no release could not be installed")
 
 
+class OneInstructionTests(unittest.TestCase):
+    """The single line a machine with nothing on it is given, and what has to hold for it to work.
+
+    The instruction is published in four places and resolves only because the release workflow
+    attaches that exact file. Nothing coupled the two, so deleting one line from `release.yml`
+    would have turned every documented instruction into a 404 with the whole gate still green.
+    """
+
+    #: `https://github.com/<slug>/releases/latest/download/<asset>`
+    PUBLISHED = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/releases/latest/download/([\w.-]+)")
+
+    GIVES_IT = ["README.md", "install.sh", "src/rundesk_cli/cli.py", ".github/workflows/release.yml"]
+
+    def _published(self) -> set:
+        found = set()
+        for name in self.GIVES_IT:
+            hits = self.PUBLISHED.findall((REPO / name).read_text(encoding="utf-8"))
+            self.assertTrue(hits, f"{name} no longer tells anyone how to install rundesk")
+            found |= set(hits)
+        return found
+
+    def test_the_one_instruction_names_the_same_thing_everywhere_it_is_given(self):
+        # Four files tell a person how to install. Two of them disagreeing means somebody is
+        # being sent to a URL that nothing serves, and the docs look right either way.
+        self.assertEqual(len(self._published()), 1,
+                         f"the install instruction differs between {', '.join(self.GIVES_IT)}")
+
+    def test_the_one_instruction_points_at_the_repository_rundesk_updates_from(self):
+        # An install from one repository that then updates from another is two products
+        # wearing one name.
+        (slug, _asset), = self._published()
+        declared = re.search(r'REPO_SLUG="\$\{RUNDESK_REPO_SLUG:-([^}]+)\}"', INSTALLER.read_text())
+        self.assertIsNotNone(declared, "the installer does not say which repository it installs from")
+        self.assertEqual(declared.group(1), slug,
+                         "the instruction installs from one repository and updates from another")
+
+    def test_a_release_serves_the_file_the_one_instruction_asks_for(self):
+        # `releases/latest/download/<asset>` resolves only if the release carries that asset.
+        # Drop it from the workflow and every instruction above becomes a 404.
+        (_slug, asset), = self._published()
+        workflow = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        attached = re.search(r"^\s*files:\s*(.+)$", workflow, re.M)
+        self.assertIsNotNone(attached, "a release attaches no files, so the install instruction 404s")
+        carried = {f.strip() for f in re.split(r"[,\n]", attached.group(1)) if f.strip()}
+        self.assertIn(asset, carried,
+                      f"the instruction downloads {asset}, which no release attaches")
+
+
 class DownloadedInstallTests(Sandbox):
     def test_removing_an_install_the_installer_made_takes_its_directory(self):
         # A downloaded install is a directory full of source with an install.sh in it —

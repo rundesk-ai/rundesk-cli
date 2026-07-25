@@ -19,7 +19,7 @@ answers; keeping it current and taking it away are their own contracts.
 
 |  | ID | Requirement | Evidence |
 |:--:|---|---|---|
-| ❌ | R-INS-1 | A machine with none of rundesk on it installs it with one instruction | install.sh:1 — the path exists, but no release has been published to install from |
+| ✅ | R-INS-1 | A machine with none of rundesk on it installs it with one instruction | `the one instruction names the same thing everywhere it is given`, `the one instruction points at the repository rundesk updates from`, `a release serves the file the one instruction asks for`, .github/workflows/build.yml:one-instruction — the published release installed from an empty directory |
 | ✅ | R-INS-2 | Installing asks for nothing the machine does not already ship with | `installing needs nothing already present beyond the machines own` |
 | ✅ | R-INS-3 | Anything rundesk needs in order to run is put there by the install, never by the person | `the command finds what was installed for it`, `nothing needed means no virtualenv is made at all` |
 | ✅ | R-INS-4 | Anything the install puts in place for rundesk stays inside rundesk's own directory | `what rundesk needs goes inside its own install` |
