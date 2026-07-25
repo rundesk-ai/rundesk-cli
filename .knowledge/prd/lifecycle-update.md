@@ -41,7 +41,7 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-20 | Nothing published is told apart from being unable to ask | `nothing published is told apart from being unable to ask` |
 | ❌ | R-UPD-21 | An update leaves nothing that was running in a broken state | src/rundesk_cli/updater.py:150 — an update replaces the install without looking at what is running |
 | ❌ | R-UPD-22 | An update brings back whatever it stopped in order to perform it | src/rundesk_cli/updater.py:150 — an update stops nothing, so it brings nothing back |
-| ❌ | R-UPD-23 | An update refuses rather than interrupting work that is in flight | src/rundesk_cli/updater.py:122 — an update does not ask what is in flight |
+| ✅ | R-UPD-23 | An update refuses rather than interrupting work that is in flight | `an update refuses while work is in flight`, `an update says what is in flight rather than something`, `an update with nothing in flight goes ahead`, `checking never refuses for work in flight`, `what is in flight is asked of every gateway that is running` |
 
 ## Open questions
 

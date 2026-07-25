@@ -704,5 +704,60 @@ class WhyItCouldNotSayTests(unittest.TestCase):
         )
 
 
+class AnUpdateAndWorkInFlight(unittest.TestCase):
+    """R-UPD-23 — an update replaces the files a running gateway is made of.
+
+    The process keeps whatever it has already imported, so what breaks is whatever it
+    imports *next* — minutes later, part-way through a provider session, in a way that
+    reads like anything but an update. Refusing is the whole of the safety: stopping the
+    work instead would be deciding on the owner's behalf that the turn was worth less
+    than the release.
+    """
+
+    def _run(self, busy, check_only=False):
+        applied = []
+        code = updater.run(
+            Path("/tmp/rundesk-not-real"), "0.1.0", check_only=check_only,
+            latest=lambda: "9.9.9",
+            apply=lambda root, version: applied.append(version) or 0,
+            busy=lambda: busy,
+        )
+        return code, applied
+
+    def test_an_update_refuses_while_work_is_in_flight(self):
+        code, applied = self._run(["gateway/schedule:nightly"])
+        self.assertEqual(1, code, "an update that refused reported success")
+        self.assertEqual([], applied, "it replaced the install out from under running work")
+
+    def test_an_update_says_what_is_in_flight_rather_than_something(self):
+        """An owner told only that 'something' is running has to go and find which."""
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            self._run(["one/turn-a", "two/turn-b"])
+        self.assertIn("one/turn-a", said.getvalue())
+        self.assertIn("two/turn-b", said.getvalue())
+
+    def test_an_update_with_nothing_in_flight_goes_ahead(self):
+        code, applied = self._run([])
+        self.assertEqual(0, code)
+        self.assertEqual(["9.9.9"], applied, "an idle machine was refused an update")
+
+    def test_checking_never_refuses_for_work_in_flight(self):
+        """R-UPD-8 — asking where this copy stands never changes it, so it never has a
+        reason to refuse either."""
+        code, applied = self._run(["gateway/busy"], check_only=True)
+        self.assertEqual(0, code)
+        self.assertEqual([], applied)
+
+    def test_an_update_that_is_already_current_never_asks_what_is_in_flight(self):
+        """R-UPD-18 — nothing is going to be moved, so nothing is worth refusing over."""
+        asked = []
+        code = updater.run(
+            Path("/tmp/rundesk-not-real"), "9.9.9", latest=lambda: "9.9.9",
+            apply=lambda root, version: 0, busy=lambda: asked.append(True) or ["x"],
+        )
+        self.assertEqual(0, code)
+        self.assertEqual([], asked, "it asked what was running when it was already current")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -135,8 +135,23 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_update(args: argparse.Namespace) -> int:
-    return updater.run(REPO_ROOT, __version__, check_only=args.check)
+def cmd_update(args: argparse.Namespace, gateways) -> int:
+    return updater.run(REPO_ROOT, __version__, check_only=args.check,
+                       busy=lambda: _in_flight(gateways))
+
+
+def _in_flight(gateways) -> list:
+    """Everything every gateway on this machine says it is working on (R-UPD-23).
+
+    Asked of the gateways rather than of a list kept somewhere, and named by gateway as
+    well as by work: an owner told only that "something" is running has to go and find
+    which of several it was before they can decide to wait.
+    """
+    return [
+        f"{it.name}/{one}"
+        for it in gateways.every() if it.running
+        for one in gateways.what_is_running(it.name)
+    ]
 
 
 def cmd_uninstall(_args: argparse.Namespace) -> int:
@@ -561,7 +576,7 @@ def main(argv: list[str], gateways=None, machine=None) -> int:
     if args.command == "version":
         return cmd_version(args)
     if args.command == "update":
-        return cmd_update(args)
+        return cmd_update(args, gateways)
     if args.command == "uninstall":
         return cmd_uninstall(args)
     if args.command == "serve":

@@ -4,9 +4,9 @@ rundesk does not drive what these programs do — the agent brains it will run o
 own loop entirely. What rundesk owns is the process: when it starts, what it may see of
 the machine, everything it says, when it stops, and what became of it.
 
-Four things shape everything below, and all four come from what these programs are:
-sessions that run for hours, say a great deal, start programs of their own, and run
-many at a time.
+Five things shape everything below, and all five come from what these programs are:
+sessions that run for hours, say a great deal, start programs of their own, run many at
+a time, and — the ones that are agent brains — are talked to rather than merely watched.
 
 1. **Its own session.** A program is started in one, so it and everything it spawns share
    a process group of their own. Ending it therefore ends the whole tree (R-PROC-5) — a
@@ -27,12 +27,24 @@ many at a time.
    number of them run at once without coordinating (R-PROC-10). There is no registry, no
    lock and no module-level mutable state in this file, and that is deliberate: what is
    running is the gateway's to know, and one process's trouble is never another's.
+
+5. **A program is read one of two ways, and one of them answers back.** Output meant for a
+   person is text, split into lines, handed over as it arrives (R-PROC-3). Output meant to
+   be parsed is bytes, framed into whole records, never split (R-PROC-18) — and that kind
+   is written to while it runs (R-PROC-14), with what it says went wrong kept off the
+   stream that is being parsed (R-PROC-15) and drained regardless, because a stream nobody
+   reads is a program that stops reading us (R-PROC-16). Between the reading and whoever
+   receives it sits something bounded, so a slow or broken receiver can neither hold the
+   program up nor end it (R-PROC-17). One loop serves both: when to stop reading is the
+   same question either way.
 """
 
 from __future__ import annotations
 
 import asyncio
 import codecs
+import contextlib
+import inspect
 import os
 import signal
 import time
@@ -86,6 +98,21 @@ POLL_SECONDS = 1.0
 #: the durable record is a concern of its own, and not this module's.
 RETAINED_LINES = 200
 
+#: The most one record of structured output may be before it is dropped rather than
+#: passed on in pieces (R-PROC-18). Counted in bytes, which is what is actually held —
+#: unlike `MAX_LINE_CHARS`, whose characters may be several times as many bytes.
+MAX_RECORD_BYTES = 4 * 1024 * 1024
+
+#: The most that is held for a receiver that has fallen behind (R-PROC-17). Generous on
+#: purpose: reaching it should mean a receiver is broken rather than busy, because what
+#: happens at the bound is that records are lost.
+HELD_BYTES = 8 * 1024 * 1024
+
+#: How long to wait between asking whether a program has gone. Asked of its exit code
+#: rather than waited on, because waiting resolves only once every pipe is closed too —
+#: and a program rundesk talks to has three of them (R-PROC-16).
+GONE_SECONDS = 0.05
+
 
 class NotAbsolute(ValueError):
     """A program named rather than located.
@@ -123,6 +150,220 @@ class Result:
         return self.reason == FINISHED
 
 
+class NotListening(Exception):
+    """Written to, and nothing is reading it (R-PROC-14).
+
+    Three ways round to the same answer, and they are one answer on purpose: it was never
+    opened to be written to, rundesk has already said there is no more coming, or it has
+    gone. In every case the next thing written would land nowhere, which is the only fact
+    a caller can act on. Told apart from `gone_within`, which asks the narrower question —
+    whether the program itself has exited — because a program can be perfectly alive and
+    still not listening.
+    """
+
+
+@dataclass(frozen=True)
+class Gap:
+    """Records that were lost, said where they were lost (R-PROC-17, R-PROC-18).
+
+    Handed to the receiver in the place the loss happened rather than counted up at the
+    end. A count says something was lost; a gap says *where*, and where is what decides
+    whether what surrounds it can still be made sense of. Records are not independent —
+    text arrives in pieces meant to be joined — so a hole nobody is told about is not
+    less of an answer, it is a wrong one.
+    """
+
+    records: int
+    why: str
+
+
+class Held:
+    """What a program said, held between the reading of it and the receiving of it.
+
+    Between the two on purpose (R-PROC-17). Handed straight to a receiver, a slow one
+    stops the reading — and for a program rundesk also writes to that is a deadlock: the
+    program blocks writing what nobody is reading, so it never reads what we are writing.
+    So offering never waits, and never raises.
+
+    Bounded in bytes rather than in records, because one record may be megabytes and a
+    count of them bounds nothing (R-PROC-12). Past the bound the *oldest* go: the end of
+    what a program says is the part that matters — what it concluded, and that it is done.
+    """
+
+    def __init__(self, held: int | None = None):
+        # Resolved here rather than in the signature: a default argument is bound once,
+        # when this file is read, and nothing can reach it afterwards.
+        self._held = HELD_BYTES if held is None else held
+        self._waiting: deque = deque()
+        self._bytes = 0
+        self._lost = 0
+        self._arrived = asyncio.Event()
+        self._closed = False
+
+    @property
+    def lost(self) -> int:
+        return self._lost
+
+    def offer(self, record: bytes) -> None:
+        """Take this, whatever state the receiver is in. Never waits, never raises."""
+        self._waiting.append(record)
+        self._bytes += len(record)
+        self._arrived.set()
+        dropped = 0
+        # Never the one just offered: a bound smaller than a single record would
+        # otherwise drop everything and deliver nothing at all.
+        while self._bytes > self._held and len(self._waiting) > 1:
+            went = self._waiting.popleft()
+            if isinstance(went, Gap):
+                dropped += went.records  # gaps merge rather than pile up
+                continue
+            self._bytes -= len(went)
+            dropped += 1
+        if dropped:
+            self._waiting.appendleft(Gap(dropped, "fell behind"))
+            self._lost += dropped
+
+    def lose(self, records: int, why: str) -> None:
+        """Say that records were lost here, without ever having held them."""
+        self._waiting.append(Gap(records, why))
+        self._lost += records
+        self._arrived.set()
+
+    def close(self) -> None:
+        self._closed = True
+        self._arrived.set()
+
+    async def next(self):
+        """The next record or gap, or None once there is nothing more coming."""
+        while True:
+            if self._waiting:
+                it = self._waiting.popleft()
+                if not isinstance(it, Gap):
+                    self._bytes -= len(it)
+                if not self._waiting:
+                    self._arrived.clear()
+                return it
+            if self._closed:
+                return None
+            self._arrived.clear()
+            await self._arrived.wait()
+
+
+class _Lines:
+    """Framing for output meant to be read: text, split on line endings.
+
+    What a program says is only useful in the order it said it, and a person reading a
+    very long line would rather have it in pieces than not at all — so past the cap this
+    passes on what it holds and carries on (R-PROC-3, R-PROC-12).
+
+    Extracted from `wait()` unchanged, so that what a program rundesk only reads gets
+    exactly the treatment it has always had.
+    """
+
+    def __init__(self, on_line: Callable[[str], None] | None):
+        self._on_line = on_line
+        self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._pending = ""
+        self._tail: deque = deque(maxlen=RETAINED_LINES)
+
+    def feed(self, chunk: bytes) -> None:
+        self._pending += self._decoder.decode(chunk)
+        while "\n" in self._pending:
+            line, self._pending = self._pending.split("\n", 1)
+            self._emit(line)
+        if len(self._pending) >= MAX_LINE_CHARS:
+            self._emit(self._pending)
+            self._pending = ""
+
+    def finish(self) -> None:
+        # Bytes the decoder was holding back in case the rest of a character followed. It
+        # never did: the program has gone. Finalising turns them into what they can be
+        # rather than dropping them, which is what happens if nothing ever asks.
+        self._pending += self._decoder.decode(b"", final=True)
+        if self._pending:
+            self._emit(self._pending)
+            self._pending = ""
+
+    def _emit(self, line: str) -> None:
+        self._tail.append(line)
+        if self._on_line is not None:
+            # Allowed to raise, and the loop above takes the program with it. A receiver
+            # that cannot cope with what it is being handed is a reason to stop, for
+            # output nobody else is holding (R-PROC-11).
+            self._on_line(line)
+
+    @property
+    def held(self) -> str:
+        return "\n".join(self._tail)
+
+
+class _Records:
+    """Framing for output meant to be parsed: bytes, whole or not at all (R-PROC-18).
+
+    Half a record is not a smaller record, it is a corrupt one — and a receiver lenient
+    enough to accept it turns a loud failure into a wrong answer. So past the cap this
+    drops the record, finds the next line ending and carries on, saying a record was
+    lost where it was lost. The framing survives, which is why one enormous record does
+    not cost every record after it.
+
+    Bytes rather than text: a record is a unit for a parser, not prose for a person, and
+    decoding here would put a question mark where a byte was, which nothing can tell from
+    one the program meant. It is also what makes the cap a true bound on what is held,
+    which counting characters is not.
+    """
+
+    def __init__(self, held: Held):
+        self._held = held
+        self._pending = bytearray()
+        self._skipping = False
+        self._tail: deque = deque(maxlen=RETAINED_LINES)
+
+    def feed(self, chunk: bytes) -> None:
+        self._pending += chunk
+        while True:
+            at = self._pending.find(b"\n")
+            if at < 0:
+                break
+            record = bytes(self._pending[:at])
+            del self._pending[:at + 1]
+            if self._skipping:
+                self._skipping = False  # the record being dropped ends here
+                continue
+            if len(record) > MAX_RECORD_BYTES:
+                # Whole, and still too big. Asked only of what is left to arrive, the cap
+                # would never see a record that turned up complete inside one read — and
+                # the size at which this matters is well under a single read.
+                self._held.lose(1, "too large")
+                continue
+            self._emit(record)
+        if self._skipping:
+            self._pending.clear()  # counted, never kept
+        elif len(self._pending) > MAX_RECORD_BYTES:
+            self._skipping = True
+            self._pending.clear()
+            self._held.lose(1, "too large")
+
+    def finish(self) -> None:
+        # What is left has no line ending, so it is not a record — it is the beginning of
+        # one the program did not finish. Delivered, it would be indistinguishable from a
+        # whole one, and nothing downstream could tell a forgotten terminator from a
+        # program killed mid-sentence. Said, rather than passed on or passed over.
+        if self._pending and not self._skipping:
+            self._held.lose(1, "unterminated")
+        self._pending.clear()
+        self._skipping = False
+
+    def _emit(self, record: bytes) -> None:
+        if record.endswith(b"\r"):
+            record = record[:-1]  # exactly one, and only at the end: the rest is data
+        self._tail.append(record)
+        self._held.offer(record)
+
+    @property
+    def held(self) -> str:
+        return "\n".join(one.decode("utf-8", "replace") for one in self._tail)
+
+
 #: `eq=False` so a program is itself and nothing else: the gateway holds what it is
 #: running in a set, and two programs with the same command line are two programs.
 @dataclass(eq=False)
@@ -141,8 +382,28 @@ class Program:
     env: dict[str, str] = field(default_factory=dict)
     silence: float | None = SILENCE_SECONDS
     ceiling: float | None = CEILING_SECONDS
+    #: Whether anything is ever written *to* it (R-PROC-14). Closed by default: a program
+    #: nothing writes to that decides to read its input would wait on a terminal that is
+    #: not there, forever. Opened only for one rundesk holds a conversation with.
+    takes_input: bool = False
+    #: Whether what it says and what went wrong are kept apart (R-PROC-15). Folded by
+    #: default, because what a program said is only useful in the order it said it
+    #: (R-PROC-3) — and at the price that, kept apart, there is no order between the two
+    #: at all. Kept apart only for output meant to be parsed, which anything not part of
+    #: the structure corrupts.
+    errors_apart: bool = False
+    #: Where it starts from (R-PROC-19). Nothing by default, which means wherever rundesk
+    #: itself was started — under the machine's supervisor, a directory the owner never
+    #: chose. Every agent brain works on a project rather than in the abstract, so the one
+    #: it is pointed at is a decision rundesk has to be able to make rather than inherit.
+    cwd: str | Path | None = None
     _proc: asyncio.subprocess.Process | None = field(default=None, repr=False, init=False)
     _ended: bool = field(default=False, repr=False, init=False)
+    _writable: bool = field(default=True, repr=False, init=False)
+    _refused: int = field(default=0, repr=False, init=False)
+    #: What it said went wrong, when that is kept apart. Read rather than handed over:
+    #: nothing parses it, and it is where a provider says why it died.
+    _errors: object = field(default=None, repr=False, init=False)
 
     @property
     def pid(self) -> int | None:
@@ -151,6 +412,16 @@ class Program:
     @property
     def alive(self) -> bool:
         return self._proc is not None and self._proc.returncode is None
+
+    @property
+    def errors(self) -> str:
+        """The tail of what it said went wrong, when the two streams are kept apart."""
+        return self._errors.held if self._errors is not None else ""
+
+    @property
+    def refused(self) -> int:
+        """How many records the receiver failed on. Its failing is not the program's."""
+        return self._refused
 
     async def start(self) -> None:
         if not self.argv:
@@ -162,45 +433,68 @@ class Program:
             )
         self._proc = await asyncio.create_subprocess_exec(
             *self.argv,
-            # Nothing is read from us, so a program that decides to read its input would
-            # otherwise wait on a terminal that is not there, forever. A program that took
-            # further instruction while it ran would need this reopened — an open question
-            # rather than a settled no.
-            stdin=asyncio.subprocess.DEVNULL,
+            # Closed unless rundesk means to write to it (R-PROC-14). Nothing is read
+            # from us otherwise, so a program that decides to read its input would wait
+            # on a terminal that is not there, forever.
+            stdin=asyncio.subprocess.PIPE if self.takes_input else asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
-            # Folded together on purpose: two pipes means two orderings, and what a
-            # program said is only useful in the order it said it (R-PROC-3). Right for
-            # output meant to be read; an open question for output meant to be parsed,
-            # where anything not part of the structure corrupts it.
-            stderr=asyncio.subprocess.STDOUT,
+            # Folded together unless rundesk means to parse what it says (R-PROC-15). Two
+            # pipes means two orderings, and what a program said is only useful in the
+            # order it said it (R-PROC-3) — right for output meant to be read, and wrong
+            # for output meant to be parsed, which anything not part of it corrupts.
+            stderr=asyncio.subprocess.PIPE if self.errors_apart else asyncio.subprocess.STDOUT,
             # The whole environment a program gets, chosen here rather than inherited
             # from whatever happened to start us (R-PROC-1).
             env=dict(self.env),
+            # Where it starts from, chosen rather than inherited (R-PROC-19). `None` is
+            # asyncio's own "wherever we are", which under the supervisor is a directory
+            # nobody picked.
+            cwd=str(self.cwd) if self.cwd is not None else None,
             # Its own session, and so its own process group: see the module docstring.
             start_new_session=True,
         )
 
-    async def wait(self, on_line: Callable[[str], None] | None = None) -> Result:
+    async def wait(
+        self,
+        on_line: Callable[[str], None] | None = None,
+        sink: Callable[[object], object] | None = None,
+    ) -> Result:
         """Read everything it says until it stops, and report what became of it.
 
         Reads in chunks and finds the line endings here rather than asking the stream for
         a line: a stream asked for a line longer than it can hold raises, and an agent
         brain reporting one large tool result as one line is exactly what would do it.
+
+        `on_line` is for output meant to be read and `sink` for output meant to be
+        parsed, and they differ in every way that matters: what a unit is, what happens
+        to one too big to hold, and whether a receiver's trouble is the program's. One
+        loop serves both, because when to stop reading is the same question either way.
         """
         if self._proc is None:
             raise RuntimeError("wait() before start()")
         assert self._proc.stdout is not None
-        tail: deque[str] = deque(maxlen=RETAINED_LINES)
-        decoder = codecs.getincrementaldecoder("utf-8")("replace")
-        pending = ""
+        if sink is not None and not self.errors_apart:
+            # Refused rather than obliged. Folded together, everything the program says
+            # went wrong arrives in the middle of what is meant to be parsed — so the
+            # records would be corrupted by exactly the warning that explains why, and
+            # nothing downstream could tell that apart from the program talking nonsense
+            # (R-PROC-15, R-PROC-18). It is never what the caller meant.
+            raise ValueError(
+                "records cannot be read from a program whose streams are folded together "
+                "— start it with errors_apart"
+            )
+        held = Held() if sink is not None else None
+        frame = _Records(held) if held is not None else _Lines(on_line)
         went_silent = False
         overran = False
         began = time.monotonic()
-
-        def emit(line: str) -> None:
-            tail.append(line)
-            if on_line is not None:
-                on_line(line)
+        # Started before anything is read, and run whatever the receiver is doing: this
+        # is what keeps the streams we are not framing from filling up (R-PROC-16).
+        beside = []
+        if self.errors_apart and self._proc.stderr is not None:
+            beside.append(asyncio.ensure_future(self._drain_errors()))
+        if held is not None:
+            beside.append(asyncio.ensure_future(self._deliver(held, sink)))
 
         # Read in short spells rather than one long one, so that between them we can look
         # at whether the program is still there. Waiting on its exit instead does not
@@ -243,13 +537,7 @@ class Program:
                     if not chunk:
                         break  # the pipe closed: nothing holds it and nothing is coming
                     quiet_for = 0.0  # measured per stretch, never summed (R-PROC-6)
-                    pending += decoder.decode(chunk)
-                    while "\n" in pending:
-                        line, pending = pending.split("\n", 1)
-                        emit(line)
-                    if len(pending) >= MAX_LINE_CHARS:
-                        emit(pending)
-                        pending = ""
+                    frame.feed(chunk)
                     continue
                 if gone:
                     break  # drained as far as it will drain — something it left holds the pipe
@@ -264,17 +552,13 @@ class Program:
             # nothing holding it, which is the orphan this module exists to prevent
             # (R-PROC-4, R-PROC-11).
             await self.end()
+            await self._settle(beside, held)
             raise
         finally:
             if reader is not None:
                 reader.cancel()
 
-        # Bytes the decoder was holding back in case the rest of a character followed. It
-        # never did: the program has gone. Finalising turns them into what they can be
-        # rather than dropping them, which is what happens if nothing ever asks.
-        pending += decoder.decode(b"", final=True)
-        if pending:
-            emit(pending)
+        frame.finish()
         if not overran and not went_silent and self._proc.returncode is None:
             # The pipe closing is not the program dying. One that closes what it writes
             # out and keeps going — anything that daemonises itself, or execs something
@@ -286,7 +570,7 @@ class Program:
             # the ceiling entirely here — and a program allowed to be quiet indefinitely
             # (R-PROC-6) that closes its output and keeps going would then be waited on
             # forever, which is the one thing the ceiling exists to prevent.
-            if not await self._exits_within(self._patience_left(began)):
+            if not await self.gone_within(self._patience_left(began)):
                 overran = self._past_ceiling(began)
                 went_silent = not overran
         # Ended here, after every way of deciding it should be — not before. Deciding it
@@ -294,15 +578,171 @@ class Program:
         # to stop, which is the very shape of wedge this is all here to prevent.
         if overran or went_silent:
             await self.end()
+        await self._settle(beside, held)
+        return await self._became(frame.held, overran, went_silent)
+
+    async def _settle(self, beside: list, held: Held | None) -> None:
+        """Let what is running beside the reading finish, then stop waiting for it.
+
+        Bounded, and quiet about it. The delivery is told there is nothing more coming
+        and given the drain to hand over what it holds — so a receiver still working
+        through the last of a program's output is not cut off at the moment the program
+        exits. What will not finish in that time is cancelled: this is a drain, not a
+        wait for more work.
+        """
+        if held is not None:
+            held.close()
+        # One deadline for all of them, not one each. Spent per task, two of them make a
+        # program that has already gone take twice as long to be answered for, and the
+        # gateway's own patience for stopping is what that eats into (R-GW-7).
+        by = time.monotonic() + DRAIN_SECONDS
+        for one in beside:
+            try:
+                await asyncio.wait_for(asyncio.shield(one), max(0.0, by - time.monotonic()))
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                one.cancel()
+            except BaseException:
+                pass  # whatever it was, it is not the program's to answer for
+        # Awaited after cancelling, so that what is being reported about a program is
+        # settled before anyone reads it — and so a task that raised on the way out is
+        # collected here rather than surfacing later as an exception nobody retrieved.
+        for one in beside:
+            if one.cancelled() or not one.done():
+                with contextlib.suppress(BaseException):
+                    await one
+        beside.clear()
+
+    async def _became(self, output: str, overran: bool, went_silent: bool) -> Result:
+        """Reap it, take what it left running, and say what became of it.
+
+        In one place because everything that reads a program ends at the same four
+        answers, and a second copy of this is a second copy that can come to disagree
+        (R-PROC-8, R-PROC-9).
+        """
         code = await self._reap()
         await self._sweep()
         if overran:
-            return Result(OVERRAN, code, "\n".join(tail))
+            return Result(OVERRAN, code, output)
         if went_silent:
-            return Result(SILENT, code, "\n".join(tail))
+            return Result(SILENT, code, output)
         if self._ended:
-            return Result(ENDED, code, "\n".join(tail))
-        return Result(FINISHED if code == 0 else FAILED, code, "\n".join(tail))
+            return Result(ENDED, code, output)
+        return Result(FINISHED if code == 0 else FAILED, code, output)
+
+    async def _drain_errors(self) -> None:
+        """Read what it says went wrong, always, whether or not anyone wants it.
+
+        Not optional (R-PROC-16). A pipe nobody reads fills, and a program blocked
+        writing to a full pipe stops reading what we write to it — so keeping the two
+        streams apart without this buys a deadlock, and one that presents half an hour
+        later as a perfectly healthy program having gone quiet.
+        """
+        assert self._proc is not None and self._proc.stderr is not None
+        frame = _Lines(None)
+        self._errors = frame
+        while True:
+            chunk = await self._proc.stderr.read(READ_BYTES)
+            if not chunk:
+                break
+            frame.feed(chunk)
+        frame.finish()
+
+    async def _deliver(self, held: Held, sink) -> None:
+        """Hand records to whoever is receiving them, away from the reading.
+
+        Its own task, so that a receiver taking its time slows nothing but itself
+        (R-PROC-17) — and so that one which fails does not reach the read loop, where
+        anything raised takes the program with it.
+        """
+        while True:
+            it = await held.next()
+            if it is None:
+                return
+            try:
+                said = sink(it)
+                if inspect.isawaitable(said):
+                    # Anything that can be awaited, not only what `async def` makes. A
+                    # receiver that hands back a task or a future is doing the ordinary
+                    # thing, and asking the narrower question drops its work on the floor
+                    # without awaiting it and without a word.
+                    await said
+            except asyncio.CancelledError:
+                raise
+            except BaseException:
+                # A receiver that fails is not a reason to end the program. It may still
+                # be owed an answer, and whatever went wrong is the receiver's to
+                # recover from — counted here so it is not simply lost.
+                self._refused += 1
+
+    async def send(self, record: bytes | str) -> None:
+        """Write to it while it is running (R-PROC-14).
+
+        Written and then waited on, always. Writing alone never blocks and never raises
+        — on a program that has gone it silently discards what it was given — so the
+        wait is the only place the truth arrives, and skipping it would report every
+        failed write as a success.
+
+        The wait is not bounded here, and deliberately. It ends by itself when the
+        program does: the machine notices the far end close and the wait is woken with
+        the failure. Bounding it would mean answering a caller that a write did not
+        happen while the bytes were already on their way — and there is no unwriting
+        them, so the next record would land behind half of one nobody thinks was sent.
+        A caller that cannot wait can stop waiting itself, and decide for itself what
+        that meant.
+        """
+        if self._proc is None:
+            raise RuntimeError("send() before start()")
+        if self._proc.stdin is None:
+            raise NotListening("this program was not started to be written to")
+        if not self._writable:
+            raise NotListening("this program is no longer being written to")
+        data = record if isinstance(record, bytes) else record.encode("utf-8")
+        if not data.endswith(b"\n"):
+            data += b"\n"  # a record is a record because of where it ends
+        try:
+            self._proc.stdin.write(data)
+            await self._proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError) as gone:
+            self._writable = False
+            raise NotListening("it is not there to be written to") from gone
+
+    async def close_input(self) -> None:
+        """Tell it there is no more coming, and leave it to finish (R-PROC-20).
+
+        Not the same as ending it: a program that reads its input to the end before it
+        will answer at all is waiting for exactly this, and ending it instead would take
+        it away mid-answer. Asking twice is allowed, and asking it of a program with
+        nothing to close does nothing.
+
+        What is already written still goes — closing lets what is buffered drain before
+        the far end sees the end of it. Waiting for that is bounded and its failures
+        ignored: this is a signal, not a transaction, and a program that has stopped
+        reading will never finish taking what it was sent.
+        """
+        if self._proc is None or self._proc.stdin is None or not self._writable:
+            return
+        self._writable = False
+        try:
+            self._proc.stdin.close()
+            await asyncio.wait_for(self._proc.stdin.wait_closed(), DRAIN_SECONDS)
+        except (BrokenPipeError, ConnectionResetError, OSError, asyncio.TimeoutError):
+            pass  # it is shut either way, and nothing here is owed an answer
+
+    async def gone_within(self, patience: float | None) -> bool:
+        """Has the program itself gone? Asked of its exit code, never waited on.
+
+        Waiting resolves only once every pipe is closed as well, and a program rundesk
+        talks to has three of them — so a child that inherited one makes a program that
+        exited promptly look like one that never went at all.
+        """
+        if self._proc is None:
+            return True
+        deadline = None if patience is None else time.monotonic() + patience
+        while self._proc.returncode is None:
+            if deadline is not None and time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(GONE_SECONDS)
+        return True
 
     def _past_ceiling(self, began: float) -> bool:
         return self.ceiling is not None and time.monotonic() - began >= self.ceiling
@@ -314,20 +754,6 @@ class Program:
             to_ceiling = max(0.0, self.ceiling - (time.monotonic() - began))
             left = to_ceiling if left is None else min(left, to_ceiling)
         return left
-
-    async def _exits_within(self, patience: float | None) -> bool:
-        """Does it go of its own accord in the time allowed? None means however long."""
-        assert self._proc is not None
-        if patience is None:
-            await self._proc.wait()
-            return True
-        if patience <= 0:
-            return self._proc.returncode is not None
-        try:
-            await asyncio.wait_for(asyncio.shield(self._proc.wait()), patience)
-        except asyncio.TimeoutError:
-            return False
-        return True
 
     def _spell(self) -> float:
         """How long to read for before looking at the program again.
@@ -448,9 +874,10 @@ async def run(
     silence: float | None = SILENCE_SECONDS,
     ceiling: float | None = CEILING_SECONDS,
     on_line: Callable[[str], None] | None = None,
+    cwd: str | Path | None = None,
 ) -> Result:
     """Start a program, read it to the end, and say what became of it."""
-    program = Program(argv, env=env or {}, silence=silence, ceiling=ceiling)
+    program = Program(argv, env=env or {}, silence=silence, ceiling=ceiling, cwd=cwd)
     await program.start()
     return await program.wait(on_line)
 

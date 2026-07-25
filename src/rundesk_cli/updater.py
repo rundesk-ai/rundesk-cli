@@ -122,14 +122,15 @@ def run(
     check_only: bool = False,
     latest: Callable[[], str | None] | None = None,
     apply: Callable[[Path, str], int] | None = None,
+    busy: Callable[[], list] | None = None,
 ) -> int:
     """Report where this install stands, and move it if asked.
 
-    `latest` and `apply` are arguments so the decision can be tested without a
-    network or a download — the part that is easy to get wrong is which of the
-    three outcomes is chosen, not the tarball handling.
+    `latest`, `apply` and `busy` are arguments so the decision can be tested without a
+    network, a download or a gateway — the part that is easy to get wrong is which of the
+    outcomes is chosen, not the tarball handling.
 
-    Both resolve here rather than in the signature: a default argument is bound
+    They resolve here rather than in the signature: a default argument is bound
     once, when the function is defined, so naming the function there would freeze
     it and quietly ignore anything that replaced it afterwards.
     """
@@ -141,6 +142,21 @@ def run(
         return 0
     if check_only:
         return 0
+    # Asked before anything is fetched or laid down, and only when something is actually
+    # going to be moved (R-UPD-23). An update replaces the files a running gateway is
+    # made of while it is part-way through a turn — the process keeps the code it already
+    # imported, so what breaks is whatever it imports *next*, minutes later, deep inside
+    # a provider session, in a way that reads like anything but an update. Refusing is
+    # the whole of the safety here: stopping the work would be deciding on the owner's
+    # behalf that the turn was worth less than the release.
+    working = (busy or (lambda: []))()
+    if working:
+        print(
+            f"update: NOT APPLIED — work is in flight: {', '.join(sorted(working))}",
+            file=sys.stderr,
+        )
+        print("        wait for it to finish, or stop it: rundesk stop", file=sys.stderr)
+        return 1
     return (apply or download_and_apply)(repo_root, published)
 
 

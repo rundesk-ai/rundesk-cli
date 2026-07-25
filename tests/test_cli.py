@@ -842,5 +842,42 @@ class WhatAGatewayHasBeenSaying(unittest.TestCase):
         self.assertIn("something went wrong", said)
 
 
+class WhatIsInFlightWhenAnUpdateAsks(unittest.TestCase):
+    def test_what_is_in_flight_is_asked_of_every_gateway_that_is_running(self):
+        """R-UPD-23 — every gateway, not the default one, and named so an owner knows
+        which of several to wait for. A gateway that is stopped has nothing in flight
+        however stale its record is, so it is never asked."""
+
+        class Standing:
+            def __init__(self, name, running):
+                self.name, self.running = name, running
+
+        class Gateways:
+            def every(self):
+                return [Standing("alpha", True), Standing("beta", True),
+                        Standing("gamma", False)]
+
+            def what_is_running(self, name):
+                return {"alpha": ["turn-1", "turn-2"], "beta": ["turn-3"],
+                        "gamma": ["stale"]}[name]
+
+        self.assertEqual(
+            ["alpha/turn-1", "alpha/turn-2", "beta/turn-3"],
+            cli._in_flight(Gateways()),
+        )
+
+    def test_a_machine_with_no_gateways_has_nothing_in_flight(self):
+        """R-UPD-23 — the ordinary case, and the one that must never refuse an update."""
+
+        class Gateways:
+            def every(self):
+                return []
+
+            def what_is_running(self, name):
+                raise AssertionError("it asked about a gateway that does not exist")
+
+        self.assertEqual([], cli._in_flight(Gateways()))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

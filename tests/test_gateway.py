@@ -1525,5 +1525,97 @@ class AsARealProcess(unittest.TestCase):
         self.assertFalse((self.where / "real.json").exists(), "it left its record behind")
 
 
+class WorkTheGatewayTalksTo(WithARunDirectory):
+    """R-PROC-14 to R-PROC-18 reaching work through the gateway that owns it.
+
+    Proven at the gateway rather than only on a program, because the gateway is the only
+    thing that starts one — a policy it cannot pass on is a policy nothing can ask for.
+    """
+
+    ECHOES = [PY, "-c", "import sys\nfor line in sys.stdin:\n"
+                        "    sys.stdout.write('heard ' + line); sys.stdout.flush()"]
+
+    async def test_a_gateway_starts_work_it_can_write_to_and_read_records_from(self):
+        """R-PROC-14, R-PROC-17 — the whole of what this is groundwork for: work that is
+        still running, still being written to, and answering into a receiver."""
+        gw = self.made()
+        gw.claim()
+        taken = []
+        running = asyncio.ensure_future(gw.start(
+            self.ECHOES, as_name="talks", silence=None, takes_input=True, sink=taken.append,
+        ))
+        await self._holding(gw)
+        # By name, for as long as it runs: the gateway's own register is the handle.
+        talking = gw.running["talks"]
+        await talking.send(b'{"ask":1}')
+        deadline = time.time() + 10
+        while not taken and time.time() < deadline:
+            await asyncio.sleep(0.02)
+        self.assertEqual([b'heard {"ask":1}'], taken, "nothing came back while it was running")
+        await process.end_all(list(gw.running.values()))
+        await asyncio.wait_for(running, 15)
+
+    async def test_what_work_said_went_wrong_is_written_down_rather_than_parsed(self):
+        """R-PROC-15, R-GW-18 — kept out of what is meant to be parsed, and put where
+        anything else worth explaining in the morning already goes."""
+        gw = self.made()
+        gw.claim()
+        taken = []
+        outcome = await asyncio.wait_for(gw.start(
+            [PY, "-c", "import sys\n"
+                       "sys.stderr.write('it went wrong\\n'); sys.stderr.flush()\n"
+                       "sys.stdout.write('{\"real\":1}\\n'); sys.stdout.flush()"],
+            as_name="noisy", silence=None, sink=taken.append,
+        ), 20)
+        self.assertEqual([b'{"real":1}'], taken, "what went wrong reached the receiver")
+        self.assertTrue(outcome.ok)
+        said = gateway.log_path(gw.name, self.logs).read_text()
+        self.assertIn("it went wrong", said, "what it said went wrong was simply dropped")
+
+    async def test_a_receiver_that_refuses_is_recorded_rather_than_lost(self):
+        """R-PROC-17 — a receiver silently dropping everything it is handed looks exactly
+        like work that said nothing at all, which is the one reading that misleads."""
+        gw = self.made()
+        gw.claim()
+
+        def refuses(_record):
+            raise RuntimeError("this receiver is broken")
+
+        outcome = await asyncio.wait_for(gw.start(
+            [PY, "-c", "import sys; sys.stdout.write('{\"a\":1}\\n'); sys.stdout.flush()"],
+            as_name="refused", silence=None, sink=refuses,
+        ), 20)
+        self.assertTrue(outcome.ok, "the receiver failing was blamed on the work")
+        said = gateway.log_path(gw.name, self.logs).read_text()
+        self.assertIn("refused 1 record", said)
+
+    async def test_a_gateway_starts_work_in_the_workspace_it_is_given(self):
+        """R-PROC-19 — every agent brain works on a project, and the gateway is started by
+        the machine in a directory nobody chose."""
+        gw = self.made()
+        gw.claim()
+        workspace = Path(tempfile.mkdtemp(prefix="rundesk-work-"))
+        self.addCleanup(shutil.rmtree, workspace, True)
+        taken = []
+        await asyncio.wait_for(gw.start(
+            [PY, "-c", "import os, sys; sys.stdout.write(os.getcwd() + '\\n'); sys.stdout.flush()"],
+            as_name="somewhere", silence=None, sink=taken.append, cwd=workspace,
+        ), 20)
+        self.assertEqual(workspace.resolve(), Path(taken[0].decode()).resolve())
+
+    async def test_work_the_gateway_only_reads_is_given_no_input_and_one_stream(self):
+        """R-PROC-14, R-PROC-15 — the guard: what the gateway has always started must go
+        on being started exactly as it was."""
+        gw = self.made()
+        gw.claim()
+        running = asyncio.ensure_future(gw.start(FOREVER, as_name="ordinary", silence=None))
+        await self._holding(gw)
+        ordinary = gw.running["ordinary"]
+        self.assertFalse(ordinary.takes_input)
+        self.assertFalse(ordinary.errors_apart)
+        await process.end_all(list(gw.running.values()))
+        await asyncio.wait_for(running, 15)
+
+
 if __name__ == "__main__":
     unittest.main()

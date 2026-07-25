@@ -806,6 +806,9 @@ class Gateway:
         silence: float | None = process.SILENCE_SECONDS,
         ceiling: float | None = process.CEILING_SECONDS,
         on_line: Callable[[str], None] | None = None,
+        sink: Callable[[object], object] | None = None,
+        takes_input: bool = False,
+        cwd: str | Path | None = None,
     ) -> process.Result:
         """Run a program as this gateway, and keep hold of it while it runs.
 
@@ -816,6 +819,13 @@ class Gateway:
         running is refused rather than doubled (R-GW-15) — a second session on the same
         conversation would answer it twice, each unaware of the other. Work with no name
         is work that cannot collide, and is given one of its own.
+
+        `sink` is for a program whose output is meant to be parsed rather than read, and
+        asking for one is what keeps its two streams apart (R-PROC-15) — what it says
+        goes to the receiver, and what went wrong goes to this gateway's own log, where
+        everything else that happened to it already goes (R-GW-18). `takes_input` opens
+        the way back to it (R-PROC-14). What is running is reachable by name in
+        `running` for as long as it runs, which is how anything writes to one.
         """
         if self._stopping:
             raise Stopping(f"gateway '{self.name}' is stopping and is taking no more work")
@@ -826,6 +836,15 @@ class Gateway:
         program = process.Program(
             argv, env=env if env is not None else process.environment(self.where),
             silence=silence, ceiling=ceiling,
+            takes_input=takes_input,
+            # Kept apart exactly when what it says is going somewhere to be parsed, since
+            # that is the only time anything not part of the structure does harm — and
+            # keeping them apart costs the order between the two (R-PROC-3, R-PROC-15).
+            errors_apart=sink is not None,
+            # The workspace this piece of work happens in (R-PROC-19). An agent works on
+            # a project rather than in the abstract, and the gateway is started by the
+            # machine in a directory nobody chose.
+            cwd=cwd,
         )
         # Registered before it is started, so two of the same name racing cannot both get
         # past the check above and into a subprocess.
@@ -843,10 +862,20 @@ class Gateway:
                 # by now `running` has been swept and cleared.
                 self.log.warning("ending '%s': it started as the gateway was going away", held)
                 await program.end()
-            outcome = await program.wait(on_line)
+            outcome = await program.wait(on_line, sink)
         finally:
             self.running.pop(held, None)
             self._say()
+        if program.errors:
+            # What went wrong is not handed to the receiver — nothing parses it — but it
+            # is where a program says why it died, so it goes where anything else worth
+            # explaining in the morning goes (R-GW-18).
+            self.log.warning("'%s' also said: %s", held, program.errors[-600:])
+        if program.refused:
+            # The receiver's trouble, not the program's (R-PROC-17) — but a receiver
+            # silently dropping everything it was handed looks exactly like a program
+            # that said nothing at all.
+            self.log.warning("'%s': the receiver refused %d record(s)", held, program.refused)
         if outcome.ok:
             self.log.info("'%s' finished", held)
         else:

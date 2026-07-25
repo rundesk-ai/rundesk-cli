@@ -88,6 +88,8 @@ flowchart LR
 - **The programs a gateway runs** — later, the assistants' own tools. A gateway owns everything it starts:
   it ends all of it when it goes, never runs the same piece of work twice at once, and ends work an
   earlier gateway left behind.
+- **Talking to a program while it runs** — a gateway does not only watch a program, it holds a conversation
+  with one: sending it something and taking its answers a whole piece at a time, as they come.
 - **Schedules** — work that starts itself, because the time came: you state a time in the ordinary way and
   what to run, and the gateway starts it and owns it like anything else. Each gateway has its own set, so
   later each assistant's schedules are its own and never another's to run. You can turn one off and keep
@@ -115,6 +117,10 @@ flowchart LR
   that something goes, what it started goes too. A gateway that is killed outright leaves work behind, and
   the next one of that name ends it.
 - **Nothing runs twice** — one gateway of each name, and one of each piece of work inside it.
+- **Whatever is listening cannot break what is working** — if the thing receiving an assistant's answers is
+  slow, or fails, or is not there at all, the assistant carries on regardless. Anything lost while it was
+  away is handed over as a gap in the right place, rather than quietly closing over as though nothing had
+  happened — because an answer with a hole nobody mentions is not a shorter answer, it is a wrong one.
 - **Long work is left alone; stuck work is not** — a session may take hours, so nothing is ended for taking
   its time. What is ended is a program that has gone silent, or one still going long past when any real
   work would have finished.

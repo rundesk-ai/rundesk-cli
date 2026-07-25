@@ -896,5 +896,534 @@ class WhatBecameOfAProgram(Quickened):
         self.assertNotEqual(0, result.code)
 
 
+def echoes() -> list[str]:
+    """A program that answers what it is written, a record at a time.
+
+    Unbuffered on purpose: a program left to buffer answers only once it has gone, and
+    what is being asserted is that an answer arrives while it is still running.
+    """
+    return script(
+        "import sys",
+        "for line in sys.stdin:",
+        "    sys.stdout.write('heard ' + line)",
+        "    sys.stdout.flush()",
+    )
+
+
+class Collected:
+    """A receiver that keeps what it is handed, the way a real one would not."""
+
+    def __init__(self):
+        self.taken: list = []
+
+    def __call__(self, record) -> None:
+        self.taken.append(record)
+
+    @property
+    def records(self) -> list:
+        return [one for one in self.taken if not isinstance(one, process.Gap)]
+
+    @property
+    def gaps(self) -> list:
+        return [one for one in self.taken if isinstance(one, process.Gap)]
+
+    async def until(self, many: int, seconds: float = 10.0) -> bool:
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if len(self.records) >= many:
+                return True
+            await asyncio.sleep(0.02)
+        return len(self.records) >= many
+
+
+class WritingToAProgramWhileItRuns(Quickened):
+    async def test_a_program_is_written_to_while_it_is_running(self):
+        """R-PROC-14 — the whole point: an answer comes back while it is still there."""
+        program = process.Program(echoes(), takes_input=True, errors_apart=True, silence=None)
+        await program.start()
+        taken = Collected()
+        reading = asyncio.ensure_future(program.wait(sink=taken))
+        await program.send(b'{"say":"one"}')
+        self.assertTrue(await taken.until(1), "nothing came back while it was running")
+        self.assertEqual([b'heard {"say":"one"}'], taken.records)
+        await program.send(b'{"say":"two"}')
+        self.assertTrue(await taken.until(2))
+        self.assertEqual(b'heard {"say":"two"}', taken.records[1])
+        await program.end()
+        await asyncio.wait_for(reading, 15)
+
+    async def test_what_is_written_arrives_in_the_order_it_was_written(self):
+        """R-PROC-14 — one record is one write, so two of them cannot interleave."""
+        program = process.Program(echoes(), takes_input=True, errors_apart=True, silence=None)
+        await program.start()
+        taken = Collected()
+        reading = asyncio.ensure_future(program.wait(sink=taken))
+        await asyncio.gather(*(program.send(f"n{n}") for n in range(20)))
+        self.assertTrue(await taken.until(20))
+        self.assertEqual([f"heard n{n}".encode() for n in range(20)], taken.records[:20])
+        await program.end()
+        await asyncio.wait_for(reading, 15)
+
+    async def test_a_program_that_has_gone_is_not_written_to_forever(self):
+        """R-PROC-14 — writing alone never raises, and on a program that has gone it
+        silently discards what it was given. Waiting is the only place the truth arrives,
+        so a write that skipped it would report every failed send as a success."""
+        program = process.Program(script("import sys; sys.exit(0)"), takes_input=True)
+        await program.start()
+        result = await program.wait()
+        self.assertTrue(result.ok)
+        with self.assertRaises(process.NotListening):
+            for _ in range(200):  # the transport notices the far end at its own pace
+                await program.send(b"anyone there")
+                await asyncio.sleep(0.01)
+
+    async def test_a_program_not_started_to_be_written_to_says_so(self):
+        """R-PROC-14 — input is closed unless rundesk said otherwise, and asking to write
+        to one that has none is a mistake to report rather than a silent no-op."""
+        program = process.Program(forever())
+        await program.start()
+        self.addCleanup(lambda: None)
+        with self.assertRaises(process.NotListening):
+            await program.send(b"hello")
+        await program.end()
+
+    async def test_writing_to_a_program_that_never_started_is_refused(self):
+        """R-PROC-14 — mirrors `wait() before start()`."""
+        with self.assertRaises(RuntimeError):
+            await process.Program(forever()).send(b"hello")
+
+    async def test_a_program_is_told_there_is_no_more_coming_without_being_ended(self):
+        """R-PROC-20 — a program that reads its input to the end before it answers at all
+        is waiting for exactly this, and ending it instead takes it away mid-answer."""
+        program = process.Program(
+            script(
+                "import sys",
+                "said = sys.stdin.buffer.read()",   # answers nothing until the end
+                "sys.stdout.write('took %d\\n' % len(said)); sys.stdout.flush()",
+            ),
+            takes_input=True, errors_apart=True, silence=None,
+        )
+        await program.start()
+        taken = Collected()
+        reading = asyncio.ensure_future(program.wait(sink=taken))
+        await program.send(b"four")
+        self.assertFalse(await taken.until(1, 1.0), "it answered before it was told to")
+        await program.close_input()
+        self.assertTrue(await taken.until(1), "being told there was no more did not reach it")
+        self.assertEqual([b"took 5"], taken.records)
+        result = await asyncio.wait_for(reading, 15)
+        self.assertTrue(result.ok, "it was ended rather than left to finish")
+
+    async def test_writing_after_there_is_no_more_coming_is_refused(self):
+        """R-PROC-20 — said once, and it stays said."""
+        program = process.Program(forever(), takes_input=True)
+        await program.start()
+        await program.close_input()
+        await program.close_input()  # asking twice is allowed
+        with self.assertRaises(process.NotListening):
+            await program.send(b"more")
+        await program.end()
+
+    async def test_telling_a_program_with_no_input_there_is_no_more_does_nothing(self):
+        """R-PROC-20 — mirrors ending a program that never started."""
+        await process.Program(forever()).close_input()
+        program = process.Program(forever())
+        await program.start()
+        await program.close_input()
+        self.assertTrue(program.alive)
+        await program.end()
+
+
+class TheTwoStreamsKeptApart(Quickened):
+    async def test_the_two_streams_are_kept_apart(self):
+        """R-PROC-15 — the opposite guarantee to `everything it writes out is passed on`,
+        and deliberately so: anything not part of the structure corrupts what is parsed."""
+        program = process.Program(
+            script(
+                "import sys",
+                "sys.stderr.write('a warning\\n'); sys.stderr.flush()",
+                "sys.stdout.write('{\"real\":1}\\n'); sys.stdout.flush()",
+            ),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        taken = Collected()
+        result = await asyncio.wait_for(program.wait(sink=taken), 15)
+        self.assertEqual([b'{"real":1}'], taken.records,
+                         "what went wrong reached what is meant to be parsed")
+        self.assertIn("a warning", program.errors)
+        self.assertTrue(result.ok)
+
+    async def test_a_program_is_not_held_up_by_a_stream_nobody_reads(self):
+        """R-PROC-16 — the deadlock, and the reason keeping the streams apart is not free.
+
+        A pipe nobody reads fills, and a program blocked writing to a full one stops
+        reading what we write to it. Nothing here consumes what went wrong, because
+        nothing is meant to have to: rundesk reads it whether or not anyone wants it.
+        Bounded so a regression fails in seconds rather than reading as a stuck suite.
+        """
+        program = process.Program(
+            script(
+                "import sys",
+                "sys.stderr.write('x' * 4000000)",   # far past any pipe
+                "sys.stderr.flush()",
+                "sys.stdout.write('done\\n'); sys.stdout.flush()",
+            ),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        taken = Collected()
+        result = await asyncio.wait_for(program.wait(sink=taken), 20)
+        self.assertEqual([b"done"], taken.records, "it never got past shouting")
+        self.assertTrue(result.ok)
+
+    async def test_a_conversation_larger_than_the_pipes_completes(self):
+        """R-PROC-16 — neither side can finish unless the other is being drained, which
+        is the classic deadlock in the one shape that actually reproduces it."""
+        program = process.Program(
+            script(
+                "import sys",
+                "sys.stdout.write('x' * 1000000 + '\\n'); sys.stdout.flush()",
+                "said = sys.stdin.buffer.read()",
+                "sys.stdout.write('took %d\\n' % len(said)); sys.stdout.flush()",
+            ),
+            takes_input=True, errors_apart=True, silence=None,
+        )
+        await program.start()
+        taken = Collected()
+        reading = asyncio.ensure_future(program.wait(sink=taken))
+        await asyncio.wait_for(program.send(b"y" * 1000000), 20)
+        program._proc.stdin.close()   # there is no more coming
+        self.assertTrue(await taken.until(2, 20), "the conversation wedged")
+        self.assertEqual(b"took 1000001", taken.records[1])
+        await asyncio.wait_for(reading, 20)
+
+    async def test_what_went_wrong_is_not_held_against_the_machine(self):
+        """R-PROC-12 — read whether or not anyone wants it is not read without bound."""
+        program = process.Program(
+            script(
+                "import sys",
+                "for n in range(20000): sys.stderr.write('line %d\\n' % n)",
+                "sys.stderr.flush()",
+                "sys.stdout.write('done\\n'); sys.stdout.flush()",
+            ),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        await asyncio.wait_for(program.wait(sink=Collected()), 20)
+        self.assertLessEqual(len(program.errors.splitlines()), process.RETAINED_LINES)
+        self.assertIn("line 19999", program.errors, "it kept the beginning, not the end")
+
+
+class WhatAReceiverIsHanded(Quickened):
+    async def test_a_receiver_that_fails_neither_stops_nor_ends_the_program(self):
+        """R-PROC-17 — the deliberate opposite of `a handler that raises does not leave
+        the program running`. For output nobody else holds, a receiver that cannot cope
+        is a reason to stop; for a program still owed an answer, it is not."""
+        program = process.Program(echoes(), takes_input=True, errors_apart=True, silence=None)
+        await program.start()
+        reading = asyncio.ensure_future(program.wait(sink=self._always_fails))
+        await program.send(b"one")
+        deadline = time.time() + 10
+        while program.refused < 1 and time.time() < deadline:
+            await asyncio.sleep(0.02)
+        self.assertEqual(1, program.refused, "the receiver's failure was simply lost")
+        self.assertTrue(program.alive, "a receiver failing took the program with it")
+        await program.send(b"two")   # and it is still being talked to
+        deadline = time.time() + 10
+        while program.refused < 2 and time.time() < deadline:
+            await asyncio.sleep(0.02)
+        self.assertEqual(2, program.refused)
+        await program.end()
+        await asyncio.wait_for(reading, 15)
+
+    @staticmethod
+    def _always_fails(_record):
+        raise RuntimeError("this receiver is broken")
+
+    async def test_a_receiver_that_is_slow_does_not_slow_the_program(self):
+        """R-PROC-17 — handed straight to a receiver, a slow one stops the reading, and
+        for a program rundesk also writes to that is the deadlock above."""
+        taken = Collected()
+
+        async def dawdles(record):
+            await asyncio.sleep(0.2)
+            taken(record)
+
+        program = process.Program(
+            script(
+                "import sys",
+                "for n in range(50): sys.stdout.write('n%d\\n' % n)",
+                "sys.stdout.flush()",
+            ),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        began = time.monotonic()
+        result = await asyncio.wait_for(program.wait(sink=dawdles), 20)
+        # Fifty records at a fifth of a second each is ten seconds of receiving. The
+        # program is not waited on for any of it.
+        self.assertLess(time.monotonic() - began, 8.0, "the receiver held the program up")
+        self.assertTrue(result.ok)
+
+    async def test_a_receiver_that_never_reads_is_told_what_it_missed(self):
+        """R-PROC-17 — what is held is bounded, so a receiver far enough behind loses
+        records. Losing them silently would render a wrong answer with nothing to say it
+        was wrong, so the loss is handed over in the place it happened."""
+        self.addCleanup(setattr, process, "HELD_BYTES", process.HELD_BYTES)
+        process.HELD_BYTES = 200
+        held = process.Held()
+        for n in range(100):
+            held.offer(b"record %03d" % n)
+        held.close()
+        got = []
+        while True:
+            it = await held.next()
+            if it is None:
+                break
+            got.append(it)
+        self.assertIsInstance(got[0], process.Gap, "records went missing with nothing said")
+        self.assertEqual("fell behind", got[0].why)
+        self.assertEqual(b"record 099", got[-1], "it kept the beginning and lost the end")
+        self.assertEqual(100, got[0].records + len(got) - 1)
+
+    async def test_what_is_held_for_a_receiver_is_bounded_in_bytes(self):
+        """R-PROC-12 — a bound counted in records bounds nothing, since one record may
+        be megabytes. The bound that matters is on what is actually held."""
+        self.addCleanup(setattr, process, "HELD_BYTES", process.HELD_BYTES)
+        process.HELD_BYTES = 1000
+        held = process.Held()
+        for _ in range(50):
+            held.offer(b"y" * 500)
+        self.assertLessEqual(held._bytes, 1000 + 500, "it held more than it is allowed")
+        self.assertGreater(held.lost, 0)
+
+
+class RecordsWholeOrNotAtAll(Quickened):
+    async def test_a_record_is_never_passed_on_in_pieces(self):
+        """R-PROC-18 — half a record is not a smaller record, it is a corrupt one, and a
+        receiver lenient enough to take it turns a loud failure into a wrong answer."""
+        self.addCleanup(setattr, process, "MAX_RECORD_BYTES", process.MAX_RECORD_BYTES)
+        process.MAX_RECORD_BYTES = 1000
+        program = process.Program(
+            script(
+                "import sys",
+                "sys.stdout.write('y' * 5000 + '\\n')",
+                "sys.stdout.write('{\"after\":1}\\n')",
+                "sys.stdout.flush()",
+            ),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        taken = Collected()
+        await asyncio.wait_for(program.wait(sink=taken), 15)
+        self.assertEqual([b'{"after":1}'], taken.records,
+                         "the oversize record was passed on in pieces")
+        self.assertEqual(1, len(taken.gaps), "a record went missing with nothing said")
+        self.assertEqual("too large", taken.gaps[0].why)
+        self.assertEqual([b'{"after":1}'], taken.taken[1:],
+                         "the framing did not survive the record that was dropped")
+
+    async def test_a_record_at_the_limit_is_still_passed_on_whole(self):
+        """R-PROC-18 — the cap drops what is past it, not what reaches it."""
+        self.addCleanup(setattr, process, "MAX_RECORD_BYTES", process.MAX_RECORD_BYTES)
+        process.MAX_RECORD_BYTES = 200000   # several reads' worth
+        program = process.Program(
+            script("import sys; sys.stdout.write('y' * 199999 + '\\n'); sys.stdout.flush()"),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        taken = Collected()
+        await asyncio.wait_for(program.wait(sink=taken), 15)
+        self.assertEqual([b"y" * 199999], taken.records)
+        self.assertEqual([], taken.gaps)
+
+    async def test_a_record_split_across_reads_arrives_whole(self):
+        """R-PROC-18 — a record is a unit, and where the reads happened to land is not
+        something anything downstream may be made to care about."""
+        program = process.Program(
+            script("import sys; sys.stdout.write('z' * 300000 + '\\n'); sys.stdout.flush()"),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        taken = Collected()
+        await asyncio.wait_for(program.wait(sink=taken), 15)
+        self.assertEqual([b"z" * 300000], taken.records)
+
+    async def test_a_record_the_program_did_not_finish_is_not_passed_on_as_one(self):
+        """R-PROC-18 — delivered, it would be indistinguishable from a whole one, and
+        nothing downstream could tell a forgotten ending from a program killed
+        mid-sentence."""
+        program = process.Program(
+            script(
+                "import os, sys",
+                "sys.stdout.write('{\"whole\":1}\\n{\"half\"')",
+                "sys.stdout.flush()",
+                "os._exit(1)",
+            ),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        taken = Collected()
+        result = await asyncio.wait_for(program.wait(sink=taken), 15)
+        self.assertEqual([b'{"whole":1}'], taken.records, "half a record was passed on")
+        self.assertEqual(["unterminated"], [gap.why for gap in taken.gaps])
+        self.assertEqual(process.FAILED, result.reason)
+
+    async def test_bytes_that_are_not_text_survive_whole(self):
+        """R-PROC-18 — a record is a unit for a parser, not prose for a person. Decoded,
+        a byte it cannot read becomes a question mark nothing can tell from one the
+        program meant."""
+        program = process.Program(
+            script("import sys; sys.stdout.buffer.write(b'\\xff\\xfe\\x00ok\\n'); "
+                   "sys.stdout.buffer.flush()"),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        taken = Collected()
+        await asyncio.wait_for(program.wait(sink=taken), 15)
+        self.assertEqual([b"\xff\xfe\x00ok"], taken.records)
+
+    async def test_a_carriage_return_before_the_ending_is_not_part_of_the_record(self):
+        """R-PROC-18 — one, and only at the end. Anywhere else it is data."""
+        program = process.Program(
+            script("import sys; sys.stdout.buffer.write(b'{\"a\":1}\\r\\nwith\\rin\\n'); "
+                   "sys.stdout.buffer.flush()"),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        taken = Collected()
+        await asyncio.wait_for(program.wait(sink=taken), 15)
+        self.assertEqual([b'{"a":1}', b"with\rin"], taken.records)
+
+    async def test_a_record_too_big_before_its_ending_arrives_is_dropped_and_the_rest_kept(self):
+        """R-PROC-18 — the shape the dropping exists for, and the one an oversize record
+        arriving whole inside a single read never reaches: one so large it must be given
+        up on before its ending has been seen at all. What matters is that the framing
+        survives it, so the record after it is not swallowed too."""
+        self.addCleanup(setattr, process, "MAX_RECORD_BYTES", process.MAX_RECORD_BYTES)
+        process.MAX_RECORD_BYTES = 20000       # well under a single read
+        program = process.Program(
+            script(
+                "import sys",
+                # No ending for a long time, so it is given up on mid-flight, across
+                # several reads — and only then finished.
+                "sys.stdout.write('y' * 400000)",
+                "sys.stdout.flush()",
+                "sys.stdout.write('\\n{\"after\":1}\\n')",
+                "sys.stdout.flush()",
+            ),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        taken = Collected()
+        await asyncio.wait_for(program.wait(sink=taken), 20)
+        self.assertEqual([b'{"after":1}'], taken.records,
+                         "the framing did not recover from the record it gave up on")
+        self.assertEqual([(1, "too large")], [(g.records, g.why) for g in taken.gaps],
+                         "giving up on one record was counted more than once")
+
+    async def test_two_programs_with_receivers_run_at_once_without_crossing(self):
+        """R-PROC-10, R-PROC-17 — what is held for a receiver is the first new state this
+        module has grown per program, and the whole architecture rests on nothing being
+        shared between two of them."""
+        programs, takers = [], []
+        for tag in ("alpha", "beta"):
+            program = process.Program(
+                script("import sys",
+                       f"for n in range(20): sys.stdout.write('{tag}-%d\\n' % n)",
+                       "sys.stdout.flush()"),
+                errors_apart=True, silence=None,
+            )
+            await program.start()
+            taken = Collected()
+            programs.append(asyncio.ensure_future(program.wait(sink=taken)))
+            takers.append((tag, taken))
+        await asyncio.wait_for(asyncio.gather(*programs), 20)
+        for tag, taken in takers:
+            self.assertEqual(20, len(taken.records))
+            self.assertTrue(all(one.startswith(tag.encode()) for one in taken.records),
+                            f"{tag} received another program's records")
+
+    async def test_a_receiver_that_fails_after_being_awaited_is_survived_too(self):
+        """R-PROC-17 — a receiver that does any real work fails from inside what it hands
+        back, not from being called. That is the likely shape in practice, and the one a
+        tidy-up moving the awaiting out of the guard would silently stop covering."""
+        async def fails_later(_record):
+            await asyncio.sleep(0)
+            raise RuntimeError("this receiver is broken, but only once it gets going")
+
+        program = process.Program(
+            script("import sys; sys.stdout.write('{\"a\":1}\\n'); sys.stdout.flush()"),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        result = await asyncio.wait_for(program.wait(sink=fails_later), 20)
+        self.assertTrue(result.ok, "the receiver failing was blamed on the program")
+        self.assertEqual(1, program.refused)
+
+    async def test_records_are_refused_from_a_program_whose_streams_are_folded(self):
+        """R-PROC-15, R-PROC-18 — folded together, everything the program says went wrong
+        arrives in the middle of what is meant to be parsed. The records would be
+        corrupted by the very warning that explains why, and nothing downstream could tell
+        that apart from the program talking nonsense."""
+        program = process.Program(forever(), silence=None)   # streams folded, the default
+        await program.start()
+        with self.assertRaises(ValueError):
+            await program.wait(sink=Collected())
+        await program.end()
+
+    async def test_an_empty_record_is_still_a_record(self):
+        """R-PROC-18 — a bare ending is a keepalive in more than one protocol, and
+        whether it means anything is not this module's to decide."""
+        program = process.Program(
+            script("import sys; sys.stdout.write('\\n\\nlast\\n'); sys.stdout.flush()"),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        taken = Collected()
+        await asyncio.wait_for(program.wait(sink=taken), 15)
+        self.assertEqual([b"", b"", b"last"], taken.records)
+
+
+class WhereAProgramStartsFrom(Quickened):
+    async def test_a_program_starts_where_rundesk_puts_it(self):
+        """R-PROC-19 — an agent brain works on a project rather than in the abstract, and
+        the gateway is started by the machine in a directory nobody chose."""
+        workspace = self.scratch()
+        result = await process.run(script("import os; print(os.getcwd())"), cwd=workspace)
+        self.assertEqual(workspace.resolve(), Path(result.output.strip()).resolve())
+
+    async def test_a_program_rundesk_gives_no_directory_starts_where_rundesk_did(self):
+        """R-PROC-19 — the default is unchanged, so nothing that ran before moves."""
+        result = await process.run(script("import os; print(os.getcwd())"))
+        self.assertEqual(str(Path.cwd().resolve()), str(Path(result.output.strip()).resolve()))
+
+
+class WhatAProgramStillGetsByDefault(Quickened):
+    async def test_a_program_is_given_no_input_and_one_stream_unless_rundesk_says_otherwise(self):
+        """R-PROC-14, R-PROC-15 — the guard on both fields. What rundesk only reads must
+        go on getting exactly the treatment it has always had."""
+        program = process.Program(forever())
+        self.assertFalse(program.takes_input)
+        self.assertFalse(program.errors_apart)
+        await program.start()
+        self.assertIsNone(program._proc.stdin, "input was opened on a program nobody writes to")
+        self.assertIsNone(program._proc.stderr, "the streams were kept apart uninvited")
+        await program.end()
+
+    async def test_what_went_wrong_still_arrives_in_the_order_it_was_said(self):
+        """R-PROC-3 — folded together unless asked otherwise, which is what makes what a
+        program said readable in the order it said it."""
+        result = await process.run(
+            script(
+                "import sys",
+                "sys.stdout.write('first\\n'); sys.stdout.flush()",
+                "sys.stderr.write('second\\n'); sys.stderr.flush()",
+            ),
+        )
+        self.assertEqual(["first", "second"], result.output.splitlines())
+
+
 if __name__ == "__main__":
     unittest.main()

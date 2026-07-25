@@ -23,6 +23,16 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   reproduced hang and reads exactly like a deadlock in your own code.
 - `asyncio.wait({a, b})` returns **instantly, forever** once one of them is already done — a completed
   future stays done. Drop it from the set after it fires, or the loop spins at full speed.
+- Giving a program `stderr=PIPE` **without something reading it deadlocks the program**, and it presents
+  half an hour later as a perfectly healthy one having gone quiet (`SILENT`), which sends you looking
+  anywhere but here. Anything that opens a second stream must start a task that drains it to EOF for the
+  program's whole life, whether or not the caller wants what is on it.
+- `StreamWriter.write()` **never blocks and never raises** — on a program that has gone it silently
+  discards what it was given, and asyncio swallows the `BrokenPipeError` without even reaching the loop's
+  exception handler. `await drain()` is the *only* place a failed write is reported. Never write without it.
+- A module-level constant used as a **default argument** (`def __init__(self, held=HELD_BYTES)`) is bound
+  once, when the file is read, so a test that monkeypatches the constant changes nothing and the case
+  passes against unbounded behaviour. Resolve it in the body: `held = HELD_BYTES if held is None else held`.
 - A test that builds a `Gateway` without `RUNDESK_RUN_DIR` **and** `RUNDESK_LOG_DIR` pointed at scratch
   writes into the real `~/.rundesk`. The suite did, and left nine log files in the owner's home. Point
   logs somewhere **outside** the run directory too, or the "leaves nothing behind" cases trip over them.

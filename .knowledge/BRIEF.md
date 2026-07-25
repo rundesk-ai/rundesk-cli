@@ -36,7 +36,9 @@ supervises nothing itself; it hands that to what the machine already has.
 - **Active areas:** the command surface and how it describes itself; install, update and uninstall; which
   version this install is on, and which has been published; the gateway — starting one, keeping it up,
   saying what it is doing, and ending everything it started when it goes; the programs it runs, which are
-  ended on silence rather than on a clock, because a session may legitimately take hours; and schedules,
+  ended on silence rather than on a clock, because a session may legitimately take hours, and which are
+  read either as words for a person or as whole records for something that parses them — that second kind
+  being written back to while it runs, which is how an agent brain will be reached; and schedules,
   which are per gateway so that an agent's are its own, are never run late and never overlap.
 - **Out of scope:** agents, provider brains, chat channels, turns and transcripts. Those verbs are
   registered and answer "coming soon" until each is built. rundesk also does not supervise: keeping a

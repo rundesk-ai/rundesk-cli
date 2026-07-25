@@ -49,7 +49,11 @@ Putting the schedule history with the run state erased it on every ordinary rest
 - `src/rundesk_cli/process.py` — a program rundesk runs, and how it keeps hold of it: its own session so
   ending it ends the whole tree, silence rather than duration as the failure, output streamed and never
   accumulated. Knows nothing of gateways or agents, and holds no state of its own, so any number of
-  programs run at once.
+  programs run at once. Two ways of reading one, sharing every rule about when to stop: output **meant to
+  be read** goes line by line to the caller as it always has, and output **meant to be parsed** goes as
+  whole records through what is held for a receiver — kept apart from what the program says went wrong,
+  written back to while it runs, and never split, so that a slow or failing receiver can neither hold up
+  the program nor end it.
 - `src/rundesk_cli/gateway.py` — the part that stays running. One per name from the outset, since a
   gateway per agent is how one agent is cycled without disturbing the rest. Owns every program started
   through it, and proves it is alive with a lock the kernel drops when the process dies. Writes what
