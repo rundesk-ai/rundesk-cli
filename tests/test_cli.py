@@ -54,7 +54,10 @@ def run(argv: list[str], published: str | None = None) -> tuple[int, str, str]:
     """
     out, err = io.StringIO(), io.StringIO()
     real = cli.updater.latest_version_online
-    cli.updater.latest_version_online = lambda: published
+    # Both halves, the way the real look-up answers: which kind of nothing it was
+    # is part of the answer rather than something left behind for the caller.
+    cli.updater.latest_version_online = lambda: (
+        published, None if published else cli.updater.UNREACHABLE)
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = cli.main(argv, gateways=FakeGateways(), machine=FakeMachine())
@@ -135,7 +138,7 @@ class BuiltCommandTests(unittest.TestCase):
 
     def test_version_check_reports_against_what_is_published(self):
         # No network: the updater takes its source of truth as an argument.
-        code = cli.updater.run(cli.REPO_ROOT, "0.1.0", check_only=True, latest=lambda: "v9.9.9")
+        code = cli.updater.run(cli.REPO_ROOT, "0.1.0", check_only=True, latest=lambda: ("v9.9.9", None))
         self.assertEqual(code, 0)
 
     def test_uninstall_hands_the_job_to_the_installer(self):
@@ -186,7 +189,7 @@ class BehindOrCurrentTests(unittest.TestCase):
         moved = []
         code = cli.updater.run(
             cli.REPO_ROOT, __version__, check_only=True,
-            latest=lambda: "v99.0.0", apply=lambda root, tag: moved.append(tag) or 0,
+            latest=lambda: ("v99.0.0", None), apply=lambda root, tag: moved.append(tag) or 0,
         )
         self.assertEqual(code, 0)
         self.assertEqual(moved, [], "--check updated the install")
@@ -222,6 +225,7 @@ class FakeGateways:
     # it rather than keeping a second copy that can drift from the real one.
     checked = staticmethod(real_gateway.checked)
     NotAName = real_gateway.NotAName
+    Unreadable = real_gateway.Unreadable
 
     class AlreadyRunning(Exception):
         pass
@@ -237,7 +241,11 @@ class FakeGateways:
 
     def __init__(self, standing=(), working=None, refuses=None, written=None,
                  stops_after=None, starts_after=None, becomes=None,
-                 schedules=None, ran_schedules=None):
+                 schedules=None, ran_schedules=None, unreadable=()):
+        #: Gateways whose schedules file is there and cannot be read. Every way in refuses
+        #: alike, because the command surface turned that into "there is nothing there" on
+        #: all three of them.
+        self._unreadable = set(unreadable)
         self._standing = list(standing)
         self._stops_after = stops_after
         self._starts_after = starts_after
@@ -275,16 +283,23 @@ class FakeGateways:
     def what_is_running(self, name):
         return self._working.get(name, [])
 
+    def _still_readable(self, name):
+        if name in self._unreadable:
+            raise self.Unreadable(f"{name}.json could not be read as schedules")
+
     def scheduled(self, name):
         from rundesk_cli import schedule
+        self._still_readable(name)
         return schedule.read(self._written_schedules.get(name, []))
 
     def written_schedules(self, name):
+        self._still_readable(name)
         return list(self._written_schedules.get(name, []))
 
     @contextlib.contextmanager
     def changing_schedules(self, name):
         """Read, change, write back — the shape the real one holds a lock across."""
+        self._still_readable(name)
         keeping = list(self._written_schedules.get(name, []))
         yield keeping
         self._written_schedules[name] = keeping
@@ -715,6 +730,28 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("good", said)
         self.assertIn("NOT UNDERSTOOD", said)
+
+    def test_listing_schedules_that_cannot_be_read_never_reports_having_none(self):
+        """R-SCH-17 — before any destructive change, the control surface had already
+        turned "cannot read the configuration" into a healthy empty state: it printed
+        NO SCHEDULES and exited zero for a file that still held every one of them."""
+        code, said = drive(["schedules"], self._gateways(unreadable={"gateway"}))
+        self.assertEqual(1, code)
+        self.assertNotIn("NO SCHEDULES", said)
+        self.assertIn("UNREADABLE", said)
+
+    def test_changing_schedules_that_cannot_be_read_says_nothing_was_changed(self):
+        """R-SCH-17 — the owner needs to know their schedules are still there. Every way
+        in is refused alike, because every one of them wrote an empty list over the file."""
+        for asked in (["schedules", "add", "new", "--when", "* * * * *", "--run", "/bin/echo"],
+                      ["schedules", "remove", "nightly"],
+                      ["schedules", "off", "nightly"],
+                      ["schedules", "on", "nightly"]):
+            with self.subTest(asked=asked[1]):
+                code, said = drive(asked, self._gateways(unreadable={"gateway"}))
+                self.assertEqual(1, code)
+                self.assertIn("UNREADABLE", said)
+                self.assertIn("nothing was changed", said)
 
     def test_a_schedule_is_added_and_shows_when_it_next_runs(self):
         """R-SCH-1, R-SCH-8"""

@@ -73,33 +73,74 @@ LOG_KEEP = 3
 
 
 @contextlib.contextmanager
-def changing_schedules(name: str, where: Path | None = None):
-    """Read this gateway's schedules, change them, and write them back — alone.
+def changing(target: Path, empty, what: str, durable: bool = False):
+    """Read this file, change it, and write it back — alone, and whole.
 
-    Held for the whole read-and-write, because writing whole is not the same as changing
-    alone: two commands that each read the same list and each write theirs back leave one
-    change gone, with both having reported success. The lock is the one the kernel drops
-    however the process holding it ends, so a command that dies mid-change blocks nothing.
+    The one place a file rundesk keeps is read, decided on and written under a single
+    hold. Writing whole is not the same as changing alone: two writers that each read the
+    same contents and each write theirs back leave one change gone, with both having
+    reported success (R-GW-27). The lock is the one the kernel drops however the process
+    holding it ends, so a writer that dies mid-change blocks nothing.
+
+    `durable` also asks the machine to put it on the disk before this returns. Renaming
+    into place is enough against a reader arriving mid-write and against a process that
+    dies. It is not enough against power loss, which is exactly the moment a run that
+    already happened must not come back looking as though it never did (R-SCH-20). Not
+    paid on what a gateway rewrites every few seconds — only on what records what has
+    already happened.
     """
-    target = schedules_path(name, where)
     target.parent.mkdir(parents=True, exist_ok=True)
     guard = os.open(target.with_suffix(".changing"), os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(guard, fcntl.LOCK_EX)
-        keeping = written_schedules(name, where)
+        # Read inside the hold, and refused before anything is yielded: a file that could
+        # not be parsed still holds everything in it as recoverable text (R-SCH-17).
+        keeping = _understood(target, empty, what)
+        before = json.dumps(keeping, indent=2)
         yield keeping
-        _written_whole(target, json.dumps(keeping, indent=2) + "\n")
+        after = json.dumps(keeping, indent=2)
+        # A writer that decided to change nothing writes nothing (R-SCH-19). Rewriting an
+        # unchanged file puts all of it at the mercy of a failure nobody asked to risk.
+        if after != before:
+            _written_whole(target, after + "\n", durable)
     finally:
         fcntl.flock(guard, fcntl.LOCK_UN)
         os.close(guard)
 
 
+@contextlib.contextmanager
+def changing_schedules(name: str, where: Path | None = None):
+    """Read this gateway's schedules, change them, and write them back — alone."""
+    with changing(schedules_path(name, where), [], "schedules") as keeping:
+        yield keeping
+
+
+def _understood(target: Path, empty, what: str):
+    """What is written there, refusing a file that is there and cannot be read.
+
+    The one place that tells "never written" from "written and unreadable" (R-SCH-17).
+    `empty` is what a file nobody has written yet means, and its type is what this file is
+    supposed to be — a schedules file holding an object is as unreadable as one holding a
+    stray character, and replacing either with nothing loses the same thing.
+    """
+    state, said = _read(target)
+    if state == MISSING:
+        return empty  # never written, which is the ordinary case for a new gateway
+    if state == UNREADABLE or not isinstance(said, type(empty)):
+        raise Unreadable(f"{target} could not be read as {what}")
+    return said
+
+
 def written_schedules(name: str, where: Path | None = None) -> list:
     """What is written down for this gateway, as written — including what cannot be
     understood, because removing a broken schedule is the main thing anyone wants to do
-    with one."""
-    said = _read_json(schedules_path(name, where), [])
-    return said if isinstance(said, list) else []
+    with one.
+
+    That tolerance is for a schedule nobody can make sense of, never for a file nobody
+    can read: one is a row the owner can be shown and told to remove, and the other is
+    every row at once, reported as none (R-SCH-17).
+    """
+    return _understood(schedules_path(name, where), [], "schedules")
 
 
 def logs_home() -> Path:
@@ -160,25 +201,82 @@ def home() -> Path:
     return Path(os.environ.get("RUNDESK_RUN_DIR") or Path.home() / ".rundesk" / "run")
 
 
-def _written_whole(target: Path, text: str) -> None:
+def _written_whole(target: Path, text: str, durable: bool = False) -> None:
     """Put this where it belongs, whole, in one move.
 
     Beside and then renamed: a reader arriving mid-write would otherwise find half a
     file, and half a record reads as a gateway that cannot say what version it is, while
     half a schedules file reads as a gateway with no schedules at all.
+
+    `durable` waits for the machine to say it is really there before returning (R-SCH-20).
+    Both halves are needed and neither implies the other: the contents have to reach the
+    disk, and so does the directory entry naming them, or the rename is the thing that is
+    lost. Not asked for on what is rewritten every few seconds — the cost is real, and a
+    beat that is a moment out of date costs nothing.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     beside = target.with_suffix(f".{os.getpid()}.writing")
-    beside.write_text(text)
+    if not durable:
+        beside.write_text(text)
+        os.replace(beside, target)
+        return
+    with open(beside, "w", encoding="utf-8") as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(beside, target)
+    folder = os.open(target.parent, os.O_RDONLY)
+    try:
+        os.fsync(folder)
+    finally:
+        os.close(folder)
+
+
+#: What a file rundesk keeps turned out to be when it went to read it. `MISSING` and
+#: `UNREADABLE` are the same absence and opposite decisions: nothing is lost by writing over
+#: what was never written, and everything is lost by writing over what still holds the
+#: owner's schedules as recoverable text (R-SCH-17).
+MISSING = "missing"
+UNREADABLE = "unreadable"
+WRITTEN = "written"
+
+
+class Unreadable(Exception):
+    """A file that is there and could not be read or understood (R-SCH-17)."""
+
+
+def _read(path: Path) -> tuple[str, object]:
+    """What is written there, and which of three things happened when we looked.
+
+    The one place that decides what an unreadable file means. Four readers each worked it
+    out for themselves, and they disagreed: one reported a broken record as an empty one,
+    one wrote an empty list over a file it could not parse, and one read "I could not tell"
+    as "there is nothing left running" and deleted the record naming it.
+    """
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return MISSING, None
+    except OSError:
+        # There, and the machine would not hand it over — a stalled volume, a permission,
+        # a descriptor limit. Nothing about its contents is known, least of all that it
+        # is empty.
+        return UNREADABLE, None
+    try:
+        return WRITTEN, json.loads(text)
+    except ValueError:
+        return UNREADABLE, None
 
 
 def _read_json(path: Path, missing):
-    """What is written there, or `missing` if there is nothing readable to read."""
-    try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError):
-        return missing
+    """What is written there, or `missing` if there is nothing readable to read.
+
+    For readers that report rather than decide: to them, a file that is not there and one
+    they could not read are the same nothing. Anything about to *write* asks `_read`
+    instead, because to a writer they are opposites.
+    """
+    state, said = _read(path)
+    return said if state == WRITTEN else missing
 
 
 def schedules_home() -> Path:
@@ -387,29 +485,136 @@ def _note_interrupted(name: str, where: Path | None, work: str, why: str,
                       pgid: int | None = None, ended: bool = False) -> None:
     """Write down that a piece of work was interrupted (R-GW-23).
 
-    Read, added to, and written back — not written from something held in memory. The one
-    thing that writes here is not always the gateway whose file it is: a gateway sweeping
-    what an abandoned name left behind writes into *that* name's file (R-GW-21), and two
-    writers working from their own snapshots is how one of them loses the other's entry.
+    Read, added to and written back under one hold (R-GW-27). The thing that writes here is
+    not always the gateway whose file it is: a gateway sweeping what an abandoned name left
+    behind writes into *that* name's file (R-GW-21), so two writers each working from their
+    own snapshot is the ordinary case on a machine bringing several gateways up at once —
+    and half of everything recorded was lost every time it happened. The hold is taken on
+    the file being changed rather than on the gateway doing the changing, which is what
+    makes it cover a sweeper racing the file's own owner as well as two sweepers racing.
 
     `ended` is the distinction worth keeping. Work rundesk ended and work it could not
     show was its to end are both interrupted, and only one of them is definitely gone.
     """
     from rundesk_cli import schedule
 
-    said = what_was_interrupted(name, where)
-    said[work] = {
-        "at": datetime.now().strftime(schedule.A_MINUTE), "why": why,
-        "pgid": pgid, "ended": ended,
-    }
-    if len(said) > KEPT_INTERRUPTIONS:
-        oldest = sorted(said, key=lambda one: said[one].get("at", ""))
-        for one in oldest[: len(said) - KEPT_INTERRUPTIONS]:
-            said.pop(one, None)
     try:
-        _written_whole(interrupted_path(name, where), json.dumps(said, indent=2))
-    except OSError:
+        with changing(interrupted_path(name, where), {}, "interruptions", durable=True) as said:
+            said[work] = {
+                "at": datetime.now().strftime(schedule.A_MINUTE), "why": why,
+                "pgid": pgid, "ended": ended,
+            }
+            if len(said) > KEPT_INTERRUPTIONS:
+                # An entry a hand edit left behind is not a record and has no time to sort
+                # on. `what_was_interrupted` already passes over those, and the cap must
+                # not be the one thing here that falls over on one.
+                oldest = sorted(said, key=lambda one: said[one].get("at", "")
+                                if isinstance(said[one], dict) else "")
+                for one in oldest[: len(said) - KEPT_INTERRUPTIONS]:
+                    said.pop(one, None)
+    except (OSError, Unreadable):
         pass  # a gateway that cannot write this down still has to get on with starting
+
+
+def _ask_group(pgid: int, sig: int) -> bool:
+    """Ask this process group to go, and say whether the asking got through.
+
+    Already gone is the thing being asked for, so it counts as through. Anything else — a
+    permission, a machine that will not — is a failure to ask, and an escalation that never
+    reached its second signal has not been carried out (R-GW-28).
+    """
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        return True   # it went between being found and being asked, which is the ask granted
+    except OSError:
+        return False
+    return True
+
+
+@dataclass
+class Left:
+    """What became of one piece of work a gateway that is gone left running."""
+
+    #: rundesk dealt with this entry and may stop naming it.
+    swept: bool
+    #: It is definitely gone. Distinct from `swept`: everything that could be done to a
+    #: group can have been done and something in it still answer (R-GW-17).
+    ended: bool
+    #: What to write down about it, in the owner's words (R-GW-23).
+    why: str
+    #: Still out there, still ours, and nothing left naming it but our record.
+    keep: bool
+
+
+def _end_left_running(name: str, was, log: logging.Logger, present=None, started=None,
+                      ask=None, gone_within=None) -> Left:
+    """End one piece of work a gateway that is gone left running, and say what became of it.
+
+    Every question this asks of the live world — is the group there, when did it start, will
+    it take a signal, has it gone yet — arrives as an operation rather than being reached
+    for, so the whole decision table can be scripted (R-GW-28). The cases that matter most
+    are the ones a real process cannot be made to produce on demand: a signal the machine
+    refuses, and an identity that changes between two looks.
+
+    Failing to send, or stopping short of the second signal, leaves the entry unswept and
+    kept. Everything else is reported as swept, and `ended` carries whether it really went.
+    """
+    present = present or _still_there
+    started = started or started_at
+    ask = ask or _ask_group
+    gone_within = gone_within or _group_went
+
+    pgid, since = (was.get("pgid"), was.get("since")) if isinstance(was, dict) else (was, None)
+    if not isinstance(pgid, int):
+        log.warning("left '%s' alone: the record does not say what was running", name)
+        return Left(False, False, "the record does not say what was running", False)
+    if not present(pgid):
+        # The ordinary case: it went when its gateway did. Nothing to end, and still work
+        # that never finished, which is the thing nobody was being told.
+        return Left(False, True, "the gateway it was running under is gone", False)
+    if not since:
+        log.warning("left '%s' (group %s) alone: the record cannot prove it is ours", name, pgid)
+        # Still there, and still unfinished. Kept for the same reason as one that would not
+        # go: the record we are about to write replaces the only thing naming it.
+        return Left(False, False, "the record could not prove it was ours to end", True)
+    if started(pgid) != since:
+        # The number now belongs to something that is not ours. Leaving a stray program
+        # running is bad; a tree-kill aimed at a stranger because a number came round again
+        # is very much worse, and has happened to others. Not kept, either — naming a
+        # stranger in our record is how the next start comes to aim at it.
+        log.warning("left '%s' alone: group %s is no longer the process we started", name, pgid)
+        return Left(False, False, "its group now belongs to something that is not ours", False)
+
+    log.warning("ending '%s' (group %s), left running by a gateway that is gone", name, pgid)
+    gone = carried_out = False
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        if not ask(pgid, sig):
+            break
+        if gone_within(pgid, ORPHAN_GRACE_SECONDS):
+            gone = carried_out = True
+            break
+    else:
+        # Both were sent and it was still answering at the last look. Asked once more
+        # rather than waited on again: the kill lands inside the pause that just elapsed.
+        carried_out = True
+        gone = not present(pgid)
+    if not carried_out:
+        # The escalation stopped short, so the group has not had everything done to it that
+        # can be. Counting it swept would report a success rundesk did not earn (R-GW-28),
+        # and dropping it would throw away the only record naming a live process tree.
+        log.error("could not end '%s' (group %s): the machine would not take the signal",
+                  name, pgid)
+        return Left(False, False, "rundesk could not end it", True)
+    if not gone:
+        # Asked and then insisted, and something still answers. Said out loud, because a
+        # group that outlives being killed is not a thing to pass over — but still counted
+        # as swept, because everything that can be done to it has been. What answers may be
+        # no more than a leader nobody has reaped yet, and whether a reaped-but-not-
+        # collected leader answers at all differs by machine: the same sweep looked
+        # complete on one and unfinished on another, on that alone.
+        log.error("ended '%s' (group %s), and something in it still answers", name, pgid)
+    return Left(True, gone, "the gateway it was running under is gone", False)
 
 
 def _sweep_predecessor(record: Path, log: logging.Logger, noting=None,
@@ -427,10 +632,7 @@ def _sweep_predecessor(record: Path, log: logging.Logger, noting=None,
     narrow — the group leader must have exited, been reaped, and had its exact number
     reissued to another leader — and it is named in the contract's open questions.
     """
-    try:
-        left = json.loads(record.read_text())
-    except (OSError, ValueError):
-        return []
+    left = _read_json(record, None)
     if not isinstance(left, dict) or not isinstance(left.get("working"), dict):
         return []
     swept = []
@@ -439,52 +641,13 @@ def _sweep_predecessor(record: Path, log: logging.Logger, noting=None,
     # is only whether it is definitely gone, and that is what `ended` carries (R-GW-23).
     said = noting if noting is not None else (lambda *_args, **_kw: None)
     for name, was in left["working"].items():
-        pgid, since = (was.get("pgid"), was.get("since")) if isinstance(was, dict) else (was, None)
-        if not isinstance(pgid, int):
-            log.warning("left '%s' alone: the record does not say what was running", name)
-            said(name, "the record does not say what was running", None, False)
-            continue
-        if not _still_there(pgid):
-            # The ordinary case: it went when its gateway did. Nothing to end, and still
-            # work that never finished, which is the thing nobody was being told.
-            said(name, "the gateway it was running under is gone", pgid, True)
-            continue
-        if not since:
-            log.warning("left '%s' (group %s) alone: the record cannot prove it is ours", name, pgid)
-            said(name, "the record could not prove it was ours to end", pgid, False)
-            if surviving is not None:
-                # Still there, and still unfinished. Carried for the same reason as one
-                # that would not go: our record replaces the only thing naming it.
-                surviving[name] = was
-            continue
-        if started_at(pgid) != since:
-            # The number now belongs to something that is not ours. Leaving a stray
-            # program running is bad; a tree-kill aimed at a stranger because a number
-            # came round again is very much worse, and has happened to others.
-            log.warning(
-                "left '%s' alone: group %s is no longer the process we started", name, pgid
-            )
-            said(name, "its group now belongs to something that is not ours", pgid, False)
-            continue
-        log.warning("ending '%s' (group %s), left running by a gateway that is gone", name, pgid)
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            try:
-                os.killpg(pgid, sig)
-            except OSError:
-                break
-            if _group_went(pgid, ORPHAN_GRACE_SECONDS):
-                break
-        gone = _group_went(pgid, ORPHAN_GRACE_SECONDS)
-        said(name, "the gateway it was running under is gone", pgid, gone)
-        if not gone:
-            # Asked and then insisted, and something still answers. Said out loud, because
-            # a group that outlives being killed is not a thing to pass over — but still
-            # counted as ended, because everything that can be done to it has been. What
-            # answers may be no more than a leader nobody has reaped yet, and whether a
-            # reaped-but-not-collected leader answers at all differs by machine: the same
-            # sweep looked complete on one and unfinished on another, on that alone.
-            log.error("ended '%s' (group %s), and something in it still answers", name, pgid)
-        swept.append(name)
+        became = _end_left_running(name, was, log)
+        pgid = was.get("pgid") if isinstance(was, dict) else was
+        said(name, became.why, pgid if isinstance(pgid, int) else None, became.ended)
+        if became.swept:
+            swept.append(name)
+        elif became.keep and surviving is not None:
+            surviving[name] = was
     return swept
 
 
@@ -498,39 +661,88 @@ def _sweep_strays(where: Path, mine: str, log: logging.Logger,
     therefore looks at every record, not just its own (R-GW-23).
 
     A record whose gateway is running is left strictly alone: it is that gateway's, and
-    it is the one thing here that is not ours to touch.
+    it is the one thing here that is not ours to touch. Its name is *taken* for the whole
+    reckoning rather than asked about first, because the answer to a question stops being
+    true the moment after it is given (R-GW-29).
     """
     swept: list[str] = []
     for record in sorted(where.glob("*.json")):
         name = record.stem
-        if name == mine or _held(name, where):
+        if name == mine:
             continue
-        # Into *that* gateway's file, not ours: the work was its, and its name is where
-        # anything asking after it would look (R-GW-21, R-GW-23).
-        left = _sweep_predecessor(
-            record, log,
-            lambda work, why, pgid, ended, whose=name: _note_interrupted(
-                whose, schedules, work, why, pgid, ended),
-        )
-        if left:
-            log.warning("ended work left by '%s', a gateway nobody has started since: %s",
-                        name, ", ".join(left))
-            swept += [f"{name}/{one}" for one in left]
-        # Asked again, immediately before removing anything: a gateway of this name can
-        # have claimed it and written a fresh record while this pass was running, and
-        # that record is the live one. Removing it would leave a gateway that is
-        # genuinely up with nothing saying so until its next beat.
-        if not _held(name, where) and not _anything_left(record):
-            record.unlink(missing_ok=True)
+        with _holding_name(name, where) as taken:
+            if not taken:
+                continue  # live, or unanswerable — and neither is ours to touch
+            # Into *that* gateway's file, not ours: the work was its, and its name is where
+            # anything asking after it would look (R-GW-21, R-GW-23).
+            left = _sweep_predecessor(
+                record, log,
+                lambda work, why, pgid, ended, whose=name: _note_interrupted(
+                    whose, schedules, work, why, pgid, ended),
+            )
+            if left:
+                log.warning("ended work left by '%s', a gateway nobody has started since: %s",
+                            name, ", ".join(left))
+                swept += [f"{name}/{one}" for one in left]
+            # No second look needed: nothing of this name could have claimed, recorded or
+            # started anything while the name was held here.
+            if not _anything_left(record):
+                record.unlink(missing_ok=True)
     return swept
 
 
-def _anything_left(record: Path) -> bool:
-    """Does this record still name work that is running?"""
+@contextlib.contextmanager
+def _holding_name(name: str, where: Path):
+    """Take another gateway's name, and keep it for as long as reckoning with it takes.
+
+    Taken and *kept*, rather than asked about. `_held()` answers about the moment it was
+    called, and between that answer and a signal a gateway of that name can claim the name
+    and start work — so an ordinary start ended a live agent's whole process tree
+    (R-GW-29). A gateway claiming holds this same lock across its own predecessor sweep and
+    its first record, so of the two, one always finds the name taken.
+
+    Yields whether it was taken. A name that cannot be taken belongs to a gateway that is
+    live, or to one this process cannot ask about, and both are left alone. That is the
+    opposite default to `standing()`, which is reporting and answers "not running" when it
+    cannot tell (R-GW-9) — being wrong there costs a misleading line, and being wrong here
+    ends somebody else's session.
+    """
+    path = _lock_path(name, where)
     try:
-        said = json.loads(record.read_text())
-    except (OSError, ValueError):
-        return False
+        handle = os.open(path, os.O_RDWR)
+    except FileNotFoundError:
+        # No lock file at all, and one is never removed once made (see `release`), so no
+        # gateway of this name has ever run here and there is nobody to wait for.
+        yield True
+        return
+    except OSError:
+        yield False
+        return
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+    finally:
+        os.close(handle)
+
+
+def _anything_left(record: Path) -> bool:
+    """Does this record still name work that is running?
+
+    The one caller deletes the record when this says no, so an unreadable one answers yes
+    (R-GW-26). A record is the only thing naming a process group nobody owns; reading "I
+    could not tell" as "there is nothing there" throws away the sole means of ever finding
+    it again, and the sweep that could not read it reported having tidied up.
+    """
+    state, said = _read(record)
+    if state == UNREADABLE:
+        return True
     working = said.get("working") if isinstance(said, dict) else None
     if not isinstance(working, dict):
         return False
@@ -644,10 +856,7 @@ def standing(name: str = DEFAULT_NAME, where: Path | None = None) -> Standing:
     """What is true of the gateway of this name right now (R-GW-9, R-GW-10)."""
     where = where or home()
     running = _held(name, where)
-    try:
-        recorded = json.loads(_record_path(name, where).read_text())
-    except (OSError, ValueError):
-        recorded = {}
+    recorded = _read_json(_record_path(name, where), {})
     if not isinstance(recorded, dict):
         recorded = {}
     return Standing(
@@ -681,13 +890,10 @@ def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list
     Read from the record rather than asked of the gateway, because whoever is asking is
     a different process — that is the whole reason the record exists.
     """
-    # Built before the try: a name that is not usable is a mistake to report, and
-    # `NotAName` is a kind of ValueError, so catching one here would swallow the other.
+    # Built first: a name that is not usable is a mistake to report, and `NotAName` is a
+    # kind of ValueError, so a reader that swallowed one would swallow the other.
     record = _record_path(name, where or home())
-    try:
-        said = json.loads(record.read_text())
-    except (OSError, ValueError):
-        return []
+    said = _read_json(record, None)
     working = said.get("working") if isinstance(said, dict) else None
     return sorted(working) if isinstance(working, dict) else []
 
@@ -735,6 +941,12 @@ class Gateway:
         #: rather than collected, because the same work started twice is the failure
         #: this guards (R-GW-15) — two sessions on one conversation answer it twice.
         self.running: dict[str, process.Program] = {}
+        #: When each running program started, asked once and then kept (R-GW-30). A start
+        #: time cannot change, so asking again can only make the answer worse — and the
+        #: asking is a subprocess that fails on exactly the loaded machine where work gets
+        #: left behind. One unanswered look replaced a fingerprint that was correct with
+        #: nothing, and every later gateway then refused to touch the group for good.
+        self._known_since: dict[str, str | None] = {}
         #: The minute each schedule last ran, so one runs once for the time it is due
         #: however often the clock is examined (R-SCH-9). Held by the gateway rather
         #: than by the schedules, which remember nothing.
@@ -841,8 +1053,16 @@ class Gateway:
         since = last_seen(self.name, self.schedules)
         if since is None:
             return
+        try:
+            wanted = scheduled(self.name, self.schedules)[0]
+        except Unreadable as why:
+            # Said, and survived (R-SCH-18). A command refuses when it cannot read this
+            # file, because it was asked to change it. A gateway that refused to start over
+            # it would take everything else it does down with the one thing that is broken.
+            self.log.error("cannot say what fell due while nothing was running: %s", why)
+            return
         was_down_since = datetime.fromtimestamp(since)
-        for one in scheduled(self.name, self.schedules)[0]:
+        for one in wanted:
             if not one.enabled:
                 continue
             missed = schedule.passed_over(one, was_down_since, datetime.now())
@@ -910,7 +1130,7 @@ class Gateway:
                    if isinstance(was, dict) and isinstance(was.get("pgid"), int)
                    and _still_there(was["pgid"])},
                 **{
-                    name: {"pgid": program.pid, "since": started_at(program.pid)}
+                    name: {"pgid": program.pid, "since": self._known_since.get(name)}
                     for name, program in self.running.items()
                     if program.pid is not None
                 },
@@ -973,6 +1193,10 @@ class Gateway:
         self.running[held] = program
         try:
             await program.start()
+            # Asked once, before the record is written, and never asked again (R-GW-30).
+            # Off the loop, because it is a subprocess with a five-second budget and the
+            # loop is what reads everything this gateway's programs are saying.
+            self._known_since[held] = await asyncio.to_thread(started_at, program.pid)
             self._say()  # now it has a process group worth recording
             self.log.info("started '%s' (group %s)", held, program.pid)
             if self._stopping:
@@ -987,6 +1211,7 @@ class Gateway:
             outcome = await program.wait(on_line, sink)
         finally:
             self.running.pop(held, None)
+            self._known_since.pop(held, None)
             self._say()
         if program.errors:
             # What went wrong is not handed to the receiver — nothing parses it — but it
@@ -1139,7 +1364,16 @@ class Gateway:
         """Start everything due at this moment, and say what happened to each."""
         if self._stopping:
             return
-        wanted, refused = scheduled(self.name, self.schedules)
+        try:
+            wanted, refused = scheduled(self.name, self.schedules)
+        except Unreadable as why:
+            # Nothing runs, and it is said once rather than every tick (R-SCH-18). `None`
+            # is the file itself rather than a schedule in it — the coarser version of the
+            # same news the loop below reports row by row.
+            if self._complained.get(None) != str(why):
+                self.log.error("no schedule can run: %s", why)
+                self._complained[None] = str(why)
+            return
         for name, why in refused:
             if self._complained.get(name) != why:
                 self.log.error("schedule '%s' cannot be understood: %s", name, why)
@@ -1242,7 +1476,12 @@ class Gateway:
             minute, outcome = was, f"{outcome} (for {(at or datetime.now()).strftime(schedule.A_MINUTE)})"
         self._outcomes[name] = {"at": minute, "outcome": outcome}
         try:
-            _written_whole(ran_path(self.name, self.schedules), json.dumps(self._outcomes, indent=2))
+            # Durable, and without a hold: only the gateway that owns this name writes here,
+            # and there is one of those at a time (R-GW-4). What it must survive is not
+            # another writer but the machine going down between a firing being written and
+            # the run it authorises happening (R-SCH-20).
+            _written_whole(ran_path(self.name, self.schedules),
+                           json.dumps(self._outcomes, indent=2), durable=True)
         except OSError as why:
             self.log.warning("could not write down what '%s' did: %s", name, why)
             return False

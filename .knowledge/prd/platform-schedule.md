@@ -37,6 +37,10 @@ gateway each, which is how one agent's schedules stay that agent's alone.
 | ✅ | R-SCH-14 | A gateway never runs, reports or alters another gateway's schedules | `a gateway runs only its own schedules`, `schedules are asked for and changed on one gateway only` |
 | ✅ | R-SCH-15 | What a schedule last did, and when a gateway of its name was last up, outlive the gateway that wrote them | `what each schedule last did survives a restart`, `what fell due is said after an ordinary stop and not only a crash`, `being up leaves something a later gateway can measure against`, `that a schedule fired is written down before it is run` |
 | ✅ | R-SCH-16 | A run cut short by the gateway going is told apart from one that could not start | `a run cut short by the gateway going is not called a failure to start`, `a schedule that cannot be started says so where it can be read` |
+| ✅ | R-SCH-17 | A gateway's schedules that are there and cannot be read are never written over | `a schedules file that cannot be read is never written over`, `a schedules file that is valid json but not schedules is not read as none`, `a schedules file that is not there is told from one that cannot be read`, `changing schedules that cannot be read says nothing was changed` |
+| ✅ | R-SCH-18 | A gateway's schedules that cannot be read are reported as unreadable rather than as none | `listing schedules that cannot be read never reports having none`, `a gateway whose schedules cannot be read still starts and says so`, `no schedule runs while the file cannot be read` |
+| ✅ | R-SCH-19 | A change that altered no schedule leaves the file exactly as it was | `a change that changed nothing does not rewrite the file`, `a change that did change something is written` |
+| ❌ | R-SCH-20 | A schedule run that already began is not begun again after the machine loses power | src/rundesk_cli/gateway.py:204 — no test, nothing here can cut the power |
 
 ## Open questions
 

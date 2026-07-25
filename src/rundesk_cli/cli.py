@@ -538,11 +538,21 @@ def _how_long(started: float | None) -> str:
 def cmd_schedules(args: argparse.Namespace, gateways) -> int:
     """List a gateway's schedules, or change them."""
     act = getattr(args, "act", None)
-    if act == "add":
-        return _add_schedule(args, gateways)
-    if act in ("remove", "on", "off"):
-        return _change_schedule(args, gateways, act)
-    return _list_schedules(args, gateways)
+    try:
+        if act == "add":
+            return _add_schedule(args, gateways)
+        if act in ("remove", "on", "off"):
+            return _change_schedule(args, gateways, act)
+        return _list_schedules(args, gateways)
+    except _gateway.Unreadable as why:
+        # Answered in one place because every path here reads the same file, and each of
+        # them turned "this cannot be read" into "there is nothing there": the listing said
+        # NO SCHEDULES and exited zero, and the changes wrote an empty list over a file that
+        # still held every schedule as recoverable text (R-SCH-17, R-SCH-18).
+        print(f"{args.name}: SCHEDULES UNREADABLE — {why}", file=sys.stderr)
+        print("        nothing was changed — move the file aside or repair it",
+              file=sys.stderr)
+        return 1
 
 
 def _note(gateways, name: str, said: str) -> None:

@@ -61,7 +61,7 @@ class OutcomeTests(unittest.TestCase):
         code, said = run(
             repo_root=Path("/nowhere"),
             current_version="1.0.0",
-            latest=lambda: "v1.0.0",
+            latest=lambda: ("v1.0.0", None),
             apply=lambda root, tag: applied.append(tag) or 0,
         )
         self.assertEqual(code, 0)
@@ -73,7 +73,7 @@ class OutcomeTests(unittest.TestCase):
         code, said = run(
             repo_root=Path("/nowhere"),
             current_version="0.1.0",
-            latest=lambda: "v0.2.0",
+            latest=lambda: ("v0.2.0", None),
             apply=lambda root, tag: applied.append(tag) or 0,
         )
         self.assertEqual(code, 0)
@@ -85,7 +85,7 @@ class OutcomeTests(unittest.TestCase):
         code, said = run(
             repo_root=Path("/nowhere"),
             current_version="0.1.0",
-            latest=lambda: "v0.2.0",
+            latest=lambda: ("v0.2.0", None),
             check_only=True,
             apply=lambda root, tag: applied.append(tag) or 0,
         )
@@ -96,7 +96,7 @@ class OutcomeTests(unittest.TestCase):
     def test_an_unreachable_forge_is_reported_as_unknown_never_as_current(self):
         # "up to date" when we simply could not ask is the one answer that would
         # leave someone on an old version believing they are current.
-        code, said = run(repo_root=Path("/nowhere"), current_version="0.1.0", latest=lambda: None)
+        code, said = run(repo_root=Path("/nowhere"), current_version="0.1.0", latest=lambda: (None, updater.UNREACHABLE))
         self.assertEqual(code, 1)
         self.assertIn("UNKNOWN", said)
         self.assertNotIn("UP TO DATE", said)
@@ -429,25 +429,27 @@ class AskingTheForgeTests(unittest.TestCase):
     """The one function that actually talks to GitHub — stubbed everywhere else, so tested here."""
 
     def test_the_published_tag_is_read_out_of_the_release(self):
-        code, _ = _with_json(b'{"tag_name": "v0.4.0", "name": "0.4.0"}', updater.latest_version_online)
-        self.assertEqual(code, "v0.4.0")
+        (tag, why), _ = _with_json(b'{"tag_name": "v0.4.0", "name": "0.4.0"}',
+                                   updater.latest_version_online)
+        self.assertEqual(tag, "v0.4.0")
+        self.assertIsNone(why, "a look-up that worked still said why it had not")
 
     def test_a_release_with_no_tag_is_not_turned_into_one(self):
         # A shape we did not expect must read as "could not tell", never as a version.
         for payload in (b'{}', b'{"tag_name": ""}', b'{"tag_name": null}', b'[]'):
             with self.subTest(payload=payload):
-                got, _ = _with_json(payload, updater.latest_version_online)
-                self.assertIsNone(got)
+                (tag, _why), _ = _with_json(payload, updater.latest_version_online)
+                self.assertIsNone(tag)
 
     def test_a_forge_that_cannot_be_reached_says_nothing_rather_than_guessing(self):
         for boom in (urllib.error.URLError("no route"), TimeoutError(), OSError("refused")):
             with self.subTest(boom=type(boom).__name__):
-                got, _ = _with_json(boom, updater.latest_version_online)
-                self.assertIsNone(got)
+                (tag, _why), _ = _with_json(boom, updater.latest_version_online)
+                self.assertIsNone(tag)
 
     def test_a_reply_that_is_not_json_is_survived(self):
-        got, _ = _with_json(b"<html>rate limited</html>", updater.latest_version_online)
-        self.assertIsNone(got)
+        (tag, _why), _ = _with_json(b"<html>rate limited</html>", updater.latest_version_online)
+        self.assertIsNone(tag)
 
     def test_it_asks_the_releases_endpoint_for_this_repository(self):
         # A wrong URL is invisible from the outside: everything would simply report
@@ -688,20 +690,33 @@ class WhyItCouldNotSayTests(unittest.TestCase):
         # They send a reader somewhere completely different: one is "wait and try again",
         # the other is "there is nothing there, or you cannot see it". Reporting a private
         # or release-less repository as a network problem sends someone to check their wifi.
-        missing, _ = _with_json(urllib.error.HTTPError("u", 404, "Not Found", {}, None),
-                                updater.latest_version_online)
+        (missing, why), _ = _with_json(urllib.error.HTTPError("u", 404, "Not Found", {}, None),
+                                       updater.latest_version_online)
         self.assertIsNone(missing)
-        self.assertEqual(updater.why_unavailable, updater.NOTHING_PUBLISHED)
+        self.assertEqual(why, updater.NOTHING_PUBLISHED)
 
-        offline, _ = _with_json(urllib.error.URLError("no route"), updater.latest_version_online)
+        (offline, why), _ = _with_json(urllib.error.URLError("no route"),
+                                       updater.latest_version_online)
         self.assertIsNone(offline)
-        self.assertEqual(updater.why_unavailable, updater.UNREACHABLE)
+        self.assertEqual(why, updater.UNREACHABLE)
 
         self.assertNotEqual(
             updater.describe("0.1.0", None, updater.NOTHING_PUBLISHED),
             updater.describe("0.1.0", None, updater.UNREACHABLE),
             "both kinds of nothing read the same",
         )
+
+    def test_which_kind_of_nothing_it_was_comes_back_from_the_look_up_that_found_it(self):
+        """The reason travelled as a module global, set by the real network call. Injected
+        look-ups — the seam this module is built around — never set it, so `update` read
+        whatever the last real call had left there and reported the wrong kind of nothing."""
+        _, nothing_there = run(repo_root=Path("/nowhere"), current_version="0.1.0",
+                               latest=lambda: (None, updater.NOTHING_PUBLISHED))
+        self.assertIn("NO RELEASES", nothing_there)
+
+        _, could_not_ask = run(repo_root=Path("/nowhere"), current_version="0.1.0",
+                               latest=lambda: (None, updater.UNREACHABLE))
+        self.assertIn("could not reach", could_not_ask)
 
 
 class AnUpdateAndWorkInFlight(unittest.TestCase):
@@ -718,7 +733,7 @@ class AnUpdateAndWorkInFlight(unittest.TestCase):
         applied = []
         code = updater.run(
             Path("/tmp/rundesk-not-real"), "0.1.0", check_only=check_only,
-            latest=lambda: "9.9.9",
+            latest=lambda: ("9.9.9", None),
             apply=lambda root, version: applied.append(version) or 0,
             busy=lambda: busy,
         )
@@ -752,7 +767,7 @@ class AnUpdateAndWorkInFlight(unittest.TestCase):
         """R-UPD-18 — nothing is going to be moved, so nothing is worth refusing over."""
         asked = []
         code = updater.run(
-            Path("/tmp/rundesk-not-real"), "9.9.9", latest=lambda: "9.9.9",
+            Path("/tmp/rundesk-not-real"), "9.9.9", latest=lambda: ("9.9.9", None),
             apply=lambda root, version: 0, busy=lambda: asked.append(True) or ["x"],
         )
         self.assertEqual(0, code)
@@ -782,7 +797,7 @@ class AnUpdateAndWhatIsRunning(unittest.TestCase):
             return applied_code
 
         code = updater.run(
-            Path("/tmp/rundesk-not-real"), "0.1.0", latest=lambda: "9.9.9",
+            Path("/tmp/rundesk-not-real"), "0.1.0", latest=lambda: ("9.9.9", None),
             apply=apply, busy=lambda: [], pause=pause, resume=resume,
         )
         return code

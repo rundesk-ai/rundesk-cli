@@ -30,9 +30,6 @@ HTTP_TIMEOUT = 5
 DOWNLOAD_TIMEOUT = 60
 USER_AGENT = "rundesk-cli-updater"
 
-#: Why the last look-up came back empty, when it did. Set by `latest_version_online`.
-why_unavailable: str | None = None
-
 _VERSION_RE = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?")
 
 
@@ -59,19 +56,20 @@ UNREACHABLE = "unreachable"
 NOTHING_PUBLISHED = "nothing-published"
 
 
-def latest_version_online() -> str | None:
-    """The newest published release, or None when it cannot be had.
+def latest_version_online() -> tuple[str | None, str | None]:
+    """The newest published release, and which kind of nothing it was when there is none.
 
-    `why_unavailable` carries which kind of nothing it was, because "we could not ask" and
-    "there is nothing there" send a reader somewhere completely different.
+    Both are returned rather than one being left somewhere for the caller to pick up. Which
+    kind of nothing it was is part of this answer — "we could not ask" and "there is nothing
+    there" send a reader somewhere completely different — and a look-up whose second half
+    was a module global held whatever the last real call left in it, which is precisely
+    wrong when the whole point of the seam is that a test replaces the call.
 
     The request carries no credentials. rundesk is published in the open, so a token would
     buy nothing but rate-limit headroom for a question asked once in a while — and an
     earlier version read GITHUB_TOKEN from the environment, which meant a machine that
     happened to have one exported sent it on a check nobody asked to authenticate.
     """
-    global why_unavailable
-    why_unavailable = None
     request = urllib.request.Request(RELEASES_LATEST_URL, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
@@ -80,17 +78,17 @@ def latest_version_online() -> str | None:
         # 404 answers plainly: either nothing is published, or this repository is not visible
         # without credentials. Reporting that as "could not reach" sends someone to check
         # their network when the answer is that there is nothing to find.
-        why_unavailable = NOTHING_PUBLISHED if err.code in (403, 404) else UNREACHABLE
-        return None
+        return None, (NOTHING_PUBLISHED if err.code in (403, 404) else UNREACHABLE)
     except (urllib.error.URLError, TimeoutError, ValueError, OSError):
-        why_unavailable = UNREACHABLE
-        return None
+        return None, UNREACHABLE
     # A shape we did not expect — an array, a rate-limit page parsed as JSON — reads as
     # "could not tell", never as a crash. This runs behind whatever the user typed.
     if not isinstance(payload, dict):
-        return None
+        return None, UNREACHABLE
     tag = payload.get("tag_name")
-    return tag if isinstance(tag, str) and tag else None
+    if isinstance(tag, str) and tag:
+        return tag, None
+    return None, UNREACHABLE
 
 
 def tag_matches(tag: str, version: str) -> bool:
@@ -120,7 +118,7 @@ def run(
     repo_root: Path,
     current_version: str,
     check_only: bool = False,
-    latest: Callable[[], str | None] | None = None,
+    latest: Callable[[], tuple[str | None, str | None]] | None = None,
     apply: Callable[[Path, str], int] | None = None,
     busy: Callable[[], list] | None = None,
     pause: Callable[[], tuple] | None = None,
@@ -136,8 +134,8 @@ def run(
     once, when the function is defined, so naming the function there would freeze
     it and quietly ignore anything that replaced it afterwards.
     """
-    published = (latest or latest_version_online)()
-    print(describe(current_version, published, why_unavailable))
+    published, why = (latest or latest_version_online)()
+    print(describe(current_version, published, why))
     if published is None:
         return 1
     if not is_newer(published, current_version):

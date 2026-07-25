@@ -10,6 +10,7 @@ supervisor's, and are not here: they arrive with the job that describes one.
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import shutil
 import signal
@@ -1781,6 +1782,498 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
         gateway._note_interrupted("shared", self.schedules, "second", "because")
         said = gateway.what_was_interrupted("shared", self.schedules)
         self.assertEqual({"first", "second"}, set(said), "one write erased the other")
+
+
+#: A gateway of this name, holding it and running something, for as long as it is left to.
+#: Its own process so the lock is genuinely another process's — a lock taken twice in one
+#: process is granted, which is the one thing this must not accidentally prove.
+HOLDS_ITS_NAME = """
+import json, os, subprocess, sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from rundesk_cli import gateway
+
+where, name, ready, stop = Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]), Path(sys.argv[5])
+mine = gateway.Gateway(name, where=where, logs=Path(sys.argv[6]), schedules=Path(sys.argv[7]))
+mine.claim()
+work = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"],
+                        start_new_session=True)
+(where / f"{name}.json").write_text(json.dumps({
+    "name": name, "pid": os.getpid(),
+    "working": {"turn": {"pgid": work.pid, "since": gateway.started_at(work.pid)}},
+}))
+ready.write_text(str(work.pid))
+while not stop.exists():
+    time.sleep(0.01)
+work.kill()
+"""
+
+
+class TheDecisionToEndSomebodysWork(WithARunDirectory):
+    """The whole table, without a real process anywhere near it.
+
+    What this code can do when it is wrong is kill a provider's entire process tree, or
+    throw away the only record that would ever find one. The cases that matter are the ones
+    a real process cannot be made to produce on demand — a signal the machine refuses, an
+    identity that changes between two looks — so every question it asks of the live world
+    arrives as an operation it is handed.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.log = logging.Logger("reckoning")
+        self.said = []
+        self.log.addHandler(logging.NullHandler())
+        self.log.error = lambda msg, *a: self.said.append(msg % a if a else msg)
+        self.log.warning = lambda msg, *a: self.said.append(msg % a if a else msg)
+
+    def reckon(self, was, **how):
+        """One entry, decided with the world answering exactly as told."""
+        answers = {"present": lambda _pgid: True,
+                   "started": lambda _pgid: "when it started",
+                   "ask": lambda _pgid, _sig: True,
+                   "gone_within": lambda _pgid, _patience: True}
+        answers.update(how)
+        return gateway._end_left_running("turn", was, self.log, **answers)
+
+    OURS = {"pgid": 4242, "since": "when it started"}
+
+    def test_work_the_machine_refused_to_signal_is_not_reported_as_ended(self):
+        """R-GW-28 — every path appended the entry to what had been swept, including the
+        one where the first signal was refused and the second was never sent. The sweep
+        then said it had ended work left behind, and the record naming a live process
+        tree was the thing it went on to delete."""
+        became = self.reckon(self.OURS, ask=lambda _pgid, _sig: False,
+                             gone_within=lambda _pgid, _p: False)
+        self.assertFalse(became.swept, "it counted work it never signalled as dealt with")
+        self.assertFalse(became.ended, "it called work it never signalled ended")
+        self.assertTrue(became.keep, "it dropped the only record naming a live group")
+
+    def test_an_escalation_that_stopped_after_the_polite_signal_is_not_reported_as_ended(self):
+        """R-GW-28 — refused on the second signal is as short of the end as refused on the
+        first, and the group is still there either way."""
+        asked = []
+
+        def refuses_the_second(_pgid, sig):
+            asked.append(sig)
+            return len(asked) == 1
+
+        became = self.reckon(self.OURS, ask=refuses_the_second,
+                             gone_within=lambda _pgid, _p: False)
+        self.assertEqual(2, len(asked), "it never tried to insist")
+        self.assertFalse(became.swept, "an escalation that stopped short was called complete")
+        self.assertTrue(became.keep)
+
+    def test_work_that_goes_on_the_polite_signal_is_ended_without_being_killed(self):
+        """R-GW-16"""
+        asked = []
+        became = self.reckon(self.OURS,
+                             ask=lambda _pgid, sig: asked.append(sig) or True,
+                             gone_within=lambda _pgid, _p: True)
+        self.assertEqual([signal.SIGTERM], asked, "it killed something that was going anyway")
+        self.assertTrue(became.swept)
+        self.assertTrue(became.ended)
+
+    def test_work_that_ignores_the_polite_signal_is_killed_and_then_ended(self):
+        """R-GW-16"""
+        asked, went = [], []
+
+        def then_gone(_pgid, _patience):
+            went.append(1)
+            return len(went) > 1        # still there after TERM, gone after KILL
+
+        became = self.reckon(self.OURS,
+                             ask=lambda _pgid, sig: asked.append(sig) or True,
+                             gone_within=then_gone)
+        self.assertEqual([signal.SIGTERM, signal.SIGKILL], asked)
+        self.assertTrue(became.swept)
+        self.assertTrue(became.ended)
+
+    def test_work_that_outlives_both_signals_is_swept_and_said_not_to_have_gone(self):
+        """R-GW-17 — everything that can be done to it has been done, and it is still
+        answering. Both facts are reported, because they are different facts."""
+        became = self.reckon(self.OURS, gone_within=lambda _pgid, _p: False,
+                             present=lambda _pgid: True)
+        self.assertTrue(became.swept, "it left work nothing more can be done to")
+        self.assertFalse(became.ended, "it said work that still answers had gone")
+        self.assertTrue(any("still answers" in one for one in self.said))
+
+    def test_a_group_whose_identity_changed_between_two_looks_is_left_alone(self):
+        """R-GW-19 — a tree-kill aimed at a stranger because a number came round again is
+        very much worse than a stray program, and it is never kept in our record either:
+        naming a stranger is how the next start comes to aim at it."""
+        became = self.reckon(self.OURS, started=lambda _pgid: "some other moment")
+        self.assertFalse(became.swept)
+        self.assertFalse(became.keep, "it took a stranger's group into its own record")
+        self.assertIn("not ours", became.why)
+
+    def test_a_record_that_cannot_prove_the_work_was_ours_leaves_it_and_keeps_naming_it(self):
+        """R-GW-19, R-GW-23 — nothing may be signalled on the strength of a number alone,
+        and the record we are about to write is the only thing naming it."""
+        became = self.reckon({"pgid": 4242}, started=lambda _pgid: "when it started")
+        self.assertFalse(became.swept)
+        self.assertTrue(became.keep)
+
+    def test_a_record_that_does_not_say_what_was_running_is_still_answered_for(self):
+        """R-GW-23"""
+        became = self.reckon({"pgid": "not a number"})
+        self.assertFalse(became.swept)
+        self.assertFalse(became.keep)
+        self.assertIn("does not say", became.why)
+
+    def test_work_that_had_already_gone_is_not_counted_as_something_we_ended(self):
+        """R-GW-23 — interrupted, definitely gone, and nothing rundesk did."""
+        became = self.reckon(self.OURS, present=lambda _pgid: False)
+        self.assertFalse(became.swept, "it took credit for work that went with its gateway")
+        self.assertTrue(became.ended)
+
+    def test_asking_a_group_that_has_already_gone_counts_as_the_ask_getting_through(self):
+        """R-GW-28 — the ask is granted by the very thing it asked for. Read as a refusal,
+        work that had gone would be left unswept for the one reason that means it worked."""
+        went = subprocess.Popen([PY, "-c", "pass"], start_new_session=True)
+        went.wait()
+        self.assertTrue(gateway._ask_group(went.pid, signal.SIGTERM),
+                        "a group that had already gone was read as the machine refusing")
+
+    @unittest.skipIf(os.geteuid() == 0, "root is refused nothing, so there is no refusal to see")
+    def test_a_machine_that_refuses_the_signal_is_told_from_one_that_granted_it(self):
+        """R-GW-28 — the distinction the whole decision rests on, at its own level.
+
+        Group one is the machine's own, which nobody but root may signal. **Never group
+        zero**: that is the caller's own group, and asking it to die kills the test run,
+        the shell around it and everything else sharing the group.
+        """
+        self.assertFalse(gateway._ask_group(1, signal.SIGKILL),
+                         "a refused signal was reported as sent")
+
+
+class WhatProvesWorkIsOurs(WithARunDirectory):
+    """A process number alone proves nothing; a number and a start time prove ownership.
+
+    That proof was re-derived on every beat, from a subprocess with a five-second budget,
+    on exactly the loaded machine where work gets left behind. One unanswered look wrote
+    `null` over an answer that was correct, and from then on every gateway refused to touch
+    the group — a provider CLI and everything under it, held until the machine reboots.
+    """
+
+    async def test_a_look_that_the_machine_did_not_answer_never_erases_what_is_held(self):
+        """R-GW-30 — a start time cannot change, so asking again can only make it worse."""
+        gw = self.made()
+        gw.claim()
+        running = asyncio.ensure_future(gw.start(FOREVER, as_name="turn"))
+        deadline = time.time() + 15
+        while "turn" not in gw.running and time.time() < deadline:
+            await asyncio.sleep(0.02)
+        while not gw._known_since.get("turn") and time.time() < deadline:
+            await asyncio.sleep(0.02)
+        first = json.loads((self.where / "gateway.json").read_text())["working"]["turn"]
+        self.assertTrue(first["since"], "the work was recorded without anything proving it ours")
+
+        self.addCleanup(setattr, gateway, "started_at", gateway.started_at)
+        gateway.started_at = lambda _pid: None      # the machine, not answering
+        gw._say()
+
+        after = json.loads((self.where / "gateway.json").read_text())["working"]["turn"]
+        self.assertEqual(first["since"], after["since"],
+                         "one unanswered look erased the only proof the work was ours")
+        await process.end_all(list(gw.running.values()))
+        await asyncio.wait_for(running, 15)
+
+    async def test_a_beat_does_not_ask_the_machine_anything(self):
+        """R-GW-30 — it was a blocking subprocess per running program per beat, on the
+        loop that reads everything those programs are saying."""
+        gw = self.made()
+        gw.claim()
+        running = asyncio.ensure_future(gw.start(FOREVER, as_name="turn"))
+        deadline = time.time() + 15
+        while not gw._known_since.get("turn") and time.time() < deadline:
+            await asyncio.sleep(0.02)
+
+        asked = []
+        self.addCleanup(setattr, gateway, "started_at", gateway.started_at)
+        gateway.started_at = lambda pid: asked.append(pid)
+        gw._say()
+        gw._say()
+
+        self.assertEqual([], asked, "a beat shelled out once per running program")
+        await process.end_all(list(gw.running.values()))
+        await asyncio.wait_for(running, 15)
+
+
+class ANameIsTakenNotAskedAbout(WithARunDirectory):
+    """A gateway can claim its name in the instant between being asked about and being
+    signalled. The answer stops being true the moment after it is given, so the sweep takes
+    the name instead and keeps it for the whole reckoning."""
+
+    def running_gateway(self, name: str):
+        """A gateway of this name in a process of its own, holding it and running work."""
+        ready = self.scratch()
+        stop, told = ready / "stop", ready / "ready"
+        child = subprocess.Popen(
+            [PY, "-c", HOLDS_ITS_NAME, str(ROOT / "src"), str(self.where), name,
+             str(told), str(stop), str(self.logs), str(self.schedules)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        )
+        self.addCleanup(child.wait, 30)
+        self.addCleanup(stop.touch)
+        deadline = time.time() + 30
+        while not told.exists() and time.time() < deadline:
+            if child.poll() is not None:
+                self.fail(f"the gateway never came up: {child.communicate()[1]}")
+            time.sleep(0.02)
+        self.assertTrue(told.exists(), "the gateway never said it was up")
+        return int(told.read_text())
+
+    def test_a_gateway_that_holds_its_name_keeps_its_work_and_its_record(self):
+        """R-GW-29 — the destructive half. A start that swept here ended a live agent's
+        whole process tree, and the agent went on holding its name throughout."""
+        working = self.running_gateway("busy")
+
+        swept = gateway._sweep_strays(self.where, "mine", self.made("mine").log, self.schedules)
+
+        self.assertEqual([], swept, "an ordinary start swept a gateway that is up")
+        self.assertTrue((self.where / "busy.json").exists(),
+                        "it deleted a live gateway's record")
+        self.assertTrue(gateway._still_there(working),
+                        "it ended the work of a gateway that holds its name")
+
+    def test_a_gateway_cannot_claim_its_name_while_a_sweep_is_reckoning_with_it(self):
+        """R-GW-29 — the window itself, and the reason one more liveness check was never
+        enough. The old code asked whether the name was held and then let go of the answer;
+        a gateway could claim in the instant that followed, and the sweep already under way
+        went on to signal the process group that gateway had just started.
+
+        A lock belongs to the open file, not to the process, so a second `open` here
+        contends exactly as another process would — which is what `_held` itself relies on.
+        """
+        (self.where / "target.json").write_text(json.dumps({"working": {}}))
+        (self.where / "target.lock").touch()
+        inside, carry_on = self.scratch() / "inside", self.scratch() / "carry-on"
+
+        def waits_while_holding_the_name(record, log, *_args, **_kw):
+            inside.touch()
+            deadline = time.time() + 15
+            while not carry_on.exists() and time.time() < deadline:
+                time.sleep(0.01)
+            return []
+
+        self.addCleanup(setattr, gateway, "_sweep_predecessor", gateway._sweep_predecessor)
+        gateway._sweep_predecessor = waits_while_holding_the_name
+        sweeping = threading.Thread(
+            target=gateway._sweep_strays,
+            args=(self.where, "mine", self.made("mine").log, self.schedules), daemon=True)
+        sweeping.start()
+        self.addCleanup(sweeping.join, 30)
+        self.addCleanup(carry_on.touch)
+        deadline = time.time() + 15
+        while not inside.exists() and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(inside.exists(), "the sweep never got as far as reckoning")
+
+        claiming = gateway.Gateway("target", where=self.where, logs=self.logs,
+                                   schedules=self.schedules)
+        self.addCleanup(claiming.release)
+        with self.assertRaises(gateway.AlreadyRunning):
+            claiming.claim()
+
+    def test_a_name_that_cannot_be_asked_about_is_left_alone(self):
+        """R-GW-29 — unknown is not free. `standing()` may answer "not running" when it
+        cannot tell, because being wrong there costs a misleading line. Being wrong here
+        ends somebody else's session."""
+        (self.where / "guarded.json").write_text(json.dumps(
+            {"working": {"turn": {"pgid": 999999, "since": "then"}}}))
+        lock = self.where / "guarded.lock"
+        lock.touch()
+        lock.chmod(0o000)
+        self.addCleanup(lock.chmod, 0o600)
+
+        swept = gateway._sweep_strays(self.where, "mine", self.made("mine").log, self.schedules)
+
+        self.assertEqual([], swept, "it acted on a name it could not ask about")
+        self.assertTrue((self.where / "guarded.json").exists(),
+                        "it deleted the record of a gateway it could not ask about")
+
+
+#: One writer of the interruption history, as a program of its own. Two of these racing is
+#: not a contrived shape: every gateway that starts writes into every abandoned name's file,
+#: so a machine bringing several up at once does exactly this.
+NOTES_INTERRUPTIONS = """
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from rundesk_cli import gateway
+
+schedules, mine, how_many, start = Path(sys.argv[2]), sys.argv[3], int(sys.argv[4]), Path(sys.argv[5])
+while not start.exists():          # all of them held here, then let go together
+    time.sleep(0.002)
+for n in range(how_many):
+    gateway._note_interrupted("shared", schedules, f"{mine}-{n}", "because")
+"""
+
+
+class WhatTwoWritersDoToOneFile(WithARunDirectory):
+    """Read, change, write back — by more than one process, which is the ordinary case.
+
+    Every gateway that starts writes into every abandoned name's interruption file, so a
+    reboot bringing several gateways up together has several writers on one file as a
+    matter of course. Each read its own snapshot and wrote it back whole, and half of
+    everything recorded was lost.
+    """
+
+    WRITERS = 4
+    EACH = 10
+
+    def test_gateways_noting_interruptions_at_once_lose_none_of_them(self):
+        """R-GW-27 — real concurrent processes. Two sequential calls in one process pass
+        against a file with no lock at all, which is what the case this replaces did."""
+        start = self.scratch() / "go"
+        running = [
+            subprocess.Popen(
+                [PY, "-c", NOTES_INTERRUPTIONS, str(ROOT / "src"), str(self.schedules),
+                 f"writer{n}", str(self.EACH), str(start)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+            )
+            for n in range(self.WRITERS)
+        ]
+        time.sleep(0.3)   # every one of them up and waiting before any of them writes
+        start.touch()
+        for one in running:
+            _, went_wrong = one.communicate(timeout=60)
+            self.assertEqual(0, one.returncode, went_wrong)
+
+        said = gateway.what_was_interrupted("shared", self.schedules)
+        wanted = {f"writer{n}-{m}" for n in range(self.WRITERS) for m in range(self.EACH)}
+        self.assertLessEqual(len(wanted), gateway.KEPT_INTERRUPTIONS,
+                             "the case is only about lost writes, so it stays under the cap")
+        self.assertEqual(wanted, set(said),
+                         f"{len(wanted) - len(said)} of {len(wanted)} interruptions were lost")
+
+    def test_a_writer_that_cannot_read_the_file_changes_nothing_and_does_not_stop_a_start(self):
+        """R-GW-27, R-SCH-17 — the history is worth less than the gateway. It is not worth
+        so little that a file nobody can read is replaced with one entry."""
+        target = gateway.interrupted_path("shared", self.schedules)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('{"turn": {"at": "2026-07-25 09:00",,}}')
+        gateway._note_interrupted("shared", self.schedules, "new", "because")
+        self.assertEqual('{"turn": {"at": "2026-07-25 09:00",,}}', target.read_text(),
+                         "it wrote one entry over a file it could not read")
+
+    def test_what_records_what_already_happened_is_asked_to_reach_the_disk(self):
+        """The guarantee itself — that a run which already happened is not repeated after
+        power loss — cannot be tested here, and R-SCH-20 says so. This proves only that the
+        ask is made, so that a later change cannot drop it in silence."""
+        asked = []
+        self.addCleanup(setattr, os, "fsync", os.fsync)
+        real_fsync = os.fsync
+        os.fsync = lambda fd: (asked.append(fd), real_fsync(fd))[1]
+
+        gateway._note_interrupted("shared", self.schedules, "turn", "because")
+        self.assertTrue(asked, "what has already happened was written without waiting for it")
+
+        asked.clear()
+        gateway._written_whole(self.where / "beat.json", "{}")
+        self.assertEqual([], asked, "the beat pays for a durability it does not need")
+
+
+class WhatCannotBeReadIsNotEmpty(WithARunDirectory):
+    """A file rundesk keeps is either not there or unreadable, and the two are opposites.
+
+    Every reader worked it out for itself and they disagreed. The one that mattered most
+    replaced a file it could not parse with an empty list and reported success — so a
+    stray character in a schedules file, or a stalled volume for one moment, took every
+    schedule the owner had ever written and said nothing.
+    """
+
+    GARBLED = '[{"name": "nightly", "when": "0 4 * * *", "run": ["/bin/echo", "x"]},,]'
+
+    def garbled_for(self, name: str) -> Path:
+        target = self.schedules / f"{name}.json"
+        target.write_text(self.GARBLED)
+        return target
+
+    def test_a_schedules_file_that_cannot_be_read_is_never_written_over(self):
+        """R-SCH-17 — the file still holds every schedule as recoverable text."""
+        target = self.garbled_for("gateway")
+        with self.assertRaises(gateway.Unreadable):
+            with gateway.changing_schedules("gateway", self.schedules) as keeping:
+                keeping.append({"name": "new", "when": "* * * * *", "run": ["/bin/echo"]})
+        self.assertEqual(self.GARBLED, target.read_text(),
+                         "it wrote over a file it could not read")
+
+    def test_a_schedules_file_that_is_valid_json_but_not_schedules_is_not_read_as_none(self):
+        """R-SCH-17 — parsing is not understanding: a file that reads back as an object
+        holds something, and replacing it with an empty list loses it just the same."""
+        target = self.schedules / "gateway.json"
+        target.write_text('{"nightly": {"when": "0 4 * * *"}}')
+        with self.assertRaises(gateway.Unreadable):
+            gateway.written_schedules("gateway", self.schedules)
+        self.assertEqual('{"nightly": {"when": "0 4 * * *"}}', target.read_text())
+
+    def test_a_schedules_file_that_is_not_there_is_told_from_one_that_cannot_be_read(self):
+        """R-SCH-17 — absent and unreadable are distinguishable at the point of decision,
+        which is the whole of the fix: one is a gateway that has never been given a
+        schedule, and the other is one whose schedules are all still there."""
+        self.assertEqual([], gateway.written_schedules("never-had-one", self.schedules))
+        self.garbled_for("had-some")
+        with self.assertRaises(gateway.Unreadable):
+            gateway.written_schedules("had-some", self.schedules)
+
+    def test_a_change_that_changed_nothing_does_not_rewrite_the_file(self):
+        """R-SCH-18 — a command that decided to do nothing writes nothing. Rewriting an
+        unchanged file puts every schedule at the mercy of a failure nobody asked to
+        risk, and `remove` on a name that is not there took that risk every time."""
+        target = self.schedules / "gateway.json"
+        # Written by hand, with spacing rundesk would not produce: an untouched file has
+        # to come back byte for byte, not merely mean the same thing.
+        original = '[{"name":   "nightly", "when": "0 4 * * *", "run": ["/bin/echo", "x"]}]'
+        target.write_text(original)
+        with gateway.changing_schedules("gateway", self.schedules) as keeping:
+            self.assertEqual(1, len(keeping), "it did not read what was there")
+        self.assertEqual(original, target.read_text(), "it rewrote a file nothing changed")
+
+    def test_a_change_that_did_change_something_is_written(self):
+        """R-SCH-18 — the other half, so "never rewrite" cannot pass by never writing."""
+        with gateway.changing_schedules("gateway", self.schedules) as keeping:
+            keeping.append({"name": "new", "when": "* * * * *", "run": ["/bin/echo"]})
+        self.assertEqual(["new"], [one["name"] for one
+                                   in gateway.written_schedules("gateway", self.schedules)])
+
+    def test_a_gateway_whose_schedules_cannot_be_read_still_starts_and_says_so(self):
+        """R-SCH-17 — a command refuses, because it was asked to change the file. A
+        gateway that refused to start over it would take everything else it does down
+        with the one thing that is broken."""
+        self.garbled_for("gateway")
+        gateway.seen_path("gateway", self.schedules).write_text(json.dumps({"at": time.time()}))
+        gw = self.made()
+        gw.claim()
+        self.assertTrue(gateway.standing("gateway", self.where).running)
+        self.assertIn("could not be read", gateway.log_path("gateway", self.logs).read_text())
+
+    async def test_no_schedule_runs_while_the_file_cannot_be_read(self):
+        """R-SCH-17 — and it is said once, not on every tick for as long as it is broken."""
+        from rundesk_cli import schedule as schedules_module
+        self.garbled_for("gateway")
+        gw = self.made()
+        gw.claim()
+        from datetime import datetime
+        gw._fire(schedules_module, datetime(2026, 7, 25, 9, 0))
+        gw._fire(schedules_module, datetime(2026, 7, 25, 9, 1))
+        await asyncio.sleep(0.2)
+        self.assertEqual({}, gw.running, "it ran something out of a file it could not read")
+        said = gateway.log_path("gateway", self.logs).read_text()
+        self.assertEqual(1, said.count("no schedule can run"),
+                         "it complained again on the next tick")
+
+    def test_a_record_that_cannot_be_read_is_kept_rather_than_removed(self):
+        """R-GW-26 — the record is the only thing naming a process group nobody owns.
+        Reading "I could not tell" as "there is nothing left" throws away the sole means
+        of ever finding it again, and reports having tidied up."""
+        record = self.where / "abandoned.json"
+        record.write_text('{"working": {"turn": {"pgid": 4242,,}}}')
+        (self.where / "abandoned.lock").touch()
+        swept = gateway._sweep_strays(self.where, "mine", self.made("mine").log, self.schedules)
+        self.assertEqual([], swept, "it claimed to have swept a record it could not read")
+        self.assertTrue(record.exists(), "it deleted the only record naming abandoned work")
 
 
 if __name__ == "__main__":
