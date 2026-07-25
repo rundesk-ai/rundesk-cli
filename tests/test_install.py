@@ -19,7 +19,22 @@ import tempfile
 import unittest
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+#: Everything here works on a **copy** of the checkout, made once for the whole file.
+#:
+#: This suite drives the real installer, and removing rundesk deletes the `.venv` beside the
+#: script it was run from — correct for somebody uninstalling, and ruinous when the script it
+#: was run from is the developer's own live install. Run against the checkout itself, this
+#: file errored twice, failed once, and left a supervised gateway that refuses to start on
+#: its next restart, because fitness finds the dependencies gone. A gate that cannot be run
+#: twice is not a gate. The copy carries no history, which changes nothing: the installer
+#: looks for history only under the directory it is installing *into*, never under itself.
+CHECKOUT = Path(__file__).resolve().parent.parent
+_working = tempfile.TemporaryDirectory(prefix="rundesk-checkout-")
+# Resolved, like the path it stands in for. The installer reports where it is with `pwd -P`,
+# and a job is only recognised as ours by comparing the two — so an unresolved temporary
+# directory leaves every plist looking like somebody else's, on macOS alone.
+REPO = Path(_working.name).resolve() / CHECKOUT.name
+shutil.copytree(CHECKOUT, REPO, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
 INSTALLER = REPO / "install.sh"
 
 
@@ -266,12 +281,28 @@ class DependencyTests(Sandbox):
         return installer(home=self.home, bindir=self.bindir,
                          **{**kw, "extra_env": env_extra})
 
+    def checkout(self) -> Path:
+        """A copy of the checkout for one test to work on.
+
+        Every case here builds or removes the `.venv` beside the installer, and where that
+        goes is decided from where the script sits. Sharing one tree between them means the
+        case that asserts no virtualenv was made passes or fails on whichever case ran
+        before it.
+        """
+        clone = self.root / "checkout"
+        shutil.copytree(REPO, clone, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        return clone
+
+    def installing_into(self, clone: Path, requirements: Path) -> subprocess.CompletedProcess:
+        return self.install_needing(requirements, cwd=clone, script=clone / "install.sh")
+
     def test_nothing_needed_means_no_virtualenv_is_made_at_all(self):
         # The state to return to if a dependency ever stops earning its place: zero cost,
         # nothing to go stale, and an install that is a symlink and nothing else.
-        done = self.install_needing(self.needs("# nothing needed", ""))
+        clone = self.checkout()
+        done = self.installing_into(clone, self.needs("# nothing needed", ""))
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertFalse((REPO / ".venv").exists(), "a virtualenv was made for no dependencies")
+        self.assertFalse((clone / ".venv").exists(), "a virtualenv was made for no dependencies")
         self.assertNotIn("installing what rundesk needs", done.stdout,
                          "the installer said it was installing dependencies it does not have")
 
@@ -286,43 +317,39 @@ class DependencyTests(Sandbox):
     def test_the_command_finds_what_was_installed_for_it(self):
         # Added to the path by the launcher rather than by activating anything, so the
         # command works from any shell with nothing sourced first.
-        venv = REPO / ".venv"
+        clone = self.checkout()
+        venv = clone / ".venv"
         packages = venv / "lib" / f"python3.{sys.version_info.minor}" / "site-packages"
         packages.mkdir(parents=True)
         (packages / "pretend_dependency.py").write_text("WORKS = True\n")
-        try:
-            said = subprocess.run(
-                [str(REPO / "rundesk"), "version"], capture_output=True, text=True,
-                env={**os.environ, "HOME": str(self.home)},
-            )
-            self.assertEqual(said.returncode, 0, said.stderr)
-            found = subprocess.run(
-                [str(REPO / "rundesk"), "--version"], capture_output=True, text=True,
-                env={**os.environ, "HOME": str(self.home)},
-            )
-            self.assertEqual(found.returncode, 0, found.stderr)
-            # The path wiring itself, asked directly.
-            imported = subprocess.run(
-                ["python3", "-c",
-                 "import sys, pathlib; "
-                 f"sys.path[:0] = [str(p) for p in sorted(pathlib.Path({str(venv)!r}).glob('lib/python3.*/site-packages'))]; "
-                 "import pretend_dependency; print(pretend_dependency.WORKS)"],
-                capture_output=True, text=True,
-            )
-            self.assertIn("True", imported.stdout, imported.stderr)
-        finally:
-            shutil.rmtree(venv, ignore_errors=True)
+        said = subprocess.run(
+            [str(clone / "rundesk"), "version"], capture_output=True, text=True,
+            env={**os.environ, "HOME": str(self.home)},
+        )
+        self.assertEqual(said.returncode, 0, said.stderr)
+        found = subprocess.run(
+            [str(clone / "rundesk"), "--version"], capture_output=True, text=True,
+            env={**os.environ, "HOME": str(self.home)},
+        )
+        self.assertEqual(found.returncode, 0, found.stderr)
+        # The path wiring itself, asked directly.
+        imported = subprocess.run(
+            ["python3", "-c",
+             "import sys, pathlib; "
+             f"sys.path[:0] = [str(p) for p in sorted(pathlib.Path({str(venv)!r}).glob('lib/python3.*/site-packages'))]; "
+             "import pretend_dependency; print(pretend_dependency.WORKS)"],
+            capture_output=True, text=True,
+        )
+        self.assertIn("True", imported.stdout, imported.stderr)
 
     def test_removing_rundesk_takes_what_was_installed_for_it(self):
-        venv = REPO / ".venv"
+        clone = self.checkout()
+        venv = clone / ".venv"
         venv.mkdir()
         (venv / "marker").write_text("x")
-        try:
-            self.install_needing(self.needs("# nothing needed", ""))
-            self.uninstall()
-            self.assertFalse(venv.exists(), "uninstalling left the dependencies behind")
-        finally:
-            shutil.rmtree(venv, ignore_errors=True)
+        self.installing_into(clone, self.needs("# nothing needed", ""))
+        self.uninstall(cwd=clone, script=clone / "install.sh")
+        self.assertFalse(venv.exists(), "uninstalling left the dependencies behind")
 
 class EverythingNeededTests(unittest.TestCase):
     """An install has to leave a working command, not a nearly-working one."""
