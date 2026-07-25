@@ -41,7 +41,7 @@ so a later round does not spend the effort again without new reason:
 | Scheduling correctness | findings **12**, **21**, **24**, **25**, **26** |
 | Install, update and removal safety | findings **4**, **14**, **15**, **28** |
 | Source of truth and auditability | findings **26**, **27**, **28**, **29**; extensions to **12**, **17**, **19** |
-| Consumer command surface | findings **31–38**; extensions to **6**, **13**, **17**, **27**, **28** |
+| Consumer command surface | findings **31–37**; extensions to **6**, **13**, **17**, **27**, **28** |
 | Measured performance | finding **9** (second consequence) and **17**; measurements below |
 | Failure-injection coverage | see "Tests that prove only the easy half" below |
 | Security and trust boundaries | **no change needed today** — see below |
@@ -1312,7 +1312,7 @@ in `src/rundesk_cli/process.py`.
 # Round six — 2026-07-25
 
 Line numbers are against `43315ae`. Material that repeated an existing failure is merged
-above; findings 31–38 are only the distinct consumer command-surface gaps.
+above; findings 31–37 are only the distinct consumer command-surface gaps.
 
 ## High impact
 
@@ -1450,24 +1450,6 @@ above; findings 31–38 are only the distinct consumer command-surface gaps.
 5. **Test:** Semantic help/status tests must cover loaded job with no process, process with
    no loaded job, unknown launchd response, and loaded foreign/same-name PID. No state may
    collapse to `?` or imply process ownership it has not proved.
-
-### 38. Reserve a distinct exit code for unavailable commands
-
-**Status:** Open
-
-1. **Command and location:** planned commands such as `doctor`;
-   `src/rundesk_cli/cli.py:46-60`, `:72-81`, `:245-247`.
-2. **Current behaviour:** A recognized but unimplemented command prints
-   `doctor: NOT BUILT ...` and exits 2. Argparse also exits 2 for invalid syntax.
-3. **Why it blocks:** Scripts cannot distinguish “this Rundesk version lacks the command”
-   from “the caller supplied an invalid command”. Those require different recovery actions.
-4. **Replacement:** Keep 2 for usage and return a documented unavailable code, such as
-   `EX_UNAVAILABLE` (69), for planned commands. The message should end with the available
-   action: `run: rundesk --help`.
-5. **Test:** Assert invalid syntax and a planned command return different documented codes;
-   the planned command accepts arbitrary future arguments, changes no state, and prints the
-   concise availability message and next command.
-
 
 ## Tests that prove only the easy half
 
