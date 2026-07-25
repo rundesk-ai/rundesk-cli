@@ -119,9 +119,14 @@ nightly   OFF    0 3 * * *    off               2026-07-24 03:00  finished
   so a program named rather than located is refused by `add` rather than discovered at
   three in the morning.
 
-Everything else — `agents`, `new`, `doctor`, `run`, `replay` — is registered and says
-**coming soon**. The whole shape is visible from the start; a command that is not built
-exits non-zero rather than reporting a success it did not earn.
+The agents themselves — making one, what reaches it, which channels it answers on and what
+each run became — are registered and say **coming soon**. One verb, then whose:
+`rundesk add ava` makes an agent and the one gateway that runs it, `rundesk start ava`
+starts it, `rundesk schedules ava` is its schedules. Run `rundesk --help` for the list; it
+is read off the command rather than copied out here, so it cannot come to disagree with
+what you have installed. The whole shape is visible from the start, and a command that is
+not built exits `69` rather than reporting a success it did not earn — a number of its own,
+so a script can tell "this rundesk does not have that" from "you typed it wrong".
 
 ### What a gateway guarantees
 

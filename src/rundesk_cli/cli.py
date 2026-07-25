@@ -68,31 +68,38 @@ NOT_AVAILABLE = 69
 #: A binding is what reaches an agent — a channel, a schedule, or this terminal — so a
 #: schedule comes to name one through `bindings`, and `schedules` keeps carrying whatever
 #: it is given without reading it.
+#: A verb says what, and the word after it says whose — `start ava`, `logs ava`,
+#: `schedules ava`. `add` and `remove` need no noun in front of them for the same reason
+#: `start` does not: there is one thing at this level to add or remove, and it is an
+#: agent. A nested `add` stays qualified by the group it sits in, so `schedules ava add`
+#: is a schedule and nothing else.
 PLANNED: dict[str, tuple[str, dict[str, str]]] = {
-    "agents": ("list the agents this install defines", {
-        "add": "make an agent, and the gateway that runs it",
-        "remove": "take an agent away, along with the gateway that ran it",
-        "show": "what one agent is, and where it keeps things",
-    }),
+    "add": ("make an agent, and the gateway that runs it", {}),
+    "agents": ("the agents this install defines, or one of them", {}),
     "bindings": ("what reaches an agent, and as which provider", {
-        "add": "have one entry point reach an agent through a chosen provider",
+        "add": "have one entry point reach this agent through a chosen provider",
         "remove": "take a binding away, leaving the agent it named",
         "show": "what one entry point resolves to, before anything runs",
     }),
     "channels": ("the channels an agent is reachable on, and who may use them", {
-        "add": "put an agent on a channel, held open by the gateway that runs it",
-        "remove": "take an agent off a channel",
-        "show": "one channel, and who is allowed to reach the agent through it",
+        "add": "put this agent on a channel, held open by the gateway that runs it",
+        "remove": "take this agent off a channel",
+        "show": "one channel, and who is allowed to reach this agent through it",
     }),
     "doctor": ("what stands between an agent and a working turn", {}),
     "run": ("one turn, streamed to this terminal", {}),
-    "runs": ("what has been run, and what became of each", {
+    "runs": ("what an agent has run, and what became of each", {
         "replay": "re-print a stored run",
         "resume": "carry one run on from where it stopped",
         "show": "one run, and everything recorded against it",
-        "stop": "end one run, leaving the gateway holding it up",
+        "stop": "end one run, leaving the agent it belongs to running",
     }),
 }
+
+#: The planned verbs that are about one agent's things rather than about an agent, and so
+#: name whose before saying which. Optional to the parser and required by the command once
+#: built, so that leaving it out is answered in our words rather than by a usage dump.
+WHOSE = {"bindings", "channels", "runs"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -108,22 +115,26 @@ def build_parser() -> argparse.ArgumentParser:
         # Marked where the list is, not only when the verb is invoked. Most of what is
         # listed is planned, and a surface that reads as working sends a newcomer to try
         # each in turn to find out which ones do anything.
-        planned = sub.add_parser(name, help=f"{help_text} [coming soon]",
-                                 description=f"{help_text} — planned, not built yet.")
+        described = "\n".join(f"  {act:<8}  {what}" for act, what in actions.items())
+        planned = sub.add_parser(
+            name, help=f"{help_text} [coming soon]",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            description=f"{help_text} — planned, not built yet."
+                        + (f"\n\nactions:\n{described}" if described else ""))
+        if name in WHOSE:
+            planned.add_argument("agent", nargs="?", help="whose — the agent's name")
         if actions:
-            # A verb that will manage several things offers them the way `schedules` does,
-            # so the shape a person learns once is the shape everywhere. Each is described
-            # where it is listed, which is the whole point of registering them this early.
-            acts = planned.add_subparsers(dest="act", metavar="<action>")
-            for act, what in actions.items():
-                one = acts.add_parser(act, help=f"{what} [coming soon]",
-                                      description=f"{what} — planned, not built yet.")
-                one.add_argument("args", nargs="*", help=argparse.SUPPRESS)
-        else:
-            # Whatever a planned command will eventually take, it takes nothing today —
-            # but it must not choke on being given arguments, or the message it prints
-            # would be argparse's rather than ours.
-            planned.add_argument("args", nargs="*", help=argparse.SUPPRESS)
+            # A plain argument rather than a sub-parser, which cannot be used here: a
+            # sub-parser is itself a positional and takes the *first* word after the verb,
+            # so `runs ava show` would look for an action called `ava`. The agent comes
+            # first everywhere in this surface, so the actions are a choice instead — and
+            # each is described above, where it is listed, rather than by argparse.
+            planned.add_argument("act", nargs="?", choices=sorted(actions), metavar="<action>",
+                                 help="what to do — see the list above")
+        # Whatever a planned command will eventually take, it takes nothing today — but it
+        # must not choke on being given arguments, or the message it prints would be
+        # argparse's rather than ours.
+        planned.add_argument("args", nargs="*", help=argparse.SUPPRESS)
 
     said = sub.add_parser("version", help="what is installed, and whether that is current")
     said.add_argument("--check", action="store_true", help="say whether a newer release exists")

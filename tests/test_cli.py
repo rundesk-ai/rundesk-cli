@@ -10,6 +10,7 @@ Run: python3 tests/test_cli.py
 
 from __future__ import annotations
 
+import argparse
 import io
 import contextlib
 import pathlib
@@ -75,9 +76,26 @@ def run(argv: list[str], published: str | None = None) -> tuple[int, str, str]:
 def _offered(parser) -> dict:
     """What this parser offers under it, by name — or an empty mapping if nothing."""
     for action in parser._actions:
-        if isinstance(action, __import__("argparse")._SubParsersAction):
+        if isinstance(action, argparse._SubParsersAction):
             return action.choices
     return {}
+
+
+def _actions_of(parser) -> list[str]:
+    """Every action this verb offers, however it happens to offer them.
+
+    Two shapes, for one reason. A built verb naming its gateway with an option can use
+    sub-parsers; a planned one naming its agent first cannot, because a sub-parser is
+    itself a positional and would take `ava` in `runs ava show` for an action. Read off
+    the parser either way, so neither shape needs a hand-kept list beside it.
+    """
+    under = sorted(_offered(parser))
+    if under:
+        return under
+    for action in parser._actions:
+        if action.dest == "act" and action.choices:
+            return sorted(action.choices)
+    return []
 
 
 def verbs() -> list[str]:
@@ -99,24 +117,37 @@ def operations() -> list[list[str]]:
     found = []
     for verb, parser in sorted(_offered(cli.build_parser()).items()):
         found.append([verb])
-        found += [[verb, act] for act in sorted(_offered(parser))]
+        found += [[verb, act] for act in _actions_of(parser)]
     return found
 
 
 def planned() -> list[list[str]]:
-    """Every operation that is planned and not built, as a person types it."""
-    return [words for words in operations() if words[0] in cli.PLANNED]
+    """Every operation that is planned and not built, as a person types it.
+
+    An action is typed after the agent it is about, which is what a person types and so
+    what these cases send: `runs <agent> show`, never `runs show`.
+    """
+    words = []
+    for verb, parser in sorted(_offered(cli.build_parser()).items()):
+        if verb not in cli.PLANNED:
+            continue
+        whose = ["an-agent"] if verb in cli.WHOSE else []
+        words.append([verb] + whose)
+        words += [[verb] + whose + [act] for act in _actions_of(parser)]
+    return words
 
 
 def planned_leaves() -> list[list[str]]:
-    """The planned operations that take arguments rather than an action under them.
+    """The planned operations with nothing further expected after them.
 
-    A verb offering actions takes an action next and nothing else, so `agents ava` is a
-    usage error and always will be — the same answer `schedules ava` already gives. Only
-    what sits at the end of the surface has arguments of its own to tolerate.
+    Those are the ones with arguments of their own to tolerate. A verb offering actions
+    expects one next and nothing else, so `runs ava tomorrow` is a usage error and always
+    will be — found by asking which of these no other one continues, rather than by a
+    second list that would stop agreeing with the first.
     """
-    return [words for words in planned()
-            if not cli.PLANNED[words[0]][1] or len(words) > 1]
+    every = planned()
+    return [words for words in every
+            if not any(other[:len(words)] == words and other != words for other in every)]
 
 
 class SurfaceTests(unittest.TestCase):
@@ -165,8 +196,8 @@ class SurfaceTests(unittest.TestCase):
         """R-CMD-4 — `agents` and `agents show` are different things to want. Told only
         that `agents` is planned, a reader takes the whole noun to be missing rather than
         one thing about it."""
-        _, _, err = run(["agents", "show", "ava"])
-        self.assertIn("agents show", err)
+        _, _, err = run(["runs", "ava", "show", "7"])
+        self.assertIn("runs show", err)
 
     def test_a_planned_command_names_something_that_does_work(self):
         """R-CMD-4 — a refusal that leaves somebody with nowhere to go is half a message."""

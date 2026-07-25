@@ -101,6 +101,12 @@ what the gateway verbs act on as an argument rather than importing it, so the su
 and nothing of locks, records or process groups — and every one of them is tested with no gateway and
 no supervisor anywhere near it.
 
+The agent arrives **above** the gateway, never beside it: `cli` → `agent` → `gateway` → `process`. One
+agent has one gateway, made with it and taken away with it, and the agent's channels are held open
+there — so an agent knows which gateway runs it, and a gateway goes on knowing nothing of whose work it
+is holding. That is what keeps the two testable apart while the command surface operates them as one
+thing, and it is the direction to keep: never a gateway that reaches for an agent.
+
 ## Scripts And Commands
 
 - `install.sh` — puts `rundesk` on a PATH and takes it off again (`--uninstall [--purge]`). Installs

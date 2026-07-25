@@ -41,6 +41,8 @@ gateway each, which is how one agent's schedules stay that agent's alone.
 | ✅ | R-SCH-18 | A gateway's schedules that cannot be read are reported as unreadable rather than as none | `listing schedules that cannot be read never reports having none`, `a gateway whose schedules cannot be read still starts and says so`, `no schedule runs while the file cannot be read` |
 | ✅ | R-SCH-19 | A change that altered no schedule leaves the file exactly as it was | `a change that changed nothing does not rewrite the file`, `a change that did change something is written` |
 | ❌ | R-SCH-20 | A schedule run that already began is not begun again after the machine loses power | src/rundesk_cli/gateway.py:204 — no test, nothing here can cut the power |
+| ❌ | R-SCH-21 | A schedule can be run by hand at any time, whether or not it is due | — |
+| ❌ | R-SCH-22 | A schedule run by hand does not change when it next falls due on its own | — |
 
 ## Open questions
 

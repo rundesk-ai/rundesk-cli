@@ -40,10 +40,12 @@ supervises nothing itself; it hands that to what the machine already has.
   read either as words for a person or as whole records for something that parses them — that second kind
   being written back to while it runs, which is how an agent brain will be reached; and schedules,
   which are per gateway so that an agent's are its own, are never run late and never overlap.
-- **Out of scope:** agents, provider brains, chat channels, turns and transcripts. Those verbs are
-  registered and answer "coming soon" until each is built. rundesk also does not supervise: keeping a
-  gateway up is the machine's, and writing our own would be the largest thing here that nobody asked for.
-  No dependencies, no build step, and no second way into the product besides this command.
+- **Out of scope:** agents, provider brains, chat channels, turns and transcripts. Every operation that
+  will reach them is registered and answers "coming soon" until it is built — an agent and the one
+  gateway that runs it, what reaches that agent, the channels it answers on, and what each run became.
+  rundesk also does not supervise: keeping a gateway up is the machine's, and writing our own would be
+  the largest thing here that nobody asked for. No dependencies, no build step, and no second way into
+  the product besides this command.
 
 ## External Systems
 

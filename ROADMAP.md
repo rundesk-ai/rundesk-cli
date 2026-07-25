@@ -1,25 +1,30 @@
-# Roadmap — Agent Profiles to Provider-Controlled Channels
+# Roadmap — Agents to Provider-Controlled Channels
 
-**Planning baseline:** `8be7470` on 2026-07-25  
+**Planning baseline:** `eb61e2f` on 2026-07-25  
 **Status:** Direction, not a ratified product contract
 
-This roadmap gets Rundesk from a proven process/gateway/schedule substrate to named agent profiles that
-can be reached through Discord, Slack, schedules and the terminal. It deliberately advances one
-testable concept at a time. The Node Rundesk is evidence and prior art; it is not the architecture to
-port.
+This roadmap gets Rundesk from a proven process/gateway/schedule substrate to named agents that can be
+reached through Discord, Slack, schedules and the terminal. It deliberately advances one testable
+concept at a time. The Node Rundesk is evidence and prior art; it is not the architecture to port.
+
+**The noun is `agent`.** Earlier drafts of this roadmap said "profile"; the settled word for the thing a
+person operates is the agent, and *its home* is the directory of rules, memory, workspace and skills it
+loads. Where "profile" survives below, read "agent". Requirement IDs are `R-AGT-n`, and `agent-` is a
+declared component sitting above `platform-` — so an agent knows which gateway runs it and a gateway
+knows nothing of whose work it holds.
 
 ## Direction
 
-Build **agent profiles before Discord**, after restoring a trustworthy runtime baseline.
+Build **agents before Discord**, after restoring a trustworthy runtime baseline.
 
-Profiles come first because a channel needs a stable identity, workspace and knowledge boundary to route
-to. Discord should not be used to discover whether profile isolation, provider invocation or session
+Agents come first because a channel needs a stable identity, workspace and knowledge boundary to route
+to. Discord should not be used to discover whether agent isolation, provider invocation or session
 continuation works. Those are cheaper and more deterministic to prove locally.
 
 The first useful vertical slice is:
 
 ```text
-one profile -> one resolved binding -> one provider turn -> the terminal
+one agent -> one resolved binding -> one provider turn -> the terminal
 ```
 
 Then prove the same path from a schedule and a fake channel before adding the Discord network boundary.
@@ -31,17 +36,20 @@ Four concepts are enough:
 
 | Concept | Owns | Does not own |
 |---|---|---|
-| **Profile** | Name, gateway, profile home, workspace, knowledge, skills and tool grants | A permanent provider, model or channel |
-| **Binding** | One entry point's profile, provider, model and permission policy | Profile knowledge or provider session history |
-| **Conversation** | One external thread or terminal conversation and its provider-native session handle | Global profile configuration |
+| **Agent** | Name, its one gateway, its home, workspace, knowledge, skills and tool grants | A permanent provider, model or channel |
+| **Binding** | One entry point's agent, provider, model and permission policy | Agent knowledge or provider session history |
+| **Conversation** | One external thread or terminal conversation and its provider-native session handle | Global agent configuration |
 | **Run** | One admitted occurrence, immutable resolved settings, native events and outcome | Future changes to its binding |
 
-A gateway belongs to a profile, but it may own multiple provider processes or turns selected by different
-bindings. The provider CLI remains the agent brain.
+**One agent has one gateway**, made with the agent and taken away with it. Everything that reaches that
+agent runs inside it: its channels are held open there and its schedules fire there, though the gateway
+may hold several provider processes or turns selected by different bindings. So what a person operates
+is the agent, and the gateway is how it runs rather than a second thing to keep track of. The provider
+CLI remains the agent brain.
 
-For example, all four bindings below use the same profile knowledge:
+For example, all four bindings below use the same agent's knowledge, inside that agent's one gateway:
 
-| Entry point | Profile | Provider | Model |
+| Entry point | Agent | Provider | Model |
 |---|---|---|---|
 | Discord `#operations` | `ava` | Claude | model selected for Discord |
 | Slack `#planning` | `ava` | Codex | model selected for Slack |
@@ -53,24 +61,24 @@ binding affects new work. It must not silently change an active conversation or 
 a different provider. A provider change starts a new provider session unless a future, explicitly tested
 migration says otherwise.
 
-Profile defaults may be a convenience fallback, but provider and model are not intrinsic profile
-identity. An inbound chat message cannot change them; only an authorized binding/configuration change or
-an authorized local invocation can.
+Agent defaults may be a convenience fallback, but provider and model are not intrinsic agent identity.
+An inbound chat message cannot change them; only an authorized binding/configuration change or an
+authorized local invocation can.
 
 ## Boundaries to Keep
 
 - Keep the provider's native conversation, context, tools, permissions and session loop intact. Rundesk
   invokes it, supplies its isolated environment, streams its native events, sends supported input and
   records outcomes. It does not reconstruct an agent loop.
-- Preserve the native event record. Add only the small Rundesk envelope needed to correlate profile,
+- Preserve the native event record. Add only the small Rundesk envelope needed to correlate agent,
   binding, conversation, run and delivery. Do not invent a large common event vocabulary before two real
   consumers prove it is needed.
 - Keep channel presentation out of provider adapters. A fake channel and Discord should consume the same
   provider/run surface.
-- Keep provider installations, adapters and private runtime homes outside the profile home. Rundesk may
-  associate an isolated runtime home with a profile/provider pair, but that managed state is not profile
-  knowledge and does not make the provider part of the profile.
-- Define profile isolation narrowly in the first release: separate automatic context/skill discovery,
+- Keep provider installations, adapters and private runtime homes outside an agent's home. Rundesk may
+  associate an isolated runtime home with an agent/provider pair, but that managed state is not the agent's
+  knowledge and does not make the provider part of the agent.
+- Define agent isolation narrowly in the first release: separate automatic context/skill discovery,
   configuration, session history and default cwd. It is not an OS filesystem sandbox. A provider's native
   file or shell tools may reach sibling or owner paths unless a later phase adds and proves an enforcement
   boundary; remote access must never be described as filesystem containment.
@@ -104,52 +112,73 @@ Measure observable behavior. For example, prove two processes overlap by recordi
 intervals; do not infer concurrency from a quick elapsed time. Prove context loading with a canary and
 token counts; do not ask a model what it believes was loaded.
 
-## Phase 0 — Restore a Trustworthy Gate and Declare the Surface
+## Phase 0 — Restore a Trustworthy Gate and Declare the Surface — **done**
 
-**Outcome:** the current substrate has one unambiguous green gate, and the owner has approved how the next
-concepts appear in the product. No profile or channel behavior is added.
+**Outcome:** the substrate has one unambiguous green gate, and the owner has approved how the next
+concepts appear in the product. No agent or channel behavior was added.
 
-### 0A. Make the gate truthful
+### 0A. Make the gate truthful — done
 
-At this baseline, `requirements.txt` declares `discord.py==2.7.1`, the repository `.venv` can run the
-gateway suite, but the CI test matrix runs plain Python without installing declared requirements. A clean
-plain-Python gateway test therefore fails its runtime fitness check. Decide and prove the one supported
-test environment before treating any later result as green. Do not remove or move the dependency merely
-for cleanliness.
+The gate meant three things. A `Gateway` built without a root asked whether the *developer's checkout*
+fit the Python running it, so with `discord.py` declared, every case that claimed a name refused on any
+machine that had run the installer — 8 failures and 88 errors — and passed in CI, which has no `.venv`.
+The suites now decide fitness in their own scratch root, and CI creates an empty `.venv` so a runner is
+the machine a developer has. `discord.py` stays declared and pinned: the channel needs a websocket
+client the standard library does not have.
 
-### 0B. Declare the concepts and their command surface
+A second gap mattered more for consumers. Nobody runs rundesk under `.venv/bin/python`, which is all CI
+ever checked — the command is `#!/usr/bin/env python3` and puts the virtualenv's packages on the path
+itself. That hand-off was unproven, and breaking it would have refused every installed gateway while the
+gate stayed green. CI now starts a real gateway through the installed command.
 
-The owner must approve the component ontology and persisted-state boundaries before implementation.
-R-CMD-1 and R-CMD-2 also require every future operation to be listed and described by the command from
-the outset. Decide whether the existing planned verbs will manage each operation or whether additional
-planned verbs are needed for:
+`.knowledge/scripts/gate` is the one command, and it **finds** the suites rather than listing them: four
+ran in CI that the documented gate never named. It fails when the workflow does not name one too.
 
-- profile creation, listing, inspection and diagnosis;
-- binding creation, provider/model selection and removal;
-- channel authorization and channel-to-binding management;
-- schedule-to-binding management;
-- run inspection, continuation and replay.
+### 0B. Declare the concepts and their command surface — done
 
-The roadmap does not choose names for undeclared operations. Their approved syntax is registered as
-truthfully unavailable before the first implementation phase relies on a hidden configuration path.
+`agent-` is a declared component above `platform-`, and `.knowledge/prd-drafts/agent-home.md` states what
+an agent is, what its home holds, how far apart two of them are kept, and what isolation deliberately is
+not. Every operation the product will offer is registered and refuses truthfully: `agents`, `bindings`,
+`channels`, `doctor`, `run` and `runs`, each with the actions under it described where it is listed. A
+schedule reaches an agent by naming a binding, so `schedules` keeps carrying what it is given without
+reading it.
 
-### Exit proof
+A planned command exited `2`, and so does a typo — two situations wanting opposite things done about
+them. Planned now ends on `EX_UNAVAILABLE`, says which part of it is missing, and names a command that
+works (R-CMD-8, R-CMD-9, R-CMD-10).
 
-- The documented local and CI commands use the same dependency assumptions and pass from a clean checkout.
+### Exit proof — met
+
+- The documented local command and CI run the same list under the same assumptions, and pass from a clean
+  checkout with or without a `.venv`.
 - The owner-approved ontology, persisted boundaries and complete planned CLI surface are recorded.
 - Existing process, gateway and schedule contracts remain green.
 
-## Phase 1 — Create the Profile Boundary
+### Left open, deliberately
 
-**Outcome:** Rundesk can create, list and diagnose an isolated profile without running a provider.
+- Findings 32 and 33 — `stop`/`restart` fanning out with no scope, and `uninstall` being an instruction
+  page that exits zero. Both change built verbs and were kept out of a declaration phase.
+- Finding 31 — `schedules add --run` swallowing later options. Nothing new was added to that grammar
+  because of it.
 
-Start with the already-declared `new`, `agents` and `doctor` command intentions. Exact syntax and persisted
-layout are decided in the draft PRD before implementation.
+## Phase 1 — Make the Agent the Thing You Operate
 
-A profile scaffold should contain:
+**Outcome:** Rundesk creates, lists and diagnoses an isolated agent, and the command surface operates
+agents rather than gateways — without a provider being run.
+
+This phase is **two halves that must land together**, because either alone leaves the product incoherent:
+an agent nobody can start, or a gateway that still has to be managed by hand beside its agent.
+
+### 1A. The agent and its home
+
+`agents add` makes an agent's home; `agents`, `agents show` and `doctor` read it. Exact syntax and
+persisted layout are decided in the draft PRD before implementation, and `.knowledge/prd-drafts/agent-home.md`
+is ratified as part of this phase rather than before it — its rows are what these tests prove.
+
+An agent's home should contain:
 
 ```text
-<profile>/
+<agent>/
   AGENTS.md
   CLAUDE.md
   SOUL.md
@@ -161,53 +190,102 @@ A profile scaffold should contain:
 
 This is a conceptual layout, not a ratified path schema. `AGENTS.md` is the canonical rule router.
 `CLAUDE.md` is a small provider bootstrap that routes Claude to the same rules; it is not a second set of
-profile knowledge. `SOUL.md`, `USER.md` and `MEMORY.md` are loaded through that routing rather than
+agent knowledge. `SOUL.md`, `USER.md` and `MEMORY.md` are loaded through that routing rather than
 assuming each provider recognizes those filenames.
 
-Rundesk-managed provider homes are outside this profile scaffold and isolated by profile/provider pair.
+Rundesk-managed provider homes are outside an agent's home and isolated by agent/provider pair.
 Authentication sharing or isolation is a separate, explicit decision: probes already show that
 config/home variables affect discovery and credentials, so Rundesk must never accidentally expose the
 owner's global skills or history through automatic discovery.
 
-Profile-owned knowledge must also have an explicit lifecycle. It must live outside removable install
-files or be preserved by ordinary uninstall, with deletion limited to a separately authorized purge.
-Profile names must not collide with gateway history sidecars or reserved suffixes.
+An agent's knowledge must also have an explicit lifecycle. It must live outside removable install files
+or be preserved by ordinary uninstall, with deletion limited to a separately authorized purge. Agent
+names must not collide with gateway history sidecars or reserved suffixes.
 
-Before a supervised profile is considered isolated, local commands and its launchd job must resolve the
-same authoritative state/profile directories. These profile-entry risks are currently recorded by
-findings 18–19, 22 and 28; reproduce them on the implementation baseline rather than copying a suggested
-fix.
+Before a supervised agent is considered isolated, local commands and its launchd job must resolve the
+same authoritative state and agent directories. These entry risks are currently recorded by findings
+18–19, 22 and 28; reproduce them on the implementation baseline rather than copying a suggested fix.
+
+### 1B. The CLI operates agents, and gateways are how they run
+
+Today the gateway is the subject of `start`, `stop`, `restart`, `remove`, `status`, `logs` and
+`schedules --gateway`. It becomes the mechanism, and the agent becomes the subject.
+
+**One rule: the verb says what, and the next word says whose.** A verb with only one possible object at
+this level needs no noun in front of it — there is one thing to `add`, `remove`, `start` or `stop`, and
+it is an agent. A nested `add` stays qualified by its group, so `schedules ava add` is a schedule.
+
+```text
+rundesk add ava                    make ava, and the one gateway that runs it
+rundesk remove ava                 take both away
+rundesk start ava                  already ships — subject becomes the agent
+rundesk stop ava
+rundesk restart ava
+rundesk logs ava
+rundesk doctor ava
+rundesk status                     every agent, and what each is doing
+
+rundesk agents                     list them
+rundesk agents ava                 what ava is, and where it keeps things
+
+rundesk schedules ava              what ava runs on its own       (was --gateway ava)
+rundesk schedules ava add tidy --when <cron> -- /bin/tidy
+rundesk schedules ava run tidy     run it now, due or not
+rundesk channels ava               what ava is reachable on
+rundesk runs ava                   what ava has run
+rundesk runs ava show <run>
+```
+
+- `add` makes the agent **and its one gateway**; `remove` takes both. There is no separate step, and no
+  way to end up with one without the other.
+- `remove` stops being gateway-specific and becomes the agent's — the gateway goes because its agent did.
+  The verb does not move, so nothing that ships today is renamed.
+- `--gateway <name>` becomes a positional, which also takes it out of the option list that `--run`'s
+  remainder currently swallows (finding 31).
+- **A schedule can be run by hand** — `schedules <agent> run <schedule>` — whether or not it is due, and
+  doing so does not move when it next falls due on its own (R-SCH-21, R-SCH-22).
+- The default gateway that exists today under no agent's name is reconciled: either it gains an agent or
+  it is named as legacy. **This is a persisted-state decision and an owner call before implementation.**
+
+The dependency runs **agents → gateways and never the reverse**: `cli` → `agent` → `gateway` → `process`.
+An agent knows which gateway runs it; a gateway goes on knowing nothing of whose work it holds, which is
+what keeps the two testable apart while the command surface operates them as one thing.
 
 ### Tests
 
-- Refuse names and symlinks that escape the profile root.
-- Refuse names that collide with reserved state/history filenames.
-- Create the same profile idempotently without overwriting edited knowledge.
-- Prove two profiles have different workspace and provider-home paths.
-- Prove the gateway receives the same resolved profile paths when supervised as when run locally.
-- Prove ordinary uninstall/update preserves profile knowledge, workspace, bindings and history.
+- Refuse names and symlinks that escape where agents are kept.
+- Refuse names that collide with reserved state or history filenames.
+- Make the same agent twice without overwriting knowledge already edited in its home.
+- Prove two agents have different workspace and provider-home paths.
+- Prove an agent's gateway is made with it, and goes with it.
+- Prove no command leaves an agent without its gateway, or a gateway without its agent.
+- Prove a schedule run by hand runs, and leaves the time it next falls due where it was.
+- Prove the gateway receives the same resolved agent paths when supervised as when run locally.
+- Prove ordinary uninstall and update preserve an agent's knowledge, workspace, bindings and history.
 - Prove `doctor` detects missing files, broken links, unusable provider homes and an unfit runtime without
   starting a provider or changing state.
+- Prove the gateway module still passes its own contract with no agent anywhere near it.
 
 ### Exit proof
 
-A fresh profile can be created, inspected and diagnosed entirely offline. Profile management operations
-cannot resolve one profile's owned paths as another's. Provider filesystem containment is explicitly
-deferred; this phase proves only separate discovery, configuration, session and cwd defaults.
+A fresh agent is created, inspected, started, stopped and diagnosed entirely offline, and every one of
+those is typed against the agent's name rather than a gateway's. Agent management cannot resolve one
+agent's owned paths as another's. Provider filesystem containment is explicitly deferred; this phase
+proves only separate discovery, configuration, session and cwd defaults.
 
 ## Phase 2 — Resolve Bindings Independently of Providers
 
 **Outcome:** terminal, schedule and future channel sources can select different providers/models for the
-same profile through one pure resolver.
+same agent through one pure resolver.
 
 Define the smallest binding record that can answer:
 
-- which profile receives this source;
+- which agent receives this source;
 - which provider and optional model are selected;
 - which permission policy applies;
 - which external conversation key, if any, owns continuation.
 
-Resolution produces an immutable run specification containing at least `run_id`, profile, binding,
+Resolution produces an immutable run specification containing at least `run_id`, agent, binding,
 source/conversation, provider, model, cwd and provider home. Provider session handles belong to the
 conversation and provider combination; they are never reused across providers.
 
@@ -219,10 +297,10 @@ it does not require a new persistence engine.
 
 ### Tests
 
-- Discord, Slack and two schedules resolve to the same profile cwd/knowledge but different requested
+- Discord, Slack and two schedules resolve to the same agent cwd/knowledge but different requested
   provider/model combinations.
-- Binding selection does not copy or fork profile knowledge.
-- An unknown provider, model, profile or source fails before process creation.
+- Binding selection does not copy or fork an agent's knowledge.
+- An unknown provider, model, agent or source fails before process creation.
 - A binding edit does not mutate an already admitted run.
 - A provider change cannot resume the old provider's session.
 - Untrusted message text cannot override provider, model or permission policy.
@@ -234,10 +312,10 @@ One table-driven offline test demonstrates the four-entry-point example above, i
 
 ## Phase 3 — Bootstrap Knowledge, Skills and Tool Discovery
 
-**Outcome:** every provider can be given the same profile knowledge and a basic skill without Rundesk
+**Outcome:** every provider can be given the same agent's knowledge and a basic skill without Rundesk
 becoming a second skills or tools engine.
 
-Add one basic `SKILL.md` template, one canonical profile-visible skills library and only the provider
+Add one basic `SKILL.md` template, one canonical agent-visible skills library and only the provider
 discovery links that live probes prove. Current Node probes suggest `.claude/skills/` and
 `.agents/skills/` links, while a bare `skills/` directory is not enough; re-probe current CLI versions
 before making that a guarantee.
@@ -248,10 +326,10 @@ Tool execution and richer grants wait until one provider turn is proven.
 
 ### Tests and probes
 
-- Offline tests prove scaffold idempotency, link resolution and profile-specific grants.
+- Offline tests prove scaffold idempotency, link resolution and agent-specific grants.
 - Rundesk-managed config does not automatically discover ungranted owner-level skills.
-- A canary profile proves each provider follows `AGENTS.md` to `SOUL.md`, `USER.md` and `MEMORY.md`.
-- A basic skill canary proves actual provider discovery from the profile workspace.
+- A canary agent proves each provider follows `AGENTS.md` to `SOUL.md`, `USER.md` and `MEMORY.md`.
+- A basic skill canary proves actual provider discovery from the agent's workspace.
 - Saved, sanitized probe output records provider version, invocation and result.
 
 ### Exit proof
@@ -261,7 +339,7 @@ not claim that a provider loaded a rule or skill based only on file presence.
 
 ## Phase 4 — Control One Provider Through the Terminal
 
-**Outcome:** one profile can complete and resume one provider-native turn while Rundesk streams and
+**Outcome:** one agent can complete and resume one provider-native turn while Rundesk streams and
 correlates its events.
 
 Do not choose the first adapter because the Node build chose it. Probe the installed Claude, Codex and
@@ -281,7 +359,7 @@ budget; ownership committed before spawn; and a small admission bound. These are
 criteria; finding numbers are review evidence, not architecture.
 
 Choose the smallest currently documented surface that passes every required item above. Implement only
-that adapter and `rundesk run <profile> ...` to the terminal. Mid-turn send is not promised until a real
+that adapter and `rundesk run <agent> ...` to the terminal. Mid-turn send is not promised until a real
 probe proves it; some headless providers turn questions into final prose or require stop/resume.
 
 ### Tests
@@ -312,7 +390,7 @@ tested migration or an additive format that keeps old schedules truthful.
 
 Before reconnectable channel delivery, interruption history must resist lost updates, logs must have one
 bounded source, and stale/interrupted runs must be readable and reconciled. These are the current findings
-11, 17 and 26–27; they are just-in-time gates for this phase rather than blockers for the offline profile
+11, 17 and 26–27; they are just-in-time gates for this phase rather than blockers for the offline agent
 scaffold.
 
 Before enabling provider-backed schedules, the scheduler must also prove that it examines work
@@ -322,7 +400,7 @@ the current risks recorded as findings 24–26 and 31.
 
 ### Tests
 
-- `schedule A` and `schedule B` share one profile but resolve different provider/model selections.
+- `schedule A` and `schedule B` share one agent but resolve different provider/model selections.
 - Existing never-late and never-overlap rules still hold.
 - An interactive request in an autonomous schedule becomes a clear outcome instead of waiting forever.
 - Fake-channel disconnect, slow delivery and retry exhaustion do not end the provider turn.
@@ -389,7 +467,7 @@ than restart and repeated crashes stop looping (the currently unproven R-GW-22 a
 ## Phase 8 — Add Provider and Channel Breadth One Adapter at a Time
 
 **Outcome:** Claude, Codex and Grok can each be selected by bindings, and a second channel can reuse the
-same channel contract without profile changes.
+same channel contract without changing the agent.
 
 Add the remaining providers one at a time behind the Phase 4 conformance suite. Preserve real differences:
 do not synthesize tool events a provider does not emit, claim interactive input a protocol cannot accept
@@ -397,15 +475,15 @@ or hide cumulative usage behind guessed per-turn numbers.
 
 Only after Discord and the fake channel share a proven surface should Slack be added. A Slack binding
 selects its provider/model exactly as Discord and schedules do; it does not add Slack fields to the
-profile.
+agent.
 
 ### Exit proof
 
 - Each provider passes the supported subset of the same invocation/replay/recovery suite.
 - `doctor` reports installed version and proven/unsupported capabilities for each provider.
-- One profile is exercised through at least two channels and two schedules with different provider/model
-  selections and unchanged profile knowledge.
-- Adding the second real channel requires a wire/presentation adapter, not provider or profile changes.
+- One agent is exercised through at least two channels and two schedules with different provider/model
+  selections and unchanged agent knowledge.
+- Adding the second real channel requires a wire/presentation adapter, not provider or agent changes.
 
 ## Explicitly Deferred
 
@@ -419,17 +497,19 @@ profile.
 
 ## Ready-for-Next-Phase Verdict
 
-Rundesk is ready to **plan and begin the foundation/profile work**, but it is not ready to begin Discord
-or a live provider adapter on the current baseline.
+Phase 0 is done, so Rundesk is ready to **build agents**. It is not ready to begin Discord or a live
+provider adapter.
 
 The next implementation sequence should be:
 
-1. Make the dependency/test gate truthful and declare the approved product/CLI surface.
-2. Ratify and build the profile scaffold with discovery/config/session isolation.
+1. ~~Make the dependency/test gate truthful and declare the approved product/CLI surface.~~ **Done.**
+2. Build the agent and its home, and refactor the command surface so agents are what a person operates
+   and gateways are how they run. **Both halves of Phase 1, together** — either alone leaves an agent
+   nobody can start, or a gateway still managed by hand beside its agent.
 3. Prove binding and run-ID resolution with fakes.
 4. Close the provider-facing runtime risks immediately before the first live provider turn.
 
-That sequence exposes profile and routing mistakes locally, keeps the provider CLIs native, and reaches
+That sequence exposes agent and routing mistakes locally, keeps the provider CLIs native, and reaches
 Discord through small demonstrations instead of one large integration.
 
 ## Evidence Used
