@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""gate — everything that has to be true before work here is finished, in one command.
+
+    python3 .knowledge/scripts/gate
+
+The list was kept by hand in three places — `AGENTS.md`, the workflow, and whatever an
+agent remembered — and the three had already come apart: four suites ran in CI that the
+documented gate never named, so a change could break them and every local check stay
+green. So the suites are **found**, not listed: a file added to `tests/` is in the gate
+the day it lands, here and in the workflow, which this also checks.
+
+It runs everything rather than stopping at the first failure. A gate you have to run
+seven times to learn what is broken is one people stop running.
+
+What it does **not** cover, and says so at the end: a real `./install.sh` and
+`./install.sh --uninstall`. That reaches the network and rebuilds the virtualenv this
+checkout is running on, which is not something a routine check should do to somebody
+without being asked.
+
+Standard library only, and nothing here reaches the network.
+"""
+
+from __future__ import annotations
+
+import pathlib
+import re
+import subprocess
+import sys
+import time
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+KNOWLEDGE = ROOT / ".knowledge"
+WORKFLOW = ROOT / ".github" / "workflows" / "build.yml"
+
+#: The interpreter running this one. Never a bare `python3`: the gate has to be able to
+#: answer for the environment it was actually asked about, and the two differ on exactly
+#: the machine where that matters — one with an install beside the checkout.
+PY = sys.executable
+
+
+def suites() -> list[pathlib.Path]:
+    """Every test file there is, in the order they are named."""
+    return sorted((ROOT / "tests").glob("test_*.py"))
+
+
+def named_by_the_workflow(found: list[pathlib.Path]) -> str | None:
+    """Which suites CI never runs, or None when it runs them all.
+
+    The workflow names each suite in a step of its own, so a red tick says which contract
+    broke without opening it. That legibility is worth keeping and is exactly what drifts:
+    a hand-kept list does not grow when `tests/` does.
+    """
+    if not WORKFLOW.is_file():
+        return f"there is no {WORKFLOW.relative_to(ROOT)} to check against"
+    text = WORKFLOW.read_text(encoding="utf-8")
+    ran = set(re.findall(r"tests/(test_[a-z0-9_]+\.py)", text))
+    missing = sorted(path.name for path in found if path.name not in ran)
+    if missing:
+        return "the workflow never runs " + ", ".join(missing)
+    return None
+
+
+def checks() -> list[tuple[str, list[str]]]:
+    """Every command the gate runs, in the order a failure is cheapest to read."""
+    parses = (
+        "import ast, glob, sys\n"
+        "for f in sorted(glob.glob('src/rundesk_cli/*.py') + glob.glob('tests/*.py')):\n"
+        "    ast.parse(open(f).read(), f)\n"
+    )
+    listed: list[tuple[str, list[str]]] = [
+        ("every source and test file parses", [PY, "-c", parses]),
+        ("the installer is valid shell", ["bash", "-n", str(ROOT / "install.sh")]),
+        ("the docs meet the standard", [PY, str(KNOWLEDGE / "scripts" / "doc-lint"), str(KNOWLEDGE)]),
+        ("the doc linter still has teeth", [PY, str(KNOWLEDGE / "scripts" / "test_doc_lint.py")]),
+        ("every proven requirement names a real test", [PY, str(KNOWLEDGE / "scripts" / "check-evidence")]),
+    ]
+    listed += [(path.stem, [PY, str(path)]) for path in suites()]
+    return listed
+
+
+def run(what: str, argv: list[str]) -> tuple[bool, str, float]:
+    began = time.monotonic()
+    done = subprocess.run(argv, cwd=str(ROOT), capture_output=True, text=True)
+    return done.returncode == 0, (done.stdout + done.stderr), time.monotonic() - began
+
+
+def main() -> int:
+    found = suites()
+    if not found:
+        print("gate: no test files found at all — that cannot be right", file=sys.stderr)
+        return 1
+
+    failed: list[str] = []
+    drift = named_by_the_workflow(found)
+    print(f"{'ok  ' if drift is None else 'FAIL'}  every suite is run by CI too"
+          + (f" — {drift}" if drift else ""))
+    if drift:
+        failed.append("every suite is run by CI too")
+
+    for what, argv in checks():
+        passed, said, took = run(what, argv)
+        print(f"{'ok  ' if passed else 'FAIL'}  {what}  ({took:.1f}s)")
+        if not passed:
+            failed.append(what)
+            # The tail, not the whole of it: a failing suite says far more than fits on a
+            # screen, and the part naming what broke is at the end.
+            for line in said.strip().splitlines()[-25:]:
+                print(f"        {line}")
+
+    print()
+    if failed:
+        print(f"gate: FAILED — {', '.join(failed)}", file=sys.stderr)
+        return 1
+    print(f"gate: OK ({len(found)} suites, {len(checks()) - len(found)} other checks) on {PY}")
+    print("      still to run by hand:  ./install.sh  &&  ./install.sh --uninstall")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

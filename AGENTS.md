@@ -193,29 +193,27 @@ install.sh                  install, and --uninstall [--purge]
 requirements.txt            what is needed beyond the standard library, pinned
 .venv/                      where the install puts it — made by install.sh, git-ignored
 .github/workflows/          the gate, and what a version tag publishes
-.knowledge/                 the knowledge system, and its two linters
+.knowledge/                 the knowledge system, its two linters, and the gate
 ```
 
 ## Build, test & run
 
 ```sh
 ./rundesk                                          # the command surface
-python3 tests/test_cli.py                          # the surface, and what it refuses
-python3 tests/test_updater.py                      # version, update, and their outcomes
-python3 tests/test_install.py                      # putting it on a machine, and taking it off
-bash -n install.sh                                 # the installer is valid shell
-python3 .knowledge/scripts/doc-lint .knowledge     # the docs are valid
-python3 .knowledge/scripts/test_doc_lint.py        # …and the doc linter has teeth
-python3 .knowledge/scripts/check-evidence          # every ✅ names a test that exists
+python3 .knowledge/scripts/gate                    # every suite, both linters, evidence, shell
 ```
 
-**The gate:** all eight, then a real `./install.sh` and `./install.sh --uninstall`. `check-evidence` is not
-optional — `doc-lint` cannot tell whether a cited test is real, and this repo has already shipped four
-contracts citing tests copied from another repository.
+**The gate:** that, then a real `./install.sh` and `./install.sh --uninstall`. The suites are **found**,
+not listed — a file added to `tests/` is in the gate the day it lands, and `gate` fails when the workflow
+does not name it too, because a list kept in two places is a list that disagrees with itself. Run one on
+its own (`python3 tests/test_cli.py`) whenever that is what you want; it is not the gate.
+`check-evidence` is not optional — `doc-lint` cannot tell whether a cited test is real, and this repo has
+already shipped four contracts citing tests copied from another repository.
 
 CI runs the same list on the oldest Python a fresh macOS ships and on a current one, on Linux and on
-macOS, and finishes by installing for real: the command answers, everything declared is present and
-importable, and uninstalling leaves nothing but the checkout.
+macOS, with an empty `.venv` beside the checkout so a runner is the machine a developer has. It finishes
+by installing for real: the command answers, everything declared is present and importable, an installed
+rundesk actually starts a gateway, and uninstalling leaves nothing but the checkout.
 
 ## Documentation duties
 

@@ -20,10 +20,10 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   redirected still discovers and stops **live gateways** through the ambient state directories. Point
   `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR`, `RUNDESK_SCHEDULES_DIR` and `RUNDESK_JOBS_DIR` at scratch too
   before running the destructive half of the gate.
-- The documented plain-`python3` suites can fail gateway fitness when `requirements.txt` is non-empty,
-  because only the install's `.venv` has those dependencies and the CI test job does not install them.
-  Until the gate installs or invokes the declared environment, run source suites with `.venv/bin/python`
-  and never report the clean plain-Python matrix as green.
+- **A `Gateway` built without `root=` asks whether the *developer's checkout* fits**, so with anything in
+  `requirements.txt` every case that claims a name refuses on a machine that has run the installer, and
+  passes in CI, which has no `.venv`. Give any gateway a test builds a scratch `root`; only the fitness
+  cases build an install. The suites are isolated now — the trap is writing the next one without it.
 - **`os.killpg(0, …)` signals the caller's own process group.** A test written to prove a signal can be
   refused killed the test run, the shell around it and everything else in the group — exit 1, no output,
   nothing to read. Use group `1` (the machine's own, refused to anyone but root) and skip under root.

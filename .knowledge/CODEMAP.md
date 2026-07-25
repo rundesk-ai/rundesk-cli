@@ -109,10 +109,16 @@ no supervisor anywhere near it.
   Removing takes the install directory entry by entry rather than whole, so an ordinary uninstall
   keeps `logs/` and `schedules/` and only `--purge` takes them. It changes nothing else a person owns — a `PATH` that does not reach the command is reported, never
   edited — and refuses to claim success until the installed command answers.
+- `.knowledge/scripts/gate` — everything that has to be true before work here is finished, in one
+  command. The suites are **found**, not listed, and it fails when the workflow does not name one of
+  them, so the local gate and CI cannot come apart. Runs everything rather than stopping at the first
+  failure, and says what it did not cover: the real `./install.sh` and `--uninstall`.
 - `.github/workflows/build.yml` — the gate, in four named jobs so a red X says what broke: the knowledge
   base (docs, contracts, evidence); the tests, one step per contract, across macOS and Ubuntu on Python
-  3.9 (the oldest a fresh macOS ships) and 3.13; installing this checkout, using it and removing it; and
-  installing the published release on a bare machine.
+  3.9 (the oldest a fresh macOS ships) and 3.13, with an empty `.venv` put beside the checkout so a
+  runner is the machine a developer has; installing this checkout, using it — including starting a real
+  gateway through the installed command, which is the only thing that exercises how the launcher reaches
+  what was installed — and removing it; and installing the published release on a bare machine.
 - `.github/workflows/release.yml` — a `vX.Y.Z` tag publishes the release that `rundesk update` finds.
 
 ## Integrations / Jobs
