@@ -181,9 +181,12 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="what to do with them")
         # Whatever a planned command will eventually take, it takes nothing today — but it
         # must not choke on being given arguments, or the message it prints would be
-        # argparse's rather than ours. Named where the shape is settled, so `--help` shows
-        # what it will be typed with rather than leaving a reader to guess.
-        planned.add_argument("args", nargs="*", help=argparse.SUPPRESS)
+        # argparse's rather than ours (R-CMD-7). Everything left, options included: with
+        # `nargs="*"` an option nobody has declared yet is an unrecognized argument, so
+        # `channels ava add ops --kind discord` — the form the reference lists — ended on
+        # argparse's usage code, which is the one thing a script must be able to tell our
+        # refusal from.
+        planned.add_argument("args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
 
     said = sub.add_parser("version", help="what is installed, and whether that is current")
     said.add_argument("--check", action="store_true", help="say whether a newer release exists")
@@ -1028,14 +1031,14 @@ def _add_schedule(args: argparse.Namespace, gateways, whose) -> int:
     try:
         made = schedule.Schedule(args.schedule, args.when)
     except schedule.NotASchedule as why:
-        print(f"{args.schedule}: NOT ADDED — {why}", file=sys.stderr)
+        print(f"{args.name}/{args.schedule}: NOT ADDED — {why}", file=sys.stderr)
         return 1
     if not process.located(args.run[0]):
         # Refused here rather than discovered at three in the morning. The gateway runs
         # with almost no PATH, so a program named rather than located resolves in the
         # shell that typed it and nowhere else (R-PROC-2) — and a schedule that cannot
         # start looks exactly like one that has simply never come due.
-        print(f"{args.schedule}: NOT ADDED — '{args.run[0]}' is a name, not a location; "
+        print(f"{args.name}/{args.schedule}: NOT ADDED — '{args.run[0]}' is a name, not a location; "
               f"give the full path (try: command -v {args.run[0]})", file=sys.stderr)
         return 1
     # Read and written under one lock: two `add`s racing would otherwise each read the
@@ -1043,7 +1046,7 @@ def _add_schedule(args: argparse.Namespace, gateways, whose) -> int:
     # while both commands reported success.
     with gateways.changing_schedules(args.name, whose.schedules) as keeping:
         if any(one.get("name") == args.schedule for one in keeping if isinstance(one, dict)):
-            print(f"{args.schedule}: EXISTS — remove it first, or use a different name",
+            print(f"{args.name}/{args.schedule}: EXISTS — remove it first, or use a different name",
                   file=sys.stderr)
             return 1
         keeping.append({"name": args.schedule, "when": args.when, "run": list(args.run)})
@@ -1059,7 +1062,7 @@ def _change_schedule(args: argparse.Namespace, gateways, whose, act: str) -> int
         found = [one for one in keeping
                  if isinstance(one, dict) and one.get("name") == args.schedule]
         if not found:
-            print(f"{args.schedule}: NOT FOUND — {args.name} has no schedule by that name",
+            print(f"{args.name}/{args.schedule}: NOT FOUND — no schedule by that name",
                   file=sys.stderr)
             return 1
         if act == "remove":
@@ -1094,12 +1097,12 @@ def _run_schedule(args: argparse.Namespace, gateways, whose) -> int:
     wanted, _ = gateways.scheduled(args.name, whose.schedules)
     found = [one for one in wanted if one.name == args.schedule]
     if not found:
-        print(f"{args.schedule}: NOT FOUND — {args.name} has no schedule by that name",
+        print(f"{args.name}/{args.schedule}: NOT FOUND — no schedule by that name",
               file=sys.stderr)
         return 1
     one = found[0]
     if not one.run:
-        print(f"{args.schedule}: NOTHING TO RUN — it names no program", file=sys.stderr)
+        print(f"{args.name}/{args.schedule}: NOTHING TO RUN — it names no program", file=sys.stderr)
         return 1
     was_due = schedule.describe(one, datetime.now())
     print(f"{args.name}/{args.schedule}: RUNNING BY HAND — {' '.join(one.run)}")

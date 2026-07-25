@@ -14,6 +14,7 @@ import argparse
 import io
 import contextlib
 import pathlib
+import re
 import shutil
 import tempfile
 import sys
@@ -265,6 +266,36 @@ class SurfaceTests(unittest.TestCase):
                 code, _, err = run(words + ["agent-x", "do a thing"])
                 self.assertEqual(code, cli.NOT_AVAILABLE)
                 self.assertIn("NOT AVAILABLE", err)
+
+    def test_every_operation_the_reference_lists_is_answered_as_it_is_typed(self):
+        """R-CMD-7 — read off the reference and typed exactly as written, options and all.
+
+        The forms were only ever exercised as bare verbs, so a planned one given the
+        arguments it will eventually take fell through to argparse: `channels ava add ops
+        --kind discord`, listed in `CLI.md` in those words, ended on the usage code. That
+        is the one thing a script has to be able to tell our refusal from, because the two
+        want opposite things done about them.
+        """
+        listed = pathlib.Path(cli.REPO_ROOT) / "CLI.md"
+        forms = [line.split("   ")[0].strip()
+                 for line in listed.read_text().splitlines()
+                 if line.startswith("rundesk ")]
+        self.assertTrue(forms, "the reference lists no operations at all")
+        for form in forms:
+            # `<agent>` and friends stand for a word. A `[...]` group is optional and left
+            # out whole — dropping only the token it starts with leaves the rest of the
+            # group behind and types something nobody would.
+            bare = re.sub(r"\[[^\]]*\]", " ", form)
+            typed = ["an-agent" if word.startswith("<") else word
+                     for word in bare.split()[1:]]
+            if "--" in typed:                       # what follows is a program to run
+                typed = typed[:typed.index("--")] + ["--", "/bin/echo"]
+            with self.subTest(form=form):
+                code, out, err = run(typed, published=f"v{__version__}")
+                self.assertNotIn("invalid choice", err, f"'{form}' is listed and not offered")
+                self.assertNotIn("unrecognized arguments", err,
+                                 f"'{form}' is listed and refused by argparse rather than by us")
+                self.assertIn(code, (0, 1, cli.NOT_AVAILABLE), f"'{form}' exited {code}")
 
     def test_a_command_that_is_not_there_is_told_apart_from_one_typed_wrong(self):
         """R-CMD-5, R-CMD-8 — two situations that shared one exit code, and want opposite
@@ -1374,13 +1405,18 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         self.assertEqual(2, code, said)
         self.assertEqual({}, gateways._written_schedules)
 
-    def test_adding_says_which_agent_as_well_as_which_schedule(self):
-        """R-SCH-14 — a success line naming only the schedule could not tell you it had
-        landed on the wrong agent."""
+    def test_every_outcome_says_which_agent_as_well_as_which_schedule(self):
+        """R-SCH-14 — a line naming only the schedule could not tell you it had landed on
+        the wrong agent, and a refusal is exactly when you most want to know which."""
         gateways = self._gateways()
-        _, said = drive(["schedules", "ava", "add", "tidy", "--when", "* * * * *",
-                         "--", "/bin/echo"], gateways)
-        self.assertIn("ava/tidy", said)
+        _, added = drive(["schedules", "ava", "add", "tidy", "--when", "* * * * *",
+                          "--", "/bin/echo"], gateways)
+        self.assertIn("ava/tidy", added)
+        _, twice = drive(["schedules", "ava", "add", "tidy", "--when", "* * * * *",
+                          "--", "/bin/echo"], gateways)
+        self.assertIn("ava/tidy", twice, "a refusal named the schedule and not the agent")
+        _, missing = drive(["schedules", "ava", "remove", "nope"], gateways)
+        self.assertIn("ava/nope", missing, "a refusal named the schedule and not the agent")
 
     def test_a_gateway_with_no_schedules_says_so(self):
         """R-SCH-8"""
