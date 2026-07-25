@@ -5,6 +5,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# One run per ref at a time. Four pushes in forty minutes ran four whole matrices at once,
+# every one of them carrying the same stuck job, and nothing stopped the superseded ones.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 # Four jobs, each answering one question, so a red tick says what is broken before you
 # open it: are the docs and contracts sound, does the code do what it claims, does this
 # checkout install, and does what is *published* install.
@@ -16,6 +22,7 @@ jobs:
   # failing test. Nothing here depends on the platform, so it runs once.
   knowledge:
     name: knowledge base — docs, contracts, evidence
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +45,7 @@ jobs:
   # ------------------------------------------------------------------ the code
   tests:
     name: tests — ${{ matrix.os }}, python ${{ matrix.python }}
+    timeout-minutes: 10
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -100,6 +108,7 @@ jobs:
   # unit and still leave a command that does not answer.
   install-this-checkout:
     name: install this checkout, use it, remove it — ${{ matrix.os }}
+    timeout-minutes: 10
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -206,6 +215,7 @@ jobs:
   install-published-release:
     name: install the published release on a bare machine — ${{ matrix.os }}
     if: github.event_name != 'pull_request'
+    timeout-minutes: 10
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
