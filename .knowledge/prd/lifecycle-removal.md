@@ -20,7 +20,7 @@ cannot do for itself, because doing it removes the command that is doing it.
 |  | ID | Requirement | Evidence |
 |:--:|---|---|---|
 | ✅ | R-RM-1 | Removing rundesk leaves no command behind | `removing rundesk leaves no command behind` |
-| ✅ | R-RM-2 | Removing rundesk leaves a copy of the source that was already there | `removing rundesk leaves a copy of the source alone` |
+| ✅ | R-RM-2 | Removing rundesk leaves a copy of the source that was already there | `removing rundesk leaves a copy of the source alone`, `removing rundesk leaves a checkout where it stands` |
 | ✅ | R-RM-3 | Removing rundesk leaves a command of the same name belonging to something else | `removing rundesk leaves a command it did not install` |
 | ✅ | R-RM-4 | Settings a person made are kept unless removal is asked to take them | `removing rundesk keeps settings unless asked to take them` |
 | ✅ | R-RM-5 | The command says how it is removed rather than attempting it | `uninstall hands the job to the installer` |

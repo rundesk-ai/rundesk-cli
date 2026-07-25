@@ -265,6 +265,48 @@ class InterruptedUpdateTests(unittest.TestCase):
         self.assertEqual(litter, [], f"an interrupted update left staging paths behind: {litter}")
 
 
+class OneAtATimeTests(unittest.TestCase):
+    """Two updates at once each replace what the other is halfway through reading."""
+
+    def setUp(self):
+        self._work = tempfile.TemporaryDirectory()
+        self.install = Path(self._work.name)
+
+    def tearDown(self):
+        self._work.cleanup()
+
+    def test_an_update_refuses_while_another_is_already_running(self):
+        # The work is stubbed rather than merely expected not to happen: if the lock ever
+        # stops holding, this fails on the stub having been called instead of quietly
+        # reaching for the network the way the real one would.
+        started = []
+        original = updater._download_and_apply
+
+        def should_not_run(*args, **kw):
+            started.append(args)
+            return 0
+
+        updater._download_and_apply = should_not_run
+        try:
+            with updater._only_one(self.install):
+                with contextlib.redirect_stdout(io.StringIO()) as said:
+                    code = updater.download_and_apply(self.install, "v9.9.9")
+        finally:
+            updater._download_and_apply = original
+
+        self.assertEqual(started, [], "a second update began while the first held the install")
+        self.assertEqual(code, 1, "a refused update reported success")
+        self.assertIn("already running", said.getvalue())
+
+    def test_an_update_that_finishes_leaves_the_way_clear_for_the_next(self):
+        # A lock that outlives the process holding it is worse than none: every later
+        # update refuses, and the only way out is deleting a file nobody mentioned.
+        with updater._only_one(self.install):
+            pass
+        with updater._only_one(self.install):
+            pass  # would raise Busy if the first had not let go
+
+
 class ReplacesTheInstallTests(unittest.TestCase):
     """An update has to actually replace what is on disk — and leave what is not its business."""
 

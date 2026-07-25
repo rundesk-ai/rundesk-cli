@@ -9,6 +9,8 @@ An update replaces the checkout in place and never touches the symlink that put
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -56,28 +58,20 @@ UNREACHABLE = "unreachable"
 NOTHING_PUBLISHED = "nothing-published"
 
 
-def _token() -> str | None:
-    """A token, if the machine has one. Needed only for a repository you cannot see anonymously."""
-    for name in ("RUNDESK_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"):
-        value = os.environ.get(name)
-        if value:
-            return value
-    return None
-
-
 def latest_version_online() -> str | None:
     """The newest published release, or None when it cannot be had.
 
     `why_unavailable` carries which kind of nothing it was, because "we could not ask" and
     "there is nothing there" send a reader somewhere completely different.
+
+    The request carries no credentials. rundesk is published in the open, so a token would
+    buy nothing but rate-limit headroom for a question asked once in a while — and an
+    earlier version read GITHUB_TOKEN from the environment, which meant a machine that
+    happened to have one exported sent it on a check nobody asked to authenticate.
     """
     global why_unavailable
     why_unavailable = None
-    headers = {"User-Agent": USER_AGENT}
-    token = _token()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(RELEASES_LATEST_URL, headers=headers)
+    request = urllib.request.Request(RELEASES_LATEST_URL, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -147,8 +141,41 @@ def run(
     return (apply or download_and_apply)(repo_root, published)
 
 
+@contextlib.contextmanager
+def _only_one(repo_root: Path):
+    """Hold the right to change this install, or say who already has it.
+
+    Two updates running at once each replace what the other is mid-way through reading.
+    The lock is advisory and only updates take it: a `rundesk version` racing an update is
+    left to the swap being a rename, which is as close to instant as this gets.
+    """
+    lock = repo_root / ".update.lock"
+    handle = open(lock, "w")
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise Busy(f"another update is already running (holding {lock})")
+        yield
+    finally:
+        handle.close()
+
+
+class Busy(Exception):
+    """Something else is already changing this install."""
+
+
 def download_and_apply(repo_root: Path, tag: str) -> int:
     """Fetch that tag and lay it over the checkout, leaving the PATH symlink alone."""
+    try:
+        with _only_one(repo_root):
+            return _download_and_apply(repo_root, tag)
+    except Busy as err:
+        print(f"could not update: {err}")
+        return 1
+
+
+def _download_and_apply(repo_root: Path, tag: str) -> int:
     url = ARCHIVE_URL.format(tag=tag)
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with tempfile.TemporaryDirectory() as work:

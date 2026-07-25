@@ -12,10 +12,14 @@
 #   ./install.sh --uninstall [--purge]
 #   curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash -s -- --uninstall
 #
-# Env overrides: RUNDESK_INSTALL_DIR (default ~/.rundesk), RUNDESK_BIN_DIR, RUNDESK_REPO_SLUG.
+# Env overrides: RUNDESK_INSTALL_DIR (default ~/.rundesk), RUNDESK_BIN_DIR.
 set -euo pipefail
 
-REPO_SLUG="${RUNDESK_REPO_SLUG:-rundesk-ai/rundesk-cli}"
+# Not overridable, and deliberately so. An install pointed at one repository updates itself
+# from whichever one `rundesk update` is compiled to ask — there is nowhere on disk that
+# remembers where a copy came from, so the two must be the same repository or an install
+# silently drifts onto somebody else's releases. Kept in step by a test.
+REPO_SLUG="rundesk-ai/rundesk-cli"
 INSTALL_DIR="${RUNDESK_INSTALL_DIR:-$HOME/.rundesk}"
 MIN_PYTHON_MINOR=9
 

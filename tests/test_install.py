@@ -499,30 +499,60 @@ class OneInstructionTests(unittest.TestCase):
     #: `https://github.com/<slug>/releases/latest/download/<asset>`
     PUBLISHED = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/releases/latest/download/([\w.-]+)")
 
-    GIVES_IT = ["README.md", "install.sh", "src/rundesk_cli/cli.py", ".github/workflows/release.yml"]
+    SKIP = {".git", ".venv", "__pycache__", "node_modules"}
 
-    def _published(self) -> set:
-        found = set()
-        for name in self.GIVES_IT:
-            hits = self.PUBLISHED.findall((REPO / name).read_text(encoding="utf-8"))
-            self.assertTrue(hits, f"{name} no longer tells anyone how to install rundesk")
-            found |= set(hits)
+    def _gives_it(self) -> dict:
+        """Every file in the repository that tells anyone how to install rundesk.
+
+        Found rather than listed. The first version of this test hand-kept the four files it
+        knew about — and the same commit added the URL to build.yml twice, outside the list,
+        which is exactly the drift it was written to stop.
+        """
+        found = {}
+        for path in sorted(REPO.rglob("*")):
+            if not path.is_file() or self.SKIP & set(path.relative_to(REPO).parts):
+                continue
+            if path.stat().st_size > 1_000_000:
+                continue
+            hits = set(self.PUBLISHED.findall(path.read_text(encoding="utf-8", errors="ignore")))
+            if hits:
+                found[str(path.relative_to(REPO))] = hits
         return found
 
+    def _published(self) -> set:
+        gives_it = self._gives_it()
+        self.assertTrue(gives_it, "nothing in the repository says how to install rundesk")
+        return set().union(*gives_it.values())
+
     def test_the_one_instruction_names_the_same_thing_everywhere_it_is_given(self):
-        # Four files tell a person how to install. Two of them disagreeing means somebody is
-        # being sent to a URL that nothing serves, and the docs look right either way.
+        # Every file that publishes the instruction has to publish the same one. Two of them
+        # disagreeing sends somebody to a URL nothing serves, and both files look right.
+        gives_it = self._gives_it()
         self.assertEqual(len(self._published()), 1,
-                         f"the install instruction differs between {', '.join(self.GIVES_IT)}")
+                         "the install instruction differs between " + ", ".join(sorted(gives_it)))
 
     def test_the_one_instruction_points_at_the_repository_rundesk_updates_from(self):
         # An install from one repository that then updates from another is two products
-        # wearing one name.
+        # wearing one name — and nothing on disk remembers where a copy came from, so the
+        # only thing keeping them together is that both name the same repository.
+        sys.path.insert(0, str(REPO / "src"))
+        from rundesk_cli import updater
+
         (slug, _asset), = self._published()
-        declared = re.search(r'REPO_SLUG="\$\{RUNDESK_REPO_SLUG:-([^}]+)\}"', INSTALLER.read_text())
+        declared = re.search(r'^REPO_SLUG="([^"]+)"', INSTALLER.read_text(), re.M)
         self.assertIsNotNone(declared, "the installer does not say which repository it installs from")
         self.assertEqual(declared.group(1), slug,
-                         "the instruction installs from one repository and updates from another")
+                         "the published instruction and the installer name different repositories")
+        self.assertEqual(updater.REPO_SLUG, slug,
+                         "the installer fetches from one repository and `rundesk update` from another")
+
+    def test_the_installer_offers_no_way_to_point_it_at_another_repository(self):
+        # It used to. `install.sh` honoured RUNDESK_REPO_SLUG while the updater hardcoded
+        # its own, so installing from a fork gave a copy that updated itself from upstream
+        # forever. Nothing set it, no requirement asked for it, and it could not be made
+        # coherent without recording the origin somewhere on disk.
+        self.assertNotIn("RUNDESK_REPO_SLUG", INSTALLER.read_text(),
+                         "the installer can be pointed somewhere `rundesk update` will not follow")
 
     def test_a_release_serves_the_file_the_one_instruction_asks_for(self):
         # `releases/latest/download/<asset>` resolves only if the release carries that asset.
