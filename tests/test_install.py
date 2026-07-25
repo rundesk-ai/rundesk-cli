@@ -86,6 +86,38 @@ class RemovingWhatIsRunningTests(Sandbox):
             f"uninstalling left a job behind, which the machine will keep trying to start:\n{said.stdout}{said.stderr}",
         )
 
+    def test_removing_rundesk_refuses_while_a_gateway_is_still_running(self):
+        """R-RM-9 — the refusal that was written and never reached.
+
+        `stop_gateways` ended in `python3 … || echo "note: …"`, so the shell reported the
+        echo's success rather than the command's failure: the guard could not fire, its
+        message was unreachable, and uninstall deleted the command while a gateway it was
+        keeping went on running — an agent nobody can reach, and the one thing that could
+        have stopped it now gone.
+        """
+        sys.path.insert(0, str(REPO / "src"))
+        from rundesk_cli import gateway, supervisor
+        jobs, run = self.root / "jobs", self.root / "run"
+        jobs.mkdir()
+        run.mkdir()
+        where = {"RUNDESK_JOBS_DIR": str(jobs), "RUNDESK_RUN_DIR": str(run)}
+        self.install(extra_env=where)
+        supervisor.write("busy", REPO, self.root / "logs", str(jobs))
+        # Held for real: the lock is what `standing` asks the kernel about, so this is a
+        # gateway that is genuinely still running as far as everything here is concerned.
+        holding = gateway.Gateway("busy", where=run, logs=self.root / "logs")
+        holding.claim()
+        self.addCleanup(holding.release)
+
+        said = self.uninstall(extra_env=where)
+        self.assertNotEqual(0, said.returncode, "it removed rundesk with a gateway still running")
+        self.assertIn("still running", said.stdout + said.stderr)
+        self.assertTrue(
+            (self.bindir / "rundesk").exists(),
+            "it took away the command while a gateway it was keeping was still running — "
+            "which is the one thing that could have stopped it",
+        )
+
     def test_removing_rundesk_leaves_a_job_written_by_something_else(self):
         """R-RM-3, R-RM-9 — someone else's agents are not ours to stand down."""
         jobs = self.root / "jobs"

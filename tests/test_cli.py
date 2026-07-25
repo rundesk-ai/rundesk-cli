@@ -430,6 +430,33 @@ class HandingAGatewayToTheMachine(unittest.TestCase):
         self.assertIn("ALREADY RUNNING", said)
         self.assertEqual([], machine.did, "it touched the job of a gateway that was fine")
 
+    def test_starting_a_gateway_running_with_nothing_keeping_it_is_not_success(self):
+        """R-GW-13 — running is not the same as looked after.
+
+        A gateway started by hand, or one left behind when its job was taken away,
+        answers every question exactly as a supervised one does and will not come back
+        when it exits or when the machine reboots. Reporting ALREADY RUNNING and exiting
+        0 tells an owner they are covered at the one moment they are not.
+        """
+        machine = FakeMachine(jobs=[])  # a supervisor is here; it has no job for this
+        gateways = FakeGateways(standing=[FakeGateways.Standing("gateway", running=True, pid=7)])
+        code, said = drive(["start"], gateways, machine)
+        self.assertEqual(1, code, "it reported success for a gateway nothing is keeping up")
+        self.assertIn("FAILED", said)
+        self.assertIn("unsupervised", said)
+        self.assertIn("7", said, "it did not say which process to deal with")
+
+    def test_starting_a_gateway_already_running_where_there_is_no_supervisor_is_fine(self):
+        """R-GW-13 — the check above is about a supervisor that has no job for this
+        gateway, not about there being no supervisor. On a machine with none, running by
+        hand is the arrangement rundesk itself recommends, and calling it a failure would
+        make `rundesk serve` a thing that can never be reported as working."""
+        machine = FakeMachine(missing=True)
+        gateways = FakeGateways(standing=[FakeGateways.Standing("gateway", running=True, pid=7)])
+        code, said = drive(["start"], gateways, machine)
+        self.assertEqual(0, code)
+        self.assertIn("ALREADY RUNNING", said)
+
     def test_handing_over_a_name_belonging_to_something_else_is_refused(self):
         """R-GW-13 — handing over boots out whatever holds the name and writes over it,
         so this is the verb where getting ownership wrong costs the most."""
@@ -499,6 +526,51 @@ class StandingGatewaysDown(unittest.TestCase):
         machine = FakeMachine(jobs=["agent-one"])
         drive(["restart", "agent-one"], machine=machine)
         self.assertEqual([("stop", "agent-one"), ("start", "agent-one")], machine.did)
+
+    def test_a_cycle_that_could_not_start_it_again_is_a_failure(self):
+        """R-GW-13 — stopping is half of a restart, and the half that leaves it down.
+
+        A refused kickstart fell into the block written for `stop`: the gateway was not
+        running (this command had just stopped it) and the job was known, so it came out
+        as ALREADY STOPPED with a success exit. True, and completely wrong — it reads as
+        'there was nothing to do' when what happened is 'I took it down and could not
+        bring it back', which is the report a script acts on.
+        """
+        class RefusesToStart(FakeMachine):
+            def start(self, name):
+                self.did.append(("start", name))
+                return self.Spoke(False, "the supervisor said no")
+
+        machine = RefusesToStart(jobs=["agent-one"])
+        code, said = drive(["restart", "agent-one"], FakeGateways(), machine)
+        self.assertEqual([("stop", "agent-one"), ("start", "agent-one")], machine.did)
+        self.assertEqual(1, code, "it reported success having left the gateway stopped")
+        self.assertIn("FAILED", said)
+        self.assertNotIn("ALREADY STOPPED", said, "it read as though there was nothing to do")
+
+    def test_cycling_a_gateway_that_was_never_handed_over_is_a_failure(self):
+        """R-GW-13 — 'nothing to stop' is a finished job for `stop` and a request that
+        did not happen for `restart`: whoever asked wanted it running, and got nothing."""
+        machine = FakeMachine(jobs=[])
+        code, said = drive(["restart", "nobody"], machine=machine)
+        self.assertEqual([], machine.did)
+        self.assertIn("NO JOB", said)
+        self.assertEqual(1, code, "it reported success without starting anything")
+        # The same case under `stop` is genuinely fine, and must stay that way.
+        code, said = drive(["stop", "nobody"], machine=FakeMachine(jobs=[]))
+        self.assertEqual(0, code)
+        self.assertIn("NO JOB", said)
+
+    def test_a_gateway_running_with_no_job_is_not_blamed_on_another_install(self):
+        """R-GW-13 — there is no other install, and no job of any kind. A stand-in
+        refusal fed into the failure block said its job belonged to someone else, sending
+        an owner hunting for a second copy of rundesk that does not exist."""
+        machine = FakeMachine(jobs=[])
+        gateways = FakeGateways(standing=[FakeGateways.Standing("gateway", running=True, pid=9)])
+        code, said = drive(["stop", "gateway"], gateways, machine)
+        self.assertEqual(1, code)
+        self.assertIn("no job", said)
+        self.assertNotIn("another install", said, "it blamed an install that does not exist")
 
     def test_cycling_waits_for_the_old_one_to_actually_go(self):
         """R-GW-13 — asking the machine to start a gateway that is still running does

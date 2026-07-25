@@ -78,6 +78,11 @@ class Spoke:
 
     ok: bool
     said: str
+    #: Whether the machine answered at all. Not answering is *not* the same as answering
+    #: no, and code that cannot tell them apart reads silence from a busy machine as
+    #: "there is no such job" — which is how a timeout came to delete the only
+    #: description a second attempt would have needed.
+    answered: bool = True
 
 
 def label(name: str) -> str:
@@ -111,7 +116,9 @@ def ask(*args: str) -> Spoke:
             timeout=ANSWER_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
-        return Spoke(False, f"the machine did not answer within {ANSWER_TIMEOUT_SECONDS:g}s")
+        return Spoke(
+            False, f"the machine did not answer within {ANSWER_TIMEOUT_SECONDS:g}s", answered=False
+        )
     return Spoke(done.returncode == 0, (done.stdout + done.stderr).strip())
 
 
@@ -213,15 +220,31 @@ def install(
 
 def remove(name: str, where: str | None = None, root: Path | None = None,
            asking: Callable[..., Spoke] = ask) -> Spoke:
-    """Stop this gateway being kept up, and forget the job entirely."""
+    """Ask the machine to let go of this gateway's job.
+
+    The description is left exactly where it is. It is the only thing that names this
+    job — `described` finds a gateway by globbing for it and by nothing else — so
+    whether it can be forgotten is not a question this can answer: the machine letting
+    go is only half of it, and the gateway itself may still be running. `take_all_back`
+    decides, once it has watched both let go.
+    """
     _only_ours(name, where, root)
-    said = asking("bootout", f"{domain()}/{label(name)}")
-    # The description is what a second attempt would need. Deleting it after a refusal
-    # leaves a job the machine is still keeping and nothing left to name it with — so it
-    # goes only once the machine has actually let go.
-    if said.ok or not loaded(name, asking):
-        job_path(name, where).unlink(missing_ok=True)
-    return said
+    return asking("bootout", f"{domain()}/{label(name)}")
+
+
+def _let_go(name: str, said: Spoke, asking: Callable[..., Spoke] = ask) -> bool:
+    """Has the machine really let go of this job?
+
+    Three answers, not two. The bootout being accepted is one. A refusal followed by the
+    machine saying plainly that it has no such job is another — that is a job it never
+    had, and refusing to boot out something absent is not a reason to keep chasing it.
+    Silence is the third, and it is *not* the second: a machine too busy to answer has
+    told us nothing at all.
+    """
+    if said.ok:
+        return True
+    answer = asking("print", f"{domain()}/{label(name)}")
+    return answer.answered and not answer.ok
 
 
 def _only_ours(name: str, where: str | None = None, root: Path | None = None) -> None:
@@ -314,6 +337,11 @@ def take_all_back(
 
     Only jobs this install wrote, and only after each gateway is really gone. Returns
     what was taken back, and what would not stop.
+
+    **Two parties have to let go, and both are asked.** Judging this on the gateway
+    process alone reported a name as taken back while the machine was still refusing to
+    release its job — so an uninstall deleted the install and left the machine trying to
+    start a command that was no longer there, every few seconds and again at every login.
     """
     from rundesk_cli import gateway  # here, so this module imports on a machine without one
 
@@ -321,13 +349,21 @@ def take_all_back(
     taken, stubborn = [], []
     for name in described(where, root):
         try:
-            remove(name, where, root, asking)
+            said = remove(name, where, root, asking)
         except (NotOurs, NoSupervisor):
             continue
         deadline = time.monotonic() + SETTLE_SECONDS
         while standing(name).running and time.monotonic() < deadline:
             time.sleep(0.2)
-        (stubborn if standing(name).running else taken).append(name)
+        if standing(name).running or not _let_go(name, said, asking):
+            # Still held by one of them, so the description stays. It is the only thing
+            # that will find this gateway again: deleting it here left the first attempt
+            # reporting the name as stubborn and every attempt after it unable to see the
+            # gateway at all, with the thing itself still running.
+            stubborn.append(name)
+            continue
+        job_path(name, where).unlink(missing_ok=True)
+        taken.append(name)
     return taken, stubborn
 
 

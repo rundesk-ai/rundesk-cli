@@ -96,7 +96,9 @@ stop_gateways() {
     echo "note: python3 is gone, so any gateway still running was left as it is."
     return 0
   fi
-  python3 - "$root" <<'STOP' || echo "note: gateways could not be stopped; check: launchctl list | grep rundesk"
+  # `cmd || echo …` would report the echo's success, not the command's failure — so the
+  # refusal below never fired and uninstall deleted rundesk with gateways still running.
+  if ! python3 - "$root" <<'STOP'
 import sys
 sys.path.insert(0, sys.argv[1] + "/src")
 from rundesk_cli import supervisor
@@ -111,6 +113,10 @@ if stubborn:
         print(f"gateway '{name}' would not stop, and is still running")
     raise SystemExit(3)
 STOP
+  then
+    echo "note: gateways could not be stopped; check: launchctl list | grep rundesk"
+    return 1
+  fi
 }
 
 # ---------------------------------------------------------------- uninstall

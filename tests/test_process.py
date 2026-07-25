@@ -561,6 +561,39 @@ class EndingAProgram(Quickened):
         self.assertEqual(process.FINISHED, result.reason)
         self.assertLess(time.monotonic() - started, 20.0)
 
+    async def test_a_talkative_leftover_does_not_hold_the_drain_open_forever(self):
+        """R-PROC-11, R-PROC-13 — the drain is a deadline, not a per-read timeout.
+
+        Spent per read, a child that inherited the pipe and keeps writing more often than
+        the drain allows completes every read, and the loop goes round again with nothing
+        ever deciding it has drained. The wait then ran on to the 48-hour ceiling holding
+        the name against a restart of that work. Anything talkative does it — a dev
+        server, a language server, a log being followed.
+        """
+        told = self.scratch() / "grandchild.pid"
+        program = process.Program(
+            script(
+                "import subprocess, pathlib, sys",
+                # Writes every 0.05s: far more often than the drain, and it inherits the
+                # pipe, so every read of ours comes back with something.
+                "child = subprocess.Popen([sys.executable, '-c',",
+                "    'import time,sys\\nwhile True:\\n print(\"still here\"); "
+                "sys.stdout.flush(); time.sleep(0.05)'])",
+                f"pathlib.Path({str(told)!r}).write_text(str(child.pid))",
+            ),
+            silence=3600.0,   # an hour, so nothing but the drain can end this
+            ceiling=3600.0,   # and an hour again: reaching either means the drain failed
+        )
+        await program.start()
+        waiting = asyncio.ensure_future(program.wait())
+        grandchild = await self._reported_pid(told)
+        self.assertIsNotNone(grandchild)
+        # Bounded well under both, so a drain that never decides fails here rather than
+        # turning a regression into a build that appears to hang.
+        result = await asyncio.wait_for(waiting, 25.0)
+        self.assertEqual(process.FINISHED, result.reason)
+        self.assertTrue(await gone_within(grandchild), "the leftover outlived the drain")
+
     async def _reported(self, told: Path, seconds: float = 10.0):
         """Whatever the program wrote to `told`, once it has written it."""
         deadline = time.time() + seconds

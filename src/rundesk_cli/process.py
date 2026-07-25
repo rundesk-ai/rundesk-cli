@@ -210,6 +210,7 @@ class Program:
         # program left running is holding one — the exit would land hours late, or never.
         reader: asyncio.Future | None = None
         quiet_for = 0.0
+        drained_by: float | None = None
         try:
             while True:
                 # Checked on every pass, not only when nothing was said: the shape this
@@ -222,8 +223,21 @@ class Program:
                     reader = asyncio.ensure_future(self._proc.stdout.read(READ_BYTES))
                 # Once it has gone there is nothing more coming but what is already in
                 # flight, so the wait drops from "has it gone quiet" to "is it drained".
+                #
+                # A deadline for the whole drain, not a timeout for each read of it.
+                # Spent per read, a child that inherited the pipe and keeps writing more
+                # often than the drain allows completes every read, and the loop goes
+                # round again with nothing ever reaching the break below — the wait ran
+                # on to the 48-hour ceiling, holding the name against a restart of that
+                # work for two days. Anything talkative does it: a dev server, a language
+                # server, a log being followed.
                 gone = self._proc.returncode is not None
-                spell = DRAIN_SECONDS if gone else self._spell()
+                if gone and drained_by is None:
+                    drained_by = time.monotonic() + DRAIN_SECONDS
+                left = None if drained_by is None else drained_by - time.monotonic()
+                if left is not None and left <= 0:
+                    break  # drained as long as it is worth draining
+                spell = self._spell() if left is None else left
                 done, _ = await asyncio.wait({reader}, timeout=spell)
                 if reader in done:
                     chunk = reader.result()
@@ -337,9 +351,19 @@ class Program:
         Asked first and taken second: a brain killed outright can leave its own session
         half-written, and the polite signal costs a few seconds at shutdown.
         """
-        if self._proc is None or self._proc.returncode is not None:
+        if self._proc is None:
             return
-        self._ended = True
+        # The leader having gone is not the tree having gone. Returning here because the
+        # one process we started has exited left everything it spawned running — and a
+        # shutdown asked to end this program then reported that it had (R-PROC-5,
+        # R-PROC-11). What decides whether there is anything to do is the group, and
+        # signalling an empty one costs a failed system call.
+        #
+        # Ended, though, only if there was still something of *ours* to end: a program
+        # that finished on its own and left a talkative child behind is finished, and
+        # relabelling it would rewrite what actually happened to it.
+        if self._proc.returncode is None:
+            self._ended = True
         try:
             for sig in (signal.SIGTERM, signal.SIGKILL):
                 if not self._signal_group(sig):
@@ -431,8 +455,13 @@ async def end_all(programs: Iterable[Program]) -> None:
 
     In turn would spend the grace period once per program, and the machine's own
     supervisor does not wait that long before taking the gateway out (R-GW-7, R-GW-8).
+
+    Everything, not only what is alive. `alive` asks after the one process we started,
+    and a program whose leader has exited while its children carry on is exactly the one
+    with something left to end — skipping it is how a shutdown came to report itself
+    drained with a whole process group still running.
     """
-    await asyncio.gather(*(p.end() for p in programs if p.alive), return_exceptions=True)
+    await asyncio.gather(*(p.end() for p in programs), return_exceptions=True)
 
 
 def environment(home: Path, path: str | None = None) -> dict[str, str]:

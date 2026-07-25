@@ -8,6 +8,7 @@ supervisor's, and are not here: they arrive with the job that describes one.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -98,9 +99,27 @@ class WithARunDirectory(unittest.IsolatedAsyncioTestCase):
         self.fail(f"gateway '{gw.name}' never took hold of its program")
 
     async def _gone(self, pid: int, seconds: float = 10.0) -> bool:
+        """Is this one process gone? Asked of the process, not of its group.
+
+        Told apart from `_group_gone` because the two answer differently for anything
+        that is not a group leader: `killpg` on a grandchild's number fails whether or
+        not it is running, so asking that way reports every child of a child as gone and
+        quietly passes every test about leaving one behind.
+        """
         deadline = time.time() + seconds
         while time.time() < deadline:
-            if not gateway._still_there(pid):
+            try:
+                os.kill(pid, 0)
+            except (ProcessLookupError, PermissionError):
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
+    async def _group_gone(self, pgid: int, seconds: float = 10.0) -> bool:
+        """Is everything in this process group gone? The number must be a group leader's."""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if not gateway._still_there(pgid):
                 return True
             await asyncio.sleep(0.05)
         return False
@@ -470,6 +489,62 @@ class GoingAway(WithARunDirectory):
         self.assertEqual(process.ENDED, (await asyncio.wait_for(running, 15)).reason)
         self.assertTrue(await self._gone(pid), "a program outlived the gateway running it")
 
+    async def test_a_gateway_going_away_ends_what_the_work_left_running(self):
+        """R-GW-8, R-PROC-11 — the leader having gone is not the tree having gone.
+
+        A program that exits while something it started carries on is still draining, and
+        stays in `running` — but `alive` asks after the one process we started, so a
+        shutdown that ended only what was alive skipped it entirely, reported itself
+        drained, and deleted the record naming the group. Nothing was left that could ever
+        end it: not the successor either, since the pid it fingerprints has been reaped.
+        """
+        gw = self.made()
+        gw.claim()
+        # A long drain, so the tidying `wait()` does on its own way out cannot reach the
+        # leftover during this test. That tidying is real, but it is not this guarantee:
+        # once `serve` returns the gateway process exits, and a `wait()` still draining
+        # goes with the loop it was running on. Whatever `_go` did not end is left for
+        # good — so what `_go` alone achieves is what has to be asserted.
+        self.addCleanup(setattr, process, "DRAIN_SECONDS", process.DRAIN_SECONDS)
+        process.DRAIN_SECONDS = 30.0
+        told = self.scratch() / "grandchild.pid"
+        leaves_one = [
+            PY, "-c",
+            "import subprocess, pathlib, sys\n"
+            f"child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
+            f"pathlib.Path({str(told)!r}).write_text(str(child.pid))\n",
+        ]
+        running = asyncio.ensure_future(gw.start(leaves_one, as_name="leaky", silence=None))
+        left = await self._said(told)
+        self.assertIsNotNone(left, "the program never got as far as starting anything")
+        # Its own leader is gone; what it started is not, and the gateway still holds it.
+        self.assertTrue(await self._went(gw.running["leaky"]), "the leader never exited")
+        self.assertIn("leaky", gw.running)
+        drained = await asyncio.wait_for(gw._go(), 15)
+        self.assertTrue(await self._gone(left, 5.0),
+                        "the gateway left behind what its work started")
+        self.assertTrue(drained, "it reported work still out there when it had ended all of it")
+        running.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(running, 15)
+
+    async def _said(self, told, seconds: float = 10.0):
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if told.exists() and told.read_text().strip():
+                return int(told.read_text().strip())
+            await asyncio.sleep(0.05)
+        return None
+
+    async def _went(self, program, seconds: float = 10.0) -> bool:
+        """Has the program's own leader exited, whatever it left running?"""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if not program.alive:
+                return True
+            await asyncio.sleep(0.05)
+        return not program.alive
+
     async def test_work_that_starts_as_the_gateway_goes_away_is_not_left_running(self):
         """R-GW-8 — the gap between taking work and having a process for it.
 
@@ -561,7 +636,7 @@ class WhatADeadGatewayLeftBehind(WithARunDirectory):
         gw = self.made("orphaned")
         gw.claim()
         self.assertEqual(["a-conversation"], gw.swept)
-        self.assertTrue(await self._gone(left.pid))
+        self.assertTrue(await self._group_gone(left.pid))
 
     async def test_taking_a_name_nobody_left_anything_under_is_ordinary(self):
         """R-GW-16 — the common case costs nothing and says nothing."""
@@ -922,7 +997,7 @@ class WorkNobodyIsComingBackFor(WithARunDirectory):
         left = await self._stray("an-agent-since-renamed")
         gw = self.made("something-else-entirely")
         gw.claim()
-        self.assertTrue(await self._gone(left.pid), "work under a forgotten name outlived everything")
+        self.assertTrue(await self._group_gone(left.pid), "work under a forgotten name outlived everything")
         self.assertIn("nobody has started since", gateway.log_path(gw.name, self.logs).read_text())
 
     async def test_a_record_with_nothing_left_running_is_not_kept_forever(self):

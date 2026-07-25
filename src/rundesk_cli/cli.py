@@ -194,8 +194,20 @@ def cmd_start(args: argparse.Namespace, gateways, machine) -> int:
     name = args.name
     already = gateways.standing(name)
     if already.running:
-        print(f"{name}: ALREADY RUNNING (pid {already.pid})")
-        return 0
+        # Running is not the same as looked after. A gateway started by hand, or one left
+        # behind when its job was taken away, answers everything exactly as a supervised
+        # one does — and will not come back when it exits or when the machine reboots.
+        # Reporting that as success is telling an owner they are covered when they are not.
+        if not machine.available() or machine.loaded(name):
+            print(f"{name}: ALREADY RUNNING (pid {already.pid})")
+            return 0
+        print(f"{name}: FAILED — running unsupervised (pid {already.pid}); it will not come back",
+              file=sys.stderr)
+        # Not something this command can take over: the gateway already running holds the
+        # name, so a supervised one started now would refuse it and end cleanly.
+        print(f"         stop it first (pid {already.pid}), then: rundesk start {name}",
+              file=sys.stderr)
+        return 1
     try:
         said = machine.install(name)
     except machine.NotOurs as why:
@@ -274,8 +286,24 @@ def _stand_down(args: argparse.Namespace, gateways, machine, verb: str) -> int:
                           file=sys.stderr)
                     worst = 1
                     continue
-                said = machine.Spoke(False, "")
-            elif verb == "restart":
+                # No job whatsoever, which means three different things depending on what
+                # is there and what was asked. Answering all three with one refusal — as
+                # a stand-in Spoke fed into the failure block below did — told an owner
+                # with no job at all to go looking for a second install of rundesk.
+                now = gateways.standing(name)
+                if now.running:
+                    print(f"{name}: FAILED — running with no job (pid {now.pid}); "
+                          "nothing is keeping it up", file=sys.stderr)
+                    worst = 1
+                elif verb == "restart":
+                    # Nothing to stop is a finished job for `stop`, and a request that
+                    # did not happen for `restart`: whoever asked wanted it running.
+                    print(f"{name}: NO JOB — nothing to restart", file=sys.stderr)
+                    worst = 1
+                else:
+                    print(f"{name}: NO JOB — nothing to stop")
+                continue
+            if verb == "restart":
                 stopped = machine.stop(name)
                 if not stopped.ok:
                     print(f"rundesk {name}: could not ask it to stop — {stopped.said}",
@@ -292,6 +320,15 @@ def _stand_down(args: argparse.Namespace, gateways, machine, verb: str) -> int:
                     worst = 1
                     continue
                 said = machine.start(name)
+                if not said.ok:
+                    # Reported below, this fell into the block written for `stop` and came
+                    # out as ALREADY STOPPED with a success exit — a true sentence and a
+                    # completely wrong one. It reads as "there was nothing to do"; what
+                    # happened is "it was taken down and could not be brought back".
+                    print(f"{name}: FAILED — stopped, but the supervisor refused to start "
+                          f"it: {said.said}", file=sys.stderr)
+                    worst = 1
+                    continue
             else:
                 said = machine.stop(name)
         except machine.NoSupervisor as why:
@@ -302,13 +339,15 @@ def _stand_down(args: argparse.Namespace, gateways, machine, verb: str) -> int:
             worst = 1
             continue
         if not said.ok:
-            if gateways.standing(name).running:
-                print(f"{name}: FAILED — running, but its job belongs to another install",
-                      file=sys.stderr)
+            now = gateways.standing(name)
+            if now.running:
+                print(f"{name}: FAILED — the supervisor refused to stop it (pid {now.pid}): "
+                      f"{said.said}", file=sys.stderr)
                 worst = 1
-            elif not machine.known(name):
-                print(f"{name}: NO JOB — nothing to {verb}")
             else:
+                # Refused, and already in the state that was asked for. Nothing to report
+                # against: the machine declining to stop what is not running is not a
+                # failure of this command.
                 print(f"{name}: ALREADY STOPPED")
             continue
         if verb == "restart":

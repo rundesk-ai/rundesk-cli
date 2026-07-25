@@ -30,9 +30,14 @@ class Machine:
     is refused.
     """
 
-    def __init__(self, refuse=(), slow_to_let_go: int = 0):
+    def __init__(self, refuse=(), slow_to_let_go: int = 0, deaf=()):
         self.asked: list[tuple] = []
         self.refuse = refuse
+        #: Verbs the machine is too busy to answer at all. Told apart from `refuse`
+        #: because the real one tells them apart: a question that timed out has said
+        #: nothing, and a stand-in that answered "no" for both could not fail the way
+        #: a loaded machine does.
+        self.deaf = deaf
         self.holding: set[str] = set()
         self.slow_to_let_go = slow_to_let_go
         self._letting_go: dict[str, int] = {}
@@ -41,6 +46,8 @@ class Machine:
         self.asked.append(args)
         verb, target = args[0], args[-1]
         name = target.rsplit(".", 1)[-1] if verb != "bootstrap" else None
+        if verb in self.deaf:
+            return supervisor.Spoke(False, "the machine did not answer in time", answered=False)
         if verb in self.refuse:
             return supervisor.Spoke(False, "the machine said no")
         if verb == "bootout":
@@ -85,6 +92,16 @@ class WithAJobDirectory(unittest.TestCase):
     def written(self, name: str = "gateway") -> dict:
         with open(supervisor.job_path(name, str(self.where)), "rb") as file:
             return plistlib.load(file)
+
+    def _standing(self, running=()):
+        """A stand-in for asking a gateway whether it is still there."""
+        class Standing:
+            def __init__(self, name):
+                self.name, self.running = name, name in running
+        return Standing
+
+    def job_survives(self, name: str) -> bool:
+        return supervisor.job_path(name, str(self.where)).exists()
 
 
 class WhatTheJobSays(WithAJobDirectory):
@@ -259,13 +276,6 @@ class TakingItAllBack(WithAJobDirectory):
         super().setUp()
         self.stopped = []
 
-    def _standing(self, running=()):
-        """A stand-in for asking a gateway whether it is still there."""
-        class Standing:
-            def __init__(self, name):
-                self.name, self.running = name, name in running
-        return Standing
-
     def test_removing_rundesk_stops_every_gateway_it_was_keeping(self):
         """R-RM-9 — a job outlives the command it names: the gateway keeps running,
         because deleting a program does not stop one, and the machine goes on trying to
@@ -302,6 +312,51 @@ class TakingItAllBack(WithAJobDirectory):
             standing=self._standing(running=("stubborn",)))
         self.assertEqual([], taken)
         self.assertEqual(["stubborn"], stubborn)
+
+    def test_a_job_the_machine_still_holds_is_not_reported_as_taken_back(self):
+        """R-RM-9 — two parties have to let go, and both are asked.
+
+        Judged on the gateway process alone, a machine that refused to release its job
+        was filed under 'taken back' as long as nothing was running. The installer then
+        deleted rundesk, and the machine went on trying to start a command that was no
+        longer there — every few seconds, and again at every login, forever.
+        """
+        machine = Machine(refuse=("bootout",))
+        supervisor.install("held", self.root, self.logs, str(self.where), machine)
+        taken, stubborn = supervisor.take_all_back(
+            str(self.where), self.root, machine, standing=self._standing())
+        self.assertEqual(([], ["held"]), (taken, stubborn))
+        self.assertTrue(self.job_survives("held"), "it forgot a job the machine still holds")
+        self.assertTrue(supervisor.loaded("held", machine))
+
+    def test_a_machine_too_busy_to_answer_is_not_taken_as_having_nothing(self):
+        """R-RM-9 — silence is not a no. A `print` that timed out has said nothing about
+        whether the job is there, and reading it as 'no such job' deleted the only
+        description a second attempt would have had, on nothing but a slow machine."""
+        machine = Machine(refuse=("bootout",))
+        supervisor.install("quiet", self.root, self.logs, str(self.where), machine)
+        machine.deaf = ("print",)  # installed first, so the job really is there
+        taken, stubborn = supervisor.take_all_back(
+            str(self.where), self.root, machine, standing=self._standing())
+        self.assertEqual(([], ["quiet"]), (taken, stubborn))
+        self.assertTrue(self.job_survives("quiet"), "a timeout was read as 'there is no job'")
+
+    def test_a_gateway_that_would_not_stop_can_still_be_found_next_time(self):
+        """R-RM-9 — being reported as stubborn is only useful if something can act on it.
+
+        The description was deleted as soon as the machine accepted the bootout, before
+        anyone had waited on the gateway itself. The first attempt then said the name was
+        stubborn and the second could not see it at all — with the thing still running.
+        """
+        supervisor.install("stubborn", self.root, self.logs, str(self.where), self.machine)
+        self.addCleanup(setattr, supervisor, "SETTLE_SECONDS", supervisor.SETTLE_SECONDS)
+        supervisor.SETTLE_SECONDS = 0.3
+        still_up = self._standing(running=("stubborn",))
+        first = supervisor.take_all_back(str(self.where), self.root, self.machine, standing=still_up)
+        self.assertEqual(([], ["stubborn"]), first)
+        self.assertTrue(self.job_survives("stubborn"))
+        again = supervisor.take_all_back(str(self.where), self.root, self.machine, standing=still_up)
+        self.assertEqual(([], ["stubborn"]), again, "a second attempt could not see it at all")
 
     def test_removing_rundesk_where_nothing_was_ever_started_is_ordinary(self):
         """R-RM-9"""
@@ -389,17 +444,30 @@ class HandingItOver(WithAJobDirectory):
         """R-RM-9 — refusing to boot out something that was never loaded is the ordinary
         case, and keeping the file for it would leave it there forever."""
         supervisor.write("never-loaded", self.root, self.logs, str(self.where))
-        empty = Machine()   # holding nothing, so bootout fails and `loaded` is false
-        said = supervisor.remove("never-loaded", str(self.where), self.root, asking=empty)
-        self.assertFalse(said.ok)
-        self.assertFalse(supervisor.job_path("never-loaded", str(self.where)).exists())
+        empty = Machine()   # holding nothing, so bootout fails and it says so plainly
+        taken, stubborn = supervisor.take_all_back(
+            str(self.where), self.root, empty, standing=self._standing())
+        self.assertEqual((["never-loaded"], []), (taken, stubborn))
+        self.assertFalse(self.job_survives("never-loaded"))
 
     def test_taking_a_gateway_back_forgets_the_job_entirely(self):
         """R-GW-12"""
         supervisor.install("gateway", self.root, self.logs, str(self.where), self.machine)
-        supervisor.remove("gateway", str(self.where), self.root, asking=self.machine)
-        self.assertFalse(supervisor.job_path("gateway", str(self.where)).exists())
+        taken, _ = supervisor.take_all_back(
+            str(self.where), self.root, self.machine, standing=self._standing())
+        self.assertEqual(["gateway"], taken)
+        self.assertFalse(self.job_survives("gateway"))
         self.assertEqual([], supervisor.described(str(self.where), self.root))
+
+    def test_asking_the_machine_to_let_go_does_not_itself_forget_the_job(self):
+        """R-RM-9 — `remove` asks; it does not decide. The description is the only thing
+        that names a job, and whether it can go depends on the gateway too — which this
+        cannot see. Forgetting here is what deleted the handle on a gateway that was
+        still running, leaving every attempt after the first unable to find it at all."""
+        supervisor.install("gateway", self.root, self.logs, str(self.where), self.machine)
+        said = supervisor.remove("gateway", str(self.where), self.root, asking=self.machine)
+        self.assertTrue(said.ok)
+        self.assertTrue(self.job_survives("gateway"), "asking to let go forgot the job itself")
 
     def test_a_machine_with_nothing_to_hand_it_to_says_so(self):
         """R-GW-1 — rundesk supervises nothing itself, so a machine without a supervisor
