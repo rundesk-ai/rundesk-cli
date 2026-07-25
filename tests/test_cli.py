@@ -60,18 +60,63 @@ def run(argv: list[str], published: str | None = None) -> tuple[int, str, str]:
         published, None if published else cli.updater.UNREACHABLE)
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = cli.main(argv, gateways=FakeGateways(), machine=FakeMachine())
+            try:
+                code = cli.main(argv, gateways=FakeGateways(), machine=FakeMachine())
+            except SystemExit as usage:
+                # What a shell sees, which is the subject of several cases here: argparse
+                # refuses a usage error by exiting rather than returning, and a test that
+                # let that escape could not say what code the caller was left with.
+                code = usage.code if isinstance(usage.code, int) else 1
     finally:
         cli.updater.latest_version_online = real
     return code, out.getvalue(), err.getvalue()
 
 
+def _offered(parser) -> dict:
+    """What this parser offers under it, by name — or an empty mapping if nothing."""
+    for action in parser._actions:
+        if isinstance(action, __import__("argparse")._SubParsersAction):
+            return action.choices
+    return {}
+
+
 def verbs() -> list[str]:
     """Every command the parser offers, read off the parser rather than restated."""
-    for action in cli.build_parser()._actions:
-        if isinstance(action, __import__("argparse")._SubParsersAction):
-            return sorted(action.choices)
-    raise AssertionError("the parser offers no commands at all")
+    offered = _offered(cli.build_parser())
+    if not offered:
+        raise AssertionError("the parser offers no commands at all")
+    return sorted(offered)
+
+
+def operations() -> list[list[str]]:
+    """Every operation the command offers, as the words a person types for it.
+
+    A verb, and each action under a verb that has them. Walked off the parser for the
+    same reason `verbs` is: a hand-kept copy of this list is one that stops covering the
+    surface the day somebody adds to it, and the cases below are the only thing standing
+    between a registered operation and one that answers nothing.
+    """
+    found = []
+    for verb, parser in sorted(_offered(cli.build_parser()).items()):
+        found.append([verb])
+        found += [[verb, act] for act in sorted(_offered(parser))]
+    return found
+
+
+def planned() -> list[list[str]]:
+    """Every operation that is planned and not built, as a person types it."""
+    return [words for words in operations() if words[0] in cli.PLANNED]
+
+
+def planned_leaves() -> list[list[str]]:
+    """The planned operations that take arguments rather than an action under them.
+
+    A verb offering actions takes an action next and nothing else, so `agents ava` is a
+    usage error and always will be — the same answer `schedules ava` already gives. Only
+    what sits at the end of the surface has arguments of its own to tolerate.
+    """
+    return [words for words in planned()
+            if not cli.PLANNED[words[0]][1] or len(words) > 1]
 
 
 class SurfaceTests(unittest.TestCase):
@@ -91,22 +136,65 @@ class SurfaceTests(unittest.TestCase):
                 self.assertNotIn("no handler for", err, f"'{verb}' is offered but nothing handles it")
                 # 1 is allowed: a built verb given nothing to work on may honestly fail.
                 # What must never happen is falling through to the catch-all above.
-                self.assertIn(code, (0, 1, cli.NOT_BUILT), f"'{verb}' exited {code}")
+                self.assertIn(code, (0, 1, cli.NOT_AVAILABLE), f"'{verb}' exited {code}")
+
+    def test_every_operation_is_reachable_including_the_ones_under_a_verb(self):
+        """R-CMD-6 — an action registered under a verb and answered nowhere falls through
+        exactly as a verb does, and there are now more actions than verbs.
+
+        A built action may honestly refuse what it was given nothing to work on, so the
+        claim here is only that nothing reaches the catch-all in `main`: an operation the
+        parser offers and nothing answers.
+        """
+        for words in operations():
+            with self.subTest(operation=" ".join(words)):
+                _, _, err = run(words, published=f"v{__version__}")
+                self.assertNotIn("no handler for", err,
+                                 f"'{' '.join(words)}' is offered but nothing handles it")
 
     def test_a_planned_command_says_so_and_does_not_report_success(self):
         # Exiting 0 having done nothing is a lie a script will believe.
-        for verb in sorted(cli.COMING_SOON):
-            with self.subTest(verb=verb):
-                code, _, err = run([verb])
-                self.assertEqual(code, cli.NOT_BUILT, f"'{verb}' reported success without doing anything")
-                self.assertIn("NOT BUILT", err)
+        for words in planned():
+            with self.subTest(operation=" ".join(words)):
+                code, _, err = run(words)
+                self.assertEqual(code, cli.NOT_AVAILABLE,
+                                 f"'{' '.join(words)}' reported success without doing anything")
+                self.assertIn("NOT AVAILABLE", err)
+
+    def test_a_planned_command_says_which_of_it_is_not_there(self):
+        """R-CMD-4 — `agents` and `agents show` are different things to want. Told only
+        that `agents` is planned, a reader takes the whole noun to be missing rather than
+        one thing about it."""
+        _, _, err = run(["agents", "show", "ava"])
+        self.assertIn("agents show", err)
+
+    def test_a_planned_command_names_something_that_does_work(self):
+        """R-CMD-4 — a refusal that leaves somebody with nowhere to go is half a message."""
+        for words in planned():
+            with self.subTest(operation=" ".join(words)):
+                _, _, err = run(words)
+                self.assertIn("rundesk --help", err)
 
     def test_a_planned_command_tolerates_the_arguments_it_will_take(self):
-        # `rundesk run agent-x "do a thing"` must answer in our words. An unknown *flag*
-        # is argparse's to reject, and rightly — that is a typo, not a planned command.
-        code, _, err = run(["run", "agent-x", "do a thing"])
-        self.assertEqual(code, cli.NOT_BUILT)
-        self.assertIn("NOT BUILT", err)
+        """R-CMD-7 — `rundesk run agent-x "do a thing"` must answer in our words. An
+        unknown *flag* is argparse's to reject, and rightly — that is a typo, not a
+        planned command."""
+        for words in planned_leaves():
+            with self.subTest(operation=" ".join(words)):
+                code, _, err = run(words + ["agent-x", "do a thing"])
+                self.assertEqual(code, cli.NOT_AVAILABLE)
+                self.assertIn("NOT AVAILABLE", err)
+
+    def test_a_command_that_is_not_there_is_told_apart_from_one_typed_wrong(self):
+        """R-CMD-5, R-CMD-8 — two situations that shared one exit code, and want opposite
+        things done about them: wait for the release, or read the help."""
+        planned_code, _, _ = run(["doctor"])
+        with self.assertRaises(SystemExit) as usage:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                cli.main(["definitely-not-a-command"])
+        self.assertEqual(planned_code, cli.NOT_AVAILABLE)
+        self.assertNotEqual(planned_code, usage.exception.code,
+                            "a command this rundesk lacks exits the same way a typo does")
 
     def test_update_says_where_it_stands_rather_than_reaching_out_blindly(self):
         behind, _, _ = run(["update", "--check"], published="v99.0.0")
@@ -153,8 +241,8 @@ class BuiltCommandTests(unittest.TestCase):
         # which answer wins would depend on the order of the checks in `main`.
         built = {"version", "update", "uninstall",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules"}
-        self.assertEqual(built & set(cli.COMING_SOON), set())
-        self.assertEqual(set(verbs()), built | set(cli.COMING_SOON))
+        self.assertEqual(built & set(cli.PLANNED), set())
+        self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 
 
 class BehindOrCurrentTests(unittest.TestCase):

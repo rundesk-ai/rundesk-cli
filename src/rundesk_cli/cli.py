@@ -1,13 +1,14 @@
 """The rundesk command line — the one interface anyone using rundesk goes through.
 
-Every verb the finished product will have is registered here from the start, so
-`rundesk` and `rundesk --help` describe the whole shape of the thing rather than
-whatever happens to be built this week. What is not built yet says so and exits
-non-zero: a command that did nothing and reported success is a lie a script will
-believe.
+Every operation the finished product will have is registered here from the start,
+so `rundesk` and `rundesk --help` describe the whole shape of the thing rather
+than whatever happens to be built this week. What is not built yet says so and
+exits non-zero: a command that did nothing and reported success is a lie a script
+will believe, and one that exits the same way a typo does is a lie it cannot even
+tell from a typo.
 
-Only the install-lifecycle commands are real today — `version` and `update`, plus
-the `install.sh` that put the command there in the first place.
+The install lifecycle, the gateway and its schedules are real. The agents that
+work is run for, what reaches them and what each run became are `PLANNED`.
 """
 
 from __future__ import annotations
@@ -43,20 +44,54 @@ START_PATIENCE = 15.0
 #: mistaken for one that is stuck.
 CYCLE_PATIENCE = 20.0
 
-#: What a command that exists but is not built yet exits with. Not 0, which a
-#: script would take as done; not 1, which is reserved for a command that ran and
-#: failed. See `COMING_SOON`.
-NOT_BUILT = 2
+#: What a command that exists but is not built yet exits with. Not 0, which a script
+#: would take as done; not 1, which is reserved for a command that ran and failed; and
+#: not 2, which argparse already spends on a usage error. Those last two are different
+#: situations wearing one number: "this rundesk does not have that yet" is worth waiting
+#: for or upgrading to, and "you typed it wrong" is worth reading the help for, and a
+#: script that cannot tell them apart can do neither. 69 is `EX_UNAVAILABLE`, which is
+#: what the BSD table has always called this. See `PLANNED`.
+NOT_AVAILABLE = 69
 
-#: Every verb that is planned but not built, and the one line `--help` shows for it.
-#: The finished shape of the CLI, declared up front — each entry graduates out of
-#: this table into a real command as it lands.
-COMING_SOON: dict[str, str] = {
-    "agents": "list the agents this install defines",
-    "new": "give an agent a directory to be itself in",
-    "doctor": "what stands between an agent and a working turn",
-    "run": "one turn, streamed to this terminal",
-    "replay": "re-print a stored run",
+#: Every operation that is planned and not built, and the one line `--help` shows for
+#: each. The finished shape of the product, declared from the outset (R-CMD-1, R-CMD-2):
+#: what an agent, a binding, a channel and a run are reached by is registered before any
+#: of it exists, so that the first of them to land does not arrive through a
+#: configuration path nobody could have found. An entry graduates out of this table into
+#: a real command as it is built.
+#:
+#: An agent has one gateway, made with it and taken away with it, and everything that
+#: reaches that agent runs inside it: its channels are held open there, and its schedules
+#: fire there. So what a person operates is the agent, and the gateway verbs above name
+#: one — the gateway is how an agent runs, not a second thing to keep track of.
+#:
+#: A binding is what reaches an agent — a channel, a schedule, or this terminal — so a
+#: schedule comes to name one through `bindings`, and `schedules` keeps carrying whatever
+#: it is given without reading it.
+PLANNED: dict[str, tuple[str, dict[str, str]]] = {
+    "agents": ("list the agents this install defines", {
+        "add": "make an agent, and the gateway that runs it",
+        "remove": "take an agent away, along with the gateway that ran it",
+        "show": "what one agent is, and where it keeps things",
+    }),
+    "bindings": ("what reaches an agent, and as which provider", {
+        "add": "have one entry point reach an agent through a chosen provider",
+        "remove": "take a binding away, leaving the agent it named",
+        "show": "what one entry point resolves to, before anything runs",
+    }),
+    "channels": ("the channels an agent is reachable on, and who may use them", {
+        "add": "put an agent on a channel, held open by the gateway that runs it",
+        "remove": "take an agent off a channel",
+        "show": "one channel, and who is allowed to reach the agent through it",
+    }),
+    "doctor": ("what stands between an agent and a working turn", {}),
+    "run": ("one turn, streamed to this terminal", {}),
+    "runs": ("what has been run, and what became of each", {
+        "replay": "re-print a stored run",
+        "resume": "carry one run on from where it stopped",
+        "show": "one run, and everything recorded against it",
+        "stop": "end one run, leaving the gateway holding it up",
+    }),
 }
 
 
@@ -69,16 +104,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"rundesk {__version__}")
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
-    for name, help_text in COMING_SOON.items():
-        # Marked where the list is, not only when the verb is invoked. Eleven of fourteen
-        # commands are planned, and a list that reads as fourteen working ones sends a
-        # newcomer to try each in turn to find out which three do anything.
+    for name, (help_text, actions) in PLANNED.items():
+        # Marked where the list is, not only when the verb is invoked. Most of what is
+        # listed is planned, and a surface that reads as working sends a newcomer to try
+        # each in turn to find out which ones do anything.
         planned = sub.add_parser(name, help=f"{help_text} [coming soon]",
                                  description=f"{help_text} — planned, not built yet.")
-        # Whatever a planned command will eventually take, it takes nothing today —
-        # but it must not choke on being given arguments, or the message it prints
-        # would be argparse's rather than ours.
-        planned.add_argument("args", nargs="*", help=argparse.SUPPRESS)
+        if actions:
+            # A verb that will manage several things offers them the way `schedules` does,
+            # so the shape a person learns once is the shape everywhere. Each is described
+            # where it is listed, which is the whole point of registering them this early.
+            acts = planned.add_subparsers(dest="act", metavar="<action>")
+            for act, what in actions.items():
+                one = acts.add_parser(act, help=f"{what} [coming soon]",
+                                      description=f"{what} — planned, not built yet.")
+                one.add_argument("args", nargs="*", help=argparse.SUPPRESS)
+        else:
+            # Whatever a planned command will eventually take, it takes nothing today —
+            # but it must not choke on being given arguments, or the message it prints
+            # would be argparse's rather than ours.
+            planned.add_argument("args", nargs="*", help=argparse.SUPPRESS)
 
     said = sub.add_parser("version", help="what is installed, and whether that is current")
     said.add_argument("--check", action="store_true", help="say whether a newer release exists")
@@ -254,9 +299,21 @@ def cmd_uninstall(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_coming_soon(name: str) -> int:
-    print(f"{name}: NOT BUILT — this command is planned, not implemented yet", file=sys.stderr)
-    return NOT_BUILT
+def cmd_not_available(name: str, act: str | None = None) -> int:
+    """Say that this rundesk does not have that yet, and name what it does have.
+
+    The action is said back when one was given (R-CMD-10): `agents` and `agents show` are
+    different things to want, and being told only that "agents" is planned reads as though
+    the whole noun is missing rather than that one thing about it is.
+
+    Ends on `NOT_AVAILABLE` rather than argparse's usage code (R-CMD-8), and names a
+    command that does work (R-CMD-9), because being told what is missing and nothing else
+    leaves a reader exactly where they started.
+    """
+    asked = f"{name} {act}" if act else name
+    print(f"{asked}: NOT AVAILABLE — planned, not built yet", file=sys.stderr)
+    print("        what this rundesk can do:  rundesk --help", file=sys.stderr)
+    return NOT_AVAILABLE
 
 
 def _as_table(head: tuple, rows: list) -> None:
@@ -760,8 +817,8 @@ def main(argv: list[str], gateways=None, machine=None) -> int:
         except gateways.NotAName as why:
             print(f"{named}: INVALID NAME — {why}", file=sys.stderr)
             return 1
-    if args.command in COMING_SOON:
-        return cmd_coming_soon(args.command)
+    if args.command in PLANNED:
+        return cmd_not_available(args.command, getattr(args, "act", None))
     if args.command == "version":
         return cmd_version(args)
     if args.command == "update":
