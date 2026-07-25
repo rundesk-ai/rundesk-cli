@@ -1812,6 +1812,20 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
         self.assertEqual({"first", "second"}, set(said), "one write erased the other")
 
 
+def ended(child) -> None:
+    """See this child off, however it got there.
+
+    Killed rather than only waited on: one that never noticed it was asked to stop would
+    otherwise fail the *cleanup*, which reports the wrong case and leaves the process
+    behind anyway. And both halves are suppressed — these cases run inside async tests,
+    where asyncio's child watcher may have reaped it first, and reaping twice raises.
+    """
+    with contextlib.suppress(ProcessLookupError, OSError):
+        child.kill()
+    with contextlib.suppress(subprocess.TimeoutExpired, ChildProcessError):
+        child.wait(timeout=30)
+
+
 #: A gateway of this name, holding it and running something, for as long as it is left to.
 #: Its own process so the lock is genuinely another process's — a lock taken twice in one
 #: process is granted, which is the one thing this must not accidentally prove.
@@ -1960,7 +1974,18 @@ class TheDecisionToEndSomebodysWork(WithARunDirectory):
         """R-GW-28 — the ask is granted by the very thing it asked for. Read as a refusal,
         work that had gone would be left unswept for the one reason that means it worked."""
         went = subprocess.Popen([PY, "-c", "pass"], start_new_session=True)
-        went.wait()
+        # Bounded, and tolerant of having been reaped by somebody else. These cases run
+        # inside an async test, where asyncio's child watcher may collect any child before
+        # `wait` sees it — and an unbounded `wait` on a pid another reaper already took
+        # never returns at all. It is the group being gone that this needs, not the exit
+        # status, so that is what it waits for and what it asserts.
+        with contextlib.suppress(subprocess.TimeoutExpired, ChildProcessError):
+            went.wait(timeout=30)
+        deadline = time.time() + 30
+        while gateway._still_there(went.pid) and time.time() < deadline:
+            time.sleep(0.02)
+        self.assertFalse(gateway._still_there(went.pid), "the process never went")
+
         self.assertTrue(gateway._ask_group(went.pid, signal.SIGTERM),
                         "a group that had already gone was read as the machine refusing")
 
@@ -2043,7 +2068,7 @@ class ANameIsTakenNotAskedAbout(WithARunDirectory):
              str(told), str(stop), str(self.logs), str(self.schedules), str(self.root)],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
         )
-        self.addCleanup(child.wait, 30)
+        self.addCleanup(ended, child)
         self.addCleanup(stop.touch)
         deadline = time.time() + 30
         while not told.exists() and time.time() < deadline:
@@ -2164,6 +2189,10 @@ class WhatTwoWritersDoToOneFile(WithARunDirectory):
             )
             for n in range(self.WRITERS)
         ]
+        # Seen off whatever happens below. A writer left behind by a failing assertion
+        # keeps the file's lock and its own pipe, and the next case then waits on both.
+        for one in running:
+            self.addCleanup(ended, one)
         time.sleep(0.3)   # every one of them up and waiting before any of them writes
         start.touch()
         for one in running:
