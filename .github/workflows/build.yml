@@ -81,26 +81,26 @@ jobs:
 
       # -- the platform: what runs, and what keeps it running ------------------------
       - name: platform-process — a program rundesk runs, and keeping hold of it
-        run: python tests/test_process.py
+        run: python -u tests/test_process.py -v
 
       - name: platform-gateway — one gateway per name, and what it takes with it
-        run: python tests/test_gateway.py
+        run: python -u tests/test_gateway.py -v
 
       - name: platform-gateway — handing a gateway to the machine that keeps it up
-        run: python tests/test_supervisor.py
+        run: python -u tests/test_supervisor.py -v
 
       - name: platform-schedule — work that starts itself, because the time came
-        run: python tests/test_schedule.py
+        run: python -u tests/test_schedule.py -v
 
       # -- the surface, and this copy of rundesk on a machine ------------------------
       - name: command-surface — every verb, and what it honestly refuses
-        run: python tests/test_cli.py
+        run: python -u tests/test_cli.py -v
 
       - name: lifecycle-update — which version this is, and moving between them
-        run: python tests/test_updater.py
+        run: python -u tests/test_updater.py -v
 
       - name: lifecycle-install — putting it on a machine, and taking it off
-        run: python tests/test_install.py
+        run: python -u tests/test_install.py -v
 
   # ------------------------------------------------------------------ installing this checkout
   # The suites above prove the install *logic*. This runs the installer for real and then
