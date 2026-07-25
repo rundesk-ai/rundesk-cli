@@ -3,11 +3,13 @@
 **Planning baseline:** `1046f3f` on 2026-07-25  
 **Status:** Direction, not a ratified product contract
 
-**Starting implementation? Read in this order:** this file's Direction and Phase 1; then
-[`CLI.md`](CLI.md) for every operation as it will be typed;
+**Starting implementation? Read in this order:** this file's Direction and Phase 2, which is next;
+then [`.knowledge/prd-drafts/provider-adapter.md`](.knowledge/prd-drafts/provider-adapter.md) and
+[`.knowledge/guides/write-a-provider-adapter.md`](.knowledge/guides/write-a-provider-adapter.md), which
+are the contract that phase delivers; then [`CLI.md`](CLI.md) for every operation as it will be typed and
 [`.knowledge/guides/the-command-surface.md`](.knowledge/guides/the-command-surface.md) for why the
-surface is shaped that way and which overlaps were already removed; then the two drafts Phase 1
-ratifies, `.knowledge/prd-drafts/agent-home.md` and `agent-gateway.md`.
+surface is shaped that way. Phases 0 and 1 are done; their contracts are ratified in
+[`.knowledge/prd/`](.knowledge/prd/README.md).
 
 This roadmap gets Rundesk from a proven process/gateway/schedule substrate to named agents that can be
 reached through Discord, Slack, schedules and the terminal. It deliberately advances one testable
@@ -46,7 +48,7 @@ phase of its own.
 **The seam is opened with the first brain, not after several.** A contract generalised out of one
 vendor's adapter is shaped like that vendor; the way to avoid it is to write the contract first and let
 the first shipped adapter be its first customer, with a stranger's adapter proving the claim in the same
-phase. That is why Phase 3 does not end when one provider works.
+phase. That is why Phase 2 does not end when one provider works.
 
 **Skills and tools come after**, because they are additive: an agent that loads a skill is a better
 agent, not a different one, and nothing about the channel, the turn or the run record changes when they
@@ -296,7 +298,7 @@ surface is shaped this way — and which overlaps were removed to get there — 
   doing so does not move when it next falls due on its own (R-SCH-21, R-SCH-22).
 - The default gateway that exists today under no agent's name is reconciled: either it gains an agent or
   it is named as legacy. **This is a persisted-state decision and an owner call before implementation.**
-- `channels` stays **registered and refusing** through this phase. Its shape is settled in Phase 4, which
+- `channels` stays **registered and refusing** through this phase. Its shape is settled in Phase 3, which
   is where a channel is worth having, and nothing here builds one.
 
 The dependency runs **agents → gateways and never the reverse**: `cli` → `agent` → `gateway` → `process`.
@@ -371,70 +373,13 @@ what the phases after this are for.
 ### Left open, deliberately
 
 - Which files each provider actually loads is inherited from probes of the build this replaces, not
-  re-proven against installed versions. Phase 3 re-probes before anything claims it.
+  re-proven against installed versions. Phase 2 re-probes before anything claims it.
 - Finding 28's larger half — a command reading a supervised gateway's directories out of its own job —
   is not done. What this phase owed it is: the job carries the agent's directories, so the two agree.
 - Running a schedule by hand happens in the terminal, not inside the agent's gateway. There is nothing to
   ask a running gateway with, and inventing one was not this phase's work.
 
-## Phase 2 — Resolve a Binding Without a Provider Anywhere Near It
-
-**Outcome:** terminal, schedule and future channel sources can select different providers/models for the
-same agent through one pure resolver.
-
-**A binding is resolved, never maintained.** There is no `bindings` verb and no object a consumer
-creates: which provider and model answer is an option where the entry point is made — on a channel, on a
-schedule, on `ask` — and the agent supplies whatever was left out. What this phase builds is the
-resolver that turns those into one immutable record per run, and nothing a person types.
-
-**The resolver enumerates nothing.** It never holds a list of providers, and never a list of models. A
-provider is a name it carries through: one of the shipped adapters, or a path to a program somebody
-wrote. So "a provider Rundesk does not recognise" is not an error condition — it is the ordinary case
-the seam exists for, and the only failure is nothing runnable being there. A model is likewise a word
-the adapter understands and the resolver does not read; validating it here would mean tracking every
-vendor's catalogue forever, and refusing a model that shipped this morning.
-
-The same goes for how much of the machine a turn may touch: every brain scopes capability its own way,
-so what is resolved is a posture carried to the adapter, never a tool list Rundesk believes in.
-
-Define the smallest binding record that can answer:
-
-- which agent receives this source;
-- which provider and optional model are selected;
-- which permission policy applies;
-- which external conversation key, if any, owns continuation.
-
-Resolution produces an immutable run specification containing at least `run_id`, agent, binding,
-source/conversation, provider, model, cwd and provider home. Provider session handles belong to the
-conversation and provider combination; they are never reused across providers.
-
-Do this first with stand-in adapters — small programs, which is what every adapter is, so the fake and
-the real differ in what they run and in nothing else. Do not add Discord or invoke a real provider CLI.
-
-The `run_id` must also become the durable correlation key in live state, history and related logs before a
-channel can attach a question, answer or outcome to it. This is the narrow change described by finding 29;
-it does not require a new persistence engine.
-
-### Tests
-
-- Discord, Slack and two schedules resolve to the same agent cwd/knowledge but different requested
-  provider/model combinations.
-- Binding selection does not copy or fork an agent's knowledge.
-- An unknown **agent** or source fails before anything is started.
-- A provider that is a path to a program resolves, and one that is nothing runnable fails before a
-  process is created — the only two outcomes, because there is no list of providers to be absent from.
-- A model Rundesk has never heard of resolves and is carried through unread.
-- A binding edit does not mutate an already admitted run.
-- A provider change cannot resume the old provider's session.
-- Untrusted message text cannot override provider, model or permission policy.
-- Nothing in the resolver names a vendor, so a new adapter needs no change here at all.
-
-### Exit proof
-
-One table-driven offline test demonstrates the four-entry-point example above, including exact resolved
-`argv`, environment, cwd and session key through stand-in executables.
-
-## Phase 3 — Open the Provider Seam, and Put One Brain Behind It
+## Phase 2 — Open the Provider Seam, and Put One Brain Behind It
 
 **Outcome:** one agent completes and resumes a turn through an adapter — and a second adapter, written
 by somebody who has never seen this code, does the same with nothing here changed.
@@ -475,6 +420,30 @@ refused, so a provider can grow without waiting for a release here.
 tools reports none — a complete, honest turn. That is what makes a custom conversational CLI, or a plain
 HTTP endpoint, swappable in without pretending to capabilities it has not got.
 
+### What a turn resolves, and what it remembers
+
+There is no binding to create and no resolver phase of its own: what a turn needs is worked out when it
+is admitted, and only two things are written down. **The resolver enumerates nothing** — no list of
+providers, no list of models. A provider is a name carried through, a shipped adapter or a path to a
+program somebody wrote, so one Rundesk does not recognise is the ordinary case rather than an error; the
+only failure is nothing runnable being there. A model is a word the adapter understands and nothing here
+reads. How much of the machine a turn may touch is a posture carried to the adapter, never a tool list
+Rundesk believes in.
+
+**Three things, three lifetimes, and they are not one thing:**
+
+```text
+run id            one turn                     ours — what correlates a transcript, a cost, an outcome
+session handle    the provider's own token     theirs — opaque here, never interpreted
+resume ledger     (conversation, provider)     ours — the only working state that outlives the process
+                     -> session handle
+```
+
+The ledger is keyed by **conversation and provider together**. Keyed by conversation alone, changing an
+agent's provider hands Claude's session to Codex — the Node build's ledger is keyed that way and this one
+must not be. Losing the ledger costs the next turn its context and nothing else, which is why it is a
+plain file rather than anything larger.
+
 Do not choose the first shipped adapter because the Node build chose it. Probe the installed Claude,
 Codex and Grok CLIs against the same minimum contract:
 
@@ -506,12 +475,39 @@ python3 tests/test_provider.py --adapter /opt/my-brain
 It needs no account, token or network, because the adapters it drives are themselves small programs —
 the same thing any real adapter is.
 
+### The transcript — the data this is all for
+
+Every run writes what happened, append-only, one record to a line, and it is never rewritten. This is
+the thing worth having: an agent that worked all night is only useful if what it did can be read back.
+
+```text
+one file per run          agents/<agent>/runs/<run>.jsonl
+five fields to a line     run · agent · seq · at · event
+seq is monotonic          a total order that does not depend on a clock, so concatenating
+                          two files or rotating one keeps the order it happened in
+```
+
+Two rules make it worth trusting:
+
+- **Normalise once, keep the raw.** The record carries our event *and* the provider's own line beside
+  it. An upstream format change then shows up as visible drift rather than a silent gap, and a record we
+  did not understand is still there to be read later (R-PRV-5).
+- **Nothing is sent that the transcript does not show.** Anything Rundesk adds to a turn — standing
+  instructions, a continuation, anything at all — is in the record and charged to the run's usage. The
+  Node build's note on this is worth keeping: injecting text a human never wrote and leaving it out of
+  the audit makes the audit a lie, and it is invisible precisely because it is the audit.
+
+**What is deliberately not copied:** the provider's own session files. Those stay in its home and are
+referenced by session handle, because copying them duplicates credentials and vendor config into our
+record. **The consequence is honest and should be stated:** if that home is purged, what the vendor kept
+goes with it — our transcript is what survives, so it has to be sufficient on its own.
+
 **Usage is captured here, because here is where the stream first exists.** Every provider reports it and
 each reports it differently, and the Node build already proved the two traps: Codex's
 `turn.completed.usage` is the running total for the whole *conversation*, not the turn — three one-word
 replies reported 5, 10, 15 — so a turn's own share is the difference from the last one, and a gateway
 restart loses that running total; and Claude bills cache *creation* as fresh input, above the standard
-rate, so it cannot be folded in with cache reads. What is drafted is `agent-usage` (`R-USE-n`), and its
+rate, so it cannot be folded in with cache reads. What is drafted is `agent-usage` (`R-USE-n`), beside `agent-run` (`R-RUN-n`) for the account itself, and its
 hardest rule is that a cost worked out from prices never reads like one a provider measured.
 
 Nothing here asks a provider what a plan has left. That is the provider's question, needs auth and a
@@ -529,6 +525,11 @@ network call, and could not be proved by an offline gate.
 - Prove a conversation's second turn is charged its own tokens, not the conversation's running total.
 - Prove a run whose usage never arrived says so, rather than recording a cost of nothing.
 - Prove a cost worked out from prices is marked apart from one a provider measured.
+- Prove a transcript is readable after the gateway that wrote it has gone.
+- Prove two runs of one conversation concatenate into the order they happened in.
+- Prove a record Rundesk did not understand is still in the transcript afterwards.
+- Prove a second turn resumes the conversation's session, and that changing provider does not.
+- Prove anything Rundesk added to a turn appears in that turn's transcript.
 - **An adapter this code has never seen carries a whole turn**, written against the guide alone and
   living outside the tree — the claim the whole seam rests on.
 - An adapter that runs no tools produces a complete turn, with that work simply absent.
@@ -548,7 +549,7 @@ session and outcome by one run ID. The same sanitized stream passes offline repl
 runs a whole turn with nothing in Rundesk changed to accommodate it — and passes the same conformance
 suite the shipped one does. Until that has happened, the seam is a hope.
 
-## Phase 4 — Add Basic Discord Communication
+## Phase 3 — Add Basic Discord Communication
 
 **Outcome:** one authorized Discord channel/thread can send text to one proven provider binding and receive
 streamed results. Approvals and provider questions remain explicitly unsupported in this phase.
@@ -558,7 +559,7 @@ What a channel must do is drafted in `channel-messaging` (`R-CH-n`) and what Dis
 threads opened on being named, reactions marking a turn seen, finished, stopped or failed, and steering
 through Discord's own commands rather than words typed into the chat.
 
-Build the Discord wire against a fake brain first, then attach it to the Phase 3 adapter. The already
+Build the Discord wire against a fake brain first, then attach it to the Phase 2 adapter. The already
 pinned `discord.py` dependency must earn its place through the same install and test path as the product;
 do not add a second Discord stack.
 
@@ -608,7 +609,7 @@ The first slice needs:
 - local retention of the final run outcome when Discord is unavailable.
 
 **Stopping and forgetting are not approvals.** They are gestures aimed at the conversation, not at the
-provider's permission model, so they belong here while questions and approvals wait for Phase 7. What a
+provider's permission model, so they belong here while questions and approvals wait for Phase 6. What a
 control *did* arrives as the turn's own outcome, never as the command's answer — acknowledging a control
 with a lifecycle signal is what made resetting mid-turn publish the running turn's half-written output in
 the Node build (R-DIS-12).
@@ -630,13 +631,13 @@ A fake Discord integration proves all routing and failure cases offline. A manua
 then sends one message, observes streamed progress and receives one final answer correlated to the same
 run ID.
 
-## Phase 5 — Let the Clock Start Work
+## Phase 4 — Let the Clock Start Work
 
 **Outcome:** an agent does work because the time came, through the same resolver, run record and
 provider adapter that Discord and the terminal already use.
 
 One schedule names a binding and runs the proven provider under an autonomous permission policy. The
-fake channel was Phase 4's offline half, so what is left here is the trigger that has no one watching
+fake channel was Phase 3's offline half, so what is left here is the trigger that has no one watching
 it — which is the one that must never fail silently.
 
 Any change to existing schedule files is a persisted-schema decision and requires owner approval plus a
@@ -660,7 +661,7 @@ recorded as findings 24–26 and 31.
 One scheduled run passes through the same resolver, run record and provider adapter that Discord and the
 terminal already used — and its outcome is readable the next morning without a terminal having been open.
 
-## Phase 6 — Bootstrap Knowledge, Skills and Tool Discovery
+## Phase 5 — Bootstrap Knowledge, Skills and Tool Discovery
 
 **Outcome:** every provider can be given the same agent's knowledge and a basic skill without Rundesk
 becoming a second skills or tools engine.
@@ -668,7 +669,7 @@ becoming a second skills or tools engine.
 **This is additive, which is why it waits.** An agent that loads a skill is a better agent, not a
 different one: nothing about the channel, the turn, the run record or the resolver changes when this
 lands. Everything before it was work that could not be added later without redoing it, and this is not.
-The corollary is a real constraint — if a change here forces a change in Phase 3 or 4, it is not a skill
+The corollary is a real constraint — if a change here forces a change in Phase 2 or 3, it is not a skill
 concern and belongs in the phase it disturbed.
 
 Add one basic `SKILL.md` template, one canonical agent-visible skills library and only the provider
@@ -693,7 +694,7 @@ Tool execution and richer grants wait until one provider turn is proven — whic
 Each supported provider has a current capability row marked proven, unsupported or unknown. Rundesk does
 not claim that a provider loaded a rule or skill based only on file presence.
 
-## Phase 7 — Questions, Approvals and Recovery
+## Phase 6 — Questions, Approvals and Recovery
 
 **Outcome:** a supported provider can pause for remote input without weakening its native permission
 model, and Rundesk can recover truthfully after a gateway/channel restart.
@@ -722,12 +723,12 @@ A manual canary completes one question and one approval through Discord, then re
 supported restart boundary. The public always-online claim waits until interrupted work can resume rather
 than restart and repeated crashes stop looping (the currently unproven R-GW-22 and R-GW-24).
 
-## Phase 8 — Add Provider and Channel Breadth One Adapter at a Time
+## Phase 7 — Add Provider and Channel Breadth One Adapter at a Time
 
 **Outcome:** Claude, Codex and Grok can each be selected where an entry point is made, and a second
 channel can reuse the same channel contract without changing the agent.
 
-Add the remaining providers one at a time behind the Phase 3 conformance suite — which by now a
+Add the remaining providers one at a time behind the Phase 2 conformance suite — which by now a
 stranger's adapter has already passed, so adding one is writing a program against a published contract
 rather than extending a core. Preserve real differences: do not synthesize tool events a provider does
 not emit, claim interactive input a protocol cannot accept or hide cumulative usage behind guessed
@@ -762,22 +763,30 @@ agent.
 
 ## Ready-for-Next-Phase Verdict
 
-Phases 0 and 1 are done, so Rundesk is ready to **resolve a binding**. It is not ready to begin Discord or
-a live provider adapter.
+Phases 0 and 1 are done. Agents exist, are operated by name, and are proved offline. **Next is the
+provider seam and the first brain behind it.**
 
 The next implementation sequence should be:
 
 1. ~~Make the dependency/test gate truthful and declare the approved product/CLI surface.~~ **Done.**
 2. ~~Build the agent and its home, and refactor the command surface so agents are what a person operates
    and gateways are how they run.~~ **Done.**
-3. Prove binding and run-ID resolution with fakes — the smallest thing that lets a source pick a provider.
-4. Close the provider-facing runtime risks, then take one provider turn to the terminal.
-5. **Reach that agent through Discord**, so the product is tested where it is actually used.
+3. **Open the provider seam and put one brain behind it** — the contract first, a shipped adapter as its
+   first customer, a stranger's adapter as the proof, and the transcript that makes any of it worth
+   having.
+4. **Reach that agent through Discord**, so the product is tested where it is actually used.
+5. Let the clock start work, which is the trigger nobody is watching.
 6. Add skills and tool discovery, which are additive and change nothing already proven.
 
-That sequence exposes agent and routing mistakes locally, keeps the provider CLIs native, and gets to a
-real remote turn in four moves instead of six — while leaving the additive work until after the risky
-part has been proved.
+**A resolver phase used to sit at step 3 and no longer does.** With no `bindings` verb there was no
+object anyone creates, and its one durable artefact — the ledger that says which conversation is
+continuing which session — cannot be built before a provider has reported a session handle. It would
+have been a ledger with nothing to put in it. Its two real parts are now where they can be proved: what
+a turn resolves is decided in Phase 2, and the claim that four entry points reach one agent with
+different providers is proved in Phase 3, where the entry points exist.
+
+That sequence exposes agent and routing mistakes locally, keeps the provider CLIs native, and reaches a
+real remote turn in **two** moves — while leaving the additive work until after the risky part is proved.
 
 ## Evidence Used
 
