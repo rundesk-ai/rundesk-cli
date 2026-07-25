@@ -12,3 +12,4 @@ Add a row when you add a draft; `doc-lint` fails the build if one is missing.
 | [agent-gateway](./agent-gateway.md) | the one gateway an agent runs in, made with it and taken away with it | `AGW` |
 | [channel-messaging](./channel-messaging.md) | what any channel does, whatever its platform can and cannot show | `CH` |
 | [channel-discord](./channel-discord.md) | what a turn looks like on Discord — threads, marks and its own commands | `DIS` |
+| [agent-usage](./agent-usage.md) | what every run cost, in tokens and in money, and how sure that is | `USE` |

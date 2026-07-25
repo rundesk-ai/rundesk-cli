@@ -84,6 +84,7 @@ PLANNED: dict[str, tuple[str, dict[str, tuple[str, str]]]] = {
         "show": ("<channel>", "one channel, and who is allowed to reach this agent through it"),
     }),
     "doctor": ("what stands between an agent and a working turn", {}),
+    "usage": ("what agents have cost, in tokens and in money", {}),
     "runs": ("what an agent has run, and what became of each", {
         "resume": ("<run>", "carry one run on from where it stopped"),
         "show": ("<run> [--stream]", "one run — what was asked, what it cost, and how it ended"),
@@ -118,6 +119,9 @@ FORMS: dict[str, list[tuple[str, str]]] = {
     "ask": [('<agent> "<prompt>"', "")],
     "doctor": [("", "what stands between every agent and a working turn"),
                ("<agent>", "what stands between one agent and a working turn")],
+    "usage": [("", "what every agent has cost"),
+              ("<agent>", "what one agent has cost"),
+              ("<agent> <run>", "what one run cost")],
 }
 
 

@@ -40,6 +40,9 @@ rundesk runs <agent>                                                         wha
 rundesk runs <agent> resume <run>                                            carry one run on from where it stopped   [planned]
 rundesk runs <agent> show <run> [--stream]                                   one run — what was asked, what it cost, and how it ended   [planned]
 rundesk runs <agent> stop <run>                                              end one run, leaving the agent it belongs to running   [planned]
+rundesk usage                                                                what every agent has cost   [planned]
+rundesk usage <agent>                                                        what one agent has cost   [planned]
+rundesk usage <agent> <run>                                                  what one run cost   [planned]
 
 # rundesk itself
 rundesk status                                                               every agent, and what it is doing

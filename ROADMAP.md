@@ -405,6 +405,17 @@ Choose the smallest currently documented surface that passes every required item
 that adapter and `rundesk ask <agent> "..."` to the terminal. Mid-turn send is not promised until a real
 probe proves it; some headless providers turn questions into final prose or require stop/resume.
 
+**Usage is captured here, because here is where the stream first exists.** Every provider reports it and
+each reports it differently, and the Node build already proved the two traps: Codex's
+`turn.completed.usage` is the running total for the whole *conversation*, not the turn — three one-word
+replies reported 5, 10, 15 — so a turn's own share is the difference from the last one, and a gateway
+restart loses that running total; and Claude bills cache *creation* as fresh input, above the standard
+rate, so it cannot be folded in with cache reads. What is drafted is `agent-usage` (`R-USE-n`), and its
+hardest rule is that a cost worked out from prices never reads like one a provider measured.
+
+Nothing here asks a provider what a plan has left. That is the provider's question, needs auth and a
+network call, and could not be proved by an offline gate.
+
 ### Tests
 
 - Replay captured native streams, including malformed, duplicate, oversized and partial records.
@@ -414,6 +425,9 @@ probe proves it; some headless providers turn questions into final prose or requ
 - Prove secrets and raw tool payloads are not printed to a remote-safe presentation by default.
 - Prove a restart either resumes the same recorded run or reports a durable terminal interruption; it
   never silently starts the turn again.
+- Prove a conversation's second turn is charged its own tokens, not the conversation's running total.
+- Prove a run whose usage never arrived says so, rather than recording a cost of nothing.
+- Prove a cost worked out from prices is marked apart from one a provider measured.
 
 ### Exit proof
 
@@ -624,6 +638,8 @@ agent.
 - A rich common event taxonomy before real adapters require it.
 - Arbitrary remote changes to provider, model, permissions or tool grants.
 - Executing every discovered tool before inventory, grants and one provider turn are proven.
+- A budget that throttles or stops an agent that has cost too much. Recording comes first, so a cap is
+  set against history rather than a guess — and a wrong reading stops a working agent.
 
 ## Ready-for-Next-Phase Verdict
 
