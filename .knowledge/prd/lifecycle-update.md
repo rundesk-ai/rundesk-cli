@@ -38,3 +38,4 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-17 | No version other than the most recently published can be asked for | `an update cannot be pointed at a version of your choosing` |
 | ✅ | R-UPD-18 | An update that finds nothing newer leaves this copy alone | `up to date says so and changes nothing` |
 | ✅ | R-UPD-19 | A published version is named the same as the version the command reports | `a tag naming something else is refused`, `publishing a release actually applies the rule` |
+| ✅ | R-UPD-20 | Nothing published is told apart from being unable to ask | `nothing published is told apart from being unable to ask` |

@@ -33,3 +33,4 @@ answers; keeping it current and taking it away are their own contracts.
 | ✅ | R-INS-12 | A person has nothing left to do for rundesk to run once an install reports success | `an install refuses to report success until the command it installed answers`, `the command finds what was installed for it` |
 | ✅ | R-INS-13 | Everything an install puts on a machine lives in one directory under the person's home | `the install lives under the persons home`, `an install writes nothing outside the places it says` |
 | ✅ | R-INS-14 | An install changes nothing a person owns beyond placing the command | `an install does not change the path it only says so` |
+| ✅ | R-INS-15 | An install with no copy of the source takes the newest published version, not the newest work | `an install without a checkout takes the newest release not the branch` |

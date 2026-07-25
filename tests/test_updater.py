@@ -392,6 +392,26 @@ class PublishedNameTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parent.parent / ".github" / "workflows" / "release.yml").read_text()
         self.assertIn("tag_matches", workflow, "a release can be published without checking what it is named")
 
+class WhyItCouldNotSayTests(unittest.TestCase):
+    def test_nothing_published_is_told_apart_from_being_unable_to_ask(self):
+        # They send a reader somewhere completely different: one is "wait and try again",
+        # the other is "there is nothing there, or you cannot see it". Reporting a private
+        # or release-less repository as a network problem sends someone to check their wifi.
+        missing, _ = _with_json(urllib.error.HTTPError("u", 404, "Not Found", {}, None),
+                                updater.latest_version_online)
+        self.assertIsNone(missing)
+        self.assertEqual(updater.why_unavailable, updater.NOTHING_PUBLISHED)
+
+        offline, _ = _with_json(urllib.error.URLError("no route"), updater.latest_version_online)
+        self.assertIsNone(offline)
+        self.assertEqual(updater.why_unavailable, updater.UNREACHABLE)
+
+        self.assertNotEqual(
+            updater.describe("0.1.0", None, updater.NOTHING_PUBLISHED),
+            updater.describe("0.1.0", None, updater.UNREACHABLE),
+            "both kinds of nothing read the same",
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

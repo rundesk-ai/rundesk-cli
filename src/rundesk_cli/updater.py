@@ -10,6 +10,7 @@ An update replaces the checkout in place and never touches the symlink that put
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import tarfile
@@ -25,6 +26,9 @@ ARCHIVE_URL = f"https://github.com/{REPO_SLUG}/archive/refs/tags/{{tag}}.tar.gz"
 HTTP_TIMEOUT = 5
 DOWNLOAD_TIMEOUT = 60
 USER_AGENT = "rundesk-cli-updater"
+
+#: Why the last look-up came back empty, when it did. Set by `latest_version_online`.
+why_unavailable: str | None = None
 
 _VERSION_RE = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?")
 
@@ -46,14 +50,45 @@ def is_newer(latest: str, local: str) -> bool:
     return there > here
 
 
+#: Told apart because they need different things of the reader: one is "wait and try again",
+#: the other is "nothing has been published, or you cannot see it".
+UNREACHABLE = "unreachable"
+NOTHING_PUBLISHED = "nothing-published"
+
+
+def _token() -> str | None:
+    """A token, if the machine has one. Needed only for a repository you cannot see anonymously."""
+    for name in ("RUNDESK_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"):
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
 def latest_version_online() -> str | None:
-    """The newest published release, or None when the forge cannot be reached."""
-    request = urllib.request.Request(RELEASES_LATEST_URL, headers={"User-Agent": USER_AGENT})
+    """The newest published release, or None when it cannot be had.
+
+    `why_unavailable` carries which kind of nothing it was, because "we could not ask" and
+    "there is nothing there" send a reader somewhere completely different.
+    """
+    global why_unavailable
+    why_unavailable = None
+    headers = {"User-Agent": USER_AGENT}
+    token = _token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(RELEASES_LATEST_URL, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
             payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        # 404 answers plainly: either nothing is published, or this repository is not visible
+        # without credentials. Reporting that as "could not reach" sends someone to check
+        # their network when the answer is that there is nothing to find.
+        why_unavailable = NOTHING_PUBLISHED if err.code in (403, 404) else UNREACHABLE
+        return None
     except (urllib.error.URLError, TimeoutError, ValueError, OSError):
-        # Unreachable is not the same as up to date, and `run` says so.
+        why_unavailable = UNREACHABLE
         return None
     # A shape we did not expect — an array, a rate-limit page parsed as JSON — reads as
     # "could not tell", never as a crash. This runs behind whatever the user typed.
@@ -74,7 +109,9 @@ def tag_matches(tag: str, version: str) -> bool:
     return tag.strip().lstrip("v") == version.strip()
 
 
-def describe(current: str, latest: str | None) -> str:
+def describe(current: str, latest: str | None, why: str | None = None) -> str:
+    if latest is None and why == NOTHING_PUBLISHED:
+        return f"rundesk {current} — no release has been published, or this install cannot see them."
     if latest is None:
         return f"rundesk {current} — could not reach the forge to check for a newer release."
     if is_newer(latest, current):
@@ -100,7 +137,7 @@ def run(
     it and quietly ignore anything that replaced it afterwards.
     """
     published = (latest or latest_version_online)()
-    print(describe(current_version, published))
+    print(describe(current_version, published, why_unavailable))
     if published is None:
         return 1
     if not is_newer(published, current_version):

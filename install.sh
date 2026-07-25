@@ -90,8 +90,21 @@ else
   command -v tar  >/dev/null 2>&1 || die "tar is required to unpack rundesk."
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' EXIT
-  echo "downloading the newest rundesk release…"
-  curl -fsSL "https://github.com/$REPO_SLUG/archive/refs/heads/main.tar.gz" -o "$work/rundesk.tar.gz" ||
+  # The newest *published release*, not whatever is on the branch. Installing the branch
+  # would hand someone a version that was never released, reporting a number no release
+  # carries — and then `rundesk update` would offer to move them backwards onto it.
+  echo "looking up the newest rundesk release…"
+  tag="$(curl -fsSL "https://api.github.com/repos/$REPO_SLUG/releases/latest" 2>/dev/null |
+         sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  if [[ -n "$tag" ]]; then
+    echo "downloading $tag…"
+    source_url="https://github.com/$REPO_SLUG/archive/refs/tags/$tag.tar.gz"
+  else
+    # Nothing published yet — a repository can be perfectly usable before its first release.
+    echo "no release published yet; taking the main branch instead."
+    source_url="https://github.com/$REPO_SLUG/archive/refs/heads/main.tar.gz"
+  fi
+  curl -fsSL "$source_url" -o "$work/rundesk.tar.gz" ||
     die "could not download rundesk from $REPO_SLUG."
   tar -xzf "$work/rundesk.tar.gz" -C "$work"
   extracted="$(find "$work" -maxdepth 1 -type d -name 'rundesk-cli-*' | head -1)"

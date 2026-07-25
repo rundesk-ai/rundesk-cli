@@ -337,6 +337,21 @@ class OneDirectoryTests(Sandbox):
         for profile in (".zshrc", ".bashrc", ".bash_profile", ".profile"):
             self.assertFalse((self.home / profile).exists(), f"the install wrote to {profile}")
 
+class WhatIsInstalledTests(unittest.TestCase):
+    """Which rundesk a person gets when they have no copy of the source."""
+
+    def test_an_install_without_a_checkout_takes_the_newest_release_not_the_branch(self):
+        # Installing the branch hands someone a version that was never released — reporting a
+        # number no release carries, which `rundesk update` would then offer to move them
+        # *backwards* onto. The branch is the fallback for a repository with no release yet.
+        script = INSTALLER.read_text()
+        self.assertIn("releases/latest", script, "the installer does not ask what the newest release is")
+        self.assertIn("archive/refs/tags/", script, "the installer never downloads a released tag")
+        branch = script.index("archive/refs/heads/main")
+        tags = script.index("archive/refs/tags/")
+        self.assertLess(tags, branch, "the branch is preferred over the released tag")
+        self.assertIn("no release published yet", script, "a repository with no release could not be installed")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
