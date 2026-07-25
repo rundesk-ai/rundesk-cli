@@ -78,6 +78,21 @@ def run(argv: list[str], published: str | None = None) -> tuple[int, str, str]:
     return code, out.getvalue(), err.getvalue()
 
 
+@contextlib.contextmanager
+def taking_the_installer(instead):
+    """Put something else in the place `uninstall` reaches for the installer.
+
+    Never the real one: proving that this command runs the removal by running the removal
+    would stop the gateways of whoever ran the suite, and delete their install.
+    """
+    was = cli._remove_this_install
+    cli._remove_this_install = instead
+    try:
+        yield
+    finally:
+        cli._remove_this_install = was
+
+
 def _offered(parser) -> dict:
     """What this parser offers under it, by name — or an empty mapping if nothing."""
     for action in parser._actions:
@@ -283,12 +298,44 @@ class BuiltCommandTests(unittest.TestCase):
         code = cli.updater.run(cli.REPO_ROOT, "0.1.0", check_only=True, latest=lambda: ("v9.9.9", None))
         self.assertEqual(code, 0)
 
-    def test_uninstall_hands_the_job_to_the_installer(self):
-        # It cannot remove itself — the command doing the removing goes with it.
-        code, out, _ = run(["uninstall"])
-        self.assertEqual(code, 0)
-        self.assertIn("install.sh", out)
-        self.assertIn("--uninstall", out)
+    def test_uninstall_removes_rundesk_rather_than_explaining_how_to(self):
+        """R-RM-1 — it printed instructions and exited zero, so a script reading the code
+        was told the uninstall had run when nothing had been removed at all."""
+        asked = []
+        with taking_the_installer(lambda installer, args: asked.append(args) or 0):
+            code, out, _ = run(["uninstall"])
+        self.assertEqual(0, code, out)
+        self.assertEqual([["--uninstall"]], asked, "it did not run the removal")
+
+    def test_uninstall_passes_a_purge_through_rather_than_deciding_for_you(self):
+        """R-RM-10 — what an agent wrote is the owner's, and taking it is their call."""
+        asked = []
+        with taking_the_installer(lambda installer, args: asked.append(args) or 0):
+            run(["uninstall", "--purge"])
+        self.assertEqual([["--uninstall", "--purge"]], asked)
+
+    def test_uninstall_that_removed_nothing_says_so_and_fails(self):
+        """R-RM-1 — exiting zero after a removal that did not happen is the failure this
+        product is most careful about everywhere else."""
+        with taking_the_installer(lambda installer, args: 3):
+            code, _, err = run(["uninstall"])
+        self.assertEqual(1, code, "a failed uninstall reported success")
+        self.assertIn("FAILED", err)
+
+    def test_uninstall_with_no_installer_says_where_to_get_one(self):
+        """R-RM-1 — removing rundesk is exactly when a broken install has to be removable,
+        and being told only that it is broken leaves a reader where they started."""
+        def gone(installer, args):
+            raise AssertionError("it ran an installer that is not there")
+        with taking_the_installer(gone):
+            was = cli.REPO_ROOT
+            cli.REPO_ROOT = pathlib.Path("/nowhere-at-all")
+            try:
+                code, _, err = run(["uninstall"])
+            finally:
+                cli.REPO_ROOT = was
+        self.assertEqual(1, code)
+        self.assertIn("curl", err, "it failed and never said how to remove it anyway")
 
     def test_the_planned_list_and_the_built_commands_do_not_overlap(self):
         # A command that is both "coming soon" and handled would answer twice, and

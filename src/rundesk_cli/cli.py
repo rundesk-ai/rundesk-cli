@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +31,11 @@ from rundesk_cli import gateway as _gateway  # noqa: E402
 from rundesk_cli import process  # noqa: E402
 from rundesk_cli import supervisor as _supervisor  # noqa: E402
 from rundesk_cli import updater  # noqa: E402
+
+#: The installer as published, for the one case where this install has lost its own:
+#: removing rundesk is exactly when a broken install has to be removable.
+PUBLISHED_INSTALLER = ("https://github.com/rundesk-ai/rundesk-cli/releases/latest/"
+                       "download/install.sh")
 
 #: Where this checkout lives — the thing an update replaces in place.
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -183,7 +191,9 @@ def build_parser() -> argparse.ArgumentParser:
     moved = sub.add_parser("update", help="move to the newest published release")
     moved.add_argument("--check", action="store_true", help="say what would happen, and change nothing")
 
-    sub.add_parser("uninstall", help="how to remove rundesk from this machine")
+    taken_off = sub.add_parser("uninstall", help="remove rundesk from this machine")
+    taken_off.add_argument("--purge", action="store_true",
+                           help="also take every agent's home, log and history")
 
     # The agent. Making one makes the gateway that runs it, and taking it away takes both:
     # there is no separate step, and no way to end up with one and not the other.
@@ -394,19 +404,61 @@ def _in_flight(gateways, agents) -> list:
     ]
 
 
-def cmd_uninstall(_args: argparse.Namespace) -> int:
-    # The one thing the command cannot do for you: removing it removes the command
-    # that is doing the removing. The installer owns it, and it is what you already
-    # have on disk.
-    print("uninstall: USE THE INSTALLER — removing rundesk removes this command too")
-    print()
-    print("  from this checkout:")
-    print(f"    {REPO_ROOT / 'install.sh'} --uninstall [--purge]")
-    print()
-    print("  without one:")
-    print("    curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/"
-          "install.sh | bash -s -- --uninstall")
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    """Take rundesk off this machine, or fail saying why.
+
+    It printed instructions and exited zero. A control verb that is an instruction page
+    makes someone find a second surface, and exiting zero says the uninstall ran when
+    nothing was removed at all — which is the one failure this product is most careful
+    about everywhere else.
+
+    The installer owns removal, so this runs it rather than reimplementing it: one thing
+    decides what is rundesk's and what is the owner's, and a second copy of that decision
+    is how an uninstall comes to delete a home it should have kept.
+
+    **Run from a copy.** The installer deletes the install directory entry by entry, and
+    itself with it — a script being read by the shell while its file is unlinked is a
+    script that can stop mid-line. Copied out first, what runs is a whole file that no
+    longer lives where the deleting happens.
+    """
+    installer = REPO_ROOT / "install.sh"
+    if not installer.is_file():
+        print(f"uninstall: FAILED — this install has no installer to run ({installer})",
+              file=sys.stderr)
+        print("        remove it with the published one:", file=sys.stderr)
+        print(f"        curl -fsSL {PUBLISHED_INSTALLER} | bash -s -- --uninstall",
+              file=sys.stderr)
+        return 1
+    asked = ["--uninstall"] + (["--purge"] if args.purge else [])
+    # Looked up here rather than bound in the signature, so a test can put something else
+    # in its place — running the real installer to prove this calls it would stop the
+    # gateways of whoever ran the suite.
+    try:
+        ended = _remove_this_install(installer, asked)
+    except OSError as why:
+        print(f"uninstall: FAILED — could not run the installer: {why}", file=sys.stderr)
+        return 1
+    if ended != 0:
+        # Said again in our own words: the installer has already explained what stopped
+        # it, and a command that ended non-zero without saying so reads as a crash.
+        print(f"uninstall: FAILED — nothing was removed (the installer ended {ended})",
+              file=sys.stderr)
+        return 1
     return 0
+
+
+def _remove_this_install(installer: Path, asked: list[str]) -> int:
+    """Run the installer's own removal, from a copy, and say how it ended.
+
+    From a copy because the installer deletes the install directory entry by entry and
+    itself with it: a script the shell is still reading while its file is unlinked is a
+    script that can stop mid-line. What runs is a whole file somewhere else.
+    """
+    with tempfile.TemporaryDirectory(prefix="rundesk-uninstall-") as aside:
+        copy = Path(aside) / installer.name
+        shutil.copy2(installer, copy)
+        copy.chmod(0o755)
+        return subprocess.run(["bash", str(copy), *asked], cwd=aside).returncode
 
 
 def cmd_not_available(name: str, act: str | None = None) -> int:

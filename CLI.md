@@ -48,7 +48,7 @@ rundesk usage <agent> <run>                                                     
 rundesk status                                                                    how rundesk itself is on this machine
 rundesk version [--check]                                                         what is installed, and whether that is current
 rundesk update [--check]                                                          move to the newest published release
-rundesk uninstall                                                                 how to remove rundesk from this machine
+rundesk uninstall [--purge]                                                       remove rundesk from this machine
 ```
 
 ## What the arguments mean
@@ -58,7 +58,7 @@ rundesk uninstall                                                               
 --check               say whether a newer release exists
 --here                run it in this terminal instead of handing it to the machine
 --kind <kind>         which kind of channel it is — `discord`, and others as they land
---purge               also take its log, schedules and history
+--purge               also take every agent's home, log and history
 --when <cron>         when it runs, as five cron fields — minute, hour, day, month, weekday
 -n, --lines <lines>   how many of the last lines to show
 <agent>               which agent — the name it was made under
