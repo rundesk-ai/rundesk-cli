@@ -80,11 +80,43 @@ require_python() {
     die "Python 3.$MIN_PYTHON_MINOR or newer is required; found $(python3 --version)."
 }
 
+# Stop every gateway this install is keeping, and take its job away — before anything is
+# deleted. A job outlives the command it names: the gateway keeps running, because
+# deleting a program does not stop one, and the machine goes on trying to start it again
+# every few seconds and at every login, against a path that is no longer there.
+stop_gateways() {
+  local root="" candidate
+  for candidate in "$INSTALL_DIR" "${SCRIPT_DIR:-}"; do
+    if [[ -n "$candidate" && -f "$candidate/src/rundesk_cli/supervisor.py" ]]; then
+      root="$candidate"; break
+    fi
+  done
+  [[ -n "$root" ]] || return 0
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "note: python3 is gone, so any gateway still running was left as it is."
+    return 0
+  fi
+  python3 - "$root" <<'STOP' || echo "note: gateways could not be stopped; check: launchctl list | grep rundesk"
+import sys
+sys.path.insert(0, sys.argv[1] + "/src")
+from rundesk_cli import supervisor
+
+if not supervisor.available():
+    raise SystemExit(0)          # nothing of the kind on this machine
+taken, stubborn = supervisor.take_all_back()
+for name in taken:
+    print(f"stopped gateway '{name}' and removed its job")
+for name in stubborn:
+    print(f"warning: gateway '{name}' would not stop; its job is gone but it is still running")
+STOP
+}
+
 # ---------------------------------------------------------------- uninstall
 if [[ "${1:-}" == "--uninstall" ]]; then
   check_install_dir
   echo "removing rundesk"
   removed=0
+  stop_gateways
   for dir in /usr/local/bin "$HOME/.local/bin" "${RUNDESK_BIN_DIR:-}"; do
     [[ -n "$dir" && -L "$dir/rundesk" ]] || continue
     target="$(readlink "$dir/rundesk")"

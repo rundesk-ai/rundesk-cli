@@ -252,6 +252,81 @@ class WaitingOnTheMachine(WithAJobDirectory):
         self.assertIn("did not answer", said.said)
 
 
+class TakingItAllBack(WithAJobDirectory):
+    """What removing rundesk has to do before anything is deleted."""
+
+    def setUp(self):
+        super().setUp()
+        self.stopped = []
+
+    def _standing(self, running=()):
+        """A stand-in for asking a gateway whether it is still there."""
+        class Standing:
+            def __init__(self, name):
+                self.name, self.running = name, name in running
+        return Standing
+
+    def test_removing_rundesk_stops_every_gateway_it_was_keeping(self):
+        """R-RM-9 — a job outlives the command it names: the gateway keeps running,
+        because deleting a program does not stop one, and the machine goes on trying to
+        start it again every few seconds and at every login, against a path that is no
+        longer there."""
+        for name in ("agent-one", "agent-two"):
+            supervisor.install(name, self.root, self.logs, str(self.where), self.machine)
+        taken, stubborn = supervisor.take_all_back(
+            str(self.where), self.root, self.machine, standing=self._standing())
+        self.assertEqual(["agent-one", "agent-two"], sorted(taken))
+        self.assertEqual([], stubborn)
+        self.assertEqual([], supervisor.described(str(self.where), self.root))
+        self.assertIn("bootout", self.machine.verbs())
+
+    def test_removing_rundesk_leaves_a_job_it_did_not_write(self):
+        """R-RM-3, R-RM-9 — someone else's agents are not ours to stand down, even on
+        the way out."""
+        path = supervisor.job_path("theirs", str(self.where))
+        with open(path, "wb") as file:
+            plistlib.dump({"Label": supervisor.label("theirs"),
+                           "ProgramArguments": ["/somewhere/else/rundesk", "serve", "theirs"]}, file)
+        taken, stubborn = supervisor.take_all_back(
+            str(self.where), self.root, self.machine, standing=self._standing())
+        self.assertEqual(([], []), (taken, stubborn))
+        self.assertTrue(path.exists(), "it removed a job belonging to something else")
+
+    def test_a_gateway_that_will_not_stop_is_reported_rather_than_assumed(self):
+        """R-RM-9 — removal must not claim to have stopped what is still running."""
+        supervisor.install("stubborn", self.root, self.logs, str(self.where), self.machine)
+        self.addCleanup(setattr, supervisor, "SETTLE_SECONDS", supervisor.SETTLE_SECONDS)
+        supervisor.SETTLE_SECONDS = 0.3
+        taken, stubborn = supervisor.take_all_back(
+            str(self.where), self.root, self.machine,
+            standing=self._standing(running=("stubborn",)))
+        self.assertEqual([], taken)
+        self.assertEqual(["stubborn"], stubborn)
+
+    def test_removing_rundesk_where_nothing_was_ever_started_is_ordinary(self):
+        """R-RM-9"""
+        self.assertEqual(([], []), supervisor.take_all_back(
+            str(self.where), self.root, self.machine, standing=self._standing()))
+
+
+class TheJobCarriesWhereThingsAre(WithAJobDirectory):
+    def test_the_job_says_where_this_install_keeps_things(self):
+        """R-GW-9 — the machine hands a job almost nothing. Without this a supervised
+        gateway uses the default places while the command that started it reads wherever
+        it was pointed, and the two then disagree about whether anything is running —
+        which reads as a gateway that will not start, however many times you try."""
+        import os
+        for name, value in (("RUNDESK_RUN_DIR", "/tmp/rd-test-run"),
+                            ("RUNDESK_LOG_DIR", "/tmp/rd-test-logs"),
+                            ("RUNDESK_JOBS_DIR", "/tmp/rd-test-jobs")):
+            self.addCleanup(os.environ.pop, name, None)
+            os.environ[name] = value
+        said = supervisor.describe("gateway", self.root)["EnvironmentVariables"]
+        self.assertEqual("/tmp/rd-test-run", said["RUNDESK_RUN_DIR"])
+        self.assertEqual("/tmp/rd-test-logs", said["RUNDESK_LOG_DIR"])
+        self.assertEqual("/tmp/rd-test-jobs", said["RUNDESK_JOBS_DIR"])
+
+
 class HandingItOver(WithAJobDirectory):
     def test_handing_a_gateway_over_writes_the_job_and_asks_the_machine_to_take_it(self):
         """R-GW-1"""

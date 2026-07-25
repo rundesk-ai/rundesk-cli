@@ -27,3 +27,4 @@ cannot do for itself, because doing it removes the command that is doing it.
 | ✅ | R-RM-6 | Removing rundesk that was never installed says so rather than failing | `removing rundesk that was never installed says so` |
 | ✅ | R-RM-7 | Removing rundesk takes what the install put there for it | `removing rundesk takes what was installed for it` |
 | ✅ | R-RM-8 | Removing rundesk takes the directory the install created | `removing an install the installer made takes its directory` |
+| ✅ | R-RM-9 | Removing rundesk stops everything it was keeping running, before anything is deleted | `removing rundesk stops every gateway it was keeping`, `removing rundesk leaves a job it did not write`, `a gateway that will not stop is reported rather than assumed`, `removing rundesk where nothing was ever started is ordinary` |

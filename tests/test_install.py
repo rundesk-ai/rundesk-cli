@@ -10,6 +10,7 @@ Run: python3 tests/test_install.py
 from __future__ import annotations
 
 import os
+import plistlib
 import re
 import shutil
 import subprocess
@@ -57,6 +58,45 @@ class Sandbox(unittest.TestCase):
 
     def uninstall(self, *args: str, **kw) -> subprocess.CompletedProcess:
         return installer("--uninstall", *args, home=self.home, bindir=self.bindir, **kw)
+
+
+@unittest.skipUnless(shutil.which("launchctl"), "no supervisor on this machine to keep anything")
+class RemovingWhatIsRunningTests(Sandbox):
+    """Removing rundesk has to stop what it was keeping *before* deleting the command.
+
+    Every other case here drives the installer's own shell. This one exists because the
+    shell cannot catch it: an installer that simply stops calling the teardown still
+    parses, still installs, still uninstalls, and silently leaves a supervised gateway
+    running against a program that is no longer there.
+    """
+
+    def test_removing_rundesk_takes_away_the_jobs_it_left_behind(self):
+        """R-RM-9"""
+        jobs = self.root / "jobs"
+        jobs.mkdir()
+        self.install(extra_env={"RUNDESK_JOBS_DIR": str(jobs)})
+        sys.path.insert(0, str(REPO / "src"))
+        from rundesk_cli import supervisor
+        supervisor.write("left-running", REPO, self.root / "logs", str(jobs))
+        self.assertTrue((jobs / "ai.rundesk.left-running.plist").exists())
+
+        said = self.uninstall(extra_env={"RUNDESK_JOBS_DIR": str(jobs)})
+        self.assertEqual(
+            [], list(jobs.glob("*.plist")),
+            f"uninstalling left a job behind, which the machine will keep trying to start:\n{said.stdout}{said.stderr}",
+        )
+
+    def test_removing_rundesk_leaves_a_job_written_by_something_else(self):
+        """R-RM-3, R-RM-9 — someone else's agents are not ours to stand down."""
+        jobs = self.root / "jobs"
+        jobs.mkdir()
+        theirs = jobs / "ai.rundesk.theirs.plist"
+        with open(theirs, "wb") as file:
+            plistlib.dump({"Label": "ai.rundesk.theirs",
+                           "ProgramArguments": ["/somewhere/else/rundesk", "serve", "theirs"]}, file)
+        self.install(extra_env={"RUNDESK_JOBS_DIR": str(jobs)})
+        self.uninstall(extra_env={"RUNDESK_JOBS_DIR": str(jobs)})
+        self.assertTrue(theirs.exists(), "it removed a job belonging to something else")
 
 
 class InstallTests(Sandbox):

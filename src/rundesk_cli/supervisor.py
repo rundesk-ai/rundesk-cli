@@ -53,6 +53,12 @@ THROTTLE_SECONDS = 10
 #: Where the machine keeps jobs a person owns, rather than jobs the whole machine runs.
 LAUNCH_AGENTS = "~/Library/LaunchAgents"
 
+
+def jobs_home() -> str:
+    """Where this machine keeps a person's jobs. Said, so removal can be exercised
+    without writing into the real one."""
+    return os.environ.get("RUNDESK_JOBS_DIR") or LAUNCH_AGENTS
+
 #: What a gateway is given to find things with. The machine hands a job almost nothing,
 #: so a program that a gateway will later run has to be findable from here.
 PATH = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -85,7 +91,7 @@ def label(name: str) -> str:
 
 
 def job_path(name: str, where: str | None = None) -> Path:
-    return Path(os.path.expanduser(where or LAUNCH_AGENTS)) / f"{label(name)}.plist"
+    return Path(os.path.expanduser(where or jobs_home())) / f"{label(name)}.plist"
 
 
 def available() -> bool:
@@ -123,7 +129,18 @@ def describe(name: str, root: Path | None = None, logs: Path | None = None) -> d
         # PATH worth the name, so a command named rather than located is not found.
         "ProgramArguments": [str(root / "rundesk"), "serve", name],
         "WorkingDirectory": str(root),
-        "EnvironmentVariables": {"PATH": PATH, "HOME": str(Path.home())},
+        # Where things are, written into the job rather than left to whatever environment
+        # the gateway is started with. The machine hands a job almost nothing, so without
+        # this a supervised gateway uses the default places while the command that started
+        # it reads wherever it was pointed — and they then disagree about whether anything
+        # is running at all, which is the one thing neither may be wrong about.
+        "EnvironmentVariables": {
+            "PATH": PATH,
+            "HOME": str(Path.home()),
+            "RUNDESK_RUN_DIR": str(gateway.home()),
+            "RUNDESK_LOG_DIR": str(logs),
+            "RUNDESK_JOBS_DIR": os.path.expanduser(jobs_home()),
+        },
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
         "ThrottleInterval": THROTTLE_SECONDS,
@@ -251,7 +268,7 @@ def ours(path: Path, root: Path | None = None) -> bool:
 
 def described(where: str | None = None, root: Path | None = None) -> list[str]:
     """Every gateway *this install* has given the machine a job for."""
-    home = Path(os.path.expanduser(where or LAUNCH_AGENTS))
+    home = Path(os.path.expanduser(where or jobs_home()))
     if not home.is_dir():
         return []
     return sorted(
@@ -275,6 +292,39 @@ def known(name: str, where: str | None = None, root: Path | None = None) -> bool
     """Does the machine have a job for this gateway, written by this install?"""
     path = job_path(name, where)
     return path.exists() and ours(path, root)
+
+
+def take_all_back(
+    where: str | None = None,
+    root: Path | None = None,
+    asking: Callable[..., Spoke] = ask,
+    standing=None,
+) -> tuple[list[str], list[str]]:
+    """Stop every gateway this install is keeping, and take its job away (R-RM-9).
+
+    What removal has to do before anything is deleted. A job outlives the command it
+    names: the gateway it started keeps running, because deleting a program does not
+    stop one, and the machine goes on trying to start it again — every few seconds, and
+    again at every login — against a path that is no longer there. What is left behind
+    is a running agent nobody can reach and a supervisor failing in a loop forever.
+
+    Only jobs this install wrote, and only after each gateway is really gone. Returns
+    what was taken back, and what would not stop.
+    """
+    from rundesk_cli import gateway  # here, so this module imports on a machine without one
+
+    standing = standing or gateway.standing
+    taken, stubborn = [], []
+    for name in described(where, root):
+        try:
+            remove(name, where, root, asking)
+        except (NotOurs, NoSupervisor):
+            continue
+        deadline = time.monotonic() + SETTLE_SECONDS
+        while standing(name).running and time.monotonic() < deadline:
+            time.sleep(0.2)
+        (stubborn if standing(name).running else taken).append(name)
+    return taken, stubborn
 
 
 def as_argv(name: str, root: Path | None = None) -> Sequence[str]:
