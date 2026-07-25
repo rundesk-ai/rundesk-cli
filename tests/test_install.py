@@ -353,5 +353,22 @@ class WhatIsInstalledTests(unittest.TestCase):
         self.assertIn("no release published yet", script, "a repository with no release could not be installed")
 
 
+class DownloadedInstallTests(Sandbox):
+    def test_removing_an_install_the_installer_made_takes_its_directory(self):
+        # A downloaded install is a directory full of source with an install.sh in it —
+        # indistinguishable from a clone, unless the one thing that tells them apart is
+        # checked: whether it is the directory the installer was told to create.
+        made = self.home / ".rundesk"
+        shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        (self.bindir).mkdir(parents=True, exist_ok=True)
+        (self.bindir / "rundesk").symlink_to(made / "rundesk")
+
+        gone = installer("--uninstall", home=self.home, bindir=self.bindir,
+                         cwd=made, script=made / "install.sh")
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertFalse(made.exists(), "uninstalling left behind the directory the installer created")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

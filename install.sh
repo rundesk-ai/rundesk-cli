@@ -26,9 +26,13 @@ if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 
-# A checkout is where this script sits next to the thing it installs.
+# A checkout is where this script sits next to the thing it installs — and is not the
+# directory the installer itself created. Without that last clause, uninstalling from a
+# downloaded install looks exactly like uninstalling from somebody's clone, and the
+# installer politely refuses to remove its own directory.
 is_local_checkout() {
-  [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/rundesk" && -d "$SCRIPT_DIR/src/rundesk_cli" ]]
+  [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/rundesk" && -d "$SCRIPT_DIR/src/rundesk_cli" &&
+     "$SCRIPT_DIR" != "$INSTALL_DIR" ]]
 }
 
 choose_bindir() {
