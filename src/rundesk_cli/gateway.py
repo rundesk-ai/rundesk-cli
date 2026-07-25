@@ -299,6 +299,24 @@ def fitness(root: Path | None = None) -> str | None:
     return None
 
 
+def _group_went(pgid: int, patience: float) -> bool:
+    """Has this whole group gone — waited for, not sampled once.
+
+    Asked repeatedly because a signal is not an ending. What we are signalling is not our
+    child, so nothing here reaps it: it is handed to whatever adopts orphans, and that
+    happens when that machine gets round to it. Until it does, the group answers as
+    present, and a single look a fixed moment later reports a group that is on its way out
+    as one that would not go — which is how the same sweep passed here and failed on
+    another machine, on nothing but timing.
+    """
+    deadline = time.monotonic() + patience
+    while _still_there(pgid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
 def _still_there(pgid: int) -> bool:
     """Is anything left in this process group?
 
@@ -454,10 +472,9 @@ def _sweep_predecessor(record: Path, log: logging.Logger, noting=None,
                 os.killpg(pgid, sig)
             except OSError:
                 break
-            time.sleep(ORPHAN_GRACE_SECONDS)
-            if not _still_there(pgid):
+            if _group_went(pgid, ORPHAN_GRACE_SECONDS):
                 break
-        gone = not _still_there(pgid)
+        gone = _group_went(pgid, ORPHAN_GRACE_SECONDS)
         said(name, "the gateway it was running under is gone", pgid, gone)
         if not gone:
             # Asked of the machine, not assumed from having signalled. A signal that
