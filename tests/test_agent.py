@@ -10,6 +10,8 @@ whether the developer's checkout does.
 Run: python3 tests/test_agent.py
 """
 
+from __future__ import annotations
+
 import os
 import shutil
 import sys

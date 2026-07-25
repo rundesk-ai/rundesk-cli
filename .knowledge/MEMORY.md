@@ -56,6 +56,13 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 - A test that builds a `Gateway` without `RUNDESK_RUN_DIR` **and** `RUNDESK_LOG_DIR` pointed at scratch
   writes into the real `~/.rundesk`. The suite did, and left nine log files in the owner's home. Point
   logs somewhere **outside** the run directory too, or the "leaves nothing behind" cases trip over them.
+- **The gate cannot catch a 3.9 break, and CI can.** It runs on one Python — whatever `sys.executable`
+  is — and its parse check is `ast.parse`, which accepts `dict[str, bytes | None]` happily. A PEP 604
+  `X | None` in a *signature* is evaluated at import on 3.9 and raises `TypeError: unsupported operand
+  type(s) for |`, so a suite that passes the whole gate dies on the floor version CI pins. Every file
+  needs `from __future__ import annotations`, and the check before pushing is
+  `for f in tests/test_*.py; do /usr/bin/python3 "$f"; done` — macOS ships 3.9.6 at that path, which is
+  exactly the floor. `.knowledge/tmp/like-ci` exists for this.
 - A test class appended **after** the `if __name__ == "__main__": unittest.main()` block never runs —
   Python reaches the runner before the class is defined, and the count silently stays where it was.
   Keep that block last in every test file, and check the "Ran N tests" number moved.
