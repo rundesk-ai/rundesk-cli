@@ -32,8 +32,8 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-11 | An update replaces what the newer version ships | `the new release replaces what was there`, `a directory is replaced rather than merged` |
 | ✅ | R-UPD-12 | An update leaves what the newer version does not ship | `what the release does not ship is left alone` |
 | ✅ | R-UPD-13 | An update leaves the command runnable | `the entry point and installer come out executable` |
-| ✅ | R-UPD-14 | An update that does not complete leaves this copy as it was | `a download that fails leaves the install as it was`, `an archive that is not shaped like a release is refused` |
-| ✅ | R-UPD-15 | A published version is refused when it is not shaped like one | `an archive that is not shaped like a release is refused`, `an archive cannot write outside where it is unpacked` |
+| ✅ | R-UPD-14 | An update that does not complete leaves this copy as it was | `a download that fails leaves the install as it was`, `an archive that is not shaped like a release is refused`, `an update that stops partway leaves the command able to run`, `an update that stops partway leaves nothing of itself behind` |
+| ✅ | R-UPD-15 | A published version is refused when it is not shaped like one | `an archive that is not shaped like a release is refused`, `an archive cannot write outside where it is unpacked`, `an archive cannot write through a link that points outside` |
 | ✅ | R-UPD-16 | An update moves only to the version most recently published | `being behind moves the install` |
 | ✅ | R-UPD-17 | No version other than the most recently published can be asked for | `an update cannot be pointed at a version of your choosing` |
 | ✅ | R-UPD-18 | An update that finds nothing newer leaves this copy alone | `up to date says so and changes nothing` |

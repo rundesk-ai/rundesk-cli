@@ -17,7 +17,7 @@ import tarfile
 import tempfile
 import urllib.error
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 REPO_SLUG = "rundesk-ai/rundesk-cli"
@@ -162,38 +162,121 @@ def download_and_apply(repo_root: Path, tag: str) -> int:
 
         unpacked = Path(work) / "unpacked"
         unpacked.mkdir()
-        with tarfile.open(archive) as tar:
-            _safe_extract(tar, unpacked)
+        try:
+            with tarfile.open(archive) as tar:
+                _safe_extract(tar, unpacked)
+        except (tarfile.TarError, ValueError, OSError) as err:
+            print(f"{tag} did not unpack the way a release archive should: {err}")
+            return 1
 
         roots = [p for p in unpacked.iterdir() if p.is_dir()]
         if len(roots) != 1:
             print(f"{tag} did not unpack the way a release archive should")
             return 1
-        _copy_over(roots[0], repo_root)
+        try:
+            _copy_over(roots[0], repo_root)
+        except OSError as err:
+            # Whatever failed, the swaps are all-or-nothing per item, so what is on disk
+            # is a working install — just possibly still the old one.
+            print(f"could not put {tag} in place: {err}")
+            return 1
 
     print(f"updated to {tag}")
     return 0
 
 
 def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
-    """Refuse a member that would land outside `dest` — an archive is untrusted input."""
+    """Refuse a member that would land outside `dest` — an archive is untrusted input.
+
+    Checking each member's own name is not enough. A link member's *target* is a second way
+    out: an archive carrying a symlink to somewhere outside `dest`, followed by a file whose
+    path runs through it, writes wherever the link points — the name check passes both,
+    because at the time it runs the link does not exist yet for `resolve()` to follow.
+    Verified against Python 3.9, the floor this project supports.
+
+    The standard library only started refusing this by default in 3.14, so on every version
+    this project targets the guard has to be ours.
+    """
     root = dest.resolve()
     for member in tar.getmembers():
-        target = (root / member.name).resolve()
-        if not str(target).startswith(str(root)):
+        if not _lands_inside(root, member.name):
             raise ValueError(f"refusing to extract outside the destination: {member.name}")
+        if member.issym() or member.islnk():
+            link = member.linkname
+            if PurePosixPath(link).is_absolute():
+                raise ValueError(f"refusing a link to an absolute path: {member.name} -> {link}")
+            # A relative target is resolved from the directory the link sits in.
+            if not _lands_inside(root, str(PurePosixPath(member.name).parent / link)):
+                raise ValueError(f"refusing a link that points outside: {member.name} -> {link}")
     tar.extractall(dest)
 
 
+def _lands_inside(root: Path, name: str) -> bool:
+    """Whether `name`, taken relative to `root`, stays under it once '..' is worked out."""
+    if PurePosixPath(name).is_absolute():
+        return False
+    target = os.path.normpath(str(root / name))
+    return target == str(root) or target.startswith(str(root) + os.sep)
+
+
+#: Laid down with the bit set, because a release archive does not carry one.
+EXECUTABLE = {"rundesk", "install.sh"}
+
+
 def _copy_over(src: Path, dst: Path) -> None:
-    """Lay the new tree over the old, leaving anything the release does not ship."""
-    for item in src.iterdir():
-        target = dst / item.name
-        if item.is_dir():
-            if target.exists():
-                shutil.rmtree(target)
-            shutil.copytree(item, target)
-        else:
-            shutil.copy2(item, target)
-            if item.name in {"rundesk", "install.sh"}:
-                target.chmod(0o755)
+    """Lay the new tree over the old, leaving anything the release does not ship.
+
+    Every replacement is built beside its target first and swapped in with a rename, so an
+    interruption leaves either the old thing or the new one and never half of either.
+
+    The shape this replaces removed each directory and then copied the new one into place.
+    That left `src/rundesk_cli` — the package implementing update, version and uninstall —
+    absent for the whole duration of a copy. A Ctrl-C or a full disk inside that window
+    bricked every command, including the one that could have repaired it.
+    """
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for item in sorted(src.iterdir()):
+            pending = dst / f".{item.name}.incoming"
+            _discard(pending)
+            if item.is_dir():
+                shutil.copytree(item, pending)
+            else:
+                shutil.copy2(item, pending)
+                if item.name in EXECUTABLE:
+                    pending.chmod(0o755)
+            staged.append((pending, dst / item.name))
+        # Everything is written and complete. Only now does anything the running install
+        # depends on move, and each move is a rename that either happened or did not.
+        for pending, target in staged:
+            _swap(pending, target)
+    finally:
+        for pending, _ in staged:
+            _discard(pending)
+
+
+def _swap(pending: Path, target: Path) -> None:
+    """Put `pending` where `target` is, atomically enough that no reader sees neither."""
+    if target.is_dir() and not target.is_symlink():
+        outgoing = target.with_name(f".{target.name}.outgoing")
+        _discard(outgoing)
+        os.rename(target, outgoing)
+        try:
+            os.rename(pending, target)
+        except OSError:
+            os.rename(outgoing, target)  # put back what was working
+            raise
+        shutil.rmtree(outgoing, ignore_errors=True)
+    else:
+        os.replace(pending, target)
+
+
+def _discard(path: Path) -> None:
+    """Remove a leftover staging path, whatever it turned out to be."""
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path, ignore_errors=True)
+    elif path.exists() or path.is_symlink():
+        try:
+            path.unlink()
+        except OSError:
+            pass

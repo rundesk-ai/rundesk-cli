@@ -26,13 +26,40 @@ if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 
-# A checkout is where this script sits next to the thing it installs — and is not the
-# directory the installer itself created. Without that last clause, uninstalling from a
-# downloaded install looks exactly like uninstalling from somebody's clone, and the
-# installer politely refuses to remove its own directory.
+# A checkout is where this script sits next to the thing it installs. Nothing about where
+# it sits: a clone that happens to live at the install path is still a clone, and an earlier
+# version of this function said otherwise — it excluded `SCRIPT_DIR == INSTALL_DIR`, so
+# running ./install.sh from a clone at ~/.rundesk deleted that clone, .git and all.
 is_local_checkout() {
-  [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/rundesk" && -d "$SCRIPT_DIR/src/rundesk_cli" &&
-     "$SCRIPT_DIR" != "$INSTALL_DIR" ]]
+  [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/rundesk" && -d "$SCRIPT_DIR/src/rundesk_cli" ]]
+}
+
+# Somebody's work, not ours. What the installer lays down is a plain tree unpacked from a
+# release; a clone carries history. That is the whole difference, and it is the only thing
+# standing between `rm -rf` and a directory this installer did not create.
+is_someones_work() {
+  [[ -e "$1/.git" ]]
+}
+
+# `rm -rf "$INSTALL_DIR"` runs below, and RUNDESK_INSTALL_DIR is a documented override, so a
+# typo that drops the last segment must not be able to take a home directory with it. It could:
+# setting it to $HOME wiped the home directory and then printed that rundesk was installed.
+check_install_dir() {
+  local dir depth
+  dir="$INSTALL_DIR"
+  [[ -n "$dir" ]] || die "RUNDESK_INSTALL_DIR is empty."
+  [[ "$dir" == /* ]] || die "RUNDESK_INSTALL_DIR must be an absolute path; got '$dir'."
+  case "$dir" in
+    */) die "RUNDESK_INSTALL_DIR must not end in a slash; got '$dir'." ;;
+    */.|*/..) die "RUNDESK_INSTALL_DIR must name a directory, not '$dir'." ;;
+  esac
+  [[ "$dir" != "/" ]] || die "refusing to install into '/'."
+  [[ "$dir" != "${HOME%/}" ]] ||
+    die "refusing to install into '$dir' — that is your home directory, not one program's."
+  # /Users/you/.rundesk has two separators and is fine; /Users and /opt have none and are not.
+  depth="$(printf '%s' "${dir#/}" | tr -cd '/' | wc -c | tr -d ' ')"
+  [[ "$depth" -ge 1 ]] ||
+    die "refusing to install into '$dir' — too close to the root of the filesystem."
 }
 
 choose_bindir() {
@@ -51,6 +78,7 @@ require_python() {
 
 # ---------------------------------------------------------------- uninstall
 if [[ "${1:-}" == "--uninstall" ]]; then
+  check_install_dir
   removed=0
   for dir in /usr/local/bin "$HOME/.local/bin" "${RUNDESK_BIN_DIR:-}"; do
     [[ -n "$dir" && -L "$dir/rundesk" ]] || continue
@@ -75,9 +103,14 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     [[ -d "$venv" ]] && { rm -rf "$venv"; echo "removed $venv"; }
   done
 
-  # A checkout is yours; only a directory this installer created is its to delete.
-  if [[ -d "$INSTALL_DIR" ]] && ! is_local_checkout; then
-    rm -rf "$INSTALL_DIR"; echo "removed $INSTALL_DIR"
+  # Only a directory this installer laid down is its to delete. A clone carries history and
+  # is somebody's work, wherever it happens to sit.
+  if [[ -d "$INSTALL_DIR" ]]; then
+    if is_someones_work "$INSTALL_DIR"; then
+      echo "left $INSTALL_DIR alone — it is a checkout, not something this installer created."
+    else
+      rm -rf "$INSTALL_DIR"; echo "removed $INSTALL_DIR"
+    fi
   fi
   echo "rundesk uninstalled."
   exit 0
@@ -85,6 +118,7 @@ fi
 
 # ---------------------------------------------------------------- install
 require_python
+check_install_dir
 
 if is_local_checkout; then
   REPO_ROOT="$SCRIPT_DIR"
@@ -92,14 +126,23 @@ if is_local_checkout; then
 else
   command -v curl >/dev/null 2>&1 || die "curl is required to download rundesk."
   command -v tar  >/dev/null 2>&1 || die "tar is required to unpack rundesk."
+  # Before anything is fetched: what is already there may not be ours to replace.
+  if is_someones_work "$INSTALL_DIR"; then
+    die "$INSTALL_DIR is a checkout, and replacing it would take its history and any
+uncommitted work with it. Move it aside, or set RUNDESK_INSTALL_DIR somewhere else."
+  fi
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' EXIT
   # The newest *published release*, not whatever is on the branch. Installing the branch
   # would hand someone a version that was never released, reporting a number no release
   # carries — and then `rundesk update` would offer to move them backwards onto it.
   echo "looking up the newest rundesk release"
+  # The `|| true` is load-bearing. `set -e` aborts on a failing assignment and `-o pipefail`
+  # fails this pipeline whenever curl does — a repository with no releases (404), a rate
+  # limit (403), a dropped connection. Without it the fallback below is unreachable and the
+  # install dies on exit 56 having printed nothing at all, not even a message.
   tag="$(curl -fsSL "https://api.github.com/repos/$REPO_SLUG/releases/latest" 2>/dev/null |
-         sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+         sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 || true)"
   if [[ -n "$tag" ]]; then
     echo "downloading ${tag}"
     source_url="https://github.com/$REPO_SLUG/archive/refs/tags/$tag.tar.gz"
@@ -142,6 +185,19 @@ chmod +x "$SHIM"
 
 BINDIR="$(choose_bindir)"
 mkdir -p "$BINDIR"
+# `ln -sf` unlinks whatever is already there. The uninstall path reads the link before
+# removing it, precisely so it never takes somebody else's tool; the install path used to
+# overwrite without looking. /usr/local/bin is user-writable on a Homebrew mac, so a
+# collision with an unrelated `rundesk` is an ordinary thing, not a contrived one.
+if [[ -e "$BINDIR/rundesk" && ! -L "$BINDIR/rundesk" ]]; then
+  die "$BINDIR/rundesk already exists and is not a link this installer placed. Move it aside first."
+fi
+if [[ -L "$BINDIR/rundesk" ]]; then
+  case "$(readlink "$BINDIR/rundesk")" in
+    */rundesk) ;;
+    *) die "$BINDIR/rundesk points at $(readlink "$BINDIR/rundesk"), which is not a rundesk. Move it aside first." ;;
+  esac
+fi
 ln -sf "$SHIM" "$BINDIR/rundesk"
 echo "linked $BINDIR/rundesk -> $SHIM"
 

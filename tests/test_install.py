@@ -353,6 +353,141 @@ class WhatIsInstalledTests(unittest.TestCase):
         self.assertIn("no release published yet", script, "a repository with no release could not be installed")
 
 
+class WhatItWillNotDeleteTests(Sandbox):
+    """Every test here is a bug that shipped. The installer runs `rm -rf` on a path a person
+    can set, from a script people are told to pipe into bash."""
+
+    def loose(self) -> Path:
+        """install.sh on its own, with no source beside it — the `curl | bash` shape, which
+        is the one that takes the download path and does the deleting."""
+        alone = self.root / "loose"
+        alone.mkdir(exist_ok=True)
+        shutil.copy2(INSTALLER, alone / "install.sh")
+        return alone
+
+    def test_an_install_refuses_a_directory_too_important_to_be_one_programs(self):
+        # RUNDESK_INSTALL_DIR is documented, and a typo that drops the last segment used to
+        # be enough: pointing it at $HOME wiped the home directory and then reported that
+        # rundesk was installed.
+        treasure = self.home / "Documents"
+        treasure.mkdir()
+        (treasure / "thesis.txt").write_text("years of work")
+
+        for target in (str(self.home), "/", "/opt", str(self.home) + "/"):
+            with self.subTest(target=target):
+                done = installer(home=self.home, bindir=self.bindir, cwd=self.loose(),
+                                 script=self.loose() / "install.sh",
+                                 extra_env={"RUNDESK_INSTALL_DIR": target})
+                self.assertNotEqual(done.returncode, 0,
+                                    f"the installer was willing to install into {target}")
+                self.assertIn("error:", done.stderr.lower(),
+                              f"installing into {target} failed without saying why")
+                self.assertIn(target.rstrip("/") or "/", done.stderr,
+                              f"the refusal did not name {target}")
+        self.assertTrue((treasure / "thesis.txt").exists(),
+                        "the installer deleted something it was refusing to install into")
+
+    def test_an_install_refuses_to_replace_a_checkout_it_did_not_create(self):
+        # A clone sitting at the install path was deleted, .git and all, by the download
+        # path — because "is this a checkout" was answered by comparing paths.
+        theirs = self.home / ".rundesk"
+        theirs.mkdir(parents=True)
+        (theirs / ".git").mkdir()
+        (theirs / "MY-WORK.txt").write_text("uncommitted")
+
+        done = installer(home=self.home, bindir=self.bindir, cwd=self.loose(),
+                         script=self.loose() / "install.sh")
+
+        self.assertNotEqual(done.returncode, 0, "the installer offered to replace a checkout")
+        self.assertTrue((theirs / ".git").is_dir(), "the installer deleted a checkout's history")
+        self.assertTrue((theirs / "MY-WORK.txt").exists(),
+                        "the installer deleted a checkout's uncommitted work")
+
+    def test_a_checkout_at_the_install_path_installs_itself_rather_than_downloading(self):
+        # The other half of the same bug: a contributor who clones to ~/.rundesk should get
+        # an install from that clone, not a download that replaces it.
+        clone = self.home / ".rundesk"
+        shutil.copytree(REPO, clone, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        (clone / ".git").mkdir()
+        (clone / "MY-WORK.txt").write_text("uncommitted")
+
+        done = installer(home=self.home, bindir=self.bindir, cwd=clone, script=clone / "install.sh")
+
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("installing from this checkout", done.stdout)
+        self.assertTrue((clone / "MY-WORK.txt").exists(), "installing from a clone destroyed it")
+        self.assertEqual(os.readlink(self.bindir / "rundesk"), str(clone / "rundesk"))
+
+    def test_removing_rundesk_leaves_a_checkout_where_it_stands(self):
+        # Uninstall runs `rm -rf "$INSTALL_DIR"` too, and history is the thing that tells a
+        # clone apart from a tree this installer unpacked.
+        clone = self.home / ".rundesk"
+        clone.mkdir(parents=True)
+        (clone / ".git").mkdir()
+        (clone / "MY-WORK.txt").write_text("uncommitted")
+
+        gone = self.uninstall()
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertTrue((clone / "MY-WORK.txt").exists(), "uninstalling deleted a checkout")
+        self.assertIn("left", gone.stdout.lower())
+
+    def test_an_install_refuses_to_replace_a_command_of_the_same_name(self):
+        # The removal path reads a link before removing it, so it never takes somebody
+        # else's tool. The install path used to overwrite without looking.
+        self.bindir.mkdir(parents=True)
+        theirs = self.bindir / "rundesk"
+        theirs.write_text("#!/bin/sh\necho a different rundesk\n")
+
+        done = self.install()
+
+        self.assertNotEqual(done.returncode, 0, "the installer overwrote another tool")
+        self.assertEqual(theirs.read_text(), "#!/bin/sh\necho a different rundesk\n",
+                         "the installer replaced a command it did not place")
+
+
+class NoReleaseYetTests(Sandbox):
+    """The branch that runs when the release lookup comes back with nothing."""
+
+    def fake_curl(self, tarball: Path) -> Path:
+        """A curl that fails the way the real one does on a repository with no releases, and
+        serves a prepared archive for anything else. Offline, so the suite stays offline."""
+        bind = self.root / "fakebin"
+        bind.mkdir(exist_ok=True)
+        curl = bind / "curl"
+        curl.write_text(
+            "#!/bin/sh\n"
+            "out=''\n"
+            "for a in \"$@\"; do case \"$a\" in https://api.github.com/*) exit 22;; esac; done\n"
+            "while [ $# -gt 0 ]; do case \"$1\" in -o) out=\"$2\"; shift;; esac; shift; done\n"
+            f"[ -n \"$out\" ] && cp {tarball} \"$out\"\n"
+        )
+        curl.chmod(0o755)
+        return bind
+
+    def test_a_release_lookup_that_fails_falls_back_instead_of_dying_silently(self):
+        # `set -e` aborts on a failing assignment and `-o pipefail` fails the pipeline
+        # whenever curl does, so this fallback was unreachable: a repository with no
+        # releases, or a rate limit, killed the install on exit 56 having printed nothing.
+        source = self.root / "rundesk-cli-main"
+        shutil.copytree(REPO, source, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        tarball = self.root / "main.tar.gz"
+        subprocess.run(["tar", "-czf", str(tarball), "-C", str(self.root), source.name], check=True)
+
+        loose = self.root / "loose"
+        loose.mkdir()
+        shutil.copy2(INSTALLER, loose / "install.sh")
+        done = installer(home=self.home, bindir=self.bindir, cwd=loose, script=loose / "install.sh",
+                         extra_env={"PATH": f"{self.fake_curl(tarball)}{os.pathsep}{os.environ['PATH']}"})
+
+        self.assertEqual(done.returncode, 0,
+                         f"a repository with no releases could not be installed:\n{done.stdout}\n{done.stderr}")
+        self.assertIn("no release published yet", done.stdout)
+        answered = subprocess.run([str(self.bindir / "rundesk"), "version"],
+                                  capture_output=True, text=True)
+        self.assertEqual(answered.returncode, 0, answered.stderr)
+
+
 class OneInstructionTests(unittest.TestCase):
     """The single line a machine with nothing on it is given, and what has to hold for it to work.
 

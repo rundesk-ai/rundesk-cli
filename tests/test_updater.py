@@ -121,6 +121,38 @@ class ArchiveTests(unittest.TestCase):
                     updater._safe_extract(tar, dest)
             self.assertFalse((root / "escaped.txt").exists(), "the archive wrote outside its destination")
 
+    def test_an_archive_cannot_write_through_a_link_that_points_outside(self):
+        # The second way out, and the one the name check cannot see: a symlink aimed out of
+        # the tree, then a file whose path runs through it. When the names are checked
+        # nothing has been extracted yet, so there is no link there for resolve() to follow.
+        # The standard library only began refusing this by default in 3.14; on 3.9, the
+        # floor this project supports, an archive shaped this way wrote wherever it liked.
+        for label, linkname in [("absolute", None), ("relative", "../../outside")]:
+            with self.subTest(link=label):
+                with tempfile.TemporaryDirectory() as work:
+                    root = Path(work)
+                    outside = root / "outside"
+                    outside.mkdir()
+                    dest = root / "dest"
+                    dest.mkdir()
+
+                    nasty = root / "nasty.tar"
+                    with tarfile.open(nasty, "w") as tar:
+                        link = tarfile.TarInfo("release/escape")
+                        link.type = tarfile.SYMTYPE
+                        link.linkname = linkname if linkname else str(outside)
+                        tar.addfile(link)
+                        body = b"PWNED"
+                        through = tarfile.TarInfo("release/escape/authorized_keys")
+                        through.size = len(body)
+                        tar.addfile(through, io.BytesIO(body))
+
+                    with tarfile.open(nasty) as tar:
+                        with self.assertRaises(ValueError):
+                            updater._safe_extract(tar, dest)
+                    self.assertFalse((outside / "authorized_keys").exists(),
+                                     "the archive wrote outside its destination through a link")
+
 
 
 class BehindTests(unittest.TestCase):
@@ -168,6 +200,69 @@ def _release(root: Path, version: str) -> Path:
     (top / "README.md").write_text(f"rundesk {version}\n")
     (top / "src" / "rundesk_cli" / "__init__.py").write_text(f'__version__ = "{version}"\n')
     return top
+
+
+class InterruptedUpdateTests(unittest.TestCase):
+    """What is on disk when an update stops halfway.
+
+    The likeliest real failure is not a hostile archive, it is Ctrl-C or a full disk. The
+    shape this replaces removed each directory before copying the new one in, so `src/
+    rundesk_cli` — the package implementing update, version and uninstall — was absent for
+    the length of a copy. A kill inside that window left nothing able to repair itself.
+    """
+
+    def setUp(self):
+        self._work = tempfile.TemporaryDirectory()
+        self.root = Path(self._work.name)
+        self.install = self.root / "install"
+        (self.install / "src" / "rundesk_cli").mkdir(parents=True)
+        (self.install / "rundesk").write_text("# 0.1.0\n")
+        (self.install / "src" / "rundesk_cli" / "__init__.py").write_text('__version__ = "0.1.0"\n')
+        (self.install / "src" / "rundesk_cli" / "cli.py").write_text("# 0.1.0 surface\n")
+
+    def tearDown(self):
+        self._work.cleanup()
+
+    def _dies_on(self, victim: str):
+        """A copy that fails the moment it reaches `victim` — a disk filling up, or a kill."""
+        real = updater.shutil.copytree
+
+        def falls_over(src, dst, *a, **kw):
+            if Path(src).name == victim:
+                raise OSError(28, "No space left on device")
+            return real(src, dst, *a, **kw)
+
+        return falls_over
+
+    def test_an_update_that_stops_partway_leaves_the_command_able_to_run(self):
+        original = updater.shutil.copytree
+        updater.shutil.copytree = self._dies_on("src")
+        try:
+            with self.assertRaises(OSError):
+                updater._copy_over(_release(self.root, "0.2.0"), self.install)
+        finally:
+            updater.shutil.copytree = original
+
+        package = self.install / "src" / "rundesk_cli"
+        self.assertTrue((package / "__init__.py").is_file(),
+                        "an interrupted update left the package it needs to run missing")
+        self.assertTrue((package / "cli.py").is_file(),
+                        "an interrupted update left the command surface missing")
+        self.assertIn('"0.1.0"', (package / "__init__.py").read_text(),
+                      "an interrupted update left a half-written version on disk")
+
+    def test_an_update_that_stops_partway_leaves_nothing_of_itself_behind(self):
+        original = updater.shutil.copytree
+        updater.shutil.copytree = self._dies_on("src")
+        try:
+            with self.assertRaises(OSError):
+                updater._copy_over(_release(self.root, "0.2.0"), self.install)
+        finally:
+            updater.shutil.copytree = original
+
+        litter = [p.name for p in self.install.iterdir()
+                  if p.name.startswith(".") and (".incoming" in p.name or ".outgoing" in p.name)]
+        self.assertEqual(litter, [], f"an interrupted update left staging paths behind: {litter}")
 
 
 class ReplacesTheInstallTests(unittest.TestCase):
