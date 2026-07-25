@@ -140,6 +140,22 @@ class WhatIsRunning(WithARunDirectory):
         self.assertTrue(now.running)
         self.assertIsNone(now.version)
 
+    async def test_whether_it_is_going_round_survives_the_clock_being_changed(self):
+        """R-GW-9 — a wall clock moves when a machine wakes or its time is corrected,
+        and it moves both ways: forward and a healthy gateway is called wedged, back and
+        a wedged one looks fine. The beat is recorded on a clock that cannot be stepped."""
+        gw = self.made()
+        gw.claim()
+        record = self.where / f"{gw.name}.json"
+        said = json.loads(record.read_text())
+        self.assertIn("since_boot", said, "nothing was recorded that a clock step cannot move")
+        said["beat"] = time.time() - gateway.BEAT_SECONDS * 100  # as if the clock jumped
+        record.write_text(json.dumps(said))
+        self.assertFalse(
+            gateway.standing(gw.name, self.where).stale,
+            "a clock jump made a gateway that is going round look wedged",
+        )
+
     async def test_a_running_gateway_keeps_saying_it_is_still_going_round(self):
         """R-GW-9 — the record is what tells an owner a gateway is up but wedged, so it
         has to keep moving on its own without anyone asking."""
@@ -187,7 +203,10 @@ class WhatIsRunning(WithARunDirectory):
         gw.claim()
         record = self.where / f"{gateway.DEFAULT_NAME}.json"
         said = json.loads(record.read_text())
+        # Both clocks moved back, because a gateway that stopped going round stopped
+        # writing either of them.
         said["beat"] = time.time() - gateway.BEAT_SECONDS * 10
+        said["since_boot"] = time.monotonic() - gateway.BEAT_SECONDS * 10
         record.write_text(json.dumps(said))
         self.assertTrue(gateway.standing(gateway.DEFAULT_NAME, self.where).stale)
 
@@ -429,7 +448,7 @@ class GoingAway(WithARunDirectory):
         gw = self.made()
         gw.claim()
         gw.ask_to_stop()
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(gateway.Stopping):
             await gw.start([PY, "-c", "pass"])
 
     async def test_stopping_does_not_wait_past_the_time_it_is_allowed(self):
@@ -680,10 +699,24 @@ class TheNameCannotBeGivenAwayByAccident(WithARunDirectory):
         self.assertTrue(gateway.standing("shared", self.where).running, "the holder lost its name")
 
     async def test_a_name_that_would_escape_its_directory_is_refused(self):
-        """R-GW-4 — the name becomes the name of a lock, a record and a log."""
+        """R-GW-20 — the name becomes the name of a lock, a record and a log."""
         for bad in ("../escape", "a/b", "", "..", "with space"):
             with self.assertRaises(gateway.NotAName, msg=f"accepted {bad!r}"):
                 gateway.Gateway(bad, where=self.where, logs=self.logs)
+
+    async def test_nothing_builds_a_path_from_a_name_that_would_escape(self):
+        """R-GW-20 — making a gateway is not the only way in. Everything that reaches a
+        gateway by name builds a path out of it, and the verbs that stop, start and read
+        one never construct a gateway at all — so a check only in the constructor guards
+        the one path nobody takes."""
+        bad = "../../../../../../tmp/rundesk-escaped"
+        for builds in (gateway.log_path, gateway.what_is_running, gateway.standing):
+            with self.assertRaises(gateway.NotAName, msg=f"{builds.__name__} accepted it"):
+                builds(bad)
+        with self.assertRaises(gateway.NotAName):
+            gateway._lock_path(bad, self.where)
+        with self.assertRaises(gateway.NotAName):
+            gateway._record_path(bad, self.where)
 
 
 class WhatIsLeftWhenItCouldNotFinish(WithARunDirectory):

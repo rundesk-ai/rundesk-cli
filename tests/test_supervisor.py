@@ -160,6 +160,58 @@ class OnlyWhatThisInstallWrote(WithAJobDirectory):
         self.assertEqual([], self.machine.verbs())
 
 
+class ANameIsNotAPath(WithAJobDirectory):
+    async_safe = True
+
+    def test_no_job_is_written_for_a_name_that_would_escape(self):
+        """R-GW-20 — a job is a login-persistence mechanism the machine keeps running,
+        so a name that reaches outside where jobs belong plants one wherever it likes."""
+        from rundesk_cli import gateway as gw
+        bad = "../../../../../../tmp/rundesk-escaped"
+        for builds in (supervisor.label, supervisor.job_path):
+            with self.assertRaises(gw.NotAName, msg=f"{builds.__name__} accepted it"):
+                builds(bad)
+        with self.assertRaises(gw.NotAName):
+            supervisor.install(bad, self.root, self.logs, str(self.where), self.machine)
+        self.assertEqual([], self.machine.verbs(), "it asked the machine about it anyway")
+
+
+class WaitingOnTheMachine(WithAJobDirectory):
+    def _asking(self, answering):
+        """Stand in for the machine, and hand back what `ask` asked of it."""
+        import subprocess as sub
+        asked = {}
+        self.addCleanup(setattr, supervisor.subprocess, "run", supervisor.subprocess.run)
+        self.addCleanup(setattr, supervisor, "available", supervisor.available)
+        supervisor.available = lambda: True
+
+        def machine(*args, **kwargs):
+            asked.update(kwargs)
+            return answering(sub, kwargs)
+
+        supervisor.subprocess.run = machine
+        return asked
+
+    def test_the_machine_is_never_waited_on_without_a_bound(self):
+        """R-GW-13 — three verbs an owner types reach the machine, and nothing rundesk
+        does may wait on an answer forever. Asserted on what is *asked* of the machine,
+        because a stand-in that gives up regardless would prove this either way."""
+        asked = self._asking(lambda sub, kwargs: sub.CompletedProcess([], 0, "", ""))
+        supervisor.ask("bootstrap")
+        self.assertIn("timeout", asked, "it asked the machine and would have waited forever")
+        self.assertGreater(asked["timeout"], 0)
+
+    def test_a_machine_that_does_not_answer_in_time_is_given_up_on(self):
+        """R-GW-13 — and reported, rather than raising out of whatever verb was typed."""
+        def times_out(sub, kwargs):
+            raise sub.TimeoutExpired(cmd="launchctl", timeout=kwargs["timeout"])
+
+        self._asking(times_out)
+        said = supervisor.ask("bootstrap")
+        self.assertFalse(said.ok)
+        self.assertIn("did not answer", said.said)
+
+
 class HandingItOver(WithAJobDirectory):
     def test_handing_a_gateway_over_writes_the_job_and_asks_the_machine_to_take_it(self):
         """R-GW-1"""

@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import errno
 import fcntl
+import importlib.util
+import re
 import itertools
 import json
 import logging
@@ -38,45 +40,11 @@ from typing import Callable, Sequence
 from rundesk_cli import ROOT, __version__
 from rundesk_cli import process
 
-#: The gateway that exists before there are agents to name one after.
-DEFAULT_NAME = "gateway"
-
-#: How often a running gateway records that it is still there. The lock is what proves it
-#: is alive; this says when it last went round, which is what tells an owner a gateway is
-#: up but wedged — a distinction no supervisor makes for you.
-BEAT_SECONDS = 15.0
-
-#: How long work left by a gateway that died gets to go on its own before it is taken.
-#: Short: nobody is waiting on what it was doing, and a gateway is starting up behind it.
-ORPHAN_GRACE_SECONDS = 0.5
-
-#: How long to wait on the machine to say when a process started. Short: it is a local
-#: question, and a gateway must not be held up starting because an answer is slow.
-PS_TIMEOUT_SECONDS = 5.0
-
-#: How long stopping may take before the gateway stops waiting for what it is running and
-#: goes anyway (R-GW-7). Under what the supervisor allows: launchd sends SIGTERM, waits,
-#: and then sends SIGKILL — and being killed is how children get left behind.
-STOP_SECONDS = 15.0
-
-
-class AlreadyRunning(Exception):
-    """A gateway of this name is already up (R-GW-4, R-GW-5)."""
-
-
-class Unfit(Exception):
-    """What this install is made of does not fit the machine it is on (R-GW-11)."""
-
-
-class AlreadyStarted(Exception):
-    """This program is already running under this gateway (R-GW-15)."""
-
-
 class NotAName(ValueError):
     """A gateway name that would not stay inside the directory it belongs in."""
 
 
-def _checked(name: str) -> str:
+def checked(name: str) -> str:
     """A gateway's name becomes the name of its lock, its record and its log, so one
     containing a separator would put all three somewhere else entirely."""
     if not name or not all(ch.isalnum() or ch in "-_." for ch in name) or name.strip(".") == "":
@@ -102,7 +70,7 @@ def logs_home() -> Path:
 
 def log_path(name: str, logs: Path | None = None) -> Path:
     """The file a gateway of this name writes to — what `rundesk logs` reads."""
-    return (logs or logs_home()) / f"{name}.log"
+    return (logs or logs_home()) / f"{checked(name)}.log"
 
 
 def _recorder(name: str, logs: Path) -> logging.Logger:
@@ -137,20 +105,46 @@ def home() -> Path:
 
 
 def _lock_path(name: str, where: Path) -> Path:
-    return where / f"{name}.lock"
+    return where / f"{checked(name)}.lock"
 
 
 def _record_path(name: str, where: Path) -> Path:
-    return where / f"{name}.json"
+    return where / f"{checked(name)}.json"
+
+
+#: What a declared requirement is called once it is installed, where the two differ.
+IMPORTED_AS = {"discord.py": "discord"}
+
+
+def _declared(root: Path) -> list[str]:
+    """What this install says it needs, by the name it is imported under."""
+    try:
+        lines = (root / "requirements.txt").read_text().splitlines()
+    except OSError:
+        return []
+    wanted = []
+    for line in lines:
+        line = line.split("#")[0].strip()
+        if not line:
+            continue
+        name = re.split(r"[=<>!\[ ]", line)[0]
+        wanted.append(IMPORTED_AS.get(name, name.replace("-", "_")))
+    return wanted
 
 
 def fitness(root: Path | None = None) -> str | None:
     """Why this install cannot run here, or None when it can (R-GW-11).
 
-    What rundesk needs beyond the standard library is built against one version of Python.
-    A machine whose python3 has moved on since has a virtualenv that no longer matches, and
-    the failure that follows is an import error deep inside a dependency — under a
-    supervisor, in a restart loop, hours later. Refusing here says what is actually wrong.
+    Two ways it does not fit, and the second is why this asks rather than compares.
+
+    What rundesk needs beyond the standard library is built against one version of
+    Python, so a machine whose python3 has moved on has a virtualenv that no longer
+    matches. That much a name tells you. But a virtualenv of exactly the right version
+    can still be unusable — a half-finished install, an interrupted update laying a
+    release over a running one — and a name check calls that fit. The failure then
+    arrives as an import error deep inside a dependency, under a supervisor, in a
+    restart loop, hours later, which is the whole thing this exists to prevent. So the
+    question asked is whether what was declared can actually be loaded.
     """
     root = root or ROOT
     venv = root / ".venv" / "lib"
@@ -158,12 +152,18 @@ def fitness(root: Path | None = None) -> str | None:
         return None  # nothing was needed, so nothing can fail to fit
     mine = f"python3.{sys.version_info.minor}"
     built = sorted(p.name for p in venv.glob("python3.*"))
-    if not built or mine in built:
-        return None
-    return (
-        f"what rundesk needs was installed for {', '.join(built)}, and this is {mine}. "
-        "Run the installer again to rebuild it."
-    )
+    if built and mine not in built:
+        return (
+            f"what rundesk needs was installed for {', '.join(built)}, and this is {mine}. "
+            "Run the installer again to rebuild it."
+        )
+    missing = [name for name in _declared(root) if importlib.util.find_spec(name) is None]
+    if missing:
+        return (
+            f"what rundesk needs is not all there: {', '.join(missing)} cannot be loaded. "
+            "Run the installer again to rebuild it."
+        )
+    return None
 
 
 def _still_there(pgid: int) -> bool:
@@ -290,6 +290,44 @@ def _anything_left(record: Path) -> bool:
     return False
 
 
+#: The gateway that exists before there are agents to name one after.
+DEFAULT_NAME = "gateway"
+
+#: How often a running gateway records that it is still there. The lock is what proves it
+#: is alive; this says when it last went round, which is what tells an owner a gateway is
+#: up but wedged — a distinction no supervisor makes for you.
+BEAT_SECONDS = 15.0
+
+#: How long work left by a gateway that died gets to go on its own before it is taken.
+#: Short: nobody is waiting on what it was doing, and a gateway is starting up behind it.
+ORPHAN_GRACE_SECONDS = 0.5
+
+#: How long to wait on the machine to say when a process started. Short: it is a local
+#: question, and a gateway must not be held up starting because an answer is slow.
+PS_TIMEOUT_SECONDS = 5.0
+
+#: How long stopping may take before the gateway stops waiting for what it is running and
+#: goes anyway (R-GW-7). Under what the supervisor allows: launchd sends SIGTERM, waits,
+#: and then sends SIGKILL — and being killed is how children get left behind.
+STOP_SECONDS = 15.0
+
+
+class AlreadyRunning(Exception):
+    """A gateway of this name is already up (R-GW-4, R-GW-5)."""
+
+
+class Unfit(Exception):
+    """What this install is made of does not fit the machine it is on (R-GW-11)."""
+
+
+class AlreadyStarted(Exception):
+    """This program is already running under this gateway (R-GW-15)."""
+
+
+class Stopping(Exception):
+    """This gateway is going away and is taking no more work (R-GW-6)."""
+
+
 @dataclass
 class Standing:
     """How a gateway looks from outside it — what `status` is made of (R-GW-9)."""
@@ -300,11 +338,24 @@ class Standing:
     version: str | None = None
     started: float | None = None
     beat: float | None = None
+    #: The same beat, on a clock that only ever goes forward. Compared against ours
+    #: because both are counted from when this machine started.
+    since_boot: float | None = None
 
     @property
     def stale(self) -> bool:
-        """Running, but not round the loop lately — up and wedged rather than up."""
-        if not self.running or self.beat is None:
+        """Running, but not round the loop lately — up and wedged rather than up.
+
+        Measured against a clock that cannot be stepped where one is recorded. The wall
+        clock moves when a machine wakes or its time is corrected, and it moves in both
+        directions: forward, and a healthy gateway is called wedged; back, and a wedged
+        one looks fine.
+        """
+        if not self.running:
+            return False
+        if self.since_boot is not None:
+            return time.monotonic() - self.since_boot > BEAT_SECONDS * 3
+        if self.beat is None:
             return False
         return time.time() - self.beat > BEAT_SECONDS * 3
 
@@ -355,6 +406,7 @@ def standing(name: str = DEFAULT_NAME, where: Path | None = None) -> Standing:
         version=recorded.get("version") if running else None,
         started=recorded.get("started") if running else None,
         beat=recorded.get("beat") if running else None,
+        since_boot=recorded.get("since_boot") if running else None,
     )
 
 
@@ -364,8 +416,11 @@ def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list
     Read from the record rather than asked of the gateway, because whoever is asking is
     a different process — that is the whole reason the record exists.
     """
+    # Built before the try: a name that is not usable is a mistake to report, and
+    # `NotAName` is a kind of ValueError, so catching one here would swallow the other.
+    record = _record_path(name, where or home())
     try:
-        said = json.loads(_record_path(name, where or home()).read_text())
+        said = json.loads(record.read_text())
     except (OSError, ValueError):
         return []
     working = said.get("working") if isinstance(said, dict) else None
@@ -404,7 +459,7 @@ class Gateway:
         root: Path | None = None,
         logs: Path | None = None,
     ):
-        self.name = _checked(name)
+        self.name = checked(name)
         self.where = where or home()
         self.logs = logs or logs_home()
         self.log = _recorder(name, self.logs)
@@ -520,6 +575,10 @@ class Gateway:
             "version": __version__,
             "started": self._started,
             "beat": now,
+            # The same moment on a clock that only counts forward from when this machine
+            # started. Read back by anything asking whether this gateway is still going
+            # round, because a wall clock can be stepped and this cannot.
+            "since_boot": time.monotonic(),
             # A number and when it started: see `started_at`. Without the second half a
             # successor cannot tell our leftovers from whatever now shares the number.
             "working": {
@@ -554,7 +613,7 @@ class Gateway:
         is work that cannot collide, and is given one of its own.
         """
         if self._stopping:
-            raise RuntimeError(f"gateway '{self.name}' is stopping and is taking no more work")
+            raise Stopping(f"gateway '{self.name}' is stopping and is taking no more work")
         held = as_name if as_name is not None else f"·{next(self._unnamed)}"
         if held in self.running:
             self.log.warning("refused '%s': it is already running", held)
@@ -674,7 +733,18 @@ class Gateway:
             self.log.warning("could not update the record: %s", err)
 
     async def _beat(self) -> None:
-        """Say, at intervals, that this gateway is still going round."""
+        """Say, at intervals, that this gateway is still going round.
+
+        Nothing short of being cancelled stops this. It is a task nobody awaits, so an
+        exception in here is not raised anywhere — it simply ends the task, the record
+        stops moving, and the gateway is reported wedged for as long as it stays healthy.
+        That is the inverse of the fault this exists to reveal, and the worse of the two.
+        """
         while True:
-            await asyncio.sleep(BEAT_SECONDS)
-            self._say()  # a record that could not be written is not a reason to stop
+            try:
+                await asyncio.sleep(BEAT_SECONDS)
+                self._say()
+            except asyncio.CancelledError:
+                raise
+            except BaseException as went_wrong:  # noqa: BLE001 — see the docstring
+                self.log.warning("could not say it is still going round: %s", went_wrong)

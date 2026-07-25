@@ -35,6 +35,11 @@ from rundesk_cli import ROOT, gateway
 #: another's.
 PREFIX = "ai.rundesk"
 
+#: How long to wait on the machine to answer. A wedged supervisor would otherwise hang
+#: `stop` or `restart` with nothing watching *this* process to recover it — and nothing
+#: rundesk does may wait without a bound.
+ANSWER_TIMEOUT_SECONDS = 30.0
+
 #: How long the machine waits before starting a gateway again. Stops a gateway that
 #: cannot start from being started as fast as the machine can manage.
 THROTTLE_SECONDS = 10
@@ -64,7 +69,13 @@ class Spoke:
 
 
 def label(name: str) -> str:
-    return f"{PREFIX}.{name}"
+    """What the machine calls this gateway's job.
+
+    Checked here as well as where a gateway is made: `start` and `stop` reach the machine
+    without ever constructing one, so a name that escapes its directory would otherwise
+    plant a job wherever it liked and have the machine keep it running.
+    """
+    return f"{PREFIX}.{gateway.checked(name)}"
 
 
 def job_path(name: str, where: str | None = None) -> Path:
@@ -82,7 +93,13 @@ def ask(*args: str) -> Spoke:
         raise NoSupervisor(
             "this machine has no launchd, so rundesk cannot hand it a gateway to keep up"
         )
-    done = subprocess.run(["launchctl", *args], capture_output=True, text=True)
+    try:
+        done = subprocess.run(
+            ["launchctl", *args], capture_output=True, text=True,
+            timeout=ANSWER_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return Spoke(False, f"the machine did not answer within {ANSWER_TIMEOUT_SECONDS:g}s")
     return Spoke(done.returncode == 0, (done.stdout + done.stderr).strip())
 
 

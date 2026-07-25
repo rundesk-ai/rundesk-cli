@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk_cli import __version__  # noqa: E402
 from rundesk_cli import cli  # noqa: E402
+from rundesk_cli import gateway as real_gateway  # noqa: E402
 
 
 def run(argv: list[str], published: str | None = None) -> tuple[int, str, str]:
@@ -201,13 +202,15 @@ class FakeGateways:
 
     DEFAULT_NAME = "gateway"
 
+    # What a gateway may be called is one rule with one answer, so the stand-in borrows
+    # it rather than keeping a second copy that can drift from the real one.
+    checked = staticmethod(real_gateway.checked)
+    NotAName = real_gateway.NotAName
+
     class AlreadyRunning(Exception):
         pass
 
     class Unfit(Exception):
-        pass
-
-    class NotAName(ValueError):
         pass
 
     class Standing:

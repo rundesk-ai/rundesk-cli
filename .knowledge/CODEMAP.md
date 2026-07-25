@@ -11,6 +11,8 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
 - `rundesk` — the executable the installer symlinks onto a PATH. It resolves its own location, puts
   `src/` on the path and hands off to `cli.main`. It owns no logic, so everything below is importable
   and testable without it.
+- The machine's own supervisor, running `rundesk serve <name>` from a job `supervisor.py` wrote. The
+  second way in, and the one nobody types: it is how a gateway is still there tomorrow.
 
 ## Domain / Data
 
@@ -50,6 +52,14 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
   wired nowhere is caught here. `test_updater.py` covers the three outcomes — behind, current, and
   could-not-ask — and that an archive cannot write outside where it is unpacked. `test_process.py` and
   `test_gateway.py` drive real processes and real signals, with the waits turned down.
+
+## The layers, and which way they point
+
+`cli` → `gateway` → `process`, and `supervisor` → `gateway`. `process` has never heard of a gateway,
+which is what lets any number of programs run at once without coordinating. The command surface takes
+what the gateway verbs act on as an argument rather than importing it, so the surface knows the verbs
+and nothing of locks, records or process groups — and every one of them is tested with no gateway and
+no supervisor anywhere near it.
 
 ## Scripts And Commands
 

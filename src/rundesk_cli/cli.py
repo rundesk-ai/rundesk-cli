@@ -307,6 +307,13 @@ def main(argv: list[str], gateways=None, machine=None) -> int:
     if args.command is None:
         parser.print_help()
         return 0
+    named = getattr(args, "name", None)
+    if named is not None:
+        try:
+            gateways.checked(named)
+        except gateways.NotAName as why:
+            print(f"rundesk: {why}", file=sys.stderr)
+            return 1
     if args.command in COMING_SOON:
         return cmd_coming_soon(args.command)
     if args.command == "version":

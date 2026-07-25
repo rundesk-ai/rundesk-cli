@@ -5,9 +5,39 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Four jobs, each answering one question, so a red tick says what is broken before you
+# open it: are the docs and contracts sound, does the code do what it claims, does this
+# checkout install, and does what is *published* install.
+
 jobs:
-  check:
-    name: ${{ matrix.os }} · python ${{ matrix.python }}
+  # ------------------------------------------------------------------ the knowledge base
+  # Its own job rather than a step inside the test run: the contracts are how this product
+  # says what it guarantees, and a contract that has drifted should be as visible as a
+  # failing test. Nothing here depends on the platform, so it runs once.
+  knowledge:
+    name: knowledge base — docs, contracts, evidence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Docs meet the documentation standard
+        run: python .knowledge/scripts/doc-lint .knowledge
+
+      - name: The doc linter still fails what it claims to catch
+        # A linter nobody tests is a green tick that means nothing.
+        run: python .knowledge/scripts/test_doc_lint.py
+
+      - name: Every proven requirement names a test that exists
+        # doc-lint cannot tell whether a cited test is real. This repo has already shipped
+        # four contracts citing tests copied from another repository.
+        run: python .knowledge/scripts/check-evidence
+
+  # ------------------------------------------------------------------ the code
+  tests:
+    name: tests — ${{ matrix.os }}, python ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -27,60 +57,73 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      # ---------------------------------------------------------------- it is all valid
-      - name: Everything parses
+      - name: Every source and test file parses on this Python
         run: python -c "import ast, glob; [ast.parse(open(f).read()) for f in glob.glob('src/rundesk_cli/*.py') + glob.glob('tests/*.py')]; print('parse OK')"
 
       - name: The installer is valid shell
         run: bash -n install.sh
 
-      # ---------------------------------------------------------------- the knowledge base
-      - name: The docs are valid
-        run: python .knowledge/scripts/doc-lint .knowledge
-
-      - name: The doc linter has teeth
-        # Shipped with the knowledge system: it proves the linter fails on what it claims to
-        # catch. A linter nobody tests is a green tick that means nothing.
-        run: python .knowledge/scripts/test_doc_lint.py
-
-      - name: Every proven requirement names a test that exists
-        run: python .knowledge/scripts/check-evidence
-
-      # ---------------------------------------------------------------- the code
-      - name: The command surface
-        run: python tests/test_cli.py
-
-      - name: Version, update, and what they refuse to claim
-        run: python tests/test_updater.py
-
-      - name: Putting it on a machine, and taking it off
-        run: python tests/test_install.py
-
-      - name: A program rundesk runs, and how it keeps hold of it
+      # -- the platform: what runs, and what keeps it running ------------------------
+      - name: platform-process — a program rundesk runs, and keeping hold of it
         run: python tests/test_process.py
 
-      - name: The gateway — one of each name, and what it takes with it
+      - name: platform-gateway — one gateway per name, and what it takes with it
         run: python tests/test_gateway.py
 
-      - name: Handing a gateway to the machine that keeps it up
+      - name: platform-gateway — handing a gateway to the machine that keeps it up
         run: python tests/test_supervisor.py
 
-      # ---------------------------------------------------------------- the real thing
-      - name: A real install leaves a working command
+      # -- the surface, and this copy of rundesk on a machine ------------------------
+      - name: command-surface — every verb, and what it honestly refuses
+        run: python tests/test_cli.py
+
+      - name: lifecycle-update — which version this is, and moving between them
+        run: python tests/test_updater.py
+
+      - name: lifecycle-install — putting it on a machine, and taking it off
+        run: python tests/test_install.py
+
+  # ------------------------------------------------------------------ installing this checkout
+  # The suites above prove the install *logic*. This runs the installer for real and then
+  # uses what it placed, which is a different claim: an install can be correct in every
+  # unit and still leave a command that does not answer.
+  install-this-checkout:
+    name: install this checkout, use it, remove it — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Installing leaves a command that answers
         run: |
           set -euo pipefail
           export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
           ./install.sh
           "$RUNDESK_BIN_DIR/rundesk" version
+
+      - name: A verb that is not built still refuses to claim success
+        run: |
+          set -euo pipefail
+          export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
           if "$RUNDESK_BIN_DIR/rundesk" run agent-x "do a thing"; then
             echo "::error::a command that is not built reported success"; exit 1
           fi
-          # The gateway verbs are built now, so they are checked for answering rather
-          # than for refusing. `status` is the one that touches nothing: `start` would
-          # hand this runner a real job to keep running.
+
+      - name: The gateway verbs answer on a real install
+        # `status` is the one that touches nothing — `start` would hand this runner a
+        # real job to keep running.
+        run: |
+          set -euo pipefail
+          export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
           "$RUNDESK_BIN_DIR/rundesk" status
 
-      - name: Everything rundesk needs came with it
+      - name: Everything rundesk needs came with it, and imports
         # The guarantee an install makes: nothing is left for a person to put in place. If
         # anything is declared, it is installed, it fits together, and it can be imported.
         run: |
@@ -104,7 +147,7 @@ jobs:
             echo "nothing declared, and nothing installed — as intended"
           fi
 
-      - name: Uninstalling leaves nothing behind
+      - name: Uninstalling takes what it placed and leaves the checkout
         run: |
           set -euo pipefail
           export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
@@ -113,16 +156,17 @@ jobs:
           test ! -d .venv || { echo "::error::what the install put in place was left behind"; exit 1; }
           test -f rundesk || { echo "::error::uninstalling deleted the checkout"; exit 1; }
 
-  # ------------------------------------------------------------------ R-INS-1
-  # The claim the whole product rests on: a machine with none of rundesk on it installs it
-  # with one instruction. Everything above installs *this checkout* — which is a different
-  # claim, and green while what is published is unusable. This installs what is PUBLISHED,
-  # from a directory holding nothing of rundesk, exactly as a person would.
+  # ------------------------------------------------------------------ installing what is published (R-INS-1)
+  # The claim the whole product rests on, and the one every other job is blind to: a machine
+  # with none of rundesk on it installs it with the single instruction the README gives.
+  # Everything above installs *this checkout*, which stays green while what is published is
+  # unusable. This installs the PUBLISHED release, from a directory holding nothing of
+  # rundesk, exactly as a person would.
   #
   # Not a pull-request gate: a fix for the installer cannot be published before it merges,
   # so gating a PR on the old release would block the very change that repairs it.
-  one-instruction:
-    name: the one instruction · ${{ matrix.os }}
+  install-published-release:
+    name: install the published release on a bare machine — ${{ matrix.os }}
     if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     strategy:
@@ -130,7 +174,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - name: A machine with nothing on it installs rundesk
+      - name: The instruction in the README installs rundesk
         run: |
           set -euo pipefail
           export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
@@ -140,13 +184,13 @@ jobs:
           fi
           "$RUNDESK_BIN_DIR/rundesk" version
 
-      - name: Everything it installed lives in one place under the home directory
+      - name: Everything it installed lives in one directory under the home directory
         run: |
           set -euo pipefail
           test -d "$HOME/.rundesk" || { echo "::error::the install did not land in ~/.rundesk"; exit 1; }
           test -x "$HOME/.rundesk/rundesk" || { echo "::error::the install has no runnable entry point"; exit 1; }
 
-      - name: What it installed is the version the newest release carries
+      - name: The version it reports is the one the newest release carries
         # Ties the install to R-UPD-19 in reality rather than on paper: an install that
         # reports a number no release carries is one `rundesk update` cannot reason about.
         run: |
@@ -161,7 +205,7 @@ jobs:
             *) echo "::error::installed $installed, but the newest release is $tag"; exit 1 ;;
           esac
 
-      - name: And it says it is up to date, rather than offering to move
+      - name: A fresh install considers itself up to date
         run: |
           set -euo pipefail
           export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
@@ -172,7 +216,7 @@ jobs:
             *) echo "::error::a fresh install of the newest release does not consider itself current"; exit 1 ;;
           esac
 
-      - name: And taking it off leaves the machine as it was
+      - name: Uninstalling leaves the machine as it was
         run: |
           set -euo pipefail
           export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
