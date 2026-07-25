@@ -22,7 +22,7 @@ Add a row when you add a guide; `doc-lint` fails the build if one is missing.
 
 | Guide | How to |
 |---|---|
-| _(none yet)_ | |
+| [the-command-surface.md](./the-command-surface.md) | Read the command's shape, and check a new verb against it |
 
 ## Rules for a project how-to
 

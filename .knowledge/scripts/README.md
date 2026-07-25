@@ -12,6 +12,14 @@ by version bump. Everything else you drop in here is yours.
 | [`doc-lint`](./doc-lint) | Enforces the standard on `.knowledge/` — namespaces, IDs, citations, glyph tables, catalogs, research notes, and the payload's own integrity. A red lint is a broken doc. |
 | [`test_doc_lint.py`](./test_doc_lint.py) | The linter's teeth-test: a valid project passes, each mutation fails on its own rule. If this fails, the linter has lost a tooth. |
 
+### This project's
+
+| Script | What it does |
+|---|---|
+| [`check-evidence`](./check-evidence) | Every ✅ in a contract names a test the suite actually declares. `doc-lint` cannot see that. |
+| [`cli-reference`](./cli-reference) | Writes `CLI.md` from the parser, so the reference cannot drift from the command. `--check` fails when it has. |
+| [`gate`](./gate) | Everything that has to be true before work here is finished, in one command. Finds the suites rather than listing them. |
+
 ## Usage
 
 ```

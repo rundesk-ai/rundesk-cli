@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+"""cli-reference — write CLI.md from the parser, so it cannot drift from the command.
+
+    python3 .knowledge/scripts/cli-reference            # rewrite CLI.md
+    python3 .knowledge/scripts/cli-reference --check    # fail if CLI.md is out of date
+
+A reference for every verb and every argument is exactly the document that goes stale
+first: it is written once, the command grows, and the file quietly becomes a description
+of a product nobody has. So it is not written by hand. Everything below is walked off
+`build_parser()` — the same object `rundesk --help` prints from and the same object the
+tests walk — and `--check` in the gate fails the build the day the two disagree.
+
+What a generator cannot know is *why* a verb exists, which is why this file is a reference
+and `.knowledge/guides/the-command-surface.md` is the design. Standard library only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+REFERENCE = ROOT / "CLI.md"
+
+sys.path.insert(0, str(ROOT / "src"))
+
+from rundesk_cli import cli  # noqa: E402
+
+#: The verbs a person meets in the order they meet them, rather than the order argparse
+#: happens to hold. A reference sorted alphabetically makes somebody read the whole thing
+#: to learn what rundesk is for.
+GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
+    ("An agent, and its life", "Making one, taking it away, and seeing what you have.",
+     ("add", "remove", "agents", "doctor")),
+    ("Running one", "An agent runs in one gateway of its own — these name the agent, never the gateway.",
+     ("start", "stop", "restart", "logs", "serve")),
+    ("Reaching it", "The ways work arrives for an agent, and what became of each.",
+     ("ask", "channels", "schedules", "runs")),
+    ("Rundesk itself", "The copy of rundesk on this machine.",
+     ("status", "version", "update", "uninstall")),
+]
+
+
+def offered(parser) -> dict:
+    """The sub-commands this parser offers, by name."""
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action.choices
+    return {}
+
+
+def summaries(parser) -> dict:
+    """The one line `--help` shows for each sub-command, by name.
+
+    Held on the sub-parsers action rather than on the parser it made, which is why a built
+    verb has no `description` to read and its whole entry came out blank.
+    """
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return {one.dest: (one.help or "") for one in action._choices_actions}
+    return {}
+
+
+def said(text: str) -> str:
+    """Help text as a reader should see it, or nothing at all.
+
+    `argparse.SUPPRESS` is the string `==SUPPRESS==`, so an argument hidden from `--help`
+    reads as having that for its description unless it is caught here.
+    """
+    text = (text or "").strip()
+    return "" if text == argparse.SUPPRESS else text
+
+
+def signature(name: str, parser) -> str:
+    """How the verb is typed, taken from argparse's own usage line.
+
+    Written by the parser rather than assembled here, so a new argument appears in the
+    signature the moment it is registered and cannot be forgotten.
+    """
+    usage = " ".join(parser.format_usage().split())
+    usage = usage[len("usage: "):] if usage.startswith("usage: ") else usage
+    return usage.replace("[-h]", "").replace("  ", " ").strip()
+
+
+def described(action) -> tuple[str, str]:
+    """One argument as a pair: how it is written, and what it does."""
+    if action.option_strings:
+        name = ", ".join(action.option_strings)
+        name += "" if action.nargs == 0 else f" {action.metavar or '<' + action.dest + '>'}"
+    elif action.dest == "args":
+        # Registered so a planned verb tolerates what it will be given (R-CMD-7), and
+        # suppressed in `--help` because there is nothing yet to describe.
+        name = "<arguments>"
+    else:
+        name = action.metavar or f"<{action.dest}>"
+    what = said(action.help).replace("[coming soon]", "").strip()
+    if action.choices and action.dest != "command":
+        one_of = " | ".join(sorted(action.choices))
+        what = f"{what} — one of {one_of}" if what else f"one of: {one_of}"
+    if not what and action.dest == "args":
+        what = "whatever it will take once built — accepted and refused today"
+    return name, what
+
+
+def sentence(text: str) -> str:
+    """A help line as a sentence: capitalised, stopped, and nothing else changed."""
+    text = text.replace(" — planned, not built yet.", "").replace("[coming soon]", "").strip()
+    return text[0].upper() + text[1:].rstrip(".") + "." if text else ""
+
+
+def aligned(pairs: list[tuple[str, str]], indent: str = "  ") -> list[str]:
+    """Two columns that line up, however long the names are."""
+    if not pairs:
+        return []
+    width = max(len(name) for name, _ in pairs)
+    return [f"{indent}{name.ljust(width)}   {what}".rstrip() for name, what in pairs]
+
+
+def signature(name: str, parser) -> str:
+    """How the verb is typed, taken from argparse's own usage line.
+
+    Written by the parser rather than assembled here, so a new argument appears in the
+    signature the moment it is registered and cannot be forgotten.
+    """
+    usage = " ".join(parser.format_usage().split())
+    usage = usage[len("usage: "):] if usage.startswith("usage: ") else usage
+    return usage.replace("[-h] ", "").replace("[-h]", "").strip()
+
+
+#: One bracket style per thing: `[--flag]` for what is optional to *pass*, `<name>` for a
+#: value you supply. argparse wraps an optional positional in square brackets too, which
+#: puts both on one token — `[<name>]` — so those are unwrapped here.
+UNWRAP = [
+    (re.compile(r"\[\[(<[^>]+>)\] \.\.\.\]"), r"\1 ..."),   # nargs="*"
+    (re.compile(r"\[(<[^>]+>)\]"), r"\1"),                     # nargs="?"
+]
+
+
+def usage_of(parser) -> str:
+    """A parser's own usage line, tidied — argparse writes it, so it cannot drift."""
+    usage = " ".join(parser.format_usage().split())
+    usage = usage[len("usage: "):] if usage.startswith("usage: ") else usage
+    usage = usage.replace("[-h] ", "").replace("[-h]", "")
+    for pattern, into in UNWRAP:
+        usage = pattern.sub(into, usage)
+    # `REMAINDER` prints as a bare ellipsis whatever its metavar says, and an argument with
+    # no name is the one thing this reference exists to stop.
+    return usage.replace("--run ...", "--run <program> ...").strip()
+
+
+def operations(name: str, parser, summary: str = "") -> list[tuple[str, str]]:
+    """Every operation this verb offers, one line each: how it is typed, and what it does.
+
+    A verb with actions under it is not one operation but several, and a reference that
+    showed only the verb would leave a reader to guess what each action takes.
+    """
+    planned = "   [planned]" if name in cli.PLANNED else ""
+    says = (said(parser_description(parser)) or said(summary))
+    says = says.replace(" — planned, not built yet.", "").replace("[coming soon]", "").strip()
+
+    actions = offered(parser)
+    if actions:
+        # A built verb's actions are parsers of their own and carry their own usage; a
+        # planned one's are a choice, so its usage already shows where the action goes.
+        lines_for = summaries(parser)
+        out = []
+        for act, one in sorted(actions.items()):
+            act_says = (said(parser_description(one)) or said(lines_for.get(act, "")))
+            act_says = act_says.replace(" — planned, not built yet.", "").replace("[coming soon]", "").strip()
+            out.append((usage_of(one), f"{act_says}{planned}"))
+        return out
+
+    if name in getattr(cli, "TAKES", {}):
+        # Not built, so argparse has only a placeholder to show. The shape it will be
+        # typed with is settled, and stating it is the whole point of a reference.
+        return [(f"rundesk {name} {cli.TAKES[name]}", f"{says}{planned}")]
+
+    choices = [a for a in parser._actions if a.dest == "act" and a.choices]
+    if choices:
+        # A planned verb's actions are a choice rather than parsers, so each one's line
+        # lives in the table the parser was built from — not a copy of it.
+        _help, under = cli.PLANNED[name]
+        return [(usage_of(parser).replace("<action>", act), f"{under.get(act, says)}{planned}")
+                for act in sorted(choices[0].choices)]
+    return [(usage_of(parser), f"{says}{planned}")]
+
+
+def arguments_seen(verbs: dict) -> list[tuple[str, str]]:
+    """Every argument the command has, once each, with what it means.
+
+    Gathered across the whole surface rather than repeated under each verb: the same few
+    — a name, `--purge`, `--check` — appear again and again, and a reference that repeats
+    them is longer without saying more.
+    """
+    seen: dict[str, str] = {}
+    def walk(parser):
+        for action in parser._actions:
+            if action.dest in ("help", "command", "args") or isinstance(action, argparse._SubParsersAction):
+                continue
+            name, what = described(action)
+            if what and name not in seen:
+                seen[name] = what
+        for under in offered(parser).values():
+            walk(under)
+    for parser in verbs.values():
+        walk(parser)
+    return sorted(seen.items())
+
+
+def parser_description(parser) -> str:
+    return said(parser.description).split("\n")[0]
+
+
+def reference() -> str:
+    parser = cli.build_parser()
+    verbs = offered(parser)
+    lines_for = summaries(parser)
+    grouped = {name for _t, _d, names in GROUPS for name in names}
+    missing = sorted(set(verbs) - grouped)
+
+    out = [
+        "# The rundesk command",
+        "",
+        "A verb says **what**. The next word says **whose** — `start ava`, `logs ava`, `channels ava`.",
+        "`[planned]` is registered and not built: it exits `69` and changes nothing.",
+        "",
+        "**Generated from the command itself** — do not edit. Run",
+        "`python3 .knowledge/scripts/cli-reference` after changing the parser; the gate fails when this",
+        "file and the command disagree. *Why* the surface is shaped this way is",
+        "[`.knowledge/guides/the-command-surface.md`](.knowledge/guides/the-command-surface.md).",
+        "",
+        "## Every operation",
+        "",
+        "```sh",
+    ]
+    body: list[tuple[str, str]] = []
+    for title, _why, names in GROUPS + ([("Not yet grouped", "", tuple(missing))] if missing else []):
+        section: list[tuple[str, str]] = []
+        for name in names:
+            if name in verbs:
+                section += operations(name, verbs[name], lines_for.get(name, ""))
+        if section:
+            body += [(f"# {title.lower()}", "")] + section + [("", "")]
+    width = max(len(sig) for sig, _ in body if sig)
+    for sig, what in body[:-1]:
+        out.append(f"{sig.ljust(width)}   {what}".rstrip() if what else sig)
+    out += ["```", "", "## What the arguments mean", "", "```sh"]
+    out += aligned(arguments_seen(verbs), indent="")
+    out += [
+        "```",
+        "",
+        "## What it exits with",
+        "",
+        "```sh",
+        "0    it did the thing",
+        "1    it ran and failed, and said why",
+        "2    typed wrongly — read the help",
+        f"{cli.NOT_AVAILABLE}   this rundesk has not built that yet, and nothing changed",
+        "```",
+        "",
+        f"`{cli.NOT_AVAILABLE}` is `EX_UNAVAILABLE`, and deliberately not `2`: a script has to tell",
+        "\"this version lacks the command\" from \"the caller got it wrong\", because the two want",
+        "opposite things done about them (R-CMD-8).",
+    ]
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def main(argv: list[str]) -> int:
+    made = reference()
+    if "--check" in argv:
+        if not REFERENCE.is_file():
+            print(f"cli-reference: {REFERENCE.name} does not exist — run this without --check",
+                  file=sys.stderr)
+            return 1
+        if REFERENCE.read_text(encoding="utf-8") != made:
+            print(f"cli-reference: {REFERENCE.name} no longer matches the command — "
+                  f"run: python3 .knowledge/scripts/cli-reference", file=sys.stderr)
+            return 1
+        print(f"cli-reference: OK ({REFERENCE.name} matches the command)")
+        return 0
+    REFERENCE.write_text(made, encoding="utf-8")
+    print(f"cli-reference: wrote {REFERENCE.name} ({len(made.splitlines())} lines)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

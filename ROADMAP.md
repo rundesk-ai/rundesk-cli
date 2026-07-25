@@ -53,11 +53,11 @@ Four concepts are enough:
 
 **One agent has one gateway**, made with the agent and taken away with it. Everything that reaches that
 agent runs inside it: its channels are held open there and its schedules fire there, though the gateway
-may hold several provider processes or turns selected by different bindings. So what a person operates
+may hold several provider processes or turns, each with its own provider and model. So what a person operates
 is the agent, and the gateway is how it runs rather than a second thing to keep track of. The provider
 CLI remains the agent brain.
 
-For example, all four bindings below use the same agent's knowledge, inside that agent's one gateway:
+For example, all four entry points below use the same agent's knowledge, inside that agent's one gateway:
 
 | Entry point | Agent | Provider | Model |
 |---|---|---|---|
@@ -152,10 +152,11 @@ ran in CI that the documented gate never named. It fails when the workflow does 
 
 `agent-` is a declared component above `platform-`, and `.knowledge/prd-drafts/agent-home.md` states what
 an agent is, what its home holds, how far apart two of them are kept, and what isolation deliberately is
-not. Every operation the product will offer is registered and refuses truthfully: `agents`, `bindings`,
-`channels`, `doctor`, `run` and `runs`, each with the actions under it described where it is listed. A
-schedule reaches an agent by naming a binding, so `schedules` keeps carrying what it is given without
-reading it.
+not. Every operation the product will offer is registered and refuses truthfully — `add`, `agents`,
+`ask`, `channels`, `doctor` and `runs`, each with its actions described where it is listed — and
+[`CLI.md`](CLI.md) states every one of them, generated from the parser so it cannot describe a product
+nobody has. There is no `bindings` verb: which provider answers is an option where the entry point is
+made, so reaching an agent from Discord is one command and not two.
 
 A planned command exited `2`, and so does a typo — two situations wanting opposite things done about
 them. Planned now ends on `EX_UNAVAILABLE`, says which part of it is missing, and names a command that
@@ -230,7 +231,7 @@ Today the gateway is the subject of `start`, `stop`, `restart`, `remove`, `statu
 this level needs no noun in front of it — there is one thing to `add`, `remove`, `start` or `stop`, and
 it is an agent. A nested `add` stays qualified by its group, so `schedules ava add` is a schedule.
 
-```text
+```sh
 rundesk add ava                    make ava, and the one gateway that runs it
 rundesk remove ava                 take both away
 rundesk start ava                  already ships — subject becomes the agent
@@ -240,7 +241,7 @@ rundesk logs ava
 rundesk doctor ava
 rundesk status                     every agent, and what each is doing
 
-rundesk agents                     list them
+rundesk agents                     every agent, and what each is doing
 rundesk agents ava                 what ava is, and where it keeps things
 
 rundesk schedules ava              what ava runs on its own       (was --gateway ava)
@@ -251,8 +252,13 @@ rundesk schedules ava run tidy     run it now, due or not
 rundesk channels ava               what ava is reachable on
 rundesk channels ava add|remove|show discord
 rundesk runs ava                   what ava has run
-rundesk runs ava show|resume|replay|stop <run>
+rundesk runs ava show <run> [--stream]
+rundesk runs ava resume|stop <run>
 ```
+
+Every operation as it will be typed is in [`CLI.md`](CLI.md), generated from the parser. *Why* the
+surface is shaped this way — and which overlaps were removed to get there — is
+[`.knowledge/guides/the-command-surface.md`](.knowledge/guides/the-command-surface.md).
 
 - `add` makes the agent **and its one gateway**; `remove` takes both. There is no separate step, and no
   way to end up with one without the other.
@@ -284,7 +290,7 @@ what keeps the two testable apart while the command surface operates them as one
 - Prove no command leaves an agent without its gateway, or a gateway without its agent.
 - Prove a schedule run by hand runs, and leaves the time it next falls due where it was.
 - Prove the gateway receives the same resolved agent paths when supervised as when run locally.
-- Prove ordinary uninstall and update preserve an agent's knowledge, workspace, bindings and history.
+- Prove ordinary uninstall and update preserve an agent's knowledge, workspace, channels and history.
 - Prove `doctor` detects missing files, broken links, unusable provider homes and an unfit runtime without
   starting a provider or changing state.
 - Prove the gateway module still passes its own contract with no agent anywhere near it.
@@ -296,10 +302,15 @@ those is typed against the agent's name rather than a gateway's. Agent managemen
 agent's owned paths as another's. Provider filesystem containment is explicitly deferred; this phase
 proves only separate discovery, configuration, session and cwd defaults.
 
-## Phase 2 — Resolve Bindings Independently of Providers
+## Phase 2 — Resolve a Binding Without a Provider Anywhere Near It
 
 **Outcome:** terminal, schedule and future channel sources can select different providers/models for the
 same agent through one pure resolver.
+
+**A binding is resolved, never maintained.** There is no `bindings` verb and no object a consumer
+creates: which provider and model answer is an option where the entry point is made — on a channel, on a
+schedule, on `ask` — and the agent supplies whatever was left out. What this phase builds is the
+resolver that turns those into one immutable record per run, and nothing a person types.
 
 Define the smallest binding record that can answer:
 
@@ -549,7 +560,7 @@ than restart and repeated crashes stop looping (the currently unproven R-GW-22 a
 
 ## Phase 8 — Add Provider and Channel Breadth One Adapter at a Time
 
-**Outcome:** Claude, Codex and Grok can each be selected by bindings, and a second channel can reuse the
+**Outcome:** Claude, Codex and Grok can each be selected where an entry point is made, and a second channel can reuse the
 same channel contract without changing the agent.
 
 Add the remaining providers one at a time behind the Phase 3 conformance suite. Preserve real differences:

@@ -46,9 +46,11 @@ Putting the schedule history with the run state erased it on every ordinary rest
 
 - `src/rundesk_cli/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
-  the verbs and nothing of locks, records or process groups. `COMING_SOON` is the list of those planned and not built; each answers and exits
-  `NOT_BUILT` rather than reporting a success it did not earn. A verb graduates out of that table into a
-  real command as it lands.
+  the verbs and nothing of locks, records or process groups. `PLANNED` is the table of every operation
+  registered and not built, each with the actions under it; every one answers and exits `NOT_AVAILABLE`
+  rather than reporting a success it did not earn, and rather than argparse's usage code, which would
+  make a missing command indistinguishable from a typo. An entry graduates out of that table into a real
+  command as it lands.
 - `src/rundesk_cli/updater.py` — where this install stands against what is published, and moving between
   them. Every network call is behind an argument, so the whole module is exercised offline.
 - `src/rundesk_cli/process.py` — a program rundesk runs, and how it keeps hold of it: its own session so
@@ -115,6 +117,9 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   Removing takes the install directory entry by entry rather than whole, so an ordinary uninstall
   keeps `logs/` and `schedules/` and only `--purge` takes them. It changes nothing else a person owns — a `PATH` that does not reach the command is reported, never
   edited — and refuses to claim success until the installed command answers.
+- `CLI.md` — every operation the command offers, how each is typed, and what each argument means.
+  **Generated** by `.knowledge/scripts/cli-reference` from the parser, so it cannot describe a product
+  nobody has; the gate fails when it and the command disagree.
 - `.knowledge/scripts/gate` — everything that has to be true before work here is finished, in one
   command. The suites are **found**, not listed, and it fails when the workflow does not name one of
   them, so the local gate and CI cannot come apart. Runs everything rather than stopping at the first

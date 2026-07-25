@@ -32,9 +32,10 @@ Load light; pull depth only when the task needs it.
 - **Commits.** Do not commit or push unless told to.
 - **This file.** Never modify `AGENTS.md` without approval; when approved, follow
   `.knowledge/guides/docs-agents.md`.
-- **The component ontology.** `base-` / `command-` / `lifecycle-` is declared in `.knowledge/prd/README.md`
-  and signed off. Adding a component — the gateway's own are not declared yet — is the owner's call, and
-  renaming or re-filing an existing one is worse than adding: requirement IDs are permanent.
+- **The component ontology.** `base-` / `command-` / `platform-` / `agent-` / `channel-` / `lifecycle-`
+  is declared in `.knowledge/prd/README.md` and signed off. Adding a component — a brain's is not declared
+  yet — is the owner's call, and renaming or re-filing an existing one is worse than adding: requirement
+  IDs are permanent.
 
 ## Never
 
@@ -47,7 +48,8 @@ Load light; pull depth only when the task needs it.
   to, and a tool that makes its user reason about that has already lost them. Nothing is ever left for a
   person to `pip install` by hand (R-INS-3, R-INS-4).
 - **Never let a command report success it did not earn.** A verb that is planned and not built says so and
-  exits `NOT_BUILT`; a script that reads `0` believes the work happened.
+  exits `NOT_AVAILABLE`, which is its own code and not argparse's usage one; a script that reads `0`
+  believes the work happened, and one that reads `2` cannot tell a missing command from a typo.
 - **Never let a test reach the network.** What is published and how an update is applied are arguments, so
   the suite passes or fails on this code and not on somebody else's uptime.
 
@@ -170,7 +172,7 @@ name the effect, not the mechanism.
 ### Say what is not built, and exit non-zero
 
 ```python
-✅ print(f"rundesk {name}: coming soon …", file=sys.stderr); return NOT_BUILT
+✅ print(f"{name}: NOT AVAILABLE — planned, not built yet", file=sys.stderr); return NOT_AVAILABLE
 ❌ pass  # silently returns 0, and the script that called it carries on
 ```
 
@@ -187,6 +189,7 @@ A list written twice is a list that disagrees with itself.
 
 ```
 rundesk                     the executable the installer symlinks onto PATH
+CLI.md                      every operation and argument — generated from the parser, never edited
 src/rundesk_cli/            one concern per module; cli.py is the surface
 tests/                      unittest, run directly, offline
 install.sh                  install, and --uninstall [--purge]

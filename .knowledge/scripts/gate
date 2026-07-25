@@ -73,6 +73,8 @@ def checks() -> list[tuple[str, list[str]]]:
         ("the docs meet the standard", [PY, str(KNOWLEDGE / "scripts" / "doc-lint"), str(KNOWLEDGE)]),
         ("the doc linter still has teeth", [PY, str(KNOWLEDGE / "scripts" / "test_doc_lint.py")]),
         ("every proven requirement names a real test", [PY, str(KNOWLEDGE / "scripts" / "check-evidence")]),
+        ("the command's reference still matches the command",
+         [PY, str(KNOWLEDGE / "scripts" / "cli-reference"), "--check"]),
     ]
     listed += [(path.stem, [PY, str(path)]) for path in suites()]
     return listed
