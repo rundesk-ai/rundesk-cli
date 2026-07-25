@@ -453,6 +453,38 @@ def started_at(pid: int) -> str | None:
     return said.stdout.strip() or None
 
 
+async def started_when(pid: int) -> str | None:
+    """The same answer as `started_at`, asked the way a caller on the loop must ask it.
+
+    **Never hand the synchronous one to a worker thread.** Doing that forks a subprocess
+    from that thread while the loop is spawning children of its own, and a fork from a
+    multithreaded process inherits whatever locks the other threads happened to be
+    holding — so the child can deadlock before it ever reaches `exec`. It hung the whole
+    gateway suite on Linux, indefinitely and with no output, while macOS passed every
+    time: the two pick different ways to spawn a process, so only one of them forks.
+
+    Asked through the loop's own machinery instead, which is the one thing here that
+    knows about the children it already has.
+    """
+    try:
+        asking = await asyncio.create_subprocess_exec(
+            "ps", "-p", str(pid), "-o", "lstart=",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+    except (OSError, ValueError):
+        return None
+    try:
+        said, _ = await asyncio.wait_for(asking.communicate(), PS_TIMEOUT_SECONDS)
+    except (asyncio.TimeoutError, OSError):
+        # Ended and reaped rather than abandoned: a `ps` nobody collects stays a zombie
+        # for as long as the gateway lives, and a gateway lives for weeks.
+        with contextlib.suppress(ProcessLookupError, OSError):
+            asking.kill()
+            await asking.wait()
+        return None
+    return said.decode(errors="replace").strip() or None
+
+
 #: How many interruptions are kept for one gateway (R-GW-23). Bounded for the same reason
 #: the log is: a machine left running for months must not grow a file nobody prunes. The
 #: oldest go, because an interruption nobody has looked at in fifty incidents is history.
@@ -1240,9 +1272,9 @@ class Gateway:
         try:
             await program.start()
             # Asked once, before the record is written, and never asked again (R-GW-30).
-            # Off the loop, because it is a subprocess with a five-second budget and the
-            # loop is what reads everything this gateway's programs are saying.
-            self._known_since[held] = await asyncio.to_thread(started_at, program.pid)
+            # Through the loop rather than off it: see `started_when` for what handing
+            # this to a thread does to a process that is already spawning children.
+            self._known_since[held] = await started_when(program.pid)
             self._say()  # now it has a process group worth recording
             self.log.info("started '%s' (group %s)", held, program.pid)
             if self._stopping:

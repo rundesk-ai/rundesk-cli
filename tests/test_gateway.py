@@ -9,6 +9,7 @@ supervisor's, and are not here: they arrive with the job that describes one.
 
 import asyncio
 import contextlib
+import faulthandler
 import fcntl
 import json
 import logging
@@ -30,6 +31,14 @@ sys.path.insert(0, str(ROOT / "src"))
 from rundesk_cli import gateway, process  # noqa: E402
 
 PY = sys.executable
+
+#: Long enough for the slowest machine this runs on — about a minute in CI — and far short
+#: of the hours a stuck job otherwise costs. This file deadlocked on Linux and ran until the
+#: CI provider's own six-hour limit, three times over, with no output and nothing to read.
+#: `exit=True` dumps every thread's stack and ends the process, which turns a day of
+#: inference into one traceback naming the line.
+SUITE_SECONDS = 300.0
+faulthandler.dump_traceback_later(SUITE_SECONDS, exit=True)
 
 #: A program with no end of its own — still running whenever a test acts on it.
 FOREVER = [PY, "-c", "import time; time.sleep(300)"]
