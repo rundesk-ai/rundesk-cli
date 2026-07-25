@@ -21,7 +21,8 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
 ## Backend / Services
 
 - `src/rundesk_cli/cli.py` — the command surface: every verb the finished product will have, registered
-  from the outset. `COMING_SOON` is the list of those planned and not built; each answers and exits
+  from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
+  the verbs and nothing of locks, records or process groups. `COMING_SOON` is the list of those planned and not built; each answers and exits
   `NOT_BUILT` rather than reporting a success it did not earn. A verb graduates out of that table into a
   real command as it lands.
 - `src/rundesk_cli/updater.py` — where this install stands against what is published, and moving between
@@ -34,6 +35,9 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
   gateway per agent is how one agent is cycled without disturbing the rest. Owns every program started
   through it, and proves it is alive with a lock the kernel drops when the process dies. Writes what
   happened to its own log, kept apart from its run state because history has to outlive the gateway.
+- `src/rundesk_cli/supervisor.py` — handing a gateway to the machine that keeps it running: one job per
+  gateway, and never one this install did not write. Every call out to the machine is an argument, so it
+  is exercised on a machine with no supervisor at all.
 
 ## Frontend / UI
 

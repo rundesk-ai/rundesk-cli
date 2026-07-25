@@ -1,0 +1,213 @@
+"""Handing a gateway to the machine, so that nobody has to keep it running.
+
+rundesk supervises nothing. What keeps a gateway up, brings it back when it falls over
+and starts it again after a restart is the thing the machine already ships — this module
+only writes down what to run and asks that thing to take it (R-GW-1, R-GW-2, R-GW-3).
+
+One job per gateway, named for it, so that cycling one leaves the others alone. That is
+the same reason a gateway is one per name, and the two have to agree: a single shared job
+would make starting the second agent evict the first.
+
+**Exit codes are the whole of the conversation.** The supervisor is told to bring a
+gateway back only when it ends badly, so a gateway that is *refusing* to run — its
+virtualenv does not fit, or another already holds its name — must end **well**. Ending
+badly would have it started again ten seconds later, forever, which is the failure the
+refusal existed to prevent (R-GW-25).
+
+Every call out to the machine is an argument rather than an import, so all of this is
+exercised without a supervisor anywhere near it.
+"""
+
+from __future__ import annotations
+
+import os
+import plistlib
+import shutil
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Sequence
+
+from rundesk_cli import ROOT, gateway
+
+#: Every job rundesk writes is named this way, so what belongs to rundesk is obvious in
+#: a directory full of other people's jobs, and one gateway's job never collides with
+#: another's.
+PREFIX = "ai.rundesk"
+
+#: How long the machine waits before starting a gateway again. Stops a gateway that
+#: cannot start from being started as fast as the machine can manage.
+THROTTLE_SECONDS = 10
+
+#: Where the machine keeps jobs a person owns, rather than jobs the whole machine runs.
+LAUNCH_AGENTS = "~/Library/LaunchAgents"
+
+#: What a gateway is given to find things with. The machine hands a job almost nothing,
+#: so a program that a gateway will later run has to be findable from here.
+PATH = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+
+class NoSupervisor(Exception):
+    """This machine has nothing of the kind rundesk knows how to hand a gateway to."""
+
+
+class NotOurs(Exception):
+    """A job named like one of ours, which this install did not write."""
+
+
+@dataclass
+class Spoke:
+    """What the machine said when it was asked to do something."""
+
+    ok: bool
+    said: str
+
+
+def label(name: str) -> str:
+    return f"{PREFIX}.{name}"
+
+
+def job_path(name: str, where: str | None = None) -> Path:
+    return Path(os.path.expanduser(where or LAUNCH_AGENTS)) / f"{label(name)}.plist"
+
+
+def available() -> bool:
+    """Does this machine have the supervisor rundesk knows how to use?"""
+    return shutil.which("launchctl") is not None
+
+
+def ask(*args: str) -> Spoke:
+    """Ask the machine to do something, and say what it said."""
+    if not available():
+        raise NoSupervisor(
+            "this machine has no launchd, so rundesk cannot hand it a gateway to keep up"
+        )
+    done = subprocess.run(["launchctl", *args], capture_output=True, text=True)
+    return Spoke(done.returncode == 0, (done.stdout + done.stderr).strip())
+
+
+def describe(name: str, root: Path | None = None, logs: Path | None = None) -> dict:
+    """The job: what to run, and what the machine should do about it.
+
+    `KeepAlive` is conditional rather than plain: a gateway that ended well was either
+    asked to stop or is refusing to run, and neither is a thing to undo (R-GW-25).
+    """
+    root = root or ROOT
+    logs = logs or gateway.logs_home()
+    return {
+        "Label": label(name),
+        # The installed command, by where it actually is. The machine hands a job no
+        # PATH worth the name, so a command named rather than located is not found.
+        "ProgramArguments": [str(root / "rundesk"), "serve", name],
+        "WorkingDirectory": str(root),
+        "EnvironmentVariables": {"PATH": PATH, "HOME": str(Path.home())},
+        "RunAtLoad": True,
+        "KeepAlive": {"SuccessfulExit": False},
+        "ThrottleInterval": THROTTLE_SECONDS,
+        "StandardOutPath": str(logs / f"{name}.out"),
+        "StandardErrorPath": str(logs / f"{name}.err"),
+    }
+
+
+def write(name: str, root: Path | None = None, logs: Path | None = None,
+          where: str | None = None) -> Path:
+    """Put the job where the machine looks for it."""
+    path = job_path(name, where)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    (logs or gateway.logs_home()).mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as file:
+        plistlib.dump(describe(name, root, logs), file)
+    return path
+
+
+def domain() -> str:
+    return f"gui/{os.getuid()}"
+
+
+def install(
+    name: str,
+    root: Path | None = None,
+    logs: Path | None = None,
+    where: str | None = None,
+    asking: Callable[..., Spoke] = ask,
+) -> Spoke:
+    """Write this gateway's job and hand it to the machine (R-GW-1, R-GW-2, R-GW-3).
+
+    Any older job of the same name goes first: two jobs for one gateway would have the
+    machine starting a second that immediately refuses, over and over.
+    """
+    asking("bootout", f"{domain()}/{label(name)}")
+    path = write(name, root, logs, where)
+    return asking("bootstrap", domain(), str(path))
+
+
+def remove(name: str, where: str | None = None, root: Path | None = None,
+           asking: Callable[..., Spoke] = ask) -> Spoke:
+    """Stop this gateway being kept up, and forget the job entirely."""
+    path = job_path(name, where)
+    if path.exists() and not ours(path, root):
+        raise NotOurs(f"the job for '{name}' was not written by this install of rundesk")
+    said = asking("bootout", f"{domain()}/{label(name)}")
+    path.unlink(missing_ok=True)
+    return said
+
+
+def _only_ours(name: str, where: str | None, root: Path | None) -> None:
+    path = job_path(name, where)
+    if path.exists() and not ours(path, root):
+        raise NotOurs(f"the job for '{name}' was not written by this install of rundesk")
+
+
+def start(name: str, where: str | None = None, root: Path | None = None,
+          asking: Callable[..., Spoke] = ask) -> Spoke:
+    _only_ours(name, where, root)
+    return asking("kickstart", f"{domain()}/{label(name)}")
+
+
+def stop(name: str, where: str | None = None, root: Path | None = None,
+         asking: Callable[..., Spoke] = ask) -> Spoke:
+    """Ask the machine to stand it down, without forgetting the job."""
+    _only_ours(name, where, root)
+    return asking("kill", "SIGTERM", f"{domain()}/{label(name)}")
+
+
+def ours(path: Path, root: Path | None = None) -> bool:
+    """Is this job one *this install* wrote?
+
+    A job named like ours is not necessarily ours. The command this rewrite replaces
+    uses the same names for its own jobs, and they are on the same machines — so a job
+    is ours only if it runs the command that lives in this install. Getting this wrong
+    means `rundesk stop` standing down somebody else's live agents.
+    """
+    try:
+        with open(path, "rb") as file:
+            said = plistlib.load(file)
+    except (OSError, ValueError):
+        return False
+    runs = said.get("ProgramArguments")
+    if not isinstance(runs, list) or not runs:
+        return False
+    return str(runs[0]) == str((root or ROOT) / "rundesk")
+
+
+def described(where: str | None = None, root: Path | None = None) -> list[str]:
+    """Every gateway *this install* has given the machine a job for."""
+    home = Path(os.path.expanduser(where or LAUNCH_AGENTS))
+    if not home.is_dir():
+        return []
+    return sorted(
+        path.name[len(PREFIX) + 1: -len(".plist")]
+        for path in home.glob(f"{PREFIX}.*.plist")
+        if ours(path, root)
+    )
+
+
+def known(name: str, where: str | None = None, root: Path | None = None) -> bool:
+    """Does the machine have a job for this gateway, written by this install?"""
+    path = job_path(name, where)
+    return path.exists() and ours(path, root)
+
+
+def as_argv(name: str, root: Path | None = None) -> Sequence[str]:
+    """What the job runs — kept here so a test can check it without reading a plist."""
+    return describe(name, root)["ProgramArguments"]

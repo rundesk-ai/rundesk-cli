@@ -62,6 +62,9 @@ jobs:
       - name: The gateway — one of each name, and what it takes with it
         run: python tests/test_gateway.py
 
+      - name: Handing a gateway to the machine that keeps it up
+        run: python tests/test_supervisor.py
+
       # ---------------------------------------------------------------- the real thing
       - name: A real install leaves a working command
         run: |

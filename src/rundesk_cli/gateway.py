@@ -358,6 +358,20 @@ def standing(name: str = DEFAULT_NAME, where: Path | None = None) -> Standing:
     )
 
 
+def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list[str]:
+    """What this gateway says it has in flight, by the name each was started under.
+
+    Read from the record rather than asked of the gateway, because whoever is asking is
+    a different process — that is the whole reason the record exists.
+    """
+    try:
+        said = json.loads(_record_path(name, where or home()).read_text())
+    except (OSError, ValueError):
+        return []
+    working = said.get("working") if isinstance(said, dict) else None
+    return sorted(working) if isinstance(working, dict) else []
+
+
 def every(where: Path | None = None) -> list[Standing]:
     """Every gateway this machine knows of, running or not (R-GW-14).
 
