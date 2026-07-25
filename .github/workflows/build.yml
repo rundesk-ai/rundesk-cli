@@ -72,9 +72,13 @@ jobs:
           export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
           ./install.sh
           "$RUNDESK_BIN_DIR/rundesk" version
-          if "$RUNDESK_BIN_DIR/rundesk" start agent-x; then
+          if "$RUNDESK_BIN_DIR/rundesk" run agent-x "do a thing"; then
             echo "::error::a command that is not built reported success"; exit 1
           fi
+          # The gateway verbs are built now, so they are checked for answering rather
+          # than for refusing. `status` is the one that touches nothing: `start` would
+          # hand this runner a real job to keep running.
+          "$RUNDESK_BIN_DIR/rundesk" status
 
       - name: Everything rundesk needs came with it
         # The guarantee an install makes: nothing is left for a person to put in place. If
