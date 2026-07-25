@@ -8,4 +8,4 @@ Add a row when you add a draft; `doc-lint` fails the build if one is missing.
 
 | Draft | Proposes | Reserved namespace |
 |---|---|---|
-| _(no drafts yet)_ | | |
+| [agent-home](./agent-home.md) | what an agent is, the home it loads from, and how far apart two of them are kept | `AGT` |
