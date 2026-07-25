@@ -134,8 +134,10 @@ def install(
     """Write this gateway's job and hand it to the machine (R-GW-1, R-GW-2, R-GW-3).
 
     Any older job of the same name goes first: two jobs for one gateway would have the
-    machine starting a second that immediately refuses, over and over.
+    machine starting a second that immediately refuses, over and over. Older *of ours*,
+    though — a job of this name that something else wrote is not ours to evict.
     """
+    _only_ours(name, where, root)
     asking("bootout", f"{domain()}/{label(name)}")
     path = write(name, root, logs, where)
     return asking("bootstrap", domain(), str(path))
@@ -144,15 +146,20 @@ def install(
 def remove(name: str, where: str | None = None, root: Path | None = None,
            asking: Callable[..., Spoke] = ask) -> Spoke:
     """Stop this gateway being kept up, and forget the job entirely."""
-    path = job_path(name, where)
-    if path.exists() and not ours(path, root):
-        raise NotOurs(f"the job for '{name}' was not written by this install of rundesk")
+    _only_ours(name, where, root)
     said = asking("bootout", f"{domain()}/{label(name)}")
-    path.unlink(missing_ok=True)
+    job_path(name, where).unlink(missing_ok=True)
     return said
 
 
-def _only_ours(name: str, where: str | None, root: Path | None) -> None:
+def _only_ours(name: str, where: str | None = None, root: Path | None = None) -> None:
+    """Refuse anything to do with a job this install did not write.
+
+    Called by everything that reaches the machine. `install` did not, and so would boot
+    out a job belonging to something else and then overwrite it in place — the exact
+    destruction the rest of this module is careful about, reachable through the most
+    ordinary verb there is.
+    """
     path = job_path(name, where)
     if path.exists() and not ours(path, root):
         raise NotOurs(f"the job for '{name}' was not written by this install of rundesk")

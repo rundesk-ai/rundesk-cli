@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -29,6 +30,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 #: How many of a gateway's last lines `logs` shows when not told otherwise.
 LOG_LINES = 40
+
+#: How long cycling waits for a gateway to actually go before giving up on it. Longer
+#: than a gateway is allowed to take stopping, so a slow but correct shutdown is not
+#: mistaken for one that is stuck.
+CYCLE_PATIENCE = 20.0
 
 #: What a command that exists but is not built yet exits with. Not 0, which a
 #: script would take as done; not 1, which is reserved for a command that ran and
@@ -149,6 +155,9 @@ def cmd_start(args: argparse.Namespace, gateways, machine) -> int:
     """Hand a gateway to the machine, and let the machine keep it running."""
     try:
         said = machine.install(args.name)
+    except machine.NotOurs as why:
+        print(f"rundesk {args.name}: {why}", file=sys.stderr)
+        return 1
     except machine.NoSupervisor as why:
         print(f"rundesk: {why}", file=sys.stderr)
         print(f"  run it yourself with: rundesk serve {args.name}", file=sys.stderr)
@@ -179,6 +188,16 @@ def cmd_restart(args: argparse.Namespace, gateways, machine) -> int:
     return _stand_down(args, gateways, machine, "restart")
 
 
+def _gone(name: str, gateways, patience: float = CYCLE_PATIENCE) -> bool:
+    """Has this gateway actually stopped? Asked of the gateway, not of the machine."""
+    deadline = time.monotonic() + patience
+    while time.monotonic() < deadline:
+        if not gateways.standing(name).running:
+            return True
+        time.sleep(0.2)
+    return not gateways.standing(name).running
+
+
 def _stand_down(args: argparse.Namespace, gateways, machine, verb: str) -> int:
     names = _named(args, gateways, machine)
     if not names:
@@ -193,7 +212,21 @@ def _stand_down(args: argparse.Namespace, gateways, machine, verb: str) -> int:
                 # owner's live agents with it.
                 said = machine.Spoke(False, "")
             elif verb == "restart":
-                machine.stop(name)
+                stopped = machine.stop(name)
+                if not stopped.ok:
+                    print(f"rundesk {name}: could not ask it to stop — {stopped.said}",
+                          file=sys.stderr)
+                    worst = 1
+                    continue
+                if not _gone(name, gateways):
+                    # Starting it now does nothing — the machine sees a job already
+                    # running — and the old one then ends *well*, which is the one
+                    # outcome the machine is told not to undo. The gateway would be
+                    # left down, having just reported that it was cycled.
+                    print(f"rundesk {name}: still running after being asked to stop",
+                          file=sys.stderr)
+                    worst = 1
+                    continue
                 said = machine.start(name)
             else:
                 said = machine.stop(name)
@@ -247,8 +280,14 @@ def cmd_logs(args: argparse.Namespace, gateways) -> int:
     if not path.exists():
         print(f"rundesk {args.name}: nothing written yet ({path})", file=sys.stderr)
         return 1
-    lines = path.read_text(errors="replace").splitlines()
-    for line in lines[-args.lines:]:
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError as why:
+        # Every other verb answers in our words when it cannot do the thing. A log that
+        # cannot be read is a thing to be told about, not a traceback.
+        print(f"rundesk {args.name}: could not read what it wrote — {why}", file=sys.stderr)
+        return 1
+    for line in lines[-args.lines:] if args.lines > 0 else []:
         print(line)
     return 0
 

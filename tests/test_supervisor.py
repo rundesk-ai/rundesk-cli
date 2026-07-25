@@ -140,6 +140,17 @@ class OnlyWhatThisInstallWrote(WithAJobDirectory):
         self.assertTrue(supervisor.job_path("theirs", str(self.where)).exists())
         self.assertEqual([], self.machine.verbs(), "it asked the machine anyway")
 
+    def test_someone_elses_job_is_never_handed_to_the_machine_as_ours(self):
+        """R-GW-13 — the worst of the four, and the one that was missing: handing over
+        boots the old job out and then writes over it, so a job belonging to something
+        else is both stopped and destroyed, in the most ordinary verb there is."""
+        path = self._foreign("mybot")
+        was = path.read_bytes()
+        with self.assertRaises(supervisor.NotOurs):
+            supervisor.install("mybot", self.root, self.logs, str(self.where), self.machine)
+        self.assertEqual(was, path.read_bytes(), "it overwrote a job it did not write")
+        self.assertEqual([], self.machine.verbs(), "it asked the machine to boot out someone else's job")
+
     def test_someone_elses_job_is_never_stopped_or_started(self):
         """R-GW-13"""
         self._foreign("theirs")

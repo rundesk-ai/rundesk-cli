@@ -215,8 +215,10 @@ class FakeGateways:
             self.name, self.running, self.pid = name, running, pid
             self.version, self.stale = version, stale
 
-    def __init__(self, standing=(), working=None, refuses=None, written=None):
+    def __init__(self, standing=(), working=None, refuses=None, written=None, stops_after=None):
         self._standing = list(standing)
+        self._stops_after = stops_after
+        self._asked = 0
         self._working = working or {}
         self._refuses = refuses
         self._written = written
@@ -226,6 +228,9 @@ class FakeGateways:
         return list(self._standing)
 
     def standing(self, name):
+        if self._stops_after is not None:
+            self._asked += 1
+            return self.Standing(name, running=self._asked <= self._stops_after)
         for it in self._standing:
             if it.name == name:
                 return it
@@ -343,6 +348,13 @@ class HandingAGatewayToTheMachine(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertIn(("install", "agent-one"), machine.did)
 
+    def test_handing_over_a_name_belonging_to_something_else_is_refused(self):
+        """R-GW-13 — handing over boots out whatever holds the name and writes over it,
+        so this is the verb where getting ownership wrong costs the most."""
+        code, said = drive(["start", "theirs"], machine=FakeMachine(foreign=["theirs"]))
+        self.assertEqual(1, code)
+        self.assertIn("not written by this install", said)
+
     def test_a_machine_with_no_supervisor_says_what_to_do_instead(self):
         """R-GW-13 — rundesk supervises nothing itself, so this is a real answer rather
         than a failure to explain."""
@@ -389,6 +401,27 @@ class StandingGatewaysDown(unittest.TestCase):
         machine = FakeMachine(jobs=["agent-one"])
         drive(["restart", "agent-one"], machine=machine)
         self.assertEqual([("stop", "agent-one"), ("start", "agent-one")], machine.did)
+
+    def test_cycling_waits_for_the_old_one_to_actually_go(self):
+        """R-GW-13 — asking the machine to start a gateway that is still running does
+        nothing, and the old one then ends *well*, which the machine is told not to
+        undo. The gateway is left down, having just been reported as cycled."""
+        machine = FakeMachine(jobs=["agent-one"])
+        gateways = FakeGateways(stops_after=2)
+        code, said = drive(["restart", "agent-one"], gateways, machine)
+        self.assertEqual([("stop", "agent-one"), ("start", "agent-one")], machine.did)
+        self.assertEqual(0, code)
+
+    def test_cycling_says_so_rather_than_starting_one_that_never_stopped(self):
+        """R-GW-13 — and does not report having cycled it."""
+        self.addCleanup(setattr, cli, "CYCLE_PATIENCE", cli.CYCLE_PATIENCE)
+        cli.CYCLE_PATIENCE = 0.3
+        machine = FakeMachine(jobs=["agent-one"])
+        gateways = FakeGateways(stops_after=10_000)  # never stops
+        code, said = drive(["restart", "agent-one"], gateways, machine)
+        self.assertEqual([("stop", "agent-one")], machine.did, "it started one that was still running")
+        self.assertEqual(1, code)
+        self.assertIn("still running", said)
 
     def test_cycling_one_gateway_leaves_the_others_alone(self):
         """R-GW-4"""
@@ -469,6 +502,21 @@ class WhatAGatewayHasBeenSaying(unittest.TestCase):
         code, said = drive(["logs"], FakeGateways(written=self.written))
         self.assertEqual(1, code)
         self.assertIn("nothing written yet", said)
+
+    def test_a_log_that_cannot_be_read_is_reported_rather_than_crashing(self):
+        """R-GW-18 — every other verb answers in our words when it cannot do the thing."""
+        self.written.write_text("something\n")
+        self.written.chmod(0o000)
+        self.addCleanup(self.written.chmod, 0o600)
+        code, said = drive(["logs"], FakeGateways(written=self.written))
+        self.assertEqual(1, code)
+        self.assertIn("could not read", said)
+
+    def test_asking_for_none_of_the_log_shows_none_of_it(self):
+        """R-GW-18 — a slice of minus nothing is the whole file."""
+        self.written.write_text("first\nsecond\n")
+        _, said = drive(["logs", "-n", "0"], FakeGateways(written=self.written))
+        self.assertNotIn("first", said)
 
     def test_what_a_gateway_wrote_is_readable_after_it_has_gone(self):
         """R-GW-18 — the case the log exists for."""
