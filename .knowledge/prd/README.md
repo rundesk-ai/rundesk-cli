@@ -11,10 +11,14 @@ run toward `base-`: a higher layer may cite a lower one, never the reverse.
 1. base-       — laws true of every part, whatever it is
 2. command-    — the command line itself: what it offers, and how a verb behaves
 3. platform-   — the runtime rundesk is: what stays up, and what it keeps hold of
-4. agent-      — the named identity work is run for: its home, and what it loads
-5. channel-    — the surfaces an agent is reached on, and what arrives from them
-6. lifecycle-  — this copy of rundesk on a machine: how it arrives, moves and leaves
+4. provider-   — the seam a brain is reached through, and what any adapter must do
+5. agent-      — the named identity work is run for: its home, and what it loads
+6. channel-    — the surfaces an agent is reached on, and what arrives from them
+7. lifecycle-  — this copy of rundesk on a machine: how it arrives, moves and leaves
 ```
+
+`provider-` sits under `agent-` because an agent chooses which brain answers for it, while an adapter
+knows nothing of whose turn it is running — that is what lets a stranger write one.
 
 `platform-` sits under `agent-` because an agent is reached through what stays running, while a gateway
 knows nothing of whose work it is holding. `agent-` sits under `channel-` because a channel dispatches

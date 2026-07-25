@@ -31,14 +31,22 @@ continuation works — those are cheaper and more deterministic to prove locally
 The first useful vertical slice is:
 
 ```text
-one agent -> one resolved binding -> one provider turn -> the terminal
+one agent -> one resolved binding -> one adapter -> one turn -> the terminal
 ```
+
+The adapter in that line is a program Rundesk runs, not code it loads — which is what makes the same
+line true when the brain is somebody's own CLI rather than one that ships here.
 
 **Discord comes next, not last.** A remote channel is the thing this product is for, and until one
 carries a real turn, everything before it is proved only against fakes and the owner's own terminal. So
 the order is: the agent, the smallest resolution that lets a source pick a provider, one provider turn
 to have a brain at all, and then Discord — with the fake channel as its offline half rather than as a
 phase of its own.
+
+**The seam is opened with the first brain, not after several.** A contract generalised out of one
+vendor's adapter is shaped like that vendor; the way to avoid it is to write the contract first and let
+the first shipped adapter be its first customer, with a stranger's adapter proving the claim in the same
+phase. That is why Phase 3 does not end when one provider works.
 
 **Skills and tools come after**, because they are additive: an agent that loads a skill is a better
 agent, not a different one, and nothing about the channel, the turn or the run record changes when they
@@ -48,7 +56,7 @@ Do not build all providers, channels, tools and approval paths together.
 
 ## The Small Model
 
-Four concepts are enough:
+Five concepts are enough:
 
 | Concept | Owns | Does not own |
 |---|---|---|
@@ -56,6 +64,7 @@ Four concepts are enough:
 | **Binding** | One entry point's agent, provider, model and permission policy | Agent knowledge or provider session history |
 | **Conversation** | One external thread or terminal conversation and its provider-native session handle | Global agent configuration |
 | **Run** | One admitted occurrence, immutable resolved settings, native events and outcome | Future changes to its binding |
+| **Adapter** | Running a brain and reporting what it did, in words no brain owns | The agent, the run, or anything about whose turn it is |
 
 **One agent has one gateway**, made with the agent and taken away with it. Everything that reaches that
 agent runs inside it: its channels are held open there and its schedules fire there, though the gateway
@@ -86,6 +95,11 @@ authorized local invocation can.
 - Keep the provider's native conversation, context, tools, permissions and session loop intact. Rundesk
   invokes it, supplies its isolated environment, streams its native events, sends supported input and
   records outcomes. It does not reconstruct an agent loop.
+- **The seam a brain is reached through is public, and an adapter is a program rather than a plugin.**
+  Rundesk runs it and reads records from it; it never loads a stranger's code into the gateway that runs
+  every other agent, and never requires an adapter to be written in Python. A brain nobody here has
+  heard of — a self-hosted endpoint, somebody's own conversational CLI — is reached the same way a
+  shipped one is, and is a first-class brain rather than a degraded one.
 - Preserve the native event record. Add only the small Rundesk envelope needed to correlate agent,
   binding, conversation, run and delivery. Do not invent a large common event vocabulary before two real
   consumers prove it is needed.
@@ -373,6 +387,16 @@ creates: which provider and model answer is an option where the entry point is m
 schedule, on `ask` — and the agent supplies whatever was left out. What this phase builds is the
 resolver that turns those into one immutable record per run, and nothing a person types.
 
+**The resolver enumerates nothing.** It never holds a list of providers, and never a list of models. A
+provider is a name it carries through: one of the shipped adapters, or a path to a program somebody
+wrote. So "a provider Rundesk does not recognise" is not an error condition — it is the ordinary case
+the seam exists for, and the only failure is nothing runnable being there. A model is likewise a word
+the adapter understands and the resolver does not read; validating it here would mean tracking every
+vendor's catalogue forever, and refusing a model that shipped this morning.
+
+The same goes for how much of the machine a turn may touch: every brain scopes capability its own way,
+so what is resolved is a posture carried to the adapter, never a tool list Rundesk believes in.
+
 Define the smallest binding record that can answer:
 
 - which agent receives this source;
@@ -384,7 +408,8 @@ Resolution produces an immutable run specification containing at least `run_id`,
 source/conversation, provider, model, cwd and provider home. Provider session handles belong to the
 conversation and provider combination; they are never reused across providers.
 
-Do this first with fake providers. Do not add Discord or invoke a real CLI.
+Do this first with stand-in adapters — small programs, which is what every adapter is, so the fake and
+the real differ in what they run and in nothing else. Do not add Discord or invoke a real provider CLI.
 
 The `run_id` must also become the durable correlation key in live state, history and related logs before a
 channel can attach a question, answer or outcome to it. This is the narrow change described by finding 29;
@@ -395,23 +420,63 @@ it does not require a new persistence engine.
 - Discord, Slack and two schedules resolve to the same agent cwd/knowledge but different requested
   provider/model combinations.
 - Binding selection does not copy or fork an agent's knowledge.
-- An unknown provider, model, agent or source fails before process creation.
+- An unknown **agent** or source fails before anything is started.
+- A provider that is a path to a program resolves, and one that is nothing runnable fails before a
+  process is created — the only two outcomes, because there is no list of providers to be absent from.
+- A model Rundesk has never heard of resolves and is carried through unread.
 - A binding edit does not mutate an already admitted run.
 - A provider change cannot resume the old provider's session.
 - Untrusted message text cannot override provider, model or permission policy.
+- Nothing in the resolver names a vendor, so a new adapter needs no change here at all.
 
 ### Exit proof
 
 One table-driven offline test demonstrates the four-entry-point example above, including exact resolved
 `argv`, environment, cwd and session key through stand-in executables.
 
-## Phase 3 — Control One Provider Through the Terminal
+## Phase 3 — Open the Provider Seam, and Put One Brain Behind It
 
-**Outcome:** one agent can complete and resume one provider-native turn while Rundesk streams and
-correlates its events.
+**Outcome:** one agent completes and resumes a turn through an adapter — and a second adapter, written
+by somebody who has never seen this code, does the same with nothing here changed.
 
-Do not choose the first adapter because the Node build chose it. Probe the installed Claude, Codex and
-Grok CLIs against the same minimum contract:
+**The seam is the deliverable. The adapter is the proof.** Building one provider and generalising later
+is how a seam ends up shaped like whichever vendor happened to be first; every leaked flag, session file
+and permission mode then has to be pulled back out of the core. So the contract is written first, the
+shipped adapter is written against it, and the phase does not end until an adapter Rundesk has never
+heard of carries a whole turn.
+
+**An adapter is a program, not a plugin.** Rundesk runs it, tells it where to work through the
+environment, reads whole records from its stdout, and ends it. It never loads a stranger's code into the
+gateway that runs every other agent, and an adapter can be written in any language — a shell script is
+enough. This is what "Rundesk is a process hub" means concretely: the conversational loop is the
+adapter's, always, including for the ones that ship here.
+
+The contract is drafted in `provider-adapter` (`R-PRV-n`) and written for a stranger in
+[`.knowledge/guides/write-a-provider-adapter.md`](.knowledge/guides/write-a-provider-adapter.md).
+Its shape:
+
+```text
+we run:     <provider>                      whatever the agent named — a shipped one, or a path
+we set:     RUNDESK_CWD, RUNDESK_PROVIDER_HOME, RUNDESK_MODEL, RUNDESK_RUN
+we send:    the prompt, on stdin
+we read:    one JSON record per line on stdout —
+              text · think · tool · result · usage · done
+            anything else is kept in the run record, shown to nobody, and breaks nothing
+we keep:    stderr, apart, as what went wrong rather than what happened
+we end:     the adapter and everything it started
+```
+
+The vocabulary is closed at those six. A seventh is a contract change, deliberately — an open one puts
+every vendor's words into every channel and every reader, which is the thing the seam exists to prevent.
+Being closed is also what lets an adapter be ahead of us: an unknown record is preserved rather than
+refused, so a provider can grow without waiting for a release here.
+
+**A brain with no loop of its own is a first-class brain**, not a degraded one. An adapter that runs no
+tools reports none — a complete, honest turn. That is what makes a custom conversational CLI, or a plain
+HTTP endpoint, swappable in without pretending to capabilities it has not got.
+
+Do not choose the first shipped adapter because the Node build chose it. Probe the installed Claude,
+Codex and Grok CLIs against the same minimum contract:
 
 - select model, cwd and private provider home;
 - start and stop a turn safely;
@@ -426,9 +491,20 @@ budget; ownership committed before spawn; and a small admission bound. These are
 6, 8–10, 12, 16, 23 and 30. Reproduce each on the implementation baseline and use its failure-injection
 criteria; finding numbers are review evidence, not architecture.
 
-Choose the smallest currently documented surface that passes every required item above. Implement only
-that adapter and `rundesk ask <agent> "..."` to the terminal. Mid-turn send is not promised until a real
-probe proves it; some headless providers turn questions into final prose or require stop/resume.
+Choose the smallest currently documented surface that passes every required item above. Implement that
+adapter, a stand-in adapter the suite drives, and `rundesk ask <agent> "..."` to the terminal. Mid-turn
+send is not promised until a real probe proves it; some headless providers turn questions into final
+prose or require stop/resume.
+
+**One suite, every adapter.** The conformance suite is what a shipped adapter and a stranger's both
+pass, and it takes the adapter as an argument so an author can run it against theirs:
+
+```sh
+python3 tests/test_provider.py --adapter /opt/my-brain
+```
+
+It needs no account, token or network, because the adapters it drives are themselves small programs —
+the same thing any real adapter is.
 
 **Usage is captured here, because here is where the stream first exists.** Every provider reports it and
 each reports it differently, and the Node build already proved the two traps: Codex's
@@ -453,11 +529,24 @@ network call, and could not be proved by an offline gate.
 - Prove a conversation's second turn is charged its own tokens, not the conversation's running total.
 - Prove a run whose usage never arrived says so, rather than recording a cost of nothing.
 - Prove a cost worked out from prices is marked apart from one a provider measured.
+- **An adapter this code has never seen carries a whole turn**, written against the guide alone and
+  living outside the tree — the claim the whole seam rests on.
+- An adapter that runs no tools produces a complete turn, with that work simply absent.
+- An adapter emitting a record we do not know keeps it in the run, shows it to nobody, and finishes.
+- An adapter that names no model leaves none claimed, rather than the one that was asked for.
+- Ending a turn ends the adapter and every process it started.
+- One adapter cannot reach another agent's workspace or provider home.
+- No vendor's flag, session file or permission mode appears outside its own adapter.
 
 ### Exit proof
 
 A manual canary completes one local turn, resumes it, and correlates its native stream, transcript,
 session and outcome by one run ID. The same sanitized stream passes offline replay.
+
+**And the seam is proved open, not just designed open:** a second adapter, written from
+[the guide](.knowledge/guides/write-a-provider-adapter.md) by someone who has not read this codebase,
+runs a whole turn with nothing in Rundesk changed to accommodate it — and passes the same conformance
+suite the shipped one does. Until that has happened, the seam is a hope.
 
 ## Phase 4 — Add Basic Discord Communication
 
@@ -638,9 +727,14 @@ than restart and repeated crashes stop looping (the currently unproven R-GW-22 a
 **Outcome:** Claude, Codex and Grok can each be selected where an entry point is made, and a second
 channel can reuse the same channel contract without changing the agent.
 
-Add the remaining providers one at a time behind the Phase 3 conformance suite. Preserve real differences:
-do not synthesize tool events a provider does not emit, claim interactive input a protocol cannot accept
-or hide cumulative usage behind guessed per-turn numbers.
+Add the remaining providers one at a time behind the Phase 3 conformance suite — which by now a
+stranger's adapter has already passed, so adding one is writing a program against a published contract
+rather than extending a core. Preserve real differences: do not synthesize tool events a provider does
+not emit, claim interactive input a protocol cannot accept or hide cumulative usage behind guessed
+per-turn numbers.
+
+If adding one of these needs a change inside Rundesk, that is the finding — the seam was not open, and
+the change belongs in the contract rather than in a special case for whichever vendor exposed it.
 
 Only after Discord and the fake channel share a proven surface should Slack be added. A Slack binding
 selects its provider/model exactly as Discord and schedules do; it does not add Slack fields to the
