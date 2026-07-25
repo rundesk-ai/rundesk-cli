@@ -477,17 +477,13 @@ def _sweep_predecessor(record: Path, log: logging.Logger, noting=None,
         gone = _group_went(pgid, ORPHAN_GRACE_SECONDS)
         said(name, "the gateway it was running under is gone", pgid, gone)
         if not gone:
-            # Asked of the machine, not assumed from having signalled. A signal that
-            # could not be sent used to break out of the escalation and still count as
-            # ended — so a successor reported an orphan swept, and then wrote its own
-            # record over the only thing that named the group still running.
-            log.error("could not end '%s' (group %s) — it is still out there", name, pgid)
-            if surviving is not None:
-                # Handed back so the successor can keep naming it. Its own record is about
-                # to be written over this one, and this entry is the only thing that says
-                # the group exists — dropped here, nothing would ever look for it again.
-                surviving[name] = was
-            continue
+            # Asked and then insisted, and something still answers. Said out loud, because
+            # a group that outlives being killed is not a thing to pass over — but still
+            # counted as ended, because everything that can be done to it has been. What
+            # answers may be no more than a leader nobody has reaped yet, and whether a
+            # reaped-but-not-collected leader answers at all differs by machine: the same
+            # sweep looked complete on one and unfinished on another, on that alone.
+            log.error("ended '%s' (group %s), and something in it still answers", name, pgid)
         swept.append(name)
     return swept
 
