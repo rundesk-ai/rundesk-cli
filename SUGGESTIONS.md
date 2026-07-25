@@ -1,56 +1,24 @@
 # Suggestions
 
-Confirmed runtime and lifecycle findings. Each finding was reproduced against the
-implementation that existed when it was written.
+**Open findings only.** Each was reproduced against the implementation that existed when it
+was written, and each is still true. What has been fixed is deleted rather than kept as
+history — the ledger is a work list, not an account of what was done, and a resolved entry
+in it is one more thing to read before finding the thing that matters. Numbers are never
+reused and gaps are expected: they are cited in commits, in `ROADMAP.md` and in each other.
 
-Six rounds are recorded here.
+Three findings are **partly** closed and say in their own status which half is still open —
+4, 6 and 9. Read the status before the body.
 
-**Round one (2026-07-25, findings 1–5).** Runtime and lifecycle; scheduling excluded.
-The original five failure shapes are resolved on current `main`. They remain here as
-regression criteria: a future change should not reintroduce any of them. Finding 4
-now also carries a distinct, still-open same-name/PID variant found in round three.
-Five findings carry a pointer to a later finding that touches the same code or the
-same guarantee — read the pair together before changing either, because two later
-fixes can reintroduce a round-one failure if applied naively.
-
-**Round two (2026-07-25, findings 6–22).** The review the "Future low-level review
-focuses" section below asked for, scheduling included. Findings 6–9 are critical,
-10–15 high, 16–22 medium. All are **open**. Every one was reproduced against
-`205467b` plus the in-flight `_keep` edit; the reproduction scripts and their observed
-output are quoted inline. Findings 6–12 block provider and channel work; the rest do
-not.
-
-**Round three (2026-07-25, findings 23–25 plus extensions to findings 4, 6, 9, 12
-and 14).** A gateway-foundation follow-up against `7841a0f` plus the existing
-uncommitted gateway changes. Candidate findings were matched by underlying failure,
-not wording: five overlapped existing entries and were merged into them; only three
-new findings were added. The five gateway-facing suites still pass (326 tests), and
-each added failure was reproduced separately.
-
-**Round four (2026-07-25, findings 26–29 plus extensions to findings 11, 12, 17, 18
-and 19).** A source-of-truth and auditability review against `43315ae`: which store is
-authoritative for each runtime fact, which writers touch it, and whether an operator can
-determine what happened and what is happening now. Eleven candidates were matched by
-underlying failure; seven overlapped existing entries and were merged into them, four are
-new. **Unlike rounds one to three, round four was established by reading the code and by
-path arithmetic, not by running reproduction scripts** — treat its claims as verified
-against the source at `43315ae` and unverified at runtime. Where a merged finding gained
-new material, it is marked `Round four adds`.
-
-**Round five (2026-07-25, finding 30 plus extensions to findings 8, 11, 16, 23
-and 26).** A next-phase runtime-readiness review against the current uncommitted
-worktree. Five of six candidates were the same underlying failures already recorded
-and were merged with their current line references and new reproductions; only the
-missing gateway-wide admission limit was new. The four focused suites still pass
-(253 tests), and every added failure was reproduced separately.
-
-**Round six (2026-07-25, findings 31–38 plus extensions to findings 6, 7, 13, 17,
-27 and 28).** A consumer command-surface review against `43315ae`: whether every verb,
-status, outcome, log and next action lets an owner operate Rundesk without knowing its
-files or launchd plumbing. Overlapping material was merged into six existing findings;
-eight distinct command-surface failures are new. The merge is by failure shape, not
-wording, so each issue has one implementation plan and one complete set of regression
-criteria.
+**Where they came from.** Round two (6–22) reviewed the runtime and lifecycle against
+`205467b`, with reproduction scripts and their output quoted inline. Round three (23–25)
+followed up on the gateway foundation against `7841a0f`. Round four (26–29) asked which
+store is authoritative for each runtime fact, against `43315ae` — **by reading the code and
+by path arithmetic, not by running anything**, so treat its claims as verified against the
+source and unverified at runtime. Round five (30) reviewed runtime readiness. Round six
+(31–38) reviewed the command surface: whether an owner can operate Rundesk without knowing
+its files or launchd plumbing. Candidates were always matched by underlying failure rather
+than by wording, so each entry carries one implementation plan and one complete set of
+regression criteria.
 
 ## Future low-level review focuses
 
@@ -66,14 +34,14 @@ so a later round does not spend the effort again without new reason:
 
 | Area | Outcome |
 |---|---|
-| Ownership, cleanup and bounded resources | findings **8**, **9**, **12**, **16**, **17**, **23**, **30**; findings 1 and 3 have not regressed |
-| Crash recovery and idempotency | findings **9**, **12**, **20**, **23**, **26** |
-| Concurrency, locks and atomic decisions | findings **6**, **7**, **10**, **11**, **12**, **14**, **21**, **30** |
+| Ownership, cleanup and bounded resources | findings **8**, **9**, **12**, **16**, **17**, **23**, **30** |
+| Crash recovery and idempotency | findings **9**, **12**, **23**, **26** |
+| Concurrency, locks and atomic decisions | findings **10**, **12**, **14**, **21**, **30** |
 | Provider protocol boundary | **no change needed** — see "Reviewed, no change needed" below |
-| Scheduling correctness | findings **12**, **20**, **21**, **24**, **25**, **26** |
+| Scheduling correctness | findings **12**, **21**, **24**, **25**, **26** |
 | Install, update and removal safety | findings **4**, **14**, **15**, **18**, **28** |
-| Source of truth and auditability | findings **26**, **27**, **28**, **29**; extensions to **11**, **12**, **17**, **18**, **19** |
-| Consumer command surface | findings **31–38**; extensions to **6**, **7**, **13**, **17**, **27**, **28** |
+| Source of truth and auditability | findings **26**, **27**, **28**, **29**; extensions to **12**, **17**, **18**, **19** |
+| Consumer command surface | findings **31–38**; extensions to **6**, **13**, **17**, **27**, **28** |
 | Measured performance | finding **9** (second consequence) and **17**; measurements below |
 | Failure-injection coverage | see "Tests that prove only the easy half" below |
 | Security and trust boundaries | **no change needed today** — see below |
@@ -186,124 +154,15 @@ job creation in `src/rundesk_cli/supervisor.py`, state and logs in
 `src/rundesk_cli/gateway.py`, and archive handling in
 `src/rundesk_cli/updater.py`.
 
-## Critical
-
-### 1. Verify the whole process group after its leader exits
-
-**Status:** Resolved — but see **finding 9**, which defeats this finding's third
-regression criterion by a different route: the recovery record survives, as required,
-and is written in a state that can no longer prove ownership, so no successor acts on it.
-
-`Program.end()` returned immediately once the process-group leader had an exit code,
-and `end_all()` excluded that `Program`. A gateway could consequently report a clean
-shutdown and delete its recovery record while a descendant remained alive.
-
-Reproduced outcome:
-
-```text
-leader_returncode=0
-gateway_reported_drained=True
-record_exists=False
-child_alive=True
-```
-
-Regression criteria:
-
-- Ending a program must inspect and end its process group even when the leader has
-  already exited.
-- A gateway must report itself drained only when every owned process group is gone.
-- A recovery record must remain when shutdown cannot prove that the group is gone.
-
-Relevant implementation: `Program.end()`, `end_all()` and `Gateway._go()` in
-`src/rundesk_cli/process.py` and `src/rundesk_cli/gateway.py`.
-
-### 2. Prove both launchd and the gateway released a job before uninstalling
-
-**Status:** Resolved for jobs this install wrote — see **finding 15** for a fourth form
-of the same failure that this guard never enumerated: a gateway with no launchd job at
-all is invisible to `take_all_back()`, so uninstall proceeds while it is still running.
-
-Uninstall could proceed without proving that launchd released every job. The failure
-had several forms:
-
-- `take_all_back()` ignored a failed removal result and judged success only from
-  gateway-process liveness.
-- `python3 ... || echo` changed the supervisor cleanup's failure status back to
-  success, bypassing the uninstall guard.
-- A failed or timed-out `launchctl print` was treated as proof that a job was absent.
-- A plist could be deleted after an accepted `bootout` while its gateway was still
-  running, leaving the next attempt unable to discover it.
-
-Reproduced outcome:
-
-```text
-taken=['gateway']
-stubborn=[]
-plist_exists=True
-machine_loaded=True
-```
-
-Regression criteria:
-
-- Uninstall must stop before deleting anything whenever either launchd or the gateway
-  has not demonstrably let go.
-- An unanswered supervisor query must remain "unknown", not become "not loaded".
-- The job description must remain available for retries until both parties are gone.
-- The shell cleanup function must preserve the Python cleanup command's failure status.
-
-Relevant implementation: `take_all_back()`, `_let_go()` and `remove()` in
-`src/rundesk_cli/supervisor.py`, plus `stop_gateways()` in `install.sh`.
-
 ## High impact
-
-### 3. Bound the entire post-exit output drain
-
-**Status:** Resolved — **do not revert while fixing finding 8.** Finding 8 concerns the
-same constant used for a second, opposite purpose in `_settle()`. The fix there is to
-split the constant, never to loosen the deadline this finding tightened.
-
-`DRAIN_SECONDS` bounded each individual read rather than the complete drain period.
-A descendant that inherited stdout and kept writing completed every read, so cleanup
-could continue until the 48-hour ceiling, or forever when no ceiling was configured.
-
-Reproduced outcome:
-
-```text
-leader_returncode=0
-wait_done_after_0.6s=False
-child_alive=True
-```
-
-Regression criteria:
-
-- The drain uses one deadline shared by every post-exit read.
-- Continuous descendant output cannot extend that deadline.
-- Reaching the drain deadline proceeds to process-group cleanup.
-
-Relevant implementation: `Program.wait()` in `src/rundesk_cli/process.py`.
 
 ### 4. Do not report an unsupervised gateway as successfully started
 
-**Status:** Partially resolved — the missing-job case below is resolved. The
-same-name/PID case found in round three remains open. See also **finding 15**, which
-shows the unsupervised gateway this finding taught `start` to recognise is still
-invisible to uninstall.
+**Status:** Open — **the missing-job half is closed; the same-name/PID half is not.**
+`start` now asks whether launchd holds a job at all. See also **finding 15**, which shows
+that the unsupervised gateway `start` learned to recognise is still invisible to uninstall.
 
-`rundesk start` returned success whenever the gateway process was already running,
-without checking whether launchd held its job. A manually started gateway was therefore
-reported as covered even though it would not return after exiting or rebooting.
-
-Reproduced outcome:
-
-```text
-start_code=0
-output='gateway: ALREADY RUNNING (pid 7)'
-supervised=False
-machine_actions=[]
-```
-
-**Remaining same-name/PID gap.** `supervisor.loaded()` answers only whether launchd
-holds a job with the gateway's name (`supervisor.py:183-197`). `cmd_start()` treats
+`supervisor.loaded()` answers only whether launchd holds a job with the gateway's name (`supervisor.py:183-197`). `cmd_start()` treats
 that boolean as proof that launchd owns the process currently holding the gateway
 lock (`cli.py:290-298`), and `cmd_status()` uses the same inference for its
 `SUPERVISED` column (`cli.py:484-495`). A dormant launchd job and a manually started
@@ -336,35 +195,6 @@ Regression criteria:
 Relevant implementation: `loaded()` in `src/rundesk_cli/supervisor.py`;
 `cmd_start()` and `cmd_status()` in `src/rundesk_cli/cli.py`.
 
-### 5. Return failure when restart stops a gateway but cannot start it again
-
-**Status:** Resolved — see **finding 13**, which surfaces in this same function with a
-message this finding did not cover, and whose cause is upstream in `Gateway.serve()`
-rather than in `_stand_down()`. Do not attempt to fix finding 13 here.
-
-When stopping succeeded but the subsequent supervisor start was refused,
-`rundesk restart` printed `ALREADY STOPPED` and returned zero even though it had left
-the gateway down.
-
-Reproduced outcome:
-
-```text
-restart_code=0
-output='agent-one: ALREADY STOPPED'
-actions=[('stop', 'agent-one'), ('start', 'agent-one')]
-```
-
-Regression criteria:
-
-- A refused post-stop start returns non-zero.
-- The message says that restart failed after stopping, rather than describing the
-  gateway as merely already stopped.
-- A successful restart is reported only after the replacement gateway is observed up.
-
-Relevant implementation: `_stand_down()` in `src/rundesk_cli/cli.py`.
-
----
-
 # Round two — 2026-07-25
 
 Line numbers are against `205467b` plus the in-flight `_keep` edit to `process.py`.
@@ -378,14 +208,51 @@ exact risk and then proves only the easy half; those are listed together at the 
 
 ## Critical
 
-### 6. Treat a liveness question that could not be answered as "still running"
+### 6. Report a gateway whose liveness cannot be established as running, not stopped
 
-**Status:** Open
+**Status:** Open — **the destructive half is closed; what is left is an owner decision.**
+Nothing now signals a process group on the strength of this answer: the stray sweep *takes*
+the target's name and keeps it, and a name it cannot take is skipped untouched (R-GW-29).
+What remains is purely what an owner is *told*.
 
-`_held()` answers `False` for *every* `OSError` on opening the lock file, so "I could
-not ask" becomes "it is not running":
+`_held()` answers `False` for *every* `OSError` on opening the lock file, so "I could not
+ask" becomes "it is not running", and `standing()` reports a live gateway as STOPPED:
 
 ```python
+    try:
+        handle = os.open(path, os.O_RDWR)
+    except OSError:
+        return False            # EACCES, EMFILE/ENFILE, EIO — all read as "not running"
+```
+
+This inverts a rule the same codebase states twice and comments at length: `_still_there()`
+treats an unreachable group as *still there*, and `supervisor._still_holds()` treats silence
+as *yes*.
+
+**And it is the owner's call, not an oversight.** R-GW-9 is ratified with `a lock that
+cannot be opened is not read as running` as part of its evidence — a test that asserts
+exactly the behavior this finding wants reversed. `AGENTS.md` makes a change to ratified
+behavior the owner's decision, so this waits on that decision rather than on an
+implementation.
+
+**The same decision, from round six.** When the lock *is* held but `<name>.json` is
+unreadable, `standing()` maps the record to `{}`, `Standing.stale` reads a missing beat as
+not stale, and `cmd_status()` prints `RUNNING`, no PID or version, `WORK idle`, and exits
+zero. The process is known to exist and everything about its health is unknown. That should
+be `STATE UNREADABLE`, `PID ?`, `WORK ?`, with `rundesk logs <name>` as the next action and
+a non-zero result.
+
+Regression criteria, if the owner takes it:
+
+- A lock that cannot be opened for any reason other than "it is not there" is reported as
+  held, never as free.
+- A gateway whose liveness cannot be determined is not reported as stopped.
+- A held gateway lock with unreadable state is never reported as plain `RUNNING` or `idle`;
+  status names the unreadable state, points to its log and exits non-zero.
+
+Relevant implementation: `_held()` and `standing()` in `src/rundesk_cli/gateway.py`;
+`cmd_status()` in `src/rundesk_cli/cli.py`.
+
 # src/rundesk_cli/gateway.py:593-617
     try:
         handle = os.open(path, os.O_RDWR)
@@ -469,70 +336,15 @@ Regression criteria:
 Relevant implementation: `_held()`, `standing()` and `_sweep_strays()` in
 `src/rundesk_cli/gateway.py`.
 
-### 7. Never write an empty schedules file over one that could not be read
-
-**Status:** Open
-
-`written_schedules()` maps both "the file is not there" and "the file could not be read
-or parsed" to `[]` (`gateway.py:97-102` via `_read_json()` at `:176-181`).
-`changing_schedules()` then writes `keeping` back unconditionally (`:91`), including on
-the paths where the command decided there was nothing to do. A file that still contains
-every schedule as recoverable text is replaced with `[]`, and the command reports
-success.
-
-Reproduced outcome — a hand-edited file with one stray character, then
-`rundesk schedules --gateway gateway off nightly`:
-
-```text
-output='nightly: NOT FOUND — gateway has no schedule by that name'
-exit=1
-file_after='[]'
-```
-
-and the `add` path, which reports success while doing the same thing:
-
-```text
-output='new: ADDED — next 2026-07-26 04:00'
-exit=0
-file_after='[{"name": "new", "when": "0 4 * * *", "run": ["/bin/echo", "x"]}]'
-```
-
-A transient `OSError` on the read — `EINTR`, `ENFILE`, a stalled volume — destroys a
-perfectly valid file the same way. This also contradicts `written_schedules()`' own
-docstring, which reads the file as-written *because* removing a broken schedule is the
-main thing anyone wants to do with one.
-
-**Round six adds the read-only face.** `rundesk schedules --gateway gateway` calls the
-same reader through `_list_schedules()` (`cli.py:610-635`), prints
-`gateway: NO SCHEDULES`, and exits zero for the malformed file. Before any destructive
-mutation, the control surface has already turned "cannot read the configuration" into a
-healthy empty state. The error must name the path and parse/read reason, say that no
-change was made, and preserve the original bytes.
-
-Regression criteria:
-
-- A schedules file that exists but cannot be parsed is never overwritten; the command
-  says so and exits non-zero.
-- "Absent" and "unreadable" are distinguishable at the point of decision, not collapsed
-  by the reader.
-- A change that made no modification does not rewrite the file at all.
-- Listing a malformed or unreadable schedules file exits non-zero and never prints
-  `NO SCHEDULES`.
-
-Relevant implementation: `changing_schedules()`, `written_schedules()` and
-`_read_json()` in `src/rundesk_cli/gateway.py`; `_add_schedule()` and
-`_change_schedule()` in `src/rundesk_cli/cli.py`.
-
 ### 8. Give the receiver its own budget, and say what it never got
 
-**Status:** Open — **read finding 3 first.**
-
-Finding 3 correctly made `DRAIN_SECONDS` one deadline for the whole post-exit drain.
+**Status:** Open — **do not solve this by widening the post-exit drain.** That deadline was
+narrowed deliberately, and `DRAIN_SECONDS` is one budget for the whole post-exit drain.
 The same constant is now serving three unrelated purposes, and one of them is the
 opposite of a drain:
 
 - `Program.wait()` (`process.py:590`) — how long a leftover descendant may hold the
-  pipe. Correctly short; this is finding 3's fix.
+  pipe. Correctly short, and deliberately so.
 - `_settle()` (`process.py:659`) — how long the *receiver* gets to take what it is
   owed. Wrongly short, and shared with the stderr drain.
 - `close_input()` (`process.py:797`) — how long a stdin close may take to flush.
@@ -574,7 +386,7 @@ refused=1
 gap_seen=False
 ```
 
-The fix is to split the constant, **not** to loosen the deadline finding 3 tightened —
+The fix is to split the constant, **not** to loosen the post-exit drain deadline —
 those are different deadlines that happen to share a name today. The read loop is
 finished and the program is gone by the time `_settle()` runs, so nothing is waiting on
 the receiver. While a program is still running, the current record must remain pending
@@ -584,7 +396,7 @@ until the sink accepts it; retry uses bounded backoff, later output remains insi
 Regression criteria:
 
 - The receiver's budget is a separate, generous constant, settable by the caller that
-  knows its own sink; the descendant drain keeps finding 3's short shared deadline.
+  knows its own sink; the descendant drain keeps its short shared deadline.
 - A sink that fails temporarily and then recovers receives the pending record before
   any later record, or receives an exact ordered `Gap` before later records if the
   bounded queue had to evict it.
@@ -600,68 +412,41 @@ Relevant implementation: `Program.wait()`, `_settle()`, `Held` and `DRAIN_SECOND
 `src/rundesk_cli/process.py`; the log lines in `Gateway.start()` in
 `src/rundesk_cli/gateway.py`.
 
-### 9. Capture a process's start time once, and never let a failed lookup erase it
+### 9. Refuse work whose ownership cannot be established at the moment it starts
 
-**Status:** Open — **read findings 1 and 23 first.**
+**Status:** Open — **read finding 23; this is the same transaction.** The half that
+destroyed a proof already held is closed: `since` is asked for once, when the program is
+registered, kept in `Gateway._known_since`, and read from there by every later record, so a
+`ps` that fails or times out can no longer write `null` over an answer that was correct. The
+look also moved off the event loop, so a beat no longer shells out once per running program
+(R-GW-30).
 
-Finding 1 established that a recovery record must remain when shutdown cannot prove a
-group is gone. It does remain. It is then written in a state that can no longer prove
-anything, by the beat.
-
-`_record()` re-derives `"since": started_at(program.pid)` for every running program on
-every beat (`gateway.py:878-882`). `started_at()` (`:320-337`) shells out to `ps` and
-returns `None` on any `OSError`, `SubprocessError` or five-second timeout. The value it
-re-derives is a process start time, which cannot change. Once `since` is `null`,
-`_sweep_predecessor()` (`:433-436`) refuses to act on the record for the rest of its
-life, and the group becomes a permanent orphan: a provider CLI plus its editors,
-language servers and search tools, holding a workspace, until the machine reboots.
-
-Reproduced outcome — one failed `ps` at one beat:
+What remains is the *initial* look. `started_at()` can fail the first time as easily as the
+hundredth — it is a subprocess with a five-second budget, on the loaded machine where this
+matters most — and `Gateway.start()` accepts the child and records `"since": null` when it
+does. That work is never recoverably owned: no successor will ever act on it, and the group
+becomes a permanent orphan, a provider CLI plus its editors, language servers and search
+tools, holding a workspace until the machine reboots.
 
 ```text
-record_after_start={'work': {'pgid': 8012, 'since': 'Sat Jul 25 12:25:23 2026'}}
-record_after_one_failed_ps={'work': {'pgid': 8012, 'since': None}}
+record_after_start={'work': {'pgid': 8012, 'since': None}}
 successor_log="left 'work' (group 8012) alone: the record cannot prove it is ours"
 successor_swept=[]
 group_still_running=True
 ```
 
-The proof is destroyed by exactly the condition that makes orphans likely: a loaded
-machine.
-
-**Second consequence — a blocking subprocess on the event loop.** `started_at()` is a
-synchronous `subprocess.run`, called once per running program, per beat, from inside the
-running loop. While it runs nothing reads provider stdout, nothing is delivered to a
-sink, and queued signal handlers do not run. Measured with 8 programs:
-
-```text
-programs=8
-one_say_blocked_the_loop_for=31ms
-worst_case=PS_TIMEOUT_SECONDS(5.0) x 8 = 40s
-```
-
-`_go()` calls `_say()` on the not-drained shutdown path (`gateway.py:1075`), so the
-worst case lands inside the shutdown window — see finding 12. Both consequences are
-removed by the same change.
-
-Round three also exercised the initial lookup failure, not only a later heartbeat.
-`Gateway.start()` currently accepts the child and records `"since": null` when the
-first `started_at()` fails. That work was never recoverably owned. Capturing once is
-therefore only sufficient if establishing the initial fingerprint is part of the
-startup transaction described in finding 23: if it cannot be established, end the
-new process group and fail the start.
+Capturing once is therefore only sufficient if establishing the fingerprint is part of the
+startup transaction described in finding 23: if it cannot be established, end the new
+process group and fail the start.
 
 Regression criteria:
 
-- `since` is captured once, when the program is registered, and reused.
-- A new process whose initial fingerprint cannot be established is ended and is not
+- A new process whose initial fingerprint cannot be established is ended, and is not
   accepted as running work.
-- A failed or timed-out `started_at()` never downgrades a value already held.
-- A beat does not stop the gateway reading what its programs are saying.
 - Work left by a gateway is still swept after a beat the machine did not answer.
 
-Relevant implementation: `Gateway._record()`, `Gateway.start()`, `started_at()` and
-`_sweep_predecessor()` in `src/rundesk_cli/gateway.py`.
+Relevant implementation: `Gateway.start()` and `started_at()` in
+`src/rundesk_cli/gateway.py`.
 
 ## High impact
 
@@ -702,62 +487,6 @@ Regression criteria:
 
 Relevant implementation: `Program.send()` in `src/rundesk_cli/process.py`.
 
-### 11. Hold a lock across the interruption history's read and write
-
-**Status:** Open
-
-`_note_interrupted()` (`gateway.py:368-394`) reads, modifies and writes with no lock.
-Its own docstring names the hazard — *"two writers working from their own snapshots is
-how one of them loses the other's entry"* — and then performs it. `_sweep_strays()`
-makes concurrent writers routine: every gateway start writes into every abandoned name's
-file, so a reboot bringing several gateways up together is the normal case.
-
-Reproduced outcome, two processes, 20 entries each, under the 50-entry cap, three runs:
-
-```text
-run_1: wrote=40 file_holds=20 (A=6  B=14)  lost=20
-run_2: wrote=40 file_holds=21 (A=1  B=20)  lost=19
-run_3: wrote=40 file_holds=20 (A=0  B=20)  lost=20
-```
-
-Round five independently reproduced the same lost update with a barrier forcing two
-processes to read the empty snapshot before either wrote (`gateway.py:382-392`):
-
-```text
-concurrent_interruptions=['second']
-```
-
-R-GW-23 — work in flight when a gateway goes is answered for rather than dropped in
-silence — is the mechanism a channel layer would use to tell a conversation that its
-session died. On the one occasion it matters most it loses half of what it records.
-
-The lock this needs already exists in the right shape: `changing_schedules()`
-(`gateway.py:75-95`) holds an `flock` on a `.changing` sidecar across the whole
-read-and-write. Generalising it is the fix, and it also carries findings 7 and 20.
-
-**Round four adds a second concurrent pair, which the fix must also cover.** The
-reproduced case above is two *sweepers* racing on one abandoned name. The other pair is a
-sweeper racing the file's **owner**: `_sweep_strays()` tests `_held(name)` at
-`gateway.py:484`, then reads the record and notes interruptions; if the gateway of that
-name claims in between, it writes its own predecessor sweep into the same
-`<name>.interrupted.json` (`:769-773`), and the sweeper's later whole-file write erases
-those fresh entries. So the file has two writers even when only one gateway is starting.
-Both pairs close with one lock, but only if the lock is taken on the **target's** name
-rather than on the writer's — this is the same lock finding 6 requires the stray sweep to
-hold across its whole decision, so implement them together.
-
-Regression criteria:
-
-- Two gateways noting interruptions at once lose none of them; the test uses real
-  concurrent processes, not sequential calls.
-- A sweeper paused between its liveness check and its interruption write cannot erase an
-  entry the target gateway wrote after claiming its name.
-- Every unlocked read-modify-write of a durable file is either given the lock or shown
-  to have exactly one writer.
-
-Relevant implementation: `_note_interrupted()`, `_written_whole()` and
-`changing_schedules()` in `src/rundesk_cli/gateway.py`.
-
 ### 12. Keep the shutdown budget inside the one launchd allows
 
 **Status:** Open
@@ -774,7 +503,7 @@ launchd's default `ExitTimeOut` is 20 seconds and `describe()`
 
 Past 20 seconds launchd sends `SIGKILL`, the gateway dies without finishing `_go()`, and
 because every program is deliberately in its own session the whole tree survives with
-nothing owning it — the outcome finding 1 exists to prevent, reached by a different
+nothing owning it — a surviving descendant nobody owns, reached by a different
 route.
 
 The task ownership is split inside `Gateway` itself. `serve()` retains only the beat and
@@ -845,7 +574,7 @@ Relevant implementation: `Gateway._go()` and `Gateway.serve()` in
 
 ### 13. Do not have the machine undo a stop the owner asked for
 
-**Status:** Open — **the symptom appears where finding 5 was fixed; the cause is not there.**
+**Status:** Open — **the symptom appears in `cmd_restart`, and the cause is not there.**
 
 `serve()` returns `0 if drained else 1` (`gateway.py:1029`) and the job carries
 `"KeepAlive": {"SuccessfulExit": False}` (`supervisor.py:161`). The exit status is
@@ -943,7 +672,8 @@ Relevant implementation: `run()`, `_only_one()` and `download_and_apply()` in
 
 ### 15. Account for a gateway that has no launchd job before deleting anything
 
-**Status:** Open — **this is the fourth form of finding 2, not a new guard.**
+**Status:** Open — **this is a fourth form of "prove the machine let go before deleting",
+not a new guard.**
 
 Finding 2's first regression criterion is that uninstall must stop before deleting
 anything whenever either launchd or the gateway has not demonstrably let go. It is not
@@ -1143,7 +873,7 @@ destruction reported as success.** Neither writer notices the other's shape:
   outcome history — a dict. `written_schedules()` returns `[]` for anything that is not a
   list (`gateway.py:97-102`), so `changing_schedules()` appends to nothing and writes a
   one-element schedule list over the file. Every outcome `foo` had recorded is gone, and
-  the command prints `ADDED`. This is finding 7's "empty over unreadable" shape reached by
+  the command prints `ADDED`. This is the "empty over unreadable" shape (R-SCH-17) reached by
   a second route, so the two fixes reinforce each other but neither covers the other.
 - In the other direction `foo`'s `_remember()` (`:1210`) writes its outcome dict over
   `foo.ran`'s schedules file, and `foo.ran` silently has no schedules from then on —
@@ -1160,29 +890,10 @@ Regression criteria:
   reserved suffixes or give each gateway its own directory.
 - The set of reserved suffixes is derived from the `*_path` helpers rather than restated by
   hand, so a new sidecar file is covered the day it lands.
-- No schedules command overwrites a file whose contents are not a schedule list (finding 7).
+- No schedules command overwrites a file whose contents are not a schedule list (R-SCH-17).
 
 Relevant implementation: `checked()`, `ran_path()`, `seen_path()`,
 `interrupted_path()` and `schedules_path()` in `src/rundesk_cli/gateway.py`.
-
-### 20. Make the history files durable, not merely atomic for readers
-
-**Status:** Open
-
-`_written_whole()` (`gateway.py:163-173`) writes beside and renames, which is correct
-against a concurrent reader, but performs no `fsync` of the file or of the directory.
-R-SCH-9's guarantee that a firing is written down before it is run therefore survives a
-process crash — which is what it was written for — but not a power loss or hard reset,
-which is when a repeated side-effecting run is most likely.
-
-This is not worth paying on every 15-second beat. It is worth paying on `ran.json`,
-`interrupted.json` and `schedules.json`, and it belongs in the single persistence
-helper that finding 11 introduces.
-
-Regression criteria: the files that record what has already happened are durable across
-power loss; the beat record is not required to be.
-
-Relevant implementation: `_written_whole()` in `src/rundesk_cli/gateway.py`.
 
 ### 21. Give updates a durable maintenance barrier rather than a repeated check
 
@@ -1229,7 +940,7 @@ and `supervisor.py`. Five gateway-facing suites passed alongside these findings
 
 ### 23. Do not run work whose ownership record could not be committed
 
-**Status:** Open — **read findings 1 and 9 first.**
+**Status:** Open — **read finding 9 first;** its remaining half is this same transaction.
 
 `Gateway.start()` spawns the program, calls `_say()`, logs that it started and waits
 for it (`gateway.py:940-952`). `_say()` catches every `OSError` from `_record()` and
@@ -1431,7 +1142,7 @@ Relevant implementation: `Gateway.claim()`, `_pick_up_where_it_left_off()`, `_fi
 
 ### 27. Give the interruption history a reader, and a way to be resolved
 
-**Status:** Open — **read finding 11 first;** it keeps the entries, this makes them
+**Status:** Open — the entries are now kept under one hold (R-GW-27); this makes them
 answer something.
 
 `what_was_interrupted()` (`gateway.py:356-365`) has no caller anywhere in the product —
@@ -1529,7 +1240,7 @@ Relevant implementation: `describe()` in `src/rundesk_cli/supervisor.py`; `home(
 
 ### 29. Key durable work records by run, not by work name
 
-**Status:** Open — **the smallest change that unblocks channel work.** Findings 11, 26 and
+**Status:** Open — **the smallest change that unblocks channel work.** Findings 26 and
 27 each work around this key; none of them removes it.
 
 Every durable per-work row is keyed by the work's *name* and is therefore last-write-wins
@@ -1673,7 +1384,7 @@ above; findings 31–38 are only the distinct consumer command-surface gaps.
 
 ### 33. Make `rundesk uninstall` the removal command
 
-**Status:** Open — read with findings 2, 15 and 18 for ownership, purge and history rules.
+**Status:** Open — read with findings 15 and 18 for ownership, purge and history rules.
 
 1. **Command and location:** `rundesk uninstall`; `src/rundesk_cli/cli.py:89`,
    `:230-242`.
@@ -1787,6 +1498,7 @@ above; findings 31–38 are only the distinct consumer command-surface gaps.
    the planned command accepts arbitrary future arguments, changes no state, and prints the
    concise availability message and next command.
 
+
 ## Tests that prove only the easy half
 
 Each of these exists, passes, and is cited as evidence for a requirement it does not
@@ -1798,7 +1510,6 @@ state it is named for.
 |---|---|---|
 | `test_what_is_written_arrives_in_the_order_it_was_written` (`tests/test_process.py:955-965`) | R-PROC-14 | 20 concurrent sends of four bytes each; the transport never pauses, so `drain()` returns before touching `_drain_waiter` — finding 10's state is never entered |
 | `test_a_receiver_that_is_slow_does_not_slow_the_program` (`tests/test_process.py:1144-1167`) | R-PROC-17 | Sets up finding 8 exactly, asserts only that the *program* was not slowed and `result.ok`; never looks at what the receiver got (9 of 50) |
-| `test_one_gateway_noting_an_interruption_does_not_erase_anothers` (`tests/test_gateway.py:1721-1727`) | R-GW-23 | Two sequential calls in one process; names the concurrent hazard in its docstring and never creates it |
 | `test_removing_rundesk_refuses_while_a_gateway_is_still_running` (`tests/test_install.py:89`) | R-RM-9 | Writes a plist first, so the no-job case in finding 15 is never exercised |
 
 ## Reviewed, no change needed
@@ -1819,33 +1530,21 @@ missed: `_matches()` implements the day/weekday OR rule correctly while `_skip()
 bypass the weekday half, so `next_after()` and `passed_over()` disagree with actual
 firing. That exception is finding 25; the other reviewed arithmetic remains sound.
 
-**Cancellation of `Program.wait()`.** Tested directly with a receiver that never
-returns: cancellation propagates, the child is ended, and the undelivered count is
-reported. No finding.
+**Cancellation of `Program.wait()`.** Tested directly with a receiver that never returns:
+cancellation propagates, the child is ended, and the undelivered count is reported.
 
-```text
-wait_propagated_cancellation_after=2.0s
-child_alive_after_cancel=False
-undelivered=5
-```
+**Retained diagnostic tails.** One `_keep()` owns both count and byte eviction for `_Lines`
+and `_Records` (`process.py:286-328`, `:358-400`), and the deque does not evict on its own.
+Keep it that way: long-running provider streams can carry large tool results, and the
+retained tail is both a memory guarantee and the only diagnostic returned when a program
+fails. Splitting the two again is what let an eviction drop an item without subtracting its
+bytes. `test_a_long_run_does_not_shrink_the_tail_it_is_keeping` holds the line.
 
-**Retained diagnostic tails.** A concrete duplication between `deque(maxlen=...)`
-and `_Lines._keep()` was reproduced during the runtime-boundary review and fixed in
-`c173038`. The deque owned count eviction while `_keep()` owned byte accounting, so an
-automatic eviction removed an item without subtracting its bytes. With a three-item,
-100-byte limit, six 20-byte entries left two entries (40 actual bytes) while
-`_held_bytes` still said 100. Sustained rollover eventually collapsed a tail that was
-well below the byte cap to one line.
-
-The fix is the smallest useful separation: the deque no longer evicts independently;
-one `_keep()` implementation owns both count and byte eviction for `_Lines` and
-`_Records` (`process.py:286-328`, `:358-400`). The direct regression test
-`test_a_long_run_does_not_shrink_the_tail_it_is_keeping`
-(`tests/test_process.py:1101-1118`) exercises sustained rollover without a subprocess.
-Keep this single source of truth: long-running provider streams can contain large tool
-results, and the retained tail is both a memory guarantee and the only diagnostic
-returned when a program fails. No further decoupling is justified while that invariant
-remains directly tested.
+**Persisted reads and writes.** One reader (`gateway._read()`) says which of missing,
+unreadable or written a file turned out to be, and one writer (`gateway.changing()`) holds
+the read, the decision and the write under one `flock`. Anything new that persists state
+goes through them rather than opening a file itself — four hand-rolled readers disagreeing
+about what an unreadable file meant is what R-SCH-17 and R-GW-26 exist to prevent.
 
 **Security and trust boundaries.** Nothing actionable today. `located()` refuses a
 program named rather than resolved, in one place, applied both at schedule-add time and
@@ -1857,54 +1556,11 @@ not before.
 
 ## Simplification opportunities
 
-Not defects. Listed because each one removes a duplicated *decision*, and three of them
-are where the findings above came from.
-
-- **One JSON reader.** `_read_json()` exists (`gateway.py:176`) and is used three times;
-  `standing()` (`:624-629`), `what_is_running()` (`:664-669`), `_sweep_predecessor()`
-  (`:411-415`) and `_anything_left()` (`:506-518`) each re-implement it with slightly
-  different shape checking. Four places must agree on what an unreadable record means,
-  and finding 7 is what happens when they do not.
-- **One orphan-reconciliation seam (findings 1, 6 and 9).**
-  `_sweep_predecessor()` (`gateway.py:415-488`) currently parses durable state, decides
-  whether identity is proven, probes the live group, sends TERM/KILL, sleeps, probes
-  again, logs and records the interruption in one loop. `process._signal_group()`
-  (`process.py:919-938`) separately documents that a failed signal must not end
-  escalation. The duplicated decision still has the opposite failure shape at
-  `gateway.py:469-487`: any `OSError` breaks escalation, yet the entry is appended to
-  `swept` even if the group still answers. That is distinct from the ratified case where
-  TERM and KILL were both sent and only an unreaped leader may still answer: that case
-  may remain swept while recording `ended=False`. Finding 6 also supplies a different
-  destructive race: `_sweep_strays()` must re-check the gateway-name lock immediately
-  before it invokes the entry seam. Finding 9 supplies the process identity proof that
-  the seam must never downgrade. Tests at `tests/test_gateway.py:938-1016` create and
-  kill real process groups, so they cannot safely or deterministically cover every
-  permission failure, identity change or group that survives both signals.
-
-  Keep record I/O and iteration in place. Extract one same-module function for a decoded
-  work entry, supplied only the presence probe, start-time probe, signal operation and
-  pause operation it already uses; return the existing outcome facts for the caller to
-  log and persist. A direct test can then script `present → TERM fails → still present`,
-  `present → TERM → present → KILL → gone`, a fingerprint mismatch and an identity
-  change between probes. Assert that failure to send or complete escalation remains
-  unswept and retained; when both signals were sent, assert the current ratified swept
-  status and `ended=False` if the group still answers. A separate direct test changes
-  the gateway-name lock between record discovery and dispatch and proves the entry seam
-  is never invoked. This is the highest-value consolidation because the code can kill a
-  whole provider process tree or erase its only recovery record; it adds no class,
-  public interface or new file.
-- **One atomic-persistence helper.** `_written_whole()` (no lock), `changing_schedules()`
-  (correct lock, one file), `_note_interrupted()` (needs the lock, lacks it).
-  A `changing(path)` context manager yielding the parsed contents and writing them back
-  under an `flock`, with `fsync` for the history files, carries findings 11 and 20
-  together.
-- **Return the reason rather than storing it.** `updater.why_unavailable`
-  (`updater.py:34`) is a module global set in `latest_version_online()` and read in
-  `run()` (`:140`). When `latest` is injected — the seam the module is built around —
-  the global holds whatever the last real call left. Returning `(tag, why)` completes
-  the seam.
-- **Split `Gateway.start()`** (`gateway.py:888-977`), which combines the stopping check,
-  name allocation, duplicate refusal, spawn, the born-into-shutdown recovery, the wait
-  and five logging decisions. The born-into-shutdown branch (`:943-951`) is a lifecycle
-  decision inside a work-starting method, and separating "register and spawn" from "wait
-  and report" is what makes finding 12's task-holding fix natural.
+- **Split `Gateway.start()`** (`gateway.py:1155-1250`) — **deferred to finding 12, not an
+  invitation on its own.** It combines the stopping check, name allocation, duplicate
+  refusal, spawn, fingerprint capture, the born-into-shutdown recovery, the wait and five
+  logging decisions. Separating "register and spawn" from "wait and report" is what makes
+  finding 12's task-holding fix natural, and that is the only reason to do it: on its own
+  this is a structural change to working, tested code with no defect behind it, which the
+  change threshold in `AGENTS.md` does not admit. Do it when finding 12 is done, or not at
+  all.
