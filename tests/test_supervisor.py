@@ -4,6 +4,7 @@ No launchd is involved. What the machine is asked is a function passed in, so ev
 here runs on any machine, including one with no supervisor at all.
 """
 
+import pathlib
 import plistlib
 import shutil
 import sys
@@ -18,15 +19,54 @@ from rundesk_cli import supervisor  # noqa: E402
 
 
 class Machine:
-    """A stand-in for the machine, which remembers what it was asked."""
+    """A stand-in for the machine that behaves like the real one.
 
-    def __init__(self, refuse=()):
+    It keeps whether a job is loaded, and it answers accordingly — because a stand-in
+    that says yes to everything cannot fail the way the real one does, and that is
+    exactly how a broken `start` passed every test it had.
+
+    `slow_to_let_go` is the real behaviour that broke it: taking a job away returns
+    before the machine has finished doing it, and offering a replacement into that gap
+    is refused.
+    """
+
+    def __init__(self, refuse=(), slow_to_let_go: int = 0):
         self.asked: list[tuple] = []
         self.refuse = refuse
+        self.holding: set[str] = set()
+        self.slow_to_let_go = slow_to_let_go
+        self._letting_go: dict[str, int] = {}
 
     def __call__(self, *args: str) -> supervisor.Spoke:
         self.asked.append(args)
-        return supervisor.Spoke(args[0] not in self.refuse, "")
+        verb, target = args[0], args[-1]
+        name = target.rsplit(".", 1)[-1] if verb != "bootstrap" else None
+        if verb in self.refuse:
+            return supervisor.Spoke(False, "the machine said no")
+        if verb == "bootout":
+            if name not in self.holding:
+                return supervisor.Spoke(False, "Boot-out failed: 3: No such process")
+            self._letting_go[name] = self.slow_to_let_go
+            if not self.slow_to_let_go:
+                self.holding.discard(name)
+            return supervisor.Spoke(True, "")
+        if verb == "print":
+            left = self._letting_go.get(name, 0)
+            if left:
+                self._letting_go[name] = left - 1
+                if left - 1 == 0:
+                    self.holding.discard(name)
+            return supervisor.Spoke(name in self.holding, "")
+        if verb == "bootstrap":
+            loaded = pathlib.Path(args[-1]).name[: -len(".plist")]
+            named = loaded[len(supervisor.PREFIX) + 1:]
+            if named in self.holding:
+                return supervisor.Spoke(False, "Bootstrap failed: 5: Input/output error")
+            self.holding.add(named)
+            return supervisor.Spoke(True, "")
+        if verb in ("kickstart", "kill"):
+            return supervisor.Spoke(name in self.holding, "")
+        return supervisor.Spoke(True, "")
 
     def verbs(self) -> list[str]:
         return [asked[0] for asked in self.asked]
@@ -224,7 +264,29 @@ class HandingItOver(WithAJobDirectory):
         """R-GW-4 — two jobs for one gateway would have the machine starting a second
         that immediately refuses, over and over."""
         supervisor.install("gateway", self.root, self.logs, str(self.where), self.machine)
-        self.assertEqual(["bootout", "bootstrap"], self.machine.verbs())
+        self.assertEqual("bootout", self.machine.verbs()[0])
+        self.assertEqual("bootstrap", self.machine.verbs()[-1])
+
+    def test_handing_the_same_gateway_over_twice_running_works_both_times(self):
+        """R-GW-1 — the machine finishes taking a job away *after* saying it has, and
+        offering the replacement into that gap is refused with an error that says
+        nothing about timing. Left unwaited, every second attempt fails — and the failed
+        one leaves no job at all, so it alternates forever."""
+        machine = Machine(slow_to_let_go=3)
+        for attempt in range(4):
+            said = supervisor.install("gateway", self.root, self.logs, str(self.where), machine)
+            self.assertTrue(said.ok, f"attempt {attempt + 1} was refused: {said.said}")
+            self.assertTrue(supervisor.loaded("gateway", machine))
+
+    def test_whether_the_machine_has_a_job_is_asked_of_the_machine(self):
+        """R-GW-9 — a job description in a directory is not a job the machine is
+        keeping. The two come apart the moment one is taken away without the file going
+        too, and a file read as a job tells an owner they are looked after when they are
+        not."""
+        supervisor.write("gateway", self.root, self.logs, str(self.where))
+        self.assertTrue(supervisor.known("gateway", str(self.where), self.root))
+        self.assertFalse(supervisor.loaded("gateway", self.machine),
+                         "a job file was read as the machine keeping it")
 
     def test_a_machine_that_will_not_take_it_is_reported_rather_than_assumed(self):
         """R-GW-1 — an install that reports success it did not earn is the thing this

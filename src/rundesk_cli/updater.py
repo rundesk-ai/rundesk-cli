@@ -13,6 +13,7 @@ import contextlib
 import fcntl
 import json
 import os
+import sys
 import re
 import shutil
 import tarfile
@@ -104,13 +105,15 @@ def tag_matches(tag: str, version: str) -> bool:
 
 
 def describe(current: str, latest: str | None, why: str | None = None) -> str:
+    """One line, state first. Whoever reads this needs to know which of four situations
+    they are in before they need anything else about it."""
     if latest is None and why == NOTHING_PUBLISHED:
-        return f"rundesk {current} — no release has been published, or this install cannot see them."
+        return f"{current}: NO RELEASES — nothing is published, or this install cannot see them"
     if latest is None:
-        return f"rundesk {current} — could not reach the forge to check for a newer release."
+        return f"{current}: UNKNOWN — could not reach GitHub to check"
     if is_newer(latest, current):
-        return f"rundesk {current} — {latest} is available. Run: rundesk update"
-    return f"rundesk {current} — up to date."
+        return f"{current}: OUT OF DATE — {latest} available, run: rundesk update"
+    return f"{current}: UP TO DATE"
 
 
 def run(
@@ -171,7 +174,7 @@ def download_and_apply(repo_root: Path, tag: str) -> int:
         with _only_one(repo_root):
             return _download_and_apply(repo_root, tag)
     except Busy as err:
-        print(f"could not update: {err}")
+        print(f"FAILED — could not update: {err}", file=sys.stderr)
         return 1
 
 
@@ -184,38 +187,38 @@ def _download_and_apply(repo_root: Path, tag: str) -> int:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with tempfile.TemporaryDirectory() as work:
         archive = Path(work) / "rundesk.tar.gz"
-        print(f"downloading {tag}", flush=True)
+        print(f"{tag}: downloading", flush=True)
         try:
             with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT) as response:
                 archive.write_bytes(response.read())
         except (urllib.error.URLError, TimeoutError, OSError) as err:
-            print(f"could not download {tag}: {err}")
+            print(f"{tag}: FAILED — could not download: {err}", file=sys.stderr)
             return 1
 
         unpacked = Path(work) / "unpacked"
         unpacked.mkdir()
-        print(f"unpacking {_size(archive)}", flush=True)
+        print(f"{tag}: unpacking {_size(archive)}", flush=True)
         try:
             with tarfile.open(archive) as tar:
                 _safe_extract(tar, unpacked)
         except (tarfile.TarError, ValueError, OSError) as err:
-            print(f"{tag} did not unpack the way a release archive should: {err}")
+            print(f"{tag}: FAILED — the download is not shaped like a release: {err}", file=sys.stderr)
             return 1
 
         roots = [p for p in unpacked.iterdir() if p.is_dir()]
         if len(roots) != 1:
-            print(f"{tag} did not unpack the way a release archive should")
+            print(f"{tag}: FAILED — the download is not shaped like a release", file=sys.stderr)
             return 1
-        print(f"putting {tag} in place at {repo_root}", flush=True)
+        print(f"{tag}: installing into {repo_root}", flush=True)
         try:
             _copy_over(roots[0], repo_root)
         except OSError as err:
             # Whatever failed, the swaps are all-or-nothing per item, so what is on disk
             # is a working install — just possibly still the old one.
-            print(f"could not put {tag} in place: {err}")
+            print(f"{tag}: FAILED — could not install: {err}", file=sys.stderr)
             return 1
 
-    print(f"updated to {tag}. Run 'rundesk version' to confirm.")
+    print(f"{tag}: UPDATED — run 'rundesk version' to confirm")
     return 0
 
 

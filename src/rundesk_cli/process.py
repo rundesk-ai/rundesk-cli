@@ -259,8 +259,6 @@ class Program:
         pending += decoder.decode(b"", final=True)
         if pending:
             emit(pending)
-        if overran:
-            await self.end()
         if not overran and not went_silent and self._proc.returncode is None:
             # The pipe closing is not the program dying. One that closes what it writes
             # out and keeps going — anything that daemonises itself, or execs something
@@ -268,8 +266,17 @@ class Program:
             # wait is a wedge nothing recovers from: the silence window is already spent,
             # so R-PROC-7 would never fire, and the name it was started under would be
             # held against a restart of that work for as long as the gateway lives.
-            went_silent = not await self._exits_within(self.silence)
-        if went_silent:
+            # Bounded by whichever runs out first. Waiting on the silence alone loses
+            # the ceiling entirely here — and a program allowed to be quiet indefinitely
+            # (R-PROC-6) that closes its output and keeps going would then be waited on
+            # forever, which is the one thing the ceiling exists to prevent.
+            if not await self._exits_within(self._patience_left(began)):
+                overran = self._past_ceiling(began)
+                went_silent = not overran
+        # Ended here, after every way of deciding it should be — not before. Deciding it
+        # overran and then reaping without ending it is a wait on a process nobody asked
+        # to stop, which is the very shape of wedge this is all here to prevent.
+        if overran or went_silent:
             await self.end()
         code = await self._reap()
         await self._sweep()
@@ -281,12 +288,25 @@ class Program:
             return Result(ENDED, code, "\n".join(tail))
         return Result(FINISHED if code == 0 else FAILED, code, "\n".join(tail))
 
+    def _past_ceiling(self, began: float) -> bool:
+        return self.ceiling is not None and time.monotonic() - began >= self.ceiling
+
+    def _patience_left(self, began: float) -> float | None:
+        """How long there is left to wait, on whichever clock runs out first."""
+        left = self.silence
+        if self.ceiling is not None:
+            to_ceiling = max(0.0, self.ceiling - (time.monotonic() - began))
+            left = to_ceiling if left is None else min(left, to_ceiling)
+        return left
+
     async def _exits_within(self, patience: float | None) -> bool:
         """Does it go of its own accord in the time allowed? None means however long."""
         assert self._proc is not None
         if patience is None:
             await self._proc.wait()
             return True
+        if patience <= 0:
+            return self._proc.returncode is not None
         try:
             await asyncio.wait_for(asyncio.shield(self._proc.wait()), patience)
         except asyncio.TimeoutError:

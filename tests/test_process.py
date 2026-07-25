@@ -269,6 +269,34 @@ class HowLongAProgramMayTake(Quickened):
         await quiet.start()
         self.assertEqual(process.SILENT, (await asyncio.wait_for(quiet.wait(), 20)).reason)
 
+    async def test_a_program_that_closes_its_output_is_still_held_to_the_ceiling(self):
+        """R-PROC-13 — the ceiling is checked while a program is talking, and a program
+        that closes what it writes out stops being read at all. Bounding what follows by
+        the silence alone loses the ceiling there, and a program allowed to be quiet
+        indefinitely is then waited on forever — the one thing the ceiling prevents."""
+        for silence in (None, 30.0):
+            with self.subTest(silence=silence):
+                program = process.Program(
+                    script("import os, time", "os.close(1)", "os.close(2)", "time.sleep(300)"),
+                    silence=silence, ceiling=0.5,
+                )
+                await program.start()
+                pid = program.pid
+                result = await asyncio.wait_for(program.wait(), 20)
+                self.assertEqual(process.OVERRAN, result.reason)
+                self.assertTrue(gone_within(pid))
+
+    async def test_a_program_that_closes_its_output_and_goes_quiet_is_told_apart(self):
+        """R-PROC-8 — silence running out first is a different answer from the ceiling
+        running out first, even when the program stopped being readable in both."""
+        program = process.Program(
+            script("import os, time", "os.close(1)", "os.close(2)", "time.sleep(300)"),
+            silence=0.4, ceiling=30.0,
+        )
+        await program.start()
+        result = await asyncio.wait_for(program.wait(), 20)
+        self.assertEqual(process.SILENT, result.reason)
+
     async def test_a_program_that_goes_quiet_is_ended(self):
         """R-PROC-7 — reported as silent *and* actually gone: saying so without ending
         it would leave a wedged session running with nothing watching it."""
@@ -341,7 +369,11 @@ class EndingAProgram(Quickened):
                 "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
                 f"pathlib.Path({str(deaf)!r}).write_text('ignoring')",
                 "time.sleep(300)",
-            )
+            ),
+            # Bounded, so that a broken escalation fails this in seconds rather than
+            # falling through to the real half-hour silence window — which in CI reads
+            # as a stuck build rather than as the regression this test exists to catch.
+            silence=5.0,
         )
         await program.start()
         waiting = asyncio.ensure_future(program.wait())

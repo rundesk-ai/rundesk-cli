@@ -267,9 +267,11 @@ def _sweep_strays(where: Path, mine: str, log: logging.Logger) -> list[str]:
             log.warning("ended work left by '%s', a gateway nobody has started since: %s",
                         name, ", ".join(left))
             swept += [f"{name}/{one}" for one in left]
-        if not _anything_left(record):
-            # Nothing of it is running and nobody holds the name: the record has no
-            # reader left. Kept, it would be listed as a gateway forever.
+        # Asked again, immediately before removing anything: a gateway of this name can
+        # have claimed it and written a fresh record while this pass was running, and
+        # that record is the live one. Removing it would leave a gateway that is
+        # genuinely up with nothing saying so until its next beat.
+        if not _held(name, where) and not _anything_left(record):
             record.unlink(missing_ok=True)
     return swept
 

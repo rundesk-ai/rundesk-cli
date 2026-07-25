@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import plistlib
+import time
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -34,6 +35,11 @@ from rundesk_cli import ROOT, gateway
 #: a directory full of other people's jobs, and one gateway's job never collides with
 #: another's.
 PREFIX = "ai.rundesk"
+
+#: How long to wait for the machine to catch up with what it just said it did. Taking a
+#: job away is not finished when the command returns, and bootstrapping while the old one
+#: is still going away fails with an error that reads like nothing to do with timing.
+SETTLE_SECONDS = 10.0
 
 #: How long to wait on the machine to answer. A wedged supervisor would otherwise hang
 #: `stop` or `restart` with nothing watching *this* process to recover it — and nothing
@@ -141,6 +147,27 @@ def domain() -> str:
     return f"gui/{os.getuid()}"
 
 
+def loaded(name: str, asking: Callable[..., Spoke] = ask) -> bool:
+    """Does the machine actually have this job right now?
+
+    Asked of the machine rather than inferred from a file. A job description sitting in
+    the directory is not a job the machine is keeping — the two come apart whenever a
+    job is taken away without the file going with it, and reporting the file as though
+    it were the job tells an owner their gateway is looked after when nothing is.
+    """
+    return asking("print", f"{domain()}/{label(name)}").ok
+
+
+def _gone_from(name: str, asking: Callable[..., Spoke], patience: float = SETTLE_SECONDS) -> bool:
+    """Wait for the machine to finish taking a job away."""
+    deadline = time.monotonic() + patience
+    while time.monotonic() < deadline:
+        if not loaded(name, asking):
+            return True
+        time.sleep(0.2)
+    return not loaded(name, asking)
+
+
 def install(
     name: str,
     root: Path | None = None,
@@ -153,9 +180,16 @@ def install(
     Any older job of the same name goes first: two jobs for one gateway would have the
     machine starting a second that immediately refuses, over and over. Older *of ours*,
     though — a job of this name that something else wrote is not ours to evict.
+
+    And it must be *gone* before the new one is offered. Taking a job away returns before
+    the machine has finished doing it, and offering a replacement into that gap fails
+    with an input/output error that says nothing about timing — leaving no job at all,
+    so the next attempt succeeds and the one after that fails, alternately, forever.
     """
     _only_ours(name, where, root)
     asking("bootout", f"{domain()}/{label(name)}")
+    if not _gone_from(name, asking):
+        return Spoke(False, "the old job is still going away, so a new one was not offered")
     path = write(name, root, logs, where)
     return asking("bootstrap", domain(), str(path))
 
@@ -224,6 +258,16 @@ def described(where: str | None = None, root: Path | None = None) -> list[str]:
         for path in home.glob(f"{PREFIX}.*.plist")
         if ours(path, root)
     )
+
+
+def exists(name: str, where: str | None = None) -> bool:
+    """Is there a job of this name at all, whoever wrote it?
+
+    Told apart from `known` on purpose: "there is no job" and "there is one, and it is
+    not ours" send a reader somewhere completely different, and answering both with the
+    same word is how `stop` came to report a job that plainly exists as not running.
+    """
+    return job_path(name, where).exists()
 
 
 def known(name: str, where: str | None = None, root: Path | None = None) -> bool:

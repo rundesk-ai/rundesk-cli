@@ -31,6 +31,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 #: How many of a gateway's last lines `logs` shows when not told otherwise.
 LOG_LINES = 40
 
+#: How long to wait for a gateway to actually appear after the machine takes its job.
+#: Generous enough for a cold start, short enough that a gateway which is never coming
+#: is reported rather than waited on.
+START_PATIENCE = 15.0
+
 #: How long cycling waits for a gateway to actually go before giving up on it. Longer
 #: than a gateway is allowed to take stopping, so a slow but correct shutdown is not
 #: mistaken for one that is stuck.
@@ -121,18 +126,19 @@ def cmd_uninstall(_args: argparse.Namespace) -> int:
     # The one thing the command cannot do for you: removing it removes the command
     # that is doing the removing. The installer owns it, and it is what you already
     # have on disk.
-    print("Removing rundesk is the installer's job, since it removes this command too:")
+    print("uninstall: USE THE INSTALLER — removing rundesk removes this command too")
     print()
-    print(f"  {REPO_ROOT / 'install.sh'} --uninstall [--purge]")
+    print("  from this checkout:")
+    print(f"    {REPO_ROOT / 'install.sh'} --uninstall [--purge]")
     print()
-    print("Or, without a checkout:")
-    print("  curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh"
-          " | bash -s -- --uninstall")
+    print("  without one:")
+    print("    curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/"
+          "install.sh | bash -s -- --uninstall")
     return 0
 
 
 def cmd_coming_soon(name: str) -> int:
-    print(f"rundesk {name}: coming soon — this command is planned, not built yet.", file=sys.stderr)
+    print(f"{name}: NOT BUILT — this command is planned, not implemented yet", file=sys.stderr)
     return NOT_BUILT
 
 
@@ -147,26 +153,53 @@ def cmd_serve(args: argparse.Namespace, gateways) -> int:
     try:
         return asyncio.run(gateways.Gateway(args.name).serve())
     except (gateways.AlreadyRunning, gateways.Unfit, gateways.NotAName) as why:
-        print(f"rundesk {args.name}: {why}", file=sys.stderr)
+        print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         return 0
 
 
 def cmd_start(args: argparse.Namespace, gateways, machine) -> int:
-    """Hand a gateway to the machine, and let the machine keep it running."""
+    """Hand a gateway to the machine, and see that a gateway actually results.
+
+    The machine taking the job is not the gateway running. A job can be accepted and the
+    gateway then refuse to start — and refusing ends cleanly, so the machine does not try
+    again and nothing says a word. Reporting the hand-off as the outcome is reporting a
+    success this command did not earn.
+    """
+    name = args.name
+    already = gateways.standing(name)
+    if already.running:
+        print(f"{name}: ALREADY RUNNING (pid {already.pid})")
+        return 0
     try:
-        said = machine.install(args.name)
+        said = machine.install(name)
     except machine.NotOurs as why:
-        print(f"rundesk {args.name}: {why}", file=sys.stderr)
+        print(f"{name}: FAILED — {why}", file=sys.stderr)
         return 1
     except machine.NoSupervisor as why:
-        print(f"rundesk: {why}", file=sys.stderr)
-        print(f"  run it yourself with: rundesk serve {args.name}", file=sys.stderr)
+        print(f"{name}: FAILED — {why}", file=sys.stderr)
+        print(f"         run in this terminal instead: rundesk serve {name}", file=sys.stderr)
         return 1
     if not said.ok:
-        print(f"rundesk {args.name}: the machine would not take it — {said.said}", file=sys.stderr)
+        print(f"{name}: FAILED — the supervisor refused the job: {said.said}", file=sys.stderr)
         return 1
-    print(f"rundesk {args.name}: handed to the machine, which will keep it running")
+    up = _came_up(name, gateways)
+    if up is None:
+        print(f"{name}: FAILED — job accepted, but no gateway started.", file=sys.stderr)
+        print(f"         why: rundesk logs {name}", file=sys.stderr)
+        return 1
+    print(f"{name}: RUNNING (pid {up.pid})")
     return 0
+
+
+def _came_up(name: str, gateways, patience: float = START_PATIENCE):
+    """The gateway, once it is actually there — or None if it never arrives."""
+    deadline = time.monotonic() + patience
+    while time.monotonic() < deadline:
+        now = gateways.standing(name)
+        if now.running:
+            return now
+        time.sleep(0.2)
+    return None
 
 
 def _named(args: argparse.Namespace, gateways, machine) -> list[str]:
@@ -201,15 +234,20 @@ def _gone(name: str, gateways, patience: float = CYCLE_PATIENCE) -> bool:
 def _stand_down(args: argparse.Namespace, gateways, machine, verb: str) -> int:
     names = _named(args, gateways, machine)
     if not names:
-        print("rundesk: no gateway to " + verb)
+        print("no gateways")
         return 0
     worst = 0
     for name in names:
         try:
             if not machine.known(name):
-                # Never a job this install did not write. The command this replaces uses
-                # the same names for its own, and standing those down would take an
-                # owner's live agents with it.
+                # Never a job this install did not write. But one that exists and is not
+                # ours is not the same as none at all, and saying "nothing to stop" about
+                # a job sitting right there sends someone looking in the wrong place.
+                if machine.exists(name):
+                    print(f"{name}: FAILED — this job belongs to another install of rundesk",
+                          file=sys.stderr)
+                    worst = 1
+                    continue
                 said = machine.Spoke(False, "")
             elif verb == "restart":
                 stopped = machine.stop(name)
@@ -231,19 +269,35 @@ def _stand_down(args: argparse.Namespace, gateways, machine, verb: str) -> int:
             else:
                 said = machine.stop(name)
         except machine.NoSupervisor as why:
-            print(f"rundesk: {why}", file=sys.stderr)
+            print(f"FAILED — {why}", file=sys.stderr)
             return 1
         except machine.NotOurs as why:
-            print(f"rundesk {name}: {why}", file=sys.stderr)
+            print(f"{name}: FAILED — {why}", file=sys.stderr)
             worst = 1
             continue
-        if said.ok:
-            print(f"rundesk {name}: {'cycled' if verb == 'restart' else 'asked to stop'}")
-        elif gateways.standing(name).running:
-            print(f"rundesk {name}: running, but not the machine's to {verb}", file=sys.stderr)
+        if not said.ok:
+            if gateways.standing(name).running:
+                print(f"{name}: FAILED — running, but its job belongs to another install",
+                      file=sys.stderr)
+                worst = 1
+            elif not machine.known(name):
+                print(f"{name}: NO JOB — nothing to {verb}")
+            else:
+                print(f"{name}: ALREADY STOPPED")
+            continue
+        if verb == "restart":
+            up = _came_up(name, gateways)
+            if up is None:
+                print(f"{name}: FAILED — stopped, but did not restart.", file=sys.stderr)
+                print(f"         why: rundesk logs {name}", file=sys.stderr)
+                worst = 1
+                continue
+            print(f"{name}: RESTARTED (pid {up.pid})")
+        elif not _gone(name, gateways):
+            print(f"{name}: FAILED — still running after stop request", file=sys.stderr)
             worst = 1
         else:
-            print(f"rundesk {name}: not running")
+            print(f"{name}: STOPPED")
     return worst
 
 
@@ -253,24 +307,49 @@ def cmd_status(_args: argparse.Namespace, gateways, machine) -> int:
     Answered by the gateways themselves rather than by the machine, because the machine
     cannot tell a gateway that is working from one that is up and stuck (R-GW-9).
     """
-    known = set(machine.described()) if machine.available() else set()
+    has_supervisor = machine.available()
+    described = set(machine.described()) if has_supervisor else set()
     found = {it.name: it for it in gateways.every()}
-    for name in sorted(known - set(found)):
+    for name in sorted(described - set(found)):
         found[name] = gateways.Standing(name=name, running=False)
     if not found:
         print("no gateways")
         return 0
+    rows = []
     for name in sorted(found):
         it = found[name]
-        kept = " kept up" if name in known else ""
-        if not it.running:
-            print(f"{name:<20} not running{kept}")
-            continue
-        doing = gateways.what_is_running(name)
-        work = f", {len(doing)} in flight ({', '.join(sorted(doing))})" if doing else ", idle"
-        state = "WEDGED — not going round" if it.stale else "running"
-        print(f"{name:<20} {state}{kept}, pid {it.pid}, version {it.version}{work}")
+        # Whether the supervisor is keeping this gateway is asked of the supervisor. A
+        # job description sitting in a directory is not a job being kept, and the two
+        # come apart exactly when something has gone wrong — which is when it is read.
+        kept = has_supervisor and name in described and machine.loaded(name)
+        doing = gateways.what_is_running(name) if it.running else []
+        rows.append((
+            name,
+            ("WEDGED" if it.stale else "RUNNING") if it.running else "STOPPED",
+            str(it.pid) if it.running else "-",
+            _how_long(it.started) if it.running else "-",
+            "yes" if kept else "no",
+            (f"{len(doing)} ({', '.join(sorted(doing))})" if doing else "idle") if it.running else "-",
+        ))
+    widths = [max(len(row[i]) for row in [("GATEWAY", "STATE", "PID", "UPTIME", "SUPERVISED", "WORK")] + rows)
+              for i in range(6)]
+    for row in [("GATEWAY", "STATE", "PID", "UPTIME", "SUPERVISED", "WORK")] + rows:
+        print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
     return 0
+
+
+def _how_long(started: float | None) -> str:
+    """How long it has been up, in the shortest form that is still exact enough."""
+    if not started:
+        return "-"
+    seconds = max(0, int(time.time() - started))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
+    return f"{seconds // 86400}d{(seconds % 86400) // 3600:02d}h"
 
 
 def cmd_logs(args: argparse.Namespace, gateways) -> int:
@@ -278,14 +357,14 @@ def cmd_logs(args: argparse.Namespace, gateways) -> int:
     still be asked what happened (R-GW-18)."""
     path = gateways.log_path(args.name)
     if not path.exists():
-        print(f"rundesk {args.name}: nothing written yet ({path})", file=sys.stderr)
+        print(f"{args.name}: NO LOG — nothing written yet ({path})", file=sys.stderr)
         return 1
     try:
         lines = path.read_text(errors="replace").splitlines()
     except OSError as why:
         # Every other verb answers in our words when it cannot do the thing. A log that
         # cannot be read is a thing to be told about, not a traceback.
-        print(f"rundesk {args.name}: could not read what it wrote — {why}", file=sys.stderr)
+        print(f"{args.name}: FAILED — could not read the log: {why}", file=sys.stderr)
         return 1
     for line in lines[-args.lines:] if args.lines > 0 else []:
         print(line)
@@ -312,7 +391,7 @@ def main(argv: list[str], gateways=None, machine=None) -> int:
         try:
             gateways.checked(named)
         except gateways.NotAName as why:
-            print(f"rundesk: {why}", file=sys.stderr)
+            print(f"{named}: INVALID NAME — {why}", file=sys.stderr)
             return 1
     if args.command in COMING_SOON:
         return cmd_coming_soon(args.command)

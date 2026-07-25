@@ -65,7 +65,7 @@ class OutcomeTests(unittest.TestCase):
             apply=lambda root, tag: applied.append(tag) or 0,
         )
         self.assertEqual(code, 0)
-        self.assertIn("up to date", said)
+        self.assertIn("UP TO DATE", said)
         self.assertEqual(applied, [], "an up-to-date install was updated anyway")
 
     def test_being_behind_moves_the_install(self):
@@ -98,8 +98,8 @@ class OutcomeTests(unittest.TestCase):
         # leave someone on an old version believing they are current.
         code, said = run(repo_root=Path("/nowhere"), current_version="0.1.0", latest=lambda: None)
         self.assertEqual(code, 1)
-        self.assertIn("could not reach", said)
-        self.assertNotIn("up to date", said)
+        self.assertIn("UNKNOWN", said)
+        self.assertNotIn("UP TO DATE", said)
 
 
 class ArchiveTests(unittest.TestCase):
@@ -188,7 +188,7 @@ class BehindTests(unittest.TestCase):
         current = updater.describe("0.1.0", "v0.1.0")
         unknown = updater.describe("0.1.0", None)
         self.assertEqual(len({behind, current, unknown}), 3, "two different situations read the same")
-        self.assertNotIn("up to date", unknown)
+        self.assertNotIn("UP TO DATE", unknown)
 
 
 def _release(root: Path, version: str) -> Path:
@@ -289,7 +289,9 @@ class OneAtATimeTests(unittest.TestCase):
         updater._download_and_apply = should_not_run
         try:
             with updater._only_one(self.install):
-                with contextlib.redirect_stdout(io.StringIO()) as said:
+                # The error stream, because that is where a refusal belongs and where
+                # every other verb puts one.
+                with contextlib.redirect_stderr(io.StringIO()) as said:
                     code = updater.download_and_apply(self.install, "v9.9.9")
         finally:
             updater._download_and_apply = original
@@ -381,7 +383,7 @@ class DownloadTests(unittest.TestCase):
 
             self.assertEqual(code, 0, said)
             self.assertIn("0.2.0", (install / "rundesk").read_text(), "the install was not replaced")
-            self.assertIn("updated to v0.2.0", said)
+            self.assertIn("v0.2.0: UPDATED", said)
 
     def test_a_download_that_fails_leaves_the_install_as_it_was(self):
         with tempfile.TemporaryDirectory() as work:
@@ -393,7 +395,7 @@ class DownloadTests(unittest.TestCase):
                                         lambda: updater.download_and_apply(install, "v0.2.0"))
 
             self.assertEqual(code, 1)
-            self.assertIn("could not download", said)
+            self.assertIn("FAILED", said)
             self.assertEqual((install / "rundesk").read_text(), "# 0.1.0\n", "a failed update still changed the install")
 
 
@@ -412,13 +414,15 @@ def _with_download(payload, call):
 
     real = updater.urllib.request.urlopen
     updater.urllib.request.urlopen = fake_urlopen
-    out = io.StringIO()
+    out, err = io.StringIO(), io.StringIO()
     try:
-        with contextlib.redirect_stdout(out):
+        # Both streams: what went wrong is reported on the error stream, like every
+        # other verb, and a helper that only watched one would miss it.
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = call()
     finally:
         updater.urllib.request.urlopen = real
-    return code, out.getvalue()
+    return code, out.getvalue() + err.getvalue()
 
 
 class AskingTheForgeTests(unittest.TestCase):
@@ -474,7 +478,7 @@ class MalformedArchiveTests(unittest.TestCase):
                                         lambda: updater.download_and_apply(install, "v0.2.0"))
 
             self.assertEqual(code, 1)
-            self.assertIn("did not unpack", said)
+            self.assertIn("not shaped like a release", said)
             self.assertEqual((install / "rundesk").read_text(), "# 0.1.0\n", "a bad archive still changed the install")
 
 
@@ -506,7 +510,7 @@ class SaysWhatItIsDoingTests(unittest.TestCase):
                                     lambda: updater.download_and_apply(self.install, "v0.2.0"))
 
         self.assertEqual(code, 0, said)
-        for step in ("downloading v0.2.0", "unpacking", "putting v0.2.0 in place", "updated to v0.2.0"):
+        for step in ("v0.2.0: downloading", "unpacking", "v0.2.0: installing", "v0.2.0: UPDATED"):
             self.assertIn(step, said, f"an update never said {step!r}")
 
     def test_an_update_says_where_it_is_writing(self):
@@ -551,7 +555,7 @@ class RecoveryTests(unittest.TestCase):
         code, said = _with_download(b"this is not a tar archive",
                                     lambda: updater.download_and_apply(self.install, "v0.2.0"))
         self.assertEqual(code, 1)
-        self.assertIn("did not unpack", said)
+        self.assertIn("not shaped like a release", said)
         self.assertEqual((self.install / "rundesk").read_text(), "# 0.1.0\n")
 
     def test_an_archive_that_reaches_outside_is_reported_rather_than_raised(self):
@@ -565,7 +569,7 @@ class RecoveryTests(unittest.TestCase):
         code, said = _with_download(nasty.read_bytes(),
                                     lambda: updater.download_and_apply(self.install, "v0.2.0"))
         self.assertEqual(code, 1)
-        self.assertIn("did not unpack", said)
+        self.assertIn("not shaped like a release", said)
         self.assertFalse((self.root / "escaped.txt").exists())
 
     def test_being_unable_to_put_a_release_in_place_is_reported_rather_than_raised(self):
@@ -577,7 +581,7 @@ class RecoveryTests(unittest.TestCase):
         finally:
             updater._copy_over = real
         self.assertEqual(code, 1)
-        self.assertIn("could not put", said)
+        self.assertIn("could not install", said)
 
     def test_a_swap_that_fails_puts_back_what_was_working(self):
         # The rollback in _swap: the old directory has already been renamed aside when the

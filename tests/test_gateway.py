@@ -818,6 +818,45 @@ class WhoseProcessIsItAnyway(WithARunDirectory):
         self.addCleanup(lock.chmod, 0o600)
         self.assertFalse(gateway.standing("guarded", self.where).running)
 
+    async def test_a_leftover_that_ignores_the_polite_signal_is_ended_anyway(self):
+        """R-GW-16 — this is the case the sweep exists for: a gateway killed outright,
+        leaving a tool process behind. A tool is as free to ignore a polite signal as
+        anything else, and nothing here made one do so, so the second signal was never
+        load-bearing."""
+        stubborn = await asyncio.create_subprocess_exec(
+            PY, "-c",
+            "import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(300)\n",
+            start_new_session=True,
+        )
+        self.addCleanup(lambda: stubborn.kill() if stubborn.returncode is None else None)
+        await asyncio.sleep(0.4)  # let it install the handler before anything signals it
+        (self.where / "orphaned.json").write_text(
+            json.dumps({
+                "name": "orphaned",
+                "working": {"a-tool": {"pgid": stubborn.pid, "since": gateway.started_at(stubborn.pid)}},
+            })
+        )
+        gw = self.made("orphaned")
+        gw.claim()
+        self.assertEqual(["a-tool"], gw.swept)
+        deadline = time.time() + 10
+        while gateway._still_there(stubborn.pid) and time.time() < deadline:
+            await asyncio.sleep(0.05)
+        self.assertFalse(gateway._still_there(stubborn.pid), "a deaf leftover outlived the sweep")
+
+    def test_when_the_machine_cannot_say_when_a_process_started(self):
+        """R-GW-19 — if asking fails, every record is written without a fingerprint and
+        the sweep then leaves everything alone forever. That would turn the whole orphan
+        clean-up off silently, so it must at least be a path something has walked."""
+        real = gateway.subprocess.run
+        self.addCleanup(setattr, gateway.subprocess, "run", real)
+
+        def cannot(*_args, **_kwargs):
+            raise OSError("ps is not on this machine")
+
+        gateway.subprocess.run = cannot
+        self.assertIsNone(gateway.started_at(os.getpid()))
+
     def test_when_a_process_started_is_answered_for_one_that_exists(self):
         """R-GW-16 — the fingerprint the whole guard rests on."""
         self.assertIsNotNone(gateway.started_at(os.getpid()))
