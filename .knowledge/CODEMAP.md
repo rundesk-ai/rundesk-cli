@@ -40,9 +40,11 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
 
 ## Scripts And Commands
 
-- `install.sh` — puts `rundesk` on a PATH and takes it off again (`--uninstall [--purge]`). From a
-  checkout it symlinks that checkout, so development and installed use share one layout. It refuses to
-  claim success until the installed command answers.
+- `install.sh` — puts `rundesk` on a PATH and takes it off again (`--uninstall [--purge]`). Installs
+  into `~/.rundesk`, one directory under the person's home holding rundesk and its `.venv`; from a
+  checkout it symlinks that checkout instead, so development and installed use share one layout. It
+  changes nothing else a person owns — a `PATH` that does not reach the command is reported, never
+  edited — and refuses to claim success until the installed command answers.
 - `.github/workflows/build.yml` — the gate: everything parses, the installer is valid shell, each test
   file runs, and a real install answers. Pinned to Python 3.9, the oldest a fresh macOS ships.
 - `.github/workflows/release.yml` — a `vX.Y.Z` tag publishes the release that `rundesk update` finds.

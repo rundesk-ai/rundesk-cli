@@ -31,7 +31,5 @@ answers; keeping it current and taking it away are their own contracts.
 | ✅ | R-INS-10 | Everything rundesk needs is declared, so an install can provide all of it | `everything the code imports is the standard library or declared` |
 | ✅ | R-INS-11 | An install refuses to report success while what it installed does not fit together | `an install refuses to report success while what it installed does not fit together` |
 | ✅ | R-INS-12 | A person has nothing left to do for rundesk to run once an install reports success | `an install refuses to report success until the command it installed answers`, `the command finds what was installed for it` |
-
-## Open questions
-
-- Whether an install should offer to put its directory on the path when it is not there, or only say so, is undecided.
+| ✅ | R-INS-13 | Everything an install puts on a machine lives in one directory under the person's home | `the install lives under the persons home`, `an install writes nothing outside the places it says` |
+| ✅ | R-INS-14 | An install changes nothing a person owns beyond placing the command | `an install does not change the path it only says so` |

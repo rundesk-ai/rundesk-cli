@@ -304,6 +304,39 @@ class EverythingNeededTests(unittest.TestCase):
         self.assertIn("pip check", installer_text, "nothing verifies the dependencies fit together")
         self.assertIn("do not fit together", installer_text, "a broken dependency set fails without saying why")
 
+class OneDirectoryTests(Sandbox):
+    """Everything rundesk puts on a machine lives in one place the person owns."""
+
+    def test_the_install_lives_under_the_persons_home(self):
+        # `~/.rundesk`, the way other tools of this shape do it. Somewhere a person can find,
+        # back up, and delete — not scattered through a system they did not choose.
+        declared = re.search(r'INSTALL_DIR="\$\{RUNDESK_INSTALL_DIR:-([^}]+)\}"', INSTALLER.read_text())
+        self.assertIsNotNone(declared, "the installer does not say where it installs")
+        self.assertEqual(declared.group(1), "$HOME/.rundesk")
+
+    def test_an_install_writes_nothing_outside_the_places_it_says(self):
+        # The guarantee behind being removable: if an install scattered files, uninstalling
+        # could not honestly claim to leave nothing behind.
+        before = {p.name for p in self.home.iterdir()}
+        done = self.install()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        after = {p.name for p in self.home.iterdir()}
+
+        self.assertLessEqual(
+            after - before,
+            {".rundesk", ".config", ".cache", ".local"},
+            "an install left something in the person's home it never mentioned",
+        )
+
+    def test_an_install_does_not_change_the_path_it_only_says_so(self):
+        # Deliberate, for now: editing someone's shell profile behind their back is a change
+        # to a file they own and did not ask us to touch (R-INS-9).
+        done = self.install()
+        said = done.stdout + done.stderr
+        self.assertIn("export PATH=", said, "it did not say how to reach the command")
+        for profile in (".zshrc", ".bashrc", ".bash_profile", ".profile"):
+            self.assertFalse((self.home / profile).exists(), f"the install wrote to {profile}")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

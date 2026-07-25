@@ -12,7 +12,12 @@ Standard library Python only — no packages to install, and nothing to build.
 curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash
 ```
 
-From a checkout, `./install.sh` symlinks that checkout, so development and installed
+It installs into **`~/.rundesk`** — one directory under your home, holding rundesk and
+anything it needs. Nothing else on your machine is written to, and your shell profile is
+left alone: if the command is not on your `PATH`, the installer says so and shows the line
+to add rather than editing a file you own.
+
+From a checkout, `./install.sh` symlinks that checkout instead, so development and installed
 use share one layout.
 
 ```sh
