@@ -1,0 +1,70 @@
+name: bisect
+
+# Temporary. Finds which case in a suite hangs on Linux, by running every class on its own
+# under a bound. A suite that hangs as a whole says nothing at all — the step never ends,
+# so the runner never publishes its log — and three fixes have now been aimed at it by
+# inference. This replaces inference with a list.
+#
+# Delete once the hang is found.
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: which suite to take apart
+        default: tests/test_gateway.py
+      seconds:
+        description: how long one class may take before it is called stuck
+        default: '120'
+
+jobs:
+  class-by-class:
+    name: ${{ inputs.suite }} — class by class on ${{ matrix.os }}
+    timeout-minutes: 45
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: This checkout has an install beside it, as a developer's does
+        run: mkdir -p .venv/lib/python3.13
+
+      - name: Every class, on its own, with a bound
+        run: |
+          set -uo pipefail
+          classes=$(python - "${{ inputs.suite }}" <<'FIND'
+          import re, sys
+          found = re.findall(r"^class (\w+)\(", open(sys.argv[1]).read(), re.M)
+          print(" ".join(found))
+          FIND
+          )
+          stuck=""
+          for one in $classes; do
+            python -u "${{ inputs.suite }}" "$one" > one.log 2>&1 &
+            ran=$!
+            ended=0
+            for _ in $(seq "${{ inputs.seconds }}"); do
+              kill -0 "$ran" 2>/dev/null || { ended=1; break; }
+              sleep 1
+            done
+            if [ "$ended" = 0 ]; then
+              echo "STUCK    $one"
+              stuck="$stuck $one"
+              kill -9 "$ran" 2>/dev/null || true
+            else
+              wait "$ran"; code=$?
+              [ "$code" = 0 ] && echo "ok       $one" || { echo "FAILED   $one (exit $code)"; tail -20 one.log; }
+            fi
+          done
+          echo
+          if [ -n "$stuck" ]; then
+            echo "::error::stuck:$stuck"
+            exit 1
+          fi
+          echo "nothing hung"
