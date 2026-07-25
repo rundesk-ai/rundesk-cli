@@ -35,6 +35,8 @@ gateway each, which is how one agent's schedules stay that agent's alone.
 | ✅ | R-SCH-12 | Deciding what is due asks nothing of the machine beyond the time | `deciding what is due asks nothing of the machine`, `a rare schedule is found without examining every minute` |
 | ✅ | R-SCH-13 | A schedule runs only in the gateway whose schedules it is among | `a gateway runs only its own schedules`, `schedules are asked for and changed on one gateway only` |
 | ✅ | R-SCH-14 | A gateway never runs, reports or alters another gateway's schedules | `a gateway runs only its own schedules`, `schedules are asked for and changed on one gateway only` |
+| ✅ | R-SCH-15 | What a schedule last did, and when a gateway of its name was last up, outlive the gateway that wrote them | `what each schedule last did survives a restart`, `what fell due is said after an ordinary stop and not only a crash`, `being up leaves something a later gateway can measure against`, `that a schedule fired is written down before it is run` |
+| ✅ | R-SCH-16 | A run cut short by the gateway going is told apart from one that could not start | `a run cut short by the gateway going is not called a failure to start`, `a schedule that cannot be started says so where it can be read` |
 
 ## Open questions
 

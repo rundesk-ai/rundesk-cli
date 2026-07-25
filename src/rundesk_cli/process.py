@@ -34,7 +34,6 @@ from __future__ import annotations
 import asyncio
 import codecs
 import os
-import shutil
 import signal
 import time
 from collections import deque
@@ -106,17 +105,6 @@ def located(program: str) -> bool:
     else is a second copy that can come to disagree.
     """
     return os.path.isabs(program)
-
-
-def resolve(name: str, path: str | None = None) -> str | None:
-    """Where a program actually is, looked up once so nothing has to look again.
-
-    Called when rundesk is installed rather than on every run: what is on a PATH is a
-    property of the shell that asked, and the gateway has no shell (R-PROC-2).
-    """
-    if os.path.isabs(name):
-        return name if os.path.exists(name) else None
-    return shutil.which(name, path=path)
 
 
 @dataclass

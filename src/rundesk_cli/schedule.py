@@ -24,7 +24,7 @@ from __future__ import annotations
 import calendar
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable
 
 #: The five fields a schedule is stated in, in order, and what each may say.
 FIELDS = (
@@ -224,7 +224,7 @@ def _number(said: str, low: int, high: int, name: str) -> int:
     return value
 
 
-def _matches(fields: tuple, moment: datetime, anything: tuple = ()) -> bool:
+def _matches(fields: tuple, moment: datetime, anything: tuple) -> bool:
     """Does this minute satisfy all five fields?
 
     The one place this differs from what a reader expects: when *both* the day of the
@@ -236,8 +236,10 @@ def _matches(fields: tuple, moment: datetime, anything: tuple = ()) -> bool:
     if moment.minute not in minute or moment.hour not in hour or moment.month not in month:
         return False
     # Written as `*` or not — the only honest way to ask whether a field was narrowed.
-    day_said = not (anything[2] if len(anything) > 2 else len(day) >= 31)
-    weekday_said = not (anything[4] if len(anything) > 4 else len(weekday) >= 8)
+    # There was a fallback here that counted values instead, for a caller that cannot
+    # happen: every schedule is understood before it is matched, and understanding always
+    # yields all five. It was the very heuristic the line above exists to replace.
+    day_said, weekday_said = not anything[2], not anything[4]
     on_day = moment.day in day
     on_weekday = _weekday(moment) in weekday
     if day_said and weekday_said:
@@ -276,6 +278,13 @@ def _skip(fields: tuple, found: datetime) -> datetime:
     return found + timedelta(minutes=1)
 
 
+#: How a minute is written down and read back. One place, because `_remember` writes it and
+#: `_pick_up_where_it_left_off` parses it back: change one copy and the parse quietly falls to its
+#: `except`, every schedule is taken as never having run, and they all fire again on the minute after a
+#: restart — the exact fault R-SCH-9 exists to prevent, with nothing logged to say so.
+A_MINUTE = "%Y-%m-%d %H:%M"
+
+
 def describe(one: Schedule, moment: datetime) -> str:
     """When this next runs, said the way a person would ask it."""
     following = one.next_after(moment)
@@ -283,4 +292,4 @@ def describe(one: Schedule, moment: datetime) -> str:
         return "off"
     if following is None:
         return "never"
-    return following.strftime("%Y-%m-%d %H:%M")
+    return following.strftime(A_MINUTE)

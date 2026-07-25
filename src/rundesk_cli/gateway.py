@@ -41,6 +41,7 @@ from typing import Callable, Sequence
 
 from rundesk_cli import ROOT, __version__
 from rundesk_cli import process
+from rundesk_cli import schedule
 
 #: The gateway that exists before there are agents to name one after.
 DEFAULT_NAME = "gateway"
@@ -69,16 +70,6 @@ WRITTEN_AS = "%(asctime)s %(levelname)-7s %(message)s"
 #: when something happened at three in the morning is the part just before it.
 LOG_BYTES = 2 * 1024 * 1024
 LOG_KEEP = 3
-
-
-def write_schedules(name: str, keeping: list, where: Path | None = None) -> None:
-    """Write this gateway's schedules down, whole and in one move.
-
-    The gateway reads this file every time it looks at the clock, so a change takes
-    effect within a tick without anything being restarted — and a half-written file
-    would be read as a gateway with no schedules at all.
-    """
-    _written_whole(schedules_path(name, where), json.dumps(keeping, indent=2) + "\n")
 
 
 @contextlib.contextmanager
@@ -242,8 +233,6 @@ def scheduled(name: str = DEFAULT_NAME, where: Path | None = None):
     Nothing else's, ever: the name is the file, and a name that would reach outside the
     directory it belongs in was refused long before this (R-GW-20).
     """
-    from rundesk_cli import schedule
-
     # Read once, understood here: the same file read two ways is one rule stated twice.
     return schedule.read(written_schedules(name, where))
 
@@ -311,10 +300,20 @@ def fitness(root: Path | None = None) -> str | None:
 
 
 def _still_there(pgid: int) -> bool:
+    """Is anything left in this process group?
+
+    Only *gone* counts as gone. Being unable to reach a group is not the same as there
+    being no group, and reading them alike here was the same fault `process` documents at
+    length on its own side: a group we may not signal was reported as absent, so the sweep
+    passed over it — and the record naming it was then deleted as having nothing left to
+    find (R-GW-16). Anything else going wrong is not evidence of absence either.
+    """
     try:
         os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False  # the group is empty: everything in it has gone
     except OSError:
-        return False
+        return True   # unreachable, or unanswerable — not the same as not there
     return True
 
 
@@ -712,7 +711,7 @@ class Gateway:
         self._outcomes = what_was_scheduled(self.name, self.schedules)
         for name, did in self._outcomes.items():
             try:
-                self._ran[name] = datetime.strptime(did["at"], "%Y-%m-%d %H:%M")
+                self._ran[name] = datetime.strptime(did["at"], schedule.A_MINUTE)
             except (KeyError, TypeError, ValueError):
                 continue
 
@@ -724,13 +723,11 @@ class Gateway:
         an owner cannot tell from a schedule that never worked, so the count is written
         down even though nothing is done about it.
         """
-        from rundesk_cli import schedule
-
         since = last_seen(self.name, self.schedules)
         if since is None:
             return
         was_down_since = datetime.fromtimestamp(since)
-        for one, _ in [(one, None) for one in scheduled(self.name, self.schedules)[0]]:
+        for one in scheduled(self.name, self.schedules)[0]:
             if not one.enabled:
                 continue
             missed = schedule.passed_over(one, was_down_since, datetime.now())
@@ -971,8 +968,6 @@ class Gateway:
         a task nobody awaits, so an exception in it would simply end the ticking and
         every schedule would quietly stop running.
         """
-        from rundesk_cli import schedule
-
         await self._over_and_over(
             TICK_SECONDS, lambda: self._fire(schedule, datetime.now()),
             "could not look at the clock: %s",
@@ -1020,6 +1015,16 @@ class Gateway:
             return
         except Stopping:
             return
+        except asyncio.CancelledError:
+            # Not a failure to start, and told apart from one before the catch-all below
+            # can call it that. This is what a run in flight *is* when the gateway goes:
+            # `serve` returns and the loop cancels whatever is left, so a schedule that
+            # started perfectly well arrived here — and was written down as 'could not
+            # start', with no reason, one line after the log said it had started. A false
+            # line in the one account that outlives the gateway (R-GW-18), and in the file
+            # that is meant to say truthfully what each schedule last did.
+            self._remember(one.name, "interrupted", fired)
+            raise
         except BaseException as would_not_start:  # noqa: BLE001 — see below
             # Nobody awaits this task, so anything raised here is raised nowhere at all:
             # asyncio reports it against the garbage-collected task, on stderr, which for
@@ -1057,7 +1062,7 @@ class Gateway:
         so every schedule due in between was passed over as already done.
         """
         self._outcomes[name] = {
-            "at": (at or datetime.now()).strftime("%Y-%m-%d %H:%M"), "outcome": outcome,
+            "at": (at or datetime.now()).strftime(schedule.A_MINUTE), "outcome": outcome,
         }
         try:
             _written_whole(ran_path(self.name, self.schedules), json.dumps(self._outcomes, indent=2))

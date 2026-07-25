@@ -7,10 +7,11 @@ screen, stable, PII-free.*
 
 `rundesk` is the command line for a lightweight, provider-agnostic multi-agent gateway: a person runs a
 small team of AI coding agents on their own machine and talks to them from a chat app. It is **standard
-library Python**, and it is built from the outside in. Two layers are here: this copy of rundesk on a
-machine, and the **gateway** — the long-lived process an agent will work inside, one per name, kept up by
-the machine itself and owning every program it starts. The agents are not here yet; the verbs that will
-reach them are registered and say so plainly until they land.
+library Python**, and it is built from the outside in. Three layers are here: this copy of rundesk on a
+machine; the **gateway** — the long-lived process an agent will work inside, one per name, kept up by the
+machine itself and owning every program it starts; and **schedules**, which turn a stated time into work
+that gateway starts and owns like any other. The agents are not here yet; the verbs that will reach them
+are registered and say so plainly until they land.
 
 ## Why it exists
 
@@ -34,8 +35,9 @@ supervises nothing itself; it hands that to what the machine already has.
 
 - **Active areas:** the command surface and how it describes itself; install, update and uninstall; which
   version this install is on, and which has been published; the gateway — starting one, keeping it up,
-  saying what it is doing, and ending everything it started when it goes; and the programs it runs, which
-  are ended on silence rather than on a clock, because a session may legitimately take hours.
+  saying what it is doing, and ending everything it started when it goes; the programs it runs, which are
+  ended on silence rather than on a clock, because a session may legitimately take hours; and schedules,
+  which are per gateway so that an agent's are its own, are never run late and never overlap.
 - **Out of scope:** agents, provider brains, chat channels, turns and transcripts. Those verbs are
   registered and answer "coming soon" until each is built. rundesk also does not supervise: keeping a
   gateway up is the machine's, and writing our own would be the largest thing here that nobody asked for.

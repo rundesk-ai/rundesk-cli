@@ -16,25 +16,59 @@ self-hosted tool, not something sold; there is no revenue model.
 
 ## The platform
 
+**Handing one over, once.** You do this a single time per assistant; from then on the machine keeps it
+running and you only ever ask it questions.
+
+```mermaid
+flowchart TB
+  You(["You, once"]) -->|"rundesk start agent-one"| Hand["rundesk writes a job<br/>describing what to run"]
+  Hand --> LD{{"launchd — the supervisor<br/>your machine already has"}}
+  LD -->|"starts it now, again at every login,<br/>again after a reboot, again if it dies"| GW
+  GW["The gateway for agent-one<br/>one per name, running until told to stop"]
+  GW -.->|"refuses to run: name taken,<br/>or this install no longer fits"| Quiet["Ends cleanly, so the machine<br/>stops rather than retrying forever"]
+```
+
+**What it then does, unattended.** This is the loop that runs without you, and the ownership that makes
+stopping safe.
+
+```mermaid
+flowchart TB
+  GW["The gateway for agent-one"] -->|"looks at the clock"| Due{"Anything due<br/>this minute?"}
+  Sch[("agent-one's own schedules<br/>— never another's")] --> Due
+  Due -->|"no"| GW
+  Due -->|"already running"| Skip["Skipped, and said so"]
+  Due -->|"yes"| Run
+
+  Soon["An assistant with a turn to run"]:::soon -.->|"later, the same way"| Run
+
+  Run["Started in a process group of its own"] --> Own["The gateway owns it:<br/>the program and every tool it spawns"]
+  Own -->|"finished · failed · went silent ·<br/>ran too long"| Log[("This gateway's log,<br/>which outlives it")]
+  Skip --> Log
+
+  Stop(["You: rundesk stop agent-one"]) --> End["Ends all of it before going,<br/>and leaves nothing running"]
+  Own --> End
+
+  classDef soon stroke-dasharray:5 5
+```
+
+**Asking it what is happening.** `status` and `logs` ask the gateways themselves rather than the
+supervisor — which is how they can show a gateway that is up but stuck, something launchd cannot tell you.
+
 ```mermaid
 flowchart LR
-  You["You"] --> Cmd["rundesk — the one command"]
-  subgraph Living["This copy of rundesk"]
-    Cmd --> Ver["Version — what you are on"]
-    Cmd --> Upd["Update — move to what is published"]
-    Cmd --> Ins["Install / uninstall"]
-  end
-  subgraph Running["What stays running"]
-    Cmd --> GwCmd["Start, stop, restart, status, logs"]
-    GwCmd --> Mach["Your machine keeps it up"]
-    Mach --> Gw["A gateway — one per name"]
-    Gw --> Prog["The programs it runs"]
-  end
-  subgraph Later["Registered, and coming"]
-    Cmd --> Agents["Agents, new, doctor, run, replay"]
-  end
-  Ver --> GH["GitHub Releases"]
-  Upd --> GH
+  You(["You"]) -->|"rundesk status · logs · schedules"| GW["Each gateway, asked directly"]
+  GW --> Ans["Running, stopped, or up-but-stuck<br/>what each is working on<br/>what its schedules last did"]
+```
+
+**Keeping this copy current.** Separate from all of the above: it is about the command itself, not what
+it runs.
+
+```mermaid
+flowchart LR
+  Inst["install.sh"] -->|"one directory, one symlink"| Cmd["the rundesk command"]
+  Cmd -->|"rundesk version --check"| GH[("GitHub Releases")]
+  Cmd -->|"rundesk update"| GH
+  GH -->|"newest published version"| Cmd
 ```
 
 ## How it works
@@ -54,6 +88,10 @@ flowchart LR
 - **The programs a gateway runs** — later, the assistants' own tools. A gateway owns everything it starts:
   it ends all of it when it goes, never runs the same piece of work twice at once, and ends work an
   earlier gateway left behind.
+- **Schedules** — work that starts itself, because the time came: you state a time in the ordinary way and
+  what to run, and the gateway starts it and owns it like anything else. Each gateway has its own set, so
+  later each assistant's schedules are its own and never another's to run. You can turn one off and keep
+  it, rather than deleting it to stop it.
 - **Status and logs** — what is running, what each one is working on, and what it has been saying. A
   gateway that is up but stuck is shown as stuck, which the machine on its own cannot tell you.
 - **Agents, new, doctor, run, replay** — the assistants themselves. Registered and answering "coming soon"
@@ -80,8 +118,12 @@ flowchart LR
 - **Long work is left alone; stuck work is not** — a session may take hours, so nothing is ended for taking
   its time. What is ended is a program that has gone silent, or one still going long past when any real
   work would have finished.
+- **A missed time is not made up later** — whatever fell due while nothing was running is not run on the
+  way back up, because five of them starting at once is worse than none. You are told how many were
+  missed, since a schedule that quietly did nothing looks exactly like one that never worked.
 - **What happened is written down** — every gateway keeps its own log, and it outlives the gateway, so
-  something that went wrong overnight can still be explained in the morning.
+  something that went wrong overnight can still be explained in the morning. What each schedule last did
+  outlives it too, and survives stopping and starting the gateway.
 
 ---
 *Editing this file? Follow the standard first: [`guides/docs-overview.md`](./guides/docs-overview.md).*

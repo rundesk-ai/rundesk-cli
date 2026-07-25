@@ -20,7 +20,24 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
   reports it, the updater compares against it, and a release tag is expected to match it. Nothing else
   holds a copy. `ROOT` is the same idea for *where* this install is, resolved rather than assumed.
 
-## Backend / Services
+### What is written down, and where (4 directories)
+
+No database. Everything persisted is a small JSON file written whole and renamed into place, so a reader
+arriving mid-write finds the old one rather than half of the new one. Each directory is overridable by an
+environment variable, and every one of them is carried in the launchd job — a gateway reading somewhere
+other than the command that configured it is the fault that makes a schedule silently never run.
+
+| Where | Override | Holds | Lifetime |
+|---|---|---|---|
+| `~/.rundesk/run/` | `RUNDESK_RUN_DIR` | `<name>.lock` (liveness, held open) · `<name>.json` (what a gateway is doing now) | **State** — cleared when a gateway stops (R-GW-12) |
+| `~/.rundesk/logs/` | `RUNDESK_LOG_DIR` | `<name>.log` (rotated) | **History** — outlives the gateway (R-GW-18) |
+| `~/.rundesk/schedules/` | `RUNDESK_SCHEDULES_DIR` | `<name>.json` (what is scheduled) · `<name>.ran.json` (when each last fired and what became of it) · `<name>.seen.json` (when a gateway of this name was last up) · `<name>.changing` (held while a change is made, so two commands cannot lose one) | **History**, beside what it describes |
+| `~/Library/LaunchAgents/` | `RUNDESK_JOBS_DIR` | `ai.rundesk.<name>.plist` | The machine's, written by `supervisor.py` |
+
+The split is the point: stopping a gateway must clear what it is *doing* without clearing what it *did*.
+Putting the schedule history with the run state erased it on every ordinary restart.
+
+## Backend / Services (src/rundesk_cli/ — 6 modules)
 
 - `src/rundesk_cli/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -49,13 +66,23 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
 
 - No UI. The command line is the whole surface.
 
-## Tests
+## Tests (tests/ — 7 files, ~355 cases)
 
-- `tests/` — `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network.
-  `test_cli.py` walks every verb off the parser rather than a restated list, so a command added and
-  wired nowhere is caught here. `test_updater.py` covers the three outcomes — behind, current, and
-  could-not-ask — and that an archive cannot write outside where it is unpacked. `test_process.py` and
-  `test_gateway.py` drive real processes and real signals, with the waits turned down.
+`unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
+provider. One file per contract, named for it:
+
+| File | Cases | Covers |
+|---|---|---|
+| `test_gateway.py` | 90 | `platform-gateway` — real processes, real signals, waits turned down |
+| `test_cli.py` | 64 | `command-surface` — walks every verb off the parser, so one wired nowhere is caught |
+| `test_process.py` | 54 | `platform-process` — real process groups, grandchildren, drains and ceilings |
+| `test_updater.py` | 43 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
+| `test_install.py` | 39 | `lifecycle-install` — drives the real `install.sh` in a sandboxed home |
+| `test_supervisor.py` | 38 | the launchd job — a fake `launchctl`, so it runs where there is none |
+| `test_schedule.py` | 28 | `platform-schedule` — pure time arithmetic, the clock passed in |
+
+Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and
+`.knowledge/scripts/check-evidence` fails the build when a row names one that does not exist.
 
 ## The layers, and which way they point
 
@@ -72,8 +99,10 @@ no supervisor anywhere near it.
   checkout it symlinks that checkout instead, so development and installed use share one layout. It
   changes nothing else a person owns — a `PATH` that does not reach the command is reported, never
   edited — and refuses to claim success until the installed command answers.
-- `.github/workflows/build.yml` — the gate: everything parses, the installer is valid shell, each test
-  file runs, and a real install answers. Pinned to Python 3.9, the oldest a fresh macOS ships.
+- `.github/workflows/build.yml` — the gate, in four named jobs so a red X says what broke: the knowledge
+  base (docs, contracts, evidence); the tests, one step per contract, across macOS and Ubuntu on Python
+  3.9 (the oldest a fresh macOS ships) and 3.13; installing this checkout, using it and removing it; and
+  installing the published release on a bare machine.
 - `.github/workflows/release.yml` — a `vX.Y.Z` tag publishes the release that `rundesk update` finds.
 
 ## Integrations / Jobs

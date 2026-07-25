@@ -45,6 +45,7 @@ rundesk stop [name]                 # stand it down
 rundesk restart [name]              # cycle one, leaving the others alone
 rundesk status                      # every gateway, and what each is working on
 rundesk logs [name] [-n]            # what one has been saying
+rundesk schedules [...]             # work that starts itself — see below
 ```
 
 Leave the name out and it means the one gateway there is today — and every one of
@@ -59,10 +60,44 @@ cleanly so the machine does not spend the rest of the day restarting it.
 supervisor cannot: up, and not going round.
 
 ```
-gateway              running kept up, pid 4192, version 0.1.1, 2 in flight (a-conversation, another)
-agent-two            WEDGED — not going round kept up, pid 4210, version 0.1.1, idle
-agent-three          not running kept up
+GATEWAY  STATE    PID    UPTIME  SUPERVISED  WORK
+gateway  RUNNING  4192   2h14m   yes         a-conversation, another
+agent-2  WEDGED   4210   6h02m   yes         idle
+agent-3  STOPPED  -      -       yes         -
 ```
+
+`SUPERVISED` is asked of the machine, not read off a file: a job description sitting in
+a directory is not a job launchd is keeping, and the two come apart.
+
+### Schedules
+
+Work that starts itself, because the time came. Every gateway has its own — so when there
+are agents, each one's schedules are its own and never another's to run.
+
+```sh
+rundesk schedules                                        # what is scheduled, and what it last did
+rundesk schedules add <name> --when <cron> --run <cmd…>  # state one
+rundesk schedules remove <name>                          # take it away
+rundesk schedules on|off <name>                          # keep it, but stop it running
+rundesk schedules --gateway <name> …                     # whose schedules
+```
+
+```
+SCHEDULE  STATE  WHEN         NEXT              LAST RUN          OUTCOME
+tidy      ON     */5 * * * *  2026-07-25 10:45  2026-07-25 10:40  finished
+nightly   OFF    0 3 * * *    off               2026-07-24 03:00  finished
+```
+
+- **Nothing is run late.** A time that passed while nothing was running is gone — running
+  five at once on the way up is worse than not running them — but the gap is written to
+  the log, because silence is indistinguishable from a schedule that never worked.
+- **Nothing overlaps.** A schedule that is still running when it next falls due is skipped
+  and said so, using the same guard that stops any work running twice.
+- **It runs once for the minute it is due**, however often the clock is examined — across a
+  restart, and across the hour a clock goes back.
+- **What it names is refused where it is written.** A gateway runs with almost no `PATH`,
+  so a program named rather than located is refused by `add` rather than discovered at
+  three in the morning.
 
 Everything else — `agents`, `new`, `doctor`, `run`, `replay` — is registered and says
 **coming soon**. The whole shape is visible from the start; a command that is not built
@@ -103,6 +138,7 @@ No test runner to install, and nothing reaches the network or runs a provider:
 python3 tests/test_process.py      # a program rundesk runs, and keeping hold of it
 python3 tests/test_gateway.py      # one gateway per name, and what it takes with it
 python3 tests/test_supervisor.py   # handing a gateway to the machine that keeps it up
+python3 tests/test_schedule.py     # work that starts itself, because the time came
 python3 tests/test_cli.py          # every verb, and what it honestly refuses
 python3 tests/test_updater.py      # which version this is, and moving between them
 python3 tests/test_install.py      # putting it on a machine, and taking it off

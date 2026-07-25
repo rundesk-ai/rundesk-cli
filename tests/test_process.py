@@ -122,16 +122,6 @@ class FindingTheProgram(Quickened):
         with self.assertRaises(process.NotAbsolute):
             await process.run([])
 
-    def test_a_program_is_located_once_so_nothing_looks_again(self):
-        """R-PROC-2"""
-        self.assertEqual(PY, process.resolve(PY))
-        self.assertIsNotNone(process.resolve("python3"))
-
-    def test_a_program_that_is_not_there_resolves_to_nothing(self):
-        """R-PROC-2"""
-        self.assertIsNone(process.resolve("rundesk-no-such-program"))
-        self.assertIsNone(process.resolve("/nonexistent/rundesk-no-such-program"))
-
 
 class WhatAProgramSays(Quickened):
     async def test_everything_it_writes_out_is_passed_on(self):
@@ -785,10 +775,6 @@ class TheAwkwardCases(Quickened):
         self.assertFalse(program.alive)
         self.assertIsNone(program.pid)
 
-    async def test_ending_nothing_at_all_is_allowed(self):
-        """R-PROC-11 — the gateway stopping with no programs running is the ordinary case."""
-        await process.end_all([])
-
     async def test_a_handler_that_raises_does_not_leave_the_program_running(self):
         """R-PROC-11 — the caller's own line handler failing is an ordinary thing: it is
         writing each line on to somewhere that can refuse. Whatever goes wrong in here,
@@ -863,7 +849,10 @@ class TheAwkwardCases(Quickened):
 
         self.addCleanup(setattr, process.os, "killpg", real)
         process.os.killpg = vanished
-        await program.end()  # returns rather than escalating against nothing
+        # Returns rather than escalating against nothing — and says the group is gone,
+        # which is what a shutdown then decides on. Asserting only that it returned let
+        # this pass whatever it answered.
+        self.assertTrue(await program.end(), "a group that had already gone was not reported gone")
         process.os.killpg = real
         real(pid, signal.SIGKILL)
 

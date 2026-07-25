@@ -266,9 +266,6 @@ class FakeGateways:
     def written_schedules(self, name):
         return list(self._written_schedules.get(name, []))
 
-    def write_schedules(self, name, keeping):
-        self._written_schedules[name] = list(keeping)
-
     @contextlib.contextmanager
     def changing_schedules(self, name):
         """Read, change, write back — the shape the real one holds a lock across."""

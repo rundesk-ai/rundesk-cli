@@ -27,7 +27,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable
 
 from rundesk_cli import ROOT, gateway
 
@@ -370,8 +370,3 @@ def take_all_back(
         job_path(name, where).unlink(missing_ok=True)
         taken.append(name)
     return taken, stubborn
-
-
-def as_argv(name: str, root: Path | None = None) -> Sequence[str]:
-    """What the job runs — kept here so a test can check it without reading a plist."""
-    return describe(name, root)["ProgramArguments"]

@@ -1169,6 +1169,38 @@ class WorkThatStartsItself(WithARunDirectory):
                          "a schedule that could not start looks like one that never came due")
         self.assertIn("could not be started", gateway.log_path(gw.name, self.logs).read_text())
 
+    async def test_a_run_cut_short_by_the_gateway_going_is_not_called_a_failure_to_start(self):
+        """R-SCH-8, R-GW-18 — a catch-all that does not let cancellation past first.
+
+        A run in flight when the gateway goes is cancelled by the loop that was running
+        it. Swallowed by the handler written for a program that could not be started, it
+        was written down as 'could not start' with no reason at all — one line after the
+        log said it had started. A false line in the one account that outlives the gateway,
+        in the file that exists to say truthfully what each schedule last did.
+        """
+        gw = self.made()
+        gw.claim()
+        self.schedules_for(gw.name, {"name": "long", "when": "* * * * *", "run": FOREVER})
+        fired = datetime(2026, 3, 1, 9, 30)
+        gw._fire(self.schedule, fired)
+        await self._holding(gw)
+        # Cancelling the task the schedule runs in is exactly what the loop does to
+        # whatever is left when `serve` returns and the gateway's process exits.
+        running = next(
+            (task for task in asyncio.all_tasks()
+             if task is not asyncio.current_task() and "_run_scheduled" in repr(task)),
+            None,
+        )
+        self.assertIsNotNone(running, "the schedule is not running in a task of its own")
+        running.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(running, 15)
+        said = gateway.what_was_scheduled(gw.name, self.schedules)
+        self.assertEqual("interrupted", said["long"]["outcome"],
+                         "a run cut short by the gateway going was called a failure to start")
+        self.assertNotIn("could not be started", gateway.log_path(gw.name, self.logs).read_text())
+        await process.end_all(list(gw.running.values()))
+
     async def test_a_gateway_can_start_work_with_no_ceiling_on_how_long_it_runs(self):
         """R-PROC-13 — a program may be allowed to run without any ceiling, and the
         gateway is the only thing that starts one. Unable to say so, everything it ran was

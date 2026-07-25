@@ -53,11 +53,13 @@ check_install_dir() {
   dir="$INSTALL_DIR"
   [[ -n "$dir" ]] || die "RUNDESK_INSTALL_DIR is empty."
   [[ "$dir" == /* ]] || die "RUNDESK_INSTALL_DIR must be an absolute path; got '$dir'."
+  # `/` first: it ends in a slash, so the next arm would otherwise catch it and refuse
+  # the root of the filesystem by complaining about punctuation.
+  [[ "$dir" != "/" ]] || die "refusing to install into '/'."
   case "$dir" in
     */) die "RUNDESK_INSTALL_DIR must not end in a slash; got '$dir'." ;;
     */.|*/..) die "RUNDESK_INSTALL_DIR must name a directory, not '$dir'." ;;
   esac
-  [[ "$dir" != "/" ]] || die "refusing to install into '/'."
   [[ "$dir" != "${HOME%/}" ]] ||
     die "refusing to install into '$dir' — that is your home directory, not one program's."
   # /Users/you/.rundesk has two separators and is fine; /Users and /opt have none and are not.
