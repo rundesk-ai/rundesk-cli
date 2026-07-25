@@ -677,12 +677,15 @@ class FakeMachine:
     class NotOurs(Exception):
         pass
 
+    class Unsure(Exception):
+        pass
+
     class Spoke:
         def __init__(self, ok, said=""):
             self.ok, self.said = ok, said
 
     def __init__(self, jobs=(), missing=False, refuses=False, foreign=(), refuse_acts=False,
-                 stubborn=()):
+                 stubborn=(), uncertain=()):
         self.jobs = list(jobs)
         self.missing, self.refuses, self.foreign = missing, refuses, list(foreign)
         #: The supervisor saying no without raising — a job present but not loaded.
@@ -690,6 +693,7 @@ class FakeMachine:
         #: Gateways whose job the machine will not let go of. The real `take_back` keeps
         #: the description in that case: it is the only thing that finds them again.
         self.stubborn = set(stubborn)
+        self.uncertain = set(uncertain)
         self.did = []
 
     def _check(self, name):
@@ -714,6 +718,8 @@ class FakeMachine:
         return name in self.jobs
 
     def loaded(self, name):
+        if name in self.uncertain:
+            raise self.Unsure("the machine did not answer")
         return not self.missing and name in self.jobs
 
     def install(self, name, run=None, logs=None, schedules=None, agents=None):
@@ -1114,6 +1120,16 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
         self.assertIn("ava", said)
         self.assertIn("RUNNING", said)
 
+    def test_the_name_column_holds_the_name_and_nothing_else(self):
+        """R-AGW-8 — the table is read by things other than people: CI waits for a gateway
+        to come up by matching the name at the start of its row. A marker put inside that
+        cell made the column stop holding a name, and a running gateway was reported as one
+        that never started — by the one step that proves an installed rundesk works."""
+        gateways = FakeGateways(standing=[FakeGateways.Standing("probe", running=True, pid=9)])
+        _, said = drive(["agents"], gateways, agents=FakeAgents())
+        self.assertRegex(said, r"(?m)^probe +RUNNING",
+                         "the name column holds something other than the name")
+
     def test_a_gateway_with_no_agent_is_listed_and_marked(self):
         """R-AGW-8 — still running, still holding a name. Leaving it off the one command
         that says what this install has is the worst of both."""
@@ -1309,21 +1325,40 @@ class WhatEachAgentIsDoing(unittest.TestCase):
         _, said = drive(["agents"], gateways)
         self.assertIn("WEDGED", said)
 
-    def test_status_shows_a_gateway_the_machine_keeps_but_which_is_not_running(self):
-        """R-GW-10 — the machine believing it has one is not the same as one being there."""
-        _, said = drive(["agents"], FakeGateways(), FakeMachine(jobs=["agent-one"]))
-        self.assertIn("agent-one", said)
-        self.assertIn("STOPPED", said)
+    def test_a_loaded_job_with_no_process_reports_both_facts(self):
+        """R-GW-10, R-GW-34 — a loaded job is not a running gateway."""
+        _, said = drive(["agents"], FakeGateways(), FakeMachine(jobs=["agent-one"]),
+                        agents=FakeAgents(made=["agent-one"]))
+        self.assertRegex(said, r"agent-one\s+STOPPED.*LOADED")
+        self.assertIn("LAUNCHD JOB", said)
+        self.assertNotIn("SUPERVISED", said)
 
-    def test_status_says_a_gateway_is_not_supervised_when_the_machine_dropped_it(self):
-        """R-GW-9 — a job description in a directory is not a job being kept, and they
-        come apart exactly when something has gone wrong."""
-        gateways = FakeGateways(standing=[FakeGateways.Standing("gateway", running=False)])
-        machine = FakeMachine(jobs=["gateway"])
-        machine.loaded = lambda name: False   # the supervisor no longer has it
-        _, said = drive(["agents"], gateways, machine)
-        self.assertIn("STOPPED", said)
-        self.assertIn("no", said, "it did not say the machine had stopped keeping it")
+    def test_a_running_process_with_no_loaded_job_reports_both_facts(self):
+        """R-GW-9, R-GW-34 — a running gateway is not a loaded job."""
+        gateways = FakeGateways(standing=[
+            FakeGateways.Standing("agent-one", running=True, pid=7, version="0.1.1")])
+        _, said = drive(["agents"], gateways, FakeMachine(),
+                        agents=FakeAgents(made=["agent-one"]))
+        self.assertRegex(said, r"agent-one\s+RUNNING\s+7.*NOT LOADED")
+        self.assertNotIn("SUPERVISED", said)
+
+    def test_an_unanswered_job_query_is_reported_as_unknown(self):
+        """R-GW-34 — unknown is a named state, never a punctuation mark."""
+        machine = FakeMachine(jobs=["agent-one"], uncertain=["agent-one"])
+        _, said = drive(["agents"], FakeGateways(), machine,
+                        agents=FakeAgents(made=["agent-one"]))
+        self.assertRegex(said, r"agent-one\s+STOPPED.*UNKNOWN")
+        self.assertNotIn("?", said)
+
+    def test_a_loaded_same_name_job_does_not_claim_the_gateway_process(self):
+        """R-GW-34 — the machine cannot identify the PID its same-name job owns."""
+        gateways = FakeGateways(standing=[
+            FakeGateways.Standing("agent-one", running=True, pid=7, version="0.1.1")])
+        _, said = drive(["agents"], gateways, FakeMachine(jobs=["agent-one"]),
+                        agents=FakeAgents(made=["agent-one"]))
+        self.assertRegex(said, r"agent-one\s+RUNNING\s+7.*LOADED")
+        self.assertIn("LAUNCHD JOB", said)
+        self.assertNotIn("SUPERVISED", said)
 
 
 class WhatAGatewayRunsOnItsOwn(unittest.TestCase):

@@ -896,7 +896,12 @@ def cmd_agents(args: argparse.Namespace, gateways, machine, agents) -> int:
         # a manually started same-name process can coexist with a loaded dormant job.
         job = "LOADED" if kept else ("UNKNOWN" if kept is None else "NOT LOADED")
         rows.append((
-            name + ("" if agents.exists(name) else " *"),
+            # The name, and only the name. A marker in this cell makes the column stop
+            # holding what it says it holds — anything reading the table by name stops
+            # finding one, which is exactly how CI came to report a running gateway as
+            # never started. Which of them have no agent is said under the table, where
+            # there is room to say what to do about it.
+            name,
             ("WEDGED" if it.stale else "RUNNING") if it.running else "STOPPED",
             str(it.pid) if it.running else "-",
             _how_long(it.started) if it.running else "-",
@@ -907,8 +912,8 @@ def cmd_agents(args: argparse.Namespace, gateways, machine, agents) -> int:
     _as_table(("AGENT", "STATE", "PID", "UPTIME", "LAUNCHD JOB", "VERSION", "WORK"), rows)
     if orphaned:
         print()
-        print(f"* no agent yet — running since before there were any: {', '.join(orphaned)}")
-        print(f"  give it one:  rundesk add {orphaned[0]}")
+        print(f"no agent yet — running since before there were any: {', '.join(orphaned)}")
+        print(f"  give one an agent:  rundesk add {orphaned[0]}")
     return 0
 
 
