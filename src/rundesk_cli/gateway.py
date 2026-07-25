@@ -43,6 +43,10 @@ DEFAULT_NAME = "gateway"
 #: up but wedged — a distinction no supervisor makes for you.
 BEAT_SECONDS = 15.0
 
+#: How long work left by a gateway that died gets to go on its own before it is taken.
+#: Short: nobody is waiting on what it was doing, and a gateway is starting up behind it.
+ORPHAN_GRACE_SECONDS = 0.5
+
 #: How long stopping may take before the gateway stops waiting for what it is running and
 #: goes anyway (R-GW-7). Under what the supervisor allows: launchd sends SIGTERM, waits,
 #: and then sends SIGKILL — and being killed is how children get left behind.
@@ -98,6 +102,50 @@ def fitness(root: Path | None = None) -> str | None:
         f"what rundesk needs was installed for {', '.join(built)}, and this is {mine}. "
         "Run the installer again to rebuild it."
     )
+
+
+def _still_there(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _sweep_predecessor(record: Path) -> list[str]:
+    """End whatever the last gateway of this name was still running, and say what it was.
+
+    Called once, at the moment a gateway takes the name — so by definition the gateway
+    that wrote this record no longer holds the lock, and anything it was running is
+    running with nobody owning it. Two things follow from ending it here rather than
+    leaving it: the same work cannot end up running twice over once the new gateway is
+    asked for it (R-GW-15), and nothing rundesk started outlives rundesk (R-GW-16).
+
+    A recorded group that has already gone is the ordinary case and costs nothing. A
+    number that has since been given to something else is the risk this carries; it is
+    narrow — the group leader must have exited, been reaped, and had its exact number
+    reissued to another leader — and it is named in the contract's open questions.
+    """
+    try:
+        left = json.loads(record.read_text())
+    except (OSError, ValueError):
+        return []
+    if not isinstance(left, dict) or not isinstance(left.get("working"), dict):
+        return []
+    swept = []
+    for name, pgid in left["working"].items():
+        if not isinstance(pgid, int) or not _still_there(pgid):
+            continue
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(pgid, sig)
+            except OSError:
+                break
+            time.sleep(ORPHAN_GRACE_SECONDS)
+            if not _still_there(pgid):
+                break
+        swept.append(name)
+    return swept
 
 
 @dataclass
@@ -210,6 +258,8 @@ class Gateway:
         The lock is taken before anything else is written, so a second gateway cannot get
         far enough to overwrite the first one's record.
         """
+        if self._lock is not None:
+            return  # this gateway already holds its own name; asking twice is not a clash
         unfit = fitness(self.root)
         if unfit:
             raise Unfit(unfit)
@@ -225,7 +275,17 @@ class Gateway:
                 ) from err
             raise
         self._lock = handle
-        self._record()
+        # Whatever the last gateway of this name was running is, by definition, running
+        # with nobody owning it: we now hold the lock it held. Taken before anything of
+        # ours starts, so the same work can never be running twice over (R-GW-15, R-GW-16).
+        self.swept = _sweep_predecessor(_record_path(self.name, self.where))
+        try:
+            self._record()
+        except OSError:
+            # The lock is only ours while this object lives. Leaving it held by a claim
+            # that did not finish would make the name unusable to a retry of itself.
+            self.release()
+            raise
 
     def release(self) -> None:
         """Leave nothing of this gateway behind for the next start to find (R-GW-12)."""
@@ -237,21 +297,35 @@ class Gateway:
             self._lock = None
 
     def _record(self) -> None:
-        """What this gateway says about itself, for anything asking from outside."""
+        """What this gateway says about itself, for anything asking from outside.
+
+        Written whole and moved into place rather than written over what is there: a
+        reader asking while a beat is landing would otherwise find half a record, and
+        report a healthy gateway as one that cannot say what version it is.
+
+        Carries what is in flight, so that a gateway which dies leaves behind the one
+        thing its successor needs — the names and process groups of work nobody is left
+        owning (R-GW-16).
+        """
         now = time.time()
-        _record_path(self.name, self.where).write_text(
-            json.dumps(
-                {
-                    "name": self.name,
-                    "pid": os.getpid(),
-                    "version": __version__,
-                    "started": getattr(self, "_started", now),
-                    "beat": now,
-                }
-            )
-        )
         if not hasattr(self, "_started"):
             self._started = now
+        said = {
+            "name": self.name,
+            "pid": os.getpid(),
+            "version": __version__,
+            "started": self._started,
+            "beat": now,
+            "working": {
+                name: program.pid
+                for name, program in self.running.items()
+                if program.pid is not None
+            },
+        }
+        target = _record_path(self.name, self.where)
+        beside = target.with_suffix(f".{os.getpid()}.writing")
+        beside.write_text(json.dumps(said))
+        os.replace(beside, target)
 
     # -- what it runs -------------------------------------------------------------
 
@@ -286,9 +360,11 @@ class Gateway:
         self.running[held] = program
         try:
             await program.start()
+            self._say()  # now it has a process group worth recording
             return await program.wait(on_line)
         finally:
             self.running.pop(held, None)
+            self._say()
 
     # -- being up, and going away --------------------------------------------------
 
@@ -301,7 +377,7 @@ class Gateway:
         without leaving anything running.
         """
         self.claim()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self.ask_to_stop)
         beating = asyncio.ensure_future(self._beat())
@@ -309,10 +385,17 @@ class Gateway:
             await self._stopped.wait()
         finally:
             beating.cancel()
+            # The handlers stay installed across `_go()`. Removing them here restores the
+            # system default, which for these two signals is *terminate* — so a second
+            # signal arriving during the shutdown window would kill the gateway outright,
+            # orphaning every program it was in the middle of ending. Asking twice is
+            # something an impatient operator does; `ask_to_stop` is happy to be asked.
+            drained = await self._go()
             for sig in (signal.SIGTERM, signal.SIGINT):
                 loop.remove_signal_handler(sig)
-            await self._go()
-        return 0
+        # Not a success if it went with work still running: something is still out there,
+        # and a supervisor reading zero would have no way to know (R-GW-7).
+        return 0 if drained else 1
 
     def ask_to_stop(self) -> None:
         """Take no more work, and begin going away (R-GW-6).
@@ -323,27 +406,41 @@ class Gateway:
         self._stopping = True
         self._stopped.set()
 
-    async def _go(self) -> None:
+    async def _go(self) -> bool:
         """End everything, then leave nothing behind (R-GW-8, R-GW-12).
 
         Bounded, because the supervisor's patience is: past it, this process is killed,
         and a killed gateway leaves its children running — the one outcome worth
-        hurrying to avoid.
+        hurrying to avoid. True when everything really did go.
         """
         self._stopping = True
+        drained = True
         try:
             await asyncio.wait_for(process.end_all(list(self.running.values())), STOP_SECONDS)
         except asyncio.TimeoutError:
-            pass  # out of time; the record still goes, and what is left is not ours to wait on
+            # Said out loud rather than swallowed: what is left is in its own process
+            # group, so this process exiting will not take it, and the next start of
+            # this name is the only thing that will.
+            drained = False
+            still = ", ".join(sorted(self.running)) or "something"
+            print(
+                f"rundesk {self.name}: gave up waiting for {still} to stop",
+                file=sys.stderr,
+            )
         finally:
             self.running.clear()
             self.release()
+        return drained
+
+    def _say(self) -> None:
+        """Update the record, and never let failing to do so stop the work."""
+        try:
+            self._record()
+        except OSError:
+            pass
 
     async def _beat(self) -> None:
         """Say, at intervals, that this gateway is still going round."""
         while True:
             await asyncio.sleep(BEAT_SECONDS)
-            try:
-                self._record()
-            except OSError:
-                pass  # a record that could not be written is not a reason to stop serving
+            self._say()  # a record that could not be written is not a reason to stop

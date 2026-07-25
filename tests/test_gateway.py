@@ -283,6 +283,65 @@ class NeverTheSameWorkTwice(WithARunDirectory):
         self.fail("the gateway never took hold of the program")
 
 
+class OneGatewaysTroubleIsNotAnothers(WithARunDirectory):
+    """The property a gateway per agent exists for: whatever happens inside one, the
+    others carry on. Everything here runs two gateways at once on one machine."""
+
+    async def test_one_gateway_stopping_leaves_the_others_running(self):
+        """R-GW-4 — cycling one agent must not disturb the rest."""
+        one, two = self.made("agent-one"), self.made("agent-two")
+        two.claim()
+        serving = asyncio.ensure_future(one.serve())
+        deadline = time.time() + 5
+        while not gateway.standing("agent-one", self.where).running and time.time() < deadline:
+            await asyncio.sleep(0.02)
+        one.ask_to_stop()
+        await asyncio.wait_for(serving, 10)
+        self.assertFalse(gateway.standing("agent-one", self.where).running)
+        self.assertTrue(gateway.standing("agent-two", self.where).running, "the other went too")
+
+    async def test_one_gateway_ending_its_work_leaves_another_gateways_work_alone(self):
+        """R-GW-8 — a gateway ends *its* programs. Everything is in its own process
+        group, so a signal meant for one must never reach the other's."""
+        one, two = self.made("agent-one"), self.made("agent-two")
+        one.claim()
+        two.claim()
+        ones = asyncio.ensure_future(one.start(FOREVER, as_name="work", silence=None))
+        twos = asyncio.ensure_future(two.start(FOREVER, as_name="work", silence=None))
+        await self._holding(one)
+        await self._holding(two)
+        survivor = next(iter(two.running.values()))
+        await one._go()
+        self.assertEqual(process.ENDED, (await ones).reason)
+        self.assertTrue(survivor.alive, "ending one gateway's work ended another's")
+        await process.end_all([survivor])
+        await twos
+
+    async def test_the_same_work_name_under_two_gateways_is_two_pieces_of_work(self):
+        """R-GW-15 — the guard is per gateway, because a gateway is per agent: two
+        agents each having a conversation of the same name is not a duplicate."""
+        one, two = self.made("agent-one"), self.made("agent-two")
+        one.claim()
+        two.claim()
+        ones = asyncio.ensure_future(one.start(FOREVER, as_name="convo", silence=None))
+        twos = asyncio.ensure_future(two.start(FOREVER, as_name="convo", silence=None))
+        await self._holding(one)
+        await self._holding(two)
+        self.assertNotEqual(
+            next(iter(one.running.values())).pid, next(iter(two.running.values())).pid
+        )
+        await process.end_all(list(one.running.values()) + list(two.running.values()))
+        await asyncio.gather(ones, twos)
+
+    async def _holding(self, gw, seconds: float = 5.0):
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if gw.running:
+                return
+            await asyncio.sleep(0.02)
+        self.fail(f"gateway '{gw.name}' never took hold of its program")
+
+
 class GoingAway(WithARunDirectory):
     async def test_a_gateway_asked_to_stop_goes(self):
         """R-GW-12"""
@@ -340,8 +399,9 @@ class GoingAway(WithARunDirectory):
         await self._up(gw)
         gw.ask_to_stop()
         started = time.monotonic()
-        await asyncio.wait_for(serving, 10)
+        left_running = await asyncio.wait_for(serving, 10)
         self.assertLess(time.monotonic() - started, 5.0)
+        self.assertNotEqual(0, left_running, "it went with work still running and said it was fine")
         self.assertFalse(gateway.standing(gw.name, self.where).running)
 
     async def _up(self, gw, seconds: float = 5.0):
@@ -371,6 +431,101 @@ class GoingAway(WithARunDirectory):
         return False
 
 
+class WhatADeadGatewayLeftBehind(WithARunDirectory):
+    async def test_taking_a_name_ends_what_the_last_gateway_of_it_was_running(self):
+        """R-GW-16 — a gateway that was killed outright cannot end its own children:
+        they are in their own groups, so nothing takes them with it. The next gateway
+        of that name is the only thing that can, and it does so before it starts work."""
+        left = await asyncio.create_subprocess_exec(*FOREVER, start_new_session=True)
+        self.addCleanup(lambda: left.kill() if left.returncode is None else None)
+        (self.where / "orphaned.json").write_text(
+            json.dumps({"name": "orphaned", "pid": 999999, "working": {"a-conversation": left.pid}})
+        )
+        gw = self.made("orphaned")
+        gw.claim()
+        self.assertEqual(["a-conversation"], gw.swept)
+        self.assertTrue(await self._gone(left))
+
+    async def test_taking_a_name_nobody_left_anything_under_is_ordinary(self):
+        """R-GW-16 — the common case costs nothing and says nothing."""
+        gw = self.made("fresh")
+        gw.claim()
+        self.assertEqual([], gw.swept)
+
+    async def test_work_recorded_by_a_gateway_that_has_since_gone_is_left_alone(self):
+        """R-GW-16 — a recorded group that is already gone is the ordinary case, not a
+        thing to report as swept."""
+        (self.where / "orphaned.json").write_text(
+            json.dumps({"name": "orphaned", "working": {"a-conversation": 999999}})
+        )
+        gw = self.made("orphaned")
+        gw.claim()
+        self.assertEqual([], gw.swept)
+
+    async def test_a_record_saying_nothing_about_work_is_survived(self):
+        """R-GW-16 — every gateway written before this existed says nothing about work."""
+        (self.where / "orphaned.json").write_text(json.dumps({"name": "orphaned", "pid": 1}))
+        gw = self.made("orphaned")
+        gw.claim()
+        self.assertEqual([], gw.swept)
+
+    async def test_what_is_in_flight_is_written_down_as_it_happens(self):
+        """R-GW-16 — the record is the only thing a successor has to go on, so it has to
+        be true when the gateway dies, not fifteen seconds ago."""
+        gw = self.made()
+        gw.claim()
+        running = asyncio.ensure_future(gw.start(FOREVER, as_name="a-conversation", silence=None))
+        deadline = time.time() + 5
+        while not gw.running and time.time() < deadline:
+            await asyncio.sleep(0.02)
+        said = json.loads((self.where / f"{gw.name}.json").read_text())
+        self.assertIn("a-conversation", said["working"])
+        self.assertEqual(next(iter(gw.running.values())).pid, said["working"]["a-conversation"])
+        await process.end_all(list(gw.running.values()))
+        await running
+        after = json.loads((self.where / f"{gw.name}.json").read_text())
+        self.assertEqual({}, after["working"], "work that finished was still recorded as running")
+
+    async def _gone(self, proc, seconds: float = 10.0) -> bool:
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if not gateway._still_there(proc.pid):
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
+
+class WhenClaimingGoesWrong(WithARunDirectory):
+    async def test_a_gateway_claiming_its_own_name_twice_is_not_a_clash(self):
+        """R-GW-4 — the clash is another process holding the name, never this one
+        holding it already. Serving claims for itself, so anything that claimed before
+        calling it would otherwise refuse itself."""
+        gw = self.made()
+        gw.claim()
+        gw.claim()  # no exception
+        self.assertTrue(gateway.standing(gw.name, self.where).running)
+
+    async def test_a_name_is_not_left_held_by_a_claim_that_did_not_finish(self):
+        """R-GW-4 — a claim that failed part way through must not make the name
+        unusable to the next attempt, including a retry of itself."""
+        gw = gateway.Gateway("awkward", where=self.where)
+        self.addCleanup(gw.release)
+        broken = gateway.Gateway.__dict__["_record"]
+
+        def refuses(self_):
+            raise OSError("the record could not be written")
+
+        gateway.Gateway._record = refuses
+        try:
+            with self.assertRaises(OSError):
+                gw.claim()
+        finally:
+            gateway.Gateway._record = broken
+        again = self.made("awkward")
+        again.claim()  # the name is free, so this does not raise
+        self.assertTrue(gateway.standing("awkward", self.where).running)
+
+
 class AsARealProcess(unittest.TestCase):
     """One case driven the way the supervisor will drive it: a real process, a real
     signal. Everything above drives the object, which cannot prove that the handler is
@@ -379,6 +534,64 @@ class AsARealProcess(unittest.TestCase):
     def setUp(self):
         self.where = Path(tempfile.mkdtemp(prefix="rundesk-gw-real-"))
         self.addCleanup(shutil.rmtree, self.where, True)
+
+    def test_being_asked_to_stop_twice_does_not_kill_it_mid_shutdown(self):
+        """R-GW-8, R-GW-12 — removing the handlers before shutting down restores the
+        system default for these signals, which is *terminate*. A second signal in that
+        window then kills the gateway outright: it never finishes ending its programs,
+        and it leaves its lock and its record behind for the next start to trip over.
+
+        The gateway is given a program that ignores the polite signal, so that shutting
+        down genuinely takes time — and is not signalled again until that program is
+        recorded as in flight, since otherwise there is no window to arrive during.
+        """
+        served, where = self._serving("twice", holding=True)
+        served.send_signal(signal.SIGTERM)
+        time.sleep(1.0)  # inside the shutdown window
+        served.send_signal(signal.SIGTERM)
+        code = served.wait(timeout=60)
+        self.assertEqual(0, code, "the second signal killed it rather than being taken as a repeat")
+        self.assertEqual([], sorted(x.name for x in where.iterdir()), "it left something behind")
+
+    def _serving(self, name: str, holding: bool = False):
+        held = (
+            "async def main():\n"
+            "    serving = asyncio.ensure_future(gw.serve())\n"
+            "    await asyncio.sleep(0.5)\n"
+            "    asyncio.ensure_future(gw.start([sys.executable, '-c', "
+            "'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)'],"
+            " as_name='stubborn', silence=None))\n"
+            "    await asyncio.sleep(0.5)\n"
+            "    return await serving\n"
+            "raise SystemExit(asyncio.run(main()))\n"
+        )
+        served = subprocess.Popen(
+            [
+                PY,
+                "-c",
+                "import sys, asyncio, pathlib\n"
+                f"sys.path.insert(0, {str(ROOT / 'src')!r})\n"
+                "from rundesk_cli import gateway\n"
+                f"gw = gateway.Gateway({name!r}, where=pathlib.Path({str(self.where)!r}))\n"
+                + (held if holding else "raise SystemExit(asyncio.run(gw.serve()))\n"),
+            ]
+        )
+        self.addCleanup(served.kill)
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            if gateway.standing(name, self.where).running and (
+                not holding or self._in_flight(name)
+            ):
+                return served, self.where
+            time.sleep(0.05)
+        self.fail("the gateway never came up holding what it was meant to hold")
+
+    def _in_flight(self, name: str) -> bool:
+        try:
+            said = json.loads((self.where / f"{name}.json").read_text())
+        except (OSError, ValueError):
+            return False
+        return bool(said.get("working"))
 
     def test_a_gateway_stops_when_the_machine_asks_it_to(self):
         """R-GW-6, R-GW-12"""
