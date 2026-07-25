@@ -20,8 +20,8 @@ rundesk doctor <agent>                                                       wha
 
 # running one
 rundesk start <agent>                                                        have the machine keep an agent running
-rundesk stop [--remove] [--purge] <agent>                                    stand an agent down
-rundesk restart <agent>                                                      cycle an agent, leaving the others alone
+rundesk stop [--all] <agent>                                                 stand an agent down
+rundesk restart [--all] <agent>                                              cycle an agent, leaving the others alone
 rundesk logs [-n <lines>] <agent>                                            what an agent has been saying
 rundesk serve <agent>                                                        run an agent here, until it is asked to stop
 
@@ -53,11 +53,11 @@ rundesk uninstall                                                            how
 ## What the arguments mean
 
 ```sh
+--all                 every agent on this machine
 --check               say whether a newer release exists
 --gateway <agent>     whose schedules — an agent's schedules are its own
 --kind <kind>         which kind of channel it is — `discord`, and others as they land
---purge               with --remove, also take its log, schedules and history
---remove              and take it away for good, once it has stopped
+--purge               also take its log, schedules and history
 --run <program>       the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH
 --when <cron>         when it runs, as five cron fields — minute, hour, day, month, weekday
 -n, --lines <lines>   how many of the last lines to show

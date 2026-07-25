@@ -169,6 +169,11 @@ class SurfaceTests(unittest.TestCase):
             with self.subTest(verb=verb):
                 # Told it is current, so every verb takes its ordinary path.
                 code, out, err = run([verb], published=f"v{__version__}")
+                # A verb whose next word says whose is a usage error without one, which is
+                # the surface working rather than a verb nothing handles. Typed again with
+                # a name, so what is asserted below is still that it reached a handler.
+                if code == 2:
+                    code, out, err = run([verb, "an-agent"], published=f"v{__version__}")
                 self.assertNotIn("no handler for", err, f"'{verb}' is offered but nothing handles it")
                 # 1 is allowed: a built verb given nothing to work on may honestly fail.
                 # What must never happen is falling through to the catch-all above.
@@ -411,7 +416,8 @@ class FakeGateways:
                 return it
         return self.Standing(name)
 
-    def what_is_running(self, name):
+    def what_is_running(self, name, where=None):
+        self.asked_where.append(where)
         return self._working.get(name, [])
 
     def forget(self, name, where=None, schedules=None, logs=None, history=False):
@@ -450,10 +456,10 @@ class FakeGateways:
         from rundesk_cli import gateway as real
         real.note(name, said, self._written.parent)
 
-    def log_path(self, name):
+    def log_path(self, name, logs=None):
         return self._written if self._written is not None else pathlib.Path("/nowhere/x.log")
 
-    def Gateway(self, name):
+    def Gateway(self, name, where=None, logs=None, schedules=None):
         gateways = self
 
         class One:
@@ -619,12 +625,13 @@ class ServingAGateway(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual(["agent-one"], gateways.served)
 
-    def test_serving_without_a_name_runs_the_one_gateway_there_is(self):
-        """R-GW-13 — a name is optional today and required by nothing, so what this
-        does now stays true when there is one gateway per agent."""
+    def test_serving_without_a_name_is_a_usage_error(self):
+        """R-CMD-5 — a verb says what and the next word says whose. There is no longer one
+        gateway for it to have meant, so guessing would be guessing which agent."""
         gateways = FakeGateways()
-        drive(["serve"], gateways)
-        self.assertEqual([FakeGateways.DEFAULT_NAME], gateways.served)
+        code, _, _ = run(["serve"])
+        self.assertEqual(2, code)
+        self.assertEqual([], gateways.served)
 
     def test_a_gateway_that_refuses_to_run_ends_well(self):
         """R-GW-25 — the machine starts a gateway again whenever it ends badly. One
@@ -634,7 +641,7 @@ class ServingAGateway(unittest.TestCase):
                         FakeGateways.Unfit("does not fit"),
                         FakeGateways.NotAName("not a name")):
             with self.subTest(refusal=type(refusal).__name__):
-                code, said = drive(["serve"], FakeGateways(refuses=refusal))
+                code, said = drive(["serve", "gateway"], FakeGateways(refuses=refusal))
                 self.assertEqual(0, code, "refusing to run ended badly, so it will be retried forever")
                 self.assertIn(str(refusal), said, "it refused without saying why")
 
@@ -655,7 +662,7 @@ class HandingAGatewayToTheMachine(unittest.TestCase):
         refusing ends cleanly, so nothing else would ever say a word."""
         self.addCleanup(setattr, cli, "START_PATIENCE", cli.START_PATIENCE)
         cli.START_PATIENCE = 0.3
-        code, said = drive(["start"], FakeGateways(starts_after=10_000), FakeMachine())
+        code, said = drive(["start", "gateway"], FakeGateways(starts_after=10_000), FakeMachine())
         self.assertEqual(1, code)
         self.assertIn("FAILED", said)
         self.assertIn("rundesk logs", said, "it did not say where to look")
@@ -664,7 +671,7 @@ class HandingAGatewayToTheMachine(unittest.TestCase):
         """R-GW-13 — handing it over again would boot the running one out first."""
         machine = FakeMachine(jobs=["gateway"])
         gateways = FakeGateways(standing=[FakeGateways.Standing("gateway", running=True, pid=7)])
-        code, said = drive(["start"], gateways, machine)
+        code, said = drive(["start", "gateway"], gateways, machine)
         self.assertEqual(0, code)
         self.assertIn("ALREADY RUNNING", said)
         self.assertEqual([], machine.did, "it touched the job of a gateway that was fine")
@@ -679,7 +686,7 @@ class HandingAGatewayToTheMachine(unittest.TestCase):
         """
         machine = FakeMachine(jobs=[])  # a supervisor is here; it has no job for this
         gateways = FakeGateways(standing=[FakeGateways.Standing("gateway", running=True, pid=7)])
-        code, said = drive(["start"], gateways, machine)
+        code, said = drive(["start", "gateway"], gateways, machine)
         self.assertEqual(1, code, "it reported success for a gateway nothing is keeping up")
         self.assertIn("FAILED", said)
         self.assertIn("unsupervised", said)
@@ -692,7 +699,7 @@ class HandingAGatewayToTheMachine(unittest.TestCase):
         make `rundesk serve` a thing that can never be reported as working."""
         machine = FakeMachine(missing=True)
         gateways = FakeGateways(standing=[FakeGateways.Standing("gateway", running=True, pid=7)])
-        code, said = drive(["start"], gateways, machine)
+        code, said = drive(["start", "gateway"], gateways, machine)
         self.assertEqual(0, code)
         self.assertIn("ALREADY RUNNING", said)
 
@@ -706,13 +713,13 @@ class HandingAGatewayToTheMachine(unittest.TestCase):
     def test_a_machine_with_no_supervisor_says_what_to_do_instead(self):
         """R-GW-13 — rundesk supervises nothing itself, so this is a real answer rather
         than a failure to explain."""
-        code, said = drive(["start"], machine=FakeMachine(missing=True))
+        code, said = drive(["start", "gateway"], machine=FakeMachine(missing=True))
         self.assertEqual(1, code)
         self.assertIn("serve", said, "it did not say how to run one without a supervisor")
 
     def test_a_machine_that_refuses_the_job_is_not_reported_as_success(self):
         """R-GW-13"""
-        code, said = drive(["start"], machine=FakeMachine(refuses=True))
+        code, said = drive(["start", "gateway"], machine=FakeMachine(refuses=True))
         self.assertEqual(1, code)
 
 
@@ -723,11 +730,21 @@ class StandingGatewaysDown(unittest.TestCase):
         drive(["stop", "agent-one"], machine=machine)
         self.assertEqual([("stop", "agent-one")], machine.did)
 
-    def test_stopping_without_a_name_stops_every_gateway(self):
-        """R-GW-14 — naming none and meaning one is the ambiguity worth refusing;
-        naming none and meaning all of them is what shutting a machine down wants."""
+    def test_stopping_without_saying_which_stops_nothing(self):
+        """R-GW-14 — leaving the name out used to mean every gateway on the machine,
+        silently. `rundesk restart` reads as the one you have, and took down every one."""
+        for verb in ("stop", "restart"):
+            with self.subTest(verb=verb):
+                machine = FakeMachine(jobs=["agent-one", "agent-two"])
+                code, said = drive([verb], machine=machine)
+                self.assertEqual(2, code, said)
+                self.assertEqual([], machine.did, f"bare `{verb}` reached the machine")
+                self.assertIn("--all", said, "it refused and never said how to mean all")
+
+    def test_stopping_every_agent_at_once_is_asked_for_out_loud(self):
+        """R-GW-14 — the fan-out is kept; only the way of asking for it changed."""
         machine = FakeMachine(jobs=["agent-one", "agent-two"])
-        drive(["stop"], machine=machine)
+        drive(["stop", "--all"], machine=machine)
         self.assertEqual({("stop", "agent-one"), ("stop", "agent-two")}, set(machine.did))
 
     def test_stopping_a_gateway_that_was_never_handed_over_says_so(self):
@@ -840,11 +857,11 @@ class StandingGatewaysDown(unittest.TestCase):
         drive(["restart", "agent-one"], machine=machine)
         self.assertNotIn("agent-two", [name for _, name in machine.did])
 
-    def test_stopping_where_there_is_nothing_to_stop_says_so(self):
+    def test_stopping_them_all_where_there_are_none_says_so(self):
         """R-GW-13"""
-        code, said = drive(["stop"], machine=FakeMachine(jobs=[]))
+        code, said = drive(["stop", "--all"], machine=FakeMachine(jobs=[]))
         self.assertEqual(0, code)
-        self.assertIn("no gateway", said)
+        self.assertIn("no agents", said)
 
 
 class MakingAnAgent(unittest.TestCase):
@@ -899,6 +916,30 @@ class MakingAnAgent(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertEqual([], agents.adopted, "it moved what a running gateway is reading")
         self.assertIn("rundesk stop gateway", said, "it refused and never said what to do")
+
+
+class TheVerbsNameTheAgent(unittest.TestCase):
+    """The gateway is how an agent runs, so every verb asks where *that* agent keeps things."""
+
+    def test_a_verb_asks_where_the_agent_it_names_keeps_things(self):
+        """R-AGT-9 — an agent's gateway keeps its state in the agent's own directory. A
+        command that asked the old shared one would report a running agent as stopped."""
+        agents = FakeAgents(made=["ava"])
+        gateways = FakeGateways()
+        # Asked before the removal, which takes the agent away and with it the answer.
+        its_own = agents.resolved("ava").run
+        drive(["remove", "ava"], gateways, FakeMachine(), agents=agents)
+        self.assertIn(its_own, gateways.asked_where,
+                      "it asked about ava somewhere other than ava's own directory")
+
+    def test_a_name_with_no_agent_is_asked_after_where_it_always_was(self):
+        """R-AGT-9 — a gateway running since before there were agents keeps working, and
+        adopting it is something an owner asks for rather than something it needs."""
+        agents, gateways = FakeAgents(), FakeGateways()
+        drive(["remove", "gateway"], gateways, FakeMachine(), agents=agents)
+        self.assertTrue(gateways.asked_where, "it never asked the gateway anything")
+        self.assertEqual({None}, set(gateways.asked_where),
+                         "a name with no agent was asked after somewhere new")
 
 
 class DiagnosingAnAgent(unittest.TestCase):
@@ -998,33 +1039,13 @@ class TakingAGatewayAway(unittest.TestCase):
         self.assertEqual([("test2", True)], purged.forgotten)
         self.assertIn("went with it", told)
 
-    def test_stopping_with_remove_does_both_in_one_step(self):
-        """R-GW-31 — the shortcut, since removing is more than stopping."""
-        gateways = FakeGateways(stops_after=0)
-        machine = FakeMachine(jobs=["test2"])
-        code, said = drive(["stop", "test2", "--remove"], gateways, machine)
-        self.assertEqual(0, code, said)
-        self.assertIn("STOPPED", said)
-        self.assertIn("REMOVED", said)
-        self.assertEqual([("test2", False)], gateways.forgotten)
-
-    def test_stopping_with_remove_removes_nothing_when_it_did_not_stop(self):
-        """R-GW-31 — the ordering that matters: deleting the record and the lock of
-        something still running is the one thing removal must never do."""
-        gateways = FakeGateways(standing=[FakeGateways.Standing("test2", running=True, pid=7)])
-        machine = FakeMachine(jobs=["test2"], refuse_acts=True)
-        code, said = drive(["stop", "test2", "--remove"], gateways, machine)
-        self.assertEqual(1, code)
-        self.assertEqual([], gateways.forgotten, "it removed a gateway that never stopped")
-
-    def test_removing_every_gateway_at_once_is_not_something_stop_will_guess(self):
-        """R-GW-31 — `stop` with no name stands them all down, which is a fine thing to
-        ask for and a terrible thing to remove."""
-        gateways = FakeGateways(standing=[FakeGateways.Standing("a"), FakeGateways.Standing("b")])
-        code, said = drive(["stop", "--remove"], gateways, FakeMachine(jobs=["a", "b"]))
-        self.assertEqual(1, code)
-        self.assertIn("NAME REQUIRED", said)
-        self.assertEqual([], gateways.forgotten)
+    def test_there_is_one_way_to_remove_and_stop_is_not_it(self):
+        """R-GW-31 — two ways to remove were two things to get right. `stop` stands an
+        agent down and nothing else, so no flag on it can delete anything."""
+        offered = {flag for parser in [_offered(cli.build_parser())["stop"]]
+                   for action in parser._actions for flag in action.option_strings}
+        self.assertEqual(offered - {"-h", "--help"}, {"--all"},
+                         "`stop` offers a way to remove something")
 
     def test_remove_without_a_name_answers_in_our_words(self):
         """R-GW-31 — every other gateway verb defaults to one when the name is left out.
@@ -1039,7 +1060,7 @@ class WhatIsRunningRightNow(unittest.TestCase):
         """R-GW-14"""
         code, said = drive(["status"])
         self.assertEqual(0, code)
-        self.assertIn("no gateways", said)
+        self.assertIn("no agents", said)
 
     def test_status_says_which_gateways_are_up(self):
         """R-GW-9, R-GW-14"""
@@ -1254,20 +1275,20 @@ class WhatAGatewayHasBeenSaying(unittest.TestCase):
     def test_logs_shows_what_a_gateway_wrote(self):
         """R-GW-18"""
         self.written.write_text("first\nsecond\nthird\n")
-        code, said = drive(["logs"], FakeGateways(written=self.written))
+        code, said = drive(["logs", "gateway"], FakeGateways(written=self.written))
         self.assertEqual(0, code)
         self.assertIn("second", said)
 
     def test_logs_shows_the_last_of_it_rather_than_all_of_it(self):
         """R-GW-18 — a gateway up for a month has more than anyone wants at once."""
         self.written.write_text("".join(f"line {i}\n" for i in range(500)))
-        _, said = drive(["logs", "-n", "5"], FakeGateways(written=self.written))
+        _, said = drive(["logs", "-n", "5", "gateway"], FakeGateways(written=self.written))
         self.assertIn("line 499", said)
         self.assertNotIn("line 100", said)
 
     def test_logs_for_a_gateway_that_has_said_nothing_says_so(self):
         """R-GW-18 — and does not print an empty answer as though that were the log."""
-        code, said = drive(["logs"], FakeGateways(written=self.written))
+        code, said = drive(["logs", "gateway"], FakeGateways(written=self.written))
         self.assertEqual(1, code)
         self.assertIn("nothing written yet", said)
 
@@ -1276,20 +1297,20 @@ class WhatAGatewayHasBeenSaying(unittest.TestCase):
         self.written.write_text("something\n")
         self.written.chmod(0o000)
         self.addCleanup(self.written.chmod, 0o600)
-        code, said = drive(["logs"], FakeGateways(written=self.written))
+        code, said = drive(["logs", "gateway"], FakeGateways(written=self.written))
         self.assertEqual(1, code)
         self.assertIn("could not read", said)
 
     def test_asking_for_none_of_the_log_shows_none_of_it(self):
         """R-GW-18 — a slice of minus nothing is the whole file."""
         self.written.write_text("first\nsecond\n")
-        _, said = drive(["logs", "-n", "0"], FakeGateways(written=self.written))
+        _, said = drive(["logs", "-n", "0", "gateway"], FakeGateways(written=self.written))
         self.assertNotIn("first", said)
 
     def test_what_a_gateway_wrote_is_readable_after_it_has_gone(self):
         """R-GW-18 — the case the log exists for."""
         self.written.write_text("up\nsomething went wrong\ndown\n")
-        _, said = drive(["logs"], FakeGateways(written=self.written))
+        _, said = drive(["logs", "gateway"], FakeGateways(written=self.written))
         self.assertIn("something went wrong", said)
 
 
@@ -1308,13 +1329,16 @@ class WhatIsInFlightWhenAnUpdateAsks(unittest.TestCase):
                 return [Standing("alpha", True), Standing("beta", True),
                         Standing("gamma", False)]
 
-            def what_is_running(self, name):
+            def standing(self, name, where=None):
+                return Standing(name, name in ("alpha", "beta"))
+
+            def what_is_running(self, name, where=None):
                 return {"alpha": ["turn-1", "turn-2"], "beta": ["turn-3"],
                         "gamma": ["stale"]}[name]
 
         self.assertEqual(
             ["alpha/turn-1", "alpha/turn-2", "beta/turn-3"],
-            cli._in_flight(Gateways()),
+            cli._in_flight(Gateways(), FakeAgents()),
         )
 
     def test_a_machine_with_no_gateways_has_nothing_in_flight(self):
@@ -1324,10 +1348,13 @@ class WhatIsInFlightWhenAnUpdateAsks(unittest.TestCase):
             def every(self):
                 return []
 
-            def what_is_running(self, name):
+            def standing(self, name, where=None):
                 raise AssertionError("it asked about a gateway that does not exist")
 
-        self.assertEqual([], cli._in_flight(Gateways()))
+            def what_is_running(self, name, where=None):
+                raise AssertionError("it asked about a gateway that does not exist")
+
+        self.assertEqual([], cli._in_flight(Gateways(), FakeAgents()))
 
 
 class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
@@ -1351,6 +1378,9 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
             def loaded(self, name):
                 return name in loaded
 
+            def described(self):
+                return []
+
             def stop(self, name):
                 Machine.asked.append(("stop", name))
                 return type("Spoke", (), {"ok": stops})()
@@ -1364,19 +1394,25 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
 
     def _gateways(self, standing, gone_after_stop=True, comes_up=True, working=()):
         outer = self
+        #: How many times each has been asked after. The first answer is what it was doing
+        #: before anything was asked of it, and the ones after are whether it has gone —
+        #: the same gateway, asked twice, which is what the real one does.
+        asked = {}
 
         class Gateways:
             def every(self):
                 return standing
 
-            def standing(self, name):
+            def standing(self, name, where=None):
                 for it in standing:
                     if it.name == name:
-                        return outer.Standing(name, running=not gone_after_stop) \
-                            if gone_after_stop else it
+                        asked[name] = asked.get(name, 0) + 1
+                        if asked[name] == 1 or not gone_after_stop:
+                            return it
+                        return outer.Standing(name, running=False)
                 return outer.Standing(name, running=False)
 
-            def what_is_running(self, name):
+            def what_is_running(self, name, where=None):
                 return list(working)
 
             def fitness(self, root=None):
@@ -1387,7 +1423,7 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
         """R-UPD-21"""
         up = [self.Standing("alpha"), self.Standing("beta"), self.Standing("idle", running=False)]
         machine = self._machine(loaded=("alpha", "beta"))
-        stopped, refused = cli._stand_all_down(self._gateways(up), machine)
+        stopped, refused = cli._stand_all_down(self._gateways(up), machine, FakeAgents())
         self.assertIsNone(refused)
         self.assertEqual(["alpha", "beta"], stopped)
         self.assertEqual([("stop", "alpha"), ("stop", "beta")], machine.asked,
@@ -1397,8 +1433,7 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
         """R-UPD-21 — launchctl has no handle on a process it never started, and nothing
         records the terminal a hand-started gateway came from."""
         machine = self._machine(loaded=())     # running, but the machine holds no job
-        stopped, refused = cli._stand_all_down(
-            self._gateways([self.Standing("scratch", pid=8812)]), machine)
+        stopped, refused = cli._stand_all_down(self._gateways([self.Standing("scratch", pid=8812)]), machine, FakeAgents())
         self.assertEqual([], stopped)
         self.assertIn("unsupervised", refused)
         self.assertIn("rundesk start scratch", refused)
@@ -1406,15 +1441,14 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
 
     def test_an_update_on_a_machine_with_no_supervisor_stops_nothing(self):
         """R-UPD-21 — nothing to hand a gateway to means nothing to take one from."""
-        stopped, refused = cli._stand_all_down(
-            self._gateways([self.Standing("alpha")]), self._machine(available=False))
+        stopped, refused = cli._stand_all_down(self._gateways([self.Standing("alpha")]), self._machine(available=False), FakeAgents())
         self.assertEqual(([], None), (stopped, refused))
 
     def test_a_gateway_that_will_not_stop_leaves_the_install_untouched(self):
         """R-UPD-21 — replacing files under something that refused to go is the failure
         this whole sequence exists to avoid."""
         machine = self._machine(loaded=("alpha",), stops=False)
-        stopped, refused = cli._stand_all_down(self._gateways([self.Standing("alpha")]), machine)
+        stopped, refused = cli._stand_all_down(self._gateways([self.Standing("alpha")]), machine, FakeAgents())
         self.assertEqual([], stopped)
         self.assertIn("would not stop", refused)
 
@@ -1423,8 +1457,7 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
         began between that answer and this moment would be killed by the very stop that
         exists to protect it, so it is asked again with nothing left in between."""
         machine = self._machine(loaded=("alpha",))
-        stopped, refused = cli._stand_all_down(
-            self._gateways([self.Standing("alpha")], working=("a-turn",)), machine)
+        stopped, refused = cli._stand_all_down(self._gateways([self.Standing("alpha")], working=("a-turn",)), machine, FakeAgents())
         self.assertEqual([], stopped)
         self.assertIn("began work", refused)
         self.assertEqual([], machine.asked, "it stopped a gateway that had just taken work")
@@ -1437,7 +1470,7 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
         cli.START_PATIENCE = 0.1
         machine = self._machine(loaded=("alpha",))
         never = self._gateways([self.Standing("alpha", running=False)], gone_after_stop=False)
-        self.assertEqual(["alpha"], cli._bring_all_back(["alpha"], never, machine))
+        self.assertEqual(["alpha"], cli._bring_all_back(["alpha"], never, machine, FakeAgents()))
 
 
 class WhichVersionEachGatewayIsActuallyOn(unittest.TestCase):

@@ -190,20 +190,14 @@ def build_parser() -> argparse.ArgumentParser:
     # name out means all of them wherever that can mean anything, so what these do
     # today stays true once there are several.
     served = sub.add_parser("serve", help="run an agent here, until it is asked to stop")
-    served.add_argument("name", nargs="?", metavar="<agent>", default=_gateway.DEFAULT_NAME,
-                        help="which agent — the only one, unless named")
+    served.add_argument("name", metavar="<agent>", help="which agent")
 
     started = sub.add_parser("start", help="have the machine keep an agent running")
-    started.add_argument("name", nargs="?", metavar="<agent>", default=_gateway.DEFAULT_NAME,
-                         help="which agent — the only one, unless named")
+    started.add_argument("name", metavar="<agent>", help="which agent")
 
     stopped = sub.add_parser("stop", help="stand an agent down")
-    stopped.add_argument("name", nargs="?", metavar="<agent>",
-                         help="which agent — every one of them when left out")
-    stopped.add_argument("--remove", action="store_true",
-                         help="and take it away for good, once it has stopped")
-    stopped.add_argument("--purge", action="store_true",
-                         help="with --remove, also take its log, schedules and history")
+    stopped.add_argument("name", nargs="?", metavar="<agent>", help="which agent")
+    stopped.add_argument("--all", action="store_true", help="every agent on this machine")
 
     gone = sub.add_parser("remove", help="take an agent away for good")
     # Optional to the parser and required by the command, so that asking for it wrong is
@@ -215,8 +209,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="also take its log, schedules and history")
 
     cycled = sub.add_parser("restart", help="cycle an agent, leaving the others alone")
-    cycled.add_argument("name", nargs="?", metavar="<agent>",
-                        help="which agent — every one of them when left out")
+    cycled.add_argument("name", nargs="?", metavar="<agent>", help="which agent")
+    cycled.add_argument("--all", action="store_true", help="every agent on this machine")
 
     sub.add_parser("status", help="every agent, and what it is doing")
 
@@ -238,8 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
         one.add_argument("schedule", metavar="<schedule>", help="which schedule, by the name it was added under")
 
     said = sub.add_parser("logs", help="what an agent has been saying")
-    said.add_argument("name", nargs="?", metavar="<agent>", default=_gateway.DEFAULT_NAME,
-                      help="whose log — the only agent, unless named")
+    said.add_argument("name", metavar="<agent>", help="whose log")
     said.add_argument("-n", "--lines", type=int, metavar="<lines>", default=LOG_LINES,
                       help="how many of the last lines to show")
     return parser
@@ -252,16 +245,38 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_update(args: argparse.Namespace, gateways, machine) -> int:
+def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
     return updater.run(
         REPO_ROOT, __version__, check_only=args.check,
-        busy=lambda: _in_flight(gateways),
-        pause=lambda: _stand_all_down(gateways, machine),
-        resume=lambda names: _bring_all_back(names, gateways, machine),
+        busy=lambda: _in_flight(gateways, agents),
+        pause=lambda: _stand_all_down(gateways, machine, agents),
+        resume=lambda names: _bring_all_back(names, gateways, machine, agents),
     )
 
 
-def _stand_all_down(gateways, machine) -> tuple:
+def _every_name(gateways, machine, agents) -> list[str]:
+    """Every gateway there is: one per agent, and any that has no agent yet.
+
+    Three places, because there are three ways one can exist. An agent has a gateway
+    whether or not it has ever run; a gateway from before there were agents left its record
+    where gateways used to keep them; and a job the machine holds names one that may have
+    left nothing anywhere. Asked of the agent module rather than of the gateway module for
+    the first, so that a gateway still knows nothing of whose work it holds.
+    """
+    return sorted({*agents.known(), *(it.name for it in gateways.every()), *machine.described()})
+
+
+def _standing(name: str, gateways, agents):
+    """What this gateway is doing, asked where that gateway actually keeps it.
+
+    The one place the two are put together. A command that resolved the directory itself
+    at each call is how one of them comes to ask the wrong place and report a running
+    agent as stopped.
+    """
+    return gateways.standing(name, agents.resolved(name).run)
+
+
+def _stand_all_down(gateways, machine, agents) -> tuple:
     """Stop every gateway an update is about to replace the files of (R-UPD-21).
 
     Refuses outright rather than touching one running without a job. `launchctl kill` has
@@ -273,7 +288,8 @@ def _stand_all_down(gateways, machine) -> tuple:
     if not machine.available():
         return [], None
     stopped = []
-    for it in gateways.every():
+    for name in _every_name(gateways, machine, agents):
+        it = _standing(name, gateways, agents)
         if not it.running:
             continue
         try:
@@ -286,7 +302,7 @@ def _stand_all_down(gateways, machine) -> tuple:
         # Asked again, immediately before stopping it: the check for work in flight
         # happened before any of this, and a turn that began in between is one this would
         # otherwise kill (R-UPD-23).
-        if gateways.what_is_running(it.name):
+        if gateways.what_is_running(it.name, agents.resolved(it.name).run):
             return stopped, (f"'{it.name}' began work while the update was starting, so "
                              f"nothing was replaced under it")
         if not kept:
@@ -299,13 +315,13 @@ def _stand_all_down(gateways, machine) -> tuple:
                 f"        or stop it yourself, then update"
             )
         said = machine.stop(it.name)
-        if not said.ok or not _gone(it.name, gateways):
+        if not said.ok or not _gone(it.name, gateways, agents):
             return stopped, f"'{it.name}' would not stop, so nothing was replaced under it"
         stopped.append(it.name)
     return stopped, None
 
 
-def _bring_all_back(names: list, gateways, machine) -> list:
+def _bring_all_back(names: list, gateways, machine, agents) -> list:
     """Start again everything the update stopped, and say what did not come back.
 
     What this exists to catch is not the machine refusing — it is a gateway that starts,
@@ -321,7 +337,7 @@ def _bring_all_back(names: list, gateways, machine) -> list:
         except (machine.NotOurs, machine.NoSupervisor):
             down.append(name)
             continue
-        if not said.ok or _came_up(name, gateways) is None:
+        if not said.ok or _came_up(name, gateways, agents) is None:
             down.append(name)
     if down:
         unfit = gateways.fitness(REPO_ROOT)
@@ -330,7 +346,7 @@ def _bring_all_back(names: list, gateways, machine) -> list:
     return down
 
 
-def _in_flight(gateways) -> list:
+def _in_flight(gateways, agents) -> list:
     """Everything every gateway on this machine says it is working on (R-UPD-23).
 
     Asked of the gateways rather than of a list kept somewhere, and named by gateway as
@@ -338,9 +354,10 @@ def _in_flight(gateways) -> list:
     which of several it was before they can decide to wait.
     """
     return [
-        f"{it.name}/{one}"
-        for it in gateways.every() if it.running
-        for one in gateways.what_is_running(it.name)
+        f"{name}/{one}"
+        for name in agents.known() + [it.name for it in gateways.every()]
+        if _standing(name, gateways, agents).running
+        for one in gateways.what_is_running(name, agents.resolved(name).run)
     ]
 
 
@@ -386,7 +403,7 @@ def _as_table(head: tuple, rows: list) -> None:
         print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
 
 
-def cmd_serve(args: argparse.Namespace, gateways) -> int:
+def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
     """Run a gateway here, in the foreground. What the machine's job invokes.
 
     Refusing to run ends *well*, on purpose. The machine is told to start a gateway
@@ -394,14 +411,16 @@ def cmd_serve(args: argparse.Namespace, gateways) -> int:
     does not fit, or another already holds its name — would otherwise be started every
     few seconds for as long as the machine is up (R-GW-25).
     """
+    whose = agents.resolved(args.name)
     try:
-        return asyncio.run(gateways.Gateway(args.name).serve())
+        return asyncio.run(gateways.Gateway(args.name, where=whose.run, logs=whose.logs,
+                                            schedules=whose.schedules).serve())
     except (gateways.AlreadyRunning, gateways.Unfit, gateways.NotAName) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         return 0
 
 
-def cmd_start(args: argparse.Namespace, gateways, machine) -> int:
+def cmd_start(args: argparse.Namespace, gateways, machine, agents) -> int:
     """Hand a gateway to the machine, and see that a gateway actually results.
 
     The machine taking the job is not the gateway running. A job can be accepted and the
@@ -410,7 +429,7 @@ def cmd_start(args: argparse.Namespace, gateways, machine) -> int:
     success this command did not earn.
     """
     name = args.name
-    already = gateways.standing(name)
+    already = _standing(name, gateways, agents)
     if already.running:
         # Running is not the same as looked after. A gateway started by hand, or one left
         # behind when its job was taken away, answers everything exactly as a supervised
@@ -444,7 +463,7 @@ def cmd_start(args: argparse.Namespace, gateways, machine) -> int:
     if not said.ok:
         print(f"{name}: FAILED — the supervisor refused the job: {said.said}", file=sys.stderr)
         return 1
-    up = _came_up(name, gateways)
+    up = _came_up(name, gateways, agents)
     if up is None:
         print(f"{name}: FAILED — job accepted, but no gateway started.", file=sys.stderr)
         print(f"         why: rundesk logs {name}", file=sys.stderr)
@@ -453,7 +472,7 @@ def cmd_start(args: argparse.Namespace, gateways, machine) -> int:
     return 0
 
 
-def _came_up(name: str, gateways, patience: float | None = None):
+def _came_up(name: str, gateways, agents, patience: float | None = None):
     """The gateway, once it is actually there — or None if it never arrives.
 
     The patience resolves here rather than in the signature: a default argument is bound
@@ -462,40 +481,36 @@ def _came_up(name: str, gateways, patience: float | None = None):
     """
     deadline = time.monotonic() + (START_PATIENCE if patience is None else patience)
     while time.monotonic() < deadline:
-        now = gateways.standing(name)
+        now = _standing(name, gateways, agents)
         if now.running:
             return now
         time.sleep(LOOK_AGAIN_SECONDS)
     return None
 
 
-def _named(args: argparse.Namespace, gateways, machine) -> list[str]:
-    """The gateways a command is about: the one named, or every one there is.
+def _named(args: argparse.Namespace, gateways, machine, agents, verb: str) -> list[str] | None:
+    """The agents a command is about: the one named, or every one there is — or None.
 
-    Naming none and meaning one is the ambiguity worth refusing; naming none and meaning
-    all of them is what an owner wants when they are shutting the machine down.
+    None is a refusal, and it is the point of this. Leaving the name out used to mean
+    every gateway on the machine, silently: the verb says what and the next word says
+    whose, so saying no whose is not saying "all of them", it is not saying. `rundesk
+    restart` reads as the one you have, and it took down every agent you had.
+
+    `--all` is how an owner says they mean all of them, and it still means all of them —
+    the fan-out is kept, and only the way of asking for it changed.
     """
     if getattr(args, "name", None):
         return [args.name]
-    return sorted({it.name for it in gateways.every()} | set(machine.described()))
+    if not getattr(args, "all", False):
+        print(f"{verb}: NAME or --all IS REQUIRED — say which agent", file=sys.stderr)
+        print(f"        every agent at once:  rundesk {verb} --all", file=sys.stderr)
+        print("        what there is:        rundesk agents", file=sys.stderr)
+        return None
+    return _every_name(gateways, machine, agents)
 
 
 def cmd_stop(args: argparse.Namespace, gateways, machine, agents) -> int:
-    if not args.remove:
-        return _stand_down(args, gateways, machine, "stop")
-    if not args.name:
-        # `stop` with no name stands every gateway down, which is a fine thing to ask for
-        # and a terrible thing to remove. Naming one is how someone says which (R-GW-31).
-        print("stop --remove: NAME REQUIRED — say which gateway to remove", file=sys.stderr)
-        print("        every gateway at once is: rundesk uninstall", file=sys.stderr)
-        return 1
-    stopped = _stand_down(args, gateways, machine, "stop")
-    if stopped:
-        # It is still up, or the machine would not say. Removing now would delete the
-        # record and the lock of something that is still running (R-GW-31).
-        print(f"{args.name}: NOT REMOVED — it did not stop", file=sys.stderr)
-        return stopped
-    return cmd_remove(args, gateways, machine, agents)
+    return _stand_down(args, gateways, machine, agents, "stop")
 
 
 def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
@@ -524,7 +539,7 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
     knew = agents.exists(name)
     wrote = agents.standing_before(name)
     if wrote and not knew:
-        now = gateways.standing(name)
+        now = _standing(name, gateways, agents)
         if now.running:
             print(f"{name}: NOT MADE — a gateway of that name is running (pid {now.pid})",
                   file=sys.stderr)
@@ -630,27 +645,32 @@ def cmd_remove(args: argparse.Namespace, gateways, machine, agents) -> int:
     return 0
 
 
-def cmd_restart(args: argparse.Namespace, gateways, machine) -> int:
-    return _stand_down(args, gateways, machine, "restart")
+def cmd_restart(args: argparse.Namespace, gateways, machine, agents) -> int:
+    return _stand_down(args, gateways, machine, agents, "restart")
 
 
-def _gone(name: str, gateways, patience: float | None = None) -> bool:
+def _gone(name: str, gateways, agents, patience: float | None = None) -> bool:
     """Has this gateway actually stopped? Asked of the gateway, not of the machine.
 
     The patience resolves here, not in the signature — see `_came_up`.
     """
     deadline = time.monotonic() + (CYCLE_PATIENCE if patience is None else patience)
     while time.monotonic() < deadline:
-        if not gateways.standing(name).running:
+        if not _standing(name, gateways, agents).running:
             return True
         time.sleep(LOOK_AGAIN_SECONDS)
-    return not gateways.standing(name).running
+    return not _standing(name, gateways, agents).running
 
 
-def _stand_down(args: argparse.Namespace, gateways, machine, verb: str) -> int:
-    names = _named(args, gateways, machine)
+def _stand_down(args: argparse.Namespace, gateways, machine, agents, verb: str) -> int:
+    names = _named(args, gateways, machine, agents, verb)
+    if names is None:
+        # Said which, and nothing was touched. Not a failure of the machine and not a
+        # thing that half happened — it is the command being typed without its subject,
+        # which is what argparse spends 2 on.
+        return 2
     if not names:
-        print("no gateways")
+        print("no agents")
         return 0
     worst = 0
     for name in names:
@@ -668,7 +688,7 @@ def _stand_down(args: argparse.Namespace, gateways, machine, verb: str) -> int:
                 # is there and what was asked. Answering all three with one refusal — as
                 # a stand-in Spoke fed into the failure block below did — told an owner
                 # with no job at all to go looking for a second install of rundesk.
-                now = gateways.standing(name)
+                now = _standing(name, gateways, agents)
                 if now.running:
                     print(f"{name}: FAILED — running with no job (pid {now.pid}); "
                           "nothing is keeping it up", file=sys.stderr)
@@ -688,7 +708,7 @@ def _stand_down(args: argparse.Namespace, gateways, machine, verb: str) -> int:
                           file=sys.stderr)
                     worst = 1
                     continue
-                if not _gone(name, gateways):
+                if not _gone(name, gateways, agents):
                     # Starting it now does nothing — the machine sees a job already
                     # running — and the old one then ends *well*, which is the one
                     # outcome the machine is told not to undo. The gateway would be
@@ -717,7 +737,7 @@ def _stand_down(args: argparse.Namespace, gateways, machine, verb: str) -> int:
             worst = 1
             continue
         if not said.ok:
-            now = gateways.standing(name)
+            now = _standing(name, gateways, agents)
             if now.running:
                 print(f"{name}: FAILED — the supervisor refused to stop it (pid {now.pid}): "
                       f"{said.said}", file=sys.stderr)
@@ -729,14 +749,14 @@ def _stand_down(args: argparse.Namespace, gateways, machine, verb: str) -> int:
                 print(f"{name}: ALREADY STOPPED")
             continue
         if verb == "restart":
-            up = _came_up(name, gateways)
+            up = _came_up(name, gateways, agents)
             if up is None:
                 print(f"{name}: FAILED — stopped, but did not restart.", file=sys.stderr)
                 print(f"         why: rundesk logs {name}", file=sys.stderr)
                 worst = 1
                 continue
             print(f"{name}: RESTARTED (pid {up.pid})")
-        elif not _gone(name, gateways):
+        elif not _gone(name, gateways, agents):
             print(f"{name}: FAILED — still running after stop request", file=sys.stderr)
             worst = 1
         else:
@@ -744,7 +764,7 @@ def _stand_down(args: argparse.Namespace, gateways, machine, verb: str) -> int:
     return worst
 
 
-def cmd_status(_args: argparse.Namespace, gateways, machine) -> int:
+def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
     """Every gateway, and what it is actually doing.
 
     Answered by the gateways themselves rather than by the machine, because the machine
@@ -752,11 +772,10 @@ def cmd_status(_args: argparse.Namespace, gateways, machine) -> int:
     """
     has_supervisor = machine.available()
     described = set(machine.described()) if has_supervisor else set()
-    found = {it.name: it for it in gateways.every()}
-    for name in sorted(described - set(found)):
-        found[name] = gateways.Standing(name=name, running=False)
+    found = {name: _standing(name, gateways, agents)
+             for name in _every_name(gateways, machine, agents)}
     if not found:
-        print("no gateways")
+        print("no agents")
         return 0
     rows = []
     for name in sorted(found):
@@ -768,7 +787,7 @@ def cmd_status(_args: argparse.Namespace, gateways, machine) -> int:
             kept = has_supervisor and name in described and machine.loaded(name)
         except machine.Unsure:
             kept = None   # asked, and not told — which is not the same as "no"
-        doing = gateways.what_is_running(name) if it.running else []
+        doing = gateways.what_is_running(name, agents.resolved(name).run) if it.running else []
         rows.append((
             name,
             ("WEDGED" if it.stale else "RUNNING") if it.running else "STOPPED",
@@ -920,10 +939,10 @@ def _list_schedules(args: argparse.Namespace, gateways) -> int:
     return 1 if refused else 0
 
 
-def cmd_logs(args: argparse.Namespace, gateways) -> int:
+def cmd_logs(args: argparse.Namespace, gateways, agents) -> int:
     """What a gateway has been saying. Reads the file, so a gateway that has gone can
     still be asked what happened (R-GW-18)."""
-    path = gateways.log_path(args.name)
+    path = gateways.log_path(args.name, agents.resolved(args.name).logs)
     if not path.exists():
         print(f"{args.name}: NO LOG — nothing written yet ({path})", file=sys.stderr)
         return 1
@@ -967,7 +986,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
     if args.command == "version":
         return cmd_version(args)
     if args.command == "update":
-        return cmd_update(args, gateways, machine)
+        return cmd_update(args, gateways, machine, agents)
     if args.command == "uninstall":
         return cmd_uninstall(args)
     if args.command == "add":
@@ -975,21 +994,21 @@ def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
     if args.command == "doctor":
         return cmd_doctor(args, gateways, agents)
     if args.command == "serve":
-        return cmd_serve(args, gateways)
+        return cmd_serve(args, gateways, agents)
     if args.command == "start":
-        return cmd_start(args, gateways, machine)
+        return cmd_start(args, gateways, machine, agents)
     if args.command == "stop":
         return cmd_stop(args, gateways, machine, agents)
     if args.command == "remove":
         return cmd_remove(args, gateways, machine, agents)
     if args.command == "restart":
-        return cmd_restart(args, gateways, machine)
+        return cmd_restart(args, gateways, machine, agents)
     if args.command == "status":
-        return cmd_status(args, gateways, machine)
+        return cmd_status(args, gateways, machine, agents)
     if args.command == "schedules":
         return cmd_schedules(args, gateways)
     if args.command == "logs":
-        return cmd_logs(args, gateways)
+        return cmd_logs(args, gateways, agents)
 
     # Unreachable through argparse, which rejects an unknown command before this —
     # but a dispatch that silently returns 0 for a verb nobody handled is how a
