@@ -848,13 +848,29 @@ class Gateway:
         a gateway starts once, stays up unattended, says so truthfully, and goes away
         without leaving anything running.
         """
-        self.claim()
+        # Able to be asked to stop *before* it can be found, and in that order. A gateway
+        # becomes discoverable the moment it takes its name, and until these are installed
+        # the system default for both signals is terminate — so a supervisor asking it to
+        # stop inside that window killed it outright: it left its record behind for the
+        # next start to trip over, and never ran the shutdown that ends what it started
+        # (R-GW-6, R-GW-12). Taking the name is not instant either; it reads what the last
+        # gateway of this name left and what its schedules missed, and the window is as
+        # wide as that takes on a loaded machine.
         self._stopped = asyncio.Event()
-        if self._stopping:
-            self._stopped.set()  # asked to stop before it got going
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self.ask_to_stop)
+        try:
+            self.claim()
+        except BaseException:
+            # A gateway that never got the name leaves nothing of itself on this loop —
+            # including handlers, which outlive `serve` and would answer for a gateway
+            # that is not there.
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.remove_signal_handler(sig)
+            raise
+        if self._stopping:
+            self._stopped.set()  # asked to stop before it got going, or while taking hold
         beating = asyncio.ensure_future(self._beat())
         ticking = asyncio.ensure_future(self._tick())
         try:

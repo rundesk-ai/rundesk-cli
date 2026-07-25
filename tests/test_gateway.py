@@ -459,6 +459,34 @@ class GoingAway(WithARunDirectory):
         self.assertEqual(0, await asyncio.wait_for(serving, 10))
         self.assertFalse(gateway.standing(gw.name, self.where).running)
 
+    async def test_a_gateway_can_be_asked_to_stop_from_the_moment_it_can_be_found(self):
+        """R-GW-6, R-GW-12 — the window between being visible and being able to answer.
+
+        A gateway becomes discoverable the moment it takes its name, and until its
+        handlers are installed the system default for these signals is *terminate*. A
+        supervisor asking it to stop inside that window killed it outright: the shutdown
+        never ran, and the record it left behind was there for the next start to trip
+        over. Asserted by when the handler was installed rather than by racing it, since
+        the race is exactly what a test cannot be relied on to lose.
+        """
+        gw = self.made()
+        taking_hold = {}
+        took = gw.claim
+
+        def claim():
+            taking_hold["sigterm"] = signal.getsignal(signal.SIGTERM)
+            return took()
+
+        gw.claim = claim
+        serving = asyncio.ensure_future(gw.serve())
+        await self._up(gw)
+        gw.ask_to_stop()
+        self.assertEqual(0, await asyncio.wait_for(serving, 10))
+        self.assertNotEqual(
+            signal.SIG_DFL, taking_hold["sigterm"],
+            "a stop arriving while it took its name would have killed it where it stood",
+        )
+
     async def test_stopping_leaves_nothing_for_the_next_start_to_find(self):
         """R-GW-12"""
         gw = self.made()
