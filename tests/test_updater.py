@@ -478,6 +478,113 @@ class MalformedArchiveTests(unittest.TestCase):
             self.assertEqual((install / "rundesk").read_text(), "# 0.1.0\n", "a bad archive still changed the install")
 
 
+class RecoveryTests(unittest.TestCase):
+    """The paths that only run when something has already gone wrong.
+
+    Every one of these was written and then never executed by anything — found by measuring
+    which lines the suite reaches, not by reading. Untested recovery code is worse than none:
+    it is reached exactly when the install is already in trouble.
+    """
+
+    def setUp(self):
+        self._work = tempfile.TemporaryDirectory()
+        self.root = Path(self._work.name)
+        self.install = self.root / "install"
+        (self.install / "src" / "rundesk_cli").mkdir(parents=True)
+        (self.install / "rundesk").write_text("# 0.1.0\n")
+
+    def tearDown(self):
+        self._work.cleanup()
+
+    def _archive(self) -> bytes:
+        top = _release(self.root, "0.2.0")
+        path = self.root / "rel.tar.gz"
+        with tarfile.open(path, "w:gz") as tar:
+            tar.add(top, arcname=top.name)
+        return path.read_bytes()
+
+    def test_an_archive_that_will_not_open_is_reported_rather_than_raised(self):
+        # Not a tarball at all — a truncated download, or a proxy serving an error page.
+        code, said = _with_download(b"this is not a tar archive",
+                                    lambda: updater.download_and_apply(self.install, "v0.2.0"))
+        self.assertEqual(code, 1)
+        self.assertIn("did not unpack", said)
+        self.assertEqual((self.install / "rundesk").read_text(), "# 0.1.0\n")
+
+    def test_an_archive_that_reaches_outside_is_reported_rather_than_raised(self):
+        # _safe_extract raises; download_and_apply has to turn that into a worded refusal
+        # instead of a traceback. Nothing drove a rejected archive through the wrapper.
+        nasty = self.root / "nasty.tar.gz"
+        with tarfile.open(nasty, "w:gz") as tar:
+            escaping = tarfile.TarInfo("../escaped.txt")
+            escaping.size = 1
+            tar.addfile(escaping, io.BytesIO(b"x"))
+        code, said = _with_download(nasty.read_bytes(),
+                                    lambda: updater.download_and_apply(self.install, "v0.2.0"))
+        self.assertEqual(code, 1)
+        self.assertIn("did not unpack", said)
+        self.assertFalse((self.root / "escaped.txt").exists())
+
+    def test_being_unable_to_put_a_release_in_place_is_reported_rather_than_raised(self):
+        real = updater._copy_over
+        updater._copy_over = lambda *a, **kw: (_ for _ in ()).throw(OSError(28, "No space left on device"))
+        try:
+            code, said = _with_download(self._archive(),
+                                        lambda: updater.download_and_apply(self.install, "v0.2.0"))
+        finally:
+            updater._copy_over = real
+        self.assertEqual(code, 1)
+        self.assertIn("could not put", said)
+
+    def test_a_swap_that_fails_puts_back_what_was_working(self):
+        # The rollback in _swap: the old directory has already been renamed aside when the
+        # new one fails to move in. Without it the install is left with no `src` at all.
+        package = self.install / "src"
+        real = updater.os.rename
+        calls = []
+
+        def second_one_fails(a, b):
+            calls.append((a, b))
+            if len(calls) == 2:
+                raise OSError(13, "Permission denied")
+            return real(a, b)
+
+        incoming = self.install / ".src.incoming"
+        incoming.mkdir()
+        (incoming / "new.py").write_text("# new\n")
+        updater.os.rename = second_one_fails
+        try:
+            with self.assertRaises(OSError):
+                updater._swap(incoming, package)
+        finally:
+            updater.os.rename = real
+
+        self.assertTrue(package.is_dir(), "a failed swap left the install without its package")
+        self.assertTrue((package / "rundesk_cli").is_dir(),
+                        "a failed swap put back something other than what was there")
+
+    def test_staging_left_by_an_earlier_crash_is_cleared_rather_than_reused(self):
+        # A kill between staging and swapping leaves `.src.incoming` on disk. The next
+        # update must not lay that half-copy over the install.
+        stale = self.install / ".src.incoming"
+        stale.mkdir()
+        (stale / "half-written.py").write_text("# from a crash\n")
+        stale_file = self.install / ".rundesk.incoming"
+        stale_file.write_text("# from a crash\n")
+
+        updater._copy_over(_release(self.root, "0.2.0"), self.install)
+
+        self.assertFalse(stale.exists(), "a stale staging directory survived an update")
+        self.assertFalse(stale_file.exists(), "a stale staging file survived an update")
+        self.assertFalse((self.install / "src" / "half-written.py").exists(),
+                         "an update laid a crashed run's half-copy over the install")
+
+    def test_a_member_named_with_an_absolute_path_is_refused(self):
+        # The other absolute case: not a link's target, the member's own name.
+        self.assertFalse(updater._lands_inside(self.install, "/etc/passwd"))
+        self.assertTrue(updater._lands_inside(self.install, "release/src/cli.py"))
+
+
 def _with_json(payload, call):
     """Run `call` with the forge replaced — bytes to serve, or an error to raise."""
     class _Response:
