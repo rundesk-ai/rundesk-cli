@@ -27,7 +27,12 @@ HOMES = [ROOT / ".knowledge" / "prd", ROOT / ".knowledge" / "prd-drafts"]
 #: `| ✅ | R-NS-1 | the claim | `a test name`, `another` |`
 ROW = re.compile(r"^\|\s*(✅|❌)\s*\|\s*(R-[A-Z0-9]+-\d+)\s*\|([^|]*)\|\s*(.*?)\s*\|\s*$")
 BACKTICKED = re.compile(r"`([^`]+)`")
-TEST_DEF = re.compile(r"^\s*def (test_[a-z0-9_]+)", re.M)
+#: `async def` counts. The gateway and everything it runs are asynchronous, so most of
+#: this suite is — and a pattern that only saw plain `def` reported every one of those
+#: tests as missing, which reads exactly like a contract citing a test copied from
+#: somewhere else. That is the failure this script exists to catch, so it must not be
+#: the one it invents.
+TEST_DEF = re.compile(r"^\s*(?:async\s+)?def (test_[a-z0-9_]+)", re.M)
 
 
 def declared() -> dict[str, str]:

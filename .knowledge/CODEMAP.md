@@ -16,7 +16,7 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
 
 - `src/rundesk_cli/__init__.py` — **`__version__`, the one source of what version this is.** The command
   reports it, the updater compares against it, and a release tag is expected to match it. Nothing else
-  holds a copy.
+  holds a copy. `ROOT` is the same idea for *where* this install is, resolved rather than assumed.
 
 ## Backend / Services
 
@@ -26,6 +26,13 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
   real command as it lands.
 - `src/rundesk_cli/updater.py` — where this install stands against what is published, and moving between
   them. Every network call is behind an argument, so the whole module is exercised offline.
+- `src/rundesk_cli/process.py` — a program rundesk runs, and how it keeps hold of it: its own session so
+  ending it ends the whole tree, silence rather than duration as the failure, output streamed and never
+  accumulated. Knows nothing of gateways or agents, and holds no state of its own, so any number of
+  programs run at once.
+- `src/rundesk_cli/gateway.py` — the part that stays running. One per name from the outset, since a
+  gateway per agent is how one agent is cycled without disturbing the rest. Owns every program started
+  through it, and proves it is alive with a lock the kernel drops when the process dies.
 
 ## Frontend / UI
 
@@ -36,7 +43,8 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
 - `tests/` — `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network.
   `test_cli.py` walks every verb off the parser rather than a restated list, so a command added and
   wired nowhere is caught here. `test_updater.py` covers the three outcomes — behind, current, and
-  could-not-ask — and that an archive cannot write outside where it is unpacked.
+  could-not-ask — and that an archive cannot write outside where it is unpacked. `test_process.py` and
+  `test_gateway.py` drive real processes and real signals, with the waits turned down.
 
 ## Scripts And Commands
 

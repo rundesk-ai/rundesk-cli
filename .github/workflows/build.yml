@@ -56,6 +56,12 @@ jobs:
       - name: Putting it on a machine, and taking it off
         run: python tests/test_install.py
 
+      - name: A program rundesk runs, and how it keeps hold of it
+        run: python tests/test_process.py
+
+      - name: The gateway — one of each name, and what it takes with it
+        run: python tests/test_gateway.py
+
       # ---------------------------------------------------------------- the real thing
       - name: A real install leaves a working command
         run: |

@@ -10,11 +10,15 @@ run toward `base-`: a higher layer may cite a lower one, never the reverse.
 ```
 1. base-       — laws true of every part, whatever it is
 2. command-    — the command line itself: what it offers, and how a verb behaves
-3. lifecycle-  — this copy of rundesk on a machine: how it arrives, moves and leaves
+3. platform-   — the runtime rundesk is: what stays up, and what it keeps hold of
+4. lifecycle-  — this copy of rundesk on a machine: how it arrives, moves and leaves
 ```
 
-The gateway's own components — a brain, a channel, an agent, the runtime they run on — are not declared
-yet. Each is the owner's call at the time its work arrives, and adding one is a row here.
+`platform-` sits under `lifecycle-` because moving this copy of rundesk has to account for what is
+running at the time, while what is running knows nothing of how it arrived.
+
+The gateway's remaining components — a brain, a channel, an agent — are not declared yet. Each is the
+owner's call at the time its work arrives, and adding one is a row here.
 
 ## Contents — maintained by hand
 
