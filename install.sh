@@ -223,24 +223,34 @@ uncommitted work with it. Move it aside, or set RUNDESK_INSTALL_DIR somewhere el
   fi
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' EXIT
-  # The newest *published release*, not whatever is on the branch. Installing the branch
-  # would hand someone a version that was never released, reporting a number no release
-  # carries — and then `rundesk update` would offer to move them backwards onto it.
+  # The newest *published release*, not whatever is on the branch (R-INS-15).
+  # Installing the branch would hand someone a version that was never released,
+  # reporting a number no release carries — and then `rundesk update` would offer
+  # to move them backwards onto it.
   echo "looking up the newest rundesk release"
-  # The `|| true` is load-bearing. `set -e` aborts on a failing assignment and `-o pipefail`
-  # fails this pipeline whenever curl does — a repository with no releases (404), a rate
-  # limit (403), a dropped connection. Without it the fallback below is unreachable and the
-  # install dies on exit 56 having printed nothing at all, not even a message.
-  tag="$(curl -fsSL "https://api.github.com/repos/$REPO_SLUG/releases/latest" 2>/dev/null |
-         sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 || true)"
-  if [[ -n "$tag" ]]; then
-    echo "downloading ${tag}"
-    source_url="https://github.com/$REPO_SLUG/archive/refs/tags/$tag.tar.gz"
-  else
-    # Nothing published yet — a repository can be perfectly usable before its first release.
-    echo "no release published yet; taking the main branch instead."
-    source_url="https://github.com/$REPO_SLUG/archive/refs/heads/main.tar.gz"
+  release="$work/release.json"
+  if ! curl -fsSL "https://api.github.com/repos/$REPO_SLUG/releases/latest" \
+       -o "$release" 2>/dev/null; then
+    die "could not determine the newest release; check the connection and retry."
   fi
+  if ! tag="$(python3 - "$release" <<'TAG'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as response:
+        tag = json.load(response).get("tag_name")
+except (AttributeError, json.JSONDecodeError, OSError, UnicodeError):
+    raise SystemExit(1)
+if not isinstance(tag, str) or not tag:
+    raise SystemExit(1)
+print(tag)
+TAG
+)"; then
+    die "could not determine the newest release; check the connection and retry."
+  fi
+  echo "downloading ${tag}"
+  source_url="https://github.com/$REPO_SLUG/archive/refs/tags/$tag.tar.gz"
   curl -fsSL "$source_url" -o "$work/rundesk.tar.gz" ||
     die "could not download rundesk from $REPO_SLUG."
   echo "unpacking $(du -h "$work/rundesk.tar.gz" | cut -f1 | tr -d ' ')"

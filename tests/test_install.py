@@ -512,14 +512,12 @@ class WhatIsInstalledTests(unittest.TestCase):
     def test_an_install_without_a_checkout_takes_the_newest_release_not_the_branch(self):
         # Installing the branch hands someone a version that was never released — reporting a
         # number no release carries, which `rundesk update` would then offer to move them
-        # *backwards* onto. The branch is the fallback for a repository with no release yet.
+        # *backwards* onto.
         script = INSTALLER.read_text()
         self.assertIn("releases/latest", script, "the installer does not ask what the newest release is")
         self.assertIn("archive/refs/tags/", script, "the installer never downloads a released tag")
-        branch = script.index("archive/refs/heads/main")
-        tags = script.index("archive/refs/tags/")
-        self.assertLess(tags, branch, "the branch is preferred over the released tag")
-        self.assertIn("no release published yet", script, "a repository with no release could not be installed")
+        self.assertNotIn("archive/refs/heads/main", script,
+                         "a failed release lookup can still install unreleased work")
 
 
 class SaysWhatItIsDoingTests(Sandbox):
@@ -658,46 +656,105 @@ class WhatItWillNotDeleteTests(Sandbox):
                          "the installer replaced a command it did not place")
 
 
-class NoReleaseYetTests(Sandbox):
-    """The branch that runs when the release lookup comes back with nothing."""
+class ReleaseLookupTests(Sandbox):
+    """A remote install changes nothing until it knows which release it is installing."""
 
-    def fake_curl(self, tarball: Path) -> Path:
-        """A curl that fails the way the real one does on a repository with no releases, and
-        serves a prepared archive for anything else. Offline, so the suite stays offline."""
+    def fake_curl(self) -> Path:
+        """A curl whose release reply and archive are local, with every request recorded."""
         bind = self.root / "fakebin"
         bind.mkdir(exist_ok=True)
         curl = bind / "curl"
         curl.write_text(
             "#!/bin/sh\n"
+            "url=''\n"
             "out=''\n"
-            "for a in \"$@\"; do case \"$a\" in https://api.github.com/*) exit 22;; esac; done\n"
-            "while [ $# -gt 0 ]; do case \"$1\" in -o) out=\"$2\"; shift;; esac; shift; done\n"
-            f"[ -n \"$out\" ] && cp {tarball} \"$out\"\n"
+            "while [ $# -gt 0 ]; do\n"
+            "  case \"$1\" in\n"
+            "    -o) out=\"$2\"; shift ;;\n"
+            "    http*) url=\"$1\" ;;\n"
+            "  esac\n"
+            "  shift\n"
+            "done\n"
+            "printf '%s\\n' \"$url\" >> \"$RUNDESK_REQUEST_LOG\"\n"
+            "case \"$url\" in\n"
+            "  https://api.github.com/*)\n"
+            "    case \"$RUNDESK_LOOKUP_REPLY\" in\n"
+            "      timeout) exit 28 ;;\n"
+            "      forbidden|missing) exit 22 ;;\n"
+            "      malformed) printf '%s\\n' 'not-json' > \"$out\" ;;\n"
+            "      empty) printf '%s\\n' '{\"tag_name\":\"\"}' > \"$out\" ;;\n"
+            "      valid) printf '%s\\n' '{\"tag_name\":\"v9.9.9\"}' > \"$out\" ;;\n"
+            "    esac\n"
+            "    ;;\n"
+            "  *) cp \"$RUNDESK_RELEASE_ARCHIVE\" \"$out\" ;;\n"
+            "esac\n"
         )
         curl.chmod(0o755)
         return bind
 
-    def test_a_release_lookup_that_fails_falls_back_instead_of_dying_silently(self):
-        # `set -e` aborts on a failing assignment and `-o pipefail` fails the pipeline
-        # whenever curl does, so this fallback was unreachable: a repository with no
-        # releases, or a rate limit, killed the install on exit 56 having printed nothing.
-        source = self.root / "rundesk-cli-main"
+    def release_archive(self) -> Path:
+        source = self.root / "rundesk-cli-v9.9.9"
         shutil.copytree(REPO, source, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
-        tarball = self.root / "main.tar.gz"
+        tarball = self.root / "release.tar.gz"
         subprocess.run(["tar", "-czf", str(tarball), "-C", str(self.root), source.name], check=True)
+        return tarball
 
-        loose = self.root / "loose"
+    def attempt(self, reply: str, tarball: Path):
+        case = self.root / reply
+        home, bindir, loose = case / "home", case / "bin", case / "loose"
+        home.mkdir(parents=True)
+        bindir.mkdir()
         loose.mkdir()
         shutil.copy2(INSTALLER, loose / "install.sh")
-        done = installer(home=self.home, bindir=self.bindir, cwd=loose, script=loose / "install.sh",
-                         extra_env={"PATH": f"{self.fake_curl(tarball)}{os.pathsep}{os.environ['PATH']}"})
+        install = home / ".rundesk"
+        install.mkdir()
+        marker = install / "existing-install.marker"
+        marker.write_text("the released install")
+        current = install / "rundesk"
+        current.write_text("#!/bin/sh\necho 'the released install'\n")
+        current.chmod(0o755)
+        command = bindir / "rundesk"
+        command.symlink_to(current)
+        requests = case / "requests.txt"
+        done = installer(
+            home=home,
+            bindir=bindir,
+            cwd=loose,
+            script=loose / "install.sh",
+            extra_env={
+                "PATH": f"{self.fake_curl()}{os.pathsep}{os.environ['PATH']}",
+                "RUNDESK_LOOKUP_REPLY": reply,
+                "RUNDESK_REQUEST_LOG": str(requests),
+                "RUNDESK_RELEASE_ARCHIVE": str(tarball),
+            },
+        )
+        return done, marker, command, requests.read_text().splitlines()
 
-        self.assertEqual(done.returncode, 0,
-                         f"a repository with no releases could not be installed:\n{done.stdout}\n{done.stderr}")
-        self.assertIn("no release published yet", done.stdout)
-        answered = subprocess.run([str(self.bindir / "rundesk"), "version"],
-                                  capture_output=True, text=True)
-        self.assertEqual(answered.returncode, 0, answered.stderr)
+    def test_release_lookup_failures_leave_the_existing_install_alone(self):
+        """R-INS-15 — uncertainty is not permission to install unreleased work."""
+        tarball = self.release_archive()
+        for reply in ("timeout", "forbidden", "missing", "malformed", "empty"):
+            with self.subTest(reply=reply):
+                done, marker, command, requests = self.attempt(reply, tarball)
+                self.assertNotEqual(done.returncode, 0, done.stdout)
+                self.assertIn("could not determine the newest release", done.stderr)
+                self.assertTrue(marker.exists(), "the failed lookup replaced the existing install")
+                self.assertEqual(str(marker.parent / "rundesk"), os.readlink(command),
+                                 "the failed lookup replaced the existing command")
+                self.assertFalse(any("refs/heads/main" in request for request in requests),
+                                 "the failed lookup requested unreleased work")
+                self.assertEqual(1, len(requests), "the failed lookup requested an archive")
+
+    def test_a_valid_release_response_installs_only_its_exact_tag(self):
+        """R-INS-15 — the tag returned by the release lookup is the archive installed."""
+        done, marker, _, requests = self.attempt("valid", self.release_archive())
+        self.assertEqual(done.returncode, 0, f"{done.stdout}\n{done.stderr}")
+        self.assertFalse(marker.exists(), "the valid release did not replace the existing install")
+        self.assertEqual(
+            "https://github.com/rundesk-ai/rundesk-cli/archive/refs/tags/v9.9.9.tar.gz",
+            requests[-1],
+        )
+        self.assertFalse(any("refs/heads/main" in request for request in requests))
 
 
 class OneInstructionTests(unittest.TestCase):

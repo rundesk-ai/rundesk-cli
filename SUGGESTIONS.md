@@ -41,7 +41,7 @@ so a later round does not spend the effort again without new reason:
 | Scheduling correctness | findings **12**, **21**, **24**, **25**, **26** |
 | Install, update and removal safety | findings **4**, **14**, **15**, **28** |
 | Source of truth and auditability | findings **26**, **27**, **28**, **29**; extensions to **12**, **17**, **19** |
-| Consumer command surface | findings **31–36**; extensions to **6**, **13**, **17**, **27**, **28** |
+| Consumer command surface | findings **31–35**; extensions to **6**, **13**, **17**, **27**, **28** |
 | Measured performance | finding **9** (second consequence) and **17**; measurements below |
 | Failure-injection coverage | see "Tests that prove only the easy half" below |
 | Security and trust boundaries | **no change needed today** — see below |
@@ -1309,7 +1309,7 @@ in `src/rundesk_cli/process.py`.
 # Round six — 2026-07-25
 
 Line numbers are against `43315ae`. Material that repeated an existing failure is merged
-above; findings 31–36 are only the distinct consumer command-surface gaps.
+above; findings 31–35 are only the distinct consumer command-surface gaps.
 
 ## High impact
 
@@ -1405,26 +1405,6 @@ above; findings 31–36 are only the distinct consumer command-surface gaps.
    `show` reproduces it unambiguously. Start two work items, stop one by run ID, and prove
    the other and the gateway remain running. Each owned state source alone must make its
    gateway or run discoverable as required by finding 27.
-
-### 36. Do not install `main` when release lookup failed
-
-**Status:** Open
-
-1. **Command and location:** remote `install.sh`; `install.sh:198-214`;
-   `tests/test_install.py:565-604`.
-2. **Current behaviour:** A missing tag caused by no release, HTTP 403/404, malformed JSON,
-   a dropped connection or another curl failure takes the same branch:
-   `no release published yet; taking the main branch instead.` The current test explicitly
-   codifies that fallback.
-3. **Why it blocks:** The installer reports an unverified network failure as a known
-   repository state, then installs unreleased code while the user believes release
-   discovery succeeded.
-4. **Replacement:** Fail closed:
-   `install: FAILED — could not determine the newest release; check the connection and retry`.
-   Do not request `refs/heads/main.tar.gz`.
-5. **Test:** Separately inject timeout, 403, 404, malformed JSON and an empty tag. Each must
-   exit nonzero, preserve the existing install, and never request the main archive. A valid
-   release response must still install only its exact tag.
 
 ## Tests that prove only the easy half
 
