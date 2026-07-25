@@ -457,6 +457,44 @@ class AGatewayThatHasNoAgentYet(WithSomewhereToKeepAgents):
         self.assertEqual((agent.logs_home("gateway", self.where) / "gateway.log.1").read_text(),
                          "older still")
 
+    def test_nothing_is_adopted_while_a_gateway_of_that_name_is_running(self):
+        """R-AGT-9 — a gateway binds the directory it reads schedules from once, when it
+        starts, and never looks again. Moving those files out from under a live one leaves
+        it reading an empty directory for the rest of its life while every command reads
+        the new one, and a schedule it was going to run silently never runs.
+
+        The name is held across the move rather than asked about before it, because asking
+        and then moving is two decisions with a gap, and a gateway can claim the name
+        inside that gap."""
+        self.wrote()
+        agent.add("gateway", self.where)
+        running = gateway.Gateway("gateway", where=self.before / "run",
+                                  logs=self.before / "logs",
+                                  schedules=self.before / "schedules", root=self.root)
+        running.claim()
+        self.addCleanup(running.release)
+
+        with self.assertRaises(agent.InUse):
+            agent.adopt("gateway", self.where, logs=self.before / "logs",
+                        schedules=self.before / "schedules", run=self.before / "run")
+
+        self.assertTrue(gateway.schedules_path("gateway", self.before / "schedules").exists(),
+                        "it moved what a running gateway is reading")
+
+    def test_what_a_stopped_gateway_wrote_is_adopted_once_it_lets_the_name_go(self):
+        """R-AGT-9 — the other half, so refusing cannot pass by never adopting anything."""
+        self.wrote()
+        agent.add("gateway", self.where)
+        running = gateway.Gateway("gateway", where=self.before / "run",
+                                  logs=self.before / "logs",
+                                  schedules=self.before / "schedules", root=self.root)
+        running.claim()
+        running.release()
+
+        agent.adopt("gateway", self.where, logs=self.before / "logs",
+                    schedules=self.before / "schedules", run=self.before / "run")
+        self.assertFalse(gateway.schedules_path("gateway", self.before / "schedules").exists())
+
     def test_adopting_a_gateway_that_wrote_nothing_moves_nothing(self):
         """R-AGW-1"""
         agent.add("fresh", self.where)

@@ -55,7 +55,7 @@ def checked(name: str) -> str:
     containing a separator would put all three somewhere else entirely."""
     if not name or not all(ch.isalnum() or ch in "-_." for ch in name) or name.strip(".") == "":
         raise NotAName(
-            f"'{name}' is not a usable gateway name — letters, digits, dash, dot and underscore"
+            f"'{name}' is not a usable name — letters, digits, dash, dot and underscore"
         )
     return name
 
@@ -927,6 +927,19 @@ def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list
     said = _read_json(record, None)
     working = said.get("working") if isinstance(said, dict) else None
     return sorted(working) if isinstance(working, dict) else []
+
+
+@contextlib.contextmanager
+def holding(name: str, where: Path | None = None):
+    """Take this gateway's name and keep it, for anything that must not act while it runs.
+
+    The public way to `_holding_name`, for a caller that is about to move or delete what a
+    gateway of this name is using. Asking `standing()` first is not enough on its own: it
+    answers about the moment it was called, and a gateway can claim the name between that
+    answer and the act. Holding the name is what makes the two one decision.
+    """
+    with _holding_name(name, where or home()) as held:
+        yield held
 
 
 def forget(name: str, where: Path | None = None, schedules: Path | None = None,

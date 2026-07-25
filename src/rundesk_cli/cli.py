@@ -632,7 +632,11 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
         return 1
     knew = agents.exists(name)
     wrote = agents.standing_before(name)
-    if wrote and not knew:
+    # Whether or not the agent already exists. An adoption that was refused leaves the
+    # files where they were, and asking again is how an owner retries it — conditioning
+    # this on the agent being new would make one refusal permanent, since the home would
+    # exist ever after and nothing would look at the old directory again.
+    if wrote:
         now = _standing(name, gateways, agents)
         if now.running:
             print(f"{name}: NOT MADE — a gateway of that name is running (pid {now.pid})",
@@ -641,8 +645,16 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
                   file=sys.stderr)
             return 1
     made = agents.add(name)
-    moved = agents.adopt(name) if wrote and not knew else []
-    if knew and not made:
+    try:
+        moved = agents.adopt(name) if wrote else []
+    except agents.InUse as why:
+        # The name was claimed between asking and moving. Nothing moved, and saying so is
+        # the whole point: a half-adopted agent is the split this refuses to create.
+        print(f"{name}: NOT ADOPTED — {why}", file=sys.stderr)
+        print(f"        stop it and ask again: rundesk stop {name} && rundesk add {name}",
+              file=sys.stderr)
+        return 1
+    if knew and not made and not moved:
         print(f"{name}: ALREADY MADE — its home is as you left it")
         return 0
     print(f"{name}: MADE" if not knew else f"{name}: REPAIRED")
@@ -1114,7 +1126,10 @@ def _run_schedule(args: argparse.Namespace, gateways, whose) -> int:
     print(f"{args.name}/{args.schedule}: RUNNING BY HAND — {' '.join(one.run)}")
     said = asyncio.run(process.run(
         list(one.run),
-        env=process.environment(whose.run or _gateway.home()),
+        # Through what was passed in, never the module. Reaching for the real one here
+        # read the machine's own directories from inside a suite that had redirected
+        # nothing, which is the isolation every other line in this file keeps.
+        env=process.environment(whose.run or gateways.home()),
         on_line=print,
     ))
     print(f"{args.name}/{args.schedule}: "

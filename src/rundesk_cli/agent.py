@@ -54,6 +54,10 @@ class NotAnAgentName(ValueError):
     """A name that would not stand where agents are kept, or would claim another's file."""
 
 
+class InUse(Exception):
+    """Something is still using this name, so nothing belonging to it was moved."""
+
+
 def agents_home() -> Path:
     """Where agents are kept — one directory each, holding everything that is theirs.
 
@@ -76,10 +80,9 @@ def checked(name: str) -> str:
     try:
         gateway.checked(name)
     except gateway.NotAName as why:
-        raise NotAnAgentName(str(why).replace("gateway name", "agent name")) from None
-    separators = {os.sep, os.altsep} - {None}
-    if name in (os.curdir, os.pardir) or any(mark in name for mark in separators):
-        raise NotAnAgentName(f"'{name}' is not one name — an agent's name is one word, not a path")
+        # Said as it comes. What a name may be does not depend on who is asking, so the
+        # rule is stated once and neither side rewrites the other's word for it.
+        raise NotAnAgentName(str(why)) from None
     claimed = _claimed_stems()
     for part in name.split("."):
         if part in claimed:
@@ -288,13 +291,19 @@ def add(name: str, where: Path | None = None) -> list[str]:
 
 
 def adopt(name: str, where: Path | None = None, logs: Path | None = None,
-          schedules: Path | None = None) -> list[str]:
+          schedules: Path | None = None, run: Path | None = None) -> list[str]:
     """Move what a gateway of this name wrote before it had an agent into the agent's own.
 
     Only ever asked for: nothing here runs on its own, and nothing moves until an owner
-    types the name. The gateway must already be stopped when this is called — moving the
-    files a running gateway is reading would leave it writing to one place while every
-    command read another, which is the split that makes a schedule silently never run.
+    types the name.
+
+    **The name is held for as long as the moving takes**, and nothing moves if it cannot be.
+    A gateway binds the directory it reads schedules from once, when it starts, and never
+    looks again — so moving those files out from under a live one leaves it reading an empty
+    directory for the rest of its life while every command reads the new one, and a schedule
+    it was going to run silently never runs. Asking whether it is running and then moving is
+    two decisions with a gap between them, and a gateway can claim the name inside that gap;
+    holding the name is what makes them one (R-AGT-9).
 
     The log and the schedules move; what the gateway was *doing* does not, because a
     stopped gateway is not doing anything and its lock is an empty file whose name the next
@@ -302,11 +311,15 @@ def adopt(name: str, where: Path | None = None, logs: Path | None = None,
     """
     goes = {"logs": logs_home(name, where), "schedules": schedules_home(name, where)}
     moved = []
-    for was, into in _wrote_before(name, logs, schedules):
-        for path in _the_file_and_what_it_rotated_into(was):
-            goes[into].mkdir(parents=True, exist_ok=True)
-            shutil.move(str(path), str(goes[into] / path.name))
-            moved.append(path.name)
+    with gateway.holding(name, run) as held:
+        if not held:
+            raise InUse(
+                f"a gateway named '{name}' is still running, so nothing of its was moved")
+        for was, into in _wrote_before(name, logs, schedules):
+            for path in _the_file_and_what_it_rotated_into(was):
+                goes[into].mkdir(parents=True, exist_ok=True)
+                shutil.move(str(path), str(goes[into] / path.name))
+                moved.append(path.name)
     return sorted(moved)
 
 

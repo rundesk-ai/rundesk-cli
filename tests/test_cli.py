@@ -583,6 +583,12 @@ class FakeGateways:
     def fitness(self, root=None):
         return None
 
+    def home(self):
+        # Never the real one: a case that reached the machine's own run directory would be
+        # reading whatever the developer happens to have.
+        assert self._written is not None, "this case asked where gateways keep things"
+        return self._written.parent
+
     def log_path(self, name, logs=None):
         return self._written if self._written is not None else pathlib.Path("/nowhere/x.log")
 
