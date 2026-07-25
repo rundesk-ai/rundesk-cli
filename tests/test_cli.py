@@ -31,15 +31,18 @@ from rundesk_cli import cli  # noqa: E402
 #: answers honestly, never the duration. Set for the whole file rather than per case,
 #: because the ones that spend the whole wait are exactly the ones nobody remembers to
 #: turn down — a gateway that never comes up has no earlier moment to finish at.
-_REAL_PATIENCE = (cli.START_PATIENCE, cli.CYCLE_PATIENCE)
+_REAL_PATIENCE = (cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS)
 
 
 def setUpModule():
-    cli.START_PATIENCE, cli.CYCLE_PATIENCE = 0.3, 0.3
+    # Both turned down together. Turning the patience down alone left a wait that had room
+    # for one look and a fraction of a second's margin on the second — so a case proving a
+    # cycle waits passed on a quick machine and reported a failure on a loaded one.
+    cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS = 0.3, 0.3, 0.005
 
 
 def tearDownModule():
-    cli.START_PATIENCE, cli.CYCLE_PATIENCE = _REAL_PATIENCE
+    cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS = _REAL_PATIENCE
 from rundesk_cli import gateway as real_gateway  # noqa: E402
 
 

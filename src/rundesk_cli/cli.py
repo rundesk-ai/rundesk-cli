@@ -44,6 +44,14 @@ START_PATIENCE = 15.0
 #: mistaken for one that is stuck.
 CYCLE_PATIENCE = 20.0
 
+#: How often either of those looks again while it waits. Named once rather than written
+#: into each waiter, because how long to wait and how often to look are one decision: a
+#: patience shorter than a couple of these leaves a wait that can only look once, and
+#: whether it looks twice then depends on how loaded the machine is. That is exactly how
+#: a correct cycle came to be reported as one that never restarted, on one platform and
+#: not the other.
+LOOK_AGAIN_SECONDS = 0.2
+
 #: What a command that exists but is not built yet exits with. Not 0, which a script
 #: would take as done; not 1, which is reserved for a command that ran and failed; and
 #: not 2, which argparse already spends on a usage error. Those last two are different
@@ -449,7 +457,7 @@ def _came_up(name: str, gateways, patience: float | None = None):
         now = gateways.standing(name)
         if now.running:
             return now
-        time.sleep(0.2)
+        time.sleep(LOOK_AGAIN_SECONDS)
     return None
 
 
@@ -543,7 +551,7 @@ def _gone(name: str, gateways, patience: float | None = None) -> bool:
     while time.monotonic() < deadline:
         if not gateways.standing(name).running:
             return True
-        time.sleep(0.2)
+        time.sleep(LOOK_AGAIN_SECONDS)
     return not gateways.standing(name).running
 
 
