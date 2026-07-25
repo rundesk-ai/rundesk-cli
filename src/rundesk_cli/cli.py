@@ -82,7 +82,7 @@ PLANNED: dict[str, tuple[str, dict[str, str]]] = {
         "show": "what one entry point resolves to, before anything runs",
     }),
     "channels": ("the channels an agent is reachable on, and who may use them", {
-        "add": "put this agent on a channel, held open by the gateway that runs it",
+        "add": "put this agent on a channel of a named kind, with what that kind needs",
         "remove": "take this agent off a channel",
         "show": "one channel, and who is allowed to reach this agent through it",
     }),

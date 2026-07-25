@@ -9,17 +9,18 @@ concept at a time. The Node Rundesk is evidence and prior art; it is not the arc
 
 **The noun is `agent`.** Earlier drafts of this roadmap said "profile"; the settled word for the thing a
 person operates is the agent, and *its home* is the directory of rules, memory, workspace and skills it
-loads. Where "profile" survives below, read "agent". Requirement IDs are `R-AGT-n`, and `agent-` is a
-declared component sitting above `platform-` — so an agent knows which gateway runs it and a gateway
-knows nothing of whose work it holds.
+loads. Where "profile" survives below, read "agent". `agent-` is a declared component sitting above
+`platform-` — so an agent knows which gateway runs it, and a gateway knows nothing of whose work it
+holds. Its drafts are `agent-home` (`R-AGT-n`) for what an agent is and loads, and `agent-gateway`
+(`R-AGW-n`) for the one gateway it runs in.
 
 ## Direction
 
-Build **agents before Discord**, after restoring a trustworthy runtime baseline.
+Build **agents first, then reach one through Discord**, and add skills and tools after that.
 
 Agents come first because a channel needs a stable identity, workspace and knowledge boundary to route
 to. Discord should not be used to discover whether agent isolation, provider invocation or session
-continuation works. Those are cheaper and more deterministic to prove locally.
+continuation works — those are cheaper and more deterministic to prove locally.
 
 The first useful vertical slice is:
 
@@ -27,7 +28,16 @@ The first useful vertical slice is:
 one agent -> one resolved binding -> one provider turn -> the terminal
 ```
 
-Then prove the same path from a schedule and a fake channel before adding the Discord network boundary.
+**Discord comes next, not last.** A remote channel is the thing this product is for, and until one
+carries a real turn, everything before it is proved only against fakes and the owner's own terminal. So
+the order is: the agent, the smallest resolution that lets a source pick a provider, one provider turn
+to have a brain at all, and then Discord — with the fake channel as its offline half rather than as a
+phase of its own.
+
+**Skills and tools come after**, because they are additive: an agent that loads a skill is a better
+agent, not a different one, and nothing about the channel, the turn or the run record changes when they
+land. Building them earlier spends the risk budget on the part that can be added safely at any time.
+
 Do not build all providers, channels, tools and approval paths together.
 
 ## The Small Model
@@ -87,7 +97,11 @@ authorized local invocation can.
 - Keep persistence small and file-based until measured behavior requires something else. A run ID and
   minimal routing/session records do not require a database.
 - Treat component ontology, persisted schemas and migrations as owner decisions before implementation.
-  This roadmap does not add or ratify `agent-`, `provider-` or `channel-` components.
+  `agent-` is now declared; this roadmap does not add or ratify `provider-` or `channel-`.
+- **A credential never arrives as a command-line argument, and never leaves in output.** Anything on a
+  command line is readable through the process list and kept in shell history. A channel's token is read
+  from an environment variable, from a file the owner already controls, or asked for on a terminal — and
+  what shows a channel says a secret is present rather than what it is.
 
 ## How Every Phase Is Proved
 
@@ -173,7 +187,8 @@ an agent nobody can start, or a gateway that still has to be managed by hand bes
 
 `agents add` makes an agent's home; `agents`, `agents show` and `doctor` read it. Exact syntax and
 persisted layout are decided in the draft PRD before implementation, and `.knowledge/prd-drafts/agent-home.md`
-is ratified as part of this phase rather than before it — its rows are what these tests prove.
+and `agent-gateway.md` are ratified as part of this phase rather than before it — their rows are what
+these tests prove.
 
 An agent's home should contain:
 
@@ -230,22 +245,30 @@ rundesk agents ava                 what ava is, and where it keeps things
 
 rundesk schedules ava              what ava runs on its own       (was --gateway ava)
 rundesk schedules ava add tidy --when <cron> -- /bin/tidy
+rundesk schedules ava remove tidy  take it away
+rundesk schedules ava on|off tidy  keep it, but stop it running
 rundesk schedules ava run tidy     run it now, due or not
 rundesk channels ava               what ava is reachable on
+rundesk channels ava add|remove|show discord
 rundesk runs ava                   what ava has run
-rundesk runs ava show <run>
+rundesk runs ava show|resume|replay|stop <run>
 ```
 
 - `add` makes the agent **and its one gateway**; `remove` takes both. There is no separate step, and no
   way to end up with one without the other.
 - `remove` stops being gateway-specific and becomes the agent's — the gateway goes because its agent did.
   The verb does not move, so nothing that ships today is renamed.
+- **`remove` takes the agent's schedules and channels with it** (R-AGW-4). Otherwise adding the name back
+  inherits work nobody asked for, from an agent that no longer exists. What the agent *did* is kept until
+  a removal is explicitly asked to take that too (R-AGW-5), which is the `--purge` that already ships.
 - `--gateway <name>` becomes a positional, which also takes it out of the option list that `--run`'s
   remainder currently swallows (finding 31).
 - **A schedule can be run by hand** — `schedules <agent> run <schedule>` — whether or not it is due, and
   doing so does not move when it next falls due on its own (R-SCH-21, R-SCH-22).
 - The default gateway that exists today under no agent's name is reconciled: either it gains an agent or
   it is named as legacy. **This is a persisted-state decision and an owner call before implementation.**
+- `channels` stays **registered and refusing** through this phase. Its shape is settled in Phase 4, which
+  is where a channel is worth having, and nothing here builds one.
 
 The dependency runs **agents → gateways and never the reverse**: `cli` → `agent` → `gateway` → `process`.
 An agent knows which gateway runs it; a gateway goes on knowing nothing of whose work it holds, which is
@@ -310,34 +333,7 @@ it does not require a new persistence engine.
 One table-driven offline test demonstrates the four-entry-point example above, including exact resolved
 `argv`, environment, cwd and session key through stand-in executables.
 
-## Phase 3 — Bootstrap Knowledge, Skills and Tool Discovery
-
-**Outcome:** every provider can be given the same agent's knowledge and a basic skill without Rundesk
-becoming a second skills or tools engine.
-
-Add one basic `SKILL.md` template, one canonical agent-visible skills library and only the provider
-discovery links that live probes prove. Current Node probes suggest `.claude/skills/` and
-`.agents/skills/` links, while a bare `skills/` directory is not enough; re-probe current CLI versions
-before making that a guarantee.
-
-The first tool discovery kit should only inventory, search and explain granted tools. It should not
-duplicate provider-native file/shell tools, dynamically load plugins or execute arbitrary new actions.
-Tool execution and richer grants wait until one provider turn is proven.
-
-### Tests and probes
-
-- Offline tests prove scaffold idempotency, link resolution and agent-specific grants.
-- Rundesk-managed config does not automatically discover ungranted owner-level skills.
-- A canary agent proves each provider follows `AGENTS.md` to `SOUL.md`, `USER.md` and `MEMORY.md`.
-- A basic skill canary proves actual provider discovery from the agent's workspace.
-- Saved, sanitized probe output records provider version, invocation and result.
-
-### Exit proof
-
-Each supported provider has a current capability row marked proven, unsupported or unknown. Rundesk does
-not claim that a provider loaded a rule or skill based only on file presence.
-
-## Phase 4 — Control One Provider Through the Terminal
+## Phase 3 — Control One Provider Through the Terminal
 
 **Outcome:** one agent can complete and resume one provider-native turn while Rundesk streams and
 correlates its events.
@@ -377,48 +373,47 @@ probe proves it; some headless providers turn questions into final prose or requ
 A manual canary completes one local turn, resumes it, and correlates its native stream, transcript,
 session and outcome by one run ID. The same sanitized stream passes offline replay.
 
-## Phase 5 — Exercise Two Trigger Types Without a Network
-
-**Outcome:** the resolved run path works from a schedule and a fake channel, not only from the CLI.
-
-First let one schedule name a binding and run the proven provider under an autonomous permission policy.
-Then connect a fake channel to a fake or replayed provider. This separates routing and delivery failures
-from Discord failures.
-
-Any change to existing schedule files is a persisted-schema decision and requires owner approval plus a
-tested migration or an additive format that keeps old schedules truthful.
-
-Before reconnectable channel delivery, interruption history must resist lost updates, logs must have one
-bounded source, and stale/interrupted runs must be readable and reconciled. These are the current findings
-11, 17 and 26–27; they are just-in-time gates for this phase rather than blockers for the offline agent
-scaffold.
-
-Before enabling provider-backed schedules, the scheduler must also prove that it examines work
-immediately after gateway start, agrees on cron next-time and firing semantics, reconciles a stale
-`started` outcome after a crash, and cannot confuse Rundesk options with provider arguments. These are
-the current risks recorded as findings 24–26 and 31.
-
-### Tests
-
-- `schedule A` and `schedule B` share one agent but resolve different provider/model selections.
-- Existing never-late and never-overlap rules still hold.
-- An interactive request in an autonomous schedule becomes a clear outcome instead of waiting forever.
-- Fake-channel disconnect, slow delivery and retry exhaustion do not end the provider turn.
-- Reconnecting the fake channel identifies the existing conversation/run instead of duplicating it.
-
-### Exit proof
-
-One schedule run and one fake-channel conversation pass through the same resolver, run record and provider
-adapter used by the terminal.
-
-## Phase 6 — Add Basic Discord Communication
+## Phase 4 — Add Basic Discord Communication
 
 **Outcome:** one authorized Discord channel/thread can send text to one proven provider binding and receive
 streamed results. Approvals and provider questions remain explicitly unsupported in this phase.
 
-Build the Discord wire against a fake brain first, then attach it to the Phase 4 adapter. The already
+Build the Discord wire against a fake brain first, then attach it to the Phase 3 adapter. The already
 pinned `discord.py` dependency must earn its place through the same install and test path as the product;
 do not add a second Discord stack.
+
+**The fake channel is this phase's offline half, not a phase of its own.** Every routing and failure case
+— disconnect, slow delivery, retry exhaustion, reconnecting to an existing conversation — is proved
+against it before a real token is used, so a Discord failure is never confused with a routing one. What
+the fake cannot prove is Discord's own limits, and that is what the canary at the end is for.
+
+### What `channels add` takes
+
+A channel is added **by kind**, and each kind needs different things — so the kind is a positional and
+what follows it belongs to that kind, the way `schedules add` takes what a schedule needs:
+
+```text
+rundesk channels ava add discord --server <id> --channel <id> --allow <user> [--allow <user> …]
+rundesk channels ava add slack   --workspace <id> --channel <id> --allow <user>
+```
+
+Exact field names are settled **here**, against the installed Discord API rather than from a
+specification read early. Until this phase, `channels` is registered and refuses truthfully. What was
+decided in advance is only the shape, and one hard rule:
+
+- **A secret is never an argument.** A bot token on a command line is readable by anything on the machine
+  through the process list and is written into shell history. Tokens are read from an environment
+  variable or a file the owner already controls, or asked for on a terminal — never `--token <value>`,
+  and never stored anywhere Rundesk would print.
+- Who may use a channel is part of adding it, not a later step. A channel authorized for nobody reaches
+  nobody, which is the safe direction to fail in.
+- `channels ava show <channel>` says what a channel is and who may reach the agent through it, with the
+  secret named as present rather than shown.
+
+Before reconnectable channel delivery, interruption history must resist lost updates, logs must
+have one bounded source, and stale or interrupted runs must be readable and reconciled. These are
+the current findings 11, 17 and 26–27 — just-in-time gates for this phase, and not blockers for the
+offline agent work before it.
 
 The first slice needs:
 
@@ -429,11 +424,82 @@ The first slice needs:
 - an asynchronous delivery queue whose failure cannot kill provider work;
 - local retention of the final run outcome when Discord is unavailable.
 
+### Tests
+
+- Fake-channel disconnect, slow delivery and retry exhaustion do not end the provider turn.
+- Reconnecting the fake channel identifies the existing conversation/run instead of duplicating it.
+- An unauthorized user, server or channel is refused before a run is admitted, not after.
+- A message naming a provider, model or permission policy changes none of them.
+- Output too long for one message is bounded and split or attached, never truncated in silence.
+
 ### Exit proof
 
 A fake Discord integration proves all routing and failure cases offline. A manual private-server canary
 then sends one message, observes streamed progress and receives one final answer correlated to the same
 run ID.
+
+## Phase 5 — Let the Clock Start Work
+
+**Outcome:** an agent does work because the time came, through the same resolver, run record and
+provider adapter that Discord and the terminal already use.
+
+One schedule names a binding and runs the proven provider under an autonomous permission policy. The
+fake channel was Phase 4's offline half, so what is left here is the trigger that has no one watching
+it — which is the one that must never fail silently.
+
+Any change to existing schedule files is a persisted-schema decision and requires owner approval plus a
+tested migration or an additive format that keeps old schedules truthful.
+
+Before enabling provider-backed schedules, the scheduler must prove that it examines work immediately
+after gateway start, agrees on cron next-time and firing semantics, reconciles a stale `started` outcome
+after a crash, and cannot confuse Rundesk options with provider arguments. These are the current risks
+recorded as findings 24–26 and 31.
+
+### Tests
+
+- `schedule A` and `schedule B` share one agent but resolve different provider/model selections.
+- Existing never-late and never-overlap rules still hold.
+- An interactive request in an autonomous schedule becomes a clear outcome instead of waiting forever.
+- A schedule run by hand runs, and leaves the time it next falls due where it was (R-SCH-21, R-SCH-22).
+- A schedule whose provider fails leaves one durable outcome that `schedules` reports, not silence.
+
+### Exit proof
+
+One scheduled run passes through the same resolver, run record and provider adapter that Discord and the
+terminal already used — and its outcome is readable the next morning without a terminal having been open.
+
+## Phase 6 — Bootstrap Knowledge, Skills and Tool Discovery
+
+**Outcome:** every provider can be given the same agent's knowledge and a basic skill without Rundesk
+becoming a second skills or tools engine.
+
+**This is additive, which is why it waits.** An agent that loads a skill is a better agent, not a
+different one: nothing about the channel, the turn, the run record or the resolver changes when this
+lands. Everything before it was work that could not be added later without redoing it, and this is not.
+The corollary is a real constraint — if a change here forces a change in Phase 3 or 4, it is not a skill
+concern and belongs in the phase it disturbed.
+
+Add one basic `SKILL.md` template, one canonical agent-visible skills library and only the provider
+discovery links that live probes prove. Current Node probes suggest `.claude/skills/` and
+`.agents/skills/` links, while a bare `skills/` directory is not enough; re-probe current CLI versions
+before making that a guarantee.
+
+The first tool discovery kit should only inventory, search and explain granted tools. It should not
+duplicate provider-native file/shell tools, dynamically load plugins or execute arbitrary new actions.
+Tool execution and richer grants wait until one provider turn is proven — which by now it is.
+
+### Tests and probes
+
+- Offline tests prove scaffold idempotency, link resolution and agent-specific grants.
+- Rundesk-managed config does not automatically discover ungranted owner-level skills.
+- A canary agent proves each provider follows `AGENTS.md` to `SOUL.md`, `USER.md` and `MEMORY.md`.
+- A basic skill canary proves actual provider discovery from the agent's workspace.
+- Saved, sanitized probe output records provider version, invocation and result.
+
+### Exit proof
+
+Each supported provider has a current capability row marked proven, unsupported or unknown. Rundesk does
+not claim that a provider loaded a rule or skill based only on file presence.
 
 ## Phase 7 — Questions, Approvals and Recovery
 
@@ -469,7 +535,7 @@ than restart and repeated crashes stop looping (the currently unproven R-GW-22 a
 **Outcome:** Claude, Codex and Grok can each be selected by bindings, and a second channel can reuse the
 same channel contract without changing the agent.
 
-Add the remaining providers one at a time behind the Phase 4 conformance suite. Preserve real differences:
+Add the remaining providers one at a time behind the Phase 3 conformance suite. Preserve real differences:
 do not synthesize tool events a provider does not emit, claim interactive input a protocol cannot accept
 or hide cumulative usage behind guessed per-turn numbers.
 
@@ -506,11 +572,14 @@ The next implementation sequence should be:
 2. Build the agent and its home, and refactor the command surface so agents are what a person operates
    and gateways are how they run. **Both halves of Phase 1, together** — either alone leaves an agent
    nobody can start, or a gateway still managed by hand beside its agent.
-3. Prove binding and run-ID resolution with fakes.
-4. Close the provider-facing runtime risks immediately before the first live provider turn.
+3. Prove binding and run-ID resolution with fakes — the smallest thing that lets a source pick a provider.
+4. Close the provider-facing runtime risks, then take one provider turn to the terminal.
+5. **Reach that agent through Discord**, so the product is tested where it is actually used.
+6. Add skills and tool discovery, which are additive and change nothing already proven.
 
-That sequence exposes agent and routing mistakes locally, keeps the provider CLIs native, and reaches
-Discord through small demonstrations instead of one large integration.
+That sequence exposes agent and routing mistakes locally, keeps the provider CLIs native, and gets to a
+real remote turn in four moves instead of six — while leaving the additive work until after the risky
+part has been proved.
 
 ## Evidence Used
 
