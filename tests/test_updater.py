@@ -759,5 +759,78 @@ class AnUpdateAndWorkInFlight(unittest.TestCase):
         self.assertEqual([], asked, "it asked what was running when it was already current")
 
 
+class AnUpdateAndWhatIsRunning(unittest.TestCase):
+    """R-UPD-21, R-UPD-22 — an update replaces the files a running gateway is made of.
+
+    Left running, a gateway keeps the code it already imported and reads the new files
+    for everything it has not, so it goes on serving a version nobody can see it is on.
+    """
+
+    def _run(self, stopped=(), refused=None, down=(), applied_code=0):
+        self.brought_back = None
+        self.applied = []
+
+        def pause():
+            return list(stopped), refused
+
+        def resume(names):
+            self.brought_back = list(names)
+            return list(down)
+
+        def apply(root, version):
+            self.applied.append(version)
+            return applied_code
+
+        code = updater.run(
+            Path("/tmp/rundesk-not-real"), "0.1.0", latest=lambda: "9.9.9",
+            apply=apply, busy=lambda: [], pause=pause, resume=resume,
+        )
+        return code
+
+    def test_an_update_stops_what_it_is_about_to_replace_the_files_of(self):
+        """R-UPD-21"""
+        self.assertEqual(0, self._run(stopped=["gateway"]))
+        self.assertEqual(["9.9.9"], self.applied)
+        self.assertEqual(["gateway"], self.brought_back, "it never brought back what it stopped")
+
+    def test_an_update_brings_back_what_it_stopped(self):
+        """R-UPD-22"""
+        self._run(stopped=["alpha", "beta"])
+        self.assertEqual(["alpha", "beta"], self.brought_back)
+
+    def test_an_update_that_failed_still_brings_back_what_it_stopped(self):
+        """R-UPD-22 — the path that matters. An update that fell over must not also leave
+        the machine's gateways down behind it, which is the one outcome nobody recovers
+        from without knowing to go and look."""
+        code = self._run(stopped=["alpha"], applied_code=1)
+        self.assertEqual(["alpha"], self.brought_back, "a failed update left the gateway down")
+        self.assertEqual(1, code)
+
+    def test_an_update_that_broke_a_gateway_says_so_rather_than_reporting_success(self):
+        """R-UPD-22 — the update applying is not the gateway coming back, and a release
+        needing something the install does not have starts a gateway that ends *well*
+        so as not to be restarted forever. The machine calls that a job accepted."""
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            code = self._run(stopped=["alpha"], down=["alpha"])
+        self.assertEqual(1, code, "it applied an update that left a gateway down and said 0")
+        self.assertIn("did not come back", said.getvalue())
+        self.assertIn("alpha", said.getvalue())
+
+    def test_an_update_refused_by_what_is_running_replaces_nothing(self):
+        """R-UPD-21 — a gateway it cannot start again is not one to take down."""
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            code = self._run(refused="'scratch' is running unsupervised")
+        self.assertEqual(1, code)
+        self.assertEqual([], self.applied, "it replaced the install anyway")
+        self.assertIsNone(self.brought_back, "it brought back something it never stopped")
+        self.assertIn("unsupervised", said.getvalue())
+
+    def test_an_update_with_nothing_running_stops_and_starts_nothing(self):
+        """R-UPD-21 — the ordinary case on a machine with no gateway up."""
+        self.assertEqual(0, self._run())
+        self.assertEqual(["9.9.9"], self.applied)
+        self.assertEqual([], self.brought_back)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

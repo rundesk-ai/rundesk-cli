@@ -135,9 +135,69 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_update(args: argparse.Namespace, gateways) -> int:
-    return updater.run(REPO_ROOT, __version__, check_only=args.check,
-                       busy=lambda: _in_flight(gateways))
+def cmd_update(args: argparse.Namespace, gateways, machine) -> int:
+    return updater.run(
+        REPO_ROOT, __version__, check_only=args.check,
+        busy=lambda: _in_flight(gateways),
+        pause=lambda: _stand_all_down(gateways, machine),
+        resume=lambda names: _bring_all_back(names, gateways, machine),
+    )
+
+
+def _stand_all_down(gateways, machine) -> tuple:
+    """Stop every gateway an update is about to replace the files of (R-UPD-21).
+
+    Refuses outright rather than touching one running without a job. `launchctl kill` has
+    no handle on a process launchd never started, so such a gateway cannot be stopped
+    here at all — and even if it could, nothing could start it again: there is no record
+    of the terminal it was started from. Taking it down would leave an owner's gateway
+    dead because of a command they thought was routine.
+    """
+    if not machine.available():
+        return [], None
+    stopped = []
+    for it in gateways.every():
+        if not it.running:
+            continue
+        if not machine.loaded(it.name):
+            # Asked of the machine, never of the directory: a job description sitting in
+            # `LaunchAgents` is not a job the machine is keeping.
+            return stopped, (
+                f"'{it.name}' is running unsupervised (pid {it.pid}); it can be stopped "
+                f"but not started again, so it is not ours to take down for an update.\n"
+                f"        hand it to the machine:  rundesk start {it.name}\n"
+                f"        or stop it yourself, then update"
+            )
+        said = machine.stop(it.name)
+        if not said.ok or not _gone(it.name, gateways):
+            return stopped, f"'{it.name}' would not stop, so nothing was replaced under it"
+        stopped.append(it.name)
+    return stopped, None
+
+
+def _bring_all_back(names: list, gateways, machine) -> list:
+    """Start again everything the update stopped, and say what did not come back.
+
+    What this exists to catch is not the machine refusing — it is a gateway that starts,
+    finds the install no longer fits it, and ends *well* so as not to be restarted
+    forever (R-GW-25). The machine reports that as a job accepted and nothing else does
+    at all, so an update replacing a release that needs something new would otherwise
+    leave every gateway down and report success.
+    """
+    down = []
+    for name in names:
+        try:
+            said = machine.start(name)
+        except (machine.NotOurs, machine.NoSupervisor):
+            down.append(name)
+            continue
+        if not said.ok or _came_up(name, gateways) is None:
+            down.append(name)
+    if down:
+        unfit = gateways.fitness(REPO_ROOT)
+        if unfit:
+            print(f"update: what rundesk is made of no longer fits: {unfit}", file=sys.stderr)
+    return down
 
 
 def _in_flight(gateways) -> list:
@@ -410,10 +470,25 @@ def cmd_status(_args: argparse.Namespace, gateways, machine) -> int:
             str(it.pid) if it.running else "-",
             _how_long(it.started) if it.running else "-",
             "yes" if kept else "no",
+            _version_of(it),
             (f"{len(doing)} ({', '.join(sorted(doing))})" if doing else "idle") if it.running else "-",
         ))
-    _as_table(("GATEWAY", "STATE", "PID", "UPTIME", "SUPERVISED", "WORK"), rows)
+    _as_table(("GATEWAY", "STATE", "PID", "UPTIME", "SUPERVISED", "VERSION", "WORK"), rows)
     return 0
+
+
+def _version_of(it) -> str:
+    """Which version this gateway is actually running (R-GW-9).
+
+    Asked of the gateway's own record rather than of this install, because the two come
+    apart exactly when it matters: an update replaces the files while a gateway keeps the
+    code it already imported, so `rundesk version` says one thing and the thing actually
+    serving is another. Marked rather than merely shown, since a number a reader has to
+    compare against another number by eye is a difference nobody notices.
+    """
+    if not it.running or not it.version:
+        return "-"
+    return it.version if it.version == __version__ else f"{it.version} (old)"
 
 
 def _how_long(started: float | None) -> str:
@@ -576,7 +651,7 @@ def main(argv: list[str], gateways=None, machine=None) -> int:
     if args.command == "version":
         return cmd_version(args)
     if args.command == "update":
-        return cmd_update(args, gateways)
+        return cmd_update(args, gateways, machine)
     if args.command == "uninstall":
         return cmd_uninstall(args)
     if args.command == "serve":

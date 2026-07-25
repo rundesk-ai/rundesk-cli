@@ -31,7 +31,7 @@ other than the command that configured it is the fault that makes a schedule sil
 |---|---|---|---|
 | `~/.rundesk/run/` | `RUNDESK_RUN_DIR` | `<name>.lock` (liveness, held open) · `<name>.json` (what a gateway is doing now) | **State** — cleared when a gateway stops (R-GW-12) |
 | `~/.rundesk/logs/` | `RUNDESK_LOG_DIR` | `<name>.log` (rotated) | **History** — outlives the gateway (R-GW-18) |
-| `~/.rundesk/schedules/` | `RUNDESK_SCHEDULES_DIR` | `<name>.json` (what is scheduled) · `<name>.ran.json` (when each last fired and what became of it) · `<name>.seen.json` (when a gateway of this name was last up) · `<name>.changing` (held while a change is made, so two commands cannot lose one) | **History**, beside what it describes |
+| `~/.rundesk/schedules/` | `RUNDESK_SCHEDULES_DIR` | `<name>.json` (what is scheduled) · `<name>.ran.json` (when each last fired and what became of it) · `<name>.seen.json` (when a gateway of this name was last up) · `<name>.interrupted.json` (work that never got to finish, and whether it is definitely gone) · `<name>.changing` (held while a change is made, so two commands cannot lose one) | **History**, beside what it describes |
 | `~/Library/LaunchAgents/` | `RUNDESK_JOBS_DIR` | `ai.rundesk.<name>.plist` | The machine's, written by `supervisor.py` |
 
 The split is the point: stopping a gateway must clear what it is *doing* without clearing what it *did*.
@@ -70,17 +70,17 @@ Putting the schedule history with the run state erased it on every ordinary rest
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 7 files, ~355 cases)
+## Tests (tests/ — 7 files, ~420 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
 
 | File | Cases | Covers |
 |---|---|---|
-| `test_gateway.py` | 90 | `platform-gateway` — real processes, real signals, waits turned down |
-| `test_cli.py` | 64 | `command-surface` — walks every verb off the parser, so one wired nowhere is caught |
-| `test_process.py` | 54 | `platform-process` — real process groups, grandchildren, drains and ceilings |
-| `test_updater.py` | 43 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
+| `test_gateway.py` | 103 | `platform-gateway` — real processes, real signals, waits turned down |
+| `test_cli.py` | 73 | `command-surface` — walks every verb off the parser, so one wired nowhere is caught |
+| `test_process.py` | 84 | `platform-process` — real process groups, grandchildren, drains and ceilings |
+| `test_updater.py` | 54 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
 | `test_install.py` | 39 | `lifecycle-install` — drives the real `install.sh` in a sandboxed home |
 | `test_supervisor.py` | 38 | the launchd job — a fake `launchctl`, so it runs where there is none |
 | `test_schedule.py` | 28 | `platform-schedule` — pure time arithmetic, the clock passed in |

@@ -337,7 +337,64 @@ def started_at(pid: int) -> str | None:
     return said.stdout.strip() or None
 
 
-def _sweep_predecessor(record: Path, log: logging.Logger) -> list[str]:
+#: How many interruptions are kept for one gateway (R-GW-23). Bounded for the same reason
+#: the log is: a machine left running for months must not grow a file nobody prunes. The
+#: oldest go, because an interruption nobody has looked at in fifty incidents is history.
+KEPT_INTERRUPTIONS = 50
+
+
+def interrupted_path(name: str, where: Path | None = None) -> Path:
+    """Where work that never got to finish is written down (R-GW-23).
+
+    Beside the schedules, where history lives, for the same reason `ran_path` is: stopping
+    a gateway clears what it is *doing* (R-GW-12), and this is the account of what it
+    never finished — which is worth least at the moment it is written and most much later.
+    """
+    return (where or schedules_home()) / f"{checked(name)}.interrupted.json"
+
+
+def what_was_interrupted(name: str = DEFAULT_NAME, where: Path | None = None) -> dict:
+    """What this gateway never got to finish, and why (R-GW-23).
+
+    Read from a file rather than asked of anything, because whatever wants to know is a
+    different process — and usually a later one, since the gateway that could have
+    answered is the one that went.
+    """
+    said = _read_json(interrupted_path(name, where), {})
+    return {work: how for work, how in said.items() if isinstance(how, dict)} \
+        if isinstance(said, dict) else {}
+
+
+def _note_interrupted(name: str, where: Path | None, work: str, why: str,
+                      pgid: int | None = None, ended: bool = False) -> None:
+    """Write down that a piece of work was interrupted (R-GW-23).
+
+    Read, added to, and written back — not written from something held in memory. The one
+    thing that writes here is not always the gateway whose file it is: a gateway sweeping
+    what an abandoned name left behind writes into *that* name's file (R-GW-21), and two
+    writers working from their own snapshots is how one of them loses the other's entry.
+
+    `ended` is the distinction worth keeping. Work rundesk ended and work it could not
+    show was its to end are both interrupted, and only one of them is definitely gone.
+    """
+    from rundesk_cli import schedule
+
+    said = what_was_interrupted(name, where)
+    said[work] = {
+        "at": datetime.now().strftime(schedule.A_MINUTE), "why": why,
+        "pgid": pgid, "ended": ended,
+    }
+    if len(said) > KEPT_INTERRUPTIONS:
+        oldest = sorted(said, key=lambda one: said[one].get("at", ""))
+        for one in oldest[: len(said) - KEPT_INTERRUPTIONS]:
+            said.pop(one, None)
+    try:
+        _written_whole(interrupted_path(name, where), json.dumps(said, indent=2))
+    except OSError:
+        pass  # a gateway that cannot write this down still has to get on with starting
+
+
+def _sweep_predecessor(record: Path, log: logging.Logger, noting=None) -> list[str]:
     """End whatever the last gateway of this name was still running, and say what it was.
 
     Called once, at the moment a gateway takes the name — so by definition the gateway
@@ -358,15 +415,24 @@ def _sweep_predecessor(record: Path, log: logging.Logger) -> list[str]:
     if not isinstance(left, dict) or not isinstance(left.get("working"), dict):
         return []
     swept = []
+    # Every piece of work in here was in flight when its gateway went, so every one of
+    # them is interrupted — including the ones there is nothing left to end. What differs
+    # is only whether it is definitely gone, and that is what `ended` carries (R-GW-23).
+    said = noting if noting is not None else (lambda *_args, **_kw: None)
     for name, was in left["working"].items():
         pgid, since = (was.get("pgid"), was.get("since")) if isinstance(was, dict) else (was, None)
         if not isinstance(pgid, int):
             log.warning("left '%s' alone: the record does not say what was running", name)
+            said(name, "the record does not say what was running", None, False)
             continue
         if not _still_there(pgid):
-            continue  # the ordinary case: it went when its gateway did
+            # The ordinary case: it went when its gateway did. Nothing to end, and still
+            # work that never finished, which is the thing nobody was being told.
+            said(name, "the gateway it was running under is gone", pgid, True)
+            continue
         if not since:
             log.warning("left '%s' (group %s) alone: the record cannot prove it is ours", name, pgid)
+            said(name, "the record could not prove it was ours to end", pgid, False)
             continue
         if started_at(pgid) != since:
             # The number now belongs to something that is not ours. Leaving a stray
@@ -375,6 +441,7 @@ def _sweep_predecessor(record: Path, log: logging.Logger) -> list[str]:
             log.warning(
                 "left '%s' alone: group %s is no longer the process we started", name, pgid
             )
+            said(name, "its group now belongs to something that is not ours", pgid, False)
             continue
         log.warning("ending '%s' (group %s), left running by a gateway that is gone", name, pgid)
         for sig in (signal.SIGTERM, signal.SIGKILL):
@@ -385,11 +452,13 @@ def _sweep_predecessor(record: Path, log: logging.Logger) -> list[str]:
             time.sleep(ORPHAN_GRACE_SECONDS)
             if not _still_there(pgid):
                 break
+        said(name, "the gateway it was running under is gone", pgid, not _still_there(pgid))
         swept.append(name)
     return swept
 
 
-def _sweep_strays(where: Path, mine: str, log: logging.Logger) -> list[str]:
+def _sweep_strays(where: Path, mine: str, log: logging.Logger,
+                  schedules: Path | None = None) -> list[str]:
     """End work left by *any* gateway that is gone, not only this one's predecessor.
 
     A gateway ends what the last holder of its own name left behind — but a name that is
@@ -405,7 +474,13 @@ def _sweep_strays(where: Path, mine: str, log: logging.Logger) -> list[str]:
         name = record.stem
         if name == mine or _held(name, where):
             continue
-        left = _sweep_predecessor(record, log)
+        # Into *that* gateway's file, not ours: the work was its, and its name is where
+        # anything asking after it would look (R-GW-21, R-GW-23).
+        left = _sweep_predecessor(
+            record, log,
+            lambda work, why, pgid, ended, whose=name: _note_interrupted(
+                whose, schedules, work, why, pgid, ended),
+        )
         if left:
             log.warning("ended work left by '%s', a gateway nobody has started since: %s",
                         name, ", ".join(left))
@@ -683,8 +758,12 @@ class Gateway:
         # ours starts, so the same work can never be running twice over (R-GW-15, R-GW-16).
         self._pick_up_where_it_left_off()
         self._say_what_was_missed()
-        self.swept = _sweep_predecessor(_record_path(self.name, self.where), self.log)
-        self.swept += _sweep_strays(self.where, self.name, self.log)
+        self.swept = _sweep_predecessor(
+            _record_path(self.name, self.where), self.log,
+            lambda work, why, pgid, ended: _note_interrupted(
+                self.name, self.schedules, work, why, pgid, ended),
+        )
+        self.swept += _sweep_strays(self.where, self.name, self.log, self.schedules)
         if self.swept:
             self.log.warning(
                 "ended work left running by a gateway that is gone: %s", ", ".join(self.swept)
@@ -981,6 +1060,12 @@ class Gateway:
                 # next gateway of this name is the only thing that will ever end it
                 # (R-GW-16). Erasing it here is admitting to orphans and then losing them.
                 self._say()
+                # And said where something other than a person can read it (R-GW-23). The
+                # log already carries this, which answers the owner and nothing else.
+                for held, program in self.running.items():
+                    _note_interrupted(
+                        self.name, self.schedules, held,
+                        "the gateway went while it was still running", program.pid, False)
             self.running.clear()
             self.release(keep_record=not drained)
         self.log.info("down%s", "" if drained else " — with work still running")

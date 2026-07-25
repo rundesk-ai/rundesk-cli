@@ -39,11 +39,15 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-18 | An update that finds nothing newer leaves this copy alone | `up to date says so and changes nothing` |
 | ✅ | R-UPD-19 | A published version is named the same as the version the command reports | `a tag naming something else is refused`, `publishing a release actually applies the rule` |
 | ✅ | R-UPD-20 | Nothing published is told apart from being unable to ask | `nothing published is told apart from being unable to ask` |
-| ❌ | R-UPD-21 | An update leaves nothing that was running in a broken state | src/rundesk_cli/updater.py:150 — an update replaces the install without looking at what is running |
-| ❌ | R-UPD-22 | An update brings back whatever it stopped in order to perform it | src/rundesk_cli/updater.py:150 — an update stops nothing, so it brings nothing back |
+| ✅ | R-UPD-21 | An update leaves nothing that was running in a broken state | `an update stops what it is about to replace the files of`, `an update refused by what is running replaces nothing`, `an update with nothing running stops and starts nothing`, `an update stops every supervised gateway that is running`, `an update refuses rather than taking down what it cannot start again`, `an update on a machine with no supervisor stops nothing`, `a gateway that will not stop leaves the install untouched` |
+| ✅ | R-UPD-22 | An update brings back whatever it stopped in order to perform it | `an update brings back what it stopped`, `an update that failed still brings back what it stopped`, `an update that broke a gateway says so rather than reporting success`, `a gateway that does not come back is reported rather than passed over` |
 | ✅ | R-UPD-23 | An update refuses rather than interrupting work that is in flight | `an update refuses while work is in flight`, `an update says what is in flight rather than something`, `an update with nothing in flight goes ahead`, `checking never refuses for work in flight`, `what is in flight is asked of every gateway that is running` |
 
 ## Open questions
 
-- How an update stops and restarts what is running is undecided. The cheap shape is the update calling the lifecycle commands the product will already have; a registry of hooks is the expensive one, and nothing needs it yet. Something does run now, so this is answerable rather than hypothetical.
-- Whether an update should refuse outright while a turn is in flight, or wait for one to finish, is undecided.
+- Whether an update should rebuild what rundesk is made of, rather than only saying it no longer fits. A
+  release that needs something new leaves the old one in place, since only the installer ever builds it —
+  so the update reports the mismatch and the person runs the installer. Whether that hand-off is the right
+  one, or the update should do it, is not settled.
+- Whether an update part-way through replacing an install can be resumed or must be re-run. Each item
+  moves whole, so what is on disk is always readable, but a release half laid down is neither version.

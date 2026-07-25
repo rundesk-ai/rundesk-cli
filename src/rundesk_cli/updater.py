@@ -123,6 +123,8 @@ def run(
     latest: Callable[[], str | None] | None = None,
     apply: Callable[[Path, str], int] | None = None,
     busy: Callable[[], list] | None = None,
+    pause: Callable[[], tuple] | None = None,
+    resume: Callable[[list], list] | None = None,
 ) -> int:
     """Report where this install stands, and move it if asked.
 
@@ -157,7 +159,29 @@ def run(
         )
         print("        wait for it to finish, or stop it: rundesk stop", file=sys.stderr)
         return 1
-    return (apply or download_and_apply)(repo_root, published)
+    # Stopped before anything is laid down, and only what can be started again
+    # (R-UPD-21). A gateway left running reads the new files for anything it has not
+    # imported yet, and goes on serving the old code for everything it has.
+    stopped, refused = (pause or (lambda: ([], None)))()
+    if refused:
+        print(f"update: NOT APPLIED — {refused}", file=sys.stderr)
+        return 1
+    try:
+        moved = (apply or download_and_apply)(repo_root, published)
+    finally:
+        # Whatever became of the update, what was stopped to make room for it comes back
+        # (R-UPD-22). The failure path is the one that matters: an update that fell over
+        # must not also leave the machine's gateways down behind it.
+        left_down = (resume or (lambda _names: []))(stopped)
+    if left_down:
+        print(
+            f"update: {'applied' if moved == 0 else 'FAILED'}, but did not come back: "
+            f"{', '.join(sorted(left_down))}",
+            file=sys.stderr,
+        )
+        print("        why: rundesk logs <name>", file=sys.stderr)
+        return 1
+    return moved
 
 
 @contextlib.contextmanager

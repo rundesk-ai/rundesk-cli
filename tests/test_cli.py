@@ -879,5 +879,120 @@ class WhatIsInFlightWhenAnUpdateAsks(unittest.TestCase):
         self.assertEqual([], cli._in_flight(Gateways()))
 
 
+class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
+    """R-UPD-21, R-UPD-22 — which gateways an update may take down, and which it may not."""
+
+    class Standing:
+        def __init__(self, name, running=True, pid=1, version="0.1.0"):
+            self.name, self.running, self.pid, self.version = name, running, pid, version
+
+    def _machine(self, loaded=(), available=True, stops=True):
+        outer = self
+
+        class Machine:
+            NotOurs = RuntimeError
+            NoSupervisor = RuntimeError
+            asked = []
+
+            def available(self):
+                return available
+
+            def loaded(self, name):
+                return name in loaded
+
+            def stop(self, name):
+                Machine.asked.append(("stop", name))
+                return type("Spoke", (), {"ok": stops})()
+
+            def start(self, name):
+                Machine.asked.append(("start", name))
+                return type("Spoke", (), {"ok": True})()
+
+        Machine.asked = []
+        return Machine()
+
+    def _gateways(self, standing, gone_after_stop=True, comes_up=True):
+        outer = self
+
+        class Gateways:
+            def every(self):
+                return standing
+
+            def standing(self, name):
+                for it in standing:
+                    if it.name == name:
+                        return outer.Standing(name, running=not gone_after_stop) \
+                            if gone_after_stop else it
+                return outer.Standing(name, running=False)
+
+            def fitness(self, root=None):
+                return None
+        return Gateways()
+
+    def test_an_update_stops_every_supervised_gateway_that_is_running(self):
+        """R-UPD-21"""
+        up = [self.Standing("alpha"), self.Standing("beta"), self.Standing("idle", running=False)]
+        machine = self._machine(loaded=("alpha", "beta"))
+        stopped, refused = cli._stand_all_down(self._gateways(up), machine)
+        self.assertIsNone(refused)
+        self.assertEqual(["alpha", "beta"], stopped)
+        self.assertEqual([("stop", "alpha"), ("stop", "beta")], machine.asked,
+                         "it stopped a gateway that was not running")
+
+    def test_an_update_refuses_rather_than_taking_down_what_it_cannot_start_again(self):
+        """R-UPD-21 — launchctl has no handle on a process it never started, and nothing
+        records the terminal a hand-started gateway came from."""
+        machine = self._machine(loaded=())     # running, but the machine holds no job
+        stopped, refused = cli._stand_all_down(
+            self._gateways([self.Standing("scratch", pid=8812)]), machine)
+        self.assertEqual([], stopped)
+        self.assertIn("unsupervised", refused)
+        self.assertIn("rundesk start scratch", refused)
+        self.assertEqual([], machine.asked, "it tried to stop one it could not start again")
+
+    def test_an_update_on_a_machine_with_no_supervisor_stops_nothing(self):
+        """R-UPD-21 — nothing to hand a gateway to means nothing to take one from."""
+        stopped, refused = cli._stand_all_down(
+            self._gateways([self.Standing("alpha")]), self._machine(available=False))
+        self.assertEqual(([], None), (stopped, refused))
+
+    def test_a_gateway_that_will_not_stop_leaves_the_install_untouched(self):
+        """R-UPD-21 — replacing files under something that refused to go is the failure
+        this whole sequence exists to avoid."""
+        machine = self._machine(loaded=("alpha",), stops=False)
+        stopped, refused = cli._stand_all_down(self._gateways([self.Standing("alpha")]), machine)
+        self.assertEqual([], stopped)
+        self.assertIn("would not stop", refused)
+
+    def test_a_gateway_that_does_not_come_back_is_reported_rather_than_passed_over(self):
+        """R-UPD-22 — a release needing something this install does not have starts a
+        gateway that ends *well* so as not to be restarted forever, and the machine calls
+        that a job accepted. Only asking the gateway itself catches it."""
+        self.addCleanup(setattr, cli, "START_PATIENCE", cli.START_PATIENCE)
+        cli.START_PATIENCE = 0.1
+        machine = self._machine(loaded=("alpha",))
+        never = self._gateways([self.Standing("alpha", running=False)], gone_after_stop=False)
+        self.assertEqual(["alpha"], cli._bring_all_back(["alpha"], never, machine))
+
+
+class WhichVersionEachGatewayIsActuallyOn(unittest.TestCase):
+    def test_status_says_which_version_each_gateway_is_running(self):
+        """R-GW-9 — asked of the gateway's own record, because that and this install come
+        apart exactly when it matters."""
+        from rundesk_cli import __version__
+        it = type("S", (), {"running": True, "version": __version__})()
+        self.assertEqual(__version__, cli._version_of(it))
+
+    def test_a_gateway_left_on_an_older_version_is_marked_rather_than_merely_shown(self):
+        """R-GW-9 — an update replaces the files while a gateway keeps the code it already
+        imported. Two numbers a reader has to compare by eye is a difference nobody sees."""
+        it = type("S", (), {"running": True, "version": "0.0.1"})()
+        self.assertIn("old", cli._version_of(it))
+
+    def test_a_gateway_that_is_not_running_has_no_version_to_report(self):
+        """R-GW-9 — a version read off a record whose process is gone says nothing."""
+        self.assertEqual("-", cli._version_of(type("S", (), {"running": False, "version": "9"})()))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

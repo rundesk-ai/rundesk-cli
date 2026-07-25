@@ -1617,5 +1617,115 @@ class WorkTheGatewayTalksTo(WithARunDirectory):
         await asyncio.wait_for(running, 15)
 
 
+class WorkThatNeverGotToFinish(WithARunDirectory):
+    """R-GW-23 — work in flight when a gateway goes, answered for rather than dropped.
+
+    The log already tells a person. What none of this told anything else is which work
+    never finished, and whether it is definitely gone — which is what a provider adapter
+    coming back after a restart has to know before it decides what to say.
+    """
+
+    def _left_behind(self, name="gateway", work="turn", pgid=999999, since="some time"):
+        """A record of the shape a gateway that died would have left."""
+        (self.where / f"{name}.json").write_text(json.dumps(
+            {"name": name, "pid": 1, "working": {work: {"pgid": pgid, "since": since}}}))
+
+    async def test_work_a_dead_gateway_left_is_written_down_for_something_to_read(self):
+        """R-GW-23 — the ordinary case: the work went when its gateway did, and until now
+        the only trace was a line nothing but a person could read."""
+        self._left_behind()
+        gw = self.made()
+        gw.claim()
+        said = gateway.what_was_interrupted("gateway", self.schedules)
+        self.assertIn("turn", said, "work that never finished was dropped in silence")
+        self.assertTrue(said["turn"]["ended"], "it is gone, and was not said to be")
+        self.assertIn("gone", said["turn"]["why"])
+
+    async def test_work_that_could_not_be_shown_to_be_ours_is_told_apart(self):
+        """R-GW-23, R-GW-19 — ended and could-not-prove-it-was-ours are both interrupted,
+        and only one of them is definitely gone. Answering both the same way would have an
+        adapter treat a program that is still running as finished."""
+        # Our own process group: genuinely alive, so the sweep reaches the branch where
+        # it cannot prove the group is ours. A bare pid is not a group and would look gone.
+        self._left_behind(pgid=os.getpgrp(), since=None)
+        gw = self.made()
+        gw.claim()
+        said = gateway.what_was_interrupted("gateway", self.schedules)
+        self.assertFalse(said["turn"]["ended"], "something still running was called gone")
+        self.assertIn("ours", said["turn"]["why"])
+
+    async def test_a_record_that_does_not_say_what_was_running_is_still_answered_for(self):
+        """R-GW-23 — the least we know is still more than silence."""
+        (self.where / "gateway.json").write_text(json.dumps(
+            {"name": "gateway", "working": {"turn": {"since": "x"}}}))
+        gw = self.made()
+        gw.claim()
+        said = gateway.what_was_interrupted("gateway", self.schedules)
+        self.assertIn("turn", said)
+        self.assertIsNone(said["turn"]["pgid"])
+
+    async def test_work_left_under_a_name_nobody_uses_is_answered_for_under_that_name(self):
+        """R-GW-21, R-GW-23 — swept by whichever gateway happens to start, but recorded
+        against the gateway it belonged to, which is where anything asking would look."""
+        self._left_behind(name="abandoned", work="its-turn")
+        gw = self.made("mine")
+        gw.claim()
+        self.assertIn("its-turn", gateway.what_was_interrupted("abandoned", self.schedules))
+        self.assertEqual({}, gateway.what_was_interrupted("mine", self.schedules),
+                         "another gateway's interruption was filed under ours")
+
+    async def test_work_a_shutdown_could_not_end_is_answered_for(self):
+        """R-GW-23 — the other moment: not a successor finding leftovers, but a gateway
+        going away that could not take its work with it."""
+        gw = self.made()
+        gw.claim()
+        running = asyncio.ensure_future(gw.start(FOREVER, as_name="stubborn", silence=None))
+        await self._holding(gw)
+        left = next(iter(gw.running.values()))
+        stubborn = process.end_all
+
+        async def would_not_go(_programs):
+            return False
+
+        self.addCleanup(setattr, process, "end_all", stubborn)
+        process.end_all = would_not_go
+        self.assertFalse(await asyncio.wait_for(gw._go(), 15))
+        said = gateway.what_was_interrupted(gw.name, self.schedules)
+        self.assertIn("stubborn", said, "it went with work running and told nothing")
+        self.assertFalse(said["stubborn"]["ended"])
+        process.end_all = stubborn
+        await stubborn([left])
+        await asyncio.wait_for(running, 15)
+
+    async def test_what_never_finished_outlives_the_gateway_that_never_finished_it(self):
+        """R-GW-23, R-GW-12 — kept where history is kept, so an ordinary stop does not
+        erase the one account of what was interrupted."""
+        self._left_behind()
+        gw = self.made()
+        gw.claim()
+        gw.release()
+        self.assertFalse((self.where / "gateway.json").exists())
+        self.assertIn("turn", gateway.what_was_interrupted("gateway", self.schedules))
+
+    async def test_interruptions_do_not_pile_up_without_end(self):
+        """R-GW-23 — a machine left running for months must not grow a file nobody prunes,
+        and the ones worth keeping are the ones that just happened."""
+        self.addCleanup(setattr, gateway, "KEPT_INTERRUPTIONS", gateway.KEPT_INTERRUPTIONS)
+        gateway.KEPT_INTERRUPTIONS = 3
+        for n in range(10):
+            gateway._note_interrupted("gateway", self.schedules, f"turn-{n}", "because")
+        said = gateway.what_was_interrupted("gateway", self.schedules)
+        self.assertEqual(3, len(said), "it kept every interruption there had ever been")
+        self.assertIn("turn-9", said, "it kept the oldest and threw away the newest")
+
+    async def test_one_gateway_noting_an_interruption_does_not_erase_anothers(self):
+        """R-GW-23 — a gateway sweeping an abandoned name writes into *that* name's file,
+        so two writers working from their own snapshots is a real shape here."""
+        gateway._note_interrupted("shared", self.schedules, "first", "because")
+        gateway._note_interrupted("shared", self.schedules, "second", "because")
+        said = gateway.what_was_interrupted("shared", self.schedules)
+        self.assertEqual({"first", "second"}, set(said), "one write erased the other")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -77,7 +77,8 @@ flowchart LR
   listed from the start, so what is coming is never a surprise.
 - **Version** — which release this install is, and whether a newer one exists.
 - **Update** — fetches the newest published release and lays it over the install, leaving the command on
-  your PATH working.
+  your PATH working. It stands your assistants down first and brings them back afterwards, and refuses
+  outright rather than interrupting one that is mid-task.
 - **Install / uninstall** — puts the command on your PATH, or removes it. It refuses to report success
   until the command it installed actually answers.
 - **A gateway** — the part that stays running. There is one for each name, so later there can be one for
@@ -94,8 +95,8 @@ flowchart LR
   what to run, and the gateway starts it and owns it like anything else. Each gateway has its own set, so
   later each assistant's schedules are its own and never another's to run. You can turn one off and keep
   it, rather than deleting it to stop it.
-- **Status and logs** — what is running, what each one is working on, and what it has been saying. A
-  gateway that is up but stuck is shown as stuck, which the machine on its own cannot tell you.
+- **Status and logs** — what is running, what each one is working on, which version each is on, and what
+  it has been saying. One that is up but stuck is shown as stuck, which the machine cannot tell you.
 - **Agents, new, doctor, run, replay** — the assistants themselves. Registered and answering "coming soon"
   until each is built.
 - **GitHub Releases** — where a published version comes from.
@@ -127,6 +128,8 @@ flowchart LR
 - **A missed time is not made up later** — whatever fell due while nothing was running is not run on the
   way back up, because five of them starting at once is worse than none. You are told how many were
   missed, since a schedule that quietly did nothing looks exactly like one that never worked.
+- **Nothing is quietly abandoned** — work that never got to finish, because the thing running it went, is
+  written down as unfinished rather than simply disappearing — including whether it is definitely stopped.
 - **What happened is written down** — every gateway keeps its own log, and it outlives the gateway, so
   something that went wrong overnight can still be explained in the morning. What each schedule last did
   outlives it too, and survives stopping and starting the gateway.
