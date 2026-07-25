@@ -51,6 +51,38 @@ Load light; pull depth only when the task needs it.
 - **Never let a test reach the network.** What is published and how an update is applied are arguments, so
   the suite passes or fails on this code and not on somebody else's uptime.
 
+## Review and change threshold
+
+No change is a valid completed outcome. The proposed change carries the burden of proof.
+
+- A review tries to falsify ratified requirements, concrete rules in every governing `AGENTS.md` and
+  owner-approved measurable limits. It does not search for ways the code could merely be different.
+- Every review names its baseline — a commit, or a commit plus the named working-tree diff — and scope
+  before reporting findings.
+- A finding is actionable only when all are true:
+  1. It exists on the current review baseline in a supported scenario.
+  2. It violates a named `R-<AREA>-<n>` requirement, a concrete rule in a governing `AGENTS.md` or an
+     owner-approved measurable limit; or it proves a new critical security, privacy, data-loss or
+     state-corruption risk.
+  3. It has a concrete user or operational consequence.
+  4. It is reproduced or proven through a specific execution path.
+  5. It is not a duplicate, deferred capability, accepted risk or closed decision without a reopening
+     trigger.
+  6. A regression check can distinguish fixed from unfixed.
+- Behavior conforming to a ratified requirement is not a defect. A proposed behavior change is an owner
+  decision; stop and ask rather than recording it as a finding.
+- Refactoring, simplification, performance work and additional tests are not actionable without a
+  qualifying defect, blocked ratified requirement or measured limit breach.
+- Review-only work does not authorize implementation or a new task. A qualifying finding becomes work
+  only when the owner accepts it or explicitly asked the same run to fix qualifying defects.
+- `SUGGESTIONS.md` is the durable review ledger. Reviewers read its prior coverage and return the baseline,
+  scope, outcome and reopening triggers; when ledger updates are authorized, the main agent records them.
+- A completed review scope stays closed until relevant code, requirements or supported environments
+  change; an incident, new reproduction, measured breach or recorded risk trigger also reopens it. Another
+  available reviewer is not a reopening trigger.
+- When nothing meets this threshold, report
+  `NO ACTIONABLE FINDINGS at <baseline> for <review scope>.`
+
 ## Tech stack
 
 - **Runtime:** Python 3.9+ — the oldest version a fresh macOS ships, which is the floor CI pins. No build

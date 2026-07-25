@@ -16,6 +16,10 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   clone looks like** — so the guard protecting a developer's checkout refused to remove `~/.rundesk`
   and uninstalling silently left it. What tells them apart is whether the script sits in the
   directory the installer was told to create.
+- A supposedly isolated install/uninstall gate with only `RUNDESK_INSTALL_DIR` and `RUNDESK_BIN_DIR`
+  redirected still discovers and stops **live gateways** through the ambient state directories. Point
+  `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR`, `RUNDESK_SCHEDULES_DIR` and `RUNDESK_JOBS_DIR` at scratch too
+  before running the destructive half of the gate.
 
 - `asyncio`'s `Process.wait()` resolves when **every pipe closes**, not when the process exits. Anything
   the program left running inherited the far end and holds it open, so waiting on the exit lands hours
