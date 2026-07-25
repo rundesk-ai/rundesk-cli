@@ -39,8 +39,8 @@ so a later round does not spend the effort again without new reason:
 | Concurrency, locks and atomic decisions | findings **10**, **12**, **14**, **21**, **30** |
 | Provider protocol boundary | **no change needed** — see "Reviewed, no change needed" below |
 | Scheduling correctness | findings **12**, **21**, **24**, **25**, **26** |
-| Install, update and removal safety | findings **4**, **14**, **15**, **18**, **28** |
-| Source of truth and auditability | findings **26**, **27**, **28**, **29**; extensions to **12**, **17**, **18**, **19** |
+| Install, update and removal safety | findings **4**, **14**, **15**, **28** |
+| Source of truth and auditability | findings **26**, **27**, **28**, **29**; extensions to **12**, **17**, **19** |
 | Consumer command surface | findings **31–38**; extensions to **6**, **13**, **17**, **27**, **28** |
 | Measured performance | finding **9** (second consequence) and **17**; measurements below |
 | Failure-injection coverage | see "Tests that prove only the easy half" below |
@@ -819,36 +819,6 @@ Relevant implementation: `_recorder()` and `note()` in `src/rundesk_cli/gateway.
 `describe()` in `src/rundesk_cli/supervisor.py`; `cmd_logs()`, `cmd_serve()`,
 `cmd_start()` and `_stand_down()` in `src/rundesk_cli/cli.py`.
 
-### 18. Keep the owner's schedules and history unless removal is asked to take them
-
-**Status:** Open
-
-`schedules_home()` defaults to `~/.rundesk/schedules` (`gateway.py:193`), and
-`install.sh:160-167` removes `$INSTALL_DIR` entirely. `--purge` guards only
-`~/.config/rundesk` (`install.sh:147`). Schedules are unambiguously settings a person
-made, so an ordinary uninstall destroys them — which R-RM-4 says it must not.
-
-**Round four adds the rest of what goes with them, and what `--purge` is actually
-guarding.** `INSTALL_DIR` defaults to `~/.rundesk` (`install.sh:23`), which is the parent
-of all three data directories (`gateway.py:109`, `:160`, `:193`) — so the unconditional
-`rm -rf` also takes `logs/<name>.log`, `<name>.ran.json` and `<name>.interrupted.json`.
-That is the whole audit trail, and it contradicts R-GW-18 ("what a gateway wrote outlives
-the gateway") as well as R-RM-4, at the one moment an owner is most likely to want it: a
-reinstall after trouble. Meanwhile the flag that exists to ask about person-owned state
-guards `~/.config/rundesk`, which **nothing in `src/` ever writes** — grep finds it only in
-`install.sh:146` and two install tests. So the gate protects an empty placeholder while the
-real state goes unasked.
-
-Regression criteria:
-
-- Removing rundesk keeps schedules unless asked to take them.
-- Removing rundesk keeps the gateway logs, schedule outcomes and interruption history
-  unless asked to take them; with `--purge`, all of it goes.
-- The message naming what was left alone names what is actually there.
-
-Relevant implementation: `install.sh` uninstall block; `schedules_home()`, `logs_home()`
-and `home()` in `src/rundesk_cli/gateway.py`.
-
 ### 19. Stop a gateway name from claiming another gateway's history file
 
 **Status:** Open
@@ -1384,7 +1354,7 @@ above; findings 31–38 are only the distinct consumer command-surface gaps.
 
 ### 33. Make `rundesk uninstall` the removal command
 
-**Status:** Open — read with findings 15 and 18 for ownership, purge and history rules.
+**Status:** Open — read with finding 15 for the ownership rule.
 
 1. **Command and location:** `rundesk uninstall`; `src/rundesk_cli/cli.py:89`,
    `:230-242`.

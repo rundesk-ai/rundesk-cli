@@ -898,6 +898,52 @@ def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list
     return sorted(working) if isinstance(working, dict) else []
 
 
+def forget(name: str, where: Path | None = None, schedules: Path | None = None,
+           logs: Path | None = None, history: bool = False) -> list[str]:
+    """Take away what rundesk keeps for a gateway of this name (R-GW-31).
+
+    Called only once the gateway is proven stopped and its job is gone. This deletes, and
+    deleting what something is still using is the one thing removal must not do.
+
+    **The lock is taken before it is unlinked, and left alone if it cannot be.** A lock
+    lives on the inode and not on the path, so unlinking one another process is holding
+    hands the name away: the next claim makes a fresh inode, locks that, and two gateways
+    answer as one identity — which is why `release` never removes one. Holding it first is
+    the whole of what makes removing it safe, and a name that cannot be held belongs to
+    something that is using it.
+
+    `history` also takes what the gateway wrote and what was scheduled for it. Kept
+    otherwise, for the reason an uninstall keeps them: they are the owner's, and they are
+    worth most long after the gateway that wrote them is gone (R-GW-18, R-RM-10).
+    """
+    where = where or home()
+    taken = []
+    # The record is what it was doing, and the checkpoint is only ever read to work out
+    # how long a gateway of this name was down (R-SCH-5). Neither is an account of
+    # anything, and left behind, the checkpoint would have a gateway that happens to
+    # reuse the name reporting schedules it missed while it did not exist.
+    for path in (_record_path(name, where), seen_path(name, schedules)):
+        if path.exists():
+            path.unlink(missing_ok=True)
+            taken.append(path.name)
+    lock = _lock_path(name, where)
+    if lock.exists():
+        with _holding_name(name, where) as held:
+            if held:
+                lock.unlink(missing_ok=True)
+                taken.append(lock.name)
+    if history:
+        kept = (log_path(name, logs), schedules_path(name, schedules),
+                ran_path(name, schedules), interrupted_path(name, schedules),
+                schedules_path(name, schedules).with_suffix(".changing"),
+                interrupted_path(name, schedules).with_suffix(".changing"))
+        for path in kept:
+            if path.exists():
+                path.unlink(missing_ok=True)
+                taken.append(path.name)
+    return sorted(taken)
+
+
 def every(where: Path | None = None) -> list[Standing]:
     """Every gateway this machine knows of, running or not (R-GW-14).
 

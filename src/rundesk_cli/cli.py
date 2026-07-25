@@ -100,6 +100,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     stopped = sub.add_parser("stop", help="stand a gateway down")
     stopped.add_argument("name", nargs="?")
+    stopped.add_argument("--remove", action="store_true",
+                         help="and take it away for good, once it has stopped")
+    stopped.add_argument("--purge", action="store_true",
+                         help="with --remove, also take its log, schedules and history")
+
+    gone = sub.add_parser("remove", help="take a gateway away for good")
+    # Optional to the parser and required by the command, so that asking for it wrong is
+    # answered in our words rather than by an argparse usage dump. Every other gateway
+    # verb defaults to one when the name is left out; this one must never guess.
+    gone.add_argument("name", nargs="?")
+    gone.add_argument("--purge", action="store_true",
+                      help="also take its log, schedules and history")
 
     cycled = sub.add_parser("restart", help="cycle a gateway, leaving the others alone")
     cycled.add_argument("name", nargs="?")
@@ -352,7 +364,69 @@ def _named(args: argparse.Namespace, gateways, machine) -> list[str]:
 
 
 def cmd_stop(args: argparse.Namespace, gateways, machine) -> int:
-    return _stand_down(args, gateways, machine, "stop")
+    if not args.remove:
+        return _stand_down(args, gateways, machine, "stop")
+    if not args.name:
+        # `stop` with no name stands every gateway down, which is a fine thing to ask for
+        # and a terrible thing to remove. Naming one is how someone says which (R-GW-31).
+        print("stop --remove: NAME REQUIRED — say which gateway to remove", file=sys.stderr)
+        print("        every gateway at once is: rundesk uninstall", file=sys.stderr)
+        return 1
+    stopped = _stand_down(args, gateways, machine, "stop")
+    if stopped:
+        # It is still up, or the machine would not say. Removing now would delete the
+        # record and the lock of something that is still running (R-GW-31).
+        print(f"{args.name}: NOT REMOVED — it did not stop", file=sys.stderr)
+        return stopped
+    return cmd_remove(args, gateways, machine)
+
+
+def cmd_remove(args: argparse.Namespace, gateways, machine) -> int:
+    """Take a gateway away for good: its job, and what rundesk kept for it (R-GW-31).
+
+    Ordered so that nothing is deleted until both the machine and the gateway have let
+    go. A job outlives the command it names, so removing rundesk's side first leaves the
+    machine trying to start something that is not there, every few seconds and again at
+    every login.
+    """
+    name = args.name
+    if not name:
+        print("remove: NAME REQUIRED — say which gateway to remove", file=sys.stderr)
+        print("        what there is: rundesk status", file=sys.stderr)
+        return 1
+    # Asked of the gateway rather than of the machine. A gateway started by hand, or one
+    # left behind when its job was taken away, has no job for the machine to report — and
+    # is exactly the one that must not have its record deleted out from under it.
+    now = gateways.standing(name)
+    if now.running:
+        print(f"{name}: STILL RUNNING (pid {now.pid}) — nothing was removed", file=sys.stderr)
+        print(f"        stop it first, or: rundesk stop {name} --remove", file=sys.stderr)
+        return 1
+    had_job = machine.available() and machine.exists(name)
+    if had_job and not machine.known(name):
+        print(f"{name}: FAILED — this job belongs to another install of rundesk",
+              file=sys.stderr)
+        return 1
+    if had_job:
+        try:
+            if not machine.take_back(name):
+                print(f"{name}: FAILED — the machine would not let go of its job",
+                      file=sys.stderr)
+                print("        nothing was removed. See: rundesk status", file=sys.stderr)
+                return 1
+        except machine.NotOurs as why:
+            print(f"{name}: FAILED — {why}", file=sys.stderr)
+            return 1
+    taken = gateways.forget(name, history=args.purge)
+    if not had_job and not taken:
+        print(f"{name}: NOTHING TO REMOVE — no job, and nothing kept under that name")
+        return 0
+    print(f"{name}: REMOVED")
+    if args.purge:
+        print("        its log, schedules and history went with it")
+    else:
+        print("        kept what it wrote and what you scheduled (--purge takes them too)")
+    return 0
 
 
 def cmd_restart(args: argparse.Namespace, gateways, machine) -> int:
@@ -700,6 +774,8 @@ def main(argv: list[str], gateways=None, machine=None) -> int:
         return cmd_start(args, gateways, machine)
     if args.command == "stop":
         return cmd_stop(args, gateways, machine)
+    if args.command == "remove":
+        return cmd_remove(args, gateways, machine)
     if args.command == "restart":
         return cmd_restart(args, gateways, machine)
     if args.command == "status":

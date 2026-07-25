@@ -9,6 +9,7 @@ supervisor's, and are not here: they arrive with the job that describes one.
 
 import asyncio
 import contextlib
+import fcntl
 import json
 import logging
 import os
@@ -50,13 +51,23 @@ class WithARunDirectory(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(shutil.rmtree, self.schedules, True)
         self.addCleanup(os.environ.pop, "RUNDESK_SCHEDULES_DIR", None)
         os.environ["RUNDESK_SCHEDULES_DIR"] = str(self.schedules)
+        # An install of its own, and an empty one: claiming a name asks whether this
+        # install fits the Python running it, and a gateway built without a root asks
+        # that of the developer's real checkout. With dependencies declared, they live
+        # only in the install's virtualenv — so every one of these cases refused to
+        # start on the machine of anyone who had run the installer, and passed in CI,
+        # which never has one. Nothing here is about fitness; `WhatItIsMadeOf` is,
+        # and builds the installs it needs.
+        self.root = Path(tempfile.mkdtemp(prefix="rundesk-root-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
         self.addCleanup(setattr, gateway, "STOP_SECONDS", gateway.STOP_SECONDS)
         gateway.STOP_SECONDS = 2.0
         self.addCleanup(setattr, process, "GRACE_SECONDS", process.GRACE_SECONDS)
         process.GRACE_SECONDS = 0.5
 
     def made(self, name: str = gateway.DEFAULT_NAME) -> gateway.Gateway:
-        gw = gateway.Gateway(name, where=self.where, logs=self.logs, schedules=self.schedules)
+        gw = gateway.Gateway(name, where=self.where, logs=self.logs, schedules=self.schedules,
+                             root=self.root)
         self.addCleanup(gw.release)
         return gw
 
@@ -132,7 +143,7 @@ class OnlyOneOfEachName(WithARunDirectory):
         """R-GW-4"""
         first = self.made()
         first.claim()
-        second = gateway.Gateway(gateway.DEFAULT_NAME, where=self.where, logs=self.logs)
+        second = gateway.Gateway(gateway.DEFAULT_NAME, where=self.where, logs=self.logs, root=self.root)
         with self.assertRaises(gateway.AlreadyRunning):
             second.claim()
 
@@ -141,7 +152,7 @@ class OnlyOneOfEachName(WithARunDirectory):
         'do not wait' turns a clean refusal into a hang that no test can see, because
         a suite that never finishes reads as a stuck machine and not as a failure."""
         self.made().claim()
-        second = gateway.Gateway(gateway.DEFAULT_NAME, where=self.where, logs=self.logs)
+        second = gateway.Gateway(gateway.DEFAULT_NAME, where=self.where, logs=self.logs, root=self.root)
 
         def ask():
             with self.assertRaises(gateway.AlreadyRunning):
@@ -157,7 +168,7 @@ class OnlyOneOfEachName(WithARunDirectory):
         one that refused is the thing you need to know."""
         self.made().claim()
         with self.assertRaises(gateway.AlreadyRunning) as refused:
-            gateway.Gateway(gateway.DEFAULT_NAME, where=self.where, logs=self.logs).claim()
+            gateway.Gateway(gateway.DEFAULT_NAME, where=self.where, logs=self.logs, root=self.root).claim()
         self.assertIn(gateway.DEFAULT_NAME, str(refused.exception))
 
     async def test_gateways_of_different_names_run_alongside_each_other(self):
@@ -170,7 +181,7 @@ class OnlyOneOfEachName(WithARunDirectory):
 
     async def test_the_name_a_gateway_gave_back_can_be_taken_again(self):
         """R-GW-12 — cycling a gateway is stopping one and starting another."""
-        first = gateway.Gateway("agent-one", where=self.where, logs=self.logs)
+        first = gateway.Gateway("agent-one", where=self.where, logs=self.logs, root=self.root)
         first.claim()
         first.release()
         second = self.made("agent-one")
@@ -788,7 +799,7 @@ class WhatHappenedAndWhen(WithARunDirectory):
         """R-GW-18 — the case where there is no gateway afterwards to ask."""
         self.made("taken").claim()
         with self.assertRaises(gateway.AlreadyRunning):
-            gateway.Gateway("taken", where=self.where, logs=self.logs).claim()
+            gateway.Gateway("taken", where=self.where, logs=self.logs, root=self.root).claim()
         self.assertIn("already running", self.written("taken"))
 
     async def test_a_gateway_that_cannot_say_it_is_alive_writes_that_down_and_carries_on(self):
@@ -826,9 +837,9 @@ class TheNameCannotBeGivenAwayByAccident(WithARunDirectory):
         a third gateway then claimed a name that was already held."""
         holder = self.made("shared")
         holder.claim()
-        passerby = gateway.Gateway("shared", where=self.where, logs=self.logs)
+        passerby = gateway.Gateway("shared", where=self.where, logs=self.logs, root=self.root)
         passerby.release()  # never claimed, so it must touch nothing
-        third = gateway.Gateway("shared", where=self.where, logs=self.logs)
+        third = gateway.Gateway("shared", where=self.where, logs=self.logs, root=self.root)
         with self.assertRaises(gateway.AlreadyRunning):
             third.claim()
 
@@ -837,7 +848,7 @@ class TheNameCannotBeGivenAwayByAccident(WithARunDirectory):
         name it gives back."""
         holder = self.made("shared")
         holder.claim()
-        passerby = gateway.Gateway("shared", where=self.where, logs=self.logs)
+        passerby = gateway.Gateway("shared", where=self.where, logs=self.logs, root=self.root)
         await passerby._go()
         self.assertTrue(gateway.standing("shared", self.where).running, "the holder lost its name")
 
@@ -845,7 +856,7 @@ class TheNameCannotBeGivenAwayByAccident(WithARunDirectory):
         """R-GW-20 — the name becomes the name of a lock, a record and a log."""
         for bad in ("../escape", "a/b", "", "..", "with space"):
             with self.assertRaises(gateway.NotAName, msg=f"accepted {bad!r}"):
-                gateway.Gateway(bad, where=self.where, logs=self.logs)
+                gateway.Gateway(bad, where=self.where, logs=self.logs, root=self.root)
 
     async def test_nothing_builds_a_path_from_a_name_that_would_escape(self):
         """R-GW-20 — making a gateway is not the only way in. Everything that reaches a
@@ -1433,7 +1444,7 @@ class WhenClaimingGoesWrong(WithARunDirectory):
     async def test_a_name_is_not_left_held_by_a_claim_that_did_not_finish(self):
         """R-GW-4 — a claim that failed part way through must not make the name
         unusable to the next attempt, including a retry of itself."""
-        gw = gateway.Gateway("awkward", where=self.where, logs=self.logs)
+        gw = gateway.Gateway("awkward", where=self.where, logs=self.logs, root=self.root)
         self.addCleanup(gw.release)
         broken = gateway.Gateway.__dict__["_record"]
 
@@ -1463,6 +1474,11 @@ class AsARealProcess(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.logs, True)
         self.addCleanup(os.environ.pop, "RUNDESK_LOG_DIR", None)
         os.environ["RUNDESK_LOG_DIR"] = str(self.logs)
+        # An empty install of its own, for the same reason as `WithARunDirectory` — and
+        # it has to reach the gateway these cases start in another process, so it goes
+        # into the script rather than into an argument here.
+        self.root = Path(tempfile.mkdtemp(prefix="rundesk-root-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
 
     def test_being_asked_to_stop_twice_does_not_kill_it_mid_shutdown(self):
         """R-GW-8, R-GW-12 — removing the handlers before shutting down restores the
@@ -1502,7 +1518,8 @@ class AsARealProcess(unittest.TestCase):
                 "import sys, asyncio, pathlib\n"
                 f"sys.path.insert(0, {str(ROOT / 'src')!r})\n"
                 "from rundesk_cli import gateway\n"
-                f"gw = gateway.Gateway({name!r}, where=pathlib.Path({str(self.where)!r}))\n"
+                f"gw = gateway.Gateway({name!r}, where=pathlib.Path({str(self.where)!r}), "
+                f"root=pathlib.Path({str(self.root)!r}))\n"
                 + (held if holding else "raise SystemExit(asyncio.run(gw.serve()))\n"),
             ]
         )
@@ -1536,7 +1553,9 @@ class AsARealProcess(unittest.TestCase):
                 "import sys, asyncio\n"
                 f"sys.path.insert(0, {str(ROOT / 'src')!r})\n"
                 "from rundesk_cli import gateway\n"
-                f"gw = gateway.Gateway('real', where=__import__('pathlib').Path({str(self.where)!r}))\n"
+                "import pathlib\n"
+                f"gw = gateway.Gateway('real', where=pathlib.Path({str(self.where)!r}), "
+                f"root=pathlib.Path({str(self.root)!r}))\n"
                 "raise SystemExit(asyncio.run(gw.serve()))\n",
             ]
         )
@@ -1794,7 +1813,8 @@ sys.path.insert(0, sys.argv[1])
 from rundesk_cli import gateway
 
 where, name, ready, stop = Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]), Path(sys.argv[5])
-mine = gateway.Gateway(name, where=where, logs=Path(sys.argv[6]), schedules=Path(sys.argv[7]))
+mine = gateway.Gateway(name, where=where, logs=Path(sys.argv[6]), schedules=Path(sys.argv[7]),
+                       root=Path(sys.argv[8]))
 mine.claim()
 work = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"],
                         start_new_session=True)
@@ -2011,7 +2031,7 @@ class ANameIsTakenNotAskedAbout(WithARunDirectory):
         stop, told = ready / "stop", ready / "ready"
         child = subprocess.Popen(
             [PY, "-c", HOLDS_ITS_NAME, str(ROOT / "src"), str(self.where), name,
-             str(told), str(stop), str(self.logs), str(self.schedules)],
+             str(told), str(stop), str(self.logs), str(self.schedules), str(self.root)],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
         )
         self.addCleanup(child.wait, 30)
@@ -2071,7 +2091,7 @@ class ANameIsTakenNotAskedAbout(WithARunDirectory):
         self.assertTrue(inside.exists(), "the sweep never got as far as reckoning")
 
         claiming = gateway.Gateway("target", where=self.where, logs=self.logs,
-                                   schedules=self.schedules)
+                                   schedules=self.schedules, root=self.root)
         self.addCleanup(claiming.release)
         with self.assertRaises(gateway.AlreadyRunning):
             claiming.claim()
@@ -2173,6 +2193,72 @@ class WhatTwoWritersDoToOneFile(WithARunDirectory):
         asked.clear()
         gateway._written_whole(self.where / "beat.json", "{}")
         self.assertEqual([], asked, "the beat pays for a durability it does not need")
+
+
+class TakingAGatewayAway(WithARunDirectory):
+    """What rundesk keeps for a gateway, once there is no gateway to keep it for."""
+
+    def kept_for(self, name: str) -> dict:
+        """Everything rundesk would have written for a gateway of this name."""
+        made = {
+            "record": self.where / f"{name}.json",
+            "lock": self.where / f"{name}.lock",
+            "log": self.logs / f"{name}.log",
+            "schedules": self.schedules / f"{name}.json",
+            "ran": self.schedules / f"{name}.ran.json",
+            "seen": self.schedules / f"{name}.seen.json",
+            "interrupted": self.schedules / f"{name}.interrupted.json",
+        }
+        for path in made.values():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}")
+        return made
+
+    def test_forgetting_a_gateway_keeps_what_it_wrote_and_what_was_scheduled(self):
+        """R-GW-31, R-GW-18 — an owner tidying a name out of their machine's background
+        items has not asked to lose the account of what it did."""
+        made = self.kept_for("test2")
+        gateway.forget("test2", self.where, self.schedules, self.logs)
+        for still in ("log", "schedules", "ran", "interrupted"):
+            self.assertTrue(made[still].exists(), f"removing a gateway took its {still}")
+        self.assertFalse(made["record"].exists(), "it left behind what the gateway was doing")
+        self.assertFalse(made["lock"].exists(), "it left the name looking as though it exists")
+        self.assertFalse(made["seen"].exists(),
+                         "it left a checkpoint that would report schedules missed while "
+                         "the gateway did not exist")
+
+    def test_forgetting_a_gateway_with_its_history_takes_all_of_it(self):
+        """R-GW-31 — the other half, so "keeps it" cannot pass by never removing anything."""
+        made = self.kept_for("test2")
+        gateway.forget("test2", self.where, self.schedules, self.logs, history=True)
+        for path in made.values():
+            self.assertFalse(path.exists(), f"--purge left {path.name} behind")
+
+    def test_forgetting_a_gateway_never_unlinks_a_lock_something_else_is_holding(self):
+        """R-GW-31 — a lock lives on the inode, not the path, so unlinking one another
+        process holds hands the name away: the next claim makes a fresh inode, locks that,
+        and two gateways answer as one identity. Holding it first is what makes removing
+        it safe, and a name that cannot be held is one something is still using."""
+        made = self.kept_for("busy")
+        holding = os.open(made["lock"], os.O_RDWR)
+        self.addCleanup(os.close, holding)
+        fcntl.flock(holding, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        gateway.forget("busy", self.where, self.schedules, self.logs)
+
+        self.assertTrue(made["lock"].exists(), "it took a name another process was holding")
+
+    def test_forgetting_a_gateway_that_was_never_there_takes_nothing_and_says_so(self):
+        """R-GW-31 — asked twice, or for a name that never existed, is not an error."""
+        self.assertEqual([], gateway.forget("never-was", self.where, self.schedules, self.logs))
+
+    def test_forgetting_a_gateway_leaves_every_other_gateway_alone(self):
+        """R-GW-31 — one name's removal is one name's."""
+        mine, theirs = self.kept_for("mine"), self.kept_for("theirs")
+        gateway.forget("mine", self.where, self.schedules, self.logs, history=True)
+        for path in theirs.values():
+            self.assertTrue(path.exists(), f"removing one gateway took another's {path.name}")
+        self.assertFalse(mine["record"].exists())
 
 
 class WhatCannotBeReadIsNotEmpty(WithARunDirectory):

@@ -152,7 +152,7 @@ class BuiltCommandTests(unittest.TestCase):
         # A command that is both "coming soon" and handled would answer twice, and
         # which answer wins would depend on the order of the checks in `main`.
         built = {"version", "update", "uninstall",
-                 "serve", "start", "stop", "restart", "status", "logs", "schedules"}
+                 "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules"}
         self.assertEqual(built & set(cli.COMING_SOON), set())
         self.assertEqual(set(verbs()), built | set(cli.COMING_SOON))
 
@@ -260,6 +260,8 @@ class FakeGateways:
         self._refuses = refuses
         self._written = written
         self.served = []
+        #: What `remove` asked to be taken away, and whether it asked for the history too.
+        self.forgotten = []
 
     def every(self):
         return list(self._standing)
@@ -282,6 +284,10 @@ class FakeGateways:
 
     def what_is_running(self, name):
         return self._working.get(name, [])
+
+    def forget(self, name, history=False):
+        self.forgotten.append((name, history))
+        return [f"{name}.json"] + ([f"{name}.log"] if history else [])
 
     def _still_readable(self, name):
         if name in self._unreadable:
@@ -343,11 +349,15 @@ class FakeMachine:
         def __init__(self, ok, said=""):
             self.ok, self.said = ok, said
 
-    def __init__(self, jobs=(), missing=False, refuses=False, foreign=(), refuse_acts=False):
+    def __init__(self, jobs=(), missing=False, refuses=False, foreign=(), refuse_acts=False,
+                 stubborn=()):
         self.jobs = list(jobs)
         self.missing, self.refuses, self.foreign = missing, refuses, list(foreign)
         #: The supervisor saying no without raising — a job present but not loaded.
         self.refuse_acts = refuse_acts
+        #: Gateways whose job the machine will not let go of. The real `take_back` keeps
+        #: the description in that case: it is the only thing that finds them again.
+        self.stubborn = set(stubborn)
         self.did = []
 
     def _check(self, name):
@@ -390,6 +400,15 @@ class FakeMachine:
         self._check(name)
         self.did.append(("start", name))
         return self.Spoke(not self.refuse_acts, "the supervisor said no")
+
+    def take_back(self, name):
+        self._check(name)
+        self.did.append(("take_back", name))
+        if name in self.stubborn:
+            return False
+        if name in self.jobs:
+            self.jobs.remove(name)
+        return True
 
 
 def drive(argv, gateways=None, machine=None):
@@ -634,6 +653,109 @@ class StandingGatewaysDown(unittest.TestCase):
         code, said = drive(["stop"], machine=FakeMachine(jobs=[]))
         self.assertEqual(0, code)
         self.assertIn("no gateway", said)
+
+
+class TakingAGatewayAway(unittest.TestCase):
+    """Starting a gateway wrote a job the machine keeps forever; stopping one deliberately
+    leaves that job alone. So a gateway an owner was finished with stayed in their
+    machine's background items with no supported way to take it out."""
+
+    def running(self, name="test2", **kw):
+        return FakeGateways(standing=[FakeGateways.Standing(name, running=True, pid=64507)], **kw)
+
+    def test_removing_a_gateway_takes_its_job_and_what_was_kept_for_it(self):
+        """R-GW-31"""
+        gateways, machine = FakeGateways(), FakeMachine(jobs=["test2"])
+        code, said = drive(["remove", "test2"], gateways, machine)
+        self.assertEqual(0, code, said)
+        self.assertIn("REMOVED", said)
+        self.assertIn(("take_back", "test2"), machine.did, "it left the job behind")
+        self.assertEqual([("test2", False)], gateways.forgotten)
+
+    def test_removing_a_gateway_that_is_running_removes_nothing(self):
+        """R-GW-31 — asked of the gateway, not of the machine: one started by hand has no
+        job to report and is exactly the one whose record must not be deleted under it."""
+        gateways, machine = self.running(), FakeMachine(jobs=["test2"])
+        code, said = drive(["remove", "test2"], gateways, machine)
+        self.assertEqual(1, code)
+        self.assertIn("STILL RUNNING", said)
+        self.assertEqual([], gateways.forgotten, "it deleted what a running gateway is using")
+        self.assertNotIn(("take_back", "test2"), machine.did)
+        self.assertIn("--remove", said, "it never said how to do it in one step")
+
+    def test_removing_a_gateway_the_machine_will_not_let_go_of_removes_nothing(self):
+        """R-GW-31 — the job is the only thing that finds this gateway again, so a
+        half-done removal is worse than none: it leaves the thing running and unfindable."""
+        gateways = FakeGateways()
+        machine = FakeMachine(jobs=["test2"], stubborn=["test2"])
+        code, said = drive(["remove", "test2"], gateways, machine)
+        self.assertEqual(1, code)
+        self.assertIn("would not let go", said)
+        self.assertEqual([], gateways.forgotten, "it deleted rundesk's side anyway")
+
+    def test_removing_a_gateway_belonging_to_another_install_is_refused(self):
+        """R-GW-31, R-GW-13"""
+        gateways = FakeGateways()
+        machine = FakeMachine(jobs=["test2"], foreign=["test2"])
+        code, said = drive(["remove", "test2"], gateways, machine)
+        self.assertEqual(1, code)
+        self.assertIn("another install", said)
+        self.assertEqual([], gateways.forgotten)
+
+    def test_removing_a_gateway_that_was_never_there_says_so_rather_than_failing(self):
+        """R-GW-31 — running it twice, or on a name that never existed, is not an error."""
+        gateways = FakeGateways()
+        gateways.forget = lambda name, history=False: []
+        code, said = drive(["remove", "never-was"], gateways, FakeMachine())
+        self.assertEqual(0, code, said)
+        self.assertIn("NOTHING TO REMOVE", said)
+
+    def test_removing_a_gateway_keeps_what_it_wrote_unless_purge_is_asked_for(self):
+        """R-GW-31, R-GW-18 — what a gateway wrote outlives it, and an owner tidying up
+        their background items has not asked to lose the account of what it did."""
+        kept, purged = FakeGateways(), FakeGateways()
+        _, said = drive(["remove", "test2"], kept, FakeMachine(jobs=["test2"]))
+        self.assertEqual([("test2", False)], kept.forgotten)
+        self.assertIn("--purge", said, "it never said the history could go too")
+
+        _, told = drive(["remove", "test2", "--purge"], purged, FakeMachine(jobs=["test2"]))
+        self.assertEqual([("test2", True)], purged.forgotten)
+        self.assertIn("went with it", told)
+
+    def test_stopping_with_remove_does_both_in_one_step(self):
+        """R-GW-31 — the shortcut, since removing is more than stopping."""
+        gateways = FakeGateways(stops_after=0)
+        machine = FakeMachine(jobs=["test2"])
+        code, said = drive(["stop", "test2", "--remove"], gateways, machine)
+        self.assertEqual(0, code, said)
+        self.assertIn("STOPPED", said)
+        self.assertIn("REMOVED", said)
+        self.assertEqual([("test2", False)], gateways.forgotten)
+
+    def test_stopping_with_remove_removes_nothing_when_it_did_not_stop(self):
+        """R-GW-31 — the ordering that matters: deleting the record and the lock of
+        something still running is the one thing removal must never do."""
+        gateways = FakeGateways(standing=[FakeGateways.Standing("test2", running=True, pid=7)])
+        machine = FakeMachine(jobs=["test2"], refuse_acts=True)
+        code, said = drive(["stop", "test2", "--remove"], gateways, machine)
+        self.assertEqual(1, code)
+        self.assertEqual([], gateways.forgotten, "it removed a gateway that never stopped")
+
+    def test_removing_every_gateway_at_once_is_not_something_stop_will_guess(self):
+        """R-GW-31 — `stop` with no name stands them all down, which is a fine thing to
+        ask for and a terrible thing to remove."""
+        gateways = FakeGateways(standing=[FakeGateways.Standing("a"), FakeGateways.Standing("b")])
+        code, said = drive(["stop", "--remove"], gateways, FakeMachine(jobs=["a", "b"]))
+        self.assertEqual(1, code)
+        self.assertIn("NAME REQUIRED", said)
+        self.assertEqual([], gateways.forgotten)
+
+    def test_remove_without_a_name_answers_in_our_words(self):
+        """R-GW-31 — every other gateway verb defaults to one when the name is left out.
+        This one must never guess, and an argparse usage dump is not an answer."""
+        code, said = drive(["remove"], FakeGateways(), FakeMachine())
+        self.assertEqual(1, code)
+        self.assertIn("NAME REQUIRED", said)
 
 
 class WhatIsRunningRightNow(unittest.TestCase):

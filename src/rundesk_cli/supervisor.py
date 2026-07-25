@@ -354,6 +354,44 @@ def known(name: str, where: str | None = None, root: Path | None = None) -> bool
     return path.exists() and ours(path, root)
 
 
+def take_back(
+    name: str,
+    where: str | None = None,
+    root: Path | None = None,
+    asking: Callable[..., Spoke] = ask,
+    standing=None,
+) -> bool:
+    """Stop this gateway and take its job away, or say it would not let go (R-RM-9).
+
+    What removal has to do before anything is deleted. A job outlives the command it
+    names: the gateway it started keeps running, because deleting a program does not
+    stop one, and the machine goes on trying to start it again — every few seconds, and
+    again at every login — against a path that is no longer there. What is left behind
+    is a running agent nobody can reach and a supervisor failing in a loop forever.
+
+    **Two parties have to let go, and both are asked.** Judging this on the gateway
+    process alone reported a name as taken back while the machine was still refusing to
+    release its job — so an uninstall deleted the install and left the machine trying to
+    start a command that was no longer there, every few seconds and again at every login.
+
+    False leaves the description exactly where it is. It is the only thing that will find
+    this gateway again: deleting it here left the first attempt reporting the name as
+    stubborn and every attempt after it unable to see the gateway at all, with the thing
+    itself still running.
+    """
+    from rundesk_cli import gateway  # here, so this module imports on a machine without one
+
+    standing = standing or gateway.standing
+    said = remove(name, where, root, asking)
+    deadline = time.monotonic() + SETTLE_SECONDS
+    while standing(name).running and time.monotonic() < deadline:
+        time.sleep(0.2)
+    if standing(name).running or not _let_go(name, said, asking):
+        return False
+    job_path(name, where).unlink(missing_ok=True)
+    return True
+
+
 def take_all_back(
     where: str | None = None,
     root: Path | None = None,
@@ -362,39 +400,12 @@ def take_all_back(
 ) -> tuple[list[str], list[str]]:
     """Stop every gateway this install is keeping, and take its job away (R-RM-9).
 
-    What removal has to do before anything is deleted. A job outlives the command it
-    names: the gateway it started keeps running, because deleting a program does not
-    stop one, and the machine goes on trying to start it again — every few seconds, and
-    again at every login — against a path that is no longer there. What is left behind
-    is a running agent nobody can reach and a supervisor failing in a loop forever.
-
-    Only jobs this install wrote, and only after each gateway is really gone. Returns
-    what was taken back, and what would not stop.
-
-    **Two parties have to let go, and both are asked.** Judging this on the gateway
-    process alone reported a name as taken back while the machine was still refusing to
-    release its job — so an uninstall deleted the install and left the machine trying to
-    start a command that was no longer there, every few seconds and again at every login.
+    Only jobs this install wrote. Returns what was taken back, and what would not stop.
     """
-    from rundesk_cli import gateway  # here, so this module imports on a machine without one
-
-    standing = standing or gateway.standing
     taken, stubborn = [], []
     for name in described(where, root):
         try:
-            said = remove(name, where, root, asking)
+            (taken if take_back(name, where, root, asking, standing) else stubborn).append(name)
         except (NotOurs, NoSupervisor):
             continue
-        deadline = time.monotonic() + SETTLE_SECONDS
-        while standing(name).running and time.monotonic() < deadline:
-            time.sleep(0.2)
-        if standing(name).running or not _let_go(name, said, asking):
-            # Still held by one of them, so the description stays. It is the only thing
-            # that will find this gateway again: deleting it here left the first attempt
-            # reporting the name as stubborn and every attempt after it unable to see the
-            # gateway at all, with the thing itself still running.
-            stubborn.append(name)
-            continue
-        job_path(name, where).unlink(missing_ok=True)
-        taken.append(name)
     return taken, stubborn

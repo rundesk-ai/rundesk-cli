@@ -75,18 +75,18 @@ Putting the schedule history with the run state erased it on every ordinary rest
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 7 files, ~455 cases)
+## Tests (tests/ — 7 files, ~470 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
 
 | File | Cases | Covers |
 |---|---|---|
-| `test_gateway.py` | 134 | `platform-gateway` — real processes, real signals, waits turned down |
-| `test_cli.py` | 76 | `command-surface` — walks every verb off the parser, so one wired nowhere is caught |
+| `test_gateway.py` | 139 | `platform-gateway` — real processes, real signals, waits turned down |
+| `test_cli.py` | 86 | `command-surface` — walks every verb off the parser, so one wired nowhere is caught |
 | `test_process.py` | 87 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 55 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
-| `test_install.py` | 39 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
+| `test_install.py` | 41 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
 | `test_supervisor.py` | 38 | the launchd job — a fake `launchctl`, so it runs where there is none |
 | `test_schedule.py` | 28 | `platform-schedule` — pure time arithmetic, the clock passed in |
 
@@ -105,8 +105,9 @@ no supervisor anywhere near it.
 
 - `install.sh` — puts `rundesk` on a PATH and takes it off again (`--uninstall [--purge]`). Installs
   into `~/.rundesk`, one directory under the person's home holding rundesk and its `.venv`; from a
-  checkout it symlinks that checkout instead, so development and installed use share one layout. It
-  changes nothing else a person owns — a `PATH` that does not reach the command is reported, never
+  checkout it symlinks that checkout instead, so development and installed use share one layout.
+  Removing takes the install directory entry by entry rather than whole, so an ordinary uninstall
+  keeps `logs/` and `schedules/` and only `--purge` takes them. It changes nothing else a person owns — a `PATH` that does not reach the command is reported, never
   edited — and refuses to claim success until the installed command answers.
 - `.github/workflows/build.yml` — the gate, in four named jobs so a red X says what broke: the knowledge
   base (docs, contracts, evidence); the tests, one step per contract, across macOS and Ubuntu on Python

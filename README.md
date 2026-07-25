@@ -24,6 +24,11 @@ use share one layout.
 ./install.sh --uninstall [--purge]   # take it off again
 ```
 
+Removing rundesk stops every gateway it was keeping and takes their jobs with them, before
+anything is deleted — and refuses outright if one of them will not stop. What your gateways
+*wrote* is kept: their logs, your schedules, and the account of what those schedules did.
+`--purge` takes those as well.
+
 ## Commands
 
 ```sh
@@ -42,6 +47,8 @@ once there are agents — so any one of them is restarted without disturbing the
 rundesk serve [name]                # run one here, until it is asked to stop
 rundesk start [name]                # hand it to the machine, which keeps it running
 rundesk stop [name]                 # stand it down
+rundesk stop <name> --remove        # stand it down and take it away for good
+rundesk remove <name> [--purge]     # take a stopped one away for good
 rundesk restart [name]              # cycle one, leaving the others alone
 rundesk status                      # every gateway, and what each is working on
 rundesk logs [name] [-n]            # what one has been saying
@@ -49,7 +56,20 @@ rundesk schedules [...]             # work that starts itself — see below
 ```
 
 Leave the name out and it means the one gateway there is today — and every one of
-them, for `stop`, `restart`, `status` and `logs`, once there are several.
+them, for `stop`, `restart`, `status` and `logs`, once there are several. Not for
+`remove`: standing every gateway down is a fine thing to ask for and a terrible thing
+to guess at, so removal always names one.
+
+`start` creates a gateway by writing a job the machine keeps — which is also why one
+you are finished with stays in your machine's background items until it is removed.
+`stop` deliberately leaves that job alone, so the gateway comes back on the next start.
+`remove` is what takes it: the job, what the gateway was doing, and its name.
+
+What a gateway *wrote* is kept — its log, its schedules and the account of what those
+schedules did. `--purge` takes those too. Removal refuses outright while the gateway is
+still running, or while the machine will not let go of its job, and in either case takes
+nothing at all: half-removed is worse than not removed, because the job is the only thing
+that would ever find that gateway again.
 
 rundesk supervises nothing itself. `start` writes a job and hands it to launchd, which
 brings a gateway back if it falls over and starts it again after a reboot. A gateway
@@ -115,6 +135,10 @@ exits non-zero rather than reporting a success it did not earn.
   gone silent, or one still going long past when real work would have finished.
 - **It writes down what happened**, to a log that outlives it — kept apart from its run
   state, because stopping clears what a gateway is *doing* and must not clear what it did.
+- **Removing one takes nothing while anything still holds it.** A gateway that is running,
+  a job the machine will not release, a name another process is using — any of them and
+  removal reports why and takes nothing, rather than leaving something running that nothing
+  can find.
 
 ## Version
 
