@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -36,13 +37,19 @@ class WithARunDirectory(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.where = Path(tempfile.mkdtemp(prefix="rundesk-gw-"))
         self.addCleanup(shutil.rmtree, self.where, True)
+        # Beside the run directory, never inside it: what a gateway is doing is cleared
+        # when it goes, and what it wrote is not.
+        self.logs = Path(tempfile.mkdtemp(prefix="rundesk-logs-"))
+        self.addCleanup(shutil.rmtree, self.logs, True)
+        self.addCleanup(os.environ.pop, "RUNDESK_LOG_DIR", None)
+        os.environ["RUNDESK_LOG_DIR"] = str(self.logs)
         self.addCleanup(setattr, gateway, "STOP_SECONDS", gateway.STOP_SECONDS)
         gateway.STOP_SECONDS = 2.0
         self.addCleanup(setattr, process, "GRACE_SECONDS", process.GRACE_SECONDS)
         process.GRACE_SECONDS = 0.5
 
     def made(self, name: str = gateway.DEFAULT_NAME) -> gateway.Gateway:
-        gw = gateway.Gateway(name, where=self.where)
+        gw = gateway.Gateway(name, where=self.where, logs=self.logs)
         self.addCleanup(gw.release)
         return gw
 
@@ -52,16 +59,32 @@ class OnlyOneOfEachName(WithARunDirectory):
         """R-GW-4"""
         first = self.made()
         first.claim()
-        second = gateway.Gateway(gateway.DEFAULT_NAME, where=self.where)
+        second = gateway.Gateway(gateway.DEFAULT_NAME, where=self.where, logs=self.logs)
         with self.assertRaises(gateway.AlreadyRunning):
             second.claim()
+
+    async def test_a_refused_gateway_refuses_promptly_rather_than_waiting(self):
+        """R-GW-5 — the refusal has to come back. Asking for the lock without saying
+        'do not wait' turns a clean refusal into a hang that no test can see, because
+        a suite that never finishes reads as a stuck machine and not as a failure."""
+        self.made().claim()
+        second = gateway.Gateway(gateway.DEFAULT_NAME, where=self.where, logs=self.logs)
+
+        def ask():
+            with self.assertRaises(gateway.AlreadyRunning):
+                second.claim()
+
+        asking = threading.Thread(target=ask, daemon=True)
+        asking.start()
+        asking.join(timeout=10)
+        self.assertFalse(asking.is_alive(), "asking for a taken name blocked instead of refusing")
 
     async def test_a_second_gateway_says_why_it_will_not_start(self):
         """R-GW-5 — the message names the gateway, because with several running the
         one that refused is the thing you need to know."""
         self.made().claim()
         with self.assertRaises(gateway.AlreadyRunning) as refused:
-            gateway.Gateway(gateway.DEFAULT_NAME, where=self.where).claim()
+            gateway.Gateway(gateway.DEFAULT_NAME, where=self.where, logs=self.logs).claim()
         self.assertIn(gateway.DEFAULT_NAME, str(refused.exception))
 
     async def test_gateways_of_different_names_run_alongside_each_other(self):
@@ -74,7 +97,7 @@ class OnlyOneOfEachName(WithARunDirectory):
 
     async def test_the_name_a_gateway_gave_back_can_be_taken_again(self):
         """R-GW-12 — cycling a gateway is stopping one and starting another."""
-        first = gateway.Gateway("agent-one", where=self.where)
+        first = gateway.Gateway("agent-one", where=self.where, logs=self.logs)
         first.claim()
         first.release()
         second = self.made("agent-one")
@@ -218,7 +241,7 @@ class WhatItIsMadeOf(WithARunDirectory):
     async def test_a_gateway_refuses_to_start_when_it_does_not_fit(self):
         """R-GW-11 — refused here, rather than as an import error deep inside a
         dependency, under a supervisor, in a restart loop."""
-        gw = gateway.Gateway("unfit", where=self.where, root=self._install("python3.4"))
+        gw = gateway.Gateway("unfit", where=self.where, logs=self.logs, root=self._install("python3.4"))
         with self.assertRaises(gateway.Unfit):
             gw.claim()
         self.assertFalse(gateway.standing("unfit", self.where).running)
@@ -373,8 +396,21 @@ class GoingAway(WithARunDirectory):
         pid = next(iter(gw.running.values())).pid
         gw.ask_to_stop()
         await asyncio.wait_for(serving, 10)
-        self.assertEqual(process.ENDED, (await running).reason)
+        # Bounded on its own, not through the shutdown: a gateway that cleared what it
+        # was running without ending it leaves this waiting forever, and an unbounded
+        # wait turns that regression into a stuck build rather than a failing test.
+        self.assertEqual(process.ENDED, (await asyncio.wait_for(running, 15)).reason)
         self.assertTrue(self._gone(pid), "a program outlived the gateway running it")
+
+    async def test_asking_a_gateway_to_stop_both_refuses_work_and_ends_the_waiting(self):
+        """R-GW-6 — two separate effects, and a version with only the second passes
+        every other case here after a ten-second timeout rather than an assertion."""
+        gw = self.made()
+        gw.claim()
+        self.assertFalse(gw._stopping)
+        gw.ask_to_stop()
+        self.assertTrue(gw._stopping, "it did not stop taking work")
+        self.assertTrue(gw._stopped.is_set(), "it did not end the waiting")
 
     async def test_a_gateway_that_is_stopping_takes_no_more_work(self):
         """R-GW-6"""
@@ -495,6 +531,100 @@ class WhatADeadGatewayLeftBehind(WithARunDirectory):
         return False
 
 
+class WhatHappenedAndWhen(WithARunDirectory):
+    """The log, which is the only thing there is to look at once a gateway has gone."""
+
+    def written(self, name: str = gateway.DEFAULT_NAME) -> str:
+        return gateway.log_path(name, self.logs).read_text()
+
+    async def test_a_gateway_records_coming_up_and_going_down(self):
+        """R-GW-18"""
+        gw = self.made()
+        serving = asyncio.ensure_future(gw.serve())
+        deadline = time.time() + 5
+        while not gateway.standing(gw.name, self.where).running and time.time() < deadline:
+            await asyncio.sleep(0.02)
+        gw.ask_to_stop()
+        await asyncio.wait_for(serving, 10)
+        said = self.written()
+        self.assertIn("up", said)
+        self.assertIn("asked to stop", said)
+        self.assertIn("down", said)
+
+    async def test_what_a_gateway_wrote_outlives_the_gateway(self):
+        """R-GW-18 — the whole point: the gateway is gone, and something happened, and
+        the only place left to look is what it wrote."""
+        gw = self.made()
+        gw.claim()
+        gw.release()
+        self.assertTrue(gateway.log_path(gw.name, self.logs).exists())
+        self.assertIn("up", self.written())
+
+    async def test_work_that_ended_badly_is_recorded_with_its_last_words(self):
+        """R-GW-18 — the reason anyone opens this file is that something ended in a way
+        they did not expect, so what it said before it went is the useful part."""
+        gw = self.made()
+        gw.claim()
+        result = await gw.start(
+            [PY, "-c", "import sys; print('the thing that went wrong'); sys.exit(3)"],
+            as_name="doomed",
+        )
+        self.assertEqual(process.FAILED, result.reason)
+        said = self.written()
+        self.assertIn("doomed", said)
+        self.assertIn("the thing that went wrong", said)
+
+    async def test_work_that_was_refused_as_a_duplicate_is_recorded(self):
+        """R-GW-18 — a refusal nobody can see afterwards looks like nothing happening."""
+        gw = self.made()
+        gw.claim()
+        running = asyncio.ensure_future(gw.start(FOREVER, as_name="convo", silence=None))
+        deadline = time.time() + 5
+        while not gw.running and time.time() < deadline:
+            await asyncio.sleep(0.02)
+        with self.assertRaises(gateway.AlreadyStarted):
+            await gw.start(FOREVER, as_name="convo", silence=None)
+        self.assertIn("already running", self.written())
+        await process.end_all(list(gw.running.values()))
+        await running
+
+    async def test_what_was_swept_from_a_dead_gateway_is_recorded(self):
+        """R-GW-18 — ending someone else's leftovers is exactly the kind of thing you
+        want to find in a log rather than deduce."""
+        left = await asyncio.create_subprocess_exec(*FOREVER, start_new_session=True)
+        self.addCleanup(lambda: left.kill() if left.returncode is None else None)
+        (self.where / "orphaned.json").write_text(
+            json.dumps({"name": "orphaned", "working": {"a-conversation": left.pid}})
+        )
+        gw = self.made("orphaned")
+        gw.claim()
+        self.assertIn("a-conversation", self.written("orphaned"))
+
+    async def test_a_gateway_that_refused_to_start_says_why_in_writing(self):
+        """R-GW-18 — the case where there is no gateway afterwards to ask."""
+        self.made("taken").claim()
+        with self.assertRaises(gateway.AlreadyRunning):
+            gateway.Gateway("taken", where=self.where, logs=self.logs).claim()
+        self.assertIn("already running", self.written("taken"))
+
+    async def test_a_gateway_that_cannot_say_it_is_alive_writes_that_down_and_carries_on(self):
+        """R-GW-9, R-GW-18 — a full disk is not a reason to stop serving, but it is
+        certainly a reason to be able to find out about it afterwards."""
+        gw = self.made()
+        gw.claim()
+        broken = gateway.Gateway._record
+
+        def refuses(_self):
+            raise OSError("no space left on device")
+
+        gateway.Gateway._record = refuses
+        try:
+            gw._say()  # does not raise
+        finally:
+            gateway.Gateway._record = broken
+        self.assertIn("could not update the record", self.written())
+
+
 class WhenClaimingGoesWrong(WithARunDirectory):
     async def test_a_gateway_claiming_its_own_name_twice_is_not_a_clash(self):
         """R-GW-4 — the clash is another process holding the name, never this one
@@ -508,7 +638,7 @@ class WhenClaimingGoesWrong(WithARunDirectory):
     async def test_a_name_is_not_left_held_by_a_claim_that_did_not_finish(self):
         """R-GW-4 — a claim that failed part way through must not make the name
         unusable to the next attempt, including a retry of itself."""
-        gw = gateway.Gateway("awkward", where=self.where)
+        gw = gateway.Gateway("awkward", where=self.where, logs=self.logs)
         self.addCleanup(gw.release)
         broken = gateway.Gateway.__dict__["_record"]
 
@@ -534,6 +664,10 @@ class AsARealProcess(unittest.TestCase):
     def setUp(self):
         self.where = Path(tempfile.mkdtemp(prefix="rundesk-gw-real-"))
         self.addCleanup(shutil.rmtree, self.where, True)
+        self.logs = Path(tempfile.mkdtemp(prefix="rundesk-logs-"))
+        self.addCleanup(shutil.rmtree, self.logs, True)
+        self.addCleanup(os.environ.pop, "RUNDESK_LOG_DIR", None)
+        os.environ["RUNDESK_LOG_DIR"] = str(self.logs)
 
     def test_being_asked_to_stop_twice_does_not_kill_it_mid_shutdown(self):
         """R-GW-8, R-GW-12 — removing the handlers before shutting down restores the

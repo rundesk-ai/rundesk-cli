@@ -32,7 +32,8 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
   programs run at once.
 - `src/rundesk_cli/gateway.py` — the part that stays running. One per name from the outset, since a
   gateway per agent is how one agent is cycled without disturbing the rest. Owns every program started
-  through it, and proves it is alive with a lock the kernel drops when the process dies.
+  through it, and proves it is alive with a lock the kernel drops when the process dies. Writes what
+  happened to its own log, kept apart from its run state because history has to outlive the gateway.
 
 ## Frontend / UI
 

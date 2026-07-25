@@ -24,6 +24,8 @@ import errno
 import fcntl
 import itertools
 import json
+import logging
+import logging.handlers
 import os
 import signal
 import sys
@@ -63,6 +65,47 @@ class Unfit(Exception):
 
 class AlreadyStarted(Exception):
     """This program is already running under this gateway (R-GW-15)."""
+
+
+#: How much a gateway may write before it starts again, and how many it keeps. A gateway
+#: that has been up for a month should not be able to fill a disk, and the thing you want
+#: when something happened at three in the morning is the part just before it.
+LOG_BYTES = 2 * 1024 * 1024
+LOG_KEEP = 3
+
+
+def logs_home() -> Path:
+    """Where gateways write what happened. Kept apart from what they are *doing* now, in
+    `home()`: that is state, cleared when a gateway goes, and this is history, which is
+    only worth anything if it outlives the gateway that wrote it (R-GW-18)."""
+    return Path(os.environ.get("RUNDESK_LOG_DIR") or Path.home() / ".rundesk" / "logs")
+
+
+def log_path(name: str, logs: Path | None = None) -> Path:
+    """The file a gateway of this name writes to — what `rundesk logs` reads."""
+    return (logs or logs_home()) / f"{name}.log"
+
+
+def _recorder(name: str, logs: Path) -> logging.Logger:
+    """A log for one gateway, and no other.
+
+    Built rather than fetched from the logging registry: two gateways in one process
+    would otherwise share a name and write each other's lines, and nothing in this module
+    is shared between two gateways.
+    """
+    logs.mkdir(parents=True, exist_ok=True)
+    keeping = logging.Logger(f"rundesk.gateway.{name}", logging.INFO)
+    to_file = logging.handlers.RotatingFileHandler(
+        log_path(name, logs), maxBytes=LOG_BYTES, backupCount=LOG_KEEP, encoding="utf-8"
+    )
+    to_file.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s"))
+    keeping.addHandler(to_file)
+    # Also said out loud, so a gateway run in a terminal shows its working, and one run
+    # by the machine has it in whatever the machine captures.
+    aloud = logging.StreamHandler(sys.stderr)
+    aloud.setFormatter(logging.Formatter(f"rundesk {name}: %(message)s"))
+    keeping.addHandler(aloud)
+    return keeping
 
 
 def home() -> Path:
@@ -237,9 +280,17 @@ class Gateway:
     restartable without disturbing the rest.
     """
 
-    def __init__(self, name: str = DEFAULT_NAME, where: Path | None = None, root: Path | None = None):
+    def __init__(
+        self,
+        name: str = DEFAULT_NAME,
+        where: Path | None = None,
+        root: Path | None = None,
+        logs: Path | None = None,
+    ):
         self.name = name
         self.where = where or home()
+        self.logs = logs or logs_home()
+        self.log = _recorder(name, self.logs)
         self.root = root or ROOT
         #: What this gateway is running, by the name each was started under. Keyed
         #: rather than collected, because the same work started twice is the failure
@@ -262,6 +313,7 @@ class Gateway:
             return  # this gateway already holds its own name; asking twice is not a clash
         unfit = fitness(self.root)
         if unfit:
+            self.log.error("refusing to start: %s", unfit)
             raise Unfit(unfit)
         self.where.mkdir(parents=True, exist_ok=True)
         handle = os.open(_lock_path(self.name, self.where), os.O_RDWR | os.O_CREAT, 0o600)
@@ -270,25 +322,37 @@ class Gateway:
         except OSError as err:
             os.close(handle)
             if err.errno in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
+                self.log.error("refusing to start: a gateway of this name is already running")
                 raise AlreadyRunning(
                     f"a gateway named '{self.name}' is already running on this machine"
                 ) from err
+            self.log.error("refusing to start: could not take the lock (%s)", err)
             raise
         self._lock = handle
         # Whatever the last gateway of this name was running is, by definition, running
         # with nobody owning it: we now hold the lock it held. Taken before anything of
         # ours starts, so the same work can never be running twice over (R-GW-15, R-GW-16).
         self.swept = _sweep_predecessor(_record_path(self.name, self.where))
+        if self.swept:
+            self.log.warning(
+                "ended work left running by a gateway that is gone: %s", ", ".join(self.swept)
+            )
         try:
             self._record()
-        except OSError:
+        except OSError as err:
             # The lock is only ours while this object lives. Leaving it held by a claim
             # that did not finish would make the name unusable to a retry of itself.
+            self.log.error("could not write the record, so did not start: %s", err)
             self.release()
             raise
+        self.log.info("up — version %s, pid %s", __version__, os.getpid())
 
     def release(self) -> None:
-        """Leave nothing of this gateway behind for the next start to find (R-GW-12)."""
+        """Leave nothing of this gateway behind for the next start to find (R-GW-12).
+
+        What it *wrote* is not that: the log is history and outlives the gateway, which
+        is the whole reason it is kept somewhere else (R-GW-18).
+        """
         _record_path(self.name, self.where).unlink(missing_ok=True)
         _lock_path(self.name, self.where).unlink(missing_ok=True)
         if self._lock is not None:
@@ -351,6 +415,7 @@ class Gateway:
             raise RuntimeError(f"gateway '{self.name}' is stopping and is taking no more work")
         held = as_name if as_name is not None else f"·{next(self._unnamed)}"
         if held in self.running:
+            self.log.warning("refused '%s': it is already running", held)
             raise AlreadyStarted(f"'{held}' is already running under gateway '{self.name}'")
         program = process.Program(
             argv, env=env if env is not None else process.environment(self.where), silence=silence
@@ -361,10 +426,18 @@ class Gateway:
         try:
             await program.start()
             self._say()  # now it has a process group worth recording
-            return await program.wait(on_line)
+            self.log.info("started '%s' (group %s)", held, program.pid)
+            outcome = await program.wait(on_line)
         finally:
             self.running.pop(held, None)
             self._say()
+        if outcome.ok:
+            self.log.info("'%s' finished", held)
+        else:
+            # The tail is already in hand, and the reason someone opens this file at all
+            # is that something ended in a way they did not expect.
+            self.log.warning("'%s' %s — last words: %s", held, outcome.reason, outcome.output[-600:])
+        return outcome
 
     # -- being up, and going away --------------------------------------------------
 
@@ -405,6 +478,7 @@ class Gateway:
         """
         self._stopping = True
         self._stopped.set()
+        self.log.info("asked to stop")
 
     async def _go(self) -> bool:
         """End everything, then leave nothing behind (R-GW-8, R-GW-12).
@@ -423,21 +497,24 @@ class Gateway:
             # this name is the only thing that will.
             drained = False
             still = ", ".join(sorted(self.running)) or "something"
-            print(
-                f"rundesk {self.name}: gave up waiting for {still} to stop",
-                file=sys.stderr,
-            )
+            self.log.error("gave up waiting for %s to stop — it is still out there", still)
         finally:
             self.running.clear()
             self.release()
+        self.log.info("down%s", "" if drained else " — with work still running")
+        for handler in list(self.log.handlers):
+            handler.close()
+            self.log.removeHandler(handler)
         return drained
 
     def _say(self) -> None:
         """Update the record, and never let failing to do so stop the work."""
         try:
             self._record()
-        except OSError:
-            pass
+        except OSError as err:
+            # A gateway that cannot say it is alive is still alive, and stopping serving
+            # over it would turn a full disk into an outage.
+            self.log.warning("could not update the record: %s", err)
 
     async def _beat(self) -> None:
         """Say, at intervals, that this gateway is still going round."""
