@@ -33,12 +33,16 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
 from rundesk_cli import ROOT, __version__
 from rundesk_cli import process
+
+#: The gateway that exists before there are agents to name one after.
+DEFAULT_NAME = "gateway"
 
 class NotAName(ValueError):
     """A gateway name that would not stay inside the directory it belongs in."""
@@ -59,6 +63,31 @@ def checked(name: str) -> str:
 #: when something happened at three in the morning is the part just before it.
 LOG_BYTES = 2 * 1024 * 1024
 LOG_KEEP = 3
+
+
+def write_schedules(name: str, keeping: list, where: Path | None = None) -> None:
+    """Write this gateway's schedules down, whole and in one move.
+
+    The gateway reads this file every time it looks at the clock, so a change takes
+    effect within a tick without anything being restarted — and a half-written file
+    would be read as a gateway with no schedules at all.
+    """
+    target = schedules_path(name, where)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    beside = target.with_suffix(f".{os.getpid()}.writing")
+    beside.write_text(json.dumps(keeping, indent=2) + "\n")
+    os.replace(beside, target)
+
+
+def written_schedules(name: str, where: Path | None = None) -> list:
+    """What is written down for this gateway, as written — including what cannot be
+    understood, because removing a broken schedule is the main thing anyone wants to do
+    with one."""
+    try:
+        said = json.loads(schedules_path(name, where).read_text())
+    except (OSError, ValueError):
+        return []
+    return said if isinstance(said, list) else []
 
 
 def logs_home() -> Path:
@@ -102,6 +131,37 @@ def home() -> Path:
     the install, and what is running is not part of the release.
     """
     return Path(os.environ.get("RUNDESK_RUN_DIR") or Path.home() / ".rundesk" / "run")
+
+
+def schedules_home() -> Path:
+    """Where each gateway's schedules are kept — one file per gateway (R-SCH-13).
+
+    Apart from the run directory because a schedule is something a person decided and
+    not something a gateway is doing, and one file each because that is the whole of the
+    isolation: a gateway reads its own and has no way to name another's. When a gateway
+    is an agent, that is exactly one agent's schedules, its own to change and nobody
+    else's to run (R-SCH-14).
+    """
+    return Path(os.environ.get("RUNDESK_SCHEDULES_DIR") or Path.home() / ".rundesk" / "schedules")
+
+
+def schedules_path(name: str, where: Path | None = None) -> Path:
+    return (where or schedules_home()) / f"{checked(name)}.json"
+
+
+def scheduled(name: str = DEFAULT_NAME, where: Path | None = None):
+    """This gateway's schedules, and any that could not be understood (R-SCH-10).
+
+    Nothing else's, ever: the name is the file, and a name that would reach outside the
+    directory it belongs in was refused long before this (R-GW-20).
+    """
+    from rundesk_cli import schedule
+
+    try:
+        said = json.loads(schedules_path(name, where).read_text())
+    except (OSError, ValueError):
+        return [], []
+    return schedule.read(said)
 
 
 def _lock_path(name: str, where: Path) -> Path:
@@ -292,9 +352,6 @@ def _anything_left(record: Path) -> bool:
     return False
 
 
-#: The gateway that exists before there are agents to name one after.
-DEFAULT_NAME = "gateway"
-
 #: How often a running gateway records that it is still there. The lock is what proves it
 #: is alive; this says when it last went round, which is what tells an owner a gateway is
 #: up but wedged — a distinction no supervisor makes for you.
@@ -307,6 +364,11 @@ ORPHAN_GRACE_SECONDS = 0.5
 #: How long to wait on the machine to say when a process started. Short: it is a local
 #: question, and a gateway must not be held up starting because an answer is slow.
 PS_TIMEOUT_SECONDS = 5.0
+
+#: How often the gateway looks at the clock. Several times a minute, because a schedule
+#: is stated to the minute and a tick that only just misses one would lose it entirely.
+#: Firing is recorded per minute, so looking more often costs nothing (R-SCH-9).
+TICK_SECONDS = 20.0
 
 #: How long stopping may take before the gateway stops waiting for what it is running and
 #: goes anyway (R-GW-7). Under what the supervisor allows: launchd sends SIGTERM, waits,
@@ -412,6 +474,20 @@ def standing(name: str = DEFAULT_NAME, where: Path | None = None) -> Standing:
     )
 
 
+def what_was_scheduled(name: str = DEFAULT_NAME, where: Path | None = None) -> dict:
+    """When each of this gateway's schedules last ran, and what became of it (R-SCH-8).
+
+    Read from the record, because whoever is asking is a different process — the same
+    reason the record exists at all.
+    """
+    try:
+        said = json.loads(_record_path(name, where or home()).read_text())
+    except (OSError, ValueError):
+        return {}
+    ran = said.get("scheduled") if isinstance(said, dict) else None
+    return ran if isinstance(ran, dict) else {}
+
+
 def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list[str]:
     """What this gateway says it has in flight, by the name each was started under.
 
@@ -460,16 +536,24 @@ class Gateway:
         where: Path | None = None,
         root: Path | None = None,
         logs: Path | None = None,
+        schedules: Path | None = None,
     ):
         self.name = checked(name)
         self.where = where or home()
         self.logs = logs or logs_home()
+        self.schedules = schedules or schedules_home()
         self.log = _recorder(name, self.logs)
         self.root = root or ROOT
         #: What this gateway is running, by the name each was started under. Keyed
         #: rather than collected, because the same work started twice is the failure
         #: this guards (R-GW-15) — two sessions on one conversation answer it twice.
         self.running: dict[str, process.Program] = {}
+        #: The minute each schedule last ran, so one runs once for the time it is due
+        #: however often the clock is examined (R-SCH-9). Held by the gateway rather
+        #: than by the schedules, which remember nothing.
+        self._ran: dict[str, object] = {}
+        self._outcomes: dict[str, dict] = {}
+        self._complained: dict[str, str] = {}
         self._unnamed = itertools.count()
         self._lock: int | None = None
         self._released = False
@@ -581,6 +665,8 @@ class Gateway:
             # started. Read back by anything asking whether this gateway is still going
             # round, because a wall clock can be stepped and this cannot.
             "since_boot": time.monotonic(),
+            # What each schedule last did, so it can be asked about from outside.
+            "scheduled": self._outcomes,
             # A number and when it started: see `started_at`. Without the second half a
             # successor cannot tell our leftovers from whatever now shares the number.
             "working": {
@@ -660,10 +746,12 @@ class Gateway:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self.ask_to_stop)
         beating = asyncio.ensure_future(self._beat())
+        ticking = asyncio.ensure_future(self._tick())
         try:
             await self._stopped.wait()
         finally:
             beating.cancel()
+            ticking.cancel()
             # The handlers stay installed across `_go()`. Removing them here restores the
             # system default, which for these two signals is *terminate* — so a second
             # signal arriving during the shutdown window would kill the gateway outright,
@@ -716,6 +804,72 @@ class Gateway:
             self.release(keep_record=not drained)
         self.log.info("down%s", "" if drained else " — with work still running")
         return drained
+
+    async def _tick(self) -> None:
+        """Look at the clock, and start whatever the time has come for (R-SCH-2).
+
+        The gateway is what turns a schedule into work: it knows what it is to start
+        something and how to keep hold of it, and the schedules know only when. Nothing
+        of what is due is worked out here.
+
+        Unkillable by anything but cancellation, for the same reason the beat is: this is
+        a task nobody awaits, so an exception in it would simply end the ticking and
+        every schedule would quietly stop running.
+        """
+        from rundesk_cli import schedule
+
+        while True:
+            try:
+                await asyncio.sleep(TICK_SECONDS)
+                self._fire(schedule, datetime.now())
+            except asyncio.CancelledError:
+                raise
+            except BaseException as went_wrong:  # noqa: BLE001 — see the docstring
+                self.log.warning("could not look at the clock: %s", went_wrong)
+
+    def _fire(self, schedule, now) -> None:
+        """Start everything due at this moment, and say what happened to each."""
+        if self._stopping:
+            return
+        wanted, refused = scheduled(self.name, self.schedules)
+        for name, why in refused:
+            if self._complained.get(name) != why:
+                self.log.error("schedule '%s' cannot be understood: %s", name, why)
+                self._complained[name] = why
+        for one in schedule.due(wanted, now, self._ran):
+            self._ran[one.name] = now.replace(second=0, microsecond=0)
+            asyncio.ensure_future(self._run_scheduled(one))
+
+    async def _run_scheduled(self, one) -> None:
+        """Start what a schedule named, under the schedule's own name.
+
+        Under its own name on purpose: that is what makes a schedule refuse to begin
+        again while the last one is still going (R-SCH-6), using the guard that already
+        exists rather than a second one that could disagree with it.
+        """
+        if not isinstance(one.run, (list, tuple)) or not one.run:
+            self.log.error("schedule '%s' names nothing this gateway can start", one.name)
+            return
+        self.log.info("schedule '%s' is due", one.name)
+        try:
+            outcome = await self.start(list(one.run), as_name=f"schedule:{one.name}")
+        except AlreadyStarted:
+            # R-SCH-7: said, not passed over. A schedule quietly skipping every time
+            # because the last run never ended looks exactly like one that is working.
+            self.log.warning("schedule '%s' skipped: what it started last time is still running",
+                             one.name)
+            self._remember(one.name, "still running")
+            return
+        except Stopping:
+            return
+        self._remember(one.name, outcome.reason)
+
+    def _remember(self, name: str, outcome: str) -> None:
+        """What a schedule last did, kept where anything asking can read it."""
+        self._outcomes[name] = {
+            "at": datetime.now().strftime("%Y-%m-%d %H:%M"), "outcome": outcome,
+        }
+        self._say()
 
     def _say(self) -> None:
         """Update the record, and never let failing to do so stop the work.

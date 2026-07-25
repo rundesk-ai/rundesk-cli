@@ -343,11 +343,33 @@ class Program:
         for sig in (signal.SIGTERM, signal.SIGKILL):
             if not self._signal_group(sig):
                 return  # nothing left in the group to signal
-            try:
-                await asyncio.wait_for(asyncio.shield(self._proc.wait()), GRACE_SECONDS)
+            if await self._group_gone(GRACE_SECONDS):
                 return
-            except asyncio.TimeoutError:
-                continue
+        # Both signals sent and something is still there. Nothing further can be done to
+        # it; saying so is left to whoever asked, who can see `alive`.
+
+    async def _group_gone(self, patience: float) -> bool:
+        """Is *everything* in the group gone — not merely the one we started?
+
+        The one we started leaving is not the tree leaving. A child that closed the
+        output it inherited and ignores the polite signal outlives its own parent, and
+        returning when the parent goes reports a shutdown that ended nothing (R-PROC-5,
+        R-PROC-11). So this waits on the group, not on the leader.
+        """
+        assert self._proc is not None
+        deadline = time.monotonic() + patience
+        while time.monotonic() < deadline:
+            if self._proc.returncode is None:
+                # Reaped here, so a zombie of our own is not mistaken for the group
+                # still standing.
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._proc.wait()), 0.2)
+                except asyncio.TimeoutError:
+                    continue
+            if not self._signal_group(0):
+                return True
+            await asyncio.sleep(0.1)
+        return not self._signal_group(0)
 
     async def _sweep(self) -> None:
         """Take anything the program left running, once the program itself is gone.

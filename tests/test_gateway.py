@@ -43,15 +43,28 @@ class WithARunDirectory(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(shutil.rmtree, self.logs, True)
         self.addCleanup(os.environ.pop, "RUNDESK_LOG_DIR", None)
         os.environ["RUNDESK_LOG_DIR"] = str(self.logs)
+        self.schedules = Path(tempfile.mkdtemp(prefix="rundesk-sched-"))
+        self.addCleanup(shutil.rmtree, self.schedules, True)
+        self.addCleanup(os.environ.pop, "RUNDESK_SCHEDULES_DIR", None)
+        os.environ["RUNDESK_SCHEDULES_DIR"] = str(self.schedules)
         self.addCleanup(setattr, gateway, "STOP_SECONDS", gateway.STOP_SECONDS)
         gateway.STOP_SECONDS = 2.0
         self.addCleanup(setattr, process, "GRACE_SECONDS", process.GRACE_SECONDS)
         process.GRACE_SECONDS = 0.5
 
     def made(self, name: str = gateway.DEFAULT_NAME) -> gateway.Gateway:
-        gw = gateway.Gateway(name, where=self.where, logs=self.logs)
+        gw = gateway.Gateway(name, where=self.where, logs=self.logs, schedules=self.schedules)
         self.addCleanup(gw.release)
         return gw
+
+    def scratch(self) -> Path:
+        made = Path(tempfile.mkdtemp(prefix="rundesk-scratch-"))
+        self.addCleanup(shutil.rmtree, made, True)
+        return made
+
+    def schedules_for(self, name: str, *written) -> None:
+        """Write this gateway's schedules — and only this gateway's."""
+        (self.schedules / f"{name}.json").write_text(json.dumps(list(written)))
 
 
 class OnlyOneOfEachName(WithARunDirectory):
@@ -920,6 +933,108 @@ class WorkNobodyIsComingBackFor(WithARunDirectory):
                 return True
             await asyncio.sleep(0.05)
         return False
+
+
+class WorkThatStartsItself(WithARunDirectory):
+    """The gateway's half of a schedule: turning what is due into work it owns."""
+
+    def setUp(self):
+        super().setUp()
+        from rundesk_cli import schedule
+        self.schedule = schedule
+        self.told = self.scratch() / "it-ran"
+
+    def _writes(self, name="ran"):
+        return {"name": name, "when": "* * * * *",
+                "run": [PY, "-c", f"import pathlib; pathlib.Path({str(self.told)!r}).write_text('yes')"]}
+
+    async def _fired(self, gw, moment=None):
+        from datetime import datetime
+        gw._fire(self.schedule, moment or datetime.now())
+        deadline = time.time() + 10
+        while not self.told.exists() and time.time() < deadline:
+            await asyncio.sleep(0.05)
+        return self.told.exists()
+
+    async def test_a_schedule_that_is_due_starts_what_it_names(self):
+        """R-SCH-2"""
+        gw = self.made()
+        gw.claim()
+        self.schedules_for(gw.name, self._writes())
+        self.assertTrue(await self._fired(gw), "the time came and nothing started")
+
+    async def test_a_gateway_runs_only_its_own_schedules(self):
+        """R-SCH-13, R-SCH-14 — the whole of the isolation, and what makes one agent's
+        schedules that agent's alone: a gateway reads its own file and has no way to
+        name another's."""
+        self.schedules_for("someone-else", self._writes())
+        gw = self.made("mine")
+        gw.claim()
+        gw._fire(self.schedule, __import__("datetime").datetime.now())
+        await asyncio.sleep(0.5)
+        self.assertFalse(self.told.exists(), "a gateway ran another gateway's schedule")
+        self.assertEqual(([], []), gateway.scheduled("mine", self.schedules))
+
+    async def test_a_schedule_does_not_begin_again_while_the_last_is_still_running(self):
+        """R-SCH-6, R-SCH-7 — and says so, because a schedule quietly skipping every
+        time looks exactly like one that is working."""
+        gw = self.made()
+        gw.claim()
+        self.schedules_for(gw.name, {"name": "slow", "when": "* * * * *", "run": list(FOREVER)})
+        from datetime import datetime, timedelta
+        first = datetime(2026, 7, 25, 9, 0)
+        gw._fire(self.schedule, first)
+        deadline = time.time() + 5
+        while not gw.running and time.time() < deadline:
+            await asyncio.sleep(0.02)
+        self.assertEqual(1, len(gw.running))
+        gw._fire(self.schedule, first + timedelta(minutes=1))   # due again, still running
+        await asyncio.sleep(0.5)
+        self.assertEqual(1, len(gw.running), "a schedule began again over its own last run")
+        self.assertIn("still running", gateway.log_path(gw.name, self.logs).read_text())
+        await process.end_all(list(gw.running.values()))
+
+    async def test_a_schedule_runs_once_for_the_minute_it_is_due(self):
+        """R-SCH-9 — the clock is looked at several times a minute."""
+        gw = self.made()
+        gw.claim()
+        self.schedules_for(gw.name, self._writes())
+        from datetime import datetime
+        moment = datetime(2026, 7, 25, 9, 0)
+        self.assertTrue(await self._fired(gw, moment))
+        self.told.unlink()
+        gw._fire(self.schedule, moment)
+        await asyncio.sleep(0.4)
+        self.assertFalse(self.told.exists(), "one minute ran a schedule twice")
+
+    async def test_a_schedule_nobody_can_understand_is_reported_and_the_others_run(self):
+        """R-SCH-10"""
+        gw = self.made()
+        gw.claim()
+        self.schedules_for(gw.name, {"name": "broken", "when": "not a schedule"}, self._writes())
+        self.assertTrue(await self._fired(gw))
+        self.assertIn("cannot be understood", gateway.log_path(gw.name, self.logs).read_text())
+
+    async def test_a_schedule_naming_nothing_this_gateway_can_start_is_reported(self):
+        """R-SCH-3 — what a schedule names is carried without being read, so whether it
+        means anything is the gateway's to decide, and to say."""
+        gw = self.made()
+        gw.claim()
+        self.schedules_for(gw.name, {"name": "vague", "when": "* * * * *", "run": "do a thing"})
+        gw._fire(self.schedule, __import__("datetime").datetime.now())
+        await asyncio.sleep(0.4)
+        self.assertIn("names nothing this gateway can start",
+                      gateway.log_path(gw.name, self.logs).read_text())
+
+    async def test_a_gateway_that_is_stopping_starts_nothing_further(self):
+        """R-GW-6, R-SCH-2"""
+        gw = self.made()
+        gw.claim()
+        self.schedules_for(gw.name, self._writes())
+        gw.ask_to_stop()
+        gw._fire(self.schedule, __import__("datetime").datetime.now())
+        await asyncio.sleep(0.4)
+        self.assertFalse(self.told.exists(), "a gateway on its way out started new work")
 
 
 class WhenClaimingGoesWrong(WithARunDirectory):

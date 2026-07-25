@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -103,6 +104,21 @@ def build_parser() -> argparse.ArgumentParser:
     cycled.add_argument("name", nargs="?")
 
     sub.add_parser("status", help="every gateway, and what it is doing")
+
+    listed = sub.add_parser("schedules", help="what a gateway runs on its own, and when")
+    listed.add_argument("--gateway", dest="name", default=_gateway.DEFAULT_NAME,
+                        help="whose schedules — a gateway's schedules are its own")
+    acts = listed.add_subparsers(dest="act", metavar="<action>")
+    added = acts.add_parser("add", help="add a schedule")
+    added.add_argument("schedule")
+    added.add_argument("--when", required=True, help="when it runs, stated as a schedule is")
+    added.add_argument("--run", required=True, nargs=argparse.REMAINDER,
+                       help="what to start when it is due")
+    for act, what in (("remove", "take a schedule away"),
+                      ("on", "let a schedule run"),
+                      ("off", "keep a schedule but stop it running")):
+        one = acts.add_parser(act, help=what)
+        one.add_argument("schedule")
 
     said = sub.add_parser("logs", help="what a gateway has been saying")
     said.add_argument("name", nargs="?", default=_gateway.DEFAULT_NAME)
@@ -352,6 +368,101 @@ def _how_long(started: float | None) -> str:
     return f"{seconds // 86400}d{(seconds % 86400) // 3600:02d}h"
 
 
+def cmd_schedules(args: argparse.Namespace, gateways) -> int:
+    """List a gateway's schedules, or change them."""
+    act = getattr(args, "act", None)
+    if act == "add":
+        return _add_schedule(args, gateways)
+    if act in ("remove", "on", "off"):
+        return _change_schedule(args, gateways, act)
+    return _list_schedules(args, gateways)
+
+
+def _note(gateways, name: str, said: str) -> None:
+    """Say what was changed, in the log of the gateway it was changed for.
+
+    A schedule that appears or vanishes is as much a part of what happened to a gateway
+    as anything it ran, and the log is the only account that outlives the gateway.
+    """
+    try:
+        with open(gateways.log_path(name), "a", encoding="utf-8") as log:
+            log.write(f"{datetime.now():%Y-%m-%d %H:%M:%S,%f}"[:-3] + f" INFO    {said}\n")
+    except OSError:
+        pass  # the change stands whether or not it could be written down
+
+
+def _add_schedule(args: argparse.Namespace, gateways) -> int:
+    from rundesk_cli import schedule
+
+    try:
+        schedule.Schedule(args.schedule, args.when)
+    except schedule.NotASchedule as why:
+        print(f"{args.schedule}: NOT ADDED — {why}", file=sys.stderr)
+        return 1
+    if not args.run:
+        print(f"{args.schedule}: NOT ADDED — nothing was named to run", file=sys.stderr)
+        return 1
+    keeping = gateways.written_schedules(args.name)
+    if any(one.get("name") == args.schedule for one in keeping if isinstance(one, dict)):
+        print(f"{args.schedule}: EXISTS — remove it first, or use a different name", file=sys.stderr)
+        return 1
+    keeping.append({"name": args.schedule, "when": args.when, "run": list(args.run)})
+    gateways.write_schedules(args.name, keeping)
+    _note(gateways, args.name, f"schedule '{args.schedule}' added ({args.when})")
+    print(f"{args.schedule}: ADDED — next {schedule.describe(schedule.Schedule(args.schedule, args.when), datetime.now())}")
+    return 0
+
+
+def _change_schedule(args: argparse.Namespace, gateways, act: str) -> int:
+    keeping = gateways.written_schedules(args.name)
+    found = [one for one in keeping if isinstance(one, dict) and one.get("name") == args.schedule]
+    if not found:
+        print(f"{args.schedule}: NOT FOUND — {args.name} has no schedule by that name", file=sys.stderr)
+        return 1
+    if act == "remove":
+        keeping = [one for one in keeping if one is not found[0]]
+        said, told = "REMOVED", f"schedule '{args.schedule}' removed"
+    else:
+        found[0]["enabled"] = act == "on"
+        said = "ON" if act == "on" else "OFF"
+        told = f"schedule '{args.schedule}' turned {said.lower()}"
+    gateways.write_schedules(args.name, keeping)
+    _note(gateways, args.name, told)
+    print(f"{args.schedule}: {said}")
+    return 0
+
+
+def _list_schedules(args: argparse.Namespace, gateways) -> int:
+    """What this gateway runs on its own, when each next runs, and what became of it.
+
+    This gateway's, and no other's: a gateway's schedules are its own, which is what
+    makes one agent's schedules that agent's alone (R-SCH-13, R-SCH-14).
+    """
+    from rundesk_cli import schedule
+
+    wanted, refused = gateways.scheduled(args.name)
+    if not wanted and not refused:
+        print(f"{args.name}: NO SCHEDULES")
+        return 0
+    now = datetime.now()
+    ran = gateways.what_was_scheduled(args.name)
+    rows = [(
+        one.name,
+        "OFF" if not one.enabled else "ON",
+        one.when,
+        schedule.describe(one, now),
+        ran.get(one.name, {}).get("at", "-"),
+        ran.get(one.name, {}).get("outcome", "-"),
+    ) for one in wanted]
+    head = ("SCHEDULE", "STATE", "WHEN", "NEXT", "LAST RUN", "OUTCOME")
+    widths = [max(len(row[i]) for row in [head] + rows) for i in range(len(head))] if rows else []
+    for row in ([head] + rows if rows else []):
+        print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
+    for name, why in refused:
+        print(f"{name or '(unnamed)'}: NOT UNDERSTOOD — {why}", file=sys.stderr)
+    return 1 if refused else 0
+
+
 def cmd_logs(args: argparse.Namespace, gateways) -> int:
     """What a gateway has been saying. Reads the file, so a gateway that has gone can
     still be asked what happened (R-GW-18)."""
@@ -411,6 +522,8 @@ def main(argv: list[str], gateways=None, machine=None) -> int:
         return cmd_restart(args, gateways, machine)
     if args.command == "status":
         return cmd_status(args, gateways, machine)
+    if args.command == "schedules":
+        return cmd_schedules(args, gateways)
     if args.command == "logs":
         return cmd_logs(args, gateways)
 

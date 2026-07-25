@@ -433,6 +433,38 @@ class EndingAProgram(Quickened):
         await asyncio.wait_for(waiting, 30.0)
         self.assertTrue(gone_within(grandchild), "a leftover that ignored the first signal survived")
 
+    async def test_ending_waits_for_the_whole_tree_not_just_the_one_we_started(self):
+        """R-PROC-5, R-PROC-11 — the one we started leaving is not the tree leaving. A
+        child that closed the output it inherited and ignores the polite signal outlives
+        its own parent, so returning when the parent goes reports a shutdown that ended
+        nothing — and the gateway then deletes its record and exits reporting success."""
+        told = self.scratch() / "grandchild.pid"
+        deaf = (
+            "import os, signal, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "os.close(1); os.close(2)\n"
+            "time.sleep(300)\n"
+        )
+        program = process.Program(
+            script(
+                "import subprocess, pathlib, time",
+                f"child = subprocess.Popen([{PY!r}, '-c', {deaf!r}])",
+                f"pathlib.Path({str(told)!r}).write_text(str(child.pid))",
+                "time.sleep(300)",
+            ),
+            silence=30.0,
+        )
+        await program.start()
+        waiting = asyncio.ensure_future(program.wait())
+        grandchild = await self._reported_pid(told)
+        self.assertIsNotNone(grandchild)
+        await program.end()
+        self.assertFalse(
+            alive(grandchild),
+            "ending returned while a child that ignores the polite signal was still running",
+        )
+        await waiting
+
     async def test_a_first_signal_that_does_not_land_is_not_the_end_of_it(self):
         """R-PROC-4 — being unable to ask politely is not a reason to stop asking. Giving
         up on the first refusal left the program running and said nothing about it."""

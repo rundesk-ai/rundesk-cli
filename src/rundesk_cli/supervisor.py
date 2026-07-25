@@ -216,7 +216,11 @@ def remove(name: str, where: str | None = None, root: Path | None = None,
     """Stop this gateway being kept up, and forget the job entirely."""
     _only_ours(name, where, root)
     said = asking("bootout", f"{domain()}/{label(name)}")
-    job_path(name, where).unlink(missing_ok=True)
+    # The description is what a second attempt would need. Deleting it after a refusal
+    # leaves a job the machine is still keeping and nothing left to name it with — so it
+    # goes only once the machine has actually let go.
+    if said.ok or not loaded(name, asking):
+        job_path(name, where).unlink(missing_ok=True)
     return said
 
 

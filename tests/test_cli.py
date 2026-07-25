@@ -133,7 +133,7 @@ class BuiltCommandTests(unittest.TestCase):
         # A command that is both "coming soon" and handled would answer twice, and
         # which answer wins would depend on the order of the checks in `main`.
         built = {"version", "update", "uninstall",
-                 "serve", "start", "stop", "restart", "status", "logs"}
+                 "serve", "start", "stop", "restart", "status", "logs", "schedules"}
         self.assertEqual(built & set(cli.COMING_SOON), set())
         self.assertEqual(set(verbs()), built | set(cli.COMING_SOON))
 
@@ -220,7 +220,8 @@ class FakeGateways:
             self.version, self.stale, self.started = version, stale, started
 
     def __init__(self, standing=(), working=None, refuses=None, written=None,
-                 stops_after=None, starts_after=None, becomes=None):
+                 stops_after=None, starts_after=None, becomes=None,
+                 schedules=None, ran_schedules=None):
         self._standing = list(standing)
         self._stops_after = stops_after
         self._starts_after = starts_after
@@ -229,6 +230,8 @@ class FakeGateways:
         #: "running, then stopped, then running again".
         self._becomes = list(becomes) if becomes else None
         self._asked = 0
+        self._written_schedules = dict(schedules or {})
+        self._ran_schedules = dict(ran_schedules or {})
         self._working = working or {}
         self._refuses = refuses
         self._written = written
@@ -255,6 +258,19 @@ class FakeGateways:
 
     def what_is_running(self, name):
         return self._working.get(name, [])
+
+    def scheduled(self, name):
+        from rundesk_cli import schedule
+        return schedule.read(self._written_schedules.get(name, []))
+
+    def written_schedules(self, name):
+        return list(self._written_schedules.get(name, []))
+
+    def write_schedules(self, name, keeping):
+        self._written_schedules[name] = list(keeping)
+
+    def what_was_scheduled(self, name):
+        return self._ran_schedules.get(name, {})
 
     def log_path(self, name):
         return self._written if self._written is not None else pathlib.Path("/nowhere/x.log")
@@ -547,7 +563,7 @@ class WhatIsRunningRightNow(unittest.TestCase):
         self.assertIn("agent-one", said)
         self.assertIn("STOPPED", said)
 
-    async def test_status_says_a_gateway_is_not_supervised_when_the_machine_dropped_it(self):
+    def test_status_says_a_gateway_is_not_supervised_when_the_machine_dropped_it(self):
         """R-GW-9 — a job description in a directory is not a job being kept, and they
         come apart exactly when something has gone wrong."""
         gateways = FakeGateways(standing=[FakeGateways.Standing("gateway", running=False)])
@@ -556,6 +572,130 @@ class WhatIsRunningRightNow(unittest.TestCase):
         _, said = drive(["status"], gateways, machine)
         self.assertIn("STOPPED", said)
         self.assertIn("no", said, "it did not say the machine had stopped keeping it")
+
+
+class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
+    def setUp(self):
+        self.written = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-sched-")) / "gateway.log"
+        self.addCleanup(shutil.rmtree, self.written.parent, True)
+        self.written.write_text("")
+
+    def _gateways(self, **kw):
+        return FakeGateways(written=self.written, **kw)
+
+    def test_a_gateway_with_no_schedules_says_so(self):
+        """R-SCH-8"""
+        code, said = drive(["schedules"], self._gateways())
+        self.assertEqual(0, code)
+        self.assertIn("NO SCHEDULES", said)
+
+    def test_schedules_are_listed_with_when_each_next_runs(self):
+        """R-SCH-8 — what is scheduled, when it next runs, and what became of it last."""
+        gateways = self._gateways(
+            schedules={"gateway": [{"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]},
+            ran_schedules={"gateway": {"tidy": {"at": "2026-07-25 03:00", "outcome": "finished"}}})
+        code, said = drive(["schedules"], gateways)
+        self.assertEqual(0, code)
+        for expected in ("tidy", "0 3 * * *", "2026-07-25 03:00", "finished"):
+            self.assertIn(expected, said)
+
+    def test_a_schedule_that_is_off_is_kept_and_shown_as_off(self):
+        """R-SCH-11 — keeping one without running it is the whole point of turning it off."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "paused", "when": "* * * * *", "run": ["/bin/echo"], "enabled": False}]})
+        _, said = drive(["schedules"], gateways)
+        self.assertIn("paused", said)
+        self.assertIn("OFF", said)
+
+    def test_a_schedule_nobody_can_understand_is_named_and_the_rest_still_listed(self):
+        """R-SCH-10"""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "good", "when": "0 3 * * *", "run": ["/bin/echo"]},
+            {"name": "bad", "when": "nonsense"}]})
+        code, said = drive(["schedules"], gateways)
+        self.assertEqual(1, code)
+        self.assertIn("good", said)
+        self.assertIn("NOT UNDERSTOOD", said)
+
+    def test_a_schedule_is_added_and_shows_when_it_next_runs(self):
+        """R-SCH-1, R-SCH-8"""
+        gateways = self._gateways()
+        code, said = drive(["schedules", "add", "tidy", "--when", "*/5 * * * *",
+                            "--run", "/bin/echo", "hi"], gateways)
+        self.assertEqual(0, code)
+        self.assertIn("ADDED", said)
+        self.assertEqual([{"name": "tidy", "when": "*/5 * * * *", "run": ["/bin/echo", "hi"]}],
+                         gateways.written_schedules("gateway"))
+        self.assertIn("added", self.written.read_text(), "the change was not written to the log")
+
+    def test_a_schedule_nobody_could_act_on_is_never_added(self):
+        """R-SCH-1 — refused where it is written, not discovered when it fails to run."""
+        gateways = self._gateways()
+        code, said = drive(["schedules", "add", "bad", "--when", "99 * * * *",
+                            "--run", "/bin/echo"], gateways)
+        self.assertEqual(1, code)
+        self.assertIn("NOT ADDED", said)
+        self.assertEqual([], gateways.written_schedules("gateway"))
+
+    def test_a_schedule_naming_nothing_to_run_is_never_added(self):
+        """R-SCH-2"""
+        gateways = self._gateways()
+        code, said = drive(["schedules", "add", "empty", "--when", "* * * * *", "--run"], gateways)
+        self.assertEqual(1, code)
+        self.assertIn("NOT ADDED", said)
+
+    def test_adding_a_name_that_is_taken_is_refused(self):
+        """R-SCH-8 — everything about a schedule is reported by its name, so two of one
+        name is two schedules nobody can tell apart."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]})
+        code, said = drive(["schedules", "add", "tidy", "--when", "* * * * *",
+                            "--run", "/bin/echo"], gateways)
+        self.assertEqual(1, code)
+        self.assertIn("EXISTS", said)
+        self.assertEqual(1, len(gateways.written_schedules("gateway")))
+
+    def test_a_schedule_is_taken_away(self):
+        """R-SCH-8"""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]},
+            {"name": "other", "when": "0 4 * * *", "run": ["/bin/echo"]}]})
+        code, said = drive(["schedules", "remove", "tidy"], gateways)
+        self.assertEqual(0, code)
+        self.assertIn("REMOVED", said)
+        self.assertEqual(["other"], [one["name"] for one in gateways.written_schedules("gateway")])
+        self.assertIn("removed", self.written.read_text())
+
+    def test_a_schedule_is_turned_off_and_on_again_without_being_lost(self):
+        """R-SCH-11"""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]})
+        drive(["schedules", "off", "tidy"], gateways)
+        self.assertIs(False, gateways.written_schedules("gateway")[0]["enabled"])
+        drive(["schedules", "on", "tidy"], gateways)
+        kept = gateways.written_schedules("gateway")
+        self.assertIs(True, kept[0]["enabled"])
+        self.assertEqual(1, len(kept), "turning one off and on again lost it")
+        self.assertIn("turned off", self.written.read_text())
+        self.assertIn("turned on", self.written.read_text())
+
+    def test_changing_a_schedule_that_is_not_there_says_so(self):
+        """R-SCH-8"""
+        for act in ("remove", "on", "off"):
+            with self.subTest(act=act):
+                code, said = drive(["schedules", act, "nope"], self._gateways())
+                self.assertEqual(1, code)
+                self.assertIn("NOT FOUND", said)
+
+    def test_schedules_are_asked_for_and_changed_on_one_gateway_only(self):
+        """R-SCH-13, R-SCH-14 — a gateway's schedules are its own, which is what makes
+        one agent's schedules that agent's alone."""
+        gateways = self._gateways(schedules={"agent-two": [
+            {"name": "theirs", "when": "* * * * *", "run": ["/bin/echo"]}]})
+        _, said = drive(["schedules", "--gateway", "agent-one"], gateways)
+        self.assertIn("NO SCHEDULES", said)
+        drive(["schedules", "add", "mine", "--when", "* * * * *", "--run", "/bin/echo"], gateways)
+        self.assertEqual(["theirs"], [one["name"] for one in gateways.written_schedules("agent-two")])
 
 
 class WhatAGatewayHasBeenSaying(unittest.TestCase):

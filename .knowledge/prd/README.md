@@ -32,6 +32,7 @@ high-level map.
 - **Platform**
   - [platform-process](./platform-process.md) — a program rundesk runs, and how it keeps hold of it while it does.
   - [platform-gateway](./platform-gateway.md) — the part that stays running, one of each name, and what it takes with it.
+  - [platform-schedule](./platform-schedule.md) — work rundesk begins because the time came, belonging to one gateway each.
 - **Lifecycle**
   - [lifecycle-install](./lifecycle-install.md) — getting rundesk onto a machine, and knowing it worked.
   - [lifecycle-update](./lifecycle-update.md) — which version this is, which has been published, and moving between them.

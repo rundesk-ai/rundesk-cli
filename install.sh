@@ -106,8 +106,10 @@ if not supervisor.available():
 taken, stubborn = supervisor.take_all_back()
 for name in taken:
     print(f"stopped gateway '{name}' and removed its job")
-for name in stubborn:
-    print(f"warning: gateway '{name}' would not stop; its job is gone but it is still running")
+if stubborn:
+    for name in stubborn:
+        print(f"gateway '{name}' would not stop, and is still running")
+    raise SystemExit(3)
 STOP
 }
 
@@ -116,7 +118,12 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   check_install_dir
   echo "removing rundesk"
   removed=0
-  stop_gateways
+  # Refused rather than continued: deleting the command while a gateway is still running
+  # leaves an agent nobody can reach and takes away the very thing that could stop it.
+  if ! stop_gateways; then
+    die "something rundesk was keeping is still running, so nothing was removed.
+Stop it and try again, or see what is running with: rundesk status"
+  fi
   for dir in /usr/local/bin "$HOME/.local/bin" "${RUNDESK_BIN_DIR:-}"; do
     [[ -n "$dir" && -L "$dir/rundesk" ]] || continue
     target="$(readlink "$dir/rundesk")"

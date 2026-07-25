@@ -370,6 +370,30 @@ class HandingItOver(WithAJobDirectory):
         said = supervisor.install("gateway", self.root, self.logs, str(self.where), refusing)
         self.assertFalse(said.ok)
 
+    def test_a_job_the_machine_would_not_let_go_of_is_kept_to_try_again(self):
+        """R-RM-9 — the description is what a second attempt needs. Deleting it after a
+        refusal leaves a job the machine is still keeping and nothing left to name it
+        with, so the next attempt asks the machine for nothing at all."""
+        # One machine throughout, which takes the job and then will not let it go —
+        # two of them would mean removing from a machine that never had it.
+        machine = Machine(refuse=("bootout",))
+        supervisor.install("stubborn", self.root, self.logs, str(self.where), machine)
+        self.assertTrue(supervisor.loaded("stubborn", machine))
+        said = supervisor.remove("stubborn", str(self.where), self.root, asking=machine)
+        self.assertFalse(said.ok)
+        self.assertTrue(supervisor.job_path("stubborn", str(self.where)).exists(),
+                        "the job was forgotten while the machine still had it")
+        self.assertEqual(["stubborn"], supervisor.described(str(self.where), self.root))
+
+    def test_a_job_the_machine_never_had_is_forgotten_even_if_it_refuses(self):
+        """R-RM-9 — refusing to boot out something that was never loaded is the ordinary
+        case, and keeping the file for it would leave it there forever."""
+        supervisor.write("never-loaded", self.root, self.logs, str(self.where))
+        empty = Machine()   # holding nothing, so bootout fails and `loaded` is false
+        said = supervisor.remove("never-loaded", str(self.where), self.root, asking=empty)
+        self.assertFalse(said.ok)
+        self.assertFalse(supervisor.job_path("never-loaded", str(self.where)).exists())
+
     def test_taking_a_gateway_back_forgets_the_job_entirely(self):
         """R-GW-12"""
         supervisor.install("gateway", self.root, self.logs, str(self.where), self.machine)

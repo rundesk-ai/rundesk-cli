@@ -37,6 +37,10 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
   gateway per agent is how one agent is cycled without disturbing the rest. Owns every program started
   through it, and proves it is alive with a lock the kernel drops when the process dies. Writes what
   happened to its own log, kept apart from its run state because history has to outlive the gateway.
+- `src/rundesk_cli/schedule.py` — work that starts itself: what a schedule is, when one is next due, and
+  which are due now. Knows nothing of gateways or processes, and what a schedule names is carried without
+  ever being read — so the day it names an agent rather than a command, nothing here changes. The time is
+  an argument, so a year of firings is decided in a millisecond.
 - `src/rundesk_cli/supervisor.py` — handing a gateway to the machine that keeps it running: one job per
   gateway, and never one this install did not write. Every call out to the machine is an argument, so it
   is exercised on a machine with no supervisor at all.
