@@ -226,6 +226,49 @@ class HowLongAProgramMayTake(Quickened):
         self.assertTrue(result.ok, "a program that never went quiet was ended anyway")
         self.assertEqual(12, len(result.output.splitlines()))
 
+    async def test_a_program_that_never_stops_talking_is_still_ended_eventually(self):
+        """R-PROC-13 — the shape silence cannot see: wedged in a loop that keeps
+        announcing itself. Nothing would ever end it, and it would run until a person
+        noticed."""
+        program = process.Program(
+            script("import sys, time", "while True: print('retrying'); sys.stdout.flush(); time.sleep(0.05)"),
+            silence=30.0,
+            ceiling=0.5,
+        )
+        await program.start()
+        pid = program.pid
+        result = await asyncio.wait_for(program.wait(), 20)
+        self.assertEqual(process.OVERRAN, result.reason)
+        self.assertTrue(gone_within(pid))
+
+    async def test_running_a_long_time_is_not_by_itself_a_reason_to_be_ended(self):
+        """R-PROC-13 — the ceiling is a backstop, never the instrument. A session that
+        runs for hours and finishes is not what it is for."""
+        result = await process.run(
+            script("import sys, time", "for _ in range(6): print('working'); sys.stdout.flush(); time.sleep(0.05)"),
+            silence=5.0,
+            ceiling=30.0,
+        )
+        self.assertTrue(result.ok, "a program well inside the ceiling was ended anyway")
+
+    async def test_a_program_may_be_allowed_to_run_without_any_ceiling(self):
+        """R-PROC-13"""
+        result = await process.run(script("print('done')"), ceiling=None)
+        self.assertTrue(result.ok)
+
+    async def test_overrunning_is_told_apart_from_going_quiet(self):
+        """R-PROC-8 — wedged-and-talking and wedged-and-silent are different faults and
+        send a reader somewhere different."""
+        talking = process.Program(
+            script("import sys, time", "while True: print('.'); sys.stdout.flush(); time.sleep(0.05)"),
+            silence=30.0, ceiling=0.5,
+        )
+        await talking.start()
+        self.assertEqual(process.OVERRAN, (await asyncio.wait_for(talking.wait(), 20)).reason)
+        quiet = process.Program(forever(), silence=0.3, ceiling=30.0)
+        await quiet.start()
+        self.assertEqual(process.SILENT, (await asyncio.wait_for(quiet.wait(), 20)).reason)
+
     async def test_a_program_that_goes_quiet_is_ended(self):
         """R-PROC-7 — reported as silent *and* actually gone: saying so without ending
         it would leave a wedged session running with nothing watching it."""

@@ -36,6 +36,7 @@ import codecs
 import os
 import shutil
 import signal
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,11 +44,12 @@ from typing import Callable, Iterable, Sequence
 
 #: How a program ended. Told apart because each sends a reader somewhere different:
 #: `FINISHED` needs nothing, `FAILED` is the program's own doing, `ENDED` and `SILENT`
-#: are ours (R-PROC-8, R-PROC-9).
+#: are ours (R-PROC-8, R-PROC-9, R-PROC-13).
 FINISHED = "finished"
 FAILED = "failed"
 ENDED = "ended"
 SILENT = "silent"
+OVERRAN = "overran"
 
 #: How long a program gets to leave politely before it is taken out (R-PROC-5).
 GRACE_SECONDS = 5.0
@@ -56,6 +58,12 @@ GRACE_SECONDS = 5.0
 #: Generous on purpose: a working session can be quiet for a long time while a single
 #: tool call runs, and ending one of those would be ending real work.
 SILENCE_SECONDS = 1800.0
+
+#: The longest a program may run however much it is saying (R-PROC-13). Silence cannot
+#: see a program wedged in a loop that keeps announcing itself, and that shape would
+#: otherwise run until a person noticed. Set far past what real work reaches, because
+#: this is the backstop and the silence window is the instrument.
+CEILING_SECONDS = 48 * 60 * 60.0
 
 #: Read size, and the point at which output with no line ending in it is passed on
 #: anyway. Neither is a limit on what a program may say — only on how much is held
@@ -134,6 +142,7 @@ class Program:
     #: gateway holds to every program it runs. `environment()` builds the real one.
     env: dict[str, str] = field(default_factory=dict)
     silence: float | None = SILENCE_SECONDS
+    ceiling: float | None = CEILING_SECONDS
     _proc: asyncio.subprocess.Process | None = field(default=None, repr=False, init=False)
     _ended: bool = field(default=False, repr=False, init=False)
 
@@ -183,6 +192,8 @@ class Program:
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
         pending = ""
         went_silent = False
+        overran = False
+        began = time.monotonic()
 
         def emit(line: str) -> None:
             tail.append(line)
@@ -197,6 +208,12 @@ class Program:
         quiet_for = 0.0
         try:
             while True:
+                # Checked on every pass, not only when nothing was said: the shape this
+                # exists for is a program wedged in a loop that keeps announcing itself,
+                # and that one never stops arriving (R-PROC-13).
+                if self.ceiling is not None and time.monotonic() - began >= self.ceiling:
+                    overran = True
+                    break
                 if reader is None:
                     reader = asyncio.ensure_future(self._proc.stdout.read(READ_BYTES))
                 # Once it has gone there is nothing more coming but what is already in
@@ -242,7 +259,9 @@ class Program:
         pending += decoder.decode(b"", final=True)
         if pending:
             emit(pending)
-        if not went_silent and self._proc.returncode is None:
+        if overran:
+            await self.end()
+        if not overran and not went_silent and self._proc.returncode is None:
             # The pipe closing is not the program dying. One that closes what it writes
             # out and keeps going — anything that daemonises itself, or execs something
             # that does — reaches here alive, and waiting on it with nothing bounding the
@@ -254,6 +273,8 @@ class Program:
             await self.end()
         code = await self._reap()
         await self._sweep()
+        if overran:
+            return Result(OVERRAN, code, "\n".join(tail))
         if went_silent:
             return Result(SILENT, code, "\n".join(tail))
         if self._ended:
@@ -342,10 +363,11 @@ async def run(
     argv: Sequence[str],
     env: dict[str, str] | None = None,
     silence: float | None = SILENCE_SECONDS,
+    ceiling: float | None = CEILING_SECONDS,
     on_line: Callable[[str], None] | None = None,
 ) -> Result:
     """Start a program, read it to the end, and say what became of it."""
-    program = Program(argv, env=env or {}, silence=silence)
+    program = Program(argv, env=env or {}, silence=silence, ceiling=ceiling)
     await program.start()
     return await program.wait(on_line)
 

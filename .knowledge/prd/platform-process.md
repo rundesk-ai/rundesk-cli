@@ -30,11 +30,13 @@ drive what such a program does — it decides that one runs, watches it, and end
 | ✅ | R-PROC-9 | A program that failed is told apart from one that finished on its own | `failing is told apart from finishing`, `dying is told apart from finishing` |
 | ✅ | R-PROC-10 | Any number of programs run at the same time without affecting one another | `programs run at the same time rather than in turn`, `what each says reaches only its own caller`, `one program ending badly leaves the others running` |
 | ✅ | R-PROC-11 | Nothing a program started outlives the program that started it | `what a finished program left behind does not outlive it`, `what a finished program left behind is ended anyway if it will not go`, `a handler that raises does not leave the program running`, `everything still running is ended together`, `ending nothing at all is allowed` |
+| ✅ | R-PROC-13 | A program is ended once it has run longer than it is ever allowed, however much it is saying | `a program that never stops talking is still ended eventually`, `running a long time is not by itself a reason to be ended`, `a program may be allowed to run without any ceiling`, `overrunning is told apart from going quiet` |
 | ✅ | R-PROC-12 | What a program says is never held against the memory of the machine it runs on | `only a tail is kept however much it says`, `output with no line ending is not held forever` |
 
 ## Open questions
 
-- Whether how long a program may say nothing is fixed for every program, or set per kind of program.
+- Whether how long a program may say nothing, and how long it may run at all, are fixed for every
+  program or set per kind of program.
 - A program does survive rundesk being killed outright, since it is in a group of its own and out of
   reach of anything that ends rundesk without warning. What ends it is whatever takes over the name it
   was started under, next time that happens; whether that is soon enough is the part still open.

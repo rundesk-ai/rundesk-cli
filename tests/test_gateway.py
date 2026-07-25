@@ -417,11 +417,12 @@ class GoingAway(WithARunDirectory):
         """R-GW-6 — two separate effects, and a version with only the second passes
         every other case here after a ten-second timeout rather than an assertion."""
         gw = self.made()
-        gw.claim()
         self.assertFalse(gw._stopping)
         gw.ask_to_stop()
         self.assertTrue(gw._stopping, "it did not stop taking work")
-        self.assertTrue(gw._stopped.is_set(), "it did not end the waiting")
+        # Asked before it ever served: serving must then not sit there waiting to be
+        # asked a second time.
+        self.assertEqual(0, await asyncio.wait_for(gw.serve(), 10), "it went on serving")
 
     async def test_a_gateway_that_is_stopping_takes_no_more_work(self):
         """R-GW-6"""
@@ -790,6 +791,65 @@ class WhoseProcessIsItAnyway(WithARunDirectory):
         self.assertIsNone(gateway.started_at(999999))
 
 
+class WorkNobodyIsComingBackFor(WithARunDirectory):
+    """A name that is never taken up again is never anyone's to sweep, so work left
+    under it would run until the machine was restarted."""
+
+    async def _stray(self, name: str):
+        left = await asyncio.create_subprocess_exec(*FOREVER, start_new_session=True)
+        self.addCleanup(lambda: left.kill() if left.returncode is None else None)
+        (self.where / f"{name}.json").write_text(
+            json.dumps({
+                "name": name,
+                "working": {"a-conversation": {"pgid": left.pid, "since": gateway.started_at(left.pid)}},
+            })
+        )
+        return left
+
+    async def test_starting_any_gateway_ends_work_left_under_a_name_nobody_uses(self):
+        """R-GW-23 — an agent renamed or removed while it was working leaves programs
+        that nothing else would ever end."""
+        left = await self._stray("an-agent-since-renamed")
+        gw = self.made("something-else-entirely")
+        gw.claim()
+        self.assertTrue(await self._gone(left), "work under a forgotten name outlived everything")
+        self.assertIn("nobody has started since", gateway.log_path(gw.name, self.logs).read_text())
+
+    async def test_a_record_with_nothing_left_running_is_not_kept_forever(self):
+        """R-GW-23 — otherwise every name ever used is listed as a gateway for good."""
+        (self.where / "long-gone.json").write_text(
+            json.dumps({"name": "long-gone", "working": {"a-conversation": {"pgid": 999999, "since": "then"}}})
+        )
+        self.made("someone-else").claim()
+        self.assertFalse((self.where / "long-gone.json").exists())
+        self.assertNotIn("long-gone", [s.name for s in gateway.every(self.where)])
+
+    async def test_a_running_gateways_work_is_never_swept_by_another(self):
+        """R-GW-23 — the one record that is not ours to touch is one whose gateway is
+        still there. Sweeping it would be a gateway ending another's work."""
+        busy = self.made("busy")
+        busy.claim()
+        running = asyncio.ensure_future(busy.start(FOREVER, as_name="its-own-work", silence=None))
+        deadline = time.time() + 5
+        while not busy.running and time.time() < deadline:
+            await asyncio.sleep(0.02)
+        theirs = next(iter(busy.running.values()))
+        other = self.made("newcomer")
+        other.claim()
+        self.assertTrue(theirs.alive, "a gateway swept the work of one that was still running")
+        self.assertTrue((self.where / "busy.json").exists())
+        await process.end_all([theirs])
+        await running
+
+    async def _gone(self, proc, seconds: float = 10.0) -> bool:
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if not gateway._still_there(proc.pid):
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
+
 class WhenClaimingGoesWrong(WithARunDirectory):
     async def test_a_gateway_claiming_its_own_name_twice_is_not_a_clash(self):
         """R-GW-4 — the clash is another process holding the name, never this one
@@ -866,7 +926,7 @@ class AsARealProcess(unittest.TestCase):
             "raise SystemExit(asyncio.run(main()))\n"
         )
         served = subprocess.Popen(
-            [
+            stderr=subprocess.PIPE, text=True, args=[
                 PY,
                 "-c",
                 "import sys, asyncio, pathlib\n"
@@ -884,7 +944,11 @@ class AsARealProcess(unittest.TestCase):
             ):
                 return served, self.where
             time.sleep(0.05)
-        self.fail("the gateway never came up holding what it was meant to hold")
+        served.kill()
+        self.fail(
+            "the gateway never came up holding what it was meant to hold — it said: "
+            + (served.stderr.read() or "(nothing)")
+        )
 
     def _in_flight(self, name: str) -> bool:
         try:
@@ -896,7 +960,7 @@ class AsARealProcess(unittest.TestCase):
     def test_a_gateway_stops_when_the_machine_asks_it_to(self):
         """R-GW-6, R-GW-12"""
         served = subprocess.Popen(
-            [
+            stderr=subprocess.PIPE, text=True, args=[
                 PY,
                 "-c",
                 "import sys, asyncio\n"

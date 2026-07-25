@@ -39,6 +39,10 @@ cycled without disturbing the rest.
 | ✅ | R-GW-17 | The gateway says so when it goes with work it could not end | `stopping does not wait past the time it is allowed` |
 | ✅ | R-GW-19 | A gateway leaves alone anything it cannot show the last gateway of its name left running | `a number that now belongs to something else is left alone`, `a record that cannot prove what it left is left alone`, `a record that does not say what was running is left alone`, `when a process started is answered for one that exists` |
 | ✅ | R-GW-20 | A gateway name that would reach outside the directory it belongs in is refused | `a name that would escape its directory is refused` |
+| ✅ | R-GW-21 | Work left by a gateway whose name nobody takes up again is still ended | `starting any gateway ends work left under a name nobody uses`, `a record with nothing left running is not kept forever`, `a running gateways work is never swept by another` |
+| ❌ | R-GW-22 | Work interrupted by the gateway restarting is taken up where it stopped, not begun again | — nothing records where a piece of work had got to |
+| ❌ | R-GW-23 | Work in flight when a gateway goes is answered for rather than dropped in silence | — nothing tells anyone that work was interrupted |
+| ❌ | R-GW-24 | Work that keeps taking the gateway down with it is stopped rather than taken up again | — nothing is taken up again yet, so nothing can do so repeatedly |
 | ✅ | R-GW-18 | What a gateway wrote about what happened outlives the gateway | `what a gateway wrote outlives the gateway`, `a gateway records coming up and going down`, `work that ended badly is recorded with its last words`, `a gateway that refused to start says why in writing`, `what it writes goes beside the run directory by default`, `what was swept from a dead gateway is recorded`, `work that was refused as a duplicate is recorded`, `a gateway that cannot say it is alive writes that down and carries on` |
 
 ## Open questions
@@ -46,6 +50,6 @@ cycled without disturbing the rest.
 - Whether an owner may ask the gateway to stop without waiting for work in flight to finish.
 - Whether a program the gateway was running is started again when it fails, given that repeating a turn
   repeats whatever that turn already did to the machine.
-- A gateway whose name is never taken again is never swept, so what it left running is never ended by
-  anyone. Finding those needs a pass over the whole machine, which is more than this is worth today.
+- How often a gateway may be started before rundesk treats starting it as the fault, rather than
+  whatever it is starting for.
 - Whether R-GW-1, R-GW-2 and R-GW-3 assert what the machine's own supervisor does, or only rundesk's half.

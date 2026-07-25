@@ -246,6 +246,50 @@ def _sweep_predecessor(record: Path, log: logging.Logger) -> list[str]:
     return swept
 
 
+def _sweep_strays(where: Path, mine: str, log: logging.Logger) -> list[str]:
+    """End work left by *any* gateway that is gone, not only this one's predecessor.
+
+    A gateway ends what the last holder of its own name left behind — but a name that is
+    never taken up again is never anyone's to sweep, and an agent that is renamed or
+    removed while it was working leaves programs that nothing would ever end. Every start
+    therefore looks at every record, not just its own (R-GW-23).
+
+    A record whose gateway is running is left strictly alone: it is that gateway's, and
+    it is the one thing here that is not ours to touch.
+    """
+    swept: list[str] = []
+    for record in sorted(where.glob("*.json")):
+        name = record.stem
+        if name == mine or _held(name, where):
+            continue
+        left = _sweep_predecessor(record, log)
+        if left:
+            log.warning("ended work left by '%s', a gateway nobody has started since: %s",
+                        name, ", ".join(left))
+            swept += [f"{name}/{one}" for one in left]
+        if not _anything_left(record):
+            # Nothing of it is running and nobody holds the name: the record has no
+            # reader left. Kept, it would be listed as a gateway forever.
+            record.unlink(missing_ok=True)
+    return swept
+
+
+def _anything_left(record: Path) -> bool:
+    """Does this record still name work that is running?"""
+    try:
+        said = json.loads(record.read_text())
+    except (OSError, ValueError):
+        return False
+    working = said.get("working") if isinstance(said, dict) else None
+    if not isinstance(working, dict):
+        return False
+    for was in working.values():
+        pgid = was.get("pgid") if isinstance(was, dict) else was
+        if isinstance(pgid, int) and _still_there(pgid):
+            return True
+    return False
+
+
 @dataclass
 class Standing:
     """How a gateway looks from outside it — what `status` is made of (R-GW-9)."""
@@ -362,7 +406,12 @@ class Gateway:
         #: Set here as well as in `claim`, so reading it never depends on having claimed.
         self.swept: list[str] = []
         self._stopping = False
-        self._stopped = asyncio.Event()
+        #: Made when serving begins, never here. On the oldest Python this runs on, an
+        #: Event binds to whatever loop exists when it is *constructed* — and a gateway
+        #: is constructed before there is a loop, so one made here belongs to no loop
+        #: and waiting on it inside `asyncio.run` fails outright. Every in-process test
+        #: happened to build its gateway inside a running loop and so never saw this.
+        self._stopped: asyncio.Event | None = None
 
     # -- what it is made of -------------------------------------------------------
 
@@ -397,6 +446,7 @@ class Gateway:
         # with nobody owning it: we now hold the lock it held. Taken before anything of
         # ours starts, so the same work can never be running twice over (R-GW-15, R-GW-16).
         self.swept = _sweep_predecessor(_record_path(self.name, self.where), self.log)
+        self.swept += _sweep_strays(self.where, self.name, self.log)
         if self.swept:
             self.log.warning(
                 "ended work left running by a gateway that is gone: %s", ", ".join(self.swept)
@@ -528,6 +578,9 @@ class Gateway:
         without leaving anything running.
         """
         self.claim()
+        self._stopped = asyncio.Event()
+        if self._stopping:
+            self._stopped.set()  # asked to stop before it got going
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self.ask_to_stop)
@@ -555,7 +608,8 @@ class Gateway:
         anything would be a handler that could be interrupted halfway through.
         """
         self._stopping = True
-        self._stopped.set()
+        if self._stopped is not None:
+            self._stopped.set()
         self.log.info("asked to stop")
 
     async def _go(self) -> bool:
