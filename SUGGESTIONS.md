@@ -41,7 +41,7 @@ so a later round does not spend the effort again without new reason:
 | Scheduling correctness | findings **12**, **21**, **24**, **25**, **26** |
 | Install, update and removal safety | findings **4**, **14**, **15**, **28** |
 | Source of truth and auditability | findings **26**, **27**, **28**, **29**; extensions to **12**, **17**, **19** |
-| Consumer command surface | findings **31–35**; extensions to **6**, **13**, **17**, **27**, **28** |
+| Consumer command surface | findings **32–35**; extensions to **6**, **13**, **17**, **27**, **28** |
 | Measured performance | finding **9** (second consequence) and **17**; measurements below |
 | Failure-injection coverage | see "Tests that prove only the easy half" below |
 | Security and trust boundaries | **no change needed today** — see below |
@@ -1309,29 +1309,9 @@ in `src/rundesk_cli/process.py`.
 # Round six — 2026-07-25
 
 Line numbers are against `43315ae`. Material that repeated an existing failure is merged
-above; findings 31–35 are only the distinct consumer command-surface gaps.
+above; findings 32–35 are only the distinct consumer command-surface gaps.
 
 ## High impact
-
-### 31. Keep Rundesk options out of the scheduled program
-
-**Status:** Open
-
-1. **Command and location:** `rundesk schedules add`; `src/rundesk_cli/cli.py:109-117`,
-   `:557-587`.
-2. **Current behaviour:** `--run` uses `argparse.REMAINDER`, while `--gateway` belongs to
-   the parent parser. In the natural command
-   `rundesk schedules add daily --when daily --run /bin/echo hi --gateway alpha`,
-   `--gateway alpha` becomes program arguments and the schedule is added to the default
-   gateway. The success line names only the schedule: `daily: ADDED — next ...`.
-3. **Why it blocks:** A successful command can target the wrong gateway and later pass a
-   Rundesk option to the agent program. Nothing in the result exposes either mistake.
-4. **Replacement:** Use an explicit program boundary:
-   `rundesk schedules add NAME --gateway GATEWAY --when WHEN -- PROGRAM [ARG ...]`.
-   Print `GATEWAY/NAME: ADDED — next ...`; reject ambiguous legacy ordering without writing.
-5. **Test:** Assert the canonical form stores the exact gateway and argv; the ambiguous
-   form exits nonzero and leaves the schedule file byte-for-byte unchanged; the success
-   line names both gateway and schedule.
 
 ### 32. Require an explicit scope for `stop` and `restart`
 
