@@ -1,4 +1,4 @@
-# Memory — <project>
+# Memory — rundesk-cli
 
 Always-loaded, read at the start of every task: the friction we've hit in **this codebase** and the
 workaround for each — so you don't re-hit it. **A living list — delete an entry once it's genuinely solved;
@@ -17,6 +17,15 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   and uninstalling silently left it. What tells them apart is whether the script sits in the
   directory the installer was told to create.
 
+- `asyncio`'s `Process.wait()` resolves when **every pipe closes**, not when the process exits. Anything
+  the program left running inherited the far end and holds it open, so waiting on the exit lands hours
+  late or never. Watch `proc.returncode` in short spells instead — it is set promptly. This cost a
+  reproduced hang and reads exactly like a deadlock in your own code.
+- `asyncio.wait({a, b})` returns **instantly, forever** once one of them is already done — a completed
+  future stays done. Drop it from the set after it fires, or the loop spins at full speed.
+- A test that builds a `Gateway` without `RUNDESK_RUN_DIR` **and** `RUNDESK_LOG_DIR` pointed at scratch
+  writes into the real `~/.rundesk`. The suite did, and left nine log files in the owner's home. Point
+  logs somewhere **outside** the run directory too, or the "leaves nothing behind" cases trip over them.
 - A test class appended **after** the `if __name__ == "__main__": unittest.main()` block never runs —
   Python reaches the runner before the class is defined, and the count silently stays where it was.
   Keep that block last in every test file, and check the "Ran N tests" number moved.
@@ -24,7 +33,6 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   (`t.results().write_results(show_missing=True, coverdir=…)`, then grep `>>>>>>`). Running
   `python3 -m trace` once per test file overwrites the previous file's `.cover` and reports nonsense.
 
-- _(none yet)_
 
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*
