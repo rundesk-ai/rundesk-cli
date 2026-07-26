@@ -8,6 +8,15 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **`./install.sh --uninstall` removes the checkout's own `.venv`, whatever else you redirected.**
+  Symmetric — the install put `discord.py` there — but it is where a *developer's* suite loads it from
+  too, so the Discord cases silently start skipping, and a gateway you have running would fail on its
+  next restart with no obvious cause. Run `./install.sh` again straight afterwards, and check
+  `.venv/bin/python -c "import discord"` before believing a green suite.
+- **A backticked anything in an Evidence cell is read as the name of a test.** That is the whole
+  mechanism keeping a ✅ honest, and it does not care that the row is ❌ or that the backticks are around
+  a filename, a path or a script. Write those plainly in a note — `check-evidence` fails the gate with
+  "is ❌ but names a test", which reads like the row is wrong when the punctuation is.
 - **Codex has two instruction fields and one of them is a trap.** `baseInstructions` on
   `thread/start` *replaces* what codex was built with, including the instructions telling it how to
   use its own tools — nothing reports this, the turn merely behaves strangely and the model gets the

@@ -20,6 +20,8 @@ by version bump. Everything else you drop in here is yours.
 | [`cli-reference`](./cli-reference) | Writes `CLI.md` from the parser, so the reference cannot drift from the command. `--check` fails when it has. |
 | [`gate`](./gate) | Everything that has to be true before work here is finished, in one command. Finds the suites rather than listing them. |
 | [`probe-codex`](./probe-codex) | What the installed Codex CLI really does, asked of it rather than assumed. Evidence for `research/`, never a test dependency — the live half reaches a real account. |
+| [`probe-codex-instructions`](./probe-codex-instructions) | Where Codex reads standing instructions, and which of its two instruction fields replaces what the brain was built with. Both were established by probing, not by reading its schema, which describes neither. |
+| [`probe-discord`](./probe-discord) | The canary. Prints what to do and what to watch for each channel row a fake cannot settle — a mark appearing, an indicator running, a bot showing online. It does not drive Discord: every row here is *what a person sees*, so a script reporting success would be asserting the one thing it cannot observe. |
 
 ## Usage
 
