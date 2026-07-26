@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  # Once a day, because the thing most likely to break the published release is not a
+  # commit here — it is GitHub changing something under it, or a release that was laid
+  # down wrong. A canary that only fires when somebody pushes is not watching for that.
+  schedule:
+    - cron: "17 9 * * *"
 
 # One run per ref at a time. Four pushes in forty minutes ran four whole matrices at once,
 # every one of them carrying the same stuck job, and nothing stopped the superseded ones.
@@ -374,7 +379,16 @@ jobs:
   # so gating a PR on the old release would block the very change that repairs it.
   install-published-release:
     name: install the published release on a bare machine — ${{ matrix.os }}
-    if: github.event_name != 'pull_request'
+    # **Not on every push.** This job installs whatever is *published*, which no commit here
+    # can change — so running it per push tested nothing new and cost two anonymous
+    # api.github.com calls each time. Hosted macOS runners share a handful of NAT'd
+    # addresses and anonymous callers get sixty an hour *per address*, so a busy afternoon
+    # of pushes exhausted the quota and turned a correct release red. Daily, on a tag, or
+    # when somebody asks.
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/tags/v')
     timeout-minutes: 10
     runs-on: ${{ matrix.os }}
     strategy:
@@ -436,8 +450,18 @@ jobs:
           said="$("$RUNDESK_BIN_DIR/rundesk" update --check || true)"
           echo "$said"
           case "$said" in
-            *"up to date"*|*"UP TO DATE"*) ;;
-            *) echo "::error::a fresh install of the newest release does not consider itself current"; exit 1 ;;
+            *"up to date"*|*"UP TO DATE"*)
+              ;;
+            *"could not reach"*|*UNKNOWN*)
+              # Neither a pass nor a failure: the question could not be asked. rundesk sends
+              # no credentials on purpose, so it is subject to the anonymous per-IP limit that
+              # this runner shares with everybody else on it. Failing here would be the very
+              # mistake the product refuses to make in the other direction — treating "nobody
+              # answered" as an answer.
+              echo "::notice::could not ask GitHub which release is newest, so this check was not made — it says nothing about the install"
+              ;;
+            *)
+              echo "::error::a fresh install of the newest release does not consider itself current"; exit 1 ;;
           esac
 
       - name: Uninstalling leaves the machine as it was
