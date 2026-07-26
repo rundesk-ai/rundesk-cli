@@ -1,38 +1,38 @@
 #!/usr/bin/env python3
 """The Codex CLI, behind a Rundesk agent.
 
-**Everything about this vendor is in this file and nowhere else.** Its flags, the order
-they have to go in, the shape of its stream, where it keeps its sign-in, and the
-arithmetic its usage needs are all here — nothing outside knows this brain exists, which
-is the point of the seam. Read
-`.knowledge/guides/write-a-provider-adapter.md` and you can write another of these for any
-brain at all, in any language; this one happens to be Python because Python is what this
-repository already has.
+**Everything about this vendor is in this file and nowhere else.** Its protocol, the order
+of its handshake, the shape of its notifications, where it keeps its sign-in and what its
+counts mean are all here — nothing outside knows this brain exists, which is the point of
+the seam. Read `.knowledge/guides/write-a-provider-adapter.md` and you can write another of
+these for any brain at all, in any language; this one happens to be Python because Python
+is what this repository already has.
 
 An adapter is a *program*, not a plugin. Nothing here is imported by Rundesk, and nothing
-here imports Rundesk. It can be run by hand:
+here imports Rundesk.
 
-    RUNDESK_CWD=/tmp/somewhere RUNDESK_PROVIDER_HOME=/tmp/home \\
-      echo "what changed?" | src/rundesk_cli/adapters/codex
+**It speaks `codex app-server` rather than `codex exec`, and that is the whole reason it is
+shaped like this.** `exec` is one command that reads a prompt and runs to the end: it cannot
+be told anything once it has started, and its only usage figure is the whole thread's
+running total. `app-server` is a conversation over stdin and stdout, and it gives three
+things `exec` cannot:
 
-Measured against `codex-cli 0.145.0` — see `.knowledge/research/`. Four things that
-version does, each of which this file exists to absorb:
+1. **A turn can be steered.** `turn/steer` adds words to a turn that is *already running*,
+   with the running turn's id as a precondition so a word cannot land in a turn nobody
+   meant. Measured: a turn counting to twenty took a change of plan mid-count and finished
+   on the new instruction, without being interrupted and started again.
+2. **This turn's own cost, reported as such.** `thread/tokenUsage/updated` carries `last`
+   beside `total`, so there is no running total to subtract and nothing to remember between
+   turns — the trap `exec` forces every adapter to work around, and that the build this
+   replaces got wrong across every restart.
+3. **Cache writes already apart from cache reads.** `cacheWriteInputTokens` and
+   `cachedInputTokens` are separate fields, and cache creation is billed above the standard
+   rate, so folding them would misprice most of the volume.
 
-1. **Its usage is the whole thread's running total, not this turn's.** Three one-word
-   replies climb. Reported as a turn's cost that overstates every turn after the first,
-   and a spend limit reading it fires on how long a conversation is rather than what it
-   cost. So the last total is kept — in this adapter's own private home, which outlives
-   the process, unlike the build this replaces whose running totals lived in a gateway's
-   memory and went with every restart.
-2. **Its cached tokens are folded inside its input count.** Left folded, most of the
-   volume is reported at the fresh rate, which is a number that is technically real and
-   practically a lie. They come apart here.
-3. **Global flags are rejected after the `resume` subcommand.** `--sandbox` placed after
-   it is `unexpected argument '--sandbox' found`, so the whole command line has to be
-   built in one order and never appended to.
-4. **It names no model in its stream.** So none is claimed. A model that was merely asked
-   for is not a measurement, and claiming it would make every later reading of the cost a
-   guess wearing a fact's clothes.
+Its cost: `app-server` is marked experimental at 0.145.0, and it is a protocol with a
+lifecycle rather than one command. The measurements are in
+`.knowledge/research/2026-07-26-codex-cli-as-a-brain.md`, and
+`.knowledge/scripts/probe-codex` asks the same questions of the next version.
 """
 
 from __future__ import annotations
@@ -41,16 +41,12 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 #: What to run. Overridable so a machine keeping it somewhere unusual — and the probes —
 #: can point at it without this file being edited.
 CODEX = os.environ.get("RUNDESK_CODEX_BIN", "codex")
-
-#: Where the last thread total is kept, so this turn's share can be worked out from it.
-#: In the private home Rundesk gives this adapter, because that is the only thing here
-#: that outlives one turn.
-BILLED = "billed.json"
 
 #: What Codex says when the home it was given holds no sign-in. Recognised so this adapter
 #: can say what to do about it, and for no other reason: **nothing here ever reads, writes,
@@ -61,21 +57,33 @@ BILLED = "billed.json"
 LOGGED_OUT = "401 Unauthorized"
 
 #: How much of the machine a turn may touch, in this brain's words. Rundesk says `read` or
-#: `work`; what those mean to Codex is this file's business and nobody else's.
+#: `work`; what those mean to Codex is this file's business and nobody else's. Named the
+#: way its protocol names them — measured, because the schema calls the same idea three
+#: things and only one of them is what the wire accepts here.
 SANDBOX = {"read": "read-only", "work": "workspace-write"}
 
 #: What Codex calls the things it does, said in words no brain owns. Anything not here is
 #: reported without a `did` at all rather than in this vendor's vocabulary.
 DID = {
-    "command_execution": "run",
-    "file_change": "edit",
-    "web_search": "search",
-    "mcp_tool_call": "run",
-    "file_read": "read",
+    "commandExecution": "run",
+    "fileChange": "edit",
+    "webSearch": "search",
+    "mcpToolCall": "run",
+    "fileRead": "read",
+    "listFiles": "list",
 }
 
+#: Item kinds that are not tools: what the brain said, what it thought, and the echo of
+#: what we ourselves sent it.
+SPOKEN = {"agentMessage": "text", "reasoning": "think"}
+OURS = "userMessage"
+
+#: How long to wait on one answer in the handshake. A window on a *reply*, never on a turn:
+#: a turn takes as long as the work takes, and nothing here bounds that.
+ANSWER_SECONDS = 120.0
+
 #: What this brain can do. Asked before a turn, offline, and the same every time.
-CAN = {"tools": True, "resume": True, "usage": True, "model": False}
+CAN = {"tools": True, "resume": True, "usage": True, "model": False, "steer": True}
 
 
 def say(**it) -> None:
@@ -84,111 +92,175 @@ def say(**it) -> None:
     sys.stdout.flush()
 
 
-def argv() -> list:
-    """The command line, built in one go.
+class Codex:
+    """One `codex app-server`, spoken to and listened to at the same time.
 
-    Built whole rather than appended to, because every global flag is *rejected* after
-    the `resume` subcommand — `unexpected argument '--sandbox' found`, measured at
-    0.145.0. So there is one place the order is decided and nothing may append to it
-    afterwards.
-
-    The prompt is `-`, meaning stdin. Never a positional: anything on a command line is
-    readable through the process list and kept in a shell's history, and what somebody
-    asks their agent is theirs.
+    Its own class because a protocol has a lifecycle: a request carries an id and its
+    answer arrives later, notifications arrive whenever they like, and both share one pipe.
     """
-    resume = os.environ.get("RUNDESK_RESUME")
-    model = os.environ.get("RUNDESK_MODEL")
-    posture = SANDBOX.get(os.environ.get("RUNDESK_POSTURE", "work"), "workspace-write")
-    line = [CODEX, "exec", "--json", "--sandbox", posture,
-            # The agent's workspace is a directory, not necessarily a repository, and
-            # Codex otherwise refuses to start outside one.
-            "--skip-git-repo-check"]
-    if model:
-        line += ["-m", model]
-    line += _settings()
-    if resume:
-        line += ["resume", resume]
-    return line + ["-"]
+
+    def __init__(self, home: Path, where: str, raw):
+        self._raw = raw
+        self._asked = 0
+        self._answers: dict = {}
+        self._writing = threading.Lock()
+        self.thread = None
+        self.turn = None
+        self.finished = threading.Event()
+        self.ok = None
+        self.why = None
+        self.tokens = None
+        self._tools: dict = {}
+        self._proc = subprocess.Popen(
+            [CODEX, "app-server"], cwd=where,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=None,          # straight through: rundesk keeps it, apart, as ours
+            text=True, bufsize=1,
+            # Its own sign-in, configuration and session files, for this agent and no
+            # other. Pointed at an empty directory Codex is not logged in, which is
+            # measured rather than assumed.
+            env={**os.environ, "CODEX_HOME": str(home)},
+        )
+        threading.Thread(target=self._listen, daemon=True).start()
+
+    # -- speaking ----------------------------------------------------------------------
+
+    def ask(self, method: str, params=None) -> int:
+        """One request, whose answer arrives later and is matched by its id."""
+        with self._writing:
+            self._asked += 1
+            at = self._asked
+            self._write({"jsonrpc": "2.0", "id": at, "method": method,
+                         "params": params or {}})
+        return at
+
+    def tell(self, method: str, params=None) -> None:
+        """One notification — nothing comes back, and nothing waits for it."""
+        with self._writing:
+            self._write({"jsonrpc": "2.0", "method": method, "params": params or {}})
+
+    def _write(self, message: dict) -> None:
+        if self._proc.stdin is None or self._proc.stdin.closed:
+            return
+        try:
+            self._proc.stdin.write(json.dumps(message) + "\n")
+            self._proc.stdin.flush()
+        except (BrokenPipeError, ValueError, OSError):
+            self.finished.set()   # it has gone, and nothing more will be answered
+
+    def answered(self, at: int, patience: float = ANSWER_SECONDS) -> dict | None:
+        """Wait for the answer to one request, and no longer than it is worth waiting."""
+        waiting = threading.Event()
+        waited = 0.0
+        while waited < patience:
+            if at in self._answers:
+                return self._answers.pop(at)
+            if self._proc.poll() is not None and at not in self._answers:
+                return None
+            waiting.wait(0.02)
+            waited += 0.02
+        return None
+
+    # -- listening ---------------------------------------------------------------------
+
+    def _listen(self) -> None:
+        """Everything Codex says, turned into records as it arrives.
+
+        The whole of it is kept first, exactly as it came. Rundesk sees what this adapter
+        reports and never what it was made from, so without this a change to Codex's
+        protocol would show up as records quietly going missing rather than as drift
+        anybody can read.
+        """
+        assert self._proc.stdout is not None
+        for line in self._proc.stdout:
+            if self._raw is not None:
+                self._raw.write(line.encode("utf-8", "replace"))
+                self._raw.flush()
+            try:
+                said = json.loads(line)
+            except ValueError:
+                continue  # not everything on its stdout is a message, and what is not is not ours
+            if "id" in said and ("result" in said or "error" in said):
+                self._answers[said["id"]] = said
+                if "error" in said:
+                    _went_wrong(json.dumps(said["error"]))
+                continue
+            self._heard(said.get("method"), said.get("params") or {})
+        self.finished.set()
+
+    def _heard(self, method, params: dict) -> None:
+        if method == "turn/started":
+            self.turn = (params.get("turn") or {}).get("id")
+        elif method == "turn/completed":
+            became = params.get("turn") or {}
+            self.ok = became.get("status") != "failed"
+            self.why = ((became.get("error") or {}) or {}).get("message")
+            self.finished.set()
+        elif method == "turn/failed":
+            self.ok, self.why = False, str((params.get("error") or {}).get("message", ""))
+            self.finished.set()
+        elif method == "thread/tokenUsage/updated":
+            # `last` is this turn's own, reported as such — so there is no running total
+            # to subtract, and nothing to carry between turns to subtract it from.
+            self.tokens = (params.get("tokenUsage") or {}).get("last")
+        elif method == "item/started":
+            self._began(params.get("item") or {})
+        elif method == "item/completed":
+            self._ended(params.get("item") or {})
+        elif method == "error":
+            _went_wrong(str(params.get("message", "")))
+
+    def _began(self, item: dict) -> None:
+        kind = item.get("type")
+        if not kind or kind in SPOKEN or kind == OURS:
+            return
+        at = str(item.get("id") or len(self._tools) + 1)
+        self._tools[at] = kind
+        said = {"type": "tool", "id": at, "name": kind}
+        if kind in DID:
+            say(**said, did=DID[kind])
+        else:
+            say(**said)   # one we have no word for is said without one, never with its
+
+    def _ended(self, item: dict) -> None:
+        kind = item.get("type")
+        if not kind or kind == OURS:
+            return  # the echo of what we sent; the run's account already holds it
+        if kind in SPOKEN:
+            say(type=SPOKEN[kind], text=item.get("text") or "")
+            return
+        at = str(item.get("id") or "1")
+        if at not in self._tools:
+            self._began(item)   # one that finished without ever having started
+        self._tools.pop(at, None)
+        worked = item.get("exit_code") in (0, None) and item.get("status") != "failed"
+        say(type="result", id=at, ok=bool(worked), summary=_summary(item))
+
+    def end(self) -> None:
+        if self._proc.stdin is not None and not self._proc.stdin.closed:
+            try:
+                self._proc.stdin.close()
+            except (BrokenPipeError, ValueError, OSError):
+                pass
+        try:
+            self._proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self._proc.terminate()
 
 
-def _settings() -> list:
-    """Whatever the owner set, mapped onto this brain's own flags.
+def _summary(item: dict) -> str:
+    """What a tool did, short enough to read and never the whole of its output.
 
-    Rundesk hands it over without reading it, so this is the only place it means
-    anything. Two shapes, both obvious: `flags` is a list handed straight to the CLI, and
-    `config` is Codex's own dotted overrides. Anything else is ignored rather than
-    guessed at, and said on stderr so an owner who mistyped hears about it.
+    Deliberately not the output itself: it can hold file contents, credentials and private
+    paths, and what a channel shows is not this adapter's to decide.
     """
-    try:
-        said = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
-    except ValueError:
-        sys.stderr.write("RUNDESK_SETTINGS was not readable as JSON; ignoring it\n")
-        return []
-    if not isinstance(said, dict):
-        return []
-    extra = []
-    for flag in said.get("flags") or []:
-        extra.append(str(flag))
-    for key, value in sorted((said.get("config") or {}).items()):
-        extra += ["-c", f"{key}={json.dumps(value)}"]
-    for unknown in sorted(set(said) - {"flags", "config"}):
-        sys.stderr.write(f"'{unknown}' is not a setting this adapter understands\n")
-    return extra
+    for what in ("command", "path", "query", "name"):
+        if item.get(what):
+            return str(item[what])[:200]
+    return str(item.get("status") or "done")
 
 
-def billed(home: Path) -> dict:
-    """What this thread had cost by the end of the last turn."""
-    try:
-        with open(home / BILLED) as kept:
-            said = json.load(kept)
-    except (OSError, ValueError):
-        return {}
-    return said if isinstance(said, dict) else {}
-
-
-def remember(home: Path, thread: str, total: dict) -> None:
-    """Keep this thread's running total, so the next turn can subtract it.
-
-    Whole-file and per thread. Losing it costs one turn an overstatement and nothing
-    worse, which is why it is a small file and not anything larger.
-    """
-    keeping = billed(home)
-    keeping[thread] = total
-    home.mkdir(parents=True, exist_ok=True)
-    try:
-        with open(home / BILLED, "w") as writing:
-            json.dump(keeping, writing)
-    except OSError as why:
-        sys.stderr.write(f"could not keep what this thread has cost: {why}\n")
-
-
-def share(total: dict, before: dict) -> dict:
-    """This turn's own tokens, out of the thread's running total.
-
-    Two corrections, and both are this vendor's alone. The counts climb across a thread,
-    so what this turn cost is the difference from the last one — and `input_tokens`
-    already contains `cached_input_tokens`, so the cache is taken back out of it and
-    reported beside it, because the two are billed at different rates.
-
-    Never below nothing. A thread reported lower than last time has been restarted
-    underneath us rather than gone backwards, and a negative cost is not an answer.
-    """
-    fresh = _n(total, "input_tokens") - _n(total, "cached_input_tokens")
-    was_fresh = _n(before, "input_tokens") - _n(before, "cached_input_tokens")
-    return {
-        "input": max(0, fresh - was_fresh),
-        "output": max(0, _n(total, "output_tokens") - _n(before, "output_tokens")),
-        "cached": max(0, _n(total, "cached_input_tokens")
-                      - _n(before, "cached_input_tokens")),
-    }
-
-
-def _n(said: dict, what: str) -> int:
-    value = said.get(what)
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
-
-def _went_wrong(said: str, home: Path) -> None:
+def _went_wrong(said: str) -> None:
     """What Codex said went wrong, and — when it is the one thing an owner can fix — how.
 
     **Nothing here reads, writes, copies or links a credential.** Codex keeps its sign-in
@@ -199,34 +271,54 @@ def _went_wrong(said: str, home: Path) -> None:
     would be sharing them between agents without anyone having said so.
     """
     sys.stderr.write(said + "\n")
-    # Once per turn. Codex retries a failed request several times and every attempt says
-    # the same thing, so the advice would arrive five times for one fixable problem.
+    # Once per turn. A failed request is retried several times and every attempt says the
+    # same thing, so the advice would arrive five times for one fixable problem.
     if LOGGED_OUT in said and not _went_wrong.said_it:
         _went_wrong.said_it = True
+        where = os.environ.get("RUNDESK_PROVIDER_HOME", "")
         sys.stderr.write(
             f"this agent's Codex home has no sign-in of its own — sign it in with:\n"
-            f"    CODEX_HOME={home} codex login\n"
+            f"    CODEX_HOME={where} codex login\n"
             f"or, to share the one you already have, put a link to your own auth there.\n")
 
 
 _went_wrong.said_it = False
 
 
-def _findable() -> str | None:
+def _findable():
     """Codex, if this machine can find it — said plainly rather than discovered at runtime.
 
-    A gateway is started by the machine's own supervisor with a bare environment, so a
-    name that resolves in an owner's shell may resolve to nothing there. This is checked
-    rather than guessed at: no list of the places Codex might have been installed, because
-    such a list is wrong on the first machine that did something else.
+    A gateway is started by the machine's own supervisor with a bare environment, so a name
+    that resolves in an owner's shell may resolve to nothing there. Checked rather than
+    guessed at: no list of the places Codex might have been installed, because such a list
+    is wrong on the first machine that did something else.
     """
     from shutil import which
     return CODEX if os.path.isabs(CODEX) else which(CODEX)
 
 
+def _settings() -> dict:
+    """Whatever the owner set, as this brain's own options.
+
+    Rundesk hands it over without reading it, so this is the only place it means anything.
+    Two shapes: `config` becomes Codex's own dotted overrides, and `effort` is how hard it
+    thinks. Anything else is ignored rather than guessed at, and said on stderr so an owner
+    who mistyped hears about it.
+    """
+    try:
+        said = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
+    except ValueError:
+        sys.stderr.write("RUNDESK_SETTINGS was not readable as JSON; ignoring it\n")
+        return {}
+    if not isinstance(said, dict):
+        return {}
+    for unknown in sorted(set(said) - {"config", "effort"}):
+        sys.stderr.write(f"'{unknown}' is not a setting this adapter understands\n")
+    return said
+
+
 def carry() -> int:
-    """One turn: run Codex, and report what it did in words no brain owns."""
-    prompt = sys.stdin.read()
+    """One turn: run Codex, report what it does, and steer anything said into it."""
     home = Path(os.environ.get("RUNDESK_PROVIDER_HOME") or ".")
     where = os.environ.get("RUNDESK_CWD") or "."
 
@@ -234,29 +326,10 @@ def carry() -> int:
         sys.stderr.write(
             f"'{CODEX}' is not on this machine's path as this agent runs — install the "
             f"Codex CLI, or point RUNDESK_CODEX_BIN at where it stands.\n")
-        say(type="done", ok=False)
+        say(type="done", ok=False, why="the Codex CLI is not on this machine's path")
         return 1
 
-    running = subprocess.Popen(
-        argv(),
-        cwd=where,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=None,          # straight through: Rundesk keeps it, apart, as ours
-        # Its own sign-in, configuration and session files, for this agent and no other.
-        # The one lever there is: pointed at an empty directory Codex is not logged in,
-        # which is measured rather than assumed.
-        env={**os.environ, "CODEX_HOME": str(home)},
-        text=True,
-    )
-    running.stdin.write(prompt)
-    running.stdin.close()
-
-    # Everything Codex says, exactly as it says it, when rundesk offered somewhere to put
-    # it. This is the only place the *vendor's* own stream can be kept: rundesk sees what
-    # this adapter reports and never what it was made from, so without this a change to
-    # Codex's stream shape would show up as records quietly going missing rather than as
-    # drift somebody can read. Best effort — a turn is not failed over a log.
+    home.mkdir(parents=True, exist_ok=True)
     keeping = None
     at = os.environ.get("RUNDESK_RAW")
     if at:
@@ -265,89 +338,142 @@ def carry() -> int:
         except OSError as why:
             sys.stderr.write(f"could not keep what the brain said: {why}\n")
 
-    thread, ok, total, tools = None, None, None, {}
-    for line in running.stdout:
+    codex = Codex(home, where, keeping)
+    try:
+        return _turn(codex, where)
+    finally:
+        codex.end()
         if keeping is not None:
-            keeping.write(line.encode("utf-8", "replace"))
-            keeping.flush()
-        try:
-            said = json.loads(line)
-        except ValueError:
-            continue  # not everything on its stdout is a record; what is not is not ours
-        kind = said.get("type")
-        if kind == "thread.started":
-            thread = said.get("thread_id")
-        elif kind == "item.started":
-            _began(said.get("item") or {}, tools)
-        elif kind == "item.completed":
-            ok = _finished(said.get("item") or {}, tools, ok)
-        elif kind == "turn.completed":
-            total = said.get("usage") or {}
-            ok = True if ok is None else ok
-        elif kind == "turn.failed":
-            _went_wrong(str((said.get("error") or {}).get("message", "")), home)
-            ok = False
-        elif kind == "error":
-            _went_wrong(str(said.get("message", "")), home)
-
-    running.wait()
-    if keeping is not None:
-        keeping.close()
-    if total is not None and thread:
-        say(type="usage", **share(total, billed(home).get(thread) or {}))
-        remember(home, thread, total)
-    elif total is not None:
-        say(type="usage", **share(total, {}))
-    # No model: this brain names none in its stream, so none is claimed. Saying the one
-    # that was asked for would be reporting a request as a measurement.
-    say(type="done", ok=bool(ok) and running.returncode == 0, session=thread or "")
-    return 0 if ok else 1
+            keeping.close()
 
 
-def _began(item: dict, tools: dict) -> None:
-    """A tool this brain started, said as what it did rather than what it calls it."""
-    kind = item.get("type")
-    if kind in (None, "agent_message", "reasoning"):
-        return
-    at = str(item.get("id") or len(tools) + 1)
-    tools[at] = kind
-    said = {"type": "tool", "id": at, "name": kind}
-    if kind in DID:
-        say(**said, did=DID[kind])
-    else:
-        say(**said)   # a tool we have no word for is reported without one, never with its
+def _turn(codex, where: str) -> int:
+    """The handshake, the turn, and everything said into it while it is still running."""
+    resume = os.environ.get("RUNDESK_RESUME")
+    model = os.environ.get("RUNDESK_MODEL")
+    posture = SANDBOX.get(os.environ.get("RUNDESK_POSTURE", "work"), "workspace-write")
+    extra = _settings()
+
+    if codex.answered(codex.ask("initialize", {
+            "clientInfo": {"name": "rundesk", "version": "1"}})) is None:
+        say(type="done", ok=False, why="Codex would not start")
+        return 1
+    codex.tell("initialized")
+
+    opening = {"cwd": where, "sandbox": {posture: {}}}
+    if model:
+        opening["model"] = model
+    if extra.get("config"):
+        opening["config"] = extra["config"]
+    started = _opened(codex, opening, resume)
+    if started is None:
+        say(type="done", ok=False, why="Codex would not open a conversation")
+        return 1
+    codex.thread = (started.get("thread") or {}).get("id")
+
+    # The posture belongs to the conversation and is set when it is opened, so a turn
+    # inside it does not restate it — two places to say one thing is two places to be
+    # wrong in.
+    beginning = {"threadId": codex.thread, "cwd": where}
+    if model:
+        beginning["model"] = model
+    if extra.get("effort"):
+        beginning["effort"] = extra["effort"]
+
+    # Everything rundesk says, for as long as it is saying it. The first record starts the
+    # turn and every one after it is steered into the turn already running — the running
+    # turn's id is a precondition, so a word cannot land in a turn nobody meant.
+    asked = False
+    for line in sys.stdin:
+        word = _word(line)
+        if word is None:
+            continue
+        if not asked:
+            codex.ask("turn/start", {**beginning, "input": [_text(word)]})
+            asked = True
+            _until(lambda: codex.turn is not None or codex.finished.is_set())
+            continue
+        if codex.finished.is_set():
+            sys.stderr.write("the turn had already finished, so that was not sent\n")
+            continue
+        codex.ask("turn/steer", {"threadId": codex.thread, "expectedTurnId": codex.turn,
+                                 "input": [_text(word)]})
+
+    if not asked:
+        say(type="done", ok=False, why="nothing was asked")
+        return 1
+    # No deadline. A turn takes as long as the work takes, and rundesk ends one that has
+    # gone silent — which is its decision to make and never this adapter's.
+    codex.finished.wait()
+    if codex.tokens:
+        counted = codex.tokens
+        say(type="usage",
+            # `inputTokens` holds the cached ones, and cache reads are a fraction of the
+            # price of fresh input. Cache *writes* stay with fresh input, where they are
+            # billed. Left folded, most of the volume is priced as though it were new.
+            input=max(0, _n(counted, "inputTokens") - _n(counted, "cachedInputTokens")),
+            output=_n(counted, "outputTokens"),
+            cached=_n(counted, "cachedInputTokens"))
+    # No model: this brain names none in what it reports, so none is claimed. Saying the
+    # one that was asked for would be reporting a request as a measurement.
+    ended = {"type": "done", "ok": bool(codex.ok), "session": codex.thread or ""}
+    if not codex.ok and codex.why:
+        ended["why"] = codex.why
+    say(**ended)
+    return 0 if codex.ok else 1
 
 
-def _finished(item: dict, tools: dict, ok):
-    """A tool that finished, or the answer itself."""
-    kind = item.get("type")
-    at = str(item.get("id") or "")
-    if kind == "agent_message":
-        say(type="text", text=item.get("text") or "")
-        return ok
-    if kind == "reasoning":
-        say(type="think", text=item.get("text") or "")
-        return ok
-    if kind == "error":
-        sys.stderr.write(str(item.get("message", "")) + "\n")
-        return ok
-    if at in tools or kind not in (None, "agent_message", "reasoning"):
-        tools.pop(at, None)
-        worked = item.get("exit_code") in (0, None) and item.get("status") != "failed"
-        say(type="result", id=at or "1", ok=bool(worked), summary=_summary(item))
-    return ok
+def _opened(codex, opening: dict, resume):
+    """The conversation this turn belongs to — the one being carried on, or a new one.
 
-
-def _summary(item: dict) -> str:
-    """What a tool did, short enough to read and never the whole of its output.
-
-    Deliberately not the output itself: it can hold file contents, credentials and
-    private paths, and what a channel shows is not this adapter's to decide.
+    A conversation we were asked to carry on may simply be gone: a home that was purged, a
+    thread that was archived. Starting a new one costs this turn its context and nothing
+    else, which is exactly what losing a handle is supposed to cost, and it is a great deal
+    better than refusing to answer at all.
     """
-    for what in ("command", "path", "query"):
-        if item.get(what):
-            return str(item[what])[:200]
-    return str(item.get("status") or "done")
+    if resume:
+        said = codex.answered(codex.ask("thread/resume", {**opening, "threadId": resume}))
+        if said and "result" in said:
+            return said["result"]
+        sys.stderr.write("that conversation could not be carried on; starting a new one\n")
+    said = codex.answered(codex.ask("thread/start", opening))
+    return said["result"] if said and "result" in said else None
+
+
+def _word(line: str):
+    """One thing rundesk said, out of the record it said it in.
+
+    Records, because this adapter says it can be steered: its input stays open for as long
+    as the turn does, so nothing can mean "the prompt ended" any more. A line that is not
+    a record is taken as the words themselves, so a person driving this by hand is not
+    made to write JSON.
+    """
+    line = line.strip()
+    if not line:
+        return None
+    if not line.startswith("{"):
+        return line
+    try:
+        return (json.loads(line) or {}).get("text") or None
+    except ValueError:
+        return line
+
+
+def _text(word: str) -> dict:
+    return {"type": "text", "text": word}
+
+
+def _until(ready, patience: float = ANSWER_SECONDS) -> None:
+    waiting = threading.Event()
+    waited = 0.0
+    while waited < patience and not ready():
+        waiting.wait(0.02)
+        waited += 0.02
+
+
+def _n(said: dict, what: str) -> int:
+    value = said.get(what)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 if __name__ == "__main__":

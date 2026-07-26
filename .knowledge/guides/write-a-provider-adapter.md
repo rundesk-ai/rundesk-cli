@@ -29,6 +29,7 @@ Run with `--capabilities`, print one JSON object, exit `0`:
 | `resume` | you can carry an earlier conversation on |
 | `usage` | you report what a turn cost |
 | `model` | you can name the model that actually answered |
+| `steer` | you can be sent more words while a turn is still running |
 
 Every field is `false` when you leave it out, so `{}` is a valid answer and a complete
 adapter. **Rundesk asks rather than assuming**, and it never guesses from your name — so say
@@ -61,9 +62,19 @@ rundesk add ava --provider /opt/my-brain   # yours
 | `RUNDESK_POSTURE` | `read` or `work` — how much of the machine this turn may touch |
 | `RUNDESK_SETTINGS` | a JSON object of whatever the owner set, passed through unread |
 
-The prompt arrives on **stdin**. Read it to the end — stdin closes when there is no more,
-and what you get is the whole of what was asked, with the newline that terminated it still
-on the end.
+**The prompt arrives on stdin**, and how depends on the one capability that changes how a
+turn is *run*:
+
+- **You said `steer: false`** (or said nothing). The prompt is plain text and stdin closes
+  straight after it. Read to the end and you have the whole of what was asked, with the
+  newline that terminated it still on the end.
+- **You said `steer: true`.** Stdin stays open for as long as the turn does, so nothing can
+  mean "the prompt ended" any more. Everything arrives as one JSON record per line —
+  `{"type":"say","text":"…"}` — the prompt first, and anything said later the same way.
+  Read a line at a time and keep going until stdin closes.
+
+Only ask for `steer: true` if your brain can really take a word mid-turn. Holding input
+open for one that will never read again is a turn that never ends.
 
 **You report on stdout, one JSON object per line**, flushed as it happens:
 
@@ -80,6 +91,21 @@ on the end.
 you reported.
 
 That is the contract. Six kinds of record, and only `done` is required.
+
+**What each record needs**, and nothing else is required of you:
+
+| | must have | may have |
+|---|---|---|
+| `text` · `think` | `text` | |
+| `tool` | `id` (a string) | `name` — your brain's own word · `did` |
+| `result` | `id`, matching a `tool` you sent | `ok` · `summary` |
+| `usage` | | `input` · `output` · `cached` · `model` |
+| `done` | `ok` | `session` · `why`, when it failed |
+
+Leave a field out rather than guessing at it: an absent `cached` means *you could not tell*,
+and is recorded differently from a `cached` of zero. Order is yours — records are kept in
+the order you send them. A line that is not JSON, or is a kind not listed here, is kept
+verbatim and shown to nobody, so nothing you emit can break a turn.
 
 ## The rules that will bite you
 
@@ -128,9 +154,20 @@ arrange on their behalf.
 run's record verbatim. It will not be shown and it will not break the turn — so you can be
 ahead of us without waiting for us.
 
-**Exit when the turn is done**, and take your children with you. Rundesk ends your process
-group, but a turn that never ends is ended on silence rather than on a clock, because real
-work can legitimately take hours.
+**Take as long as you need, but keep talking.** Nothing bounds how long a turn may run —
+an agent that thinks for an hour is working. What is bounded is how long you may say
+*nothing at all*: half an hour on either stream, and anything you write to stderr counts.
+If your brain goes quiet for longer than that while it is genuinely busy, say something.
+
+**Exit when the turn is done**, and take your children with you. When a turn is stopped you
+get a `SIGTERM` to your whole process group and a few seconds to leave before a `SIGKILL`;
+a `done` record on the way out is welcome and not required.
+
+**Both your exit code and your `done` matter, and they mean different things.** `done.ok`
+is what *your brain* made of the turn; the exit code is what became of *your program*. A
+turn is only recorded as having worked when both say so, so a brain that answered fine
+inside an adapter that then crashed reads as the failure it was. Exiting without any `done`
+at all is a turn that never said it finished.
 
 ## A working adapter
 
@@ -178,6 +215,25 @@ brain Rundesk has never heard of" a claim rather than a hope. It checks that a w
 completes, that a brain reporting no tools still produces a well-formed turn, that an unknown
 record survives, that a running total is reported as this turn's share, that stopping ends
 everything, and that one adapter cannot reach another agent's workspace.
+
+## Steering, if your brain can take it
+
+Only if you said `steer: true`. Your stdin stays open for as long as the turn runs, and
+every line is a record:
+
+```json
+{"type":"say","text":"count from one to ten"}      <- the prompt
+{"type":"say","text":"actually, stop at three"}    <- eight seconds later
+```
+
+Read a line, act on it, keep reading. Everything that arrives goes to the turn that is
+*already running* — it is not a new turn and the old one is not thrown away. When rundesk
+has nothing more to say it closes your stdin, which is your signal that no more is coming.
+
+Rundesk writes every one of these into the run's record as it sends it, so a word put into
+a turn is never a word the account cannot show.
+
+## Proving it
 
 Run it against yours:
 

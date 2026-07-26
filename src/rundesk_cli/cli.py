@@ -240,6 +240,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="start the conversation again rather than carrying it on")
     asked.add_argument("--read-only", action="store_true",
                        help="let this turn look at the machine without changing it")
+    asked.add_argument("--steer", action="store_true",
+                       help="keep saying more to it while it works — a line at a time, until you stop")
 
     looked = sub.add_parser("doctor", help="what stands between an agent and a working turn")
     looked.add_argument("name", nargs="?", metavar="<agent>",
@@ -804,6 +806,7 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
             conversation=args.conversation or turn.TERMINAL,
             fresh=args.fresh,
             watching=said,
+            steering=_typed() if args.steer else None,
         ))
     except provider.NotRunnable as why:
         print(f"{name}: NO BRAIN THERE — {why}", file=sys.stderr)
@@ -814,6 +817,24 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
     if not outcome.ok:
         print(f"{name}: TURN FAILED — {outcome.reason}", file=sys.stderr)
     return 0 if outcome.ok else 1
+
+
+async def _typed():
+    """Whatever else is typed while the turn runs, a line at a time.
+
+    Read off a thread, because reading a terminal blocks and the turn is running on this
+    loop — a blocking read here would stop the very thing the words are meant to reach.
+    Ends when the input does, which closes what rundesk is saying and lets the brain
+    finish.
+    """
+    loop = asyncio.get_event_loop()
+    while True:
+        line = await loop.run_in_executor(None, sys.stdin.readline)
+        if not line:
+            return
+        said = line.strip()
+        if said:
+            yield said
 
 
 class _Shown:

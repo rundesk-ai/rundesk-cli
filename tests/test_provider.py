@@ -269,7 +269,7 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
         return said
 
     async def carry(self, adapter: Path, prompt: str = "say something", started=None,
-                    **extra) -> Turn:
+                    steering=None, **extra) -> Turn:
         """One whole turn, exactly as rundesk runs one.
 
         **A turn takes as long as it takes.** Pointed at a real adapter these cases drive
@@ -289,7 +289,15 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
         if started is not None:
             started(program)
         reading = asyncio.ensure_future(program.wait(sink=raw.append))
-        await program.send(prompt.encode("utf-8"))
+        if steering is None:
+            await program.send(prompt.encode("utf-8"))
+        else:
+            # Records, and the input held open, exactly as rundesk drives one that said it
+            # can be steered. Anything after the prompt reaches a turn already running.
+            await program.send(provider.spoken(prompt))
+            for word in steering:
+                await asyncio.sleep(0.2)
+                await program.send(provider.spoken(word))
         await program.close_input()
         outcome = await reading
         records = [it for it in (provider.understood(one) for one in raw
@@ -368,6 +376,17 @@ class TheContract(DrivesAnAdapter):
             if "did" in said:
                 self.assertIn(said["did"], ("read", "search", "run", "edit", "list"),
                               "a tool was described in its own brain's vocabulary")
+
+    async def test_an_adapter_can_be_steered_exactly_as_much_as_it_said_it_could(self):
+        """R-PRV-15, R-PRV-19 — the one capability that changes how a turn is *run*, so
+        saying it wrongly is a turn that hangs rather than a feature that is missing. An
+        adapter that says it can be steered has its input held open and reads records; one
+        that says it cannot is given the prompt and told there is no more."""
+        can = await provider.capabilities(self.under_test(), self.told())
+        turn = await self.carry(self.under_test(), steering=["and one more thing"]
+                                if can["steer"] else None)
+        self.assertIsNotNone(turn.done, "it did not finish a turn run the way it asked for")
+        self.assertTrue(turn.done.get("ok"), f"the turn failed: {turn.errors}")
 
     async def test_an_adapter_works_where_it_is_told_and_not_where_it_pleases(self):
         """R-PRV-3, R-PRV-14 — an agent's workspace is its own, and an adapter reaching

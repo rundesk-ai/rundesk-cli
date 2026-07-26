@@ -10,7 +10,7 @@
 | Run one turn without a person | `codex exec --json` streams JSONL on stdout and takes the prompt as a positional or, with `-`, on stdin.[1] Measured: a whole turn is `thread.started`, `turn.started`, `item.completed`, `turn.completed`.[4] |
 | Say which conversation this was | `thread.started` carries `thread_id`, on the first line and nowhere else. It is minted by the provider, so it does not exist until a turn has started.[4] |
 | Carry a conversation on | `codex exec … resume <id>` — but **every global flag is rejected after `resume`**, measured: `--sandbox` placed after it is `error: unexpected argument '--sandbox' found`.[2][4] |
-| Say what a turn cost | `turn.completed.usage`, and it is the **thread's running total rather than the turn's**. Measured: three one-word replies reported `output_tokens` of 5, 10 and 15.[4] |
+| Say what a turn cost | Through `codex exec`, `turn.completed.usage` is the **thread's running total rather than the turn's** — measured: three one-word replies reported `output_tokens` of 5, 10 and 15.[4] Through `app-server` there is no such trap: `thread/tokenUsage/updated` carries `last` beside `total`, so this turn's own share is reported as such.[4] |
 | Keep one agent's sign-in from another's | `CODEX_HOME`. Measured: pointed at an empty directory, every request is `401 Unauthorized … Missing bearer or basic authentication`.[4] |
 | Choose how much of the machine it may touch | `--sandbox` with `read-only`, `workspace-write` or `danger-full-access`; a process-level sandbox rather than a tool list.[1] |
 | Say which model answered | Nothing in the stream names one.[4] |
@@ -101,7 +101,23 @@ protocol can be read offline without an account:
 codex app-server generate-json-schema --out <dir>
 ```
 
-What that schema says, at 0.145.0:[4]
+Three shapes the schema does *not* give you, each of which cost an attempt:
+
+```text
+sandbox on thread/start   {"read-only": {}}     externally tagged, kebab-case
+                          — NOT {"mode": …}, NOT {"type": …}, NOT a bare string
+SandboxPolicy elsewhere   {"type": "readOnly"}  internally tagged, camelCase
+                          — the same idea, spelled two ways in one protocol
+usage                     arrives as a notification, not on the completed turn:
+                          thread/tokenUsage/updated {tokenUsage: {last, total}}
+```
+
+The posture is set once, when the conversation is opened; a turn inside it does not
+restate it.
+
+Measured end to end: a turn counting to thirty took a change of plan eight seconds in and
+finished on the new instruction, in the same run, without being interrupted and started
+again. What that schema says, at 0.145.0:[4]
 
 ```text
 turn/steer         {threadId, expectedTurnId, input: [UserInput], clientUserMessageId?}
@@ -121,16 +137,22 @@ do is asked rather than assumed, and a brain gaining a capability is one adapter
 
 ## Verdict for us
 
-Codex is a sound first shipped adapter, and it was chosen because it is the **hardest** of
-the three installed CLIs on the two things the seam most needs to get right: its usage is
-cumulative, and its session handle is minted by the provider rather than by us and appears
-on the first line only. An adapter that absorbs both proves the seam can absorb them, which
-one whose brain reports per-turn usage and accepts a pre-minted handle would not have.
+**Use `app-server`, not `exec`.** The shipped adapter does. `exec` is the simpler surface
+and it costs three real things: a turn cannot be added to once it starts, the only usage
+figure is a running total every adapter then has to remember and subtract across restarts,
+and its session handle appears on one line and is lost if anything goes wrong before it.
+`app-server` has none of those problems — steering is a first-class request, `last` is the
+turn's own cost, and the thread id comes back from opening the conversation.
 
-Its fidelity ceiling is worth stating: `codex exec` chooses its permissions before the run
-and cannot answer an approval or a question mid-turn, so it suits work whose posture is
-settled before it begins. That is exactly what a turn asked for from a terminal or a
-schedule is, and it is a limit to revisit when a channel wants to approve something.
+What it costs instead: it is a protocol with a lifecycle rather than one command, and it is
+marked experimental at 0.145.0. That is a real risk and the reason the probe exists — when
+the version moves, rerun it before trusting any of this.
+
+Codex was worth taking first for a reason that survives the change of surface: it is the
+**hardest** of the three installed CLIs on the things the seam most needs to get right, and
+an adapter absorbing them proves the seam can. It also proved the seam's central claim by
+accident — moving this brain from one surface to a completely different one, and gaining a
+capability doing it, changed exactly one file and nothing else.
 
 Rerun `.knowledge/scripts/probe-codex` when the version moves, and write what changed here.
 

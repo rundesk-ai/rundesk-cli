@@ -43,11 +43,12 @@ is a whole brain with that work absent, rather than a broken one.
 | ❌ | R-PRV-16 | What an owner set for a brain reaches it unread and unchanged | — |
 | ❌ | R-PRV-17 | An adapter is handed the handle it last reported for that conversation, and never another conversation's | — |
 | ❌ | R-PRV-18 | An adapter is told how much of the machine a turn may touch, in words no brain owns | — |
+| ❌ | R-PRV-19 | A brain that says it can be sent to mid-turn is, and the turn carries on rather than starting again | — |
 
 ## Open questions
 
+- What a turn does when a word said into it arrives after it has already finished.
 - What a turn does when an adapter reports a record whose shape is known but whose content is not.
 - What happens when what an adapter says it can do and what it then reports disagree.
 - Whether an adapter that cannot carry a conversation on should be given one at all.
-- Whether being sent to mid-turn belongs in this seam, and what would prove a brain supports it.
 - How a brain that has drifted from what was last measured is noticed before a turn fails on it.
