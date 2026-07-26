@@ -165,6 +165,18 @@ def run_home(name: str, where: Path | None = None) -> Path:
     return directory(name, where) / "run"
 
 
+def runs_home(name: str, where: Path | None = None) -> Path:
+    """Where the account of every turn this agent took is kept — history, which lasts.
+
+    One letter from `run_home` and the opposite of it: that holds what the gateway is
+    doing at this moment and is emptied when it stops, and this holds what was done and
+    is what an owner still has afterwards (R-RUN-10). Kept when the agent is taken away
+    and taken only when a removal asks for its history too (R-AGW-5), because a reinstall
+    after trouble is exactly when the account of the trouble matters most.
+    """
+    return directory(name, where) / "runs"
+
+
 def logs_home(name: str, where: Path | None = None) -> Path:
     """Where this agent's gateway writes what happened — history, which outlives it."""
     return directory(name, where) / "logs"
@@ -189,6 +201,7 @@ def paths(name: str, where: Path | None = None) -> dict[str, Path]:
         "skills": skills(name, where),
         "providers": directory(name, where) / "providers",
         "run": run_home(name, where),
+        "runs": runs_home(name, where),
         "logs": logs_home(name, where),
         "schedules": schedules_home(name, where),
     }
@@ -355,9 +368,10 @@ def forget(name: str, where: Path | None = None, history: bool = False) -> list[
     were given: adding the name back otherwise inherits work nobody asked for, from an
     agent that no longer exists (R-AGW-4).
 
-    What the agent *did* is kept until a removal is asked to take that too (R-AGW-5). A
-    reinstall after trouble is exactly the moment the account of the trouble matters most,
-    and it was being deleted by the command someone runs to fix the trouble.
+    What the agent *did* is kept until a removal is asked to take that too (R-AGW-5) —
+    its log, what its schedules did, and the account of every turn it took. A reinstall
+    after trouble is exactly the moment the account of the trouble matters most, and it
+    was being deleted by the command someone runs to fix the trouble.
 
     The run directory is emptied by the gateway's own removal, which holds the name's lock
     before unlinking it; anything still standing there belongs to something still using it,
@@ -377,11 +391,13 @@ def forget(name: str, where: Path | None = None, history: bool = False) -> list[
         scheduled.unlink()
         taken.append(scheduled.name)
     if history:
-        for path in (logs_home(name, where), schedules_home(name, where)):
+        for path in (logs_home(name, where), schedules_home(name, where),
+                     runs_home(name, where)):
             if path.exists():
                 shutil.rmtree(path)
                 taken.append(path.name + "/")
-    for empty in (run_home(name, where), schedules_home(name, where), stands):
+    for empty in (run_home(name, where), schedules_home(name, where),
+                  runs_home(name, where), stands):
         try:
             empty.rmdir()
         except OSError:
