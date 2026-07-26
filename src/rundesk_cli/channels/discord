@@ -257,17 +257,28 @@ def where_to_answer(direct: bool, in_thread: bool, ours: bool, mentioned: bool):
     return "open-thread"       # named in a channel: the turn happens in a thread (R-DIS-1)
 
 
-def within(direct: bool, belongs_to, listens_in, dms: bool) -> bool:
+def within(direct: bool, belongs_to, listens_in, dms: bool, a_server=None) -> bool:
     """Whether this is somewhere the owner said this agent listens.
 
     A thread is asked about by the channel it was opened in, never by its own id: an
-    owner confining an agent to one channel means the conversations under it too, and
-    a thread is where those conversations happen.
+    owner confining an agent to one channel means the conversations under it too, and a
+    thread is where those conversations happen.
+
+    **Naming nowhere means anywhere it has been invited**, and that is deliberate. It
+    was briefly the other way — a channel that named only direct messages refused to
+    answer in a server — on the reasoning that an agent should not speak somewhere its
+    owner had not named. That reasoning was wrong: who may be answered is already
+    decided, by name, before a single word reaches a brain. Refusing a mention from the
+    one person allowed to make it protects nobody and only makes them say where twice.
+
+    What naming a place *does* mean is narrowing: `--server` confines to that server and
+    `--channel` to that channel, for an owner who wants an agent in one room and not the
+    next one along.
     """
     if direct:
         return bool(dms)
     if not listens_in:
-        return True          # confined to a server and no further, which is a choice
+        return True          # anywhere it has been invited, or the one server it named
     return str(belongs_to) == str(listens_in)
 
 
@@ -396,7 +407,8 @@ class Agent(discord.Client):
         # nothing and was skipped for every thread in the server — so an agent told to
         # listen in one channel would answer in a thread under any of them.
         belongs_to = message.channel.parent_id if in_thread else message.channel.id
-        if not within(direct, belongs_to, self.chose.channel, self.chose.dm):
+        if not within(direct, belongs_to, self.chose.channel, self.chose.dm,
+                      self.chose.server):
             return
         # **Nothing expensive or visible before this.** Whether somebody may be answered
         # is rundesk's to decide and it still decides it — but a message from anybody at
@@ -694,6 +706,13 @@ class Agent(discord.Client):
         if channel is None:
             note(f"nowhere to write in {it.get('conversation')}")
             return
+        # **Only if it is in the same place.** Being named in a channel opens a thread
+        # and the turn happens there, while the message that asked is still sitting in
+        # the channel above it — so quoting it made Discord refuse the whole message, and
+        # a turn ended with a ✅ on the question and no answer under it.
+        if anchor is not None and str(getattr(anchor, "channel_id", "")) != str(
+                it.get("conversation")):
+            anchor = None
         sending = []
         for at in files:
             try:

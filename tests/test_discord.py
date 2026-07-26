@@ -102,9 +102,27 @@ class WhereItListens(unittest.TestCase):
                          "a thread under another channel was answered in")
 
     def test_an_agent_confined_to_a_server_and_no_further_answers_anywhere_in_it(self):
-        """R-DIS-2 — naming no channel is a choice, not an omission."""
-        self.assertTrue(discord.within(False, belongs_to="9999",
-                                       listens_in=None, dms=False))
+        """R-DIS-2 — naming a server and no channel is a choice, not an omission."""
+        self.assertTrue(discord.within(False, belongs_to="9999", listens_in=None,
+                                       dms=False, a_server="9930"))
+
+    def test_an_agent_that_named_nowhere_answers_anywhere_it_was_invited(self):
+        """R-DIS-2 — who may be answered is already decided, by name, before a word
+        reaches a brain. Refusing a mention from the one person allowed to make it
+        protects nobody and only makes them say where twice."""
+        self.assertTrue(discord.within(False, belongs_to="9999", listens_in=None,
+                                       dms=True, a_server=None),
+                        "it refused a mention nobody had told it to refuse")
+        self.assertTrue(discord.within(True, belongs_to=None, listens_in=None,
+                                       dms=True, a_server=None))
+
+    def test_naming_a_channel_still_narrows_it_to_that_channel(self):
+        """R-DIS-2 — the point of naming one is an agent in this room and not the next
+        one along, and that has to keep working."""
+        self.assertTrue(discord.within(False, belongs_to="1180", listens_in="1180",
+                                       dms=False, a_server="9930"))
+        self.assertFalse(discord.within(False, belongs_to="9999", listens_in="1180",
+                                        dms=False, a_server="9930"))
 
     def test_a_direct_message_is_answered_only_when_that_is_what_was_asked_for(self):
         """R-DIS-4 — a channel pointed at a room is not also a channel for private
@@ -113,6 +131,33 @@ class WhereItListens(unittest.TestCase):
         self.assertTrue(discord.within(True, belongs_to=None, listens_in=None, dms=True))
         self.assertFalse(discord.within(True, belongs_to=None, listens_in="1180",
                                         dms=False))
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class AnAnswerInAThread(unittest.TestCase):
+    """R-DIS-1 — being named opens a thread and the turn happens there, while the message
+    that asked stays in the channel above it."""
+
+    class Message:
+        def __init__(self, channel_id):
+            self.channel_id = channel_id
+
+    def test_an_answer_does_not_quote_a_message_from_somewhere_else(self):
+        """R-DIS-1 — Discord refuses a whole message that quotes one in another channel.
+        So a turn in a thread ended with a ✅ on the question and no answer under it: the
+        mark went on the message in the channel, which works, and the reply quoting that
+        same message was rejected outright."""
+        source = (ROOT / "src" / "rundesk_cli" / "channels" / "discord").read_text()
+        self.assertIn('str(getattr(anchor, "channel_id", "")) != str(', source,
+                      "an answer can still quote a message outside the place it is sent")
+
+    def test_a_thread_is_a_conversation_of_its_own(self):
+        """R-DIS-1, R-CH-3 — one thread is one conversation and one session, so the id a
+        turn is carried under is the thread's and not the channel's."""
+        self.assertEqual("open-thread", discord.where_to_answer(
+            direct=False, in_thread=False, ours=False, mentioned=True))
+        self.assertEqual("here", discord.where_to_answer(
+            direct=False, in_thread=True, ours=True, mentioned=False))
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
