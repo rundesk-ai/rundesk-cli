@@ -49,6 +49,13 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   because the thing feeding it raised is a turn that never ends, waiting on somebody who has
   already stopped speaking. Close it in a `finally`, not at the end of the happy path.
 
+- **A `pkill -f` pattern must match how a process really appears in `argv`, not how you think
+  of it.** Suites are started as `python3 tests/test_turn.py` from the repo, so `argv` holds
+  the *relative* path — `pkill -f "rundesk-cli/tests/"` matched nothing and reported success,
+  and a suite kept running for another twenty minutes while the cleanup was believed done.
+  Check with `pgrep -fl <pattern>` before trusting a kill, and remember that killing one
+  command in a `&&` chain lets the shell move on to the next one.
+
 - **An adapter that can find itself on its own PATH is a fork bomb.** An adapter looks its
   brain up by name; committing the stranger's adapter as `strangers/driftwood` and putting
   that directory on `PATH` meant it resolved `driftwood` to *itself*, ran itself, and that
