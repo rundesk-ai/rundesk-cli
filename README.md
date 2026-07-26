@@ -6,65 +6,59 @@
   <img src="https://img.shields.io/badge/build%20step-none-green?style=flat-square" alt="No build step">
 </p>
 <p align="center">
-    🚀 <a href="#-quick-start"><strong>Quick start</strong></a>
+    ✅ <a href="#-what-rundesk-does"><strong>What it does</strong></a>
     &nbsp;·&nbsp;
-    ✨ <a href="#-what-it-does"><strong>What it does</strong></a>
-    &nbsp;·&nbsp;
-    🧠 <a href="#-bring-your-own-brain"><strong>Brains</strong></a>
+    🚀 <a href="#-install"><strong>Install</strong></a>
     &nbsp;·&nbsp;
     💬 <a href="#-reach-it-where-you-already-are"><strong>Channels</strong></a>
+    &nbsp;·&nbsp;
+    🧠 <a href="#-bring-your-own-brain"><strong>Brains</strong></a>
     &nbsp;·&nbsp;
     📖 <a href="#-documentation"><strong>Docs</strong></a>
 </p>
 
 # 🖥 rundesk
 
-**Give your AI coding agent a name, a home, and a phone number.**
+**Your AI coding agent, always running — and reachable on the channels you already use.**
 
-rundesk turns the provider CLI you already have — Codex, Claude Code, or one you wrote
-yourself — into a named agent that stays running, works on a schedule, and answers you on
-Discord. It uses the CLI you're already signed in to, so there are no API keys to manage,
-nothing to host, and no build step.
+## 💡 The problem
 
-## ⚡ It's this simple
+Your coding agent lives in a terminal window. Close the window and it's gone: the context, the
+conversation, everything it knew. It can't work overnight, you can't check on it from
+somewhere else, and there's no record of what it did.
+
+## ✅ What rundesk does
+
+rundesk keeps that agent running as a named thing on your machine, with its own home and its
+own memory — and lets you reach it from a chat channel instead of a terminal.
+
+**It doesn't replace your agent.** It runs the CLI you already have — Codex, Claude Code, or
+one you wrote — so you keep its tools, its permissions and its login exactly as they are.
+
+|  |  |
+|---|---|
+| 🏠 **It has a home** | Its own workspace, memory and rules, kept apart from every other agent |
+| 💬 **You can message it** | Reach it on Discord from anywhere, and watch it work as it goes |
+| ⏰ **It works while you don't** | Schedules that run on the clock — never late, never twice |
+| ♻️ **It stays up** | Your machine restarts it after a crash or a reboot |
+| 📝 **It remembers** | Every turn recorded — what was asked, what it did, what it cost |
+| 📦 **Nothing to manage** | One directory under your home. No server to host, no build step |
+
+## ⚡ How you use it
 
 ```sh
 rundesk add ava --provider codex
 rundesk ask ava "what changed in this repo today?"
 ```
 
-That's a working agent. `ava` has her own workspace, her own memory files, and her own
-conversation history — kept apart from every other agent on the machine.
+That's a working agent. Two more commands and it's always on and reachable:
 
-## 🎯 Highlights
+```sh
+rundesk start ava                                                  # keep it running
+rundesk channels ava add discord --kind discord --allow <your-id>  # and message it
+```
 
-- **Your CLI is the brain.** rundesk runs Codex, Claude Code, or your own program. It never
-  reimplements the agent loop, so you keep the tools, permissions and session you already have.
-- **Reachable from Discord.** Message your agent from your phone. It opens a thread, shows you
-  what it's doing as it works, and posts the answer when it's done.
-- **Works while you don't.** Schedules run on the clock — never late, never twice, never
-  overlapping.
-- **Stays up.** Your machine keeps each agent running and brings it back after a crash or a reboot.
-- **Remembers everything.** Every turn is recorded — what was asked, what it did, what it cost.
-- **Nothing to manage.** Standard-library Python and one directory under your home. The single
-  package Discord needs goes into rundesk's own virtualenv — never your system Python.
-
-## 💡 Why rundesk?
-
-Provider CLIs are excellent and they all stop at the same place: they run in your terminal,
-and when you close it, they're gone. rundesk is the part around them.
-
-- **One agent, many ways in.** The same `ava` — same memory, same workspace — answers you in
-  the terminal, on Discord, and on a schedule. Which model answers is decided per entry point,
-  not baked into the agent.
-- **Swap anything, change nothing.** A brain is a program rundesk runs, not a plugin it loads.
-  So is a channel. A brain nobody here has heard of is first-class, not degraded —
-  [a stranger wrote one from the guide alone](.knowledge/guides/write-a-provider-adapter.md) and
-  it passed the same test suite the shipped one does.
-- **Honest about what it doesn't do.** A command that isn't built says so and exits with its own
-  code, so a script can tell "this version doesn't have that" from "you typed it wrong".
-
-## 🚀 Quick start
+## 🚀 Install
 
 ```sh
 curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash
@@ -153,12 +147,18 @@ A brain is **a program rundesk runs**, not code it loads — so it can be writte
 and a shell script is enough. rundesk hands it the working directory, the model and the prompt,
 and reads back one JSON record per line.
 
-Nothing about your brain leaks into rundesk: there is no list of providers and no list of models
-anywhere in the codebase. → **[Write a provider adapter](.knowledge/guides/write-a-provider-adapter.md)**
+Nothing about your brain leaks into rundesk — there is no list of providers and no list of models
+anywhere in the codebase. A brain nobody here has heard of is first-class rather than degraded:
+[a stranger wrote one from the guide alone](.knowledge/guides/write-a-provider-adapter.md) and it
+passed the same test suite the shipped one does, without a line of rundesk changing.
 
-Channels work exactly the same way. → **[Write a channel adapter](.knowledge/guides/write-a-channel-adapter.md)**
+Channels work exactly the same way, which is why the same agent — same memory, same workspace —
+can answer you in the terminal, on Discord and on a schedule, with a different model each time.
 
-## ✨ What it does
+→ **[Write a provider adapter](.knowledge/guides/write-a-provider-adapter.md)** ·
+**[Write a channel adapter](.knowledge/guides/write-a-channel-adapter.md)**
+
+## 🧰 Everything it does
 
 **Agents**
 - One name, one home — rules, memory, workspace and skills, kept apart from every other agent
