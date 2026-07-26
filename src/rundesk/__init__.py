@@ -7,7 +7,7 @@ actually is, worked out once from a file that is always inside it.
 
 from pathlib import Path
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 #: This install — the directory holding `rundesk`, `src/` and the virtualenv. Resolved
 #: rather than assumed, because the command is reached through a symlink on a PATH and

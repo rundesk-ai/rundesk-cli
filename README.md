@@ -93,7 +93,7 @@ rundesk logs ava         # everything it's said
 
 ```
 AGENT    STATE    PID    UPTIME  LAUNCHD JOB  VERSION  WORK
-ava      RUNNING  4192   2h14m   LOADED       0.4.0    2 (a-conversation, another)
+ava      RUNNING  4192   2h14m   LOADED       0.5.0    2 (a-conversation, another)
 codex    STOPPED  -      -       NOT LOADED   -        -
 ```
 
