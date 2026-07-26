@@ -138,13 +138,6 @@ def changing(target: Path, empty, what: str, durable: bool = False):
         os.close(guard)
 
 
-@contextlib.contextmanager
-def changing_schedules(name: str, where: Path | None = None):
-    """Read this gateway's schedules, change them, and write them back — alone."""
-    with changing(schedules_path(name, where), [], "schedules") as keeping:
-        yield keeping
-
-
 def _understood(target: Path, empty, what: str):
     """What is written there, refusing a file that is there and cannot be read.
 
@@ -159,18 +152,6 @@ def _understood(target: Path, empty, what: str):
     if state == UNREADABLE or not isinstance(said, type(empty)):
         raise Unreadable(f"{target} could not be read as {what}")
     return said
-
-
-def written_schedules(name: str, where: Path | None = None) -> list:
-    """What is written down for this gateway, as written — including what cannot be
-    understood, because removing a broken schedule is the main thing anyone wants to do
-    with one.
-
-    That tolerance is for a schedule nobody can make sense of, never for a file nobody
-    can read: one is a row the owner can be shown and told to remove, and the other is
-    every row at once, reported as none (R-SCH-17).
-    """
-    return _understood(schedules_path(name, where), [], "schedules")
 
 
 def logs_home() -> Path:
@@ -376,21 +357,10 @@ def schedules_path(name: str, where: Path | None = None) -> Path:
     return (where or schedules_home()) / f"{checked(name)}.json"
 
 
-def ran_path(name: str, where: Path | None = None) -> Path:
-    """Where what each schedule last did is kept.
-
-    Beside the schedules, not with the run state. Stopping a gateway clears what it is
-    *doing*, record and all (R-GW-12) — and what its schedules have done is history, the
-    same as the log, which is kept for exactly that reason (R-GW-18). Held with the run
-    state it would be erased by every ordinary restart.
-    """
-    return (where or schedules_home()) / f"{checked(name)}.ran.json"
-
-
 def seen_path(name: str, where: Path | None = None) -> Path:
     """Where the last moment a gateway of this name was up is kept.
 
-    Beside the schedules, for the same reason `ran_path` is. Taken off the run record,
+    Beside the schedules, where what outlives a gateway lives. Taken off the run record,
     which a clean stop deletes (R-GW-12), this checkpoint survived a crash and not an
     ordinary restart — so what fell due while a gateway was *deliberately* stopped, which
     is the gap an owner is most likely to have caused and least likely to expect, was the
@@ -404,16 +374,6 @@ def last_seen(name: str = DEFAULT_NAME, where: Path | None = None) -> float | No
     said = _read_json(seen_path(name, where), {})
     when = said.get("at") if isinstance(said, dict) else None
     return when if isinstance(when, (int, float)) else None
-
-
-def scheduled(name: str = DEFAULT_NAME, where: Path | None = None):
-    """This gateway's schedules, and any that could not be understood (R-SCH-10).
-
-    Nothing else's, ever: the name is the file, and a name that would reach outside the
-    directory it belongs in was refused long before this (R-GW-20).
-    """
-    # Read once, understood here: the same file read two ways is one rule stated twice.
-    return schedule.read(written_schedules(name, where))
 
 
 def _lock_path(name: str, where: Path) -> Path:
@@ -449,7 +409,7 @@ def reserved_suffixes() -> frozenset[str]:
     where = Path(os.sep)
     made = (
         _lock_path(_PROBE, where), _record_path(_PROBE, where), log_path(_PROBE, where),
-        schedules_path(_PROBE, where), ran_path(_PROBE, where), seen_path(_PROBE, where),
+        schedules_path(_PROBE, where), seen_path(_PROBE, where),
         interrupted_path(_PROBE, where),
     )
     return frozenset({path.name[len(_PROBE):] for path in made} | ALSO_WRITTEN)
@@ -574,7 +534,7 @@ KEPT_INTERRUPTIONS = 50
 def interrupted_path(name: str, where: Path | None = None) -> Path:
     """Where work that never got to finish is written down (R-GW-23).
 
-    Beside the schedules, where history lives, for the same reason `ran_path` is: stopping
+    Beside the schedules, where history lives rather than with the run state: stopping
     a gateway clears what it is *doing* (R-GW-12), and this is the account of what it
     never finished — which is worth least at the moment it is written and most much later.
     """
@@ -1023,18 +983,6 @@ def standing(name: str = DEFAULT_NAME, where: Path | None = None) -> Standing:
     )
 
 
-def what_was_scheduled(name: str = DEFAULT_NAME, where: Path | None = None) -> dict:
-    """When each of this gateway's schedules last ran, and what became of it (R-SCH-8).
-
-    Read from a file rather than asked of the gateway, because whoever is asking is a
-    different process — and kept where history is kept, so it outlives the gateway that
-    wrote it.
-    """
-    said = _read_json(ran_path(name, where), {})
-    return {name: did for name, did in said.items() if isinstance(did, dict)} \
-        if isinstance(said, dict) else {}
-
-
 def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list[str]:
     """What this gateway says it has in flight, by the name each was started under.
 
@@ -1097,9 +1045,10 @@ def forget(name: str, where: Path | None = None, schedules: Path | None = None,
                 lock.unlink(missing_ok=True)
                 taken.append(lock.name)
     if history:
-        kept = (log_path(name, logs), schedules_path(name, schedules),
-                ran_path(name, schedules), interrupted_path(name, schedules),
-                schedules_path(name, schedules).with_suffix(".changing"),
+        # What a schedule is and what it last did are rows, and go with the agent's own
+        # records rather than from here. What is left is the log, and the account of what
+        # never finished, which is the one thing beside a schedule that is still a file.
+        kept = (log_path(name, logs), interrupted_path(name, schedules),
                 interrupted_path(name, schedules).with_suffix(".changing"))
         for path in kept:
             if path.exists():
@@ -1142,6 +1091,7 @@ class Gateway:
         schedules: Path | None = None,
         reachable=(),
         agents: Path | None = None,
+        records=None,
     ):
         self.name = checked(name)
         self.where = where or home()
@@ -1153,6 +1103,15 @@ class Gateway:
         #: (R-AGT-9). Left unset, `process.environment` forwards whatever this process was
         #: given, which is the same answer by a shorter route.
         self.agents = agents
+        #: Where this gateway's schedules are, and what each last did. Handed over already
+        #: opened, the way the surfaces it holds are: a gateway reads rows out of it and
+        #: never asks whose they are, so it goes on knowing nothing of agents.
+        #:
+        #: **None is a gateway with no schedules, and that is a whole gateway.** Schedules
+        #: are something an agent keeps, so a name that is not an agent has none — it still
+        #: starts, holds its lock, writes its log and ends what it started; the clock simply
+        #: has nothing to start for it.
+        self.records = records
         self.log = _recorder(name, self.logs)
         self.root = root or ROOT
         #: What this gateway is running, by the name each was started under. Keyed
@@ -1169,7 +1128,6 @@ class Gateway:
         #: however often the clock is examined (R-SCH-9). Held by the gateway rather
         #: than by the schedules, which remember nothing.
         self._ran: dict[str, object] = {}
-        self._outcomes: dict[str, dict] = {}
         self._complained: dict[str, str] = {}
         self._unnamed = itertools.count()
         self._lock: int | None = None
@@ -1252,19 +1210,49 @@ class Gateway:
             raise
         self.log.info("up — version %s, pid %s", __version__, os.getpid())
 
+    def _schedules(self) -> list:
+        """Every schedule this gateway has, as rows — and none at all where it has no
+        records, which is what a gateway that is not an agent is.
+
+        The one reader, so every caller here is asking the same question of the same place,
+        and the one place a failure to read them is turned into an answer.
+
+        **Nothing is ever mistaken for having no schedules.** Records that are there and
+        cannot be read hold every schedule an owner ever wrote (R-SCH-17), so this refuses
+        rather than returning none — and its callers each decide what to do about that,
+        which for a gateway is to keep running and say so once (R-SCH-18).
+        """
+        if self.records is None:
+            return []
+        try:
+            return self.records.schedules()
+        except Exception as why:  # noqa: BLE001 — a records boundary; see below
+            # Broad on purpose. What can go wrong belongs to whatever holds the records and
+            # a gateway does not know what that is; naming those types here would be the one
+            # place it learned. Every one of them means the same thing to every caller
+            # below — these cannot be read — so it is said in rundesk's own words and once.
+            raise Unreadable(f"this agent's schedules could not be read: {why}") from why
+
     def _pick_up_where_it_left_off(self) -> None:
         """Take on what the last gateway of this name knew about its schedules.
 
-        Two things are lost otherwise, both on an ordinary restart rather than a crash.
-        A schedule that already ran this minute runs again, because what has run is held
-        in memory and a new gateway starts with none of it (R-SCH-9). And what each
-        schedule last did is wiped by the first record this gateway writes, so cycling a
-        gateway erases the only account of what its schedules have been doing (R-SCH-8).
+        A schedule that already ran this minute would otherwise run again: what has run is
+        held in memory and a new gateway starts with none of it (R-SCH-9). What each
+        schedule last did needs no picking up now that it is a row — it was a file the first
+        record of a new gateway used to write over, which is how cycling a gateway erased
+        the only account of what its schedules had been doing (R-SCH-8).
         """
-        self._outcomes = what_was_scheduled(self.name, self.schedules)
-        for name, did in self._outcomes.items():
+        try:
+            rows = self._schedules()
+        except Unreadable as why:
+            # Said, and it still starts (R-SCH-17). A gateway that refused to take its name
+            # because one thing it keeps is broken would take down everything else it does.
+            self.log.error("could not pick up what its schedules last did: %s", why)
+            return
+        for row in rows:
             try:
-                self._ran[name] = datetime.strptime(did["at"], schedule.A_MINUTE)
+                self._ran[row["name"]] = datetime.strptime(
+                    row["last_auto_run_at"], schedule.A_MINUTE)
             except (KeyError, TypeError, ValueError):
                 continue
 
@@ -1360,24 +1348,19 @@ class Gateway:
         up, which would then pass over everything due in between.
         """
         surviving = set(self._inherited)
-        changed = False
-        for named, did in self._outcomes.items():
-            if not isinstance(did, dict) or did.get("outcome") != STARTED:
-                continue
-            if f"{SCHEDULED_AS}{named}" in surviving:
-                continue
-            did["outcome"] = INTERRUPTED
-            changed = True
-            self.log.warning("schedule '%s' never finished: the gateway running it is gone", named)
-        if not changed:
-            return
         try:
-            _written_whole(ran_path(self.name, self.schedules),
-                           json.dumps(self._outcomes, indent=2), durable=True)
-        except OSError as why:
-            # Nothing here is worth refusing to start over. The row stays as it was,
-            # which is the state this gateway inherited rather than one it created.
-            self.log.warning("could not write down what never finished: %s", why)
+            stale = [row["name"] for row in self._schedules()
+                     if row.get("last_outcome") == STARTED
+                     and f"{SCHEDULED_AS}{row['name']}" not in surviving]
+        except Unreadable as why:
+            self.log.warning("could not read what never finished: %s", why)
+            return
+        for named in stale:
+            self.log.warning("schedule '%s' never finished: the gateway running it is gone", named)
+            # The minute is left where it is by `schedule_became`, which takes no minute at
+            # all — putting the moment of reconciling there would read as a later firing to
+            # the next gateway up, and everything due in between would be passed over.
+            self._remember_outcome(named, INTERRUPTED)
 
     def _say_what_was_missed(self) -> None:
         """Say what fell due while nothing was running (R-SCH-5).
@@ -1391,11 +1374,11 @@ class Gateway:
         if since is None:
             return
         try:
-            wanted = scheduled(self.name, self.schedules)[0]
+            wanted = schedule.read(self._schedules())[0]
         except Unreadable as why:
-            # Said, and survived (R-SCH-18). A command refuses when it cannot read this
-            # file, because it was asked to change it. A gateway that refused to start over
-            # it would take everything else it does down with the one thing that is broken.
+            # Said, and survived (R-SCH-18). A command refuses when it cannot read these,
+            # because it was asked to change them. A gateway that refused to start over it
+            # would take everything else it does down with the one thing that is broken.
             self.log.error("cannot say what fell due while nothing was running: %s", why)
             return
         was_down_since = datetime.fromtimestamp(since)
@@ -1749,11 +1732,11 @@ class Gateway:
         if self._stopping:
             return
         try:
-            wanted, refused = scheduled(self.name, self.schedules)
+            wanted, refused = schedule.read(self._schedules())
         except Unreadable as why:
             # Nothing runs, and it is said once rather than every tick (R-SCH-18). `None`
-            # is the file itself rather than a schedule in it — the coarser version of the
-            # same news the loop below reports row by row.
+            # is the records themselves rather than a schedule in them — the coarser
+            # version of the same news the loop below reports row by row.
             if self._complained.get(None) != str(why):
                 self.log.error("no schedule can run: %s", why)
                 self._complained[None] = str(why)
@@ -1775,7 +1758,7 @@ class Gateway:
             # visibly happened with nothing durable saying it did, so the same
             # side-effecting run repeats on the way back up — which is the very thing
             # writing it first is for.
-            if not self._remember(one.name, STARTED, fired):
+            if not self._remember_firing(one.name, fired):
                 self.log.error("schedule '%s' was not started: its firing could not be "
                                "written down, and a run nothing records may happen twice",
                                one.name)
@@ -1800,7 +1783,7 @@ class Gateway:
             # because the last run never ended looks exactly like one that is working.
             self.log.warning("schedule '%s' skipped: what it started last time is still running",
                              one.name)
-            self._remember(one.name, "still running", fired)
+            self._remember_outcome(one.name, "still running")
             return
         except Stopping:
             # Nothing spawned, so there is no process for the shutdown to end and nothing
@@ -1809,7 +1792,7 @@ class Gateway:
             # saying work is in flight that never began at all, and the one form of the
             # stale outcome that no reconciliation on the way back up can reach
             # (R-SCH-23).
-            self._remember(one.name, INTERRUPTED, fired)
+            self._remember_outcome(one.name, INTERRUPTED)
             return
         except asyncio.CancelledError:
             # Not a failure to start, and told apart from one before the catch-all below
@@ -1819,7 +1802,7 @@ class Gateway:
             # start', with no reason, one line after the log said it had started. A false
             # line in the one account that outlives the gateway (R-GW-18), and in the file
             # that is meant to say truthfully what each schedule last did.
-            self._remember(one.name, INTERRUPTED, fired)
+            self._remember_outcome(one.name, INTERRUPTED)
             raise
         except BaseException as would_not_start:  # noqa: BLE001 — see below
             # Nobody awaits this task, so anything raised here is raised nowhere at all:
@@ -1828,9 +1811,9 @@ class Gateway:
             # at LAST RUN '-' forever, indistinguishable from one that has never come due
             # — while failing again every single time it fell due (R-SCH-8).
             self.log.error("schedule '%s' could not be started: %s", one.name, would_not_start)
-            self._remember(one.name, "could not start", fired)
+            self._remember_outcome(one.name, "could not start")
             return
-        self._remember(one.name, outcome.reason, fired)
+        self._remember_outcome(one.name, outcome.reason)
 
     async def _over_and_over(self, every: float, do, failed: str,
                              at_once: bool = False) -> None:
@@ -1859,35 +1842,54 @@ class Gateway:
             except BaseException as went_wrong:  # noqa: BLE001 — see the docstring
                 self.log.warning(failed, went_wrong)
 
-    def _remember(self, name: str, outcome: str, at: datetime | None = None) -> bool:
-        """What a schedule last did, kept where anything asking can read it, and whether
-        it could be written down.
+    def _remember_firing(self, name: str, at: datetime) -> bool:
+        """That the clock started this, written before it runs — and whether it was.
 
-        `at` is the minute it *fell due*, kept unchanged as the outcome is updated. Using
-        the moment of writing instead moved the time forward as a run finished, and a
-        gateway restarting then read that later minute as the last one to have fired —
-        so every schedule due in between was passed over as already done.
+        `at` is the minute it *fell due*, and only the clock moves it: a run by hand leaves
+        it alone, which is what keeps asking for something now from quietly cancelling
+        tonight (R-SCH-22). Written in the minute a schedule is stated in, because that is
+        what it is compared against and what an owner reads back.
+
+        False rather than raising, because the caller's answer to a firing that could not be
+        written down is not to start it: work that visibly happened with nothing durable
+        saying so repeats on the way back up, which is the whole reason it is written first.
         """
-        minute = (at or datetime.now()).strftime(schedule.A_MINUTE)
-        # Never backwards. A long run finishing after a later occurrence was already
-        # recorded would otherwise put the earlier minute back, and a gateway reading it
-        # on the way up would take that later minute for one that had never fired —
-        # and run it again (R-SCH-9).
-        was = self._outcomes.get(name, {}).get("at")
-        if isinstance(was, str) and was > minute:
-            minute, outcome = was, f"{outcome} (for {(at or datetime.now()).strftime(schedule.A_MINUTE)})"
-        self._outcomes[name] = {"at": minute, "outcome": outcome}
+        if self.records is None:
+            return False
         try:
-            # Durable, and without a hold: only the gateway that owns this name writes here,
-            # and there is one of those at a time (R-GW-4). What it must survive is not
-            # another writer but the machine going down between a firing being written and
-            # the run it authorises happening (R-SCH-20).
-            _written_whole(ran_path(self.name, self.schedules),
-                           json.dumps(self._outcomes, indent=2), durable=True)
-        except OSError as why:
-            self.log.warning("could not write down what '%s' did: %s", name, why)
+            self.records.schedule_fired(name, at.strftime(schedule.A_MINUTE), STARTED)
+        except Exception as why:  # noqa: BLE001 — a durable-write boundary; see below
+            # Broad on purpose, and narrower than the alternative. What can go wrong here
+            # belongs to whatever holds the records, and a gateway does not know what that
+            # is; naming those types here would be the one place it learned. Every one of
+            # them means the same thing to the caller — the firing is not written down, so
+            # the work must not start — and it is said rather than swallowed.
+            self.log.warning("could not write down that '%s' fired: %s", name, why)
             return False
         return True
+
+    def _remember_outcome(self, name: str, outcome: str) -> None:
+        """What the work a schedule started turned out to be, once it is over.
+
+        The minute is not passed and cannot be moved from here. Writing the moment a run
+        *finished* into it moved the time forward, and a gateway restarting then read that
+        later minute as the last one to have fired — so every schedule due in between was
+        passed over as already done.
+
+        Never worth raising over: this is an account of something that has already happened,
+        and the work is done either way.
+        """
+        if self.records is None:
+            return
+        try:
+            self.records.schedule_became(name, outcome)
+        except Exception as why:  # noqa: BLE001 — see `_remember_firing`
+            # And broad for one more reason here: this is called from inside the handlers
+            # that catch a schedule failing, in a task nobody awaits. Raising from there
+            # would replace the failure being recorded with this one, and asyncio would
+            # report it on stderr — which for a supervised gateway is a file rundesk does
+            # not read (R-GW-18).
+            self.log.warning("could not write down what '%s' did: %s", name, why)
 
     def _say(self) -> None:
         """Update the record, and never let failing to do so stop the work.

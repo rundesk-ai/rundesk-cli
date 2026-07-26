@@ -354,7 +354,6 @@ def _wrote_before(name: str, logs: Path | None, schedules: Path | None):
     return (
         (gateway.log_path(name, logs), "logs"),
         (gateway.schedules_path(name, schedules), "schedules"),
-        (gateway.ran_path(name, schedules), "schedules"),
         (gateway.seen_path(name, schedules), "schedules"),
         (gateway.interrupted_path(name, schedules), "schedules"),
     )

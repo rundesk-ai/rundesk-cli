@@ -12,6 +12,7 @@ Run: python3 tests/test_agent.py
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -280,9 +281,11 @@ class ANameThatCannotBeAnAgents(WithSomewhereToKeepAgents):
             agent.home("sneaky", self.where)
 
     def test_a_name_a_gateway_would_take_for_something_it_wrote_is_refused(self):
-        """R-AGT-6 — a gateway named `foo` writes `foo.ran.json`, which is the file an
-        agent called `foo.ran` would want for itself."""
-        for said in ("ava.ran", "ava.seen", "ava.interrupted", "ava.log", "ava.lock",
+        """R-AGT-6 — a gateway named `foo` writes `foo.log`, which is the file an agent
+        called `foo.log` would want for itself. The list is what the path helpers actually
+        write today: `foo.ran.json` is not among them any more, because what a schedule last
+        did is a row, so `foo.ran` is an ordinary name again."""
+        for said in ("ava.seen", "ava.interrupted", "ava.log", "ava.lock",
                      "ava.json", "ava.out", "ava.err", "ava.changing", "ava.writing"):
             with self.assertRaises(agent.NotAnAgentName, msg=f"'{said}' was accepted"):
                 agent.checked(said)
@@ -294,7 +297,7 @@ class ANameThatCannotBeAnAgents(WithSomewhereToKeepAgents):
     def test_what_a_gateway_writes_is_asked_of_it_rather_than_listed(self):
         """R-AGT-6 — the teeth. A sidecar added later is covered the day it lands, because
         this fails when a path helper writes a suffix nothing declared."""
-        writes = (gateway.log_path, gateway.schedules_path, gateway.ran_path,
+        writes = (gateway.log_path, gateway.schedules_path,
                   gateway.seen_path, gateway.interrupted_path)
         for helper in writes:
             added = helper(gateway._PROBE, Path(os.sep)).name[len(gateway._PROBE):]
@@ -446,26 +449,27 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
         """R-AGW-4 — otherwise adding the name back inherits work nobody asked for, from an
         agent that no longer exists."""
         self.made()
-        with gateway.changing_schedules("ava", agent.schedules_home("ava", self.where)) as kept:
-            kept.append({"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo", "hi"]})
+        agent.records("ava", self.where).remember_schedule(
+            "tidy", "0 3 * * *", "2026-07-26T09:00:00Z", command=["/bin/echo", "hi"])
 
         agent.forget("ava", self.where)
         agent.add("ava", self.where)
-        self.assertEqual(gateway.written_schedules("ava", agent.schedules_home("ava", self.where)), [])
+        self.assertEqual([], agent.records("ava", self.where).schedules())
 
     def test_taking_an_agent_away_takes_what_its_schedules_did(self):
-        """R-AGW-5 — what is scheduled and what each schedule last did sat side by side,
-        and only the first went. The second was then inherited by whoever took the name
-        next, which is a new agent reading an old one's account of itself."""
+        """R-AGW-5 — what is scheduled and what each schedule last did sat in two files side
+        by side, and only the first went. The second was then inherited by whoever took the
+        name next, which is a new agent reading an old one's account of itself. They are one
+        row now, so the two cannot come apart."""
         self.made()
-        kept = agent.schedules_home("ava", self.where)
-        gateway.ran_path("ava", kept).write_text('{"tidy": {"outcome": "ok"}}', encoding="utf-8")
-        with gateway.changing_schedules("ava", kept) as scheduled:
-            scheduled.append({"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo", "hi"]})
+        kept = agent.records("ava", self.where)
+        kept.remember_schedule("tidy", "0 3 * * *", "2026-07-26T09:00:00Z",
+                               command=["/bin/echo", "hi"])
+        kept.schedule_fired("tidy", "2026-07-26 03:00", "finished")
 
         agent.forget("ava", self.where)
-        self.assertFalse(gateway.schedules_path("ava", kept).exists(), "the work was inherited")
-        self.assertFalse(gateway.ran_path("ava", kept).exists(), "the account was inherited")
+        self.assertFalse(store.path_for(agent.directory("ava", self.where)).exists(),
+                         "the work and its account were inherited")
 
     def test_taking_an_agent_away_takes_the_channels_it_was_reachable_on(self):
         """R-AGW-4, R-CAD-10 — the worst thing a name can inherit. An agent added back
@@ -546,8 +550,13 @@ class AGatewayThatHasNoAgentYet(WithSomewhereToKeepAgents):
         """A gateway of this name, with a log and schedules, kept the way they were kept
         before there were agents to own them."""
         gateway.note(name, "before there were agents", self.before / "logs")
-        with gateway.changing_schedules(name, self.before / "schedules") as kept:
-            kept.append({"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo", "hi"]})
+        # Written as the file it was, on purpose: this is the shape from before a schedule
+        # was a row, and adoption is the one thing that still has to know it existed.
+        where = self.before / "schedules"
+        where.mkdir(parents=True, exist_ok=True)
+        (where / f"{name}.json").write_text(
+            json.dumps([{"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo", "hi"]}]),
+            encoding="utf-8")
 
     def test_adopting_a_gateway_moves_what_it_wrote_into_the_agents_own(self):
         """R-AGW-1 — nothing moves on its own, and this is what an owner typing the name
@@ -560,7 +569,8 @@ class AGatewayThatHasNoAgentYet(WithSomewhereToKeepAgents):
 
         self.assertIn("before there were agents",
                       gateway.log_path("gateway", agent.logs_home("gateway", self.where)).read_text())
-        kept = gateway.written_schedules("gateway", agent.schedules_home("gateway", self.where))
+        kept = json.loads((agent.schedules_home("gateway", self.where) / "gateway.json")
+                          .read_text(encoding="utf-8"))
         self.assertEqual([one["name"] for one in kept], ["tidy"])
         self.assertFalse((self.before / "schedules" / "gateway.json").exists(),
                          "what was adopted is still where it was, so two places now disagree")

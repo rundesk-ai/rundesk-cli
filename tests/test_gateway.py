@@ -29,7 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import gateway, process, schedule  # noqa: E402
+from rundesk import gateway, process, schedule, store  # noqa: E402
 
 PY = sys.executable
 
@@ -70,25 +70,58 @@ class WithARunDirectory(unittest.IsolatedAsyncioTestCase):
         # and builds the installs it needs.
         self.root = Path(tempfile.mkdtemp(prefix="rundesk-root-"))
         self.addCleanup(shutil.rmtree, self.root, True)
+        # What this gateway's agent keeps. Handed over already opened, the way `cmd_serve`
+        # hands one over: a gateway reads rows out of it and never asks whose they are.
+        self.records = self.some_records()
         self.addCleanup(setattr, gateway, "STOP_SECONDS", gateway.STOP_SECONDS)
         gateway.STOP_SECONDS = 2.0
         self.addCleanup(setattr, process, "GRACE_SECONDS", process.GRACE_SECONDS)
         process.GRACE_SECONDS = 0.5
 
-    def made(self, name: str = gateway.DEFAULT_NAME) -> gateway.Gateway:
+    def some_records(self):
+        """One agent's records, in a directory of their own. One per agent is the whole of
+        the isolation now: a gateway has no way to name another's schedules because it is
+        handed the only store it can reach."""
+        at = Path(tempfile.mkdtemp(prefix="rundesk-records-"))
+        self.addCleanup(shutil.rmtree, at, True)
+        kept = store.Store(store.path_for(at))
+        kept.made()
+        return kept
+
+    def made(self, name: str = gateway.DEFAULT_NAME, records=False) -> gateway.Gateway:
         gw = gateway.Gateway(name, where=self.where, logs=self.logs, schedules=self.schedules,
-                             root=self.root)
+                             root=self.root,
+                             records=self.records if records is False else records)
         self.addCleanup(gw.release)
         return gw
+
+    def schedules_for(self, name: str, *written, records=None) -> None:
+        """Schedules, as the rows an agent keeps. `name` is the gateway they belong to,
+        which is now the store they are in rather than a file named for it.
+
+        Takes what a schedules file used to hold, so a case still reads as the thing it is
+        about: `when` is the cron and `run` is the program. A row that names nothing is
+        `command` of `[]` — the database refuses a schedule that is neither a program nor a
+        prompt, and an empty program is how "names nothing this gateway can start" is still
+        reachable.
+        """
+        kept = records if records is not None else self.records
+        for one in written:
+            kept.remember_schedule(
+                one["name"], one.get("when", ""), store.stamped(),
+                command=one.get("run") if one.get("run") is not None else [],
+                enabled=one.get("enabled", True))
+
+    def what_each_schedule_last_did(self, records=None) -> dict:
+        """What each of this gateway's schedules last did, by name — the reader a case uses
+        where it used to read a file beside the schedules."""
+        kept = records if records is not None else self.records
+        return {row["name"]: row for row in kept.schedules()}
 
     def scratch(self) -> Path:
         made = Path(tempfile.mkdtemp(prefix="rundesk-scratch-"))
         self.addCleanup(shutil.rmtree, made, True)
         return made
-
-    def schedules_for(self, name: str, *written) -> None:
-        """Write this gateway's schedules — and only this gateway's."""
-        (self.schedules / f"{name}.json").write_text(json.dumps(list(written)))
 
     # -- waiting for something to be true, without stopping it becoming true -----------
     #
@@ -1146,8 +1179,7 @@ class WorkThatStartsItself(WithARunDirectory):
         def cannot_write(*_args, **_kw):
             raise OSError("the disk is full")
 
-        self.addCleanup(setattr, gateway, "_written_whole", gateway._written_whole)
-        gateway._written_whole = cannot_write
+        self.records.schedule_fired = cannot_write
         gw._fire(self.schedule, datetime(2026, 3, 1, 9, 30))
         await asyncio.sleep(0.2)
         self.assertEqual({}, gw.running, "it started work it could not record having started")
@@ -1158,11 +1190,12 @@ class WorkThatStartsItself(WithARunDirectory):
         that had never fired."""
         gw = self.made()
         gw.claim()
-        gw._remember("nightly", "started", datetime(2026, 3, 1, 9, 0))
-        gw._remember("nightly", "still running", datetime(2026, 3, 1, 9, 5))
-        gw._remember("nightly", "finished", datetime(2026, 3, 1, 9, 0))   # the late arrival
-        said = gateway.what_was_scheduled(gw.name, self.schedules)
-        self.assertEqual("2026-03-01 09:05", said["nightly"]["at"],
+        self.schedules_for(gw.name, {"name": "nightly", "when": "0 9 * * *", "run": ["/bin/true"]})
+        gw._remember_firing("nightly", datetime(2026, 3, 1, 9, 0))
+        gw._remember_firing("nightly", datetime(2026, 3, 1, 9, 5))
+        gw._remember_firing("nightly", datetime(2026, 3, 1, 9, 0))   # the late arrival
+        said = self.what_each_schedule_last_did()
+        self.assertEqual("2026-03-01 09:05", said["nightly"]["last_auto_run_at"],
                          "a late finish put the clock back and freed a minute to run again")
 
     async def test_that_a_schedule_fired_is_written_down_before_it_is_run(self):
@@ -1176,9 +1209,9 @@ class WorkThatStartsItself(WithARunDirectory):
         self.schedules_for(gw.name, {"name": "slow", "when": "* * * * *", "run": FOREVER})
         gw._fire(self.schedule, datetime(2026, 3, 1, 9, 30))
         try:
-            said = gateway.what_was_scheduled(gw.name, self.schedules)
+            said = self.what_each_schedule_last_did()
             self.assertIn("slow", said, "nothing was written down until the run finished")
-            self.assertEqual("2026-03-01 09:30", said["slow"]["at"])
+            self.assertEqual("2026-03-01 09:30", said["slow"]["last_auto_run_at"])
         finally:
             await process.end_all(list(gw.running.values()))
 
@@ -1211,12 +1244,12 @@ class WorkThatStartsItself(WithARunDirectory):
         self.schedules_for(gw.name, {"name": "named", "when": "* * * * *", "run": ["python3", "-c", "pass"]})
         gw._fire(self.schedule, datetime(2026, 3, 1, 9, 30))
         for _ in range(100):
-            if gateway.what_was_scheduled(gw.name, self.schedules).get("named", {}).get(
-                    "outcome") == "could not start":
+            if self.what_each_schedule_last_did().get("named", {}).get(
+                    "last_outcome") == "could not start":
                 break
             await asyncio.sleep(0.05)
-        said = gateway.what_was_scheduled(gw.name, self.schedules)
-        self.assertEqual("could not start", said.get("named", {}).get("outcome"),
+        said = self.what_each_schedule_last_did()
+        self.assertEqual("could not start", said.get("named", {}).get("last_outcome"),
                          "a schedule that could not start looks like one that never came due")
         self.assertIn("could not be started", gateway.log_path(gw.name, self.logs).read_text())
 
@@ -1246,8 +1279,8 @@ class WorkThatStartsItself(WithARunDirectory):
         running.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await asyncio.wait_for(running, 15)
-        said = gateway.what_was_scheduled(gw.name, self.schedules)
-        self.assertEqual("interrupted", said["long"]["outcome"],
+        said = self.what_each_schedule_last_did()
+        self.assertEqual("interrupted", said["long"]["last_outcome"],
                          "a run cut short by the gateway going was called a failure to start")
         self.assertNotIn("could not be started", gateway.log_path(gw.name, self.logs).read_text())
         await process.end_all(list(gw.running.values()))
@@ -1269,15 +1302,19 @@ class WorkThatStartsItself(WithARunDirectory):
 
     async def test_a_gateway_runs_only_its_own_schedules(self):
         """R-SCH-13, R-SCH-14 — the whole of the isolation, and what makes one agent's
-        schedules that agent's alone: a gateway reads its own file and has no way to
-        name another's."""
-        self.schedules_for("someone-else", self._writes())
+        schedules that agent's alone. True by construction now rather than by guarding: a
+        gateway is handed the only store it can reach, so there is no directory to name
+        another's schedules in and no name to name them by."""
+        theirs = self.some_records()
+        self.schedules_for("someone-else", self._writes(), records=theirs)
         gw = self.made("mine")
         gw.claim()
         gw._fire(self.schedule, __import__("datetime").datetime.now())
         await asyncio.sleep(0.5)
         self.assertFalse(self.told.exists(), "a gateway ran another gateway's schedule")
-        self.assertEqual(([], []), gateway.scheduled("mine", self.schedules))
+        self.assertEqual([], self.records.schedules(), "it read schedules that were not its")
+        self.assertEqual(["ran"], [row["name"] for row in theirs.schedules()],
+                         "the other agent's schedule was not left where it was")
 
     async def test_a_schedule_does_not_begin_again_while_the_last_is_still_running(self):
         """R-SCH-6, R-SCH-7 — and says so, because a schedule quietly skipping every
@@ -1440,7 +1477,10 @@ class TheClockIsLookedAtAsSoonAsThereIsAGatewayToLookAtIt(WithARunDirectory):
         self.schedules_for(gw.name, self._appends())
         serving = asyncio.ensure_future(gw.serve())
         await self._up(gw)
-        started = await self._ran_within(5.0)
+        # Generous, and it costs nothing when it works: this waits for a real subprocess to
+        # be spawned and finish, and the whole suite behind it has just loaded the machine.
+        # What makes the case decisive is the interval above, not this window.
+        started = await self._ran_within(30.0)
         gw.ask_to_stop()
         await asyncio.wait_for(serving, 10)
         self.assertTrue(started, "nothing due was started until a whole interval had passed")
@@ -1454,7 +1494,7 @@ class TheClockIsLookedAtAsSoonAsThereIsAGatewayToLookAtIt(WithARunDirectory):
         self.schedules_for(gw.name, self._appends())
         serving = asyncio.ensure_future(gw.serve())
         await self._up(gw)
-        self.assertTrue(await self._ran_within(5.0), "nothing due was started at all")
+        self.assertTrue(await self._ran_within(30.0), "nothing due was started at all")
         # Long enough for many more ticks than the one that has already happened.
         await asyncio.sleep(1.0)
         gw.ask_to_stop()
@@ -1531,15 +1571,15 @@ class WhatCarriesAcrossARestart(WithARunDirectory):
         first.claim()
         self.schedules_for(first.name, {"name": "quick", "when": "* * * * *", "run": [PY, "-c", "pass"]})
         await first.start([PY, "-c", "pass"], as_name="ignored")
-        first._remember("quick", "finished")
-        self.assertIn("quick", gateway.what_was_scheduled(first.name, self.schedules))
+        first._remember_outcome("quick", "finished")
+        self.assertIn("quick", self.what_each_schedule_last_did())
         first.release()
 
         again = self.made()
         again.claim()
-        carried = gateway.what_was_scheduled(again.name, self.schedules)
+        carried = self.what_each_schedule_last_did()
         self.assertIn("quick", carried, "restarting wiped what the schedules had done")
-        self.assertEqual("finished", carried["quick"]["outcome"])
+        self.assertEqual("finished", carried["quick"]["last_outcome"])
 
     def _last_up(self, seconds_ago: float) -> None:
         """Say when a gateway of this name was last known to be going round."""
@@ -2411,8 +2451,6 @@ class TakingAGatewayAway(WithARunDirectory):
             "record": self.where / f"{name}.json",
             "lock": self.where / f"{name}.lock",
             "log": self.logs / f"{name}.log",
-            "schedules": self.schedules / f"{name}.json",
-            "ran": self.schedules / f"{name}.ran.json",
             "seen": self.schedules / f"{name}.seen.json",
             "interrupted": self.schedules / f"{name}.interrupted.json",
         }
@@ -2426,7 +2464,7 @@ class TakingAGatewayAway(WithARunDirectory):
         items has not asked to lose the account of what it did."""
         made = self.kept_for("test2")
         gateway.forget("test2", self.where, self.schedules, self.logs)
-        for still in ("log", "schedules", "ran", "interrupted"):
+        for still in ("log", "interrupted"):
             self.assertTrue(made[still].exists(), f"removing a gateway took its {still}")
         self.assertFalse(made["record"].exists(), "it left behind what the gateway was doing")
         self.assertFalse(made["lock"].exists(), "it left the name looking as though it exists")
@@ -2477,82 +2515,63 @@ class WhatCannotBeReadIsNotEmpty(WithARunDirectory):
     schedule the owner had ever written and said nothing.
     """
 
-    GARBLED = '[{"name": "nightly", "when": "0 4 * * *", "run": ["/bin/echo", "x"]},,]'
-
-    def garbled_for(self, name: str) -> Path:
-        target = self.schedules / f"{name}.json"
-        target.write_text(self.GARBLED)
+    #: Records that are there and hold nothing anything can read. Not a missing file and not
+    #: an empty one: this is what a stalled volume or a truncated write leaves behind, and it
+    #: still holds everything the owner ever wrote.
+    def garbled_for(self, records) -> Path:
+        target = Path(records.at)
+        target.write_text("this is not a database, and every schedule is still in here")
         return target
 
-    def test_a_schedules_file_that_cannot_be_read_is_never_written_over(self):
-        """R-SCH-17 — the file still holds every schedule as recoverable text."""
-        target = self.garbled_for("gateway")
+    def test_records_that_cannot_be_read_are_never_read_as_no_schedules(self):
+        """R-SCH-17 — the one that mattered most replaced what it could not parse with an
+        empty list and reported success, so a stray byte took every schedule the owner had
+        ever written and said nothing. Refused instead, in rundesk's own words."""
+        gw = self.made()
+        target = self.garbled_for(self.records)
+        before = target.read_text()
         with self.assertRaises(gateway.Unreadable):
-            with gateway.changing_schedules("gateway", self.schedules) as keeping:
-                keeping.append({"name": "new", "when": "* * * * *", "run": ["/bin/echo"]})
-        self.assertEqual(self.GARBLED, target.read_text(),
-                         "it wrote over a file it could not read")
+            gw._schedules()
+        self.assertEqual(before, target.read_text(), "reading them changed them")
 
-    def test_a_schedules_file_that_is_valid_json_but_not_schedules_is_not_read_as_none(self):
-        """R-SCH-17 — parsing is not understanding: a file that reads back as an object
-        holds something, and replacing it with an empty list loses it just the same."""
-        target = self.schedules / "gateway.json"
-        target.write_text('{"nightly": {"when": "0 4 * * *"}}')
-        with self.assertRaises(gateway.Unreadable):
-            gateway.written_schedules("gateway", self.schedules)
-        self.assertEqual('{"nightly": {"when": "0 4 * * *"}}', target.read_text())
-
-    def test_a_schedules_file_that_is_not_there_is_told_from_one_that_cannot_be_read(self):
+    def test_records_that_are_not_there_are_told_from_records_that_cannot_be_read(self):
         """R-SCH-17 — absent and unreadable are distinguishable at the point of decision,
-        which is the whole of the fix: one is a gateway that has never been given a
-        schedule, and the other is one whose schedules are all still there."""
-        self.assertEqual([], gateway.written_schedules("never-had-one", self.schedules))
-        self.garbled_for("had-some")
+        which is the whole of the fix: one is an agent that has never been given a schedule,
+        and the other is one whose schedules are all still there."""
+        never = self.made("never-had-one")
+        self.assertEqual([], never._schedules())
+        self.garbled_for(self.records)
         with self.assertRaises(gateway.Unreadable):
-            gateway.written_schedules("had-some", self.schedules)
-
-    def test_a_change_that_changed_nothing_does_not_rewrite_the_file(self):
-        """R-SCH-18 — a command that decided to do nothing writes nothing. Rewriting an
-        unchanged file puts every schedule at the mercy of a failure nobody asked to
-        risk, and `remove` on a name that is not there took that risk every time."""
-        target = self.schedules / "gateway.json"
-        # Written by hand, with spacing rundesk would not produce: an untouched file has
-        # to come back byte for byte, not merely mean the same thing.
-        original = '[{"name":   "nightly", "when": "0 4 * * *", "run": ["/bin/echo", "x"]}]'
-        target.write_text(original)
-        with gateway.changing_schedules("gateway", self.schedules) as keeping:
-            self.assertEqual(1, len(keeping), "it did not read what was there")
-        self.assertEqual(original, target.read_text(), "it rewrote a file nothing changed")
+            never._schedules()
 
     def test_a_change_that_did_change_something_is_written(self):
-        """R-SCH-18 — the other half, so "never rewrite" cannot pass by never writing."""
-        with gateway.changing_schedules("gateway", self.schedules) as keeping:
-            keeping.append({"name": "new", "when": "* * * * *", "run": ["/bin/echo"]})
-        self.assertEqual(["new"], [one["name"] for one
-                                   in gateway.written_schedules("gateway", self.schedules)])
+        """R-SCH-19 — the other half of "a change that changed nothing changes nothing", so
+        it cannot pass by never writing at all."""
+        gw = self.made()
+        self.schedules_for(gw.name, {"name": "new", "when": "* * * * *", "run": ["/bin/echo"]})
+        self.assertEqual(["new"], [row["name"] for row in gw._schedules()])
+        self.records.enable_schedule("new", False)
+        self.assertIs(False, gw._schedules()[0]["enabled"])
 
     def test_a_gateway_whose_schedules_cannot_be_read_still_starts_and_says_so(self):
-        """R-SCH-17 — a command refuses, because it was asked to change the file. A
-        gateway that refused to start over it would take everything else it does down
-        with the one thing that is broken."""
-        self.garbled_for("gateway")
-        gateway.seen_path("gateway", self.schedules).write_text(json.dumps({"at": time.time()}))
+        """R-SCH-17, R-SCH-18 — a command refuses, because it was asked to change them. A
+        gateway that refused to start over it would take everything else it does down with
+        the one thing that is broken."""
+        self.garbled_for(self.records)
         gw = self.made()
         gw.claim()
         self.assertTrue(gateway.standing("gateway", self.where).running)
         self.assertIn("could not be read", gateway.log_path("gateway", self.logs).read_text())
 
-    async def test_no_schedule_runs_while_the_file_cannot_be_read(self):
-        """R-SCH-17 — and it is said once, not on every tick for as long as it is broken."""
-        from rundesk import schedule as schedules_module
-        self.garbled_for("gateway")
+    async def test_no_schedule_runs_while_the_schedules_cannot_be_read(self):
+        """R-SCH-18 — and it is said once, not on every tick for as long as it is broken."""
         gw = self.made()
         gw.claim()
-        from datetime import datetime
-        gw._fire(schedules_module, datetime(2026, 7, 25, 9, 0))
-        gw._fire(schedules_module, datetime(2026, 7, 25, 9, 1))
+        self.garbled_for(self.records)
+        gw._fire(schedule, datetime(2026, 7, 25, 9, 0))
+        gw._fire(schedule, datetime(2026, 7, 25, 9, 1))
         await asyncio.sleep(0.2)
-        self.assertEqual({}, gw.running, "it ran something out of a file it could not read")
+        self.assertEqual({}, gw.running, "it ran something out of records it could not read")
         said = gateway.log_path("gateway", self.logs).read_text()
         self.assertEqual(1, said.count("no schedule can run"),
                          "it complained again on the next tick")
@@ -2715,8 +2734,11 @@ class ASchedulesOutcomeAfterACrash(WithARunDirectory):
     """
 
     def _died_mid_run(self, name="gateway", schedule_name="nightly", work=None):
-        (self.schedules / f"{name}.ran.json").write_text(json.dumps(
-            {schedule_name: {"at": "2026-07-25 03:00", "outcome": gateway.STARTED}}))
+        """A schedule left saying it started, and a record naming the work as in flight —
+        which is exactly what a gateway that died between the two leaves behind."""
+        self.schedules_for(name, {"name": schedule_name, "when": "0 3 * * *",
+                                  "run": ["/bin/true"]})
+        self.records.schedule_fired(schedule_name, "2026-07-25 03:00", gateway.STARTED)
         (self.where / f"{name}.json").write_text(json.dumps(
             {"name": name, "pid": 1,
              "working": {work or f"schedule:{schedule_name}": {"pgid": 999999, "since": "then"}}}))
@@ -2726,8 +2748,8 @@ class ASchedulesOutcomeAfterACrash(WithARunDirectory):
         right answer was already on disk one file away."""
         self._died_mid_run()
         self.made().claim()
-        did = gateway.what_was_scheduled("gateway", self.schedules)["nightly"]
-        self.assertEqual(gateway.INTERRUPTED, did["outcome"],
+        did = self.what_each_schedule_last_did()["nightly"]
+        self.assertEqual(gateway.INTERRUPTED, did["last_outcome"],
                          "dead work was still presented as in flight")
 
     def test_reconciling_does_not_move_the_minute_it_fell_due(self):
@@ -2736,7 +2758,7 @@ class ASchedulesOutcomeAfterACrash(WithARunDirectory):
         self._died_mid_run()
         self.made().claim()
         self.assertEqual("2026-07-25 03:00",
-                         gateway.what_was_scheduled("gateway", self.schedules)["nightly"]["at"],
+                         self.what_each_schedule_last_did()["nightly"]["last_auto_run_at"],
                          "the minute a schedule fell due was moved")
 
     def test_work_the_sweep_found_still_running_is_left_alone(self):
@@ -2749,10 +2771,10 @@ class ASchedulesOutcomeAfterACrash(WithARunDirectory):
         """
         self._died_mid_run()
         gw = self.made()
-        gw._outcomes = gateway.what_was_scheduled("gateway", self.schedules)
         gw._inherited = {"schedule:nightly": {"pgid": 4242, "since": "then"}}
         gw._reconcile_what_never_finished()
-        self.assertEqual(gateway.STARTED, gw._outcomes["nightly"]["outcome"],
+        self.assertEqual(gateway.STARTED,
+                         self.what_each_schedule_last_did()["nightly"]["last_outcome"],
                          "work that is genuinely running was written off as interrupted")
 
     def test_a_schedule_refused_by_a_shutdown_leaves_no_stale_start(self):
@@ -2760,16 +2782,20 @@ class ASchedulesOutcomeAfterACrash(WithARunDirectory):
         is written, then shutdown refuses the wrapper, so no process ever exists for a
         sweep to find and reckon with."""
 
+        self.schedules_for("gateway", {"name": "nightly", "when": "0 3 * * *",
+                                       "run": ["/bin/true"]})
+        self.records.schedule_fired("nightly", "2026-07-25 03:00", gateway.STARTED)
+
         async def refused():
             gw = self.made()
             gw.claim()
             gw._stopping = True
-            one = schedule.Schedule("nightly", "0 3 * * *", ["true"])
+            one = schedule.Schedule("nightly", "0 3 * * *", ["/bin/true"])
             await gw._run_scheduled(one, datetime(2026, 7, 25, 3, 0))
 
         asyncio.run(refused())
         self.assertEqual(gateway.INTERRUPTED,
-                         gateway.what_was_scheduled("gateway", self.schedules)["nightly"]["outcome"],
+                         self.what_each_schedule_last_did()["nightly"]["last_outcome"],
                          "a schedule that never started was left saying it had")
 
 

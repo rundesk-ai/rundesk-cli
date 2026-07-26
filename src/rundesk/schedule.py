@@ -86,11 +86,17 @@ class Schedule:
 
 
 def read(said: Any) -> list[Schedule]:
-    """Turn what was written down into schedules, keeping the ones that make sense.
+    """Turn what an agent keeps into schedules, keeping the ones that make sense.
+
+    Rows as the store hands them back — `cron` is when, and `command` is what — so this
+    module still knows nothing about where they came from. It was a list read out of a file
+    before that, and the two shapes differ by two key names and nothing else.
 
     One schedule nobody can understand does not stop the rest (R-SCH-10): a typo in the
-    fourth of five is a reason to say so about the fourth, not to leave a machine with
-    nothing scheduled at all. What could not be read comes back as its own list.
+    fourth of five is a reason to say so about the fourth, not to leave an agent with
+    nothing scheduled at all. What could not be read comes back as its own list. The cron is
+    the only part of a row that can be wrong — the shape is the database's now — and it is
+    still a person's typing, so it is still refused one row at a time.
     """
     kept, refused = [], []
     for one in said if isinstance(said, list) else []:
@@ -103,8 +109,8 @@ def read(said: Any) -> list[Schedule]:
                 raise NotASchedule("a schedule with no name cannot be reported on")
             kept.append(Schedule(
                 name=name,
-                when=str(one.get("when", "")),
-                run=one.get("run"),
+                when=str(one.get("cron", "")),
+                run=one.get("command"),
                 enabled=_switched(one.get("enabled", True)),
             ))
         except (NotASchedule, TypeError) as why:

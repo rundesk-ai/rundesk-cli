@@ -735,6 +735,12 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
     try:
         reachable = agents.reachable(args.name) if agents.exists(args.name) else []
         unrunnable = agents.unrunnable_channels(args.name) if agents.exists(args.name) else []
+        # Where this gateway's schedules are, opened here and handed over. **None for a name
+        # that is not an agent, and that is a whole gateway** — schedules are something an
+        # agent keeps, so one that has no records has no schedules, and the clock has
+        # nothing to start for it. A gateway of that name still runs, holds its lock and
+        # writes its log, exactly as it did before there were agents at all.
+        records = agents.records(args.name) if agents.exists(args.name) else None
     except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         print(f"        what stands in the way:  rundesk doctor {args.name}", file=sys.stderr)
@@ -751,7 +757,8 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
                                             # is given, so a program the gateway starts
                                             # finds the agents the gateway is running
                                             # (R-SCH-27).
-                                            agents=agents.agents_home()).serve())
+                                            agents=agents.agents_home(),
+                                            records=records).serve())
     except (gateways.AlreadyRunning, gateways.Unfit, gateways.NotAName) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         return 0
@@ -1819,23 +1826,34 @@ def cmd_schedules(args: argparse.Namespace, gateways, agents) -> int:
         print(f"        say:  rundesk schedules {args.gateway_was} ...", file=sys.stderr)
         return 2
     act = getattr(args, "act", None)
+    if not agents.exists(args.name):
+        # A schedule is something an agent keeps, so there is nowhere to put one for a name
+        # that is not an agent. It used to land in a directory beside the agents, where a
+        # gateway of that name would have read it; now it would have nowhere to go and
+        # saying so is the only honest answer.
+        print(f"{args.name}: NO SUCH AGENT — nothing of that name has been made",
+              file=sys.stderr)
+        print("        what there is:  rundesk agents", file=sys.stderr)
+        return 1
     whose = agents.resolved(args.name)
     try:
+        kept = agents.records(args.name) if act in ("add", "remove", "on", "off") \
+            else agents.reading(args.name)
         if act == "add":
-            return _add_schedule(args, gateways, whose)
+            return _add_schedule(args, gateways, kept, whose)
         if act == "run":
-            return _run_schedule(args, gateways, agents, whose)
+            return _run_schedule(args, gateways, agents, kept, whose)
         if act in ("remove", "on", "off"):
-            return _change_schedule(args, gateways, whose, act)
-        return _list_schedules(args, gateways, whose)
-    except _gateway.Unreadable as why:
-        # Answered in one place because every path here reads the same file, and each of
-        # them turned "this cannot be read" into "there is nothing there": the listing said
-        # NO SCHEDULES and exited zero, and the changes wrote an empty list over a file that
-        # still held every schedule as recoverable text (R-SCH-17, R-SCH-18).
+            return _change_schedule(args, gateways, kept, whose, act)
+        return _list_schedules(args, gateways, kept, whose)
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
+        # Answered in one place because every path here reads the same records, and each of
+        # them turned "these cannot be read" into "there is nothing there": the listing said
+        # NO SCHEDULES and exited zero, and a change would have written over records that
+        # still held every schedule (R-SCH-17, R-SCH-18).
         print(f"{args.name}: SCHEDULES UNREADABLE — {why}", file=sys.stderr)
-        print("        nothing was changed — move the file aside or repair it",
-              file=sys.stderr)
+        print(f"        nothing was changed — what stands in the way:  "
+              f"rundesk doctor {args.name}", file=sys.stderr)
         return 1
 
 
@@ -1862,7 +1880,7 @@ def _note(gateways, name: str, said: str, whose=None) -> int:
     return 1
 
 
-def _add_schedule(args: argparse.Namespace, gateways, whose) -> int:
+def _add_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
     from rundesk import schedule
 
     try:
@@ -1878,15 +1896,15 @@ def _add_schedule(args: argparse.Namespace, gateways, whose) -> int:
         print(f"{args.name}/{args.schedule}: NOT ADDED — '{args.run[0]}' is a name, not a location; "
               f"give the full path (try: command -v {args.run[0]})", file=sys.stderr)
         return 1
-    # Read and written under one lock: two `add`s racing would otherwise each read the
-    # same list and each write theirs back, and one schedule would simply never exist
-    # while both commands reported success.
-    with gateways.changing_schedules(args.name, whose.schedules) as keeping:
-        if any(one.get("name") == args.schedule for one in keeping if isinstance(one, dict)):
-            print(f"{args.name}/{args.schedule}: EXISTS — remove it first, or use a different name",
-                  file=sys.stderr)
-            return 1
-        keeping.append({"name": args.schedule, "when": args.when, "run": list(args.run)})
+    # Refused rather than replaced. `remember_schedule` writes over a name that is already
+    # there, which is what `channels add` wants and what this must not do: a schedule that
+    # quietly took another's name would take its account of what it last did with it.
+    if kept.schedule(args.schedule) is not None:
+        print(f"{args.name}/{args.schedule}: EXISTS — remove it first, or use a different name",
+              file=sys.stderr)
+        return 1
+    kept.remember_schedule(args.schedule, args.when, store.stamped(),
+                           command=list(args.run))
     unlogged = _note(gateways, args.name, f"schedule '{args.schedule}' added ({args.when})", whose)
     # Both named, because a schedule belongs to one agent and the success line saying only
     # its own name could not tell you it had landed on the wrong one.
@@ -1894,27 +1912,31 @@ def _add_schedule(args: argparse.Namespace, gateways, whose) -> int:
     return unlogged
 
 
-def _change_schedule(args: argparse.Namespace, gateways, whose, act: str) -> int:
-    with gateways.changing_schedules(args.name, whose.schedules) as keeping:
-        found = [one for one in keeping
-                 if isinstance(one, dict) and one.get("name") == args.schedule]
-        if not found:
-            print(f"{args.name}/{args.schedule}: NOT FOUND — no schedule by that name",
-                  file=sys.stderr)
-            return 1
-        if act == "remove":
-            keeping[:] = [one for one in keeping if one is not found[0]]
-            said, told = "REMOVED", f"schedule '{args.schedule}' removed"
-        else:
-            found[0]["enabled"] = act == "on"
-            said = "ON" if act == "on" else "OFF"
-            told = f"schedule '{args.schedule}' turned {said.lower()}"
+def _change_schedule(args: argparse.Namespace, gateways, kept, whose, act: str) -> int:
+    """Take a schedule away, or keep it and stop it running.
+
+    Asked for before it is changed, because a change to a name that is not there is a
+    change that did nothing and must say so rather than reporting a success (R-SCH-8). Two
+    of these racing settle on the same answer either way: each write is one transaction, and
+    turning a schedule off twice is off.
+    """
+    if kept.schedule(args.schedule) is None:
+        print(f"{args.name}/{args.schedule}: NOT FOUND — no schedule by that name",
+              file=sys.stderr)
+        return 1
+    if act == "remove":
+        kept.forget_schedule(args.schedule)
+        said, told = "REMOVED", f"schedule '{args.schedule}' removed"
+    else:
+        kept.enable_schedule(args.schedule, act == "on")
+        said = "ON" if act == "on" else "OFF"
+        told = f"schedule '{args.schedule}' turned {said.lower()}"
     unlogged = _note(gateways, args.name, told, whose)
     print(f"{args.name}/{args.schedule}: {said}")
     return unlogged
 
 
-def _run_schedule(args: argparse.Namespace, gateways, agents, whose) -> int:
+def _run_schedule(args: argparse.Namespace, gateways, agents, kept, whose) -> int:
     """Run what a schedule names, now, whether or not it is due (R-SCH-21).
 
     Here, in this terminal, and **nothing is written down** (R-SCH-22). What is due is
@@ -1931,7 +1953,7 @@ def _run_schedule(args: argparse.Namespace, gateways, agents, whose) -> int:
     """
     from rundesk import schedule
 
-    wanted, _ = gateways.scheduled(args.name, whose.schedules)
+    wanted, _ = schedule.read(kept.schedules())
     found = [one for one in wanted if one.name == args.schedule]
     if not found:
         print(f"{args.name}/{args.schedule}: NOT FOUND — no schedule by that name",
@@ -1972,7 +1994,7 @@ def _became(outcome: str, up: bool) -> str:
     return _gateway.INTERRUPTED if outcome == _gateway.STARTED and not up else outcome
 
 
-def _list_schedules(args: argparse.Namespace, gateways, whose) -> int:
+def _list_schedules(args: argparse.Namespace, gateways, kept, whose) -> int:
     """What this gateway runs on its own, when each next runs, and what became of it.
 
     This gateway's, and no other's: a gateway's schedules are its own, which is what
@@ -1980,12 +2002,13 @@ def _list_schedules(args: argparse.Namespace, gateways, whose) -> int:
     """
     from rundesk import schedule
 
-    wanted, refused = gateways.scheduled(args.name, whose.schedules)
+    rows = kept.schedules()
+    wanted, refused = schedule.read(rows)
     if not wanted and not refused:
         print(f"{args.name}: NO SCHEDULES")
         return 0
     now = datetime.now()
-    ran = gateways.what_was_scheduled(args.name, whose.schedules)
+    ran = {row["name"]: row for row in rows}
     # A firing is written down before the run begins, so `started` on its own means only
     # that — and if no gateway of this name is up, nothing it started is still going. The
     # store is reconciled by the next gateway to claim the name (R-SCH-23); until one
@@ -1997,8 +2020,8 @@ def _list_schedules(args: argparse.Namespace, gateways, whose) -> int:
         "OFF" if not one.enabled else "ON",
         one.when,
         schedule.describe(one, now),
-        ran.get(one.name, {}).get("at", "-"),
-        _became(ran.get(one.name, {}).get("outcome", "-"), up),
+        ran.get(one.name, {}).get("last_auto_run_at") or "-",
+        _became(ran.get(one.name, {}).get("last_outcome") or "-", up),
     ) for one in wanted]
     _as_table(("SCHEDULE", "STATE", "WHEN", "NEXT", "LAST RUN", "OUTCOME"), rows)
     for name, why in refused:

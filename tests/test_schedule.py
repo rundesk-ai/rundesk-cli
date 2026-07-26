@@ -216,12 +216,13 @@ class WhatASchedulNames(unittest.TestCase):
                 self.assertEqual([one], schedule.due([one], at("2026-07-25 09:00")))
 
 
-class ReadingWhatWasWrittenDown(unittest.TestCase):
+class ReadingWhatAnAgentKeeps(unittest.TestCase):
     def test_schedules_are_read_from_what_was_written(self):
-        """R-SCH-1, R-SCH-3"""
+        """R-SCH-1, R-SCH-3 — rows as the store hands them back: `cron` is when, `command`
+        is what. This module still knows nothing about where they came from."""
         kept, refused = schedule.read([
-            {"name": "nightly", "when": "0 3 * * *", "run": ["/bin/echo", "hi"]},
-            {"name": "paused", "when": "* * * * *", "enabled": False},
+            {"name": "nightly", "cron": "0 3 * * *", "command": ["/bin/echo", "hi"]},
+            {"name": "paused", "cron": "* * * * *", "enabled": False},
         ])
         self.assertEqual(["nightly", "paused"], [one.name for one in kept])
         self.assertEqual([], refused)
@@ -230,34 +231,34 @@ class ReadingWhatWasWrittenDown(unittest.TestCase):
 
     def test_one_schedule_nobody_can_understand_leaves_the_others_running(self):
         """R-SCH-10 — a typo in the fourth of five is a reason to say so about the
-        fourth, not to leave a machine with nothing scheduled at all."""
+        fourth, not to leave an agent with nothing scheduled at all."""
         kept, refused = schedule.read([
-            {"name": "good", "when": "0 3 * * *"},
-            {"name": "bad", "when": "not a schedule"},
-            {"name": "also good", "when": "*/5 * * * *"},
+            {"name": "good", "cron": "0 3 * * *"},
+            {"name": "bad", "cron": "not a schedule"},
+            {"name": "also good", "cron": "*/5 * * * *"},
         ])
         self.assertEqual(["good", "also good"], [one.name for one in kept])
         self.assertEqual(["bad"], [name for name, _ in refused])
 
     def test_a_schedule_with_no_name_cannot_be_reported_on_and_is_refused(self):
         """R-SCH-8 — everything about a schedule is reported by its name."""
-        kept, refused = schedule.read([{"when": "* * * * *"}, {"name": "", "when": "* * * * *"}])
+        kept, refused = schedule.read([{"cron": "* * * * *"}, {"name": "", "cron": "* * * * *"}])
         self.assertEqual([], kept)
         self.assertEqual(2, len(refused))
 
     def test_something_that_is_not_a_schedule_at_all_is_refused_by_itself(self):
         """R-SCH-10 — a list with a number in it is a mistake about one entry."""
         kept, refused = schedule.read([
-            {"name": "good", "when": "* * * * *"}, 42, "not a schedule", None])
+            {"name": "good", "cron": "* * * * *"}, 42, "not a schedule", None])
         self.assertEqual(["good"], [one.name for one in kept])
         self.assertEqual(3, len(refused))
 
     def test_on_or_off_has_to_be_said_as_one_or_the_other(self):
-        """R-SCH-11 — every non-empty string is true, and this file is one a person edits
-        by hand, so a plausible typo would quietly leave a schedule running."""
+        """R-SCH-11 — every non-empty string is true, so a plausible typo would quietly
+        leave a schedule running rather than saying it made no sense."""
         kept, refused = schedule.read([
-            {"name": "typo", "when": "* * * * *", "enabled": "false"},
-            {"name": "fine", "when": "* * * * *", "enabled": False},
+            {"name": "typo", "cron": "* * * * *", "enabled": "false"},
+            {"name": "fine", "cron": "* * * * *", "enabled": False},
         ])
         self.assertEqual(["fine"], [one.name for one in kept])
         self.assertEqual(["typo"], [name for name, _ in refused])

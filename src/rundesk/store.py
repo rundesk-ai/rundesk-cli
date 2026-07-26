@@ -21,8 +21,9 @@ stderr is a pipe the operating system gives us. Those files may be destroyed to 
 space, so **nothing a run recorded is recoverable only from them** — every line an adapter
 produced is a row here, understood or not.
 
-Nothing in the product reads this module yet. It is built and proved first, and moved onto
-second, so that what moves has somewhere already known to work.
+**Nothing of the database's leaves this module, exceptions included.** A caller that handles
+every shape it will not read would otherwise meet a raw `file is not a database` and let it
+past, so what cannot be read is refused in this seam's own words wherever it is opened.
 """
 
 from __future__ import annotations
@@ -332,6 +333,15 @@ class Store:
         """
         want = version_wanted() if self._version is None else self._version
         self.at.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self._made(want)
+        except sqlite3.DatabaseError as why:
+            # Records that are there and are not a database at all — see `understood`, which
+            # answers the same thing the same way. Nothing of the database's leaves here.
+            self._noted(f"these records could not be read at all: {why}", "ERROR")
+            raise Unreadable(f"{self.at} could not be read: {why}") from why
+
+    def _made(self, want: int) -> None:
         conn = self._open(writing=True)
         try:
             found = int(conn.execute("PRAGMA user_version").fetchone()[0])
@@ -366,10 +376,22 @@ class Store:
             # it out. **Nothing of the database's leaves this module, exceptions included.**
             self._noted("these records have not been made yet", "ERROR")
             raise Unreadable(f"{self.at} is not there — this agent has no records yet")
-        with self._reading() as conn:
-            found = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            self._refused(conn, found, want)
-            self._searchable = self._has_search(conn)
+        try:
+            with self._reading() as conn:
+                found = int(conn.execute("PRAGMA user_version").fetchone()[0])
+                self._refused(conn, found, want)
+                self._searchable = self._has_search(conn)
+        except sqlite3.DatabaseError as why:
+            # **Records that are there and are not a database at all.** A stalled volume, a
+            # truncated restore, a half-copied file: the driver says "file is not a
+            # database" and, left to escape, that reached a caller which already handles
+            # every shape it will not read and handles this one by tracebacking. Said in the
+            # seam's own words for the same reason the missing case above is — nothing of
+            # the database's leaves this module, exceptions included.
+            #
+            # Never treated as empty. What is there still holds everything the owner wrote.
+            self._noted(f"these records could not be read at all: {why}", "ERROR")
+            raise Unreadable(f"{self.at} could not be read: {why}") from why
 
     def _refused(self, conn, found: int, want: int) -> None:
         """Whether this shape may be read at all — one decision, said the same to everyone.

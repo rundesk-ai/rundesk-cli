@@ -158,6 +158,44 @@ class WhenTwoOfThemArriveAtOnce(WithAnAgentsOwnRecords):
                           "settings": {}}, back.agent())
 
 
+class WhenTheRecordsAreNotADatabaseAtAll(WithAnAgentsOwnRecords):
+    """R-STO-13 — a stalled volume, a truncated restore, a half-copied file. The driver says
+    "file is not a database", and left to escape that reached callers which already handle
+    every shape they will not read and handled this one by tracebacking. Nothing of the
+    database's leaves this module, exceptions included."""
+
+    GARBLED = "this is not a database, and everything the owner wrote is still in here"
+
+    def garbled(self):
+        self.at.parent.mkdir(parents=True, exist_ok=True)
+        self.at.write_text(self.GARBLED)
+
+    def test_records_that_cannot_be_read_are_refused_in_this_seams_own_words(self):
+        """R-STO-13 — both ways in answer the same thing the same way, because a caller
+        that only reads and one that may write both meet it."""
+        for opening in ("made", "understood"):
+            with self.subTest(opening=opening):
+                self.garbled()
+                with self.assertRaises(store.Unreadable):
+                    getattr(store.Store(self.at), opening)()
+
+    def test_records_that_cannot_be_read_are_left_exactly_as_they_are(self):
+        """R-STO-13 — they still hold everything the owner ever wrote, so the one thing
+        that must not happen is writing over them to make the error go away."""
+        self.garbled()
+        with self.assertRaises(store.Unreadable):
+            store.Store(self.at).made()
+        self.assertEqual(self.GARBLED, self.at.read_text())
+
+    def test_records_that_cannot_be_read_say_so_in_the_agents_own_log(self):
+        """R-STO-20 — the one account that outlives whatever was asking."""
+        self.garbled()
+        with self.assertRaises(store.Unreadable):
+            store.Store(self.at).understood()
+        self.assertIn("could not be read at all",
+                      (self.at.parent / "logs" / "gateway.log").read_text())
+
+
 class WhenTheShapeOnDiskIsNotThisOne(WithAnAgentsOwnRecords):
     """Both directions are refused, and the symmetry is the point.
 

@@ -31,14 +31,14 @@ has done. Each agent keeps its own, so nothing one agent holds is ever in anothe
 | ✅ | R-STO-10 | Every run says what caused it | `everything settled when a run was admitted is written down with it` |
 | ✅ | R-STO-11 | What an agent keeps says which shape it is in | `a fresh database is stamped with the shape this rundesk understands` |
 | ✅ | R-STO-12 | A shape this copy of rundesk does not understand is refused rather than read | `a version newer than this code understands is refused rather than read` |
-| ✅ | R-STO-13 | Records that are there and cannot be understood are never treated as absent | `a database holding tables and no version is unreadable rather than rebuilt`, `diagnosing an agent never builds the records it reads` |
+| ✅ | R-STO-13 | Records that are there and cannot be understood are never treated as absent | `a database holding tables and no version is unreadable rather than rebuilt`, `diagnosing an agent never builds the records it reads`, `records that cannot be read are refused in this seams own words`, `records that cannot be read are left exactly as they are` |
 | ✅ | R-STO-14 | Taking an agent away leaves nothing of what it kept behind | `nothing of an agents records is left behind` |
 | ✅ | R-STO-15 | What an agent keeps is reached only by asking for it by name | `no statement is written anywhere but the one module` |
 | ✅ | R-STO-16 | Nothing a caller is handed can be used to ask a question of its own | `nothing a caller is handed is a connection` |
 | ✅ | R-STO-17 | A run is named once, and no name is handed out twice | `every run is named once and no name is handed out twice` |
 | ✅ | R-STO-18 | An agent is whole again from what it keeps, with everything raw beside it gone | `an agent is whole again from its records alone` |
 | ❌ | R-STO-19 | What an agent's owner wrote is theirs, and is never reproduced from what rundesk keeps | — |
-| ✅ | R-STO-20 | Records this rundesk refuses to read say why in the agent's own log | `records this rundesk will not read say why in the log` |
+| ✅ | R-STO-20 | Records this rundesk refuses to read say why in the agent's own log | `records this rundesk will not read say why in the log`, `records that cannot be read say so in the agents own log` |
 | ✅ | R-STO-21 | A write that gave up waiting says what was holding it | `a write that gave up waiting says what was holding it` |
 | ✅ | R-STO-22 | Something the machine cannot do is said once rather than on every attempt | `a machine that cannot search says so once rather than every time` |
 | ✅ | R-STO-23 | An ordinary read or write is not written to the agent's log | `an ordinary read and write says nothing at all` |
