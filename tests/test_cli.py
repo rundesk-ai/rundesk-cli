@@ -253,8 +253,8 @@ class SurfaceTests(unittest.TestCase):
         """R-CMD-4 — `agents` and `agents show` are different things to want. Told only
         that `agents` is planned, a reader takes the whole noun to be missing rather than
         one thing about it."""
-        _, _, err = run(["runs", "ava", "show", "7"])
-        self.assertIn("runs show", err)
+        _, _, err = run(["resume", "ava", "7"])
+        self.assertIn("resume", err)
 
     def test_a_planned_command_names_something_that_does_work(self):
         """R-CMD-4 — a refusal that leaves somebody with nowhere to go is half a message."""
@@ -319,7 +319,7 @@ class SurfaceTests(unittest.TestCase):
     def test_a_command_that_is_not_there_is_told_apart_from_one_typed_wrong(self):
         """R-CMD-5, R-CMD-8 — two situations that shared one exit code, and want opposite
         things done about them: wait for the release, or read the help."""
-        planned_code, _, _ = run(["usage"])
+        planned_code, _, _ = run(["resume"])
         with self.assertRaises(SystemExit) as usage:
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 cli.main(["definitely-not-a-command"])
@@ -425,7 +425,7 @@ class BuiltCommandTests(unittest.TestCase):
         # which answer wins would depend on the order of the checks in `main`.
         built = {"version", "update", "uninstall", "add", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
-                 "channels"}
+                 "channels", "runs", "usage", "search"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 
@@ -2502,6 +2502,144 @@ class WhichVersionEachGatewayIsActuallyOn(unittest.TestCase):
     def test_a_gateway_that_is_not_running_has_no_version_to_report(self):
         """R-GW-9 — a version read off a record whose process is gone says nothing."""
         self.assertEqual("-", cli._version_of(type("S", (), {"running": False, "version": "9"})()))
+
+
+class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
+    """R-USE-10, R-STO-8 — reading back what an agent did, without starting anything.
+
+    Every one of these is answered from what the agent keeps. Nothing here runs a brain,
+    which is the point: a night's work is asked about far more often than it is done.
+    """
+
+    def setUp(self):
+        self.at = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-runs-"))
+        self.addCleanup(shutil.rmtree, self.at, True)
+        self.agents = FakeAgents(made=["ava"], at=self.at)
+
+    def furnished(self, name: str = "ava") -> str:
+        """An agent that has answered somebody, written the way a turn writes it."""
+        kept = self.agents.records(name)
+        where_it_is = store.conversation_id("ops", "general")
+        kept.opened(where_it_is, "ops", "discord", "general", "2026-07-26T09:00:00Z")
+        asked = kept.arrived(where_it_is, "2026-07-26T09:00:00Z",
+                             "what happened to the parser", who="2207")
+        run = kept.began("channel", "codex", "codex", "work", "2026-07-26T09:00:00Z",
+                         conversation_id=where_it_is, trigger_message_id=asked)
+        kept.recorded(run, 1, "2026-07-26T09:00:01Z", "tool", event={"name": "grep"})
+        kept.answered(where_it_is, run, "2026-07-26T09:00:02Z", "the parser was rewritten")
+        kept.ended(run, "2026-07-26T09:00:02Z", "finished", exit_code=0,
+                   tokens={"input": 120, "output": 30, "cached": 10, "reported": True})
+        return run
+
+    def test_what_an_agent_has_run_is_listed_with_what_became_of_each(self):
+        """R-RUN-2 — the id, when, what asked for it, and how it ended, on one line."""
+        run = self.furnished()
+        code, said = drive(["runs", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn(run, said)
+        self.assertIn("finished", said)
+        self.assertIn("channel", said)
+
+    def test_an_agent_that_has_run_nothing_says_so_and_says_what_to_do(self):
+        """A listing that printed an empty table would read as a failure to answer."""
+        code, said = drive(["runs", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("NOTHING RUN YET", said)
+        self.assertIn("rundesk ask ava", said)
+
+    def test_what_an_agent_has_cost_is_read_without_a_brain_being_started(self):
+        """R-USE-10 — a cost is a question about records, and asking it must run nothing."""
+        self.furnished()
+        code, said = drive(["usage", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("120", said)
+        self.assertIn("30", said)
+
+    def test_a_total_says_how_many_runs_it_could_not_account_for(self):
+        """R-USE-6, R-USE-7 — a total of nothing because nothing was reported and one
+        because nothing was spent are different facts, and a spend limit that could not
+        tell them apart would never fire. So the count of runs that said nothing is
+        printed beside the total rather than folded into it."""
+        kept = self.agents.records("ava")
+        for _ in range(2):
+            run = kept.began("terminal", "codex", "codex", "work", "2026-07-26T09:00:00Z")
+            kept.ended(run, "2026-07-26T09:00:01Z", "finished")
+        told = kept.began("terminal", "codex", "codex", "work", "2026-07-26T09:00:00Z")
+        kept.ended(told, "2026-07-26T09:00:01Z", "finished",
+                   tokens={"input": 5, "reported": True})
+
+        code, said = drive(["usage", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        row = [one for one in said.splitlines() if one.startswith("ava")][0]
+        self.assertEqual(["ava", "3", "5", "0", "0", "2"], row.split(),
+                         "the count of runs that said nothing is not beside the total")
+
+    def test_an_agent_that_has_run_nothing_has_no_totals_to_give(self):
+        """R-USE-6 — absent rather than zero, all the way out to what is printed."""
+        code, said = drive(["usage", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        row = [one for one in said.splitlines() if one.startswith("ava")][0]
+        self.assertEqual(["ava", "0", "-", "-", "-", "0"], row.split())
+
+    def test_what_was_said_is_found_by_the_words_in_it(self):
+        """R-STO-7 — whichever surface it arrived on, and whoever said it."""
+        self.furnished()
+        code, said = drive(["search", "ava", "parser"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("the parser was rewritten", said)
+        self.assertIn("ops/general", said, "it never said where it was said")
+
+    def test_searching_for_something_nobody_said_says_so(self):
+        self.furnished()
+        code, said = drive(["search", "ava", "kangaroo"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("NOTHING SAID ABOUT THAT", said)
+
+    def test_searching_with_nothing_to_look_for_is_refused_in_our_words(self):
+        """R-CMD-8 — never argparse's usage code, which a script cannot tell from a typo."""
+        code, said = drive(["search", "ava"], agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("SOMETHING TO LOOK FOR", said)
+
+    def cannot_search(self) -> None:
+        """A machine whose SQLite was built without FTS5, which this one was not.
+
+        The condition is a property of the build, so it is arranged rather than waited for
+        — and arranged on the real class, so what runs is the real refusal and not a
+        stand-in's idea of one.
+        """
+        self.addCleanup(setattr, store.Store, "searchable", store.Store.searchable)
+        store.Store.searchable = lambda one: False
+
+    def test_a_machine_that_cannot_search_says_so_rather_than_answering_nothing(self):
+        """R-STO-8 — an empty answer and an impossible question look identical to whoever
+        typed it, and one of them means go and look somewhere else."""
+        self.furnished()
+        self.cannot_search()
+        code, said = drive(["search", "ava", "parser"], agents=self.agents)
+        self.assertEqual(1, code, "it reported success for a question it could not ask")
+        self.assertIn("SEARCHING UNAVAILABLE", said)
+        self.assertIn("rundesk runs ava", said, "it left nowhere else to go")
+
+    def test_doctor_says_when_searching_is_unavailable(self):
+        """R-STO-8 — said by the command an owner runs to find out what is wrong, because
+        the alternative is finding out from a search that answers nothing."""
+        self.cannot_search()
+        _, said = drive(["doctor", "ava"], agents=self.agents)
+        self.assertIn("searching: UNAVAILABLE", said)
+        self.assertIn("rundesk runs", said)
+
+    def test_doctor_says_nothing_about_searching_where_it_works(self):
+        """A note about a thing that is fine is a note nobody reads twice."""
+        _, said = drive(["doctor", "ava"], agents=self.agents)
+        self.assertNotIn("searching", said)
+
+    def test_asking_after_an_agent_that_is_not_there_says_so_rather_than_failing(self):
+        for verb in (["runs", "nobody"], ["usage", "nobody"], ["search", "nobody", "x"]):
+            with self.subTest(verb=" ".join(verb)):
+                code, said = drive(verb, agents=self.agents)
+                self.assertEqual(1, code)
+                self.assertIn("NO SUCH AGENT", said)
 
 
 class MovingEveryAgentForwardWhenAnUpdateLands(unittest.TestCase):

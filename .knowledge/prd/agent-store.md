@@ -25,8 +25,8 @@ has done. Each agent keeps its own, so nothing one agent holds is ever in anothe
 | ✅ | R-STO-4 | Two commands changing one agent's records at once cannot lose one another's change | `two writers at once cannot lose one anothers work` |
 | ✅ | R-STO-5 | Nothing a run recorded is recoverable only from a file that may be destroyed (R-RUN-5, R-RUN-6) | `what a brain printed going costs the account nothing` |
 | ✅ | R-STO-6 | Work arriving twice from one surface is recorded once | `a channel reconnecting cannot record one message twice` |
-| ✅ | R-STO-7 | What was said is found by the words in it, whichever surface it arrived on | `a word is found wherever it was said and whoever said it` |
-| ✅ | R-STO-8 | Searching where the machine cannot is reported as unavailable rather than as nothing found | `a machine that cannot search says so rather than answering nothing` |
+| ✅ | R-STO-7 | What was said is found by the words in it, whichever surface it arrived on | `a word is found wherever it was said and whoever said it`, `what was said is found by the words in it` |
+| ✅ | R-STO-8 | Searching where the machine cannot is reported as unavailable rather than as nothing found | `a machine that cannot search says so rather than answering nothing`, `doctor says when searching is unavailable`, `doctor says nothing about searching where it works` |
 | ✅ | R-STO-9 | A conversation says which surface it happened on and what it branched from | `a thread is a conversation of its own that knows what it came from` |
 | ✅ | R-STO-10 | Every run says what caused it | `everything settled when a run was admitted is written down with it` |
 | ✅ | R-STO-11 | What an agent keeps says which shape it is in | `a fresh database is stamped with the shape this rundesk understands` |

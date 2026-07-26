@@ -37,19 +37,19 @@ rundesk schedules <agent> off <schedule>                                        
 rundesk schedules <agent> on <schedule>                                                                                                                                                let a schedule run
 rundesk schedules <agent> remove <schedule>                                                                                                                                            take a schedule away
 rundesk schedules <agent> run <schedule>                                                                                                                                               run a schedule now, whether or not it is due
-rundesk runs <agent>                                                                                                                                                                   what an agent has run, and what became of each   [planned]
-rundesk runs <agent> resume <run>                                                                                                                                                      carry one run on from where it stopped   [planned]
-rundesk runs <agent> show <run> [--stream]                                                                                                                                             one run — what was asked, what it cost, and how it ended   [planned]
-rundesk runs <agent> stop <run>                                                                                                                                                        end one run, leaving the agent it belongs to running   [planned]
-rundesk usage                                                                                                                                                                          what every agent has cost   [planned]
-rundesk usage <agent>                                                                                                                                                                  what one agent has cost   [planned]
-rundesk usage <agent> <run>                                                                                                                                                            what one run cost   [planned]
+rundesk runs [--most <n>] <agent>                                                                                                                                                      what an agent has run, and what became of each
+rundesk usage                                                                                                                                                                          what every agent has cost
+rundesk usage <agent>                                                                                                                                                                  what one agent has cost
 
 # rundesk itself
 rundesk status                                                                                                                                                                         how rundesk itself is on this machine
 rundesk version [--check]                                                                                                                                                              what is installed, and whether that is current
 rundesk update [--check]                                                                                                                                                               move to the newest published release
 rundesk uninstall [--purge]                                                                                                                                                            remove rundesk from this machine
+
+# not yet grouped
+rundesk resume <agent>                                                                                                                                                                 carry one run on from where it stopped   [planned]
+rundesk search [--most <n>] <agent> <words>                                                                                                                                            what was said, by the words in it
 ```
 
 ## What it looks like
@@ -106,6 +106,7 @@ rundesk schedules ava off nightly
 --instructions <text>           standing instructions for this turn, told to the brain apart from the prompt — what a schedule running unattended says
 --kind <kind>                   which kind of surface — one that ships, or the path of a program that speaks yours
 --model <model>                 which model, in that brain's own words
+--most <n>                      how many to show, newest first (default: 20)
 --provider <provider>           which brain answers for it when a turn does not say
 --purge                         also take every agent's home, log and history
 --read-only                     let this turn look at the machine without changing it
@@ -122,6 +123,7 @@ rundesk schedules ava off nightly
 <run>                           which run — the id listed against each by `runs`
 <schedule>                      what to call it, and what to name it by later
 <text>                          what to tell it, with {agent} {channel} {surface} {where} {called} {user} {conversation} filled in — empty takes it back off, and left out shows what is there
+<words>                         what to look for, in the words that were actually said
 ```
 
 ## What it exits with

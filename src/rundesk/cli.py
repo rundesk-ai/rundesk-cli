@@ -103,12 +103,7 @@ NOT_AVAILABLE = 69
 #: supplies what was left out — so reaching an agent from Discord is one command and not
 #: two, and a binding stays what a run resolved rather than a thing anyone maintains.
 PLANNED: dict[str, tuple[str, dict[str, tuple[str, str]]]] = {
-    "usage": ("what agents have cost, in tokens and in money", {}),
-    "runs": ("what an agent has run, and what became of each", {
-        "resume": ("<run>", "carry one run on from where it stopped"),
-        "show": ("<run> [--stream]", "one run — what was asked, what it cost, and how it ended"),
-        "stop": ("<run>", "end one run, leaving the agent it belongs to running"),
-    }),
+    "resume": ("carry one run on from where it stopped", {}),
 }
 
 #: What is accepted and not offered. `serve` is what every launchd job already on disk
@@ -121,7 +116,7 @@ HIDDEN = {"serve"}
 #: The planned verbs that are about one agent's things rather than about an agent, and so
 #: name whose before saying which. Optional to the parser and required by the command once
 #: built, so that leaving it out is answered in our words rather than by a usage dump.
-WHOSE = {"runs"}
+WHOSE = {"resume"}
 
 #: Every form a planned verb will be typed in, and what each form does — the bare listing
 #: and the one that names a thing are different operations, and a reference that showed
@@ -134,6 +129,7 @@ MEANS: dict[str, str] = {
     "<agent>": "which agent — the name it was made under",
     "<prompt>": "what to ask it, in quotes",
     "<run>": "which run — the id listed against each by `runs`",
+    "<words>": "what to look for, in the words that were actually said",
     "--provider <provider>": "which brain — one that ships, or the path to a program you wrote",
     "--model <model>": "which model, in that brain's own words — rundesk never reads it",
     "--set <key=value>": "anything that brain takes, carried to it unread; repeatable",
@@ -192,8 +188,7 @@ FORMS: dict[str, list[tuple[str, str]]] = {
             ('<agent> "<prompt>" --instructions "<text>"',
              "with standing instructions, told apart from the prompt")],
     "usage": [("", "what every agent has cost"),
-              ("<agent>", "what one agent has cost"),
-              ("<agent> <run>", "what one run cost")],
+              ("<agent>", "what one agent has cost")],
 }
 
 
@@ -381,6 +376,28 @@ def build_parser() -> argparse.ArgumentParser:
                       ("run", "run a schedule now, whether or not it is due")):
         one = acts.add_parser(act, help=what)
         one.add_argument("schedule", metavar="<schedule>", help="which schedule, by the name it was added under")
+
+    # What an agent has actually done. Read-only, and answered from what it keeps rather
+    # than by starting a brain (R-USE-10) — so asking what a night's work cost is a
+    # question, not a turn.
+    listed_runs = sub.add_parser("runs", help="what an agent has run, and what became of each")
+    listed_runs.add_argument("name", nargs="?", metavar="<agent>",
+                             help="which agent — the name it was made under")
+    listed_runs.add_argument("--most", type=int, default=20, metavar="<n>",
+                             help="how many to show, newest first (default: 20)")
+
+    cost = sub.add_parser("usage", help="what agents have cost, in tokens")
+    cost.add_argument("name", nargs="?", metavar="<agent>",
+                      help="one agent — every agent when left out")
+
+    # Searching by the words in something, which is the one question a listing cannot
+    # answer: what an agent was told about a thing, whichever surface it arrived on.
+    looked_for = sub.add_parser("search", help="what was said, by the words in it")
+    looked_for.add_argument("name", nargs="?", metavar="<agent>", help="which agent")
+    looked_for.add_argument("words", nargs="?", metavar="<words>",
+                            help="what to look for, in the words that were actually said")
+    looked_for.add_argument("--most", type=int, default=20, metavar="<n>",
+                            help="how many to show (default: 20)")
 
     said = sub.add_parser("logs", help="what an agent has been saying")
     said.add_argument("name", metavar="<agent>", help="whose log")
@@ -1088,7 +1105,30 @@ def cmd_doctor(args: argparse.Namespace, gateways, agents) -> int:
         print(f"{name}: NOT READY", file=sys.stderr)
         for one in said:
             print(f"        {one.said}: {one.about}", file=sys.stderr)
+    if _cannot_search(names, agents):
+        # A fact about the machine rather than a fault of any agent, so it is said here
+        # and is not a complaint: this SQLite was built without FTS5. Said by the command
+        # an owner runs to find out what is wrong, because the alternative is `search`
+        # answering nothing and reading exactly like there being nothing to find (R-STO-8).
+        print("searching: UNAVAILABLE — this machine's sqlite cannot search by the words "
+              "in something")
+        print("        every run is still listed, read and queried:  rundesk runs <agent>")
     return worst
+
+
+def _cannot_search(names, agents) -> bool:
+    """Whether this machine can search at all, asked of the first agent that can answer.
+
+    Asked rather than assumed, and asked once: it is a property of the SQLite this Python
+    was built against, so every agent on the machine gives the same answer, and an agent
+    whose records cannot be opened has no answer to give rather than a negative one.
+    """
+    for name in names:
+        try:
+            return not agents.reading(name).searchable()
+        except Exception:   # noqa: BLE001 — an agent that cannot answer is not an answer
+            continue
+    return False
 
 
 def cmd_remove(args: argparse.Namespace, gateways, machine, agents) -> int:
@@ -1874,6 +1914,138 @@ def _list_schedules(args: argparse.Namespace, gateways, whose) -> int:
     return 1 if refused else 0
 
 
+def _reading(name: str, agents) -> "store.Store | None":
+    """What this agent keeps, opened for a command that only asks.
+
+    `None` where the answer is a refusal already printed, so the three read-only verbs
+    below say the same thing when an agent is missing or its records will not be read —
+    written once, because three of them saying it three ways is three ways to be wrong.
+    """
+    if not agents.exists(name):
+        print(f"{name}: NO SUCH AGENT — nothing of that name has been made", file=sys.stderr)
+        print("        what there is:  rundesk agents", file=sys.stderr)
+        return None
+    try:
+        return agents.reading(name)
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
+        print(f"{name}: RECORDS UNREADABLE — {why}", file=sys.stderr)
+        print(f"        what stands in the way:  rundesk doctor {name}", file=sys.stderr)
+        return None
+
+
+def _wants_a_name(verb: str) -> int:
+    """Refuse a verb that is about one agent and was given none, in our own words.
+
+    Never argparse's usage code: a script has to be able to tell a command that is not
+    there from one it typed wrongly, and that is the whole distinction (R-CMD-8).
+    """
+    print(f"{verb}: NAME REQUIRED — say which agent", file=sys.stderr)
+    print("        what there is:  rundesk agents", file=sys.stderr)
+    return 1
+
+
+def cmd_runs(args: argparse.Namespace, gateways, agents) -> int:
+    """What this agent has run, newest first.
+
+    Read from what it keeps, with nothing started: a night's work is asked about far more
+    often than it is done, and a listing that had to run a brain to answer would be one
+    nobody uses (R-USE-10).
+    """
+    if not args.name:
+        return _wants_a_name("runs")
+    kept = _reading(args.name, agents)
+    if kept is None:
+        return 1
+    found = kept.runs(limit=max(1, args.most))
+    if not found:
+        print(f"{args.name}: NOTHING RUN YET")
+        print(f'        ask it something:  rundesk ask {args.name} "…"')
+        return 0
+    _as_table(("RUN", "WHEN", "SOURCE", "BRAIN", "OUTCOME", "COST"), [
+        (one["id"], str(one["started_at"]), str(one["source"]), str(one["brain"]),
+         str(one["outcome"] or "running"), _spent(one))
+        for one in found
+    ])
+    return 0
+
+
+def _spent(one: dict) -> str:
+    """What one run cost, or that nobody said.
+
+    A cost that never arrived reads as unknown rather than as nothing: a run that cost an
+    unknown amount and one that cost zero are different facts, and a total that folded the
+    first into the second would quietly claim to know more than it does (R-USE-7).
+    """
+    if not one["tokens_reported"]:
+        return "not reported"
+    return f"{one['tokens_in'] or 0} in / {one['tokens_out'] or 0} out"
+
+
+def cmd_usage(args: argparse.Namespace, gateways, agents) -> int:
+    """What an agent has cost, in tokens. Every agent when none is named."""
+    wanted = [args.name] if args.name else agents.known()
+    if not wanted:
+        print("NO AGENTS — nothing has cost anything yet")
+        print("        make one:  rundesk add <agent> --provider <provider>")
+        return 0
+    rows = []
+    for name in wanted:
+        kept = _reading(name, agents)
+        if kept is None:
+            return 1
+        spent = kept.usage()
+        rows.append((
+            name, str(spent["runs"]),
+            # Absent rather than zero, all the way out to what is printed. `SUM` over no
+            # rows is NULL and a run whose usage never arrived leaves it so, which is the
+            # one distinction a spend limit reading this must not lose (R-USE-6).
+            "-" if spent["input"] is None else str(spent["input"]),
+            "-" if spent["output"] is None else str(spent["output"]),
+            "-" if spent["cached"] is None else str(spent["cached"]),
+            str(spent["unreported"]),
+        ))
+    _as_table(("AGENT", "RUNS", "IN", "OUT", "CACHED", "NOT REPORTED"), rows)
+    return 0
+
+
+def cmd_search(args: argparse.Namespace, gateways, agents) -> int:
+    """What was said about something, wherever it was said and whoever said it.
+
+    Unavailable is said out loud rather than answered as nothing found (R-STO-8): an empty
+    answer and an impossible question look identical to whoever typed it, and one of them
+    means "go and look somewhere else".
+    """
+    if not args.name or not args.words:
+        print("SEARCH NEEDS AN AGENT AND SOMETHING TO LOOK FOR", file=sys.stderr)
+        print(f'        like this:  rundesk search {args.name or "<agent>"} "the parser"',
+              file=sys.stderr)
+        return 1
+    kept = _reading(args.name, agents)
+    if kept is None:
+        return 1
+    try:
+        found = kept.search(args.words, limit=max(1, args.most))
+    except store.Unsearchable as why:
+        print(f"{args.name}: SEARCHING UNAVAILABLE — {why}", file=sys.stderr)
+        print("        every run is still listed and read:  rundesk runs "
+              f"{args.name}", file=sys.stderr)
+        return 1
+    if not found:
+        print(f"{args.name}: NOTHING SAID ABOUT THAT")
+        return 0
+    _as_table(("WHEN", "WHERE", "WHO", "SAID"), [
+        (str(one["at"]), f"{one['channel']}/{one['space']}", str(one["author"]),
+         " ".join(str(one["text"]).split())[:_SAID_CHARS])
+        for one in found
+    ])
+    return 0
+
+
+#: How much of one thing said is shown in a listing. The whole of it is in the record; this
+#: is what fits on a line beside four other columns.
+_SAID_CHARS = 80
+
+
 def cmd_logs(args: argparse.Namespace, gateways, agents) -> int:
     """What a gateway has been saying. Reads the files, so a gateway that has gone can
     still be asked what happened (R-GW-18, R-GW-36).
@@ -2022,6 +2194,12 @@ def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
         return cmd_schedules(args, gateways, agents)
     if args.command == "logs":
         return cmd_logs(args, gateways, agents)
+    if args.command == "runs":
+        return cmd_runs(args, gateways, agents)
+    if args.command == "usage":
+        return cmd_usage(args, gateways, agents)
+    if args.command == "search":
+        return cmd_search(args, gateways, agents)
 
     # Unreachable through argparse, which rejects an unknown command before this —
     # but a dispatch that silently returns 0 for a verb nobody handled is how a
