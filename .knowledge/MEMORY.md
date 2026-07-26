@@ -97,6 +97,25 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   directory that does not exist yet leaves you with silence and a `FileNotFoundError` two assertions
   later, in the reader. Make the log directory in `setUp`; do not assume the first write makes it.
 
+- **A `--` tail needs `nargs="+"` or `_handed_on`, and `nargs="*"` is the trap between them.**
+  argparse carries a tail into a *required* greedy positional on its own, which is why
+  `schedules add` worked for a year without being in `_carries_a_tail`. Relax it to `"*"` so
+  the verb can take `--ask` instead, and argparse binds zero eagerly and reports the program as
+  `unrecognized arguments` — and worse, an option *inside* the tail (`-- rundesk ask ava "…"
+  --instructions "…"`) is read as the verb's own, which is finding 31 all over again. A verb
+  that grows options of its own must name its tail `CARRIED` so `_handed_on` splits it off in
+  front of the parser.
+- **`agents <agent>` and subcommands under `agents` cannot both exist.** An optional positional
+  (`nargs="?"`) followed by `add_subparsers()` makes argparse match the *agent's name* against
+  the subcommand choices: `rundesk agents ava` dies with `invalid choice: 'ava'`. That is why
+  what an agent is told is written by `add --instructions` rather than by `agents ava
+  instructions …`, and why any new per-agent action has to go somewhere else.
+- **`store` runs with `PRAGMA foreign_keys=ON`, so a test writing a row that references another
+  must write that one first.** A schedule with `channel="ops"` on an agent with no such channel
+  is `sqlite3.IntegrityError: FOREIGN KEY constraint failed`, from the writer and not from
+  anything that reads it back. And the stand-in `Brain` in `test_answering.py` never calls
+  `store.opened`, so nothing that reads `conversations()` after driving a fake turn finds one —
+  open it yourself when what is under test is where something goes rather than how it got there.
 - **`Gateway._started` is an attribute, not a name going spare.** `_record` sets it lazily
   (`if not hasattr(self, "_started")`) and writes it into the gateway's record as the moment
   it came up, so adding a *method* called `_started` makes `hasattr` true, puts a bound method
