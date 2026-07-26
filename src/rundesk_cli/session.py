@@ -100,3 +100,13 @@ def _read(at: Path) -> dict:
     if not isinstance(said, dict):
         return {}
     return {brain: held for brain, held in said.items() if isinstance(held, dict)}
+
+
+def brains(directory: Path) -> list[str]:
+    """Every brain this agent has kept a conversation under.
+
+    Forgetting is aimed at a conversation rather than at a brain, and an agent whose
+    provider changed has conversations under both — so leaving one behind would mean the
+    next message carrying on from a session somebody just asked to throw away.
+    """
+    return sorted(_read(book(directory)))

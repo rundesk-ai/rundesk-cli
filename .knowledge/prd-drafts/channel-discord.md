@@ -35,6 +35,7 @@ posted whole at the end — because a reply that rewrites itself in place is unr
 | ❌ | R-DIS-13 | Output longer than a Discord message allows is split or attached rather than cut | — |
 | ❌ | R-DIS-14 | Writes are paced so that Discord does not refuse them | — |
 | ❌ | R-DIS-15 | The owner is told when their agent comes up and when it goes down | — |
+| ❌ | R-DIS-16 | An agent shows as online for as long as the gateway running it is up | — |
 
 ## Open questions
 
@@ -42,4 +43,4 @@ posted whole at the end — because a reply that rewrites itself in place is unr
 - Whether a thread that has gone quiet is archived, and whether that is Rundesk's to do.
 - Which of an agent's activity belongs in the thread and which belongs in a message to the owner alone.
 - Whether more than one person in a thread may steer the same agent, or only the one who opened it.
-- Whether an agent's presence should follow the gateway that runs it, rather than the connection.
+- Whether a surface that cannot show presence should say it is up some other way, or stay quiet.

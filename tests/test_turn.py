@@ -274,6 +274,44 @@ class WhatATurnRecords(WithAnAgentToRunTurnsFor):
         self.assertEqual(said.tokens, self.only(said.run, turn.OUTCOME)["tokens"])
 
 
+class WhatAdmittedThisTurn(WithAnAgentToRunTurnsFor):
+    """R-CH-15 — a turn admitted from somewhere says so in its own account.
+
+    The two things a surface needs from the turn, and the reason they are the turn's to
+    give rather than a channel's to keep: a channel that wrote either of them down itself
+    would become the only place they existed, and it goes when its platform's history does.
+    """
+
+    async def test_a_turn_says_which_run_it_became_before_the_brain_is_started(self):
+        """R-CH-15 — anything showing a turn as it happens has to name the run from its
+        first mark. Waiting for the outcome to learn it leaves everything shown while
+        somebody is actually waiting uncorrelated."""
+        told: list = []
+        said = await self.ask("plain", admitted=told.append)
+        self.assertEqual([said.run], told, "the run was named late, or twice")
+
+    async def test_the_run_is_named_before_anything_is_shown_of_it(self):
+        """R-CH-15 — the order is the requirement: the id exists before the first record
+        the watcher is handed, or the first mark cannot carry it."""
+        order: list = []
+        await self.ask("plain", admitted=lambda run: order.append("admitted"),
+                       watching=lambda said: order.append(said["type"]))
+        self.assertEqual("admitted", order[0], f"something was shown before the run had a name: {order}")
+
+    async def test_where_a_turn_came_from_is_written_into_its_account(self):
+        """R-CH-15 — so a run read back afterwards says which conversation asked for it,
+        and the channel needs to have written nothing."""
+        said = await self.ask("plain", asked_by={"channel": "ops", "on": "1180", "user": "2207"})
+        self.assertEqual({"channel": "ops", "on": "1180", "user": "2207"},
+                         self.only(said.run, turn.ADMITTED)["asked_by"])
+
+    async def test_a_turn_nobody_admitted_from_anywhere_says_nothing_about_it(self):
+        """R-CH-15 — `rundesk ask` is a turn from a terminal, and inventing an empty
+        origin for it would make the account claim a surface that does not exist."""
+        said = await self.ask("plain")
+        self.assertNotIn("asked_by", self.only(said.run, turn.ADMITTED))
+
+
 class CarryingAConversationOn(WithAnAgentToRunTurnsFor):
     async def test_a_second_turn_resumes_the_conversations_session(self):
         """R-RUN-11 — the whole point of keeping a handle at all."""

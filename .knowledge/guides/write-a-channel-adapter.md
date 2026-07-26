@@ -159,6 +159,14 @@ line is readable through the process list and kept in a shell's history. Read yo
 from the environment variable you named in `secret`, or from a file the owner already
 controls. Do not put it in `settings`: that is written to a file that outlives you.
 
+**You are running exactly when the agent is up, so say so if your platform can.** The
+gateway starts you when the agent starts and ends you when it stops; there is no record
+telling you either, because your own lifetime is the signal. If your surface has a
+presence — an online light, a status, a badge — set it when you connect and clear it on
+the way out, and it will mean the one thing worth meaning: that something is there to
+answer. Tie it to your socket instead and it says an agent is up when the process behind
+it has gone.
+
 **Say when you have gone, and come back by yourself.** Reconnecting is yours — you know
 what your platform's backoff wants and Rundesk does not. Say `gone` when you lose the
 connection and `ready` when you have it again, so an owner can see the difference between

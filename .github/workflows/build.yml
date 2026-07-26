@@ -171,6 +171,15 @@ jobs:
           tail -c 200000 suite.log
           exit $ran
 
+      - name: channel-messaging — what arrives on a channel, carried through to an answer
+        run: |
+          # Both edges are arguments here: what a turn does is a stand-in the suite
+          # writes, and what reaches the adapter is a list. So a routing failure and a
+          # platform failure can never be confused for one another.
+          set +e; python -u tests/test_answering.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
+
       - name: channel-adapter — the contract any surface is reached by, shipped or a stranger's
         run: |
           # The mirror of the one above, and bare for the same reason: the fake channel is

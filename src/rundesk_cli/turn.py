@@ -95,6 +95,8 @@ async def carry(
     root: Path | None = None,
     now=None,
     pick=None,
+    asked_by: dict | None = None,
+    admitted=None,
 ) -> Outcome:
     """Run one turn for this agent, and write down everything about it.
 
@@ -102,6 +104,16 @@ async def carry(
     — and it is carried through rather than looked up in any list. `watching` is handed
     each record as it arrives, for a terminal that is showing the turn as it happens; the
     account is written whether or not anyone is watching.
+
+    `asked_by` is whatever the thing that admitted this turn wants the account to show
+    about where it came from — a channel and the person who spoke, when one did. Carried
+    into the admitted record and never read here, so the turn goes on knowing nothing
+    about surfaces (R-CH-15).
+
+    `admitted` is told the run's id the moment there is one, before the brain is started.
+    Anything showing a turn as it happens needs to name the run from its first mark, and
+    the id only exists once the account does — waiting for the outcome to learn it means
+    everything shown before the end is uncorrelated.
     """
     at = provider.program(named)          # raises NotRunnable, before anything is written
     whose = agents.paths(name, where)
@@ -124,11 +136,14 @@ async def carry(
         resume = session.of(whose["agent"], brain, conversation)
 
     run = transcript.allocate(whose["runs"], pick=pick)
+    if admitted is not None:
+        admitted(run)
     with transcript.Writer(whose["runs"], run, name, now=now) as writing:
         writing.add(event={
             "type": ADMITTED, "provider": named, "brain": brain, "posture": posture,
             "conversation": conversation, "model": model, "resumed": bool(resume),
             "settings": dict(settings or {}), "can": can,
+            **({"asked_by": dict(asked_by)} if asked_by else {}),
         })
         # Written before the brain is started, because what is sent is what the account
         # has to show — and an account written afterwards is one that can be written to
