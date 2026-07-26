@@ -16,11 +16,19 @@ own patience rather than sharing a departed program's drain, a record it failed 
 offered again before anything later, a loss it was never given is handed over as a gap in
 the place it happened, a run that lost records no longer reports that it was fine, two
 writes that both have to wait no longer collide, and saying a record was lost is bounded
-like everything else that adds to the queue. **6, 9, 12, 23 and 30 are untouched on
-purpose** — every one of them is about admitting work into a gateway, or about handing a
-gateway back to the machine that supervises it, and a turn asked for from a terminal enters
-neither path. They come due when a channel or a schedule admits a turn instead, which is
-the next phase and not this one.
+like everything else that adds to the queue.
+
+**What the channel seam closed on its way in.** A channel is held open by a gateway for
+weeks and is answered for after a crash, so three things were owed before one could be:
+17, 26 and 27 are fixed and gone from here. A gateway's account is bounded wherever it
+lands and readable across rotation and both writers, a change whose audit line failed no
+longer reports a plain success, a schedule left saying it started by a gateway that died
+is reconciled rather than shown as in flight, and what never finished has a reader at
+last. **6, 9, 12, 23 and 30 are still untouched** — every one of them is about admitting
+work into a gateway, or about handing a gateway back to the machine that supervises it.
+A channel admitting a turn is exactly that path, so they are due as the channel is held
+open rather than as it is designed, and each is to be reproduced on the baseline of the
+day rather than taken from its write-up.
 
 **Where they came from.** Round two (6–22) reviewed the runtime and lifecycle against
 `205467b`, with reproduction scripts and their output quoted inline. Round three (23–25)
@@ -47,15 +55,15 @@ so a later round does not spend the effort again without new reason:
 
 | Area | Outcome |
 |---|---|
-| Ownership, cleanup and bounded resources | findings **9**, **12**, **17**, **23**, **30** |
-| Crash recovery and idempotency | findings **9**, **12**, **23**, **26** |
+| Ownership, cleanup and bounded resources | findings **9**, **12**, **23**, **30** |
+| Crash recovery and idempotency | findings **9**, **12**, **23** |
 | Concurrency, locks and atomic decisions | findings **12**, **14**, **21**, **30** |
 | Provider protocol boundary | **no change needed** — see "Reviewed, no change needed" below |
-| Scheduling correctness | findings **12**, **21**, **24**, **25**, **26** |
+| Scheduling correctness | findings **12**, **21**, **24**, **25** |
 | Install, update and removal safety | findings **4**, **14**, **15**, **28** |
-| Source of truth and auditability | findings **26**, **27**, **28**, **29**; extensions to **12**, **17**, **19** |
-| Consumer command surface | findings **32–35**; extensions to **6**, **13**, **17**, **27**, **28** |
-| Measured performance | finding **9** (second consequence) and **17**; measurements below |
+| Source of truth and auditability | findings **28**, **29**; extensions to **12**, **19** |
+| Consumer command surface | findings **32–35**; extensions to **6**, **13**, **28** |
+| Measured performance | finding **9** (second consequence); measurements below |
 | Failure-injection coverage | see "Tests that prove only the easy half" below |
 | Security and trust boundaries | **no change needed today** — see below |
 
@@ -611,68 +619,6 @@ Relevant implementation: `take_all_back()` in `src/rundesk_cli/supervisor.py`;
 
 ## Medium impact
 
-### 17. Stop the rotated log from having an unrotated shadow
-
-**Status:** Open
-
-`_recorder()` adds a `StreamHandler(sys.stderr)` to every gateway logger
-(`gateway.py:148-150`), and `describe()` points `StandardErrorPath` at
-`logs/<name>.err` (`supervisor.py:163-164`). Every line that goes into the 2 MB × 3
-rotated log also goes into a file that nothing prunes, nothing reads (`rundesk logs`
-reads only `<name>.log`) and no requirement mentions. R-GW-18 bounds the log; its shadow
-is unbounded, for as long as the gateway is up.
-
-**Round four adds why `/dev/null` is the wrong half of the fix.** `<name>.err` is not
-purely a duplicate. It is the **only** store for everything that never reaches the logger:
-an interpreter-level traceback, an unraisable-exception report from a task nobody awaited,
-and `cmd_serve()`'s `NOT STARTED — …` line (`cli.py:271`). `rundesk logs` cannot show any
-of it, while `cmd_start()` and `_stand_down()` point the owner at exactly that command when
-a gateway does not come up (`cli.py:321`, `:452`) — so the operator asking "why did it die"
-is sent to the one file that cannot answer, and sending `StandardErrorPath` to `/dev/null`
-would destroy the answer rather than bound it. Drop the stderr **handler** when the gateway
-is not attached to a terminal, keep the file, and have `rundesk logs` show its tail when it
-is non-empty: `.err` then holds only what the logger cannot, which is small, bounded in
-practice, and the part worth keeping.
-
-A second, smaller writer problem in the same store: `note()` (`gateway.py:117-129`) appends
-to `<name>.log` **by path, from a different process**, while the gateway's
-`RotatingFileHandler` (`:141-143`) rotates it by rename. A line written across a rotation
-lands in `.log.1`, out of order, and external bytes are invisible to the handler's
-`maxBytes` accounting, so rotation is late by however much the CLI has appended. Both are
-minor next to the crash-output hole; record them together because both are "two writers,
-one log file".
-
-**Round six adds the control-surface failures around these same stores.**
-
-- `cmd_logs()` reads only the current `<name>.log` (`cli.py:638-654`), not the rotated
-  `.log.1`–`.log.3` history and not launchd's `.out` or `.err`. Yet failed start and
-  restart point to `rundesk logs <name>` (`cli.py:321`, `:460`). The advised command can
-  therefore say `NO LOG` while the startup traceback exists in `<name>.err`, or omit the
-  older lines that explain the current tail. Default output should combine labeled
-  gateway and launchd sources across rotation; `--source gateway|launchd|all` may narrow
-  it.
-- `note()` neither creates the log directory nor returns its `OSError`. On the first
-  schedule change in a clean home, `rundesk schedules add` can print `ADDED` and persist
-  the schedule while producing no audit line anywhere. A successful mutation whose
-  history write failed must say `WARNING — change applied, but not logged: <path>:
-  <reason>` and must not return full success.
-
-Regression criteria:
-
-- What a gateway writes is bounded wherever it lands.
-- No line appears in both `<name>.log` and `<name>.err`.
-- A startup failure that never reaches the logger is still shown by `rundesk logs`.
-- `note()` and the gateway's own handler cannot lose a line to a rotation between them.
-- A failure held only in `<name>.err`, and needed context held only in `.log.1`, are both
-  reachable through the command with source labels.
-- The first schedule change in a clean home creates its log; forced append failure keeps
-  the truthful schedule mutation, names the log path and returns a partial/failure
-  outcome rather than silent success.
-
-Relevant implementation: `_recorder()` and `note()` in `src/rundesk_cli/gateway.py`;
-`describe()` in `src/rundesk_cli/supervisor.py`; `cmd_logs()`, `cmd_serve()`,
-`cmd_start()` and `_stand_down()` in `src/rundesk_cli/cli.py`.
-
 ### 19. Stop a gateway name from claiming another gateway's history file
 
 **Status:** Open
@@ -907,106 +853,6 @@ names the store, its writers, and the concrete disagreement or loss.
 
 ## High impact
 
-### 26. Reconcile a schedule outcome left saying `started` by a gateway that died
-
-**Status:** Open — **read finding 12 first;** its `_released` guard is the other half of
-keeping this file truthful.
-
-`_fire()` writes the outcome `started` durably *before* the run begins
-(`gateway.py:1125`), which is correct and is what R-SCH-9 rests on. Nothing ever rewrites
-it if the gateway dies mid-run. `_pick_up_where_it_left_off()` (`:789-803`) reads the row
-back verbatim, and `claim()` (`:737-787`) performs no reconciliation between it and the
-sweep that has just established the work is gone.
-
-The result is two durable stores describing one event and disagreeing:
-
-| store | says |
-|---|---|
-| `<name>.ran.json` | `{"at": …, "outcome": "started"}` — indistinguishable from running now |
-| `<name>.interrupted.json` | the same work, ended, with `ended` true or false |
-
-`rundesk schedules` reads only the first (`cli.py:602-627`), so its `OUTCOME` column
-presents dead work as in-flight until that schedule next falls due — which for a daily
-schedule is a day. This is the first question asked after a crash, and the command answers
-it wrongly while the correct answer is already on disk one file away.
-
-Round five reproduced the adjacent shutdown-before-spawn form of the same stale
-`"started"` fact. `_fire()` writes `"started"` and creates the scheduled wrapper
-(`gateway.py:1112-1130`). If shutdown sets `_stopping` before the wrapper enters
-`Gateway.start()`, `_run_scheduled()` catches `Stopping` and returns without replacing
-the outcome (`:1144-1153`). No process exists for `_go()` to end or for a later sweep
-to reconcile:
-
-```text
-schedule='nightly'
-process_started=False
-durable_outcome={'at': '2026-07-25 09:30', 'outcome': 'started'}
-```
-
-The sweep already knows the work names it accounted for, so no new state is needed: after
-`_sweep_predecessor()` and `_sweep_strays()` return, rewrite any `_outcomes` row still
-reading `started` to `interrupted`. The shutdown-before-spawn branch needs the matching
-local correction: record `"interrupted"` or `"not started"` for the original due
-minute before the `Stopping` handler returns.
-
-Regression criteria:
-
-- A `.ran.json` row left saying `started`, whose work the sweep has just accounted for, no
-  longer says `started` once `claim()` returns.
-- `rundesk schedules` does not present that row as in-flight.
-- A row saying `started` for work the sweep found **still running** (identity unproven,
-  finding 6) is left alone — it is genuinely in flight.
-- A wrapper refused by `Stopping` never leaves `"started"` behind when no process
-  spawned.
-- Reconciling the row does not move its `at` minute, or R-SCH-9's guard is defeated.
-
-Relevant implementation: `Gateway.claim()`, `_pick_up_where_it_left_off()`, `_fire()` and
-`_remember()` in `src/rundesk_cli/gateway.py`; `_list_schedules()` in
-`src/rundesk_cli/cli.py`.
-
-### 27. Give the interruption history a reader, and a way to be resolved
-
-**Status:** Open — the entries are now kept under one hold (R-GW-27); this makes them
-answer something.
-
-`what_was_interrupted()` (`gateway.py:356-365`) has no caller anywhere in the product —
-grep across `src/`, `install.sh` and `.knowledge/prd/` finds only `_note_interrupted()`
-and the tests. R-GW-23 is satisfied by writing the file; nothing reads it back. Two
-consequences:
-
-- **No reader.** The store that exists to say what never finished cannot be reached from
-  the command line. `status` shows only what is running *now* (`cli.py:464-499`), and
-  `logs` shows prose. "What did not finish" is answered by hand-reading JSON out of
-  `~/.rundesk/schedules/`, which is not an answer an operator has during an incident — and
-  it is the fact a channel adapter needs on reconnect to tell a conversation its session
-  died.
-- **No resolution.** Entries are keyed by work name (`:383`) and are never cleared, so work
-  interrupted once in March is still listed in July, alongside work interrupted a minute
-  ago, with nothing distinguishing outstanding from long since fine. Combined with the
-  keying, the same work interrupted ten times shows only the tenth — which is precisely the
-  fact R-GW-24 (work that keeps taking the gateway down) will need, being overwritten
-  before it can be counted. See finding 29.
-
-**Round six adds discovery and the concrete command shape.** `cmd_status()` discovers
-names only from run records and Rundesk-owned launchd descriptions (`cli.py:472-482`);
-`gateway.every()` scans only the run directory (`gateway.py:695-709`). A gateway name
-that survives only in schedules, logs or `<name>.interrupted.json` is therefore absent
-from `status`, and the owner must already know its name before asking any other command.
-Add `rundesk interruptions [gateway]` with `WORK`, `AT`, `ENDED`, and `REASON`; status
-should discover every Rundesk-owned state source and show a nonzero interruption count.
-
-Regression criteria:
-
-- Interrupted work is visible through the command line without reading a file by hand.
-- Work that later completes is no longer presented as outstanding.
-- The count of times one piece of work was interrupted survives (finding 29).
-- Ended and unresolved entries are rendered distinctly with their time and reason.
-- A schedules-, log- or interruption-only gateway is discoverable without knowing its
-  name in advance.
-
-Relevant implementation: `what_was_interrupted()` and `_note_interrupted()` in
-`src/rundesk_cli/gateway.py`; `cmd_status()` in `src/rundesk_cli/cli.py`.
-
 ### 28. Read a supervised gateway's directories from its own job, not from the ambient environment
 
 **Status:** Open — **this is finding 22 one level up.** Finding 22 is the gateway failing
@@ -1042,7 +888,7 @@ leaves the wrong answer in place.
 paths resolved from the command's environment, but it neither reads the job's environment
 nor shows the launchd plist. The CLI must identify which install, run state, schedules,
 logs and launchd plist are authoritative; overrides must be shown exactly, not normalized
-back to defaults. Finding 27 supplies the history this view must link, and finding 35
+back to defaults. The interruption history supplies what this view must link, and finding 35
 supplies the rest of the owned-state inventory.
 
 Regression criteria:
@@ -1073,7 +919,7 @@ on a fact that has one value per **occurrence**:
 - `_remember()` — `self._outcomes[name] = {…}` (`gateway.py:1208`)
 
 Two consequences today, before any channel exists. The first is history that cannot
-accumulate: work interrupted twice keeps only the second, so finding 27 has nothing to count
+accumulate: work interrupted twice keeps only the second, so the reader of that history has nothing to count
 and R-GW-24 has no input. The second is already visible in the code — `_remember()`'s
 never-move-backwards rule (`:1205-1207`) needs to hold two timestamps in a row that has one,
 and degrades to appending the second into the *outcome string*:
@@ -1204,7 +1050,7 @@ above; findings 32–35 are only the distinct consumer command-surface gaps.
 
 ### 34. Give lifecycle and update outcomes a durable control log
 
-**Status:** Open — gateway program logs remain finding 17.
+**Status:** Open — what a gateway itself writes is now bounded and readable (R-GW-35, R-GW-36); this is the control log for what the *command* did, which still has none.
 
 1. **Command and location:** `start`, `stop`, `restart`, `update`;
    `src/rundesk_cli/cli.py:275-321`, `:375-469`;
@@ -1224,7 +1070,7 @@ above; findings 32–35 are only the distinct consumer command-surface gaps.
 
 ### 35. Expose scheduled commands and individual work through Rundesk
 
-**Status:** Open — read with findings 27–29 for inventory, interruption history and run IDs.
+**Status:** Open — read with findings 28 and 29 for inventory and run IDs.
 
 1. **Command and location:** `status`, `schedules`, and the missing work controls;
    `src/rundesk_cli/cli.py:472-507`, `:610-635`;
@@ -1240,7 +1086,7 @@ above; findings 32–35 are only the distinct consumer command-surface gaps.
 5. **Test:** Round-trip an argv containing spaces and option-looking arguments; assert
    `show` reproduces it unambiguously. Start two work items, stop one by run ID, and prove
    the other and the gateway remain running. Each owned state source alone must make its
-   gateway or run discoverable as required by finding 27.
+   gateway or run discoverable, as R-GW-38 now requires of a gateway.
 
 ## Tests that prove only the easy half
 
