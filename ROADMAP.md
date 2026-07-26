@@ -793,10 +793,11 @@ guide by someone who has not read this codebase, carries a whole conversation wi
 the same bar Phase 2 set for a brain, and the same reason. Until that has happened, "channels are
 swappable" is a hope.
 
-## Phase 4 — Design the Shape of What Is Kept, and How It Moves — **research and planning, no code**
+## Phase 4 — Design the Shape of What Is Kept, and Build the Way In
 
-**Outcome:** a settled, written design for how everything durable is organised, queried and carried
-between versions — agreed with the owner before a line of it is built.
+**Outcome:** a settled, agreed design for how everything durable is organised, queried and carried
+between versions — **and the seam it is all reached through, built and exercised against nothing that
+matters yet.**
 
 **Why this is its own phase.** Every other phase here could discover its design while building it, because
 a wrong turn cost a rewrite of code nobody had yet. This one cannot: the moment a release lands, the shape
@@ -804,8 +805,15 @@ is on somebody's disk and every mistake becomes a migration. Discovering the des
 means discovering it in the one place where mistakes are permanent. So the design is finished, argued over
 and written down first, and the phase after does exactly what was written.
 
-**Nothing is implemented here.** No schema is created, no file is moved, no query is written. What this
-phase produces is a decision, in the places this repository keeps decisions.
+**Nothing anybody owns is touched here.** No file is moved, nothing is migrated, and nothing yet reads
+the new store — the old layout keeps working throughout, untouched, and could keep working if this phase
+were abandoned. What *is* built is the way in: the schema and the one module every reader will go through.
+
+**That is deliberate, and it is why this is not a paper phase.** A query seam designed on a page and never
+run is a guess: whether a caller can actually ask for what it needs without SQL leaking out, whether a
+migration can find every question, whether reading can be told from writing — none of that is knowable
+until something has been built against a real database. So it is built here, where the only database it
+touches is one made for a test, and the phase after moves real data onto something already proven to work.
 
 ### What it must settle
 
@@ -970,53 +978,6 @@ How it behaves, which is the part worth arguing about now rather than during an 
 - **A fresh install runs no migrations** and is stamped with the current version, so first use and
   upgrade converge on the same shape.
 
-### What it produces
-
-Four things, and the phase is not finished until all four exist:
-
-1. **A research note** in `.knowledge/research/`, following `guides/docs-research.md`, on how the world
-   already solves this — how migration systems are ordered and recorded elsewhere, what they do about a
-   failure halfway and about going backwards, what practice says about SQLite for this shape, and what a
-   query seam usually looks like. Reporting, sourced, and separate from what we decide.
-2. **A draft contract for the shape**, in `.knowledge/prd-drafts/` — what is kept, where, under which
-   lifetime, what carries a version, and what may be destroyed.
-3. **A draft contract for moving between versions** — how a migration is found, ordered, recorded, and
-   what happens when one fails or when data is newer than the rundesk reading it.
-4. **The owner's decisions, recorded rather than assumed.** Each of these is a hard gate under `AGENTS.md`
-   and none may be settled by an agent alone:
-   - the layout, and that `~/.rundesk/{run,logs,schedules}` stops existing;
-   - SQLite at all, and one database per agent named `state.db`;
-   - which things become rows and which stay files;
-   - that the raw stream a brain produced may be destroyed;
-   - the retention of everything else — the open question `agent-run` already carries;
-   - how a conversation is keyed, given one history now spans every surface.
-
-### How it is proved
-
-A design phase cannot be proved by tests, so it is proved by three things instead, and dishonesty here is
-the only real risk:
-
-- **Every decision above is written down where decisions live**, not in a conversation that scrolls away.
-- **The design accounts for what is on disk today**, item by item — including the two coexisting layouts,
-  the four lock files, the four files per run, and the counter among the runs. A design that does not
-  mention something that exists has not been checked against reality.
-- **The migration is walked through against the owner's own install** on paper, naming what moves where.
-  If that walk cannot be written, the design is not finished — and it is far cheaper to find that out here.
-
-### Exit proof
-
-The owner has agreed the layout, the database, the split between rows and files, retention, and the
-migration mechanism — and each is written where the next phase can build from it without asking again.
-A second person could implement it from what is written.
-
-## Phase 5 — Move Everything Onto It
-
-**Outcome:** what Phase 4 designed is what is on disk, everything reads it through one seam, and an update
-carries a previous version's data into the new shape before any agent comes back up.
-
-This phase writes no new design. Where the design turns out to be wrong, that is a finding and the drafts
-move first — because the whole point of the phase before was that this one does not improvise.
-
 ### One way in, and no SQL anywhere else
 
 **A reusable query seam is part of this phase, not a tidy-up afterwards.** Raw SQL at eight call sites is
@@ -1038,13 +999,76 @@ than saying how to get it**. What that must give, whatever its shape ends up bei
 - **It is testable without a gateway**, like everything else here — a database in a temporary directory,
   and no process anywhere near it.
 
+### What it produces
+
+Four things, and the phase is not finished until all four exist:
+
+1. **The schema, and the one module every reader goes through** — built, tested, and used by nothing yet.
+   With it, a draft contract for what it guarantees, so what the next phase moves onto is a promise rather
+   than an implementation detail.
+2. **A research note** in `.knowledge/research/`, following `guides/docs-research.md`, on how the world
+   already solves this — how migration systems are ordered and recorded elsewhere, what they do about a
+   failure halfway and about going backwards, what practice says about SQLite for this shape, and what a
+   query seam usually looks like. Reporting, sourced, and separate from what we decide.
+3. **A draft contract for the shape**, in `.knowledge/prd-drafts/` — what is kept, where, under which
+   lifetime, what carries a version, and what may be destroyed.
+4. **A draft contract for moving between versions** — how a migration is found, ordered, recorded, and
+   what happens when one fails or when data is newer than the rundesk reading it.
+5. **The owner's decisions, recorded rather than assumed.** Each of these is a hard gate under `AGENTS.md`
+   and none may be settled by an agent alone:
+   - the layout, and that `~/.rundesk/{run,logs,schedules}` stops existing;
+   - SQLite at all, and one database per agent named `state.db`;
+   - which things become rows and which stay files;
+   - that the raw stream a brain produced may be destroyed;
+   - the retention of everything else — the open question `agent-run` already carries;
+   - how a conversation is keyed, given one history now spans every surface.
+
+### How it is proved
+
+The seam is proved the way everything here is — offline, against a database in a temporary directory, with
+no gateway and no agent anywhere near it:
+
+- Every question a caller can ask is answered, and asking the same thing twice goes through one name.
+- No SQL exists outside the module that owns it, proved by looking rather than by intention.
+- A reader cannot begin a transaction that would make a writer wait.
+- Two writers to one database cannot lose one another's change.
+- A schema at a version this code does not know is refused rather than read.
+- Searching works where the machine can, and its absence is reported rather than returning nothing.
+
+The design cannot be proved by tests, so it is proved by three other things, and dishonesty here is the
+only real risk:
+
+- **Every decision above is written down where decisions live**, not in a conversation that scrolls away.
+- **The design accounts for what is on disk today**, item by item — including the two coexisting layouts,
+  the four lock files, the four files per run, and the counter among the runs. A design that does not
+  mention something that exists has not been checked against reality.
+- **The migration is walked through against the owner's own install** on paper, naming what moves where.
+  If that walk cannot be written, the design is not finished — and it is far cheaper to find that out here.
+
+### Exit proof
+
+The owner has agreed the layout, the split between rows and files, retention, and the migration mechanism,
+and each is written where the next phase can build from it without asking again — a second person could
+carry it out from what is written. The seam exists, is tested, and is reached by nothing: the old layout is
+still what runs, and deleting the new module would leave the product exactly as it was. Nothing on the
+owner's disk has changed.
+
+## Phase 5 — Move Everything Onto It
+
+**Outcome:** what Phase 4 designed is what is on disk, everything reads it through one seam, and an update
+carries a previous version's data into the new shape before any agent comes back up.
+
+This phase writes no new design and builds no new seam — Phase 4 built that, and this is what it was for.
+Where the design turns out to be wrong, that is a finding and the drafts move first, because the whole
+point of the phase before was that this one does not improvise.
+
 ### Order of work
 
-1. The query seam and the schema, with nothing yet reading them.
-2. The migration runner, with one migration: the one that brings today's layout to the new one.
-3. Move readers and writers over, one at a time, each with its own regression check.
-4. Delete the old layout, and the code that defaulted to it.
-5. Migrate the owner's own install, with a copy kept until it is proved.
+1. The migration runner, with one migration: the one that brings today's layout to the new one.
+2. Move readers and writers over to the seam Phase 4 built, one at a time, each with its own regression
+   check.
+3. Delete the old layout, and the code that defaulted to it.
+4. Migrate the owner's own install, with a copy kept until it is proved.
 
 ### Tests
 
