@@ -278,6 +278,15 @@ class Store:
                 conn = self._open(writing=True)
             elif found < VERSION:
                 raise Behind(found, VERSION)
+            # A version says which shape this is meant to be, not that the shape is there. A
+            # header survives a truncated restore and a dropped table where the pages holding
+            # them do not, so a database can claim the current version and hold nothing. Asked
+            # every time rather than only when the version is zero: the mirror case was
+            # guarded and this one was not, and it is the one that reads as healthy.
+            if not self._anything(conn):
+                raise Unreadable(
+                    f"{self.at} says it is version {found or VERSION} and holds none of it"
+                )
             self._searchable = self._has_search(conn)
         finally:
             if conn is not None:

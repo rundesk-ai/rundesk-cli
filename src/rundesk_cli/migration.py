@@ -149,9 +149,19 @@ def carry(database, home, want: int, where=None, note=None) -> int:
 
 
 def _one(conn, step: Step, home: Path) -> list:
-    """One step, whole or not at all."""
+    """One step, whole or not at all.
+
+    The version is read again **inside** the hold, not only before it. Two processes that both
+    found the same version before either took the lock would otherwise both run the step: the
+    first succeeds, and the second finds the work already done and reports a failure for a
+    database that is perfectly healthy. The read, the decision and the write belong under one
+    lock, which is the rule this file exists to obey rather than to demonstrate breaking.
+    """
     conn.execute("BEGIN IMMEDIATE")
     try:
+        if int(conn.execute("PRAGMA user_version").fetchone()[0]) >= step.version:
+            conn.execute("COMMIT")
+            return []
         module = step.loaded()
         # A step may copy files. It may never delete one — what it hands back is removed
         # after the version has committed, which is what makes running again safe.

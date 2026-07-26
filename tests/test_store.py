@@ -116,6 +116,39 @@ class TheShapeOnDisk(WithAnAgentsOwnRecords):
                          "an unreadable database was built over rather than left alone")
 
 
+class WhenTwoOfThemArriveAtOnce(WithAnAgentsOwnRecords):
+    """Making a database is a read, a decision and a write, and they belong under one hold.
+
+    Two commands can reach for one agent's records at the same moment — a gateway starting
+    while something is typed at it. Both looking before either acts is how one of them ends up
+    reporting that a perfectly healthy database failed to be built.
+    """
+
+    def test_two_of_them_building_one_fresh_database_both_succeed(self):
+        trouble, done = [], []
+
+        def build():
+            try:
+                made = store.Store(self.at)
+                made.made()
+                done.append(made.version())
+            except BaseException as raised:      # noqa: BLE001 — the case is what escapes
+                trouble.append(repr(raised))
+
+        pair = [threading.Thread(target=build) for _ in range(2)]
+        for one in pair:
+            one.start()
+        for one in pair:
+            one.join()
+
+        self.assertEqual([], trouble, "one of them was told a healthy database had failed")
+        self.assertEqual([store.VERSION, store.VERSION], done)
+        # and what they built is real, not merely unraised-against
+        back = store.Store(self.at)
+        self.assertEqual({"provider": None, "model": None, "instructions": None,
+                          "settings": {}}, back.agent())
+
+
 class WhenTheShapeOnDiskIsNotThisOne(WithAnAgentsOwnRecords):
     """Both directions are refused, and the symmetry is the point.
 
@@ -153,6 +186,25 @@ class WhenTheShapeOnDiskIsNotThisOne(WithAnAgentsOwnRecords):
         self.assertEqual(1, arranged.execute("SELECT count(*) FROM channel").fetchone()[0])
         self.assertEqual("what about the parser",
                          arranged.execute("SELECT text FROM message").fetchone()[0])
+
+    def test_a_shape_that_says_it_is_here_and_is_not_is_refused_rather_than_read(self):
+        """A version says which shape this is meant to be, never that the shape is there.
+
+        The header survives a truncated restore where the pages holding the tables do not, so
+        a database can claim the current version and hold nothing. The mirror case — tables
+        with no version — was guarded and this one was not, and this is the one that reads as
+        healthy right up until the first real question.
+        """
+        self.built()
+        arranged = self.raw()
+        for table in ("record", "message", "run", "session", "conversation",
+                      "schedule", "channel", "gateway", "agent"):
+            arranged.execute(f"DROP TABLE IF EXISTS {table}")
+        self.assertEqual(store.VERSION,
+                         arranged.execute("PRAGMA user_version").fetchone()[0])
+        arranged.close()
+        with self.assertRaises(store.Unreadable):
+            store.Store(self.at).made()
 
     def test_a_database_half_built_is_not_a_state_that_can_exist(self):
         """The tables, the first rows and the stamp all move together.
