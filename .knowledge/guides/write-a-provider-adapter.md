@@ -35,6 +35,16 @@ Every field is `false` when you leave it out, so `{}` is a valid answer and a co
 adapter. **Rundesk asks rather than assuming**, and it never guesses from your name — so say
 `false` and the work is simply absent, rather than expected and missing.
 
+`--capabilities` is the only argument you are given, your stdin is closed, and nothing about
+a particular run is set. If you do not recognise the flag and do something else entirely,
+you can do nothing — which is a complete answer and never an error.
+
+**A declaration stops rundesk asking; it does not stop you reporting.** Say `tools: false`
+and emit a tool record anyway and the record is kept exactly as any other. Only `steer`
+changes how your turn is *run* — everything else is a claim about what to expect, recorded
+with the run so a turn that reported nothing and a brain that has nothing can be told
+apart later.
+
 This must not need an account, a network or a login, and it must be the same answer every
 time. It is asked when a turn is admitted, and the answer is written into that run's
 record — so a turn that reported no tools and a brain that has none can be told apart
@@ -61,6 +71,17 @@ rundesk add ava --provider /opt/my-brain   # yours
 | `RUNDESK_RESUME` | the handle you reported last time on this conversation, or unset for a new one |
 | `RUNDESK_POSTURE` | `read` or `work` — how much of the machine this turn may touch |
 | `RUNDESK_SETTINGS` | a JSON object of whatever the owner set, passed through unread |
+| `RUNDESK_RAW` | somewhere to append everything your *brain* said, if you want to keep it |
+
+The first four are always set. `RUNDESK_MODEL`, `RUNDESK_RESUME` and `RUNDESK_SETTINGS` are
+**absent** rather than empty when there is nothing to say, so `${RUNDESK_MODEL:-default}`
+does what you would hope. `RUNDESK_PROVIDER_HOME` is made for you before you start, and is
+yours to write in.
+
+**`RUNDESK_RAW` is worth using.** Rundesk sees what *you* report and never what your brain
+said before you made records of it — so if your brain changes its output shape, that shows
+up as records quietly going missing with nothing to compare against. Append your brain's own
+stream to that file and the evidence is there. Ignore it and nothing breaks.
 
 **The prompt arrives on stdin**, and how depends on the one capability that changes how a
 turn is *run*:
@@ -110,19 +131,39 @@ verbatim and shown to nobody, so nothing you emit can break a turn.
 ## The rules that will bite you
 
 **`did` is what the tool *did*, not what your brain calls it.** The same action is `Bash` on
-one brain, `shell` on the next and `run_terminal_command` on a third. Say one of `read`,
-`search`, `run`, `edit`, `list` — or leave it out. A channel that recognised your vendor's
-names would be carrying your vocabulary forever, so it never sees them.
+one brain, `shell` on the next and `run_terminal_command` on a third. A channel that
+recognised your vendor's names would be carrying your vocabulary forever, so it never sees
+them.
+
+The list is closed and short on purpose — `read`, `search`, `run`, `edit`, `list`. If what
+your tool did is not one of those, **leave `did` out**: `name` still carries your own word
+for it, and a reader that shows nothing is better than one taught to believe a word that
+means something else here. Do not stretch one to fit; tell us instead, and the list can
+grow by a release rather than by every adapter guessing differently.
 
 **Report the turn's own tokens, not the conversation's.** If your brain hands you a running
-total, subtract what you reported last time — keep it in `RUNDESK_PROVIDER_HOME`, which is
-yours and outlives the turn. Getting this wrong overstates every turn after the first, and a
-spend limit built on it fires on how long a conversation is rather than what it cost.
+total, subtract what you reported last time. Getting this wrong overstates every turn after
+the first, and a spend limit built on it fires on how long a conversation is rather than on
+what it cost.
+
+Keep what you subtract from in `RUNDESK_PROVIDER_HOME`, keyed by your brain's own session
+handle — that is the thing a running total is running against. Three cases worth deciding
+before they happen: a handle you have never seen subtracts nothing, and that one turn reads
+high; a total that came back *lower* than last time means the conversation was restarted
+underneath you, so report it whole rather than a negative; and if you cannot tell at all,
+report nothing rather than a guess.
 
 **Keep cached tokens apart from fresh ones.** Re-reading a cached prompt is most of the
 volume and a fraction of the price. Folding them together reports a number that is
 technically real and practically a lie. If your brain folds cache reads *into* its input
 count, subtract them back out before you report.
+
+**`RUNDESK_POSTURE` is a request, and honouring it is yours.** `read` means the owner asked
+this turn to look without changing anything; `work` is the ordinary case. Rundesk enforces
+nothing — it has no way to, and pretending otherwise would be worse than saying so. Map it
+onto whatever your brain really has: a sandbox, a tool list, a permission mode. If your
+brain has nothing to map it onto, ignore it; that is honest, and it is why nothing here
+describes a posture as containment.
 
 **Say nothing you did not measure.** `model` is what actually answered — omit it if your
 brain does not say, and nothing will be claimed. The same goes for tools: an adapter with no
@@ -133,10 +174,22 @@ back next time in `RUNDESK_RESUME`, for that conversation and that provider toge
 never read it, never parse it, and never give it to a different brain. Not reporting one
 costs the next turn its context and nothing else.
 
-**`RUNDESK_SETTINGS` is not ours to understand.** Whatever the owner set with `--set` arrives
-as JSON exactly as they wrote it. Map it onto your own flags however you like, ignore what
-you do not recognise, and fail loudly on stderr if something is wrong — that way a new flag
-on your CLI is something an owner can reach today, not after a Rundesk release.
+**`RUNDESK_SETTINGS` is not ours to understand.** Whatever the owner set with `--set`
+arrives as one JSON object. Both spellings merge into it, and a value that reads as JSON
+arrives as JSON:
+
+```sh
+rundesk ask ava "…" --set effort=high --set '{"flags":["--no-color"],"retries":3}'
+```
+```json
+{"effort": "high", "flags": ["--no-color"], "retries": 3}
+```
+
+There are no keys rundesk defines — `effort` and `flags` above are that owner's words for
+that owner's brain. **You decide what you understand.** Map what you know onto your own
+flags, ignore what you do not, and say on stderr when something recognised is malformed so
+an owner who mistyped hears about it. A new option on your CLI is then theirs to reach
+today, rather than after a Rundesk release.
 
 **Never a credential — not in settings, and not on a command line.** What an owner set is
 written into the run's record, so a token put there is a token in a file that outlives the
@@ -178,22 +231,26 @@ Answers once and stops. Twenty lines, no dependencies:
 # my-brain — the smallest adapter that is not a lie.
 set -euo pipefail
 
-[ "${1:-}" = "--capabilities" ] && { printf '{"resume":false}\n'; exit 0; }
+[ "$*" = "--capabilities" ] && { printf '{}\n'; exit 0; }
 
 json() { python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'; }
 say()  { printf '%s\n' "$1"; }
 
-prompt=$(cat)                       # the turn arrives on stdin
 cd "$RUNDESK_CWD"                   # work where the agent works
 
-answer=$(your-cli --model "${RUNDESK_MODEL:-default}" --prompt "$prompt") || {
-  say '{"type":"done","ok":false}'  # a turn that failed says so
+# The turn arrives on stdin and goes to your brain the same way. Never as an argument:
+# what somebody asks their agent is readable through the process list otherwise.
+answer=$(your-cli --model "${RUNDESK_MODEL:-default}" --read-prompt-from-stdin) || {
+  say '{"type":"done","ok":false,"why":"your-cli would not answer"}'
   exit 1
 }
 
 say "$(printf '{"type":"text","text":%s}' "$(printf '%s' "$answer" | json)")"
 say '{"type":"done","ok":true}'
 ```
+
+If your brain will only take a prompt as an argument, that is its limit rather than yours —
+pass it, and know that it is visible in the process list while it runs.
 
 Point an agent at it and it is a first-class brain:
 
@@ -238,6 +295,7 @@ a turn is never a word the account cannot show.
 Run it against yours:
 
 ```sh
+git clone https://github.com/rundesk-ai/rundesk-cli && cd rundesk-cli
 python3 tests/test_provider.py --adapter /opt/my-brain
 python3 tests/test_provider.py --adapter /opt/my-brain --home ~/.my-brain   # if it signs in
 ```
@@ -251,4 +309,7 @@ private home to hand it, because it will not find one in an empty directory.
 is the contract, and the code is what has to move.
 
 ---
-*This is a project how-to. The contract it describes is [`../prd-drafts/provider-adapter.md`](../prd-drafts/provider-adapter.md).*
+*This page is the contract — if your adapter follows it and the suite still fails, this page
+is what moves. [`../prd-drafts/provider-adapter.md`](../prd-drafts/provider-adapter.md) is
+the list of requirements it is held to, and which test proves each; it describes this page
+rather than the other way round.*

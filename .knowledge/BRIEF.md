@@ -7,12 +7,15 @@ screen, stable, PII-free.*
 
 `rundesk` is the command line for a lightweight, provider-agnostic multi-agent gateway: a person runs a
 small team of AI coding agents on their own machine and talks to them from a chat app. It is **standard
-library Python**, and it is built from the outside in. Four layers are here: this copy of rundesk on a
+library Python**, and it is built from the outside in. Five layers are here: this copy of rundesk on a
 machine; the **agent** — the named identity work is run for, with a home of rules, memory and workspace it
 loads, and everything of its own in one directory; the **gateway** — the long-lived process an agent works
-inside, one per agent, kept up by the machine itself and owning every program it starts; and **schedules**,
-which turn a stated time into work that gateway starts and owns like any other. What an agent is reached
-*by* is not here yet; those verbs are registered and say so plainly until they land.
+inside, one per agent, kept up by the machine itself and owning every program it starts; **schedules**,
+which turn a stated time into work that gateway starts and owns like any other; and the **brain** an agent
+reaches, through a seam that is a program rundesk runs rather than code it loads — so one nobody here has
+heard of is first class, and every turn leaves an account of what it did, what its brain said and what it
+cost. The chat apps an agent is reached *from* are not here yet; those verbs are registered and say so
+plainly until they land.
 
 ## Why it exists
 
@@ -41,12 +44,16 @@ supervises nothing itself; it hands that to what the machine already has.
   started when it goes; the programs it runs, which are
   ended on silence rather than on a clock, because a session may legitimately take hours, and which are
   read either as words for a person or as whole records for something that parses them — that second kind
-  being written back to while it runs, which is how an agent brain will be reached; and schedules,
-  which are per gateway so that an agent's are its own, are never run late and never overlap.
-- **Out of scope:** provider brains, chat channels, turns and transcripts. Every operation that will reach
-  them is registered and answers "coming soon" until it is built — what reaches an agent, the channels it
-  answers on, what each run became and what each cost. Nothing here starts a provider or claims that one
-  loaded a rule.
+  being written back to while it runs, which is how an agent brain is reached; schedules,
+  which are per gateway so that an agent's are its own, are never run late and never overlap; **the seam a
+  brain is reached through** — a program rundesk runs rather than code it loads, so a brain nobody here has
+  heard of is reached exactly as one that ships is; **one turn**, asked for from this terminal and streamed
+  back to it, carried on where it left off and steered while it runs; and **the account a turn leaves** —
+  what it did, what its brain actually said, and what it cost.
+- **Out of scope:** chat channels, and reading a run back from the command line. Every operation that will
+  reach them is registered and answers "coming soon" until it is built — the channels an agent answers on,
+  and what each run became and cost said in a listing rather than read off the account itself. Nothing here
+  claims a provider loaded a rule, works a cost out from prices, or asks a brain what its plan has left.
   rundesk also does not supervise: keeping a gateway up is the machine's, and writing our own would be
   the largest thing here that nobody asked for. No dependencies, no build step, and no second way into
   the product besides this command.

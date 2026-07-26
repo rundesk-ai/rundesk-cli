@@ -26,8 +26,8 @@ work for an agent, while an agent is the same agent whatever it is reached on. `
 `lifecycle-` because moving this copy of rundesk has to account for what is connected, while a channel
 knows nothing of how rundesk arrived.
 
-The remaining component — a brain — is not declared yet. It is the owner's call at the time its work
-arrives, and adding one is a row here.
+Every component in the list above now has at least one contract, except `base-`. Adding another is the
+owner's call at the time its work arrives, and it is a row here.
 
 ## Contents — maintained by hand
 
@@ -42,9 +42,13 @@ high-level map.
   - [platform-process](./platform-process.md) — a program rundesk runs, and how it keeps hold of it while it does.
   - [platform-gateway](./platform-gateway.md) — the part that stays running, one of each name, and what it takes with it.
   - [platform-schedule](./platform-schedule.md) — work rundesk begins because the time came, belonging to one gateway each.
+- **Provider**
+  - [provider-adapter](./provider-adapter.md) — the seam a brain is reached through: a program rundesk runs rather than code it loads, and what any adapter must do.
 - **Agent**
   - [agent-home](./agent-home.md) — the named identity work is run for, the home it loads from, and how far apart two of them are kept.
   - [agent-gateway](./agent-gateway.md) — the one gateway an agent runs in, made with it and taken away with it.
+  - [agent-run](./agent-run.md) — one occurrence of work, the account it leaves behind, and what a conversation is continued from.
+  - [agent-usage](./agent-usage.md) — what every run cost in tokens, and how sure anything derived from them is.
 - **Lifecycle**
   - [lifecycle-install](./lifecycle-install.md) — getting rundesk onto a machine, and knowing it worked.
   - [lifecycle-update](./lifecycle-update.md) — which version this is, which has been published, and moving between them.
