@@ -863,6 +863,83 @@ class OneAgentIsNeverInAnothersWay(WithAnAgentsOwnRecords):
         self.assertEqual([], mine.channels())
 
 
+class WhatSurvivesLosingEverythingElse(WithAnAgentsOwnRecords):
+    """The purpose of the split, stated as a case rather than as a paragraph.
+
+    What an agent **is and keeps** — how it is configured, and everything it has been told and
+    has said — is in one file. What is beside it is raw: what a brain printed, what went wrong,
+    what the gateway said while it was happening. Those are diagnostics and may be destroyed to
+    reclaim space, so nothing an agent needs may live only there.
+
+    Copy the one file somewhere else and the agent is whole. That is what makes it worth having.
+    """
+
+    def furnished(self) -> str:
+        """An agent with configuration and history, and raw files beside it."""
+        kept = self.built()
+        kept.remember_agent(provider="codex", instructions="be terse")
+        kept.remember_channel("ops", "discord", ["u1"], AT, provider="codex")
+        kept.remember_schedule("nightly", "0 3 * * *", AT, prompt="what changed?")
+        kept.opened("c1", "ops", "thread", "99123", AT, thread="4456")
+        asked = kept.arrived("c1", AT, "what about the parser", who="u1")
+        named = self.a_run(kept, conversation_id="c1", trigger_message_id=asked)
+        kept.recorded(named, 1, AT, "tool", event={"name": "grep"}, raw='{"type":"tool"}')
+        kept.answered("c1", named, LATER, "the parser was rewritten")
+        kept.ended(named, LATER, "finished", tokens={"input": 10, "output": 5, "reported": True})
+        kept.remember_session("c1", "codex", "sess-abc")
+        for raw in ("logs/gateway.log", "logs/runs/1-x.jsonl", "logs/runs/1-x.err",
+                    "home/AGENTS.md", "providers/codex/config.toml", "channels/ops/token",
+                    "gateway.json", "gateway.lock"):
+            beside = self.where / raw
+            beside.parent.mkdir(parents=True, exist_ok=True)
+            beside.write_text("raw, and destroyable")
+        return named
+
+    def cleared(self) -> None:
+        """Everything gone but the database and the two SQLite keeps beside it."""
+        keeping = {one.name for one in store.removes(self.where)}
+        for child in list(self.where.iterdir()):
+            if child.name in keeping:
+                continue
+            shutil.rmtree(child) if child.is_dir() else child.unlink()
+
+    def test_an_agent_is_whole_again_from_its_records_alone(self):
+        named = self.furnished()
+        self.cleared()
+        self.assertEqual(sorted(one.name for one in self.where.iterdir()),
+                         sorted(one.name for one in store.removes(self.where)))
+
+        back = store.Store(self.at)
+        back.made()
+        self.assertEqual(store.VERSION, back.version())
+        # what it is configured to do
+        self.assertEqual("codex", back.agent()["provider"])
+        self.assertEqual("be terse", back.agent()["instructions"])
+        self.assertEqual(["ops"], [one["name"] for one in back.channels()])
+        self.assertEqual(["nightly"], [one["name"] for one in back.schedules()])
+        # where it got to
+        self.assertEqual("sess-abc", back.session("c1", "codex"))
+        self.assertEqual("c1", back.conversation("ops", "99123", "4456")["id"])
+        # everything it was told and said
+        self.assertEqual([("person", "what about the parser"),
+                          ("agent", "the parser was rewritten")],
+                         [(one["author"], one["text"]) for one in back.messages("c1")])
+        self.assertEqual(["finished"], [one["outcome"] for one in back.runs()])
+        self.assertEqual(10, back.runs()[0]["tokens_in"])
+        self.assertEqual([(1, "tool")], [(one["seq"], one["kind"]) for one in back.records(named)])
+        self.assertEqual(2, len(back.search("parser")))
+
+    def test_what_a_brain_printed_going_costs_the_account_nothing(self):
+        """The reason those files may be destroyed at all: every line an adapter produced is
+        already a row, so a run whose raw file is gone still says what happened."""
+        named = self.furnished()
+        shutil.rmtree(self.where / "logs")
+        back = store.Store(self.at)
+        self.assertEqual('{"type":"tool"}', back.records(named)[0]["raw"],
+                         "what the adapter said was recoverable only from a file")
+        self.assertEqual("finished", back.run(named)["outcome"])
+
+
 class TheOnlyWayIn(unittest.TestCase):
     """Nothing outside this module knows a database is there.
 

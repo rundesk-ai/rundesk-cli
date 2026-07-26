@@ -26,7 +26,7 @@ has done. Each agent keeps its own, so nothing one agent holds is ever in anothe
 | ✅ | R-STO-5 | A run's account is added to and never rewritten | `a runs account is added to and never rewritten` |
 | ✅ | R-STO-6 | The order of a run's account does not depend on a clock | `a runs account is read back in the order the work happened` |
 | ✅ | R-STO-7 | A line a brain produced that nobody understood is kept rather than dropped | `a line rundesk did not understand is kept with what it actually said` |
-| ❌ | R-STO-8 | Nothing a run recorded is recoverable only from a file that may be destroyed | src/rundesk_cli/store.py:26 — no test |
+| ✅ | R-STO-8 | Nothing a run recorded is recoverable only from a file that may be destroyed | `what a brain printed going costs the account nothing` |
 | ✅ | R-STO-9 | What a run cost is recorded as absent rather than as nothing when it never arrived | `a run whose cost never arrived is left absent rather than written as nothing` |
 | ✅ | R-STO-10 | A session is kept for one conversation and one brain together, never for either alone | `one brain is never handed another brains session` |
 | ✅ | R-STO-11 | Work arriving twice from one surface is recorded once | `a channel reconnecting cannot record one message twice` |
@@ -41,6 +41,8 @@ has done. Each agent keeps its own, so nothing one agent holds is ever in anothe
 | ✅ | R-STO-20 | What an agent keeps is reached only by asking for it by name | `no statement is written anywhere but the one module` |
 | ✅ | R-STO-21 | Nothing a caller is handed can be used to ask a question of its own | `nothing a caller is handed is a connection` |
 | ✅ | R-STO-22 | A run is named once, and no name is handed out twice | `every run is named once and no name is handed out twice` |
+| ✅ | R-STO-23 | An agent is whole again from what it keeps, with everything raw beside it gone | `an agent is whole again from its records alone` |
+| ❌ | R-STO-24 | What an agent's owner wrote is theirs, and is never reproduced from what rundesk keeps | — |
 
 ## Open questions
 

@@ -1175,19 +1175,70 @@ This phase writes no new design and builds no new seam — Phase 4 built that, a
 Where the design turns out to be wrong, that is a finding and the drafts move first, because the whole
 point of the phase before was that this one does not improvise.
 
+### What Phase 4 already built, so this phase does not
+
+**Read [`.knowledge/guides/moving-onto-the-store.md`](.knowledge/guides/moving-onto-the-store.md) first.**
+It holds the map from every reader and writer that touches durable state today to the call that replaces
+it, the mechanical form of the one migration below, and the traps already paid for. Then:
+
+| already here | what it is |
+|---|---|
+| `src/rundesk_cli/store.py` | Everything an agent keeps, and the only way in. One database per agent, reading and writing told apart at the connection, no statement or connection outside the seam. 60 offline cases. |
+| `src/rundesk_cli/migration.py` | The runner: steps found not listed, ordered by number, each one transaction including its own version stamp. 25 offline cases. |
+| `src/rundesk_cli/migrations/001.py` | **The schema, and the only description of it there is.** |
+| [`platform-store`](.knowledge/prd-drafts/platform-store.md) · [`lifecycle-migration`](.knowledge/prd-drafts/lifecycle-migration.md) | What both guarantee. Ratify them, then set glyphs. |
+
+Four things about it that decide how this phase is written:
+
+- **Making an agent already runs the migration path**, from nothing. So the path is exercised by every
+  agent anybody creates, and a fresh install cannot drift from an upgraded one.
+- **There is no table of what has run — the version is the record.** SQLite keeps DDL inside a
+  transaction, so a step's schema change, its data change and its version stamp commit together, and
+  "ran but not recorded" is not a state that can exist. That is why nothing here looks like Alembic.
+- **A step copies and never deletes.** What it hands back is removed only once the version has
+  committed, so a step that died halfway leaves both copies rather than neither.
+- **Records behind the installed shape are refused on open, never migrated by whatever opened them.**
+  Moving forward happens once, deliberately, in the window where nothing is up — never lazily, or two
+  gateways starting together would both begin migrating.
+
 ### Order of work
 
-1. The migration runner, with one migration: the one that brings today's layout to the new one.
-2. Move readers and writers over to the seam Phase 4 built, one at a time, each with its own regression
-   check.
-3. Delete the old layout, and the code that defaulted to it.
-4. Migrate the owner's own install, with a copy kept until it is proved.
+1. **Write `migrations/002.py`** — the step that brings today's layout to the new one. Its mechanical
+   form is in the guide; the walk against a real install is in Phase 4 above. Nothing reads the store
+   yet, so this can land and be re-run against copies of a real install until it is right.
+2. **Call the runner from the update**, in the window `R-UPD-21` already opens and already tests: after
+   the files are replaced, before the first agent is brought back. A step that fails stops the update
+   and leaves every agent down.
+3. **Move readers and writers over**, one at a time, each with its own regression check, working down
+   the guide's table.
+4. **Delete the old layout and the code that defaulted to it** — including `agent.resolved()` returning
+   nothing for a name that is not an agent, which is what silently sends every unknown name to
+   `~/.rundesk/{run,logs,schedules}` today.
+5. **Migrate the owner's own install**, with a copy kept until it is proved.
+
+### Three decisions this phase carries out rather than revisits
+
+- **Removing an agent takes its account.** The owner decided this, and it contradicts ratified
+  `R-AGW-5` and the `runs_home()` docstring at `agent.py:180`, which both argue the other way. The
+  requirement row, the docstring and the behaviour change in one commit.
+- **`agent.forget()` deletes by glob** — `*.json` and `*.changing` (`agent.py:408`) — so `state.db` is
+  not caught by removal at all. Name it and the two files beside it: `store.removes()` returns all three.
+- **Cross-agent stray sweeping is already dead** and this phase makes it permanent. `_sweep_strays()`
+  globs a directory that holds exactly one record (`gateway.py:820`), so the loop body never runs for a
+  per-agent gateway. `R-GW-21` and `R-GW-23` are ✅ only because their tests share one `where`. Narrow
+  both rows and stop the tests sharing it, in the commit that deletes the shared directory. The cost is
+  real and is accepted: work left by an agent removed mid-run is never ended by anything.
 
 ### Tests
 
-- Stopping an agent empties `running/` and touches nothing in `home/`, `history/` or `state.db`.
-- Removing an agent takes one directory; `--purge` is the only thing that takes `home/`.
-- No lock file sits anywhere a record does.
+- Stopping an agent takes `gateway.json` and `gateway.lock` and touches nothing in `home/`, `logs/` or
+  `state.db`.
+- Removing an agent takes one directory, including the two files SQLite keeps beside its own; `--purge`
+  is the only thing that takes `home/`.
+- No lock file sits anywhere a record does, and the six that a transaction replaced are gone rather
+  than merely unused.
+- A gateway's own log and what the machine caught before its logger existed are one file, and rotating
+  it never leaves the machine writing into the rotated copy.
 - Forgetting a run takes its row and the brain's own files with it, and nothing of another run's.
 - Nothing reads or writes `~/.rundesk/run`, `logs` or `schedules` any more.
 - Two agents' gateways writing at once never wait on each other.

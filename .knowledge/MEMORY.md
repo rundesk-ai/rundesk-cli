@@ -181,6 +181,11 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 - **`store.usage()` on an agent that has run nothing reports `None` for the four token totals**, not
   `0` — `SUM` over no rows is NULL, and only `runs`, `reported` and `unreported` are counted. A case
   asserting zeros on a fresh database fails.
+- **Breaking `migration.py` to remove a step's spare files *before* the version commits proves
+  nothing** — a probe that looks decisive and fails silently. A step that dies never returns its
+  list, so the runner has nothing to remove on the path the claim is about, and every case still
+  passes. What actually holds "both copies survive a failed step" is the `ROLLBACK` in `_one`;
+  probe *that* (turn it into a `COMMIT`) and the copying cases fail as they should.
 
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*
