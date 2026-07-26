@@ -181,6 +181,7 @@ def environment(
     settings: dict | None = None,
     raw: Path | None = None,
     path: str | None = None,
+    preface: str | None = None,
 ) -> dict[str, str]:
     """Everything an adapter is told, and the whole of it (R-PRV-3).
 
@@ -209,6 +210,15 @@ def environment(
         # transcript can be compared with another one (R-PRV-16). Never read on the way
         # past: what an owner set is between them and their brain.
         said["RUNDESK_SETTINGS"] = json.dumps(settings, sort_keys=True)
+    if preface and preface.strip():
+        # What the thing that admitted this turn wants said about the situation, before
+        # anything the person typed. Rundesk says what it means and stops there: whether
+        # this becomes a real system instruction or a paragraph above the prompt is the
+        # brain's own business, and the adapter is the only thing that knows which its
+        # brain has. Handed over separately from the prompt for exactly that reason — a
+        # brain that cannot tell rundesk's words from the person's weights the owner's
+        # standing instructions as though somebody had just typed them.
+        said["RUNDESK_PREFACE"] = preface
     if raw is not None:
         # Somewhere to put what the *brain* said, which rundesk never sees: an adapter
         # stands between the two, so a vendor changing its stream shape would otherwise

@@ -106,6 +106,7 @@ async def carry(
     pick=None,
     asked_by: dict | None = None,
     admitted=None,
+    preface: str = "",
 ) -> Outcome:
     """Run one turn for this agent, and write down everything about it.
 
@@ -118,6 +119,13 @@ async def carry(
     about where it came from — a channel and the person who spoke, when one did. Carried
     into the admitted record and never read here, so the turn goes on knowing nothing
     about surfaces (R-CH-15).
+
+    `preface` is what the thing that admitted this turn wants the brain told about the
+    situation before it reads a word of the prompt — an owner's standing instructions for
+    this surface, or for this schedule. Handed to the adapter as its own thing rather than
+    folded into the prompt, so a brain that has somewhere to put standing instructions can
+    put them there. Written into the account, because a turn that read something the
+    person never typed has to be readable afterwards as having read it.
 
     `admitted` is told the run's id and what the brain can do, the moment there is a run
     and before the brain is started. Anything showing a turn as it happens needs both:
@@ -155,6 +163,10 @@ async def carry(
             "conversation": conversation, "model": model, "resumed": bool(resume),
             "settings": dict(settings or {}), "can": can,
             **({"asked_by": dict(asked_by)} if asked_by else {}),
+            # Written down because a turn that was given standing instructions read
+            # something the person never typed, and an account that does not say so
+            # cannot explain afterwards why it answered the way it did.
+            **({"preface": preface} if preface else {}),
         })
         # Written before the brain is started, because what is sent is what the account
         # has to show — and an account written afterwards is one that can be written to
@@ -178,7 +190,7 @@ async def carry(
             env=provider.environment(
                 home=whose["run"], cwd=whose["home"], provider_home=home, run=run,
                 model=model, resume=resume, posture=posture, settings=settings,
-                raw=whose["runs"] / (run + transcript.BRAIN),
+                raw=whose["runs"] / (run + transcript.BRAIN), preface=preface,
             ),
             # **The agent's home, not its workspace.** A brain loads the rules it is to
             # follow because they *stand in the directory it stands in* — that is the whole

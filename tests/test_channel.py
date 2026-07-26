@@ -541,6 +541,66 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
         self.assertEqual("", odd[channel.CALLED])
         self.assertEqual("", odd[channel.WHERE])
 
+    def test_what_an_owner_has_an_agent_told_composes_what_is_always_true_with_what_fits(self):
+        """R-CH-22 — `any` every time, then the one situation this is, joined. Composing
+        rather than overriding is what lets what is true everywhere be written once."""
+        record = {"kind": "discord", channel.SAYS: {
+            "any": "You are {agent}, reached over {surface}.",
+            "room": "You are in {where}. Others read this.",
+            "direct": "A private conversation with {called}."}}
+        room = channel.preface(record, "ava", "dms", {
+            "direct": False, "where": "#ops", "called": "Tim"})
+        self.assertIn("You are ava, reached over discord.", room)
+        self.assertIn("You are in #ops. Others read this.", room)
+        self.assertNotIn("private conversation", room)
+        alone = channel.preface(record, "ava", "dms", {
+            "direct": True, "where": "a direct message", "called": "Tim"})
+        self.assertIn("You are ava, reached over discord.", alone)
+        self.assertIn("A private conversation with Tim.", alone)
+        self.assertNotIn("Others read this", alone)
+
+    def test_an_owner_who_wrote_nothing_is_still_told_where_the_agent_is(self):
+        """R-CH-21, R-CH-22 — something that says where it is beats something that says
+        nothing, and an owner who disagrees says so by writing their own."""
+        said = channel.preface({"kind": "discord"}, "ava", "dms",
+                               {"direct": False, "where": "#ops", "called": "Tim"})
+        self.assertIn("over discord", said)
+        self.assertIn("in #ops", said)
+        self.assertNotIn("'dms'", said)
+
+    def test_a_situation_that_does_not_exist_is_refused_when_it_is_written(self):
+        """R-CH-22 — the moment an owner writes it, not quietly at every turn after."""
+        self.assertIn("not a situation", channel.wrong_with_says({"shouting": "hi"}))
+        self.assertIn("named situations", channel.wrong_with_says("hi"))
+        self.assertIn("as words", channel.wrong_with_says({"any": 12}))
+        self.assertIn("longer than", channel.wrong_with_says({"any": "x" * 5000}))
+        self.assertEqual("", channel.wrong_with_says({"any": "hi {called}", "room": ""}))
+
+    def test_a_name_that_cannot_be_filled_in_is_refused_when_it_is_written(self):
+        """R-CH-22 — a misspelt name is an instruction that would have gone silently
+        blank every turn from then on, and said nothing about having done so."""
+        self.assertIn("nothing called 'calledd'",
+                      channel.wrong_with_says({"any": "hello {calledd}"}))
+        self.assertEqual("", channel.wrong_with_says(
+            {"any": " ".join("{%s}" % one for one in channel.FILLED)}))
+
+    def test_a_brace_an_owner_wrote_for_its_own_sake_is_left_alone(self):
+        """R-CH-22 — an owner asking for JSON, or writing a shell expansion, wrote a brace
+        meaning a brace. Filling in by name rather than by format keeps it one."""
+        said = channel.preface({"kind": "discord", channel.SAYS: {
+            "any": 'Answer as {"ok": true} and sign it {agent}. $\{HOME\} is yours.'}},
+            "ava", "dms", {"direct": True})
+        self.assertIn('{"ok": true}', said)
+        self.assertIn("$\{HOME\}", said)
+        self.assertIn("sign it ava", said)
+
+    def test_what_an_agent_is_told_is_bounded_however_it_was_composed(self):
+        """R-CH-22 — each piece is bounded when written, and so is the whole once the
+        pieces are joined and what they name is filled in."""
+        record = {"kind": "discord", channel.SAYS: {"any": "x" * 3000, "room": "y" * 3000}}
+        self.assertEqual(channel.SAYS_MOST,
+                         len(channel.preface(record, "ava", "dms", {"direct": False})))
+
     def test_a_gesture_that_is_not_one_is_refused(self):
         """R-CAD-1 — acting on it means guessing which of two things somebody meant, and
         one of them ends a turn."""

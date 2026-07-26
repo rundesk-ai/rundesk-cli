@@ -444,7 +444,7 @@ def _turn(codex, where: str) -> int:
             if word is None:
                 continue
             if not asked:
-                codex.ask("turn/start", {**beginning, "input": [_text(word)]})
+                codex.ask("turn/start", {**beginning, "input": _first(word)})
                 asked = True
                 # Said *after* the turn is really under way, never before. Set first, the
                 # waiter woke while the turn id was still on its way and read a turn that
@@ -528,6 +528,26 @@ def _word(line: str):
 
 def _text(word: str) -> dict:
     return {"type": "text", "text": word}
+
+
+def _first(word: str) -> list:
+    """What the turn opens with — the standing instructions, then what somebody asked.
+
+    **Not `baseInstructions`, and this is the whole reason it is here.** Codex takes one on
+    `thread/start`, and "base" means base: it stands in place of the instructions codex was
+    built with, the ones telling it how to use its own tools. An owner's paragraph sent
+    there does not add a paragraph, it deletes the brain and leaves the paragraph — and
+    nothing says so, the turn merely behaves strangely and the model gets the blame. Codex
+    offers nothing that *adds* to its instructions over this protocol, so the next best
+    thing is what happens: its own block at the top of the turn, saying whose words these
+    are, rather than glued onto the end of somebody's sentence where the brain would read
+    them as the person talking.
+    """
+    preface = os.environ.get("RUNDESK_PREFACE") or ""
+    if not preface.strip():
+        return [_text(word)]
+    return [_text("Standing instructions from rundesk, not from the person you are "
+                  "answering:\n\n" + preface.strip()), _text(word)]
 
 
 def _until(ready, patience: float = ANSWER_SECONDS) -> None:

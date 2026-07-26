@@ -247,6 +247,16 @@ class WhatReachesABrain(WithAnAgentToRunTurnsFor):
         self.assertNotIn("/bo/", told["RUNDESK_CWD"])
         self.assertNotIn("/bo/", told["RUNDESK_PROVIDER_HOME"])
 
+    async def test_what_a_turn_was_told_to_stand_on_is_written_into_the_account(self):
+        """R-PRV-23 — a turn given standing instructions read something the person never
+        typed, and an account that does not say so cannot explain afterwards why it
+        answered the way it did."""
+        said = await self.ask("nosy", preface="You are in a room. Others read this.")
+        admitted = self.only(said.run, turn.ADMITTED)
+        self.assertEqual("You are in a room. Others read this.", admitted["preface"])
+        plain = await self.ask("nosy")
+        self.assertNotIn("preface", self.only(plain.run, turn.ADMITTED))
+
     async def test_a_brain_is_told_where_its_own_things_would_go_but_given_no_home(self):
         """R-AGT-8, R-PRV-3 — an adapter is *told* where a place of its own is, and rundesk
         does not make one.

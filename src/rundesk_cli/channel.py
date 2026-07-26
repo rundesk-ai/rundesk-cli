@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -74,6 +75,28 @@ ATTACHED = "attachments"
 #: turn is exactly what it was before. What is here is never a control: the answer goes
 #: where the conversation is, which is rundesk's to decide and not the sender's to say.
 WHERE, CALLED = "where", "called"
+
+#: What an owner has this agent told about its situation, before it reads a word of what
+#: somebody typed (R-CH-22). Three keys and no more: `any` is used every time, and then
+#: whichever of `direct` or `room` this conversation is. They compose rather than override,
+#: so what is true everywhere is written once.
+#:
+#: Closed, and deliberately not a language. A condition an owner can write is a condition
+#: rundesk has to explain, get right, and keep right — and what was actually asked for was
+#: "say something different in a room than in a direct message", which is three keys.
+SAYS = "says"
+ANY, DIRECT, ROOM = "any", "direct", "room"
+SITUATIONS = (ANY, DIRECT, ROOM)
+
+#: What an owner may write `{like this}` and have filled in. Closed, because a name that is
+#: not here is a typo, and a typo that silently becomes empty is an instruction that quietly
+#: stopped saying what it said. Refused when it is written, not when a turn runs.
+FILLED = ("agent", "channel", "surface", "where", "called", "user", "conversation")
+
+#: How much of a preface is carried. Standing instructions are the owner's own words and
+#: nobody is trying to defend against them — but a turn whose preface is longer than the
+#: conversation is one nobody meant to write, and a record is not somewhere to put a book.
+SAYS_MOST = 4000
 
 #: How much of either is carried. These are a stranger's words on their way into a prompt,
 #: so they are clipped and flattened to one line — a display name is a place somebody can
@@ -320,6 +343,90 @@ def attached(said) -> list:
             continue
         found.append({"name": str(one.get("name") or stands.name), "at": str(stands)})
     return found
+
+
+def preface(record: dict, agent: str, name: str, it: dict) -> str:
+    """What this agent is told about its situation, for this arrival (R-CH-22).
+
+    `any` then the one that fits, joined — so what is true everywhere is written once and
+    what is true only in a room is written where it belongs. An owner who has written
+    nothing gets the sentence rundesk would have said anyway, which is the only default:
+    something that says where it is beats something that says nothing, and an owner who
+    disagrees says so by writing their own.
+    """
+    says = record.get(SAYS)
+    said = []
+    if isinstance(says, dict):
+        said = [str(says.get(one) or "").strip()
+                for one in (ANY, DIRECT if it.get("direct") else ROOM)]
+    said = [one for one in said if one]
+    if not said:
+        said = [_by_default(record, it)]
+    filling = {
+        "agent": agent, "channel": name, "surface": str(record.get("kind") or ""),
+        "where": plainly(it.get(WHERE)), "called": plainly(it.get(CALLED)),
+        "user": str(it.get("user") or ""), "conversation": str(it.get("conversation") or ""),
+    }
+    return _fill("\n\n".join(one for one in said if one), filling)[:SAYS_MOST]
+
+
+def _by_default(record: dict, it: dict) -> str:
+    """The one line rundesk says when an owner has said nothing (R-CH-21).
+
+    **Not the channel's name.** That is the label an owner gave this connection when they
+    set it up — `dms`, `ops`, `the-loud-one` — and it means nothing to a brain except that
+    the word "channel" now appears twice in one sentence saying two different things. One
+    named `dms`, pointing at a room, had an agent announce it was in "DMs in #development":
+    it reconciled the two the only way the sentence allowed. It is a `{channel}` an owner
+    can write if they want it, and not something rundesk volunteers.
+    """
+    kind = str(record.get("kind") or "").strip()
+    if not kind:
+        return ""
+    said = f"This reached you over {kind}"
+    for word, got in ((", in ", plainly(it.get(WHERE))), (", from ", plainly(it.get(CALLED)))):
+        if got:
+            said += word + got
+    return said + ". What you answer is posted straight back there for them to read."
+
+
+def _fill(said: str, filling: dict) -> str:
+    """Put what is known in place of each `{name}`, and leave the rest of the text alone.
+
+    Done by hand rather than with `str.format`, which would read a brace an owner wrote
+    for its own sake — in a snippet of JSON, or a shell expansion — as a name it did not
+    recognise, and raise in the middle of a turn. What is here is filled in; anything else
+    is characters, and stays characters.
+    """
+    for name in FILLED:
+        if "{" + name + "}" in said:
+            said = said.replace("{" + name + "}", filling.get(name, ""))
+    return said
+
+
+def wrong_with_says(says) -> str:
+    """Why these standing instructions cannot be stored, or empty if they can (R-CH-22).
+
+    Said when an owner writes them, never when a turn runs. A name misspelled here is an
+    instruction that would have gone quietly blank every time from then on, and the moment
+    to find out is the moment it is written — which is the same rule adding a channel
+    already follows.
+    """
+    if not isinstance(says, dict):
+        return "what an agent is told has to be written as a set of named situations"
+    for situation, said in says.items():
+        if situation not in SITUATIONS:
+            return (f"'{situation}' is not a situation — it is one of "
+                    + ", ".join(SITUATIONS))
+        if not isinstance(said, str):
+            return f"what is said in {situation} has to be written as words"
+        if len(said) > SAYS_MOST:
+            return f"what is said in {situation} is longer than {SAYS_MOST} characters"
+        for found in re.findall(r"\{([a-z_]+)\}", said):
+            if found not in FILLED:
+                return (f"there is nothing called '{found}' to fill in — there is "
+                        + ", ".join(FILLED))
+    return ""
 
 
 def named(secret) -> dict | None:

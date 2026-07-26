@@ -64,7 +64,7 @@ rundesk add ava --provider /opt/my-brain   # yours
 
 | | |
 |---|---|
-| `RUNDESK_CWD` | the agent's workspace — work here |
+| `RUNDESK_CWD` | the agent's own home — stand here, so what stands beside you is what your brain loads |
 | `RUNDESK_PROVIDER_HOME` | yours alone, and it lasts: config, credentials, session files, anything you must remember between turns |
 | `RUNDESK_MODEL` | the model asked for, or unset — a name you understand, not one we enumerate |
 | `RUNDESK_RUN` | the id of this run, for correlating anything you keep |
@@ -72,11 +72,36 @@ rundesk add ava --provider /opt/my-brain   # yours
 | `RUNDESK_POSTURE` | `read` or `work` — how much of the machine this turn may touch |
 | `RUNDESK_SETTINGS` | a JSON object of whatever the owner set, passed through unread |
 | `RUNDESK_RAW` | somewhere to append everything your *brain* said, if you want to keep it |
+| `RUNDESK_PREFACE` | standing instructions for this turn's situation, or unset — see below |
 
 The first four are always set. `RUNDESK_MODEL`, `RUNDESK_RESUME` and `RUNDESK_SETTINGS` are
 **absent** rather than empty when there is nothing to say, so `${RUNDESK_MODEL:-default}`
 does what you would hope. `RUNDESK_PROVIDER_HOME` is made for you before you start, and is
 yours to write in.
+
+**`RUNDESK_PREFACE` is appended, never substituted — and this one will bite.** It is what
+the owner has this agent told about the situation it is answering in, before it reads a
+word of what anybody typed. Rundesk says what it means and stops there, because only you
+know what your brain offers:
+
+- **If your brain has a way to *add* to its instructions, use that.** `claude` has
+  `--append-system-prompt`. `grok` has `--rules`, described in its own help as "extra rules
+  to append to the system prompt". That is the right home for this.
+- **Never map it to anything that replaces the system prompt.** `claude --system-prompt`,
+  `grok --system-prompt-override` and codex's `baseInstructions` all *substitute* for what
+  the brain was built with — the instructions that tell it how to use its own tools. Send
+  an owner's paragraph there and you have not added a paragraph, you have deleted the brain
+  and left the paragraph. Rundesk cannot stop you doing this and will not know you did; the
+  turn will simply behave strangely, and it will look like the model's fault.
+- **If your brain has no way to add to its instructions, put it at the top of the turn as
+  its own block**, marked as rundesk's rather than the person's. Codex has none, so that is
+  what the shipped codex adapter does. This is worse than a real system channel and it is
+  fine: correctness never degrades, only fidelity.
+- **Ignoring it entirely is a whole adapter.** A brain with no notion of standing
+  instructions is not a broken one.
+
+It arrives already composed and already bounded, and it does not come through again with a
+steer — a brain does not read its standing instructions twice in one turn.
 
 **`RUNDESK_RAW` is worth using.** Rundesk sees what *you* report and never what your brain
 said before you made records of it — so if your brain changes its output shape, that shows

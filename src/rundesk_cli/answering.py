@@ -166,11 +166,13 @@ class Answering:
         held.ref = it.get("ref")
         held.stopped = False
         held.task = asyncio.ensure_future(
-            self._one(held, _asked(it, self._from(it)), it["user"]))
+            self._one(held, _asked(it), it["user"], self._from(it)))
 
     def _from(self, it: dict) -> str:
-        """Where this conversation is, in the words a brain is given it in (R-CH-21)."""
-        return _where(self.record, self.channel, it)
+        """What this agent is told about the situation, before it reads the words
+        (R-CH-21, R-CH-22) — the owner's own, or rundesk's one line when they wrote none.
+        """
+        return channel.preface(self.record, self.name, self.channel, it)
 
     def _make_room(self) -> None:
         """Drop the oldest conversations that have nothing running in them.
@@ -195,14 +197,17 @@ class Answering:
         them again is a turn that never ends — so they wait and become the next turn.
         """
         if held.can.get("steer") and held.saying is not None:
-            held.saying.put_nowait(_asked(it, self._from(it)))
+            # Words only. Standing instructions were given to this turn when it started
+            # and a brain does not read them twice — repeating them with every steer is
+            # the owner's paragraph landing again in the middle of an answer.
+            held.saying.put_nowait(_asked(it))
             return
         # Whether the brain can be steered is not known until the turn is admitted, and a
         # burst arrives faster than that. So it waits here and is drained into the running
         # turn the moment the answer comes back — otherwise the first message of every
         # burst is steered and the rest become turns of their own, which is the same
         # conversation answered twice over.
-        held.waiting.append((_asked(it, self._from(it)), it["user"], it.get("ref")))
+        held.waiting.append((_asked(it), it["user"], it.get("ref"), self._from(it)))
         if len(held.waiting) > WAITING:
             # Bounded, and said. One person typing faster than an agent can answer must
             # not be able to hand themselves the whole gateway.
@@ -263,7 +268,7 @@ class Answering:
 
     # -- one turn --------------------------------------------------------------------
 
-    async def _one(self, held: Exchange, prompt: str, user: str) -> None:
+    async def _one(self, held: Exchange, prompt: str, user: str, preface: str = "") -> None:
         """Carry one turn, and say how it stands at each point rundesk decides it."""
         chose = agents.chosen(self.name, self._where)
         held.saying = asyncio.Queue()
@@ -287,6 +292,7 @@ class Answering:
                 steering=_saying(held.saying),
                 asked_by={"channel": self.channel, "on": held.conversation, "user": user},
                 admitted=lambda run, can: self._took(held, run, can),
+                preface=preface,
             )
         except asyncio.CancelledError:
             # Asked for, or the gateway going. Either way the turn is over and the
@@ -322,10 +328,10 @@ class Answering:
         """
         if self._stopping or not held.waiting:
             return
-        text, user, ref = held.waiting.pop(0)
+        text, user, ref, preface = held.waiting.pop(0)
         held.ref = ref
         held.stopped = False
-        held.task = asyncio.ensure_future(self._one(held, text, user))
+        held.task = asyncio.ensure_future(self._one(held, text, user, preface))
 
     def _took(self, held: Exchange, run: str, can: dict) -> None:
         """The run this conversation became and what its brain can do, the moment both
@@ -341,7 +347,7 @@ class Answering:
         # queueing behind it (R-CH-9).
         if held.can.get("steer") and held.saying is not None:
             while held.waiting:
-                text, _user, _ref = held.waiting.pop(0)
+                text, _user, _ref, _preface = held.waiting.pop(0)
                 held.saying.put_nowait(text)
         self._say(channel.RUNNING, held)
 
@@ -562,7 +568,7 @@ def _within(at: Path, inside: Path) -> bool:
     return True
 
 
-def _asked(it: dict, where: str = "") -> str:
+def _asked(it: dict) -> str:
     """What the person actually asked, including anything they attached (R-CH-17).
 
     A brain is given a prompt, so what somebody attached reaches it the only way
@@ -570,44 +576,18 @@ def _asked(it: dict, where: str = "") -> str:
     the agent can open. Rundesk does not read the file and does not describe it — what it
     is is the brain's to find out, with the tools it already has.
 
-    Where it was said reaches it the same way and for the same reason (R-CH-21). Without
-    it a brain answers every conversation as though it were the only one — it cannot tell
-    a room full of people from a direct message, or know that what it writes is about to
-    be read by the person who asked rather than kept in a file.
+    Where it was said does **not** come through here (R-CH-21, R-CH-22). Folded in, it
+    arrived as part of what the person typed, so a brain could not tell rundesk's words
+    from theirs — and answered by reporting its own situation back to them as though they
+    had asked about it. It goes over as its own thing instead.
     """
     said = it.get("text") or ""
     brought = it.get(channel.ATTACHED) or []
     if brought:
         named = "\n".join(f"- {one['name']}: {one['at']}" for one in brought)
         said = f"{said}\n\nAttached to this message, on this machine:\n{named}"
-    if where:
-        said = f"{said}\n\n{where}"
     return said.strip()
 
-
-def _where(record: dict, name: str, it: dict) -> str:
-    """The one line that tells a brain where it is answering (R-CH-21).
-
-    Said every turn rather than once at the start of a conversation: a session outlives
-    the gateway that opened it, and a turn taken up after a restart would otherwise be the
-    one turn that did not know. It costs a line and it is never wrong.
-    """
-    kind = str(record.get("kind") or "").strip()
-    if not kind:
-        return ""
-    at = channel.plainly(it.get(channel.WHERE))
-    who = channel.plainly(it.get(channel.CALLED))
-    # **Not the channel's name.** That is the label an owner gave this connection when
-    # they set it up — `dms`, `ops`, `the-loud-one` — and it means nothing to a brain
-    # except that the word "channel" now appears twice in one sentence saying two
-    # different things. One named `dms`, pointing at a room, had an agent announce it was
-    # in "DMs in #development": it reconciled the two the only way the sentence allowed.
-    said = f"This reached you over {kind}"
-    if at:
-        said += f", in {at}"
-    if who:
-        said += f", from {who}"
-    return said + ". What you answer is posted straight back there for them to read."
 
 
 def _why(outcome) -> str:

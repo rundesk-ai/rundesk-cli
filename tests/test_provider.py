@@ -528,6 +528,20 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
         self.assertIsNone(said["told"]["RUNDESK_RESUME"])
         self.assertIsNone(said["told"]["RUNDESK_SETTINGS"])
 
+    async def test_standing_instructions_are_told_separately_from_the_prompt(self):
+        """R-PRV-23 — folded into the prompt they arrive as part of what the person typed,
+        so a brain cannot tell the owner's standing instructions from somebody's message,
+        and answers by reporting its own situation back as though it had been asked."""
+        told = self.told(preface="You are in a room. Others read this.")
+        self.assertEqual("You are in a room. Others read this.", told["RUNDESK_PREFACE"])
+
+    async def test_a_turn_with_no_standing_instructions_leaves_them_unset(self):
+        """R-PRV-3, R-PRV-23 — unset rather than empty, like everything else here: an
+        adapter that reads a variable it can act on should be able to trust that it has
+        something to act on."""
+        self.assertNotIn("RUNDESK_PREFACE", self.told())
+        self.assertNotIn("RUNDESK_PREFACE", self.told(preface="   "))
+
     async def test_no_vendor_variable_is_put_in_front_of_an_adapter(self):
         """R-PRV-1 — which variable a brain wants is that brain's adapter's business.
         Set here, the vendor would be in the core, which is the seam failing."""

@@ -169,7 +169,9 @@ class WhereABrainIsAnswering(CarriesAConversation):
         held = self.answering(surface, brain)
         await self.carry(held, dict(self.arrived(),
                                     where="#ops on the Rundesk server", called="Tim"))
-        said = brain.asked[0]["prompt"]
+        said = brain.asked[0]["preface"]
+        self.assertEqual("what changed?", brain.asked[0]["prompt"],
+                         "the situation was folded into what the person typed")
         self.assertIn("over somewhere", said)
         self.assertNotIn("'ops'", said, "rundesk's own label for the connection is not "
                          "the agent's business, and collides with the platform's own word")
@@ -182,7 +184,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
         brain, surface = Brain(), Surface()
         held = self.answering(surface, brain)
         await self.carry(held, self.arrived())
-        said = brain.asked[0]["prompt"]
+        said = brain.asked[0]["preface"]
         self.assertIn("over somewhere", said)
         self.assertNotIn(", in ", said)
         self.assertNotIn(", from ", said)
@@ -195,6 +197,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
                                                       "settings": {}})
         await self.carry(held, dict(self.arrived(), where="#ops", called="Tim"))
         self.assertEqual("what changed?", brain.asked[0]["prompt"])
+        self.assertEqual("", brain.asked[0]["preface"])
 
 
 class WhoMayBeAnswered(CarriesAConversation):
