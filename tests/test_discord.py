@@ -32,7 +32,7 @@ for _packages in sorted((ROOT / ".venv" / "lib").glob("python3.*/site-packages")
 
 def _adapter():
     """The adapter, loaded from its path — it is a program, not a module."""
-    at = ROOT / "src" / "rundesk" / "channels" / "discord"
+    at = ROOT / "src" / "channels" / "discord"
     loader = importlib.machinery.SourceFileLoader("rundesk_discord", str(at))
     spec = importlib.util.spec_from_loader("rundesk_discord", loader)
     made = importlib.util.module_from_spec(spec)
@@ -42,9 +42,22 @@ def _adapter():
 
 try:
     discord = _adapter()
-except BaseException as why:  # pragma: no cover - proved by the install
+except ModuleNotFoundError as why:  # pragma: no cover - proved by the install
+    # **Only the dependency may be missing.** A machine without `discord.py` is a real
+    # configuration — CI runs one — and skipping there is honest.
+    if why.name != "discord":
+        raise
     discord = None
     WHY = str(why)
+except BaseException as why:  # pragma: no cover
+    # **Anything else is this suite being broken, and it must say so.** The adapter moved in
+    # the src restructure and this went on loading it from where it used to be: every case
+    # skipped, the file was never opened, and the gate said `ok` for months of commits. A
+    # skip and a pass read identically, so the only defence is refusing to skip for a reason
+    # that is not the one skipping is for.
+    raise RuntimeError(
+        f"test_discord cannot load the adapter it tests, which is not a skip: {why}"
+    ) from why
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
@@ -149,7 +162,7 @@ class AnAnswerInAThread(unittest.TestCase):
         So a turn in a thread ended with a ✅ on the question and no answer under it: the
         mark went on the message in the channel, which works, and the reply quoting that
         same message was rejected outright."""
-        source = (ROOT / "src" / "rundesk" / "channels" / "discord").read_text()
+        source = (ROOT / "src" / "channels" / "discord").read_text()
         self.assertIn('str(getattr(anchor, "channel_id", "")) != str(', source,
                       "an answer can still quote a message outside the place it is sent")
 
@@ -646,6 +659,33 @@ class _Collects:
 
     def flush(self):
         pass
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class WhichRoomAWordMeans(unittest.TestCase):
+    """R-CAD-16 — a schedule names a place, and this is what turns that word into a room."""
+
+    def test_a_name_with_its_hash_and_without_are_one_room(self):
+        """The hash is how Discord writes a channel and how anybody types one; it is not part
+        of the name, so asking for it either way asks for the same room."""
+        self.assertTrue(discord.room_matches("#operations", "operations"))
+        self.assertTrue(discord.room_matches("operations", "operations"))
+
+    def test_a_room_is_found_however_it_was_capitalised(self):
+        """Nobody types a room name the way the server stores it."""
+        self.assertTrue(discord.room_matches("#Operations", "operations"))
+        self.assertTrue(discord.room_matches("ops", "OPS"))
+
+    def test_a_different_room_is_not_this_one(self):
+        """The half that matters: a word that names another room must not match, or a daily
+        report lands somewhere nobody chose — which is the whole failure this exists to end."""
+        self.assertFalse(discord.room_matches("#operations", "operations-archive"))
+        self.assertFalse(discord.room_matches("#ops", "operations"))
+        self.assertFalse(discord.room_matches("", "operations"))
+
+    def test_what_an_owner_typed_is_taken_as_they_typed_it(self):
+        """Spaces around it are typing, not the name."""
+        self.assertTrue(discord.room_matches("  #operations  ", "operations"))
 
 
 if __name__ == "__main__":

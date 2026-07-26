@@ -13,6 +13,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   too, so the Discord cases silently start skipping, and a gateway you have running would fail on its
   next restart with no obvious cause. Run `./install.sh` again straight afterwards, and check
   `.venv/bin/python -c "import discord"` before believing a green suite.
+- **`OK (skipped=65)` and `OK` are the same word to whoever reads the gate.** `test_discord`
+  loaded the adapter from `src/rundesk/channels/discord`, which the src restructure had moved
+  to `src/channels/discord`; the loader raised, a bare `except BaseException` set the module to
+  `None`, and every case skipped for months while the gate said `ok`. **A suite may only skip
+  for the reason skipping is for** — here, `discord.py` genuinely not installed — and anything
+  else must raise. Check a suite that can skip with `.venv/bin/python tests/test_discord.py`
+  and read the *count*, not the word: `python3` alone has no `discord` and skips honestly, so
+  the two failures look identical from the wrong interpreter.
 - **Waiting for the gate with `while pgrep -f "scripts/gate"` never ends, because the waiter
   matches itself.** The pattern is in the waiting shell's own command line, so `pgrep` finds it
   and every waiter keeps every other waiter alive — six of them were still spinning long after
