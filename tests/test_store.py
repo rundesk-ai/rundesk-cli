@@ -394,7 +394,7 @@ class WhatAnAgentIsConfiguredWith(WithAnAgentsOwnRecords):
             {"name": "discord", "kind": "discord", "enabled": True, "provider": "codex",
              "model": "gpt-5", "instructions": "be brief", "allow": ["amy", "zoe"],
              "secret": None, "settings": {"prefix": "!"}, "describes": None, "fills": [],
-             "created_at": AT},
+             "activity": True, "created_at": AT},
             kept.channel("discord"))
 
     def test_what_a_surface_said_about_itself_is_kept_where_the_surface_is(self):
@@ -407,6 +407,18 @@ class WhatAnAgentIsConfiguredWith(WithAnAgentsOwnRecords):
                               fills=["channel", "server"])
         self.assertEqual("a room other people read", kept.channel("rooms")["describes"])
         self.assertEqual(["channel", "server"], kept.channel("rooms")["fills"])
+
+    def test_a_surface_is_shown_what_the_agent_is_doing_unless_it_is_told_not_to_be(self):
+        """R-CH-6 — on unless an owner says otherwise. A room that goes quiet for four
+        minutes and then answers looks broken; a room where that is noise is one where the
+        owner says so once, rather than rundesk guessing per message."""
+        kept = self.built()
+        kept.remember_channel("rooms", "discord", ["amy"], AT)
+        self.assertTrue(kept.channel("rooms")["activity"])
+
+        kept.remember_channel("quiet", "discord", ["amy"], AT, activity=False)
+        self.assertFalse(kept.channel("quiet")["activity"])
+        self.assertTrue(kept.channel("rooms")["activity"], "one surface answered for both")
 
     def test_a_channel_nobody_may_use_is_refused_rather_than_defaulted(self):
         """A surface with an empty allow answers whoever speaks to it. That is a

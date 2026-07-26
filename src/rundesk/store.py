@@ -443,13 +443,14 @@ class Store:
         kept["allow"] = json.loads(kept["allow"])
         kept["settings"] = json.loads(kept["settings"])
         kept["fills"] = json.loads(kept["fills"])
+        kept["activity"] = bool(kept["activity"])
         kept["secret"] = json.loads(kept["secret"]) if kept["secret"] else None
         kept["enabled"] = bool(kept["enabled"])
         return kept
 
     def remember_channel(self, name, kind, allow, created_at, provider=None, model=None,
                          instructions=None, secret=None, settings=None, describes=None,
-                         fills=None, enabled=True):
+                         fills=None, activity=True, enabled=True):
         """Write down a surface an agent is reachable on, replacing one of the same name.
 
         `allow` is who may reach the agent through it and is never empty — a channel nobody
@@ -459,25 +460,31 @@ class Store:
         `describes` and `fills` are what the adapter said about the kind of place this is
         and which parts of it it can fill in, so a `{where.something}` an owner writes later
         is checked against what will actually be there rather than against a guess.
+
+        `activity` is whether this surface is shown what the agent is *doing* while it
+        works, as against what it finally says. On unless an owner says otherwise: a room
+        that goes quiet for four minutes and then answers looks broken, and the fix for a
+        room where that is noise is to say so once rather than to guess per message.
         """
         if not allow:
             raise ValueError("a channel nobody may use is refused rather than defaulted")
         with self._writing() as conn:
             conn.execute(
                 "INSERT INTO channel (name, kind, enabled, provider, model, instructions,"
-                " allow, secret, settings, describes, fills, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+                " allow, secret, settings, describes, fills, activity, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT(name) DO UPDATE SET"
                 " kind=excluded.kind, enabled=excluded.enabled, provider=excluded.provider,"
                 " model=excluded.model, instructions=excluded.instructions,"
                 " allow=excluded.allow, secret=excluded.secret, settings=excluded.settings,"
-                " describes=excluded.describes, fills=excluded.fills",
+                " describes=excluded.describes, fills=excluded.fills,"
+                " activity=excluded.activity",
                 (
                     name, kind, 1 if enabled else 0, provider, model, instructions,
                     json.dumps(sorted(set(allow))),
                     json.dumps(secret, sort_keys=True) if secret else None,
                     json.dumps(settings or {}, sort_keys=True),
-                    describes, json.dumps(list(fills or [])),
+                    describes, json.dumps(list(fills or [])), 1 if activity else 0,
                     created_at,
                 ),
             )

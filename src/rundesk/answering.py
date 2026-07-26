@@ -520,6 +520,13 @@ class _Shown:
             return
         if kind not in self.AS_IT_HAPPENS:
             return
+        if not self._answering.record.get("activity", True):
+            # What the agent *is doing* is what an owner may turn off, and what it *says*
+            # is not. A room that goes quiet for four minutes and then answers looks
+            # broken, so this is on unless somebody said otherwise — but a room where it
+            # is noise is one where they said so once, and every turn in it is quiet
+            # rather than every message carrying a decision (R-CH-6).
+            return
         it = {what: said[what] for what in self.AS_IT_HAPPENS[kind] if what in said}
         if isinstance(it.get("summary"), str) and len(it["summary"]) > self.SUMMARY_CHARS:
             it["summary"] = it["summary"][: self.SUMMARY_CHARS] + "…"

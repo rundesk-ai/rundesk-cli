@@ -2052,6 +2052,29 @@ raise SystemExit(1)
         self.assertIn("REMOVED", said)
         self.assertEqual({}, self.every())
 
+    def test_whether_a_channel_is_shown_what_the_agent_is_doing_is_settled_when_it_is_added(self):
+        """R-CH-6 — settled once for the surface rather than decided per message. A room
+        that goes quiet for four minutes and then answers looks broken, so it is on unless
+        somebody says otherwise; a room where that is noise is one where they said so."""
+        drive(["channels", "ava", "add", "loud", "--kind", self._adapter(self.WORKS),
+               "--allow", "2207"], self._gateways(), agents=self.agents)
+        code, said = drive(["channels", "ava", "add", "quiet", "--no-activity",
+                            "--kind", self._adapter(self.WORKS), "--allow", "2207"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertTrue(self.kept("loud")["activity"], "a channel had to ask to be shown")
+        self.assertFalse(self.kept("quiet")["activity"], "--no-activity reached nothing")
+
+    def test_what_a_channel_is_shown_is_readable_before_anyone_speaks_to_it(self):
+        """R-CH-6 — an owner reads back what their agent will do in a room *before* it
+        does it, which is the whole reason showing one is a command rather than a guess."""
+        drive(["channels", "ava", "add", "quiet", "--no-activity",
+               "--kind", self._adapter(self.WORKS), "--allow", "2207"],
+              self._gateways(), agents=self.agents)
+        _, said = drive(["channels", "ava", "show", "quiet"],
+                        self._gateways(), agents=self.agents)
+        self.assertIn("only the answer", said)
+
     def test_taking_one_channel_off_leaves_every_other_one_on(self):
         """R-CAD-9, R-AGW-4 — an agent reachable in three places and taken off one is
         still reachable in two. Taking the lot would put it out of reach of people who

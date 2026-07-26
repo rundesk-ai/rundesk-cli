@@ -597,6 +597,21 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
         self.assertLess(kinds.index("think"), kinds.index("answer"),
                         "what it did was shown after what it said")
 
+    async def test_a_surface_told_not_to_show_what_it_is_doing_still_answers(self):
+        """R-CH-6 — what an agent *is doing* is what an owner may turn off, and what it
+        *says* is not. Turning both off would be a channel that takes a message and never
+        replies to it, which is not a quieter agent but a broken one."""
+        brain = Brain(showing=[{"type": "think", "text": "the error is in the parser"},
+                               {"type": "tool", "id": "1", "did": "run"},
+                               {"type": "usage", "input": 10, "output": 2}])
+        surface = Surface()
+        held = self.answering(surface, brain, record=dict(self.record, activity=False))
+        await self.carry(held, self.arrived())
+        kinds = [one["type"] for one in surface.shown]
+        self.assertEqual([], [one for one in kinds if one in ("think", "tool", "usage")],
+                         "a surface told not to be shown what it was doing was shown it")
+        self.assertIn("answer", kinds, "turning activity off took the answer with it")
+
     async def test_a_finished_thing_said_mid_turn_is_shown_when_the_next_one_arrives(self):
         """R-CH-19 — an agent that says "I will look at the logs" and then, a minute
         later, what it found is writing the way a person does. Both arriving at once

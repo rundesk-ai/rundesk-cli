@@ -34,6 +34,7 @@ CREATE TABLE channel (
     settings      TEXT NOT NULL DEFAULT '{}',
     describes     TEXT,
     fills         TEXT NOT NULL DEFAULT '[]',
+    activity      INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL
 ) STRICT;
 

@@ -28,7 +28,7 @@ rundesk logs [-n <lines>] [--source <source>] <agent>                           
 # reaching it
 rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] [--instructions <text>] <agent> <prompt>   one turn, streamed to this terminal
 rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] [--instructions <text>] <agent> <prompt>   with standing instructions, told apart from the prompt
-rundesk channels <agent> add --kind <kind> --allow <user> <channel> -- <option> [<arg> ...]                                                                                            put this agent on a channel
+rundesk channels <agent> add --kind <kind> --allow <user> [--activity | --no-activity] <channel> -- <option> [<arg> ...]                                                               put this agent on a channel
 rundesk channels <agent> instructions <channel> <text>                                                                                                                                 what this agent is told about where it is
 rundesk channels <agent> remove <channel>                                                                                                                                              take this agent off a channel
 rundesk channels <agent> show <channel>                                                                                                                                                one channel, and who may reach this agent through it
@@ -96,6 +96,7 @@ rundesk schedules ava off nightly
 ## What the arguments mean
 
 ```sh
+--activity, --no-activity       show what the agent is doing while it works, not only what it finally says (default: on)
 --all                           every agent on this machine
 --allow <user>                  who may reach this agent through it — at least one, always; repeatable
 --check                         say whether a newer release exists

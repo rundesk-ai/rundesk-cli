@@ -411,6 +411,14 @@ def build_parser() -> argparse.ArgumentParser:
                         metavar="<user>",
                         help="who may reach this agent through it — at least one, always; "
                              "repeatable")
+    # On unless an owner says otherwise, because a room that goes quiet for four minutes
+    # and then answers looks broken. `BooleanOptionalAction` is what makes the flag read
+    # as the thing it settles rather than as an instruction: `--activity` and
+    # `--no-activity`, one of which is already true, so nobody has to remember which way
+    # round the default is.
+    joined.add_argument("--activity", action=argparse.BooleanOptionalAction, default=True,
+                        help="show what the agent is doing while it works, not only what "
+                             "it finally says (default: on)")
     # Declared so the reference shows it, and carried rather than read. Whatever the
     # platform needs is the adapter's own vocabulary, and the `--` in front is grammar:
     # without it the first thing that looks like an option is refused (R-CAD-13).
@@ -1535,7 +1543,7 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
                                settings=shape["settings"], secret=said["secret"],
                                describes=shape["describes"],
                                instructions=shape[channel.INSTRUCTIONS] or None,
-                               fills=shape[channel.FILLS])
+                               fills=shape[channel.FILLS], activity=args.activity)
         unlogged |= _note(gateways, args.name, f"channel '{one}' added ({args.kind})",
                           agents.resolved(args.name))
         print(f"{args.name}/{one}: ADDED — {shape['describes'] or args.kind}")
@@ -1644,6 +1652,8 @@ def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
             or "none needed"),
         ("instructions", str(it.get(channel.INSTRUCTIONS)
                      or "nothing of its own — rundesk says where it is")),
+        ("activity", "shown while it works" if it.get("activity")
+                     else "only the answer"),
         ("reachable", "yes" if gateways.standing(
             args.name, agents.resolved(args.name).run).running
             else "no — the agent is not running"),
