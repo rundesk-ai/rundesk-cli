@@ -1,240 +1,226 @@
-# rundesk
+<p align="center">
+  <a href="https://github.com/rundesk-ai/rundesk-cli/actions/workflows/build.yml"><img src="https://github.com/rundesk-ai/rundesk-cli/actions/workflows/build.yml/badge.svg" alt="Build"></a>
+  <a href="https://github.com/rundesk-ai/rundesk-cli/releases/latest"><img src="https://img.shields.io/github/v/release/rundesk-ai/rundesk-cli?style=flat-square" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux-lightgrey?style=flat-square" alt="macOS and Linux">
+  <img src="https://img.shields.io/badge/build%20step-none-green?style=flat-square" alt="No build step">
+</p>
+<p align="center">
+    🚀 <a href="#-quick-start"><strong>Quick start</strong></a>
+    &nbsp;·&nbsp;
+    ✨ <a href="#-what-it-does"><strong>What it does</strong></a>
+    &nbsp;·&nbsp;
+    🧠 <a href="#-bring-your-own-brain"><strong>Brains</strong></a>
+    &nbsp;·&nbsp;
+    💬 <a href="#-reach-it-where-you-already-are"><strong>Channels</strong></a>
+    &nbsp;·&nbsp;
+    📖 <a href="#-documentation"><strong>Docs</strong></a>
+</p>
 
-A lightweight, provider-agnostic multi-agent gateway. Provider CLIs are the agent
-brains; chat platforms are interchangeable channels; the engine between them knows
-neither.
+# 🖥 rundesk
 
-Standard library Python only — no packages to install, and nothing to build.
+**Give your AI coding agent a name, a home, and a phone number.**
 
-## Install
+rundesk turns the provider CLI you already have — Codex, Claude Code, or one you wrote
+yourself — into a named agent that stays running, works on a schedule, and answers you on
+Discord. It uses the CLI you're already signed in to, so there are no API keys to manage,
+nothing to host, and no build step.
+
+## ⚡ It's this simple
+
+```sh
+rundesk add ava --provider codex
+rundesk ask ava "what changed in this repo today?"
+```
+
+That's a working agent. `ava` has her own workspace, her own memory files, and her own
+conversation history — kept apart from every other agent on the machine.
+
+## 🎯 Highlights
+
+- **Your CLI is the brain.** rundesk runs Codex, Claude Code, or your own program. It never
+  reimplements the agent loop, so you keep the tools, permissions and session you already have.
+- **Reachable from Discord.** Message your agent from your phone. It opens a thread, shows you
+  what it's doing as it works, and posts the answer when it's done.
+- **Works while you don't.** Schedules run on the clock — never late, never twice, never
+  overlapping.
+- **Stays up.** Your machine keeps each agent running and brings it back after a crash or a reboot.
+- **Remembers everything.** Every turn is recorded — what was asked, what it did, what it cost.
+- **Nothing to manage.** Standard-library Python and one directory under your home. The single
+  package Discord needs goes into rundesk's own virtualenv — never your system Python.
+
+## 💡 Why rundesk?
+
+Provider CLIs are excellent and they all stop at the same place: they run in your terminal,
+and when you close it, they're gone. rundesk is the part around them.
+
+- **One agent, many ways in.** The same `ava` — same memory, same workspace — answers you in
+  the terminal, on Discord, and on a schedule. Which model answers is decided per entry point,
+  not baked into the agent.
+- **Swap anything, change nothing.** A brain is a program rundesk runs, not a plugin it loads.
+  So is a channel. A brain nobody here has heard of is first-class, not degraded —
+  [a stranger wrote one from the guide alone](.knowledge/guides/write-a-provider-adapter.md) and
+  it passed the same test suite the shipped one does.
+- **Honest about what it doesn't do.** A command that isn't built says so and exits with its own
+  code, so a script can tell "this version doesn't have that" from "you typed it wrong".
+
+## 🚀 Quick start
 
 ```sh
 curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash
 ```
 
-It installs into **`~/.rundesk`** — one directory under your home, holding rundesk and
-anything it needs. Nothing else on your machine is written to, and your shell profile is
-left alone: if the command is not on your `PATH`, the installer says so and shows the line
-to add rather than editing a file you own.
+Everything lands in **`~/.rundesk`** — one directory under your home. Your shell profile is left
+alone; if the command isn't on your `PATH`, the installer shows you the line to add rather than
+editing a file you own.
 
-From a checkout, `./install.sh` symlinks that checkout instead, so development and installed
-use share one layout.
+### Make an agent
 
 ```sh
-./install.sh --uninstall [--purge]   # take it off again
+rundesk add ava --provider codex     # a brain this machine already has
+rundesk doctor ava                   # what stands between ava and a working turn
 ```
 
-Removing rundesk stops every gateway it was keeping and takes their jobs with them, before
-anything is deleted — and refuses outright if one of them will not stop. What your gateways
-*wrote* is kept: their logs, your schedules, and the account of what those schedules did.
-`--purge` takes those as well.
-
-## Commands
+### Ask it something
 
 ```sh
-rundesk                             # what it can do
-rundesk version [--check]           # what is installed, and whether that is current
-rundesk update [--check]            # move to the newest published release
-rundesk uninstall                   # how to remove it
-rundesk status                      # how rundesk itself is on this machine
+rundesk ask ava "summarise what's still failing in CI"
 ```
 
-### The gateway
+Answers stream to your terminal. Ask again and it remembers — same conversation, same session.
 
-A gateway is the part that stays running. There is one per **name** — one per agent,
-once there are agents — so any one of them is restarted without disturbing the rest.
+### Keep it running
 
 ```sh
-rundesk start <agent> [--here]      # have the machine keep one running, or run it here
-rundesk stop <agent> | --all        # stand one or every agent down
-rundesk remove <agent> [--purge]    # take a stopped agent away for good
-rundesk restart <agent> | --all     # cycle one or every agent
-rundesk agents [<agent>]            # what every agent is doing, or where one keeps things
-rundesk logs <agent> [-n]           # everything one has said, across rotation and both writers
-rundesk schedules <agent> [...]     # work that starts itself — see below
+rundesk start ava        # your machine keeps it up, and brings it back after a reboot
+rundesk agents           # every agent, and what each is doing
+rundesk logs ava         # everything it's said
 ```
-
-`stop` and `restart` require either one agent or an explicit `--all`. Removal always names
-one: standing every gateway down is a fine thing to ask for and a terrible thing to guess
-at, so removal never does.
-
-`start` creates a gateway by writing a job the machine keeps — which is also why one
-you are finished with stays in your machine's background items until it is removed.
-`stop` deliberately leaves that job alone, so the gateway comes back on the next start.
-`remove` is what takes it: the job, what the gateway was doing, and its name.
-
-What a gateway *wrote* is kept — its log, its schedules and the account of what those
-schedules did. `--purge` takes those too. Removal refuses outright while the gateway is
-still running, or while the machine will not let go of its job, and in either case takes
-nothing at all: half-removed is worse than not removed, because the job is the only thing
-that would ever find that gateway again.
-
-rundesk supervises nothing itself. `start` writes a job and hands it to launchd, which
-brings a gateway back if it falls over and starts it again after a reboot. A gateway
-that *refuses* to run — a virtualenv that no longer fits, a name already held — ends
-cleanly so the machine does not spend the rest of the day restarting it.
-
-`agents` asks the gateways rather than the machine, so it can show the one thing a
-supervisor cannot: up, and not going round.
 
 ```
 AGENT    STATE    PID    UPTIME  LAUNCHD JOB  VERSION  WORK
-ava      RUNNING  4192   2h14m   LOADED       0.1.1    2 (a-conversation, another)
-claude   WEDGED   4210   6h02m   LOADED       0.1.1    idle
+ava      RUNNING  4192   2h14m   LOADED       0.4.0    2 (a-conversation, another)
 codex    STOPPED  -      -       NOT LOADED   -        -
 ```
 
-`LAUNCHD JOB` is asked of the machine, not read off a file: a job description sitting in
-a directory is not a job launchd is keeping, and the two come apart. It is reported
-separately from the gateway process state and PID because a loaded job does not prove
-which process, if any, it owns.
-
-### Schedules
-
-Work that starts itself, because the time came. Every gateway has its own — so when there
-are agents, each one's schedules are its own and never another's to run.
+### Give it work that starts itself
 
 ```sh
-rundesk schedules <agent>                                      # what is scheduled, and what it last did
-rundesk schedules <agent> add <name> --when <cron> -- <cmd…>   # state one
-rundesk schedules <agent> remove <name>                        # take it away
-rundesk schedules <agent> on|off <name>                        # keep it, but stop it running
-rundesk schedules <agent> run <name>                           # run it now
+rundesk schedules ava add nightly --when "0 3 * * *" -- rundesk ask ava "what changed today?"
+rundesk schedules ava
 ```
 
 ```
-SCHEDULE  STATE  WHEN         NEXT              LAST RUN          OUTCOME
-tidy      ON     */5 * * * *  2026-07-25 10:45  2026-07-25 10:40  finished
-nightly   OFF    0 3 * * *    off               2026-07-24 03:00  finished
+SCHEDULE  STATE  WHEN       NEXT              LAST RUN          OUTCOME
+nightly   ON     0 3 * * *  2026-07-27 03:00  2026-07-26 03:00  finished
 ```
 
-- **Nothing is run late.** A time that passed while nothing was running is gone — running
-  five at once on the way up is worse than not running them — but the gap is written to
-  the log, because silence is indistinguishable from a schedule that never worked.
-- **Nothing overlaps.** A schedule that is still running when it next falls due is skipped
-  and said so, using the same guard that stops any work running twice.
-- **It runs once for the minute it is due**, however often the clock is examined — across a
-  restart, and across the hour a clock goes back.
-- **What it names is refused where it is written.** A gateway runs with almost no `PATH`,
-  so a program named rather than located is refused by `add` rather than discovered at
-  three in the morning.
-
-### The surfaces an agent is reachable on
-
-A channel is a messaging surface an agent answers on, named the way a schedule is: you
-give it a name to refer to it by later, and what it *is* comes from `--kind`. Whatever
-that platform needs goes after `--` and is carried to it unread.
+## 💬 Reach it where you already are
 
 ```sh
-rundesk channels <agent>                                        # what it is reachable on
-rundesk channels <agent> add acme --kind discord --allow <user>  # put it on one
-rundesk channels <agent> show acme-rooms                        # what it is, and who may use it
-rundesk channels <agent> instructions acme-rooms "<text>"       # what it is told about where it is
-rundesk channels <agent> remove acme-rooms                      # take it off
+rundesk channels ava add discord --kind discord --allow <your-user-id>
 ```
 
-```
-CHANNEL     KIND     POINTS AT              ALLOWED  REACHABLE
-acme-dms    discord  direct messages        1        yes
-acme-rooms  discord  every room in Acme     1        yes
-```
+One command sets up both direct messages and rooms. **Nothing to look up** — the adapter signs
+in and asks Discord which servers your bot is in, so you never copy an ID out of a URL.
 
-- **A platform is rarely one place, so one `add` can make several.** Discord has private
-  messages and rooms full of people, so the command above writes `acme-dms` and
-  `acme-rooms` without being told to. **Nothing needs looking up** — the adapter is signed
-  in when it checks itself, so which servers a bot is in is something it asks Discord
-  rather than something you copy out of a URL. Narrow it if you want to: `--dm` on its own
-  leaves the rooms out, `--server <id>` confines them to one server and `--channel <id>` to
-  one room. The adapter decides what kinds of place it has — rundesk has no list.
-  **The point is that each carries its own allowed list**: the people who may speak to an
-  agent in a public room are not the people who may speak to it in private.
-- **Each is told where it is, and you write that.** An agent handed only the words answers
-  a room of forty people in the voice it uses for a direct message. Each channel starts
-  with something the adapter wrote for that kind of place, and you rewrite it:
+Then just message it. It opens a thread, marks your message seen, shows its work as it goes, and
+posts the answer whole when it's finished.
 
-  ```sh
-  rundesk channels ava instructions acme-rooms \
-      "You are {agent} in {where.channel} on the {where.server} server, and {called} is
-       asking. Anyone there can read what you write, so keep it short."
-  ```
+Three things worth knowing:
 
-  `{agent}` `{kind}` `{channel}` `{where}` `{called}` `{user}` `{conversation}` are always
-  there; `{where.…}` is whatever that adapter said it supplies. A name that is not one of
-  them is refused when you write it, rather than going quietly blank at every turn after.
-  With nothing written, rundesk says where the agent is and no more.
-- **It reaches the brain apart from the prompt**, so a brain can tell your standing
-  instructions from what somebody typed — through whatever its own adapter has for adding
-  to its instructions, and never through anything that replaces them. It is read where a
-  conversation is opened, so rewording reaches new conversations rather than open ones.
+- **You must say who may use it.** There's deliberately no way to say "anybody" — an agent that
+  answers whoever speaks to it, on a machine where it runs tools, is a mistake and not a mode.
+- **Your token is never an argument.** It's read from an environment variable or a file you
+  already control. Anything on a command line is readable through the process list.
+- **Adding a channel proves it works first.** It connects, signs in, and checks it can see what
+  it was pointed at. If it can't, nothing is saved and you're told why.
 
-- **Adding one proves it works.** It connects, signs in and checks it can see what it was
-  pointed at. If it cannot, nothing is written down and the reason is said — a channel
-  that was never added beats one that is silently deaf.
-- **At least one allowed user is required**, never defaulted, and there is deliberately no
-  way to say "anybody". An agent that answers whoever speaks to it, on a machine where it
-  runs tools, is a misconfiguration and not a mode.
-- **A token is never an argument.** It is read from an environment variable the adapter
-  names, or from a file the owner already controls. What shows a channel says a secret is
-  present, never what it is — a command line is readable through the process list and
-  lands in shell history.
-- **A channel is a program rundesk runs**, not code it loads, so a surface nobody here has
-  heard of is reached exactly as one that ships is. See
-  [`write-a-channel-adapter`](.knowledge/guides/write-a-channel-adapter.md).
-
-An agent and its gateway now share one name and one home: `rundesk add ava` makes both,
-`rundesk start ava` starts its gateway, and `rundesk schedules ava` shows its schedules.
-Runs and usage are registered and still say **coming soon**.
-Run `rundesk --help` for the list; it is read off the command rather than copied out here,
-so it cannot come to disagree with what you have installed. A command that is not built
-exits `69` rather than reporting a success it did not earn — a number of its own, so a
-script can tell "this rundesk does not have that" from "you typed it wrong".
-
-### What a gateway guarantees
-
-- **One of each name.** Proved by a lock the kernel drops however the process died, so a
-  gateway that was killed cannot leave a record that makes it look alive.
-- **It owns what it starts.** Everything a gateway runs goes in its own process group, so
-  ending it ends the whole tree — the provider CLI and every tool it spawned.
-- **Nothing runs twice.** The same piece of work is refused while it is already running,
-  and a gateway ends work an earlier gateway of that name left behind.
-- **Long work is left alone.** A session may run for hours; what is ended is one that has
-  gone silent, or one still going long past when real work would have finished.
-- **It writes down what happened**, to a log that outlives it — kept apart from its run
-  state, because stopping clears what a gateway is *doing* and must not clear what it did.
-- **Removing one takes nothing while anything still holds it.** A gateway that is running,
-  a job the machine will not release, a name another process is using — any of them and
-  removal reports why and takes nothing, rather than leaving something running that nothing
-  can find.
-
-## Version
-
-One source of truth: `__version__` in `src/rundesk/__init__.py`. The command reports it, the updater
-compares against it, and a release tag must match it — CI fails a `vX.Y.Z` tag that disagrees.
+Tell it where it is, so it doesn't answer a room of forty people the way it answers a DM:
 
 ```sh
-rundesk version           # what this install is, without asking anyone
-rundesk version --check   # …and whether a newer release exists
-rundesk update            # move to it
+rundesk channels ava instructions discord-rooms \
+    "You are {agent} in {where.channel}, and {called} is asking. Anyone can read this — keep it short."
 ```
 
-Three answers, kept distinguishable on purpose: **up to date**, **vX.Y.Z is available**, and **could not
-reach the forge** — the last exits non-zero, because "could not ask" must never read as "you are current".
-
-## Tests
-
-No test runner to install, and nothing reaches the network or runs a provider:
+## 🧠 Bring your own brain
 
 ```sh
-python3 tests/test_process.py      # a program rundesk runs, and keeping hold of it
-python3 tests/test_gateway.py      # one gateway per name, and what it takes with it
-python3 tests/test_supervisor.py   # handing a gateway to the machine that keeps it up
-python3 tests/test_schedule.py     # work that starts itself, because the time came
-python3 tests/test_cli.py          # every verb, and what it honestly refuses
-python3 tests/test_updater.py      # which version this is, and moving between them
-python3 tests/test_install.py      # putting it on a machine, and taking it off
+rundesk add ava --provider /opt/my-brain --model fast-1 --set effort=high
 ```
 
-What each of those guarantees is written down as a contract in
-[`.knowledge/prd/`](./.knowledge/prd/), row by row, with the test that proves it named
-beside it — and `python3 .knowledge/scripts/check-evidence` fails the build if a row
-names a test that does not exist.
+A brain is **a program rundesk runs**, not code it loads — so it can be written in any language,
+and a shell script is enough. rundesk hands it the working directory, the model and the prompt,
+and reads back one JSON record per line.
+
+Nothing about your brain leaks into rundesk: there is no list of providers and no list of models
+anywhere in the codebase. → **[Write a provider adapter](.knowledge/guides/write-a-provider-adapter.md)**
+
+Channels work exactly the same way. → **[Write a channel adapter](.knowledge/guides/write-a-channel-adapter.md)**
+
+## ✨ What it does
+
+**Agents**
+- One name, one home — rules, memory, workspace and skills, kept apart from every other agent
+- Its own private provider home, so two agents never share a session or a config
+- `doctor` tells you what's missing before you need it at three in the morning
+
+**Staying up**
+- One gateway per agent, so restarting one never disturbs another
+- Owns everything it starts — ending it ends the provider and every tool it spawned
+- Comes back after a crash or a reboot; a gateway that *can't* run stops cleanly instead of looping
+
+**Schedules**
+- Never late, never overlapping, and exactly once for the minute it's due — across restarts and
+  across the hour the clock goes back
+- A program that can't be found is refused when you write the schedule, not at 3am
+
+**Channels**
+- Threads, reactions and typing on Discord; a plain surface still carries the whole turn
+- Work shown as it happens; the answer posted whole rather than rewriting itself
+- Stop or forget a conversation from the chat itself
+
+**History**
+- Every turn recorded — what was asked, what the brain did, how it ended, what it cost
+- Kept apart from what the brain printed, so diagnostics can be deleted and the record survives
+
+## 📟 Every command
+
+```sh
+rundesk --help
+```
+
+Read off the command itself, so it can never disagree with what you have installed. The full
+reference is **[CLI.md](CLI.md)**, generated from the parser.
+
+```sh
+rundesk version --check    # what you have, and whether it's current
+rundesk update             # move to the newest release
+rundesk status             # how rundesk itself is on this machine
+rundesk remove ava         # take an agent away  (--purge takes its home too)
+rundesk uninstall          # take rundesk off this machine
+```
+
+Removing rundesk stops every agent first, and refuses outright if one won't stop — half-removed
+is worse than not removed. What your agents *wrote* is kept unless you ask for `--purge`.
+
+## 📖 Documentation
+
+- **[CLI.md](CLI.md)** — every operation and argument, generated from the command
+- **[Write a provider adapter](.knowledge/guides/write-a-provider-adapter.md)** — put your own brain behind an agent
+- **[Write a channel adapter](.knowledge/guides/write-a-channel-adapter.md)** — reach an agent from your own platform
+- **[Contracts](.knowledge/prd/README.md)** — what rundesk guarantees, row by row, each naming the test that proves it
+- **[Roadmap](ROADMAP.md)** — what's built, what's next, and why in that order
+- **[Architecture](.knowledge/CODEMAP.md)** — where everything lives
+
+## 🧪 Tests
+
+No runner to install, nothing reaches the network, and no provider is ever started:
+
+```sh
+python3 .knowledge/scripts/gate     # every suite, both doc linters, and a real install
+python3 tests/test_store.py         # or any one on its own
+```
+
+Every ✅ in the [contracts](.knowledge/prd/README.md) names the test that proves it, and the build
+fails if a row names a test that doesn't exist.
