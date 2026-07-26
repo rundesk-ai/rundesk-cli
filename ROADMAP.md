@@ -1686,7 +1686,7 @@ What remains, in order:
 |---|---|---|
 | 5 | Move everything onto it | Migration `002`, every reader on the store, the old layout deleted. **Against scratch** — nothing is pre-release data worth carrying |
 | 6 | Let the clock start work | The end-to-end proof: a schedule fires a *turn*, not just a program, and its outcome reaches a channel |
-| 7 | Two more brains | Claude and Grok, on evidence the Node build already measured, re-probing only the gaps |
+| 7 | Two more brains — **done** | Claude and Grok each carry a whole turn, on evidence the Node build measured plus six gaps probed. Nothing in `src/rundesk/` changed, which was the point |
 | 8 | Provider adapters — audit the seam | A generic endpoint adapter, the decoupling test, and the contradictions settled |
 | 9 | Channel adapters — audit the seam | The same, on the surfaces side |
 | 10 | Skills and tool discovery | Additive: a skill an agent loads, and an inventory of what it was granted |
@@ -1697,6 +1697,10 @@ What remains, in order:
 environment variables and none of them are the state directories, so a scheduled `rundesk ask` cannot
 find its own agent. Fixing it exercises the entire chain in one line: clock, gateway, turn, brain,
 account, channel. Anything Phase 5 broke shows up there, before two more brains are added on top.
+
+*Seven landed first anyway, and that was the plan for it rather than a departure from this one: a
+brain is a program, so adding one reads no durable state and could run beside Phase 5 without waiting
+on Phase 6. The ordering above still holds for what remains — six is what proves the chain.*
 
 **Eight and nine are audits, and they are phases because three shipped adapters plus a stranger's is the
 first point the seam can be judged rather than described.** Their shared claim is the one that decides
