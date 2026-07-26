@@ -38,6 +38,10 @@ has done. Each agent keeps its own, so nothing one agent holds is ever in anothe
 | ✅ | R-STO-17 | A run is named once, and no name is handed out twice | `every run is named once and no name is handed out twice` |
 | ✅ | R-STO-18 | An agent is whole again from what it keeps, with everything raw beside it gone | `an agent is whole again from its records alone` |
 | ❌ | R-STO-19 | What an agent's owner wrote is theirs, and is never reproduced from what rundesk keeps | — |
+| ✅ | R-STO-20 | Records this rundesk refuses to read say why in the agent's own log | `records this rundesk will not read say why in the log` |
+| ✅ | R-STO-21 | A write that gave up waiting says what was holding it | `a write that gave up waiting says what was holding it` |
+| ✅ | R-STO-22 | Something the machine cannot do is said once rather than on every attempt | `a machine that cannot search says so once rather than every time` |
+| ✅ | R-STO-23 | An ordinary read or write is not written to the agent's log | `an ordinary read and write says nothing at all` |
 
 ## Open questions
 

@@ -981,6 +981,94 @@ class WhatSurvivesLosingEverythingElse(WithAnAgentsOwnRecords):
         self.assertEqual("finished", back.run(named)["outcome"])
 
 
+class WhatTheAgentsOwnLogSays(WithAnAgentsOwnRecords):
+    """When this agent is wrong, its own log is where somebody looks — so it has to say why.
+
+    Not a diary of every read and write: a log nobody can skim is a log nobody reads. What is
+    written down is what an owner would need to explain a failure — a refusal, a write that
+    gave up, a machine that cannot do what was asked of it.
+    """
+
+    WHEN = "2026-07-26 03:00:00"
+
+    def told(self) -> str:
+        at = self.where / migration.LOG
+        return at.read_text() if at.exists() else ""
+
+    def test_records_this_rundesk_will_not_read_say_why_in_the_log(self):
+        self.built()
+        arranged = self.raw()
+        arranged.execute(f"PRAGMA user_version = {store.VERSION + 1}")
+        arranged.close()
+        with self.assertRaises(store.TooNew):
+            store.Store(self.at, clock=lambda: self.WHEN).made()
+        self.assertIn("ERROR", self.told())
+        self.assertIn(f"they are version {store.VERSION + 1}", self.told())
+        self.assertIn(self.WHEN, self.told())
+
+    def test_records_not_yet_brought_forward_say_so_in_the_log(self):
+        self.built()
+        with self.assertRaises(store.Behind):
+            store.Store(self.at, version=store.VERSION + 1, clock=lambda: self.WHEN).made()
+        self.assertIn("have not been brought forward", self.told())
+
+    def test_records_that_cannot_be_understood_say_so_in_the_log(self):
+        self.built()
+        arranged = self.raw()
+        for table in ("record", "message", "run", "session", "conversation",
+                      "schedule", "channel", "gateway", "agent"):
+            arranged.execute(f"DROP TABLE IF EXISTS {table}")
+        arranged.close()
+        with self.assertRaises(store.Unreadable):
+            store.Store(self.at, clock=lambda: self.WHEN).made()
+        self.assertIn("hold none of it", self.told())
+        self.assertIn("ERROR", self.told())
+
+    def test_a_write_that_gave_up_waiting_says_what_was_holding_it(self):
+        """A turn that could not record what it did is the worst kind of silence."""
+        self.impatient()
+        kept = self.built(wait=lambda seconds: None, clock=lambda: self.WHEN)
+        held = self.raw()
+        held.execute("BEGIN IMMEDIATE")
+        held.execute("UPDATE gateway SET last_seen_at = 'held' WHERE id = 1")
+        with self.assertRaises(sqlite3.OperationalError):
+            kept.seen(AT)
+        held.execute("ROLLBACK")
+        held.close()
+        self.assertIn("gave up waiting to write", self.told())
+        self.assertIn("ERROR", self.told())
+
+    def test_a_machine_that_cannot_search_says_so_once_rather_than_every_time(self):
+        kept = self.built(clock=lambda: self.WHEN)
+        arranged = self.raw()
+        for gone in ("message_fts_insert", "message_fts_delete", "message_fts_update"):
+            arranged.execute(f"DROP TRIGGER {gone}")
+        arranged.execute("DROP TABLE message_fts")
+        arranged.close()
+        kept._searchable = None
+        for _ in range(3):
+            with self.assertRaises(store.Unsearchable):
+                kept.search("parser")
+        self.assertEqual(1, self.told().count("cannot search"),
+                         "the same complaint was written down every time it was asked")
+
+    def test_an_ordinary_read_and_write_says_nothing_at_all(self):
+        """The reason any of the above is findable. A log full of what went right is a log
+        somebody stops opening, and then the one line that mattered is not read either."""
+        kept = self.built(clock=lambda: self.WHEN)
+        before = self.told()
+        kept.remember_agent(provider="codex")
+        kept.remember_channel("ops", "discord", ["u1"], AT)
+        kept.opened("c1", "ops", "thread", "99123", AT, thread="4456")
+        kept.arrived("c1", AT, "anything at all")
+        named = self.a_run(kept, conversation_id="c1")
+        kept.recorded(named, 1, AT, "done", event={"ok": True})
+        kept.ended(named, LATER, "finished")
+        kept.channels(), kept.runs(), kept.messages("c1"), kept.usage()
+        self.assertEqual(before, self.told(), "an ordinary turn wrote to the log")
+
+
+
 class TheOnlyWayIn(unittest.TestCase):
     """Nothing outside this module knows a database is there.
 

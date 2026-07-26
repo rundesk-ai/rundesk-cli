@@ -172,8 +172,9 @@ class Store:
     gateway, no agent and no process is anywhere near it.
     """
 
-    def __init__(self, at, wait=None, version=None):
+    def __init__(self, at, wait=None, version=None, clock=None):
         self.at = Path(at)
+        self._clock = clock
         # Which shape this is expected to be. Left unresolved here and asked for in the body
         # of `made`, so it is read off the steps that actually ship at the moment it matters —
         # rather than frozen when this file was first imported, which would leave every caller
@@ -183,6 +184,22 @@ class Store:
         # without the value having been fixed when this file was first read.
         self._wait = time.sleep if wait is None else wait
         self._searchable = None
+        self._grumbled = set()
+
+    def _noted(self, line: str, level: str = "INFO") -> None:
+        """Into the agent's own log, which is where somebody looks when this agent is wrong.
+
+        Only what an owner would need to explain a failure: a refusal, a write that gave up, a
+        machine that cannot do what was asked of it. Never an ordinary read or write — a log
+        nobody can skim is a log nobody reads.
+        """
+        migration.logged(self.at.parent, line, level, clock=self._clock)
+
+    def _once(self, key: str, line: str, level: str) -> None:
+        """Said the first time it is true, and not on every call afterwards."""
+        if key not in self._grumbled:
+            self._grumbled.add(key)
+            self._noted(line, level)
 
     # ── opening ───────────────────────────────────────────────────────────────────────────
 
@@ -198,7 +215,11 @@ class Store:
             )
         conn.row_factory = sqlite3.Row
         if writing:
-            _journal(conn)
+            mode = _journal(conn)
+            if mode.lower() != "wal":
+                self._once("journal", f"this machine would not keep these records in wal — "
+                                      f"it is using {mode}, so a reader waits on a writer",
+                           "WARNING")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
@@ -245,7 +266,11 @@ class Store:
                 return
             except sqlite3.OperationalError as trouble:
                 said = str(trouble).lower()
-                if ("locked" not in said and "busy" not in said) or attempt == TRIES - 1:
+                if "locked" not in said and "busy" not in said:
+                    raise
+                if attempt == TRIES - 1:
+                    self._noted(f"gave up waiting to write after {TRIES} tries — something "
+                               f"else is holding these records: {trouble}", "ERROR")
                     raise
                 self._wait(random.uniform(WAIT_LEAST, WAIT_MOST))
 
@@ -268,9 +293,13 @@ class Store:
             # a reader's decision — what resolves the second is a migration, run while
             # nothing is up.
             if found > want:
+                self._noted(f"refusing these records: they are version {found} and this "
+                           f"rundesk understands {want}", "ERROR")
                 raise TooNew(found, want)
             if found == 0:
                 if self._anything(conn):
+                    self._noted("these records hold tables but say no version — they were "
+                               "written partway and are left exactly as they are", "ERROR")
                     raise Unreadable(
                         f"{self.at} holds tables but says no version — it was written partway"
                     )
@@ -283,6 +312,9 @@ class Store:
                 migration.carry(self.at, self.at.parent, want=want)
                 conn = self._open(writing=True)
             elif found < want:
+                self._noted(f"refusing these records: they are version {found} and this "
+                           f"rundesk expects {want} — they have not been brought forward",
+                           "ERROR")
                 raise Behind(found, want)
             # A version says which shape this is meant to be, not that the shape is there. A
             # header survives a truncated restore and a dropped table where the pages holding
@@ -290,6 +322,8 @@ class Store:
             # every time rather than only when the version is zero: the mirror case was
             # guarded and this one was not, and it is the one that reads as healthy.
             if not self._anything(conn):
+                self._noted(f"these records say they are version {found or want} and hold "
+                           "none of it", "ERROR")
                 raise Unreadable(
                     f"{self.at} says it is version {found or want} and holds none of it"
                 )
@@ -647,6 +681,8 @@ class Store:
         nothing — an empty answer and an impossible question must not look the same.
         """
         if not self.searchable():
+            self._once("search", "this machine's sqlite cannot search, so searching by the "
+                                 "words in something is unavailable here", "WARNING")
             raise Unsearchable(
                 "this machine's SQLite was built without FTS5, so searching by the words in "
                 "something is unavailable — every run is still listed, read and queried"
