@@ -827,14 +827,14 @@ Read them off a real install first — these were read off one — and correct t
 
 | | What it is | What it holds today |
 |---|---|---|
-| 1 | **the agent** | `{"provider": "…"}` — one field, a path or a shipped name |
-| 2 | **its channels** | one per surface: its kind, where it listens, who may use it, and what it is told about where it is (`channels says`). Its credential is *referenced*, never held — a token in the environment or a file in the channel's own directory |
-| 3 | **its schedules** | `[{name, when, run: [program, args…], enabled}]` |
-| 4 | **what each schedule last did** | when it last fired, and what became of it — kept apart from the schedule itself, so a stop clears neither |
-| 5 | **its sessions** | `{brain-fingerprint: {conversation: handle}}` — keyed by the brain *and* the conversation, so changing provider cannot resume the wrong one |
-| 6 | **its runs** | one per turn: the id, the conversation, the provider and brain that answered, the model, the posture, what the adapter said it could do, when it started and ended, how it ended, and what it cost |
-| 7 | **the account of each run** | every record in order — `admitted`, `sent`, `think`, `tool`, `result`, `text`, `usage`, `done`, `outcome` — with its sequence and time. **This is the searchable history**, and the largest thing here by far |
-| 8 | **how a run is named, and what version the data is** | ids look like `1-co8m` today, allocated through a counter file; the version has nowhere to live yet |
+| 1 | **the agent** | `{"provider": "…"}` on the install read here — but `agent.remember()` writes **three** fields: `provider`, `model` and `settings`. Design for three |
+| 2 | **its channels** | one per surface: its kind, where it listens, who may use it, and what it is told about where it is (`channels says`). Its credential is *referenced*, never held — a token in the environment or a file in the channel's own directory. **Plus a directory per channel**, `channels/<name>/`, which is the adapter's own and holds that token file and anything it downloads |
+| 3 | **its schedules** | `[{name, when, run: [program, args…], enabled}]` — a JSON list, at `schedules/<agent>.json` |
+| 4 | **what each schedule last did** | **three sidecars, not one.** `<agent>.ran.json` is what each last did, rewritten whole and flushed to disk; `<agent>.seen.json` is a fifteen-second liveness beat that a *later* gateway reads to work out what it missed; `<agent>.interrupted.json` is work that never finished, capped and written under a lock |
+| 5 | **its sessions** | `{brain-fingerprint: {conversation: handle}}` — keyed by the brain *and* the conversation, so changing provider cannot resume the wrong one. A conversation is `terminal` or `<channel>/<platform-id>`, and on the install read here one of them is a *session handle* somebody passed to `--conversation` |
+| 6 | **its runs** | **nothing.** There is no run record today — no row, no index, no file. Every field below lives inside the `admitted` and `outcome` events of the account, and the only way to enumerate runs is to glob the directory, which nothing in the product does. The run is something this phase invents rather than moves |
+| 7 | **the account of each run** | every record in order, with its sequence and time. Rundesk writes `admitted`, `sent`, `lost` and `outcome`; a brain's are `text`, `think`, `tool`, `result`, `usage`, `file` and `done`. **This is the searchable history**, and the largest thing here by far |
+| 8 | **how a run is named, and what version the data is** | ids look like `1-co8m`, and the counter file is a *hint* — the id is claimed by creating its file exclusively, and on a collision the directory wins. Moving to a database moves where uniqueness is decided. The version has nowhere to live yet |
 
 For each, the questions worth answering before it is a table: what identifies it, what may be absent versus
 what may never be, what is one row versus many, what is asked of it often enough to be indexed, what is
@@ -1070,6 +1070,56 @@ only real risk:
   mention something that exists has not been checked against reality.
 - **The migration is walked through against the owner's own install** on paper, naming what moves where.
   If that walk cannot be written, the design is not finished — and it is far cheaper to find that out here.
+
+### The walk, against the install that exists
+
+Read off `~/.rundesk` on 2026-07-26. It is one agent, `john`, with four runs, no channels and no
+launchd job — and `~/.rundesk` is itself the install directory, so `agents/` sits inside the tree an
+update replaces. Every item is named, including the ones that turned out not to be there.
+
+| on disk today | becomes | note |
+|---|---|---|
+| `agents/john/agent.json` → `{"provider":"codex"}` | one row in `agent` | `model` and `settings` are writable today and unset here, so the row is mostly empty and that is correct |
+| `agents/john/agent.changing` | **deleted** | a lock, not data |
+| `agents/john/sessions.json` | rows in `conversation` and `session` | see below — this one is not a straight copy |
+| `agents/john/sessions.changing` | **deleted** | |
+| `agents/john/runs/allocating.json` → `{"last": 4}` | **deleted** | the run number becomes the database's, and the count is checked against the rows rather than carried |
+| `agents/john/runs/allocating.changing` | **deleted** | |
+| `agents/john/runs/<run>.jsonl` ×4 | rows in `run`, `record` and `message` | the `admitted` and `outcome` events become the run's columns; `sent` and `text` become messages; the rest become records |
+| `agents/john/runs/<run>.raw` ×4 | `record.raw` | folded in, then the file goes |
+| `agents/john/runs/<run>.brain` ×4 | `logs/runs/<run>.jsonl` | renamed to what it is; still a file, still destroyable |
+| `agents/john/runs/<run>.err` ×4 | `logs/runs/<run>.err` | moved, unchanged |
+| `agents/john/logs/` — **empty** | `logs/` | nothing to move |
+| `agents/john/run/` — **empty** | `gateway.json`, `gateway.lock` at the agent root | nothing to move; the agent is not running |
+| `agents/john/schedules/` — **empty** | rows in `schedule` | john has none |
+| `agents/john/home/` | `home/`, untouched | the person's. only `--purge` may take it |
+| `agents/john/providers/codex/` | unchanged, in place | the brain's own home, opaque. It holds Codex's own `goals_1.sqlite` — never walked, never copied |
+| `~/.rundesk/schedules/twice.seen.json` | **deleted, and said** | a sidecar of a gateway named `twice` that has no agent and never will |
+| `~/.rundesk/schedules/twice.interrupted.changing` | **deleted** | a lock belonging to the same orphan |
+| `~/.rundesk/{run,logs}` | — | **do not exist.** The legacy layout is two files, not three directories |
+| `~/.rundesk/.update.lock` | unchanged | install-level, not an agent's |
+| `~/Library/LaunchAgents/ai.rundesk.*` | — | **none present.** A machine with one gains `logs/gateway.log` as both its capture paths |
+| — | `~/.rundesk/rundesk.json` | **new.** The layout version, one number |
+
+**The one row that is not a copy.** `sessions.json` reads:
+
+```json
+{"codex": {"terminal":                              "019f9c43-4c96-7ce1-ba75-384223458dd6",
+           "019f9c43-4c96-7ce1-ba75-384223458dd6":  "019f9c45-6fa2-7f72-96db-79812a22c65b"}}
+```
+
+Two conversations under one brain, and the second is *named after the first's session handle* —
+somebody passed `--conversation` a handle. The shape has no conversation to attach to, so the
+migration **mints one per distinct key**: `('terminal', 'terminal', '')` and
+`('terminal', '019f9c43…', '')`, each with a `session` row keyed to brain `codex`. Nothing is
+merged, because nothing here can prove those two were the same conversation — and guessing would
+silently join two histories. This is exactly the case that would have been discovered in Phase 5
+against real data, which is why the walk exists.
+
+**What the walk found that the design had missed:** the `.brain` file is the adapter's and the
+`.raw` file is rundesk's, so only one of them is forced to stay a file; `~/.rundesk/run` and
+`logs` do not exist at all, so the legacy layout is far smaller than assumed; and a conversation
+key can be a session handle, which no migration written from the documentation would have expected.
 
 ### Exit proof
 
