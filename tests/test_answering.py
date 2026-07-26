@@ -631,6 +631,41 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
         self.assertIn(channel.FINISHED, surface.states)
 
 
+class WhenTheChannelGoesAway(CarriesAConversation):
+    """R-CH-11 — a channel leaves nothing running once it is gone."""
+
+    async def test_a_turn_waiting_behind_another_never_starts_during_a_shutdown(self):
+        """R-CH-11 — a turn ending is what starts the next, and that happens inside the
+        cancelling. So the last turn's cancellation started a new one, after the caller
+        had been told everything had stopped, and a brain went on working for a channel
+        already reported gone."""
+        stop = asyncio.Event()
+        brain, surface = Brain(holds=stop), Surface()
+        held = self.answering(surface, brain)
+        await held.heard(self.arrived(text="first"))
+        await brain.started.wait()
+        await held.heard(self.arrived(text="second"))   # waits behind the first
+        self.assertEqual(1, len(held.exchanges["one"].waiting))
+
+        await held.stop()
+        await asyncio.sleep(0.1)
+        self.assertEqual(1, len(brain.asked),
+                         f"a turn began after everything was stopped: {brain.asked}")
+
+    async def test_nothing_of_this_channels_is_still_running_afterwards(self):
+        """R-CH-11 — however many conversations were carrying one."""
+        stop = asyncio.Event()
+        brain, surface = Brain(holds=stop), Surface()
+        held = self.answering(surface, brain)
+        for one in ("a", "b", "c"):
+            await held.heard(self.arrived(conversation=one))
+        await asyncio.sleep(0.05)
+        await held.stop()
+        left = [it.conversation for it in held.exchanges.values()
+                if it.task is not None and not it.task.done()]
+        self.assertEqual([], left, f"still running: {left}")
+
+
 class WhatAChannelHoldsForWeeks(CarriesAConversation):
     """R-CAD-6 — a channel is held open for as long as the agent is up, so anything that
     only ever grows is a leak measured in weeks."""

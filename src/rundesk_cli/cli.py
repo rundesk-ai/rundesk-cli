@@ -1399,13 +1399,18 @@ def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
               file=sys.stderr)
         return 1
-    named = (it.get("secret") or {}).get("env")
+    # However many a surface needs — one that opens a connection with one credential and
+    # calls its API with another names both, and an owner has to be told which of them is
+    # missing rather than that "the secret" is.
+    named = (it.get("secret") or {}).get("env") or []
+    named = [named] if isinstance(named, str) else named
     rows = [
         ("kind", str(it.get("kind", "-"))),
         ("points at", str(it.get("describes") or "-")),
         ("allowed", ", ".join(it.get("allow") or []) or "nobody"),
-        ("secret", f"{named} — {'present' if os.environ.get(named) else 'not set'}"
-                   if named else "none needed"),
+        ("secret", ", ".join(
+            f"{one} — {'present' if os.environ.get(one) else 'not set'}" for one in named)
+            or "none needed"),
         ("added", str(it.get("added") or "-")),
         ("reachable", "yes" if gateways.standing(
             args.name, agents.resolved(args.name).run).running

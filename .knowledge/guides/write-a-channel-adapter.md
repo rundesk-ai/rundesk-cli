@@ -33,6 +33,11 @@ you can actually see the place you were given, print one JSON object, exit `0`:
 | `describes` | one line naming what you can see, for a person deciding whether it is the right place |
 | `why` | when `ok` is false, what was wrong and what to do about it |
 
+**Take a minute if you need one, and no longer in silence.** A check may say nothing for
+a minute and take five altogether before it is given up on and treated as having failed —
+generous for a slow sign-in, and finite because somebody is standing at a terminal waiting
+for it. Say something on stderr if you are going to be a while.
+
 **Nothing is written down until you say `ok`.** An agent whose channel is misconfigured
 must find out while somebody is typing the command, not at three in the morning when
 somebody asks it something. If you cannot sign in, cannot see the room, or were given
@@ -43,6 +48,10 @@ is a better outcome than one that is silently deaf.
 exactly as typed. Rundesk does not parse it, does not validate it, and has no list of what
 your platform needs. Whatever your surface calls its places — a server, a workspace, a
 room, a number — those words live in your adapter and nowhere else.
+
+**Say `ok: false` and still exit `0` if the refusal was considered.** What is read is the
+answer, not the code — but a program that dies without printing one is a program that
+failed rather than a check that refused, and the difference is what an owner is shown.
 
 **Say what you understood, not what you were told.** `settings` is what comes back to you
 next time, so normalise it here: resolve a name to an id, drop what you ignored, fill in
@@ -68,10 +77,16 @@ All five are always set, and `RUNDESK_SETTINGS` is `{}` rather than absent when 
 nothing kept. The one variable you named in `secret` is set too, and nothing else from
 the owner's environment reaches you — so name it, or you will not have it.
 
-**`RUNDESK_ALLOW` is for addressing people, never for deciding about them.** Rundesk
-checks who may be answered and you do not (see below); this is here so you can greet the
-owner, or show whose message you are marking. Do not filter on it and do not show it to
-anybody: it is a list of who can reach this agent, which is not a list to hand out.
+**`RUNDESK_ALLOW` is not the authorization, but do use it to avoid working for nothing.**
+Rundesk checks who may be answered and still does — you cannot get that wrong, and a
+message from anybody else is dropped whatever you report. What you *can* get wrong is
+doing expensive or visible work first: downloading what somebody attached, opening a
+thread, posting anything at all. All of that happens before Rundesk has seen a word, so
+for somebody who can never be answered it is waste at best and, in a room full of people,
+an agent visibly reacting to a stranger it is about to ignore.
+
+So check it before you *act*, and let Rundesk decide whether to *answer*. And do not show
+the list to anybody: it is who can reach this agent, which is not a thing to hand out.
 
 **The same four are set while you are being checked**, except `RUNDESK_SETTINGS` — you
 have not returned any yet. So `RUNDESK_CHANNEL_HOME` is there and is already made, which
@@ -99,6 +114,17 @@ That is the whole of what you say. Four kinds of record, and only `arrived` real
 | `arrived` | `conversation`, `user` | `text` · `ref` · `direct` · `attachments` |
 | `control` | `conversation`, `user`, `control` | `ref` |
 | `gone` | | `why` |
+
+**`usage` may name the model that answered.** `model` is there when the brain said which
+one it was and absent when it did not, because nothing here guesses. Everything else on
+that record is a count of tokens: `input` is fresh, `cached` is re-read, and an absent one
+means the brain could not tell rather than that it was zero.
+
+**A gesture is checked the same way a message is.** A `control` from somebody not allowed
+is dropped exactly as their message would be, and you are told nothing either way — so a
+button or a command your surface shows to a whole room is safe to show, and will simply do
+nothing for anybody who may not use it. Do not build your own check for it, and do not
+promise the person anything you have not been told happened.
 
 **`did` is what a tool did, and the list is closed.** It is one of exactly six words —
 `read`, `search`, `run`, `edit`, `list`, `make` — or it is absent, and absent is common.
@@ -131,11 +157,12 @@ both — so a photograph sent with nothing typed is an ordinary message and not 
 **You are told how the turn is going, on stdin**, one JSON object per line:
 
 ```json
-{"type": "state",  "conversation": "1180", "run": "7-a3f1", "state": "taken",   "ref": "8841", "can": {"steer": true}}
+{"type": "state",  "conversation": "1180", "run": null,     "state": "taken",   "ref": "8841"}
+{"type": "state",  "conversation": "1180", "run": "7-a3f1", "state": "running", "can": {"steer": true}}
 {"type": "tool",   "conversation": "1180", "run": "7-a3f1", "id": "1", "name": "Bash", "did": "run"}
 {"type": "result", "conversation": "1180", "run": "7-a3f1", "id": "1", "ok": true, "summary": "3 files changed"}
 {"type": "think",  "conversation": "1180", "run": "7-a3f1", "text": "The error is in the parser."}
-{"type": "usage",  "conversation": "1180", "run": "7-a3f1", "input": 1200, "output": 340, "cached": 8000}
+{"type": "usage",  "conversation": "1180", "run": "7-a3f1", "input": 1200, "output": 340, "cached": 8000, "model": "…"}
 {"type": "said",   "conversation": "1180", "run": "7-a3f1", "text": "I'll look at the logs."}
 {"type": "answer", "conversation": "1180", "run": "7-a3f1", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png"}]}
 {"type": "state",  "conversation": "1180", "run": "7-a3f1", "state": "finished"}
@@ -150,6 +177,12 @@ says arrives as the `answer` — which is the one somebody will reply to, and th
 anchoring to the message that asked. A brain that writes its reply a piece at a time
 sends no `said` at all and only an `answer`, so a surface that treats them identically is
 still correct and merely noisier.
+
+**Nothing repeats, so keep your own time.** `running` is sent once, when the turn is
+admitted — it is not a heartbeat, and a surface whose "still working" indicator lapses
+after a few seconds has to renew it on its own clock. The shipped Discord adapter does
+exactly that, because there is nothing to lean on. Do not wait for a second `running`;
+none is coming.
 
 **The order is fixed, and the last two are the ones worth knowing.** `taken` arrives
 first, on its own, the moment the message is picked up — it carries the `ref` of the
@@ -167,7 +200,7 @@ and they arrive as `state` records in this order:
 | | |
 |---|---|
 | `taken` | it has been picked up — the first thing that happens, and the one worth showing fastest |
-| `running` | still going, said again from time to time for anything that lapses |
+| `running` | it is under way, and this is where `run` and `can` first appear |
 | `finished` | it worked, and the answer has already been handed to you |
 | `stopped` | somebody stopped it |
 | `failed` | it did not work, and `why` says what went wrong |
@@ -277,12 +310,17 @@ while IFS= read -r line; do
   esac
 done <&0 &
 
+# Its "platform" is a file the owner drops lines into — a terminal would do for `--here`
+# and there is no terminal at all once the machine is keeping this agent up, which is how
+# it really runs.
 say '{"type":"ready"}'
-while IFS= read -r asked; do
+inbox="$RUNDESK_CHANNEL_HOME/inbox"
+: > "$inbox"
+tail -n0 -F "$inbox" | while IFS= read -r asked; do
   [ -n "$asked" ] || continue
   say "$(printf '{"type":"arrived","conversation":"here","user":"me","text":%s}' \
         "$(printf '%s' "$asked" | json)")"
-done < /dev/tty
+done
 ```
 
 Point an agent at it and it is a first-class channel:
@@ -391,10 +429,14 @@ stranger confirms the agent is listening and spends the owner's tokens doing it.
 ## Proving it
 
 The same suite every shipped channel passes is the one yours passes — that is what makes
-"a surface Rundesk has never heard of" a claim rather than a hope. It checks what can be checked of *your program*: that it answers `--check` with something
-that can be acted on, that it names a credential rather than handing one over, that what
-it reports is a record this seam understands, and that it is a program at all rather than
-something that has to be imported.
+"a surface Rundesk has never heard of" a claim rather than a hope. It checks what can be checked of *your program* without having your platform: that it
+answers `--check` with something that can be acted on, that it names a credential rather
+than handing one over, that it survives a whole turn's worth of records being told to it,
+that everything it reports back is something this seam can act on, and that it is a
+program at all rather than something that has to be imported.
+
+It cannot make *your* platform deliver a message, so it cannot prove a conversation
+end to end. Only you can do that — against your own fake, or against a server you own.
 
 What it does **not** check is the half that is ours — that a delivery which fails does not
 end the turn it was reporting, that a reconnection finds the conversation it already had,

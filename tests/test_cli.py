@@ -1813,7 +1813,7 @@ raise SystemExit(1)
         drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
                "--allow", "2207"], self._gateways(), agents=self.agents)
         kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
-        self.assertEqual({"env": "A_CHANNEL_TOKEN"}, kept["secret"])
+        self.assertEqual({"env": ["A_CHANNEL_TOKEN"]}, kept["secret"])
         was = os.environ.get("A_CHANNEL_TOKEN")
         os.environ["A_CHANNEL_TOKEN"] = "not for printing"
         self.addCleanup(lambda: os.environ.pop("A_CHANNEL_TOKEN", None)

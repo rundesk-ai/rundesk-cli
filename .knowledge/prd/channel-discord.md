@@ -40,9 +40,8 @@ so only a running commentary may grow.
 | ❌ | R-DIS-16 | An agent shows as online for as long as the gateway running it is up | src/rundesk_cli/channels/discord:271 — presence is a thing only the platform shows |
 | ✅ | R-DIS-17 | An answer arrives as one message, with what it cost above it | `what a turn cost is shown as one line`, `a turn that reported no cost says nothing about it`, `a tool that worked is not a message of its own`, `a small count is not rounded into a zero` |
 | ❌ | R-DIS-18 | An answer too long to read as messages is attached as a file instead | src/rundesk_cli/channels/discord:447 — the splitting is proved offline; uploading is the platform's |
-
-| ✅ | R-DIS-20 | What an agent is doing is shown while it works only if the owner asked for it | `showing the work is off unless the owner asks`, `the commentary may grow but the answer may never`, `a long commentary is kept to what one message holds` |
 | ❌ | R-DIS-19 | A file the agent made is uploaded rather than described | src/rundesk_cli/channels/discord:470 — the upload is the platform's, and proved by hand |
+| ✅ | R-DIS-20 | What an agent is doing is shown while it works only if the owner asked for it | `showing the work is off unless the owner asks`, `the commentary may grow but the answer may never`, `a long commentary is kept to what one message holds` |
 
 ## Open questions
 

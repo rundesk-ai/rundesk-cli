@@ -120,6 +120,11 @@ ATTACH_AFTER = 3
 #: Discord for it again. Bounded because this process runs for weeks.
 SEEN_KEPT = 200
 
+#: How many conversations to hold state for. An entry is made for each and taken away
+#: when a turn ends in it, so one that never reached a turn would otherwise stay for the
+#: life of the process — which is weeks.
+LIVE_KEPT = 200
+
 #: What each state looks like here (R-CAD-4). The system decides which one a turn is in;
 #: this is the whole of what this file decides about it.
 MARKS = {"finished": "✅", "stopped": "✋", "failed": "⚠️"}
@@ -278,6 +283,7 @@ class Live:
         self.pacing = None
         self.marked = False
         self.cost = ""           # what the turn cost, shown with the answer
+        self.writes = 0          # which write is the newest, across an await
 
 
 class Agent(discord.Client):
@@ -392,6 +398,18 @@ class Agent(discord.Client):
         belongs_to = message.channel.parent_id if in_thread else message.channel.id
         if not within(direct, belongs_to, self.chose.channel, self.chose.dm):
             return
+        # **Nothing expensive or visible before this.** Whether somebody may be answered
+        # is rundesk's to decide and it still decides it — but a message from anybody at
+        # all used to open a real thread and pull down as much as three hundred megabytes
+        # first, so any member of a shared server could make this agent litter their
+        # channel and fill a disk without ever being allowed to say a word to it. Rundesk
+        # would then drop the message in silence, which is the whole point, while the
+        # thread it had already opened said the opposite out loud.
+        #
+        # This is not the authorization: it is refusing to *work* for somebody who cannot
+        # be answered. The decision that matters is still made once, over there.
+        if self.chose.allow and str(message.author.id) not in self.chose.allow:
+            return
         text = _without_mentions(message.content)
         brought = await self._fetch(message)
         if not text and not brought:
@@ -407,6 +425,11 @@ class Agent(discord.Client):
         # Somebody has spoken here, so whatever commentary was growing is no longer the
         # last thing in the conversation and must not be edited again.
         self._no_longer_last(self.live.setdefault(str(conversation), Live()))
+        while len(self.live) > LIVE_KEPT:
+            # Bounded for the same reason `seen` is, and it was not: an entry is made for
+            # every conversation and removed only when a turn ends in it, so anything
+            # that never reached a turn stayed for the life of the process.
+            self.live.pop(next(iter(self.live)))
         self.seen[str(message.id)] = message
         while len(self.seen) > SEEN_KEPT:
             self.seen.pop(next(iter(self.seen)))
@@ -484,6 +507,13 @@ class Agent(discord.Client):
             # A finished thing the agent said while it was still working, in a message of
             # its own. Not the answer and not anchored to anything: it is a remark, and
             # quoting the question on every remark buries the question.
+            # Cancelled first, the way ending a turn does it. Left running, a paced
+            # flush already suspended inside a write would finish *after* this one had
+            # buried the message, and its assignment would put the buried message back —
+            # so the next line grew into something nobody could see.
+            if held.pacing is not None:
+                held.pacing.cancel()
+                held.pacing = None
             await self._flush(it, held)
             await self._post(it, str(it.get("text") or ""))
             self._no_longer_last(held)
@@ -598,7 +628,13 @@ class Agent(discord.Client):
         if len(held.activity) > ACTIVITY_CHARS:
             held.activity = "-# …\n" + held.activity[-ACTIVITY_CHARS:]
         if held.posted is None:
-            held.posted = await self._post(it, held.activity)
+            # Which write this was, kept across the await. Something else may bury the
+            # commentary while this is in flight, and a write that comes back afterwards
+            # must not put the buried message back for the next line to grow into.
+            mine = held.writes = held.writes + 1
+            said = await self._post(it, held.activity)
+            if mine == held.writes:
+                held.posted = said
             return
         try:
             await held.posted.edit(content=held.activity)
@@ -615,6 +651,9 @@ class Agent(discord.Client):
         """
         held.posted = None
         held.activity = ""
+        # Anything already in flight is no longer the newest, so its result is dropped
+        # rather than becoming the message the next line grows into.
+        held.writes += 1
 
     async def _answer(self, it: dict, held: Live) -> None:
         """The answer, whole, at the end — split across messages rather than cut.

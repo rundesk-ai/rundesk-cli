@@ -45,11 +45,8 @@ is a whole brain with that work absent, rather than a broken one.
 | ✅ | R-PRV-17 | An adapter is handed the handle it last reported for that conversation, and never another conversation's | `an adapter is handed back the handle it reported`, `a second turn resumes the conversations session`, `changing the brain does not hand over the other ones session` |
 | ✅ | R-PRV-18 | An adapter is told how much of the machine a turn may touch, in words no brain owns | `an adapter is told how much of the machine a turn may touch`, `a turn asked to only look says so to the brain` |
 | ✅ | R-PRV-19 | A brain that says it can be sent to mid-turn is, and the turn carries on rather than starting again | `a brain that can be steered hears a word said mid turn`, `a brain that cannot be steered is not left waiting for more`, `an adapter can be steered exactly as much as it said it could` |
-
 | ❌ | R-PRV-20 | A brain says when it made a file, rather than a reader guessing from what a tool printed | src/rundesk_cli/turn.py:78 — the record is carried and the shipped adapter reports it; no test drives a brain that makes one |
-
 | ✅ | R-PRV-21 | What a tool did is one of a closed set of words, or is left unsaid | `the words for what a tool did are the same on both seams`, `every verb the seam defines has a mark of its own`, `a tool is shown by what it did and never by its brains name for it`, `a tool with no verb says something true rather than the vendors word`, `every verb has something a person would say` |
-
 | ❌ | R-PRV-22 | A brain says whether what it just said is finished or still being written | src/rundesk_cli/provider.py:60 — the shipped adapter reports it and a surface acts on it; no test drives a brain that streams fragments |
 
 ## Open questions

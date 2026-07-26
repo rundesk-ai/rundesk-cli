@@ -39,6 +39,12 @@ from rundesk_cli import channel, session, turn
 #: whole gateway. Past it the oldest waiting message goes and is said to have.
 WAITING = 4
 
+#: How many times a shutdown looks again for work that appeared while it was cancelling.
+#: More than one because ending a turn is what starts the next, and a small number
+#: because nothing here starts work forever — `_stopping` is what actually ends it, and
+#: this only has to outlast the tasks already in flight when it was set.
+_UNWINDING = 3
+
 #: How many conversations to keep hold of. A channel is held open for weeks and every
 #: distinct conversation it has ever seen had an entry that nothing ever removed — a
 #: thread opened once in March still had one in July. What is kept for a conversation is
@@ -108,6 +114,11 @@ class Answering:
         #: shown at all, since a reader has no way to tell.
         self._showing: asyncio.Queue = asyncio.Queue()
         self._writer: asyncio.Task | None = None
+        #: Set once this channel is going away. A turn ending schedules whatever was
+        #: waiting behind it, and that happens *while* the shutdown is cancelling — so
+        #: without this, cancelling the last turn started the next one, after the caller
+        #: had been told everything had stopped (R-CH-11).
+        self._stopping = False
 
     # -- what the adapter says -------------------------------------------------------
 
@@ -299,8 +310,13 @@ class Answering:
             asyncio.ensure_future(self._next(held))
 
     async def _next(self, held: Exchange) -> None:
-        """Whatever was said while the last turn ran, now that there is nothing running."""
-        if not held.waiting:
+        """Whatever was said while the last turn ran, now that there is nothing running.
+
+        Never once this channel is going away. What is waiting is lost, and that is the
+        right loss: it was never started, nothing has been said about it, and the
+        alternative is a brain running for a channel that has already been reported gone.
+        """
+        if self._stopping or not held.waiting:
             return
         text, user, ref = held.waiting.pop(0)
         held.ref = ref
@@ -416,14 +432,27 @@ class Answering:
     # -- going away ------------------------------------------------------------------
 
     async def stop(self) -> None:
-        """End every turn this channel is carrying, and wait for each to unwind."""
-        running = [held.task for held in self.exchanges.values()
-                   if held.task is not None and not held.task.done()]
-        for task in running:
-            task.cancel()
-        for task in running:
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+        """End every turn this channel is carrying, and wait for each to unwind.
+
+        Said *before* anything is cancelled. A turn ending schedules whatever was waiting
+        behind it, from a `finally` that runs during the cancelling — so a snapshot taken
+        first and awaited afterwards missed exactly the turn that shutdown created, and
+        left a brain running for a channel already reported gone (R-CH-11).
+
+        Looked at again after awaiting, rather than once: the point is that this list can
+        grow while it is being drained.
+        """
+        self._stopping = True
+        for _ in range(_UNWINDING):
+            running = [held.task for held in self.exchanges.values()
+                       if held.task is not None and not held.task.done()]
+            if not running:
+                break
+            for task in running:
+                task.cancel()
+            for task in running:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
         # What was decided before the end is still worth showing, and it is a bounded
         # amount: the last mark on every conversation that was running.
         if self._writer is not None and not self._writer.done():

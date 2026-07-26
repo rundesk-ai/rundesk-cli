@@ -212,11 +212,10 @@ def environment(
     # same settings are the same bytes every time; never read on the way past, because
     # what a platform needs is between it and its adapter.
     said["RUNDESK_SETTINGS"] = json.dumps(settings or {}, sort_keys=True)
-    named = (secret or {}).get("env")
-    if named:
-        found = (os.environ if environ is None else environ).get(named)
+    for one in (secret or {}).get("env") or []:
+        found = (os.environ if environ is None else environ).get(one)
         if found:
-            said[named] = found
+            said[one] = found
     return said
 
 
@@ -294,6 +293,25 @@ def attached(said) -> list:
     return found
 
 
+def named(secret) -> dict | None:
+    """Which variables a credential is read from — never what is in any of them.
+
+    **More than one, because one is not always enough.** A surface that opens its
+    connection with one credential and calls its API with another cannot be reached at
+    all if only one may be named, and that is the recommended shape for at least one real
+    platform. Kept as a list either way, so a second never changes what a reader expects.
+    """
+    if not isinstance(secret, dict):
+        return None
+    named_as = secret.get("env")
+    if isinstance(named_as, str):
+        named_as = [named_as]
+    if not isinstance(named_as, list):
+        return None
+    wanted = [one for one in named_as if isinstance(one, str) and one]
+    return {"env": wanted} if wanted else None
+
+
 def answered(said: object) -> dict:
     """What an adapter made of being pointed at something, as a whole answer.
 
@@ -312,8 +330,7 @@ def answered(said: object) -> dict:
     return {
         "ok": bool(given.get("ok")),
         "settings": settings if isinstance(settings, dict) else {},
-        "secret": {"env": secret["env"]} if isinstance(secret, dict)
-                  and isinstance(secret.get("env"), str) and secret["env"] else None,
+        "secret": named(secret),
         "describes": given.get("describes") if isinstance(given.get("describes"), str) else None,
         "why": given.get("why") if isinstance(given.get("why"), str) else None,
     }

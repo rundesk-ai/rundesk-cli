@@ -195,8 +195,11 @@ STAND_INS = {"plain": PLAIN, "bare": BARE, "strange": STRANGE, "refusing": REFUS
 class Held:
     """What one run of an adapter came to."""
 
-    def __init__(self, records, errors, outcome):
+    def __init__(self, records, errors, outcome, said=()):
         self.records, self.errors, self.outcome = records, errors, outcome
+        #: Every line exactly as it was written, so a case can judge what was reported
+        #: rather than only what could be understood of it.
+        self.said = list(said)
 
     def of(self, kind: str) -> list:
         return [one for one in self.records if one.get("type") == kind]
@@ -222,6 +225,22 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
 
     def under_test(self) -> Path:
         return ADAPTER if ADAPTER is not None else self.stand_in("plain")
+
+    async def checking(self) -> dict:
+        """What a real adapter is told, including whatever its own `--check` asked to be
+        kept — otherwise a case drives it with none of what it needs to reach anything.
+
+        Asked of the adapter rather than assumed, which is the same thing `channels add`
+        does: what a platform needs is that platform's to say.
+        """
+        # `checking=True`, exactly as adding a channel does it: a check is run in the
+        # owner's own shell and is where an adapter finds the credential it is about to
+        # name. Without it the check has no token, fails, and the turn below is driven at
+        # an adapter that was never given what it needs — which reads as the adapter
+        # being broken.
+        said = await channel.checked(self.under_test(), OPTIONS,
+                                     self.told(checking=True))
+        return self.told(settings=said["settings"], secret=said["secret"])
 
     def told(self, **extra) -> dict:
         said = channel.environment(
@@ -257,9 +276,10 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
         said = asyncio.ensure_future(feed())
         outcome = await program.wait(sink=heard.append)
         await said
-        records = [one for one in (channel.understood(line) for line in heard
-                                   if isinstance(line, bytes)) if one is not None]
-        return Held(records, program.errors, outcome)
+        lines = [one.decode("utf-8", "replace") for one in heard if isinstance(one, bytes)]
+        records = [one for one in (channel.understood(line) for line in lines)
+                   if one is not None]
+        return Held(records, program.errors, outcome, said=lines)
 
 
 # ------------------------------------------------------------------------------------
@@ -291,7 +311,50 @@ class TheContract(DrivesAnAdapter):
         if said["secret"] is not None:
             self.assertEqual(["env"], list(said["secret"]),
                              "it handed back more than the name of a variable")
-            self.assertIsInstance(said["secret"]["env"], str)
+            self.assertIsInstance(said["secret"]["env"], list)
+            for one in said["secret"]["env"]:
+                self.assertIsInstance(one, str)
+
+    async def test_an_adapter_survives_a_whole_turn_being_told_to_it(self):
+        """R-CAD-1, R-CAD-5 — every record the seam sends, in the order it sends them, at
+        an adapter that has never seen them. It need not show any of them; what it may
+        not do is fall over, and a surface that dies on the first `usage` record it does
+        not care about is a surface that loses the answer after it.
+
+        The suite could only check the answering of `--check` before this, while the
+        guide told a stranger it proved a conversation — so an adapter that answered one
+        question correctly and then emitted nonsense for ever passed everything.
+        """
+        held = await self.hold(self.under_test(), env=await self.checking(), saying=[
+            {"type": "state", "conversation": "one", "run": "1-aaaa", "state": channel.TAKEN,
+             "ref": "1", "can": {"steer": False}},
+            {"type": "state", "conversation": "one", "run": "1-aaaa", "state": channel.RUNNING},
+            {"type": "think", "conversation": "one", "run": "1-aaaa", "text": "thinking"},
+            {"type": "tool", "conversation": "one", "run": "1-aaaa", "id": "1", "did": "run"},
+            {"type": "result", "conversation": "one", "run": "1-aaaa", "id": "1", "ok": True},
+            {"type": "usage", "conversation": "one", "run": "1-aaaa", "input": 12},
+            {"type": "said", "conversation": "one", "run": "1-aaaa", "text": "a remark"},
+            {"type": "answer", "conversation": "one", "run": "1-aaaa", "text": "the answer"},
+            {"type": "state", "conversation": "one", "run": "1-aaaa", "state": channel.FINISHED,
+             "ref": "1"},
+        ], holding=2.0, patience=45.0)
+        self.assertNotEqual(process.FAILED, held.outcome.reason,
+                            f"it died while being told about a turn: {held.errors[-500:]}")
+
+    async def test_everything_an_adapter_reports_is_something_the_seam_can_act_on(self):
+        """R-CAD-1 — a record of a kind nobody knows is kept and acted on by nothing, so
+        an adapter that reports only those is an adapter talking to itself. Checked over
+        everything it said while a whole turn was told to it, rather than over one line."""
+        held = await self.hold(self.under_test(), env=await self.checking(), saying=[
+            {"type": "state", "conversation": "one", "run": "1-aaaa", "state": channel.TAKEN},
+            {"type": "state", "conversation": "one", "run": "1-aaaa", "state": channel.FINISHED},
+        ], holding=2.0, patience=45.0)
+        for line in held.said:
+            if not line.strip():
+                continue
+            self.assertIsNotNone(
+                channel.understood(line),
+                f"it reported something nothing can act on: {line[:200]}")
 
     async def test_an_adapter_is_a_program_this_machine_can_run(self):
         """R-CAD-1 — the whole of what an adapter is. Not a module, not a class, not
@@ -384,7 +447,7 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
         """R-CAD-11 — everything a program rundesk runs is built rather than inherited,
         so a secret has to be named to arrive, and naming it is the adapter's own doing."""
         held = await self.hold(self.stand_in("nosy"), env=self.told(
-            secret={"env": "MY_CHANNEL_TOKEN"},
+            secret={"env": ["MY_CHANNEL_TOKEN"]},
             environ={"MY_CHANNEL_TOKEN": "sh!", "SOMETHING_ELSE": "also secret"}))
         told = json.loads(held.of("arrived")[0]["text"])
         self.assertEqual("sh!", told["MY_CHANNEL_TOKEN"])
@@ -395,7 +458,7 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
         """R-CAD-11 — an adapter told its variable is present and empty would sign in
         with nothing, which fails somewhere much further from the cause."""
         said = channel.environment(self.home, "ops", "ava", self.channel_home,
-                                   secret={"env": "MY_CHANNEL_TOKEN"}, environ={})
+                                   secret={"env": ["MY_CHANNEL_TOKEN"]}, environ={})
         self.assertNotIn("MY_CHANNEL_TOKEN", said)
 
 
@@ -577,10 +640,11 @@ class WhatIsWrittenDownAboutAChannel(DrivesAnAdapter):
         """R-CAD-12 — nothing here has ever held a secret, so there is none to print by
         accident. What is kept is where the adapter said it found one."""
         channel.remember(self.where, "ops", "discord", ["2207"],
-                         secret={"env": "MY_CHANNEL_TOKEN"})
+                         secret={"env": ["MY_CHANNEL_TOKEN"]})
         written = channel.book(self.where).read_text()
         self.assertIn("MY_CHANNEL_TOKEN", written)
-        self.assertEqual({"env": "MY_CHANNEL_TOKEN"}, channel.of(self.where, "ops")["secret"])
+        self.assertEqual({"env": ["MY_CHANNEL_TOKEN"]},
+                         channel.of(self.where, "ops")["secret"])
 
     def test_a_platforms_own_words_are_kept_exactly_as_it_gave_them(self):
         """R-CAD-13 — never read, so a surface can need something nobody here has heard
@@ -711,7 +775,7 @@ class TheClaimTheWholeSeamRestsOn(DrivesAnAdapter):
 
         said = await channel.checked(adapter, ["--station", "1180"], told)
         self.assertTrue(said["ok"], f"it could not reach what it was pointed at: {said['why']}")
-        self.assertEqual({"env": "SEMAPHORE_TOKEN"}, said["secret"],
+        self.assertEqual({"env": ["SEMAPHORE_TOKEN"]}, said["secret"],
                          "it handed over a credential rather than naming one")
 
         held = await self.hold(adapter, env=dict(told, FAKE_SAYS="what changed today?",

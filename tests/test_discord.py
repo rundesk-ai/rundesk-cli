@@ -263,6 +263,17 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         self.assertEqual("", held.activity,
                          "a fresh message would have opened with the old one's lines")
 
+    def test_a_write_that_lands_after_the_message_was_buried_is_dropped(self):
+        """R-DIS-20 — the buried-message fix was written as though nothing happened
+        between deciding to post and the post landing. A paced flush suspended inside a
+        write finishes *after* something else has buried the commentary, and its
+        assignment put the buried message back for the next line to grow into."""
+        held = discord.Live()
+        was = held.writes
+        discord.Agent._no_longer_last(None, held)
+        self.assertNotEqual(was, held.writes,
+                            "a write in flight would still be taken as the newest")
+
     def test_showing_the_work_is_off_unless_the_owner_asks(self):
         """R-DIS-20 — an owner who wants to watch says so, and one who does not gets one
         message per turn rather than a running commentary."""
