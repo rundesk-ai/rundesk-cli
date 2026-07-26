@@ -526,6 +526,9 @@ class Agent(discord.Client):
             if held.pacing is not None:
                 held.pacing.cancel()
                 held.pacing = None
+            # A remark is something to read too, so stop claiming to be typing while
+            # somebody is reading it — the next thing said starts the indicator again.
+            self._stop_typing(held)
             await self._flush(it, held)
             await self._post(it, str(it.get("text") or ""))
             self._no_longer_last(held)
@@ -667,6 +670,18 @@ class Agent(discord.Client):
         # rather than becoming the message the next line grows into.
         held.writes += 1
 
+    def _stop_typing(self, held: Live) -> None:
+        """Stop saying it is working, the moment there is something to read.
+
+        Cancelled when the turn *ended*, which is one record too late: the answer is
+        handed over first, so the loop could renew once more in between and Discord holds
+        an indicator for about ten seconds after the last renewal. So it went on saying
+        the agent was typing while the reply was already sitting there.
+        """
+        if held.typing is not None:
+            held.typing.cancel()
+            held.typing = None
+
     async def _answer(self, it: dict, held: Live) -> None:
         """The answer, whole, at the end — split across messages rather than cut.
 
@@ -677,6 +692,7 @@ class Agent(discord.Client):
         # The cost first, then the answer, in one message (R-DIS-17). At the top rather
         # than the bottom because a long answer pushes anything after it off a phone
         # screen, and what a turn cost is worth seeing without scrolling.
+        self._stop_typing(held)
         self._no_longer_last(held)
         whole = str(it.get("text") or "")
         if held.cost:

@@ -294,6 +294,24 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         self.assertNotEqual("", discord.commentary(
             {"type": "think", "text": "the error is in the parser"}))
 
+    def test_it_stops_saying_it_is_typing_the_moment_there_is_something_to_read(self):
+        """R-DIS-6 — cancelled when the turn *ended*, which is one record too late: the
+        answer is handed over first, so the renewal could fire once more in between and
+        Discord holds an indicator for about ten seconds after the last one. It went on
+        saying the agent was typing while the reply was already sitting there."""
+
+        class Fake:
+            def __init__(self):
+                self.cancelled = False
+
+            def cancel(self):
+                self.cancelled = True
+
+        held = discord.Live()
+        held.typing = Fake()
+        discord.Agent._stop_typing(None, held)
+        self.assertTrue(held.typing is None)
+
     def test_a_commentary_stops_growing_once_something_is_said_under_it(self):
         """R-DIS-20 — a message something has been posted under is one the reader has
         already scrolled past. Editing it changes history rather than showing progress:
