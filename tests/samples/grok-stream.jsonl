@@ -1,0 +1,79 @@
+{"type":"thought","data":"The"}
+{"type":"thought","data":" user"}
+{"type":"thought","data":" is"}
+{"type":"thought","data":" asking"}
+{"type":"thought","data":" a"}
+{"type":"thought","data":" conceptual"}
+{"type":"thought","data":" question"}
+{"type":"thought","data":" about"}
+{"type":"thought","data":" what"}
+{"type":"thought","data":" a"}
+{"type":"thought","data":" software"}
+{"type":"thought","data":" gateway"}
+{"type":"thought","data":" is"}
+{"type":"thought","data":","}
+{"type":"thought","data":" in"}
+{"type":"thought","data":" one"}
+{"type":"thought","data":" sentence"}
+{"type":"thought","data":"."}
+{"type":"thought","data":" This"}
+{"type":"thought","data":" is"}
+{"type":"thought","data":" a"}
+{"type":"thought","data":" general"}
+{"type":"thought","data":" knowledge"}
+{"type":"thought","data":" question"}
+{"type":"thought","data":"."}
+{"type":"thought","data":" Given"}
+{"type":"thought","data":" the"}
+{"type":"thought","data":" context"}
+{"type":"thought","data":" of"}
+{"type":"thought","data":" the"}
+{"type":"thought","data":" r"}
+{"type":"thought","data":"undes"}
+{"type":"thought","data":"k"}
+{"type":"thought","data":" project"}
+{"type":"thought","data":" ("}
+{"type":"thought","data":"which"}
+{"type":"thought","data":" is"}
+{"type":"thought","data":" described"}
+{"type":"thought","data":" as"}
+{"type":"thought","data":" a"}
+{"type":"thought","data":" mult..."}
+{"type":"text","data":"A"}
+{"type":"text","data":" **"}
+{"type":"text","data":"software"}
+{"type":"text","data":" gateway"}
+{"type":"text","data":"**"}
+{"type":"text","data":" is"}
+{"type":"text","data":" a"}
+{"type":"text","data":" thin"}
+{"type":"text","data":" intermediary"}
+{"type":"text","data":" that"}
+{"type":"text","data":" sits"}
+{"type":"text","data":" between"}
+{"type":"text","data":" clients"}
+{"type":"text","data":" and"}
+{"type":"text","data":" backend"}
+{"type":"text","data":" systems"}
+{"type":"text","data":" ("}
+{"type":"text","data":"or"}
+{"type":"text","data":" services"}
+{"type":"text","data":"),"}
+{"type":"text","data":" routing"}
+{"type":"text","data":" and"}
+{"type":"text","data":" translating"}
+{"type":"text","data":" requests"}
+{"type":"text","data":" and"}
+{"type":"text","data":" responses"}
+{"type":"text","data":" so"}
+{"type":"text","data":" those"}
+{"type":"text","data":" sides"}
+{"type":"text","data":" can"}
+{"type":"text","data":" talk"}
+{"type":"text","data":" without"}
+{"type":"text","data":" knowing"}
+{"type":"text","data":" each"}
+{"type":"text","data":" other’s"}
+{"type":"text","data":" details"}
+{"type":"text","data":"."}
+{"type":"end","stopReason":"EndTurn","sessionId":"019f95ad-a32b-7922-a669-e6e26f978901","requestId":"f7fd1b19-aa99-418f-837d-ec9e99f73fb8","usage":{"input_tokens":13373,"cache_read_input_tokens":5248,"output_tokens":192,"reasoning_tokens":151,"total_tokens":18813},"num_turns":1,"total_cost_usd":0.0294724,"total_cost_usd_ticks":294724000,"modelUsage":{"grok-4.5-build":{"inputTokens":13373,"outputTokens":192,"cacheReadInputTokens":5248,"modelCalls":1,"costUSD":0.0294724}}}

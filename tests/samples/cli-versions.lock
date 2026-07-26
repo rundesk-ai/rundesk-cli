@@ -1,0 +1,8 @@
+# The CLI versions the golden event vocabularies were captured against.
+# A mismatch is a drift signal: re-run probes/capture.ts and diff contracts/*-events.json.
+claude=2.1.219
+codex=codex-cli 0.144.6
+grok=0.2.111
+node=v22.23.1
+captured=2026-07-24
+platform=darwin 25.5.0

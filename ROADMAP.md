@@ -1399,6 +1399,11 @@ terminal already used — and its outcome is readable the next morning without a
 rundesk changes to accommodate either.** If one of them needs a change in the core, that is the
 finding: the seam was not open, and the change belongs in the contract.
 
+**It runs beside Phase 5 and does not wait for Phase 6.** A brain is a program; adding one touches
+`src/providers/`, `tests/` and `.knowledge/` and reads no durable state at all, so it cannot collide
+with the storage move. The only files both phases open are `build.yml`, `MEMORY.md`, `CODEMAP.md` and
+the roadmap — append to those rather than restructuring them, and rebase rather than merge.
+
 **Most of this was already measured, and re-buying it costs real money.** The Node build drove
 all three CLIs and kept what it found, locked to `claude 2.1.219` and `grok 0.2.111` in
 `../rundesk/src/contracts/cli-versions.lock`. Carry the evidence in first; probe only the gaps.
