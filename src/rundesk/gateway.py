@@ -1142,6 +1142,10 @@ class Gateway:
         #: Which schedules have a turn in flight. Kept apart from `running`, which holds
         #: programs a shutdown ends: a turn's brain is not a program this gateway started.
         self._asked_for: set[str] = set()
+        #: The surfaces that are up right now, by name — what is held open and answering.
+        #: `reachable` is what an agent *has*; this is what can be said something on, and the
+        #: two differ for as long as an adapter is down and being started again.
+        self._reached: dict = {}
 
     # -- what it is made of -------------------------------------------------------
 
@@ -1298,6 +1302,10 @@ class Gateway:
                 # refuses somebody and comes back, in complete silence, is a channel
                 # nobody can tell from one that never started (R-GW-18).
                 self.log.info)
+            # Kept for as long as this adapter is up, so something other than an arriving
+            # message can say a word on this surface — which is what a schedule finishing at
+            # three in the morning needs and had no way to do (R-SCH-31).
+            self._reached[one.name] = answering
             try:
                 # No silence window and no ceiling: an idle channel says nothing for
                 # hours by design, and a clock that ends one is a clock that ends the
@@ -1314,15 +1322,19 @@ class Gateway:
                     on_error=lambda said, name=one.name: self.log.warning(
                         "channel '%s': %s", name, said.rstrip()))
             except (AlreadyStarted, Stopping):
+                self._reached.pop(one.name, None)
                 return
             except asyncio.CancelledError:
+                self._reached.pop(one.name, None)
                 with contextlib.suppress(BaseException):
                     await answering.stop()
                 raise
             except BaseException as would_not_start:  # noqa: BLE001 — a task nobody awaits
+                self._reached.pop(one.name, None)
                 self.log.error("channel '%s' could not be started: %s",
                                one.name, would_not_start)
                 return
+            self._reached.pop(one.name, None)
             with contextlib.suppress(BaseException):
                 await answering.stop()
             if self._stopping:
@@ -1840,6 +1852,43 @@ class Gateway:
             self._remember_outcome(one.name, "could not start")
             return
         self._remember_outcome(one.name, became)
+        await self._told_the_surface(one, became)
+
+    async def _told_the_surface(self, one, became: str) -> None:
+        """Say what this schedule came to, on the surface it names.
+
+        **The first trigger with no person at the other end.** Work that failed at three in the
+        morning has to be readable where its owner already looks, rather than only in an account
+        nobody opens until they think to. So the gateway tells the surface: it is the only thing
+        that can, because a channel is held open here and a scheduled program is a child
+        process that cannot reach it.
+
+        **The surface the schedule names, and no other.** This went to every one the agent had,
+        which is two notices about work that concerned one of them — and worse, it decided for
+        the owner where a night's work is discussed. A schedule that names none reports where it
+        always did: the account, and `schedules`. That is not silence, only not a chat message.
+
+        A channel decides nothing about any of this; it is told, exactly as it is told about a
+        turn. And an agent with no channel at all still ran and still recorded, because there is
+        then nothing here to say anything on (R-SCH-31).
+
+        A surface that will not take it changes nothing about what the schedule did: the work is
+        over and the record of it is already written. Said in the log, and on.
+        """
+        answering = self._reached.get(one.channel) if one.channel else None
+        if answering is None:
+            if one.channel:
+                # Named and not up. Said, because an owner who asked to be told and was not is
+                # owed the reason — a schedule that reports nowhere looks exactly like one that
+                # did not run.
+                self.log.warning("schedule '%s': nothing said on '%s' — that channel is not up",
+                                 one.name, one.channel)
+            return
+        try:
+            await answering.told_what_a_schedule_did(one.name, became)
+        except Exception as why:  # noqa: BLE001 — a delivery boundary; see the docstring
+            self.log.warning("channel '%s': could not say what '%s' did: %s",
+                             one.channel, one.name, why)
 
     def _for_a_schedule(self, named: str) -> dict[str, str]:
         """The environment a scheduled program is given: the ordinary one, and which schedule.

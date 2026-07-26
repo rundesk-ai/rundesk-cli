@@ -627,10 +627,15 @@ class Store:
         return kept
 
     def remember_schedule(self, name, cron, created_at, command=None, prompt=None,
-                          provider=None, model=None, instructions=None, enabled=True):
+                          provider=None, model=None, instructions=None, enabled=True,
+                          channel=None):
         """Work an agent does because the time came — either a program, or a turn.
 
         Exactly one of `command` and `prompt`, which the database enforces rather than trusts.
+
+        `channel` is where what this came to is said, by the name the owner gave that surface —
+        and none is not silence: the account and `schedules` say it either way, and a schedule
+        that named no surface is one nobody asked to be told about in a chat.
 
         **When it is next due is not kept.** The cron is the only thing that decides that, so
         a column holding it would be a second answer to one question — stale the moment an
@@ -642,15 +647,15 @@ class Store:
         with self._writing() as conn:
             conn.execute(
                 "INSERT INTO schedule (name, enabled, cron, command, prompt, provider, model,"
-                " instructions, created_at) VALUES (?,?,?,?,?,?,?,?,?)"
+                " instructions, channel, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT(name) DO UPDATE SET"
                 " enabled=excluded.enabled, cron=excluded.cron, command=excluded.command,"
                 " prompt=excluded.prompt, provider=excluded.provider, model=excluded.model,"
-                " instructions=excluded.instructions",
+                " instructions=excluded.instructions, channel=excluded.channel",
                 (
                     name, 1 if enabled else 0, cron,
                     json.dumps(command) if command is not None else None,
-                    prompt, provider, model, instructions, created_at,
+                    prompt, provider, model, instructions, channel, created_at,
                 ),
             )
 

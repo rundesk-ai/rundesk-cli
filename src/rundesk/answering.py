@@ -175,6 +175,50 @@ class Answering:
             otherwise=agents.told(self.name, self._where,
                                   otherwise=channel.by_default(self.record, it)))
 
+    async def told_what_a_schedule_did(self, named: str, became: str) -> None:
+        """Say on this surface what one of this agent's schedules came to (R-SCH-31).
+
+        **The one thing here that nobody asked for.** Every other record this sends answers
+        something that arrived; this one is the clock's work reaching the place its owner
+        already looks, because work that failed at three in the morning is no use in an account
+        nobody opens until they think to.
+
+        Said as a remark rather than as an answer: `said` is a complete thing the agent said
+        that is not anchored to a question, which is exactly what this is — there is no message
+        to reply to and no reaction to put on one.
+
+        **Where** is the newest conversation this surface has had. A surface nobody has ever
+        spoken on has nowhere for this to go, and that is said rather than invented: guessing a
+        place on a platform whose words this code does not read is how an agent posts into a
+        room nobody meant it to be in.
+        """
+        kept = agents.reading(self.name, self._where)
+        places = kept.conversations(channel=self.channel, limit=1)
+        if not places:
+            self._note(f"channel '{self.channel}': nowhere to say what '{named}' did — "
+                       f"nothing has been said on this surface yet")
+            return
+        self._tell(type="said", conversation=places[0]["id"],
+                   text=self._what_it_did(kept, named, became))
+
+    @staticmethod
+    def _what_it_did(kept, named: str, became: str) -> str:
+        """One remark: which schedule, what it came to, and what it said if it said anything.
+
+        What it said is read back out of the account rather than passed in, because the account
+        is where it already is — and because a schedule that started a *program* has no answer
+        to read, so there is one shape here for both kinds rather than two callers deciding.
+        """
+        row = kept.schedule(named) or {}
+        said = ""
+        for run in kept.runs(schedule_id=row.get("id"), limit=1) if row.get("id") else []:
+            said = "\n\n".join(
+                one["text"] for one in kept.messages(run["conversation_id"])
+                if one.get("run_id") == run["id"] and one.get("author") == "agent"
+                and (one.get("text") or "").strip()
+            )
+        return f"schedule '{named}' {became}" + (f"\n\n{said}" if said.strip() else "")
+
     def _make_room(self) -> None:
         """Drop the oldest conversations that have nothing running in them.
 

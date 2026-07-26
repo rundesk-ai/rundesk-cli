@@ -56,6 +56,12 @@ CREATE TABLE schedule (
     provider          TEXT,
     model             TEXT,
     instructions      TEXT,
+    -- Where what this came to is said, by the name the owner gave that surface. Nothing at
+    -- three in the morning has a person at the other end, so the outcome has to reach where
+    -- its owner already looks — and which place that is, is the owner's to choose rather than
+    -- rundesk's to guess. A schedule naming none is not silence: the account and `schedules`
+    -- say it either way, and referencing the channel is what stops one outliving the other.
+    channel           TEXT REFERENCES channel(name),
     last_auto_run_at  TEXT,
     last_outcome      TEXT,
     created_at        TEXT NOT NULL,

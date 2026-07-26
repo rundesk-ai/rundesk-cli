@@ -2825,6 +2825,24 @@ sys.stdout.write(json.dumps({"type": "done", "ok": False, "why": "it would not a
 """ % PY
 
 
+class ASurface:
+    """A surface that is up, as far as the gateway is concerned.
+
+    Exactly the one method the gateway calls on a live `Answering` and nothing else: what a
+    remark looks like once it crosses the seam is `tests/test_answering.py`'s, and a stand-in
+    here that knew more would let a case pass against a message nobody could read.
+    """
+
+    def __init__(self, refuses: bool = False):
+        self.told: list = []
+        self.refuses = refuses
+
+    async def told_what_a_schedule_did(self, named: str, became: str) -> None:
+        if self.refuses:
+            raise OSError("the platform would not take it")
+        self.told.append((named, became))
+
+
 class WhenTheClockAsksATurn(WithARunDirectory):
     """R-SCH-28 — a schedule that asks a turn rather than starting a program.
 
@@ -2851,6 +2869,12 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         at.write_text(said, encoding="utf-8")
         at.chmod(at.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
         return str(at)
+
+    def reachable_on(self, called: str = "ops") -> None:
+        """A surface this agent is reachable on. Written down because a schedule referencing a
+        channel that is not there is refused by the records themselves — which is what stops a
+        schedule outliving the channel it reported to."""
+        self.records.remember_channel(called, "somewhere", ["2207"], store.stamped())
 
     def asks(self, name="nightly", prompt="what changed?", **held) -> None:
         """A schedule that asks a turn, written the way the command writes one."""
@@ -2996,6 +3020,86 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         run = await self._fired(gw)
         self.assertTrue(run["provider"].endswith("other"),
                         f"the schedule's own brain was passed over: {run['provider']}")
+
+    async def test_what_a_schedule_came_to_is_said_on_the_surface_it_names(self):
+        """R-SCH-31 — the gateway is the only thing that can say it: a channel is held open
+        here, and a scheduled program is a child process that cannot reach one."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.reachable_on("ops")
+        self.asks(channel="ops")
+        gw = self.made()
+        gw._reached["ops"] = ASurface()
+        gw.claim()
+        await self._fired(gw)
+        told = gw._reached["ops"].told
+        self.assertEqual([("nightly", "finished")], told,
+                         f"what the schedule came to never reached the surface: {told}")
+
+    async def test_a_schedule_says_it_on_the_surface_it_names_and_no_other(self):
+        """R-SCH-31 — it went to every surface the agent had, which is two notices about work
+        that concerned one of them, and rundesk deciding for an owner where a night's work is
+        discussed."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.reachable_on("ops")
+        self.asks(channel="ops")
+        gw = self.made()
+        self.reachable_on("dms")
+        gw._reached["ops"], gw._reached["dms"] = ASurface(), ASurface()
+        gw.claim()
+        await self._fired(gw)
+        self.assertEqual([("nightly", "finished")], gw._reached["ops"].told)
+        self.assertEqual([], gw._reached["dms"].told,
+                         "a surface the schedule does not name was told anyway")
+
+    async def test_a_schedule_naming_no_surface_still_runs_and_still_records(self):
+        """R-SCH-31 — not silence: the account and `schedules` say it either way, and a
+        schedule nobody asked to be told about in a chat is not a schedule that did nothing."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.asks()
+        gw = self.made()
+        gw._reached["ops"] = ASurface()
+        gw.claim()
+        run = await self._fired(gw)
+        self.assertEqual("finished", run["outcome"])
+        self.assertEqual("finished", self.records.schedule("nightly")["last_outcome"])
+        self.assertEqual([], gw._reached["ops"].told,
+                         "it said it somewhere the schedule never named")
+
+    async def test_an_agent_with_no_channel_at_all_still_runs_and_still_records(self):
+        """R-SCH-31 — the case that matters most: a channel decides nothing about schedules,
+        so an agent that has none is an agent whose clock works exactly the same."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.asks(channel=None)
+        gw = self.made()
+        gw.claim()
+        run = await self._fired(gw)
+        self.assertEqual("finished", run["outcome"])
+        self.assertEqual("finished", self.records.schedule("nightly")["last_outcome"])
+
+    async def test_a_surface_that_is_not_up_is_said_rather_than_passed_over(self):
+        """R-SCH-31 — an owner who asked to be told and was not is owed the reason: a schedule
+        reporting nowhere looks exactly like one that did not run."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.reachable_on("ops")
+        self.asks(channel="ops")
+        gw = self.made()
+        gw.claim()
+        await self._fired(gw)
+        self.assertIn("that channel is not up", gateway.log_path("ava", self.logs).read_text())
+
+    async def test_a_surface_that_will_not_take_it_changes_nothing_the_schedule_recorded(self):
+        """R-SCH-31 — the work is over and its record is written before this is tried."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.reachable_on("ops")
+        self.asks(channel="ops")
+        gw = self.made()
+        gw._reached["ops"] = ASurface(refuses=True)
+        gw.claim()
+        run = await self._fired(gw)
+        self.assertEqual("finished", run["outcome"])
+        self.assertEqual("finished", self.records.schedule("nightly")["last_outcome"],
+                         "a surface refusing changed what the schedule recorded")
+        self.assertIn("could not say what", gateway.log_path("ava", self.logs).read_text())
 
     async def test_a_schedule_whose_brain_fails_leaves_one_durable_outcome(self):
         """R-SCH-8 — a schedule that fails in silence looks exactly like one that has never

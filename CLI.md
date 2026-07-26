@@ -32,7 +32,7 @@ rundesk channels <agent> add --kind <kind> --allow <user> [--token-stdin] [--act
 rundesk channels <agent> instructions <channel> <text>                                                                                                                                 what this agent is told about where it is
 rundesk channels <agent> remove <channel>                                                                                                                                              take this agent off a channel
 rundesk channels <agent> show <channel>                                                                                                                                                one channel, and who may reach this agent through it
-rundesk schedules <agent> add --when <cron> [--ask <prompt>] [--provider <provider>] [--model <model>] [--instructions <text>] <schedule> -- <program> [<arg> ...]                     add a schedule
+rundesk schedules <agent> add --when <cron> [--ask <prompt>] [--provider <provider>] [--model <model>] [--instructions <text>] [--to <channel>] <schedule> -- <program> [<arg> ...]    add a schedule
 rundesk schedules <agent> off <schedule>                                                                                                                                               keep a schedule but stop it running
 rundesk schedules <agent> on <schedule>                                                                                                                                                let a schedule run
 rundesk schedules <agent> remove <schedule>                                                                                                                                            take a schedule away
@@ -118,6 +118,7 @@ rundesk schedules ava off nightly
 --set <key=value>               anything that brain takes, carried to it unread; repeatable
 --source <source>               whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine
 --steer                         keep saying more to it while it works — a line at a time, until you stop
+--to <channel>                  which channel to say what this came to on, by the name it was added under — the account and `schedules` say it either way
 --token-stdin                   read the credential this channel needs from standard input, one line; asked for at the terminal when left out
 --when <cron>                   when it runs, as five cron fields — minute, hour, day, month, weekday
 -n, --lines <lines>             how many of the last lines to show, from each source

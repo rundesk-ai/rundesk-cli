@@ -396,6 +396,13 @@ def build_parser() -> argparse.ArgumentParser:
     added.add_argument("--instructions", dest="says", metavar="<text>", default="",
                        help="standing instructions for the turn this schedule starts, told to "
                             "the brain apart from the prompt")
+    # Where what this came to is said. Nothing at three in the morning has a person at the
+    # other end, so the outcome has to reach where its owner already looks — and which place
+    # that is, is the owner's to choose. Told nothing it went to *every* surface the agent had,
+    # so two channels meant two notices about work that concerned one of them.
+    added.add_argument("--to", dest="channel", metavar="<channel>",
+                       help="which channel to say what this came to on, by the name it was "
+                            "added under — the account and `schedules` say it either way")
     # After `--`, taken off before the parser sees it, and never read here. It was a
     # required greedy positional, which argparse can carry a tail into on its own — but the
     # moment this verb grew options of its own, an option *inside* the tail was read as one
@@ -1965,6 +1972,15 @@ def _add_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
         print(f"{args.name}/{args.schedule}: NOT ADDED — it {said}", file=sys.stderr)
         print("        say one:  -- <program> …   or   --ask \"<prompt>\"", file=sys.stderr)
         return 1
+    to = (args.channel or "").strip()
+    if to and kept.channel(to) is None:
+        # Refused where it is written rather than found at three in the morning, the same way
+        # a program named rather than located is: a schedule reporting to a surface that is
+        # not there says nothing, and looks exactly like one nobody asked to be told about.
+        print(f"{args.name}/{args.schedule}: NOT ADDED — this agent has no channel called "
+              f"'{to}'", file=sys.stderr)
+        print(f"        what it has:  rundesk channels {args.name}", file=sys.stderr)
+        return 1
     for named, said in (("--provider", args.provider), ("--model", args.model),
                         ("--instructions", args.says)):
         # Said rather than silently kept: these reach a brain, and a schedule that starts a
@@ -1993,7 +2009,8 @@ def _add_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
                            command=runs or None,
                            prompt=prompt or None,
                            provider=args.provider, model=args.model,
-                           instructions=(args.says or "").strip() or None)
+                           instructions=(args.says or "").strip() or None,
+                           channel=to or None)
     unlogged = _note(gateways, args.name, f"schedule '{args.schedule}' added ({args.when})", whose)
     # Both named, because a schedule belongs to one agent and the success line saying only
     # its own name could not tell you it had landed on the wrong one.

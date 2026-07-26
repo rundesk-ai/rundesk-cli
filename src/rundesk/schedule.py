@@ -54,9 +54,10 @@ class Schedule:
     `run` is whatever the thing doing the starting understands — a program, or nothing where
     this schedule asks a turn instead. Carried, never looked at (R-SCH-3).
 
-    `prompt` and the three beside it are the same: what to ask, which brain, which model, and
-    what it is told before it reads a word. Every one of them is carried to whatever admits
-    the turn and read by nothing here — this module still knows only when.
+    `prompt` and the four beside it are the same: what to ask, which brain, which model, what
+    it is told before it reads a word, and which surface hears what it came to. Every one of
+    them is carried to whatever admits the turn and read by nothing here — this module still
+    knows only when.
 
     **Exactly one of `run` and `prompt` says anything.** That is the records' rule rather than
     this one's, and it is not re-checked here: what arrives is what was written down, and a
@@ -71,6 +72,7 @@ class Schedule:
     provider: str | None = None
     model: str | None = None
     instructions: str | None = None
+    channel: str | None = None
     _fields: tuple = field(default=(), repr=False, compare=False)
     #: Which fields were written as `*`. Kept because "was anything allowed here?" cannot
     #: be answered by counting what a field ended up allowing: `0-6` allows every day of
@@ -128,6 +130,7 @@ def read(said: Any) -> list[Schedule]:
                 provider=one.get("provider"),
                 model=one.get("model"),
                 instructions=one.get("instructions"),
+                channel=one.get("channel"),
             ))
         except (NotASchedule, TypeError) as why:
             refused.append((str(name), str(why)))

@@ -179,6 +179,92 @@ class WhereABrainIsAnswering(CarriesAConversation):
     forty people in exactly the voice it used for a direct message, and the person it was
     talking to was a number it never saw."""
 
+    def spoken_on(self, space: str = "one") -> str:
+        """A conversation this surface has already had, which is what gives a schedule
+        somewhere to report. Opened through the store rather than by driving a turn: what is
+        under test is where an outcome goes, not how a conversation comes to exist."""
+        kept = agents.records("ava", self.where)
+        return kept.opened(store.conversation_id("ops", space), "ops", "somewhere", space,
+                           store.stamped())["id"]
+
+    def a_schedule(self, named: str = "nightly", **held) -> dict:
+        kept = agents.records("ava", self.where)
+        kept.remember_schedule(named, "0 3 * * *", store.stamped(),
+                               prompt=held.pop("prompt", "what changed?"), **held)
+        return kept.schedule(named)
+
+    async def test_what_a_schedule_came_to_is_said_where_this_agent_is_reached(self):
+        """R-SCH-31 — the first trigger with no person at the other end. Work that failed at
+        three in the morning is no use in an account nobody opens until they think to.
+
+        Said as a remark: there is no message to reply to and no reaction to put on one."""
+        where_it_is = self.spoken_on()
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_what_a_schedule_did("nightly", "finished")
+        await self._settled(held)
+        said = surface.of("said")
+        self.assertEqual(1, len(said), f"nothing was said on the surface: {surface.shown}")
+        self.assertIn("nightly", said[0]["text"])
+        self.assertIn("finished", said[0]["text"])
+        self.assertEqual(where_it_is, said[0]["conversation"],
+                         "it was said somewhere other than where this surface has been used")
+
+    async def test_what_the_turn_answered_is_said_with_what_it_came_to(self):
+        """R-SCH-31 — the outcome word alone is an owner asking what happened and being told
+        that something did. What it said is read back out of the account, where it already is."""
+        self.spoken_on()
+        row = self.a_schedule()
+        kept = agents.records("ava", self.where)
+        its_own = kept.opened(store.conversation_id("schedule", "nightly"), "schedule",
+                              "schedule", "nightly", store.stamped())["id"]
+        run = kept.began("schedule", "a-brain", "safe", store.stamped(),
+                         conversation_id=its_own, schedule_id=row["id"])
+        kept.answered(its_own, run, store.stamped(), "nothing broke overnight")
+        kept.ended(run, store.stamped(), "finished")
+
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_what_a_schedule_did("nightly", "finished")
+        await self._settled(held)
+        self.assertIn("nothing broke overnight", surface.of("said")[0]["text"])
+
+    async def test_a_schedule_that_started_a_program_is_still_said(self):
+        """R-SCH-31 — a program has no answer to read back, so the remark is what it came to
+        and nothing else. One shape for both kinds rather than two callers deciding."""
+        self.spoken_on()
+        kept = agents.records("ava", self.where)
+        kept.remember_schedule("tidy", "0 4 * * *", store.stamped(), command=["/bin/tidy"])
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_what_a_schedule_did("tidy", "failed")
+        await self._settled(held)
+        self.assertEqual("schedule 'tidy' failed", surface.of("said")[0]["text"])
+
+    async def test_a_surface_that_will_not_take_it_changes_nothing(self):
+        """R-SCH-31 — the work is over and the record of it is already written, so a platform
+        refusing is said in the log and nothing else."""
+        self.spoken_on()
+        self.a_schedule()
+        surface = Surface(refuses=True)
+        held = self.answering(surface, Brain())
+        await held.told_what_a_schedule_did("nightly", "finished")
+        await self._settled(held)
+        self.assertEqual([], surface.shown)
+        self.assertTrue(any("could not show" in one for one in self.told),
+                        f"a refusal was swallowed: {self.told}")
+
+    async def test_a_surface_nobody_has_spoken_on_has_nowhere_to_say_it(self):
+        """R-SCH-31 — said rather than invented. Guessing a place on a platform whose words
+        this code does not read is how an agent posts into a room nobody meant it to be in."""
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_what_a_schedule_did("nightly", "finished")
+        self.assertEqual([], surface.of("said"), "it invented somewhere to post")
+        self.assertTrue(any("nowhere to say" in one for one in self.told),
+                        f"it said nothing about having nowhere: {self.told}")
+
     async def test_a_channel_that_says_nothing_falls_to_what_the_agent_says(self):
         """R-AGT-16, R-CH-22 — the composition, rather than either half of it. `channel.py`
         has no idea what an agent keeps and `agent.py` has no idea what a surface is, so this
