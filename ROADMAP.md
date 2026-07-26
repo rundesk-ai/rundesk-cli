@@ -1449,6 +1449,7 @@ all three CLIs and kept what it found, locked to `claude 2.1.219` and `grok 0.2.
 | session | client-minted uuid, so the handle exists before the first byte | same shape |
 | system prompt | `--append-system-prompt` adds, `--system-prompt` replaces | `--rules` adds, `--system-prompt-override` replaces |
 | private home | `CLAUDE_CONFIG_DIR` isolates the login too — two agents need two `/login` runs | `GROK_HOME` **unproven** |
+| *(what was found instead)* | it does not redirect a login, it **removes** one; and `USER` must be set or the keychain is never read | it isolates, and is **not needed**: conversations are filed by working directory |
 | the trap | `--permission-mode` is not a read-only posture; the allowlist is | `--permission-mode dontAsk` is **accepted and silently ignored**, and `--sandbox` is a no-op |
 
 ### Deliverables
@@ -1468,7 +1469,7 @@ all three CLIs and kept what it found, locked to `claude 2.1.219` and `grok 0.2.
 6. `R-PRV-20` and `R-PRV-22` turned ✅ — Claude streams fragments and reports files, which is
    exactly what no test has driven a real brain to do.
 
-### Exit proof — met, with one deliverable short and one left open
+### Exit proof — met, with one deliverable deliberately short
 
 `git diff --stat` for the phase touches `src/providers/`, `tests/`, `.knowledge/` and
 `build.yml`, and nothing else. **Nothing in `src/rundesk/` changed.**
@@ -1476,31 +1477,59 @@ all three CLIs and kept what it found, locked to `claude 2.1.219` and `grok 0.2.
 | Deliverable | |
 |---|---|
 | 1 · evidence carried in | done — the streams, the mapping decisions and both research notes |
-| 2 · probes for the gaps only | done — `probe-claude`, `probe-grok`, four gaps answered and a fifth found |
+| 2 · probes for the gaps only | done — `probe-claude`, `probe-grok`, four gaps answered and two more found |
 | 3 · the two adapters | done — declaring only what was measured |
-| 4 · offline suites + `build.yml` | done — 64 cases, driven against captured output, no account |
-| 5 · `test_provider.py --adapter …` | grok passes unchanged, 34 cases. **Claude cannot be run** — see below |
-| 6 · `R-PRV-20` and `R-PRV-22` ✅ | R-PRV-22 green from both sides. **R-PRV-20 stays ❌** |
+| 4 · offline suites + `build.yml` | done — 75 cases against captured output, no account, no network |
+| 5 · `test_provider.py --adapter …` | done — **both pass with `--home` omitted entirely** |
+| 6 · `R-PRV-20` and `R-PRV-22` ✅ | R-PRV-22 green from both sides. **R-PRV-20 stays ❌**, below |
+
+Every case was proved by breaking the code and watching it fail — 24 probes across the two
+adapters, backed up by copy rather than by git, because another phase had uncommitted work here.
 
 **R-PRV-20 could not be earned, and the reason is the finding.** Grok reports no tool events at
 all, and the 184 captured lines of claude contain no file-making tool — its 13 calls are
 `ToolSearch`, `TaskCreate`, `TaskUpdate`, `Bash` and `Read`. So the field a `Write` names its path
 in is unmeasured, and guessing a vendor's field name is already in `MEMORY.md` as costing a whole
 feature silently. What this row needs is a capture of a brain making a file, which is a live turn
-nobody has bought yet.
+nobody has bought yet. Left ❌ on the owner's decision rather than earned on a fixture.
 
-**Claude's conformance run needs a sign-in that only the owner can create.** Measured while
-attempting it: `CLAUDE_CONFIG_DIR` does not redirect the login, it removes one — the sign-in is in
-the macOS login keychain, and pointing the variable at the directory the CLI defaults to is enough
-to be told to run `/login`. So an agent's private home cannot borrow the machine's login and there
-is nothing to copy into it. `CLAUDE_CONFIG_DIR=<dir> claude /login`, once per agent, needs a
-browser. The adapter says exactly that when it happens.
+### The design this phase got wrong first, and what corrected it
+
+The adapters were built to relocate each brain's home onto `RUNDESK_PROVIDER_HOME`, on the reading
+that a private home is what separates one agent from another. **It is not, and forcing it broke
+Claude outright.** Two measurements settled it:
+
+- Both brains already file conversations under **the directory a turn was run in** —
+  `~/.grok/sessions/<url-encoded cwd>` and `~/.claude/projects/<cwd slug>/`, the latter holding
+  the resume handle as a `.jsonl` inside it. Rundesk already stands every turn in its own agent's
+  home, so that separation is had for free, and it is what a person gets by `cd`-ing into a
+  directory and running the CLI by hand.
+- `CLAUDE_CONFIG_DIR` does not *redirect* a login, it *removes* one: pointed at the directory the
+  CLI defaults to, on a signed-in machine, `claude auth status` answers `loggedIn: false`.
+
+So no shipped adapter relocates a brain's home now — codex never did — and a fresh agent answers
+on first ask with no sign-in step and no borrowed credential. A genuinely separate *account*
+remains available through `--set`, which is a thing to be asked for rather than a default imposed.
+**`RUNDESK_PROVIDER_HOME` is left carrying an adapter's own bookkeeping and nothing else**, which
+is a narrower job than the guide describes for it — see below.
 
 ### What this closes, and what it does not
 
 The seam's claim is now tested by somebody other than the vendor it was designed against, which is
-what it was for. What is *not* closed: whether a brain can say it made a file (R-PRV-20), and
-whether `--rules` on grok lands at all — the last row in that note still reading `Assumed`.
+what it was for, and it held: two unrelated vendors, no core change, no vendor name anywhere above
+`src/providers/`.
+
+Left open, and each one is a Phase 8 question rather than a gap here:
+
+- **Whether a brain can say it made a file** (R-PRV-20), which needs a capture nobody has bought.
+- **What `RUNDESK_PROVIDER_HOME` is actually for**, now that no adapter uses it for credentials.
+  The guide still describes it as "config, credentials, session files"; three shipped adapters now
+  use it for none of those. The contract should say what is true, and whether a per-agent identity
+  is an owner's explicit choice is the owner's call to make.
+- **Whether `--rules` on grok lands at all** — the last row in that note still reading `Assumed`.
+- **That nothing drives a shipped adapter into a `state.db` from a test.** All three were driven
+  by hand and their accounts inspected — runs, records, usage, session handles and resume all
+  correct — but the suite proves the seam-to-store path with stand-ins only.
 
 ## Phase 8 — Provider Adapters: Audit the Seam
 

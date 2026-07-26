@@ -194,6 +194,37 @@ class WhenTheStreamGoesWrong(unittest.TestCase):
         self.assertFalse(ended["ok"])
         self.assertEqual("the model refused", ended["why"])
 
+    def test_a_turn_that_failed_hands_back_no_handle_to_carry_on_from(self):
+        """The bug this prevents was reproduced in production, and it is permanent once it
+        happens: this brain mints a session id even for a turn that fails, but no
+        conversation is created — so reporting the handle makes *every* turn afterwards
+        resume something that was never there. Not reporting one costs the next turn its
+        context and nothing else, which is the cheaper of the two."""
+        said = claude.records(json.dumps({
+            "type": "result", "subtype": "error_during_execution", "is_error": True,
+            "session_id": "a-session-that-does-not-exist", "result": "it went wrong",
+            "usage": {}}), {"session": "a-session-that-does-not-exist", "model": None})
+        ended = [one for one in said if one["type"] == "done"][0]
+        self.assertNotIn("session", ended, "a failed turn handed back a handle")
+
+    def test_a_turn_that_worked_hands_back_the_handle_it_was_given(self):
+        said = claude.records(json.dumps({
+            "type": "result", "subtype": "success", "is_error": False,
+            "session_id": "a-real-session", "usage": {}}), {"session": "a-real-session"})
+        self.assertEqual("a-real-session",
+                         [one for one in said if one["type"] == "done"][0]["session"])
+
+    def test_a_conversation_that_has_gone_is_told_apart_from_a_turn_that_failed(self):
+        """Losing a handle costs a turn its context, which is what losing one is supposed
+        to cost; it must not cost the turn. Telling the two apart is the whole of that, and
+        this brain makes it awkward: it says `No conversation found with session ID` on
+        **stderr** while its result line says only `error_during_execution`."""
+        self.assertTrue(claude._lost({"ok": False, "why": "No conversation found with session ID: x"}))
+        self.assertFalse(claude._lost({"ok": False, "why": "the model refused"}))
+        self.assertFalse(claude._lost({"ok": True, "why": "No conversation found"}),
+                         "a turn that worked was read as a lost conversation")
+        self.assertFalse(claude._lost({"ok": False}))
+
     def test_being_logged_out_is_carried_where_the_adapter_will_look_for_it(self):
         """Measured at 2.1.220, and the reason this is not left to stderr: having no login
         arrives as an ordinary failed turn on the `result` line. An adapter watching only
