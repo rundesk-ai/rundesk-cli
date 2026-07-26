@@ -425,7 +425,7 @@ class BuiltCommandTests(unittest.TestCase):
         # which answer wins would depend on the order of the checks in `main`.
         built = {"version", "update", "uninstall", "add", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
-                 "channels", "runs", "usage", "search"}
+                 "channels", "runs", "usage", "search", "messages"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 

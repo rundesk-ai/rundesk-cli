@@ -878,6 +878,60 @@ class Store:
             ).fetchall()
         return [_plain(row) for row in rows]
 
+    def latest(self, limit: int = 50, since=None, channel=None, author=None,
+               source=None) -> list:
+        """The newest things said, across every conversation this agent has had.
+
+        **The question `search` cannot answer.** Searching needs a word, and the case this
+        exists for is the one where nobody gave you one: an agent is told "nice work" about
+        a scheduled turn that ran in a different conversation, under a session that is not
+        this one, and has no idea what is meant. Reading its own record newest-first is how
+        it finds out, and `runs` is no help — a listing of ids, times and outcomes says that
+        work happened and never what was said in it.
+
+        Newest first and across every surface, because where something was said is not how
+        anybody looks for it. `since` is a message id and nothing after it is returned twice,
+        which is how a caller asks what is new rather than paging back through what it has
+        already read — `id` is `AUTOINCREMENT`, so it is a cursor that stays put while new
+        messages land beside it, which an offset is not.
+
+        The narrowing arguments are refused rather than ignored when they are not one of the
+        words that exist (R-STO-26). A filter nobody can spell is a listing that silently
+        answers a different question than the one asked.
+        """
+        if author is not None and author not in AUTHORS:
+            raise ValueError(f"an author is one of {AUTHORS}, not {author!r}")
+        if source is not None and source not in SOURCES:
+            raise ValueError(f"work is admitted from one of {SOURCES}, not {source!r}")
+        where, values = [], []
+        if since is not None:
+            where.append("m.id > ?")
+            values.append(int(since))
+        if channel is not None:
+            where.append("c.channel = ?")
+            values.append(channel)
+        if author is not None:
+            where.append("m.author = ?")
+            values.append(author)
+        if source is not None:
+            # Asked of the run this message belongs to, which it reaches two ways: an
+            # agent's answer carries `run_id`, and what a person said is what a run points
+            # back at. `EXISTS` rather than a join, so a message whose id matches more than
+            # one run is still one row rather than several.
+            where.append("EXISTS (SELECT 1 FROM run r WHERE (r.id = m.run_id"
+                         " OR r.trigger_message_id = m.id) AND r.source = ?)")
+            values.append(source)
+        clause = (" WHERE " + " AND ".join(where)) if where else ""
+        with self._reading() as conn:
+            rows = conn.execute(
+                "SELECT m.*, c.channel AS channel, c.kind AS kind, c.space AS space,"
+                " c.thread AS thread FROM message m"
+                " JOIN conversation c ON c.id = m.conversation_id"
+                f"{clause} ORDER BY m.id DESC LIMIT ?",
+                values + [limit],
+            ).fetchall()
+        return [_plain(row) for row in rows]
+
     def search(self, words: str, limit: int = 50) -> list:
         """What was said about something, wherever it was said and whoever said it.
 

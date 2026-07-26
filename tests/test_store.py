@@ -1359,5 +1359,83 @@ class TheOnlyWayIn(unittest.TestCase):
         self.assertEqual([], opening)
 
 
+class ReadingBackWhatWasSaid(WithAnAgentsOwnRecords):
+    """R-STO-25, R-STO-26 — the listing an agent reads about itself.
+
+    Searching needs a word, and the case this exists for is the one where nobody gave you
+    one: "nice work" about a turn that ran in another conversation entirely.
+    """
+
+    def furnished(self):
+        """Two surfaces, four messages, and a run under each — enough to narrow."""
+        kept = self.built()
+        kept.opened("c-term", "terminal", "terminal", "terminal", AT)
+        kept.opened("c-ops", "ops", "room", "general", AT)
+        said = {}
+        said["asked"] = kept.arrived("c-term", AT, "look at the parser")
+        named = kept.began("terminal", "codex", "safe", AT, conversation_id="c-term",
+                           trigger_message_id=said["asked"])
+        said["answered"] = kept.answered("c-term", named, AT, "three issues found")
+        said["nightly"] = kept.arrived("c-ops", LATER, "nice work!", who="U1")
+        by_clock = kept.began("schedule", "codex", "safe", LATER, conversation_id="c-ops")
+        said["clock"] = kept.answered("c-ops", by_clock, LATER, "the nightly review ran")
+        return kept, said
+
+    def test_what_was_said_reads_back_newest_first(self):
+        """Newest first, because the question is "what has just happened" — a listing that
+        began at the beginning would make an agent page through its whole life to answer it."""
+        kept, said = self.furnished()
+        found = kept.latest()
+        self.assertEqual([one["id"] for one in found],
+                         sorted((one["id"] for one in found), reverse=True))
+        self.assertEqual(said["clock"], found[0]["id"])
+
+    def test_what_was_said_on_every_surface_reads_back_together(self):
+        """Where something was said is not how anybody looks for it. One listing spans the
+        terminal and a room, and says which each was."""
+        kept, _ = self.furnished()
+        found = kept.latest()
+        self.assertEqual({"terminal", "ops"}, {one["channel"] for one in found})
+        self.assertEqual(4, len(found))
+
+    def test_only_what_was_said_after_a_given_one_is_read_back(self):
+        """A cursor rather than an offset: `id` is `AUTOINCREMENT`, so it stays put while new
+        messages land beside it, which is what makes "what is new since I looked" answerable."""
+        kept, said = self.furnished()
+        found = kept.latest(since=said["answered"])
+        self.assertEqual([said["clock"], said["nightly"]], [one["id"] for one in found])
+
+    def test_what_a_listing_shows_can_be_narrowed_to_one_channel(self):
+        kept, said = self.furnished()
+        found = kept.latest(channel="ops")
+        self.assertEqual([said["clock"], said["nightly"]], [one["id"] for one in found])
+
+    def test_what_a_listing_shows_can_be_narrowed_to_one_kind_of_author(self):
+        kept, said = self.furnished()
+        found = kept.latest(author="person")
+        self.assertEqual([said["nightly"], said["asked"]], [one["id"] for one in found])
+
+    def test_what_a_listing_shows_can_be_narrowed_to_how_the_work_was_admitted(self):
+        """The one an agent actually reaches for: what did the clock do, as against what a
+        person asked me. It reaches a run two ways — an answer carries `run_id`, and what a
+        person said is what a run points back at — so both sides of a turn are found."""
+        kept, said = self.furnished()
+        self.assertEqual([said["clock"]], [one["id"] for one in kept.latest(source="schedule")])
+        self.assertEqual([said["answered"], said["asked"]],
+                         [one["id"] for one in kept.latest(source="terminal")])
+
+    def test_a_narrowing_by_an_author_nobody_could_be_is_refused(self):
+        """Refused rather than ignored. A filter nobody can spell that is quietly dropped is
+        a listing answering a different question than the one it was asked."""
+        kept, _ = self.furnished()
+        with self.assertRaises(ValueError):
+            kept.latest(author="everyone")
+
+    def test_a_narrowing_by_a_source_nothing_is_admitted_from_is_refused(self):
+        kept, _ = self.furnished()
+        with self.assertRaises(ValueError):
+            kept.latest(source="hand")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

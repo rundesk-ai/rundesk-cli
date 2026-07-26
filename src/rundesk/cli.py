@@ -434,6 +434,25 @@ def build_parser() -> argparse.ArgumentParser:
     cost.add_argument("name", nargs="?", metavar="<agent>",
                       help="one agent — every agent when left out")
 
+    # Reading back what was said, newest first — the listing an agent uses on itself when a
+    # conversation refers to work its own session never saw. Filters are the closed sets the
+    # store already keeps, so `--source schedule` is what the clock did and nothing else.
+    recent = sub.add_parser("messages", help="what was said, newest first")
+    recent.add_argument("name", nargs="?", metavar="<agent>", help="which agent")
+    recent.add_argument("--most", type=int, default=20, metavar="<n>",
+                        help="how many to show, newest first (default: 20)")
+    recent.add_argument("--since", type=int, metavar="<id>",
+                        help="only what was said after this one, by the id shown beside it")
+    recent.add_argument("--channel", metavar="<channel>",
+                        help="only what was said on this channel, by the name it was added "
+                             "under")
+    # The choices are read off the store's own closed sets rather than restated, and the
+    # reference prints them, so neither says the list twice.
+    recent.add_argument("--author", choices=list(store.AUTHORS), metavar="<who>",
+                        help="only what this kind of author said")
+    recent.add_argument("--source", choices=list(store.SOURCES), metavar="<how>",
+                        help="only messages belonging to work admitted this way")
+
     # Searching by the words in something, which is the one question a listing cannot
     # answer: what an agent was told about a thing, whichever surface it arrived on.
     looked_for = sub.add_parser("search", help="what was said, by the words in it")
@@ -2305,6 +2324,46 @@ def cmd_usage(args: argparse.Namespace, gateways, agents) -> int:
     return 0
 
 
+def cmd_messages(args: argparse.Namespace, gateways, agents) -> int:
+    """What has been said, newest first, across every surface this agent is reached on.
+
+    The listing an agent reads about itself. `runs` says that work happened and `search`
+    needs a word nobody always has — this is the one that answers "what was I just told,
+    and what did I say", which is what a turn resuming a conversation it has no session for
+    actually needs (R-STO-25).
+    """
+    if not args.name:
+        return _wants_a_name("messages")
+    kept = _reading(args.name, agents)
+    if kept is None:
+        return 1
+    try:
+        found = kept.latest(limit=max(1, args.most), since=args.since,
+                            channel=args.channel, author=args.author, source=args.source)
+    except ValueError as why:
+        # The closed sets say what they are rather than being quietly ignored, so a filter
+        # nobody can spell is refused instead of answering a different question (R-STO-26).
+        print(f"{args.name}: {why}", file=sys.stderr)
+        return 1
+    if not found:
+        print(f"{args.name}: NOTHING SAID YET")
+        print(f'        ask it something:  rundesk ask {args.name} "…"')
+        return 0
+    _as_table(("ID", "WHEN", "WHERE", "WHO", "MESSAGE"), [
+        (str(one["id"]), str(one["at"]), f"{one['channel']}/{one['space']}",
+         str(one["author"]), " ".join(str(one["text"]).split())[:_MESSAGE_CHARS])
+        for one in found
+    ])
+    return 0
+
+
+#: How much of one message is shown. Far more than a search result shows, because these are
+#: read for their content rather than scanned for a hit — an agent working out what it was
+#: told needs the sentence, not the fact that a sentence exists. The whole of it is in the
+#: record; `--most 1` on one id is how a reader asks for that.
+_MESSAGE_CHARS = 255
+
+
 def cmd_search(args: argparse.Namespace, gateways, agents) -> int:
     """What was said about something, wherever it was said and whoever said it.
 
@@ -2495,6 +2554,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
         return cmd_runs(args, gateways, agents)
     if args.command == "usage":
         return cmd_usage(args, gateways, agents)
+    if args.command == "messages":
+        return cmd_messages(args, gateways, agents)
     if args.command == "search":
         return cmd_search(args, gateways, agents)
 

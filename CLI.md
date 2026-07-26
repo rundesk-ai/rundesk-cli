@@ -48,6 +48,7 @@ rundesk update [--check]                                                        
 rundesk uninstall [--purge]                                                                                                                                                            remove rundesk from this machine
 
 # not yet grouped
+rundesk messages [--most <n>] [--since <id>] [--channel <channel>] [--author <who>] [--source <how>] <agent>                                                                           what was said, newest first
 rundesk resume <agent>                                                                                                                                                                 carry one run on from where it stopped   [planned]
 rundesk search [--most <n>] <agent> <words>                                                                                                                                            what was said, by the words in it
 ```
@@ -104,6 +105,8 @@ rundesk schedules ava off nightly
 --all                           every agent on this machine
 --allow <user>                  who may reach this agent through it — at least one, always; repeatable
 --ask <prompt>                  what to ask this agent when it is due, in quotes — a turn rather than a program
+--author <who>                  only what this kind of author said — one of agent | person | rundesk
+--channel <channel>             only what was said on this channel, by the name it was added under
 --check                         say whether a newer release exists
 --conversation <conversation>   which conversation to carry on — this terminal's, when left out
 --fresh                         start the conversation again rather than carrying it on
@@ -116,6 +119,8 @@ rundesk schedules ava off nightly
 --purge                         also take every agent's home, log and history
 --read-only                     let this turn look at the machine without changing it
 --set <key=value>               anything that brain takes, carried to it unread; repeatable
+--since <id>                    only what was said after this one, by the id shown beside it
+--source <how>                  only messages belonging to work admitted this way — one of channel | schedule | terminal
 --source <source>               whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine
 --steer                         keep saying more to it while it works — a line at a time, until you stop
 --to <channel>                  which channel to say what this came to on, by the name it was added under — the account and `schedules` say it either way
