@@ -1891,6 +1891,31 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         self.assertIn("no channel called", said)
         self.assertEqual([], self.schedules_of("gateway"))
 
+    def test_a_channel_a_schedule_still_reports_to_is_not_taken_away(self):
+        """R-SCH-31 — the reference is what stops a schedule outliving the surface it reported
+        to, and the database refuses in its own words: an owner saw `FOREIGN KEY constraint
+        failed` and was pointed at `doctor`, which does not look at schedules at all."""
+        kept = self.agents.records("ava")
+        kept.remember_channel("ops", "somewhere", ["2207"], store.stamped())
+        kept.remember_schedule("nightly", "0 3 * * *", store.stamped(),
+                               prompt="what changed?", channel="ops")
+        code, said = drive(["channels", "ava", "remove", "ops"], self._gateways(),
+                           agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("NOT REMOVED", said)
+        self.assertIn("nightly", said, "it never named what was in the way")
+        self.assertNotIn("FOREIGN KEY", said, "the database's words reached the owner")
+        self.assertIsNotNone(kept.channel("ops"), "the channel went anyway")
+
+    def test_a_channel_nothing_reports_to_is_taken_away(self):
+        """R-SCH-31 — the other half, so refusing cannot pass by never removing anything."""
+        kept = self.agents.records("ava")
+        kept.remember_channel("ops", "somewhere", ["2207"], store.stamped())
+        code, said = drive(["channels", "ava", "remove", "ops"], self._gateways(),
+                           agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIsNone(kept.channel("ops"))
+
     def test_a_schedule_is_turned_off_and_on_again_without_being_lost(self):
         """R-SCH-11"""
         gateways = self._gateways(schedules={"gateway": [

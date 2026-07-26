@@ -52,6 +52,11 @@ TERMINAL = "terminal"
 #: into, and left its own prompt and answer in the middle of it.
 SCHEDULE = "schedule"
 
+#: The third, and the one this file does not otherwise name. Written out beside the other two
+#: because `began` refuses a word that is not one of `store.SOURCES`, and three spellings of
+#: that set — here, there, and in whatever a caller passes — is two too many.
+CHANNEL = "channel"
+
 #: How many lines of what a brain said went wrong are carried back with the outcome. The
 #: whole of it is in the run's own file; this is the tail worth putting in front of a person.
 TROUBLE_KEPT = 20
@@ -209,7 +214,7 @@ async def carry(
         # How this turn came about, and one of the three the records declare (R-RUN-16).
         # Said by the caller where the caller knows something this cannot work out — the
         # clock does — and derived otherwise from whether a surface asked.
-        source or ("channel" if asked_by else "terminal"), named, posture, at_now,
+        source or (CHANNEL if asked_by else TERMINAL), named, posture, at_now,
         conversation_id=where_it_is, schedule_id=schedule_id,
         trigger_message_id=asked, model=model, can=can,
         settings=settings, resumed=bool(resume), pick=pick,

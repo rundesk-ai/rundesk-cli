@@ -15,6 +15,7 @@ import io
 import json
 import logging
 import os
+import pathlib
 import shutil
 import signal
 import stat
@@ -1622,7 +1623,7 @@ class WhatCarriesAcrossARestart(WithARunDirectory):
         gw = self.made()
         gw.claim()
         gw._say()
-        self.assertIsNotNone(store.moment(self.records.last_seen()),
+        self.assertIsNotNone(self.records.last_seen(),
                              "a running gateway left nothing to say it had been up")
 
 
@@ -2882,22 +2883,33 @@ class WhenTheClockAsksATurn(WithARunDirectory):
                                        prompt=prompt, **held)
 
     def made(self, name: str = "ava", **held) -> gateway.Gateway:
+        held.setdefault("asking", self.agents.asking("ava", self.agents_at))
         gw = gateway.Gateway(name, where=self.where, logs=self.logs, root=self.root,
-                             records=self.records, agents=self.agents_at,
-                             asking=self.agents.asking("ava", self.agents_at), **held)
+                             records=self.records, agents=self.agents_at, **held)
         self.addCleanup(gw.release)
         return gw
 
     async def _fired(self, gw, moment=None, seconds: float = 30.0) -> dict:
-        """Fire the clock and wait for the run the turn wrote. Returns the run's row."""
+        """Fire the clock and wait for the run the turn wrote. Returns the run's row.
+
+        The read is retried rather than trusted, and not for the usual reason. Reading these
+        records can fail outright while another process is writing them — a WAL database whose
+        `-shm` is not there cannot be opened read-only at all, and that is the state a clean
+        close leaves behind. It is a real fault and it is recorded as one; a polling helper is
+        not the place to prove it, so this waits it out.
+        """
         gw._fire(schedule, moment or datetime.now())
         deadline = time.time() + seconds
+        last = None
         while time.time() < deadline:
-            runs = self.records.runs()
-            if runs and runs[0].get("ended_at"):
-                return runs[0]
+            try:
+                runs = self.records.runs()
+                if runs and runs[0].get("ended_at"):
+                    return runs[0]
+            except Exception as why:  # noqa: BLE001 — see the docstring
+                last = why
             await asyncio.sleep(0.05)
-        self.fail(f"no run was recorded: {self.records.runs()}")
+        self.fail(f"no run was recorded (last read said {last!r})")
 
     async def test_a_schedule_that_asks_a_turn_completes_and_records_it(self):
         """R-SCH-28 — the whole line in one case: the time came, a brain answered, and what
@@ -3100,6 +3112,60 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         self.assertEqual("finished", self.records.schedule("nightly")["last_outcome"],
                          "a surface refusing changed what the schedule recorded")
         self.assertIn("could not say what", gateway.log_path("ava", self.logs).read_text())
+
+    async def test_a_schedule_that_names_rundesk_ask_is_admitted_as_the_clocks_work(self):
+        """R-RUN-16, R-SCH-27, R-SCH-29 — the other half of the phase, and the one a stand-in
+        cannot prove: a schedule whose *program* is `rundesk ask` is still the clock's work, and
+        the only thing that can tell it so is the one variable the gateway adds to its
+        environment. Driven through the repository's own command, in a real subprocess, so a
+        rename of that variable on either side fails here rather than silently reverting a
+        scheduled turn to one somebody typed."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.records.remember_schedule(
+            "nightly", "* * * * *", store.stamped(),
+            command=[str(ROOT / "rundesk"), "ask", "ava", "what changed?"])
+        gw = self.made()
+        gw.claim()
+        run = await self._fired(gw)
+        self.assertEqual("schedule", run["source"],
+                         "a turn the clock started read back as one somebody typed")
+        where_it_is = [one for one in self.records.conversations()
+                       if one["id"] == run["conversation_id"]][0]
+        self.assertEqual(("schedule", "nightly"),
+                         (where_it_is["channel"], where_it_is["space"]),
+                         "it landed somewhere other than the schedule's own conversation")
+
+    async def test_a_gateway_going_while_a_turn_is_going_does_not_report_a_clean_stop(self):
+        """R-GW-7 — a turn a schedule asked for is not a program this gateway started, so ending
+        everything it *did* start reached none of it. Taking that for nothing left reported exit
+        zero and "down" while a brain was still answering, and a supervisor reading zero has no
+        way to know."""
+        held = asyncio.Event()
+
+        async def slowly(one):
+            await held.wait()
+            raise AssertionError("the turn was never let go")
+
+        self.asks()
+        gw = self.made(asking=slowly)
+        gw.claim()
+        gw._fire(schedule, datetime.now())
+        for _ in range(200):
+            if gw._asked_for:
+                break
+            await asyncio.sleep(0.02)
+        self.assertEqual({"schedule:nightly"}, gw._asked_for, "no turn was in flight to test")
+
+        drained = await gw._go()
+
+        self.assertFalse(drained, "it reported a clean stop with a turn still going")
+        said = gateway.log_path("ava", self.logs).read_text()
+        self.assertIn("still out there", said)
+        self.assertIn("with work still running", said)
+        self.assertIn("schedule:nightly",
+                      json.dumps(gateway.what_was_interrupted("ava", self.logs)),
+                      "nothing durable named the turn that never finished")
+        held.set()
 
     async def test_a_schedule_whose_brain_fails_leaves_one_durable_outcome(self):
         """R-SCH-8 — a schedule that fails in silence looks exactly like one that has never

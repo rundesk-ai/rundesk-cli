@@ -1087,7 +1087,7 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
     # **starts fresh every firing** — untouched, it landed in the terminal's own conversation,
     # so a run at three in the morning resumed the session its owner types into and left its
     # prompt and answer in the middle of it.
-    clock = (os.environ.get("RUNDESK_SCHEDULE") or "").strip()
+    clock = (os.environ.get(_gateway.SCHEDULE_IS) or "").strip()
     by_the_clock = bool(clock) and not args.conversation
 
     said = _Shown()
@@ -1778,10 +1778,31 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     return unlogged
 
 
+def _schedules_reporting_to(kept, channel: str) -> list:
+    """Which of this agent's schedules say what they came to on this surface.
+
+    Asked before the surface is taken away, because the reference is what stops one outliving
+    the other and the database refuses in its own words: an owner saw `FOREIGN KEY constraint
+    failed` and was sent to `doctor`, which does not look at schedules at all.
+    """
+    return sorted(one["name"] for one in kept.schedules() if one.get("channel") == channel)
+
+
 def _remove_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     if whose.channel(args.channel) is None:
         print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
               file=sys.stderr)
+        return 1
+    reporting = _schedules_reporting_to(whose, args.channel)
+    if reporting:
+        # Named, so the owner knows what to change. Refused rather than passed to the database
+        # to refuse: it would, and in its own words — `FOREIGN KEY constraint failed`, followed
+        # by advice to run `doctor`, which does not look at schedules at all.
+        print(f"{args.name}/{args.channel}: NOT REMOVED — "
+              f"{'schedule' if len(reporting) == 1 else 'schedules'} "
+              f"{', '.join(repr(one) for one in reporting)} still report here", file=sys.stderr)
+        print(f"        point them elsewhere or take them away:  "
+              f"rundesk schedules {args.name}", file=sys.stderr)
         return 1
     whose.forget_channel(args.channel)
     unlogged = _note(gateways, args.name, f"channel '{args.channel}' removed",
@@ -1998,19 +2019,31 @@ def _add_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
         print(f"{args.name}/{args.schedule}: NOT ADDED — '{runs[0]}' is a name, not a location; "
               f"give the full path (try: command -v {runs[0]})", file=sys.stderr)
         return 1
-    # Refused rather than replaced. `remember_schedule` writes over a name that is already
-    # there, which is what `channels add` wants and what this must not do: a schedule that
-    # quietly took another's name would take its account of what it last did with it.
+    # Asked so the ordinary case is answered in words an owner can act on. **It is not what
+    # makes this safe** — asking and then writing is two decisions with a gap, and two of these
+    # at once both found the name free. What makes it safe is that the write itself claims the
+    # name and refuses, which is caught below.
     if kept.schedule(args.schedule) is not None:
         print(f"{args.name}/{args.schedule}: EXISTS — remove it first, or use a different name",
               file=sys.stderr)
         return 1
-    kept.remember_schedule(args.schedule, args.when, store.stamped(),
-                           command=runs or None,
-                           prompt=prompt or None,
-                           provider=args.provider, model=args.model,
-                           instructions=(args.says or "").strip() or None,
-                           channel=to or None)
+    try:
+        kept.remember_schedule(args.schedule, args.when, store.stamped(),
+                               command=runs or None,
+                               prompt=prompt or None,
+                               provider=args.provider, model=args.model,
+                               instructions=(args.says or "").strip() or None,
+                               channel=to or None)
+    except store.Taken:
+        # The check above answers the ordinary case in words an owner can act on. This answers
+        # the race: two of these asked at once both found the name free, and one of them is
+        # about to be told it got something it did not.
+        print(f"{args.name}/{args.schedule}: EXISTS — remove it first, or use a different name",
+              file=sys.stderr)
+        return 1
+    except store.Refused as why:
+        print(f"{args.name}/{args.schedule}: NOT ADDED — {why}", file=sys.stderr)
+        return 1
     unlogged = _note(gateways, args.name, f"schedule '{args.schedule}' added ({args.when})", whose)
     # Both named, because a schedule belongs to one agent and the success line saying only
     # its own name could not tell you it had landed on the wrong one.

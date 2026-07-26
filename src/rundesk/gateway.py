@@ -42,7 +42,6 @@ from typing import Callable, Sequence
 from rundesk import ROOT, __version__
 from rundesk import process
 from rundesk import schedule
-from rundesk import store
 
 #: The gateway that exists before there are agents to name one after.
 DEFAULT_NAME = "gateway"
@@ -1234,20 +1233,21 @@ class Gateway:
         """When a gateway of this name was last up, as the wall clock a schedule is stated
         in — or None where there is nothing to measure a gap against.
 
-        **Converted here, so nothing downstream can forget to.** What is kept is UTC, so two
-        agents' records sort against each other whatever machine wrote them; a cron field is
-        the machine's own local time. `store.moment` hands back something that says which,
-        which is what makes comparing the two clock faces directly inexpressible rather than
-        merely discouraged — an error invisible for most of the year and wrong by an hour for
-        the rest of it.
+        **Converted here, so nothing downstream can forget to.** What an agent keeps is UTC, so
+        two agents' records sort against each other whatever machine wrote them; a cron field is
+        the machine's own local time. What comes back says which of the two it is, which makes
+        comparing them directly inexpressible rather than merely discouraged — an error
+        invisible for most of the year and wrong by an hour for the rest of it.
+
+        Nothing here reads a stored format. A gateway is handed its records and asks them
+        questions; how a moment is written down is theirs.
         """
         if self.records is None:
             return None
         try:
-            said = self.records.last_seen()
+            when = self.records.last_seen()
         except Exception as why:  # noqa: BLE001 — a records boundary; see `_schedules`
             raise Unreadable(f"when this agent was last up could not be read: {why}") from why
-        when = store.moment(said)
         return when.astimezone().replace(tzinfo=None) if when is not None else None
 
     def _pick_up_where_it_left_off(self) -> None:
@@ -1687,6 +1687,12 @@ class Gateway:
         Bounded, because the supervisor's patience is: past it, this process is killed,
         and a killed gateway leaves its children running — the one outcome worth
         hurrying to avoid. True when everything really did go.
+
+        **A turn a schedule asked for counts, and it is not in `running`.** Its brain is started
+        by whatever admits the turn rather than by this gateway, so `end_all` cannot reach it —
+        and taking that for nothing left reported a clean stop, exit code zero and "down", while
+        a brain was still working. A supervisor reading zero has no way to know (R-GW-7), so it
+        is counted here even though ending it is not yet something this can do.
         """
         self._stopping = True
         drained = True
@@ -1709,6 +1715,13 @@ class Gateway:
             still = ", ".join(sorted(self.running)) or "something"
             self.log.error("gave up waiting for %s to stop — it is still out there", still)
         finally:
+            asked = sorted(self._asked_for)
+            if asked:
+                # A turn nobody here started and nobody here can end. Said and counted, because
+                # the alternative is a gateway that exits zero while a brain is answering.
+                drained = False
+                self.log.error("a turn is still going for %s — this gateway cannot end one it "
+                               "did not start, so it is still out there", ", ".join(asked))
             if not drained:
                 # Written before it is forgotten, and left behind on the way out: this
                 # record is the only thing that names what is still running, and the
@@ -1721,6 +1734,12 @@ class Gateway:
                     _note_interrupted(
                         self.name, self.logs, held,
                         "the gateway went while it was still running", program.pid, False)
+                for held in asked:
+                    # No process group to name: what this gateway knows is that a turn under
+                    # this name had not finished, which is what a later one has to reckon with.
+                    _note_interrupted(
+                        self.name, self.logs, held,
+                        "the gateway went while a turn it asked for was still going", None, False)
             self.running.clear()
             self.release(keep_record=not drained)
         self.log.info("down%s", "" if drained else " — with work still running")

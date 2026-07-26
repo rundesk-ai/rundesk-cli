@@ -335,7 +335,7 @@ class TellingReadingAndWritingApart(WithAnAgentsOwnRecords):
         self.assertEqual(1, len(waited), "the boundary retry never fired")
         self.assertLessEqual(store.WAIT_LEAST, waited[0])
         self.assertLessEqual(waited[0], store.WAIT_MOST)
-        self.assertEqual(AT, kept.last_seen())
+        self.assertEqual(store.moment(AT), kept.last_seen())
 
     def test_a_writer_that_never_gets_the_lock_gives_up_rather_than_waiting_forever(self):
         """A turn blocked on a lock nobody will release has to end in something a caller
@@ -426,9 +426,9 @@ class WhatAnAgentIsConfiguredWith(WithAnAgentsOwnRecords):
         """It is read by the *next* gateway, working out how long it was down."""
         kept = self.built()
         kept.seen(AT)
-        self.assertEqual(AT, kept.last_seen())
+        self.assertEqual(store.moment(AT), kept.last_seen())
         kept.seen(LATER)
-        self.assertEqual(LATER, store.Store(self.at).last_seen())
+        self.assertEqual(store.moment(LATER), store.Store(self.at).last_seen())
 
     def test_a_surface_is_written_down_with_who_may_reach_the_agent_through_it(self):
         """Who may use it is sorted and said once: a listing that depends on the order
@@ -592,14 +592,47 @@ class WhenTheClockStartsWork(WithAnAgentsOwnRecords):
         after = self.kept.schedule("nightly")
         self.assertEqual((AT, "finished"), (after["last_auto_run_at"], after["last_outcome"]))
 
-    def test_writing_a_schedule_down_again_does_not_forget_when_it_last_ran(self):
-        """Editing a cron is an ordinary thing to do, and it must not make the gateway
-        think every firing since the schedule was made has been missed."""
+    def test_a_name_that_is_already_a_schedules_is_refused_rather_than_replaced(self):
+        """The name is claimed by *writing* it, not by asking first and then writing: two
+        `schedules add` of one name both found it absent, both reported ADDED, and the second
+        silently replaced the first — taking its account of what it last did with it."""
         self.kept.schedule_fired("nightly", AT, "started")
-        self.kept.remember_schedule("nightly", "0 4 * * *", LATER, command=["ls", "-l"])
+        with self.assertRaises(store.Taken):
+            self.kept.remember_schedule("nightly", "0 4 * * *", LATER, command=["ls", "-l"])
         after = self.kept.schedule("nightly")
-        self.assertEqual("0 4 * * *", after["cron"])
+        self.assertEqual("0 3 * * *", after["cron"], "the schedule that was there was replaced")
+        self.assertEqual(AT, after["last_auto_run_at"], "it forgot when it last ran")
+
+    def test_two_writers_claiming_one_name_cannot_both_believe_they_got_it(self):
+        """The teeth on the above, and the fault as it actually happened: a check followed by a
+        write is two decisions with a gap, and both callers reported success."""
+        made = []
+        for _ in range(2):
+            try:
+                self.kept.remember_schedule("once", "0 5 * * *", AT, command=["/bin/true"])
+                made.append("claimed")
+            except store.Taken:
+                made.append("refused")
+        self.assertEqual(["claimed", "refused"], made)
+        self.assertEqual(1, len([one for one in self.kept.schedules() if one["name"] == "once"]))
+
+    def test_turning_a_schedule_off_and_on_does_not_forget_when_it_last_ran(self):
+        """The path a change actually takes now that a name cannot be re-written: it must not
+        make the gateway think every firing since the schedule was made has been missed."""
+        self.kept.schedule_fired("nightly", AT, "started")
+        self.kept.enable_schedule("nightly", False)
+        self.kept.enable_schedule("nightly", True)
+        after = self.kept.schedule("nightly")
         self.assertEqual(AT, after["last_auto_run_at"])
+        self.assertIs(True, after["enabled"])
+
+    def test_a_schedule_reporting_to_a_channel_that_is_not_there_is_refused(self):
+        """A reference is what stops a schedule outliving the surface it reported to, and it
+        refuses at the moment of writing rather than at three in the morning."""
+        with self.assertRaises(store.Refused):
+            self.kept.remember_schedule("weekly", "0 9 * * 1", AT, prompt="anything?",
+                                        channel="nowhere")
+        self.assertEqual([], [one for one in self.kept.schedules() if one["name"] == "weekly"])
 
 
 class WhereAConversationIsHappening(WithAnAgentsOwnRecords):
@@ -1024,7 +1057,7 @@ class OneAgentIsNeverInAnothersWay(WithAnAgentsOwnRecords):
             held.execute("ROLLBACK")
             held.close()
 
-        self.assertEqual(LATER, theirs.last_seen())
+        self.assertEqual(store.moment(LATER), theirs.last_seen())
         self.assertEqual(["ops"], [one["name"] for one in theirs.channels()])
         self.assertIsNone(mine.last_seen(), "one agent's write reached another's records")
         self.assertEqual([], mine.channels())
@@ -1199,6 +1232,40 @@ class WhatTheAgentsOwnLogSays(WithAnAgentsOwnRecords):
         kept.channels(), kept.runs(), kept.messages("c1"), kept.usage()
         self.assertEqual(before, self.told(), "an ordinary turn wrote to the log")
 
+
+
+class WhenAGatewayWasLastUpIsAMomentNotAString(WithAnAgentsOwnRecords):
+    """R-SCH-15 — whoever asks this is comparing it against a clock stated in local time, and
+    what is kept is UTC. Handing back the string made the caller decode this module's own format
+    to do that, which is the caller knowing what holds its records — `gateway.py` had to import
+    `store` for it, crossing the one dependency direction the project has ratified."""
+
+    def test_it_comes_back_as_a_moment_that_says_which_clock_it_is_on(self):
+        """R-SCH-15 — aware, so the two clock faces cannot be compared without converting: an
+        error invisible for most of the year and wrong by an hour for the rest of it."""
+        kept = self.built()
+        kept.seen(AT)
+        when = kept.last_seen()
+        self.assertEqual(store.moment(AT), when)
+        self.assertIsNotNone(when.tzinfo, "it came back not saying which clock it is on")
+
+    def test_a_gateway_that_was_never_up_is_nothing_rather_than_a_guess(self):
+        """R-SCH-5 — there is nothing to measure a gap against, and saying so is the answer."""
+        self.assertIsNone(self.built().last_seen())
+
+
+class HowWorkIsAdmittedIsSpelledOneWay(unittest.TestCase):
+    """R-RUN-16 — `store.began` refuses a word that is not one of `SOURCES`, and `turn.py`
+    names all three so a caller has something to pass. Two spellings of one set is two too
+    many: they would agree until one of them did not, and the way that fails is a turn refused
+    at the moment it is admitted — the one place a refusal costs the work."""
+
+    def test_the_words_a_turn_names_are_the_words_the_records_declare(self):
+        """R-RUN-16 — asked of both rather than written down here, so a fourth one added to
+        either side has to be added to the other in the same commit."""
+        from rundesk import turn
+
+        self.assertEqual(set(store.SOURCES), {turn.TERMINAL, turn.CHANNEL, turn.SCHEDULE})
 
 
 class TheOnlyWayIn(unittest.TestCase):

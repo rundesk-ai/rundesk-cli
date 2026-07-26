@@ -121,6 +121,25 @@ class Behind(Exception):
         self.understood = understood
 
 
+class Taken(Exception):
+    """This name is already a schedule's, so nothing was written.
+
+    Its own type because the caller has something useful to say about it and nothing useful to
+    say about the driver's words. Raised by the write rather than decided by a read before one:
+    asking and then writing is two decisions with a gap, and two commands adding the same name
+    both found it absent and both reported success while one of them was silently replaced.
+    """
+
+
+class Refused(Exception):
+    """The records would not take this, because something it names is not there.
+
+    A schedule reporting to a channel that has gone is the case: the reference is what stops one
+    outliving the other, and it refuses at the moment of writing rather than at three in the
+    morning.
+    """
+
+
 class Unsearchable(Exception):
     """This machine's SQLite was built without FTS5. Said out loud, never returned as none."""
 
@@ -527,8 +546,17 @@ class Store:
                          (at if at is not None else stamped(self._clock),))
 
     def last_seen(self):
+        """When a gateway of this name was last up, or None if never.
+
+        **A moment rather than the string one is written as**, and aware. What is kept is UTC so
+        two agents' records sort against each other whatever machine wrote them, and whoever asks
+        this is comparing it against a clock stated in local time — handing back the string made
+        the caller decode this module's own format to do that, which is the caller knowing what
+        holds its records. Aware, so the two clock faces cannot be compared without converting.
+        """
         with self._reading() as conn:
-            return conn.execute("SELECT last_seen_at FROM gateway WHERE id = 1").fetchone()[0]
+            said = conn.execute("SELECT last_seen_at FROM gateway WHERE id = 1").fetchone()[0]
+        return moment(said)
 
     # ── channels ──────────────────────────────────────────────────────────────────────────
 
@@ -633,6 +661,9 @@ class Store:
 
         Exactly one of `command` and `prompt`, which the database enforces rather than trusts.
 
+        Refused rather than replacing: `Taken` where the name is already a schedule's, `Refused`
+        where it names a channel that is not there.
+
         `channel` is where what this came to is said, by the name the owner gave that surface —
         and none is not silence: the account and `schedules` say it either way, and a schedule
         that named no surface is one nobody asked to be told about in a chat.
@@ -644,20 +675,29 @@ class Store:
         """
         if (command is None) == (prompt is None):
             raise ValueError("a schedule runs a command or asks a turn, never both or neither")
-        with self._writing() as conn:
-            conn.execute(
-                "INSERT INTO schedule (name, enabled, cron, command, prompt, provider, model,"
-                " instructions, channel, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)"
-                " ON CONFLICT(name) DO UPDATE SET"
-                " enabled=excluded.enabled, cron=excluded.cron, command=excluded.command,"
-                " prompt=excluded.prompt, provider=excluded.provider, model=excluded.model,"
-                " instructions=excluded.instructions, channel=excluded.channel",
-                (
-                    name, 1 if enabled else 0, cron,
-                    json.dumps(command) if command is not None else None,
-                    prompt, provider, model, instructions, channel, created_at,
-                ),
-            )
+        # **A plain insert, so the name is claimed by writing it.** It was an upsert, and a
+        # caller that asked whether the name was free and then wrote was two decisions with a
+        # gap in the middle: two `schedules add` of one name both found it absent, both reported
+        # ADDED, and the second silently replaced the first — taking its account of what it last
+        # did with it. The unique constraint is what closes that, because it is the write.
+        try:
+            with self._writing() as conn:
+                conn.execute(
+                    "INSERT INTO schedule (name, enabled, cron, command, prompt, provider,"
+                    " model, instructions, channel, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        name, 1 if enabled else 0, cron,
+                        json.dumps(command) if command is not None else None,
+                        prompt, provider, model, instructions, channel, created_at,
+                    ),
+                )
+        except sqlite3.IntegrityError as clash:
+            # Two things the database refuses here and the caller answers differently: a name
+            # that is already a schedule's, and a channel that is not there to report to. Told
+            # apart by asking which, rather than by reading the driver's words.
+            if self.schedule(name) is not None:
+                raise Taken(f"a schedule called '{name}' is already there") from clash
+            raise Refused(f"'{name}' names something this agent has not got: {clash}") from clash
 
     def enable_schedule(self, name: str, on: bool) -> None:
         """Keep a schedule and what it did, but stop it running."""

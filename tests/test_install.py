@@ -843,7 +843,7 @@ class DownloadedInstallTests(Sandbox):
         # A downloaded install is a directory full of source with an install.sh in it —
         # indistinguishable from a clone, unless the one thing that tells them apart is
         # checked: whether it is the directory the installer was told to create.
-        made = self.home / ".rundesk"
+        made = self.home / ".rundesk" / "app"
         shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
         (self.bindir).mkdir(parents=True, exist_ok=True)
         (self.bindir / "rundesk").symlink_to(made / "rundesk")
@@ -853,6 +853,66 @@ class DownloadedInstallTests(Sandbox):
 
         self.assertEqual(gone.returncode, 0, gone.stderr)
         self.assertFalse(made.exists(), "uninstalling left behind the directory the installer created")
+        self.assertFalse((self.home / ".rundesk").exists(),
+                         "nothing of the owner's was there, so the directory should have gone too")
+
+    def test_removing_the_program_cannot_reach_what_the_owner_keeps(self):
+        """R-RM-11 — not "remembers not to": the program has a directory of its own, so removal
+        takes one path and there is nothing of the owner's inside it to spare. There was a list
+        of names to keep, and a list is a thing that stops being true the day something is added
+        beside it — `rm -rf "$INSTALL_DIR"` had already taken every gateway log once."""
+        made = self.home / ".rundesk" / "app"
+        shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        theirs = self.home / ".rundesk"
+        (theirs / "agents" / "ava" / "home").mkdir(parents=True)
+        (theirs / "agents" / "ava" / "home" / "SOUL.md").write_text("mine\n")
+        (theirs / "logs").mkdir()
+        (theirs / "logs" / "ava.log").write_text("what happened\n")
+        # Something nobody has thought of yet, which is the whole point: a keep-list would
+        # not have this name in it.
+        (theirs / "something-added-later").mkdir()
+        (theirs / "something-added-later" / "kept.txt").write_text("also mine\n")
+
+        gone = installer("--uninstall", home=self.home, bindir=self.bindir,
+                         cwd=made, script=made / "install.sh")
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertFalse(made.exists(), "the program was left behind")
+        self.assertEqual("mine\n", (theirs / "agents" / "ava" / "home" / "SOUL.md").read_text())
+        self.assertEqual("what happened\n", (theirs / "logs" / "ava.log").read_text())
+        self.assertEqual("also mine\n", (theirs / "something-added-later" / "kept.txt").read_text(),
+                         "removal reached something no keep-list would have named")
+
+    def test_purging_takes_what_the_owner_keeps_as_well(self):
+        """R-RM-11 — the other half, so "cannot reach it" cannot pass by never removing it."""
+        made = self.home / ".rundesk" / "app"
+        shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        theirs = self.home / ".rundesk"
+        (theirs / "agents" / "ava").mkdir(parents=True)
+        (theirs / "agents" / "ava" / "state.db").write_text("records\n")
+
+        gone = installer("--uninstall", "--purge", home=self.home, bindir=self.bindir,
+                         cwd=made, script=made / "install.sh")
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertFalse(theirs.exists(), "--purge left what the owner kept behind")
+
+    def test_removing_an_install_from_before_the_program_had_its_own_directory(self):
+        """R-RM-8 — somebody updating and then removing would otherwise be left with the older
+        rundesk still sitting beside their agents, and still on their PATH."""
+        made = self.home / ".rundesk"
+        shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        (made / "agents" / "ava" / "home").mkdir(parents=True)
+        (made / "agents" / "ava" / "home" / "SOUL.md").write_text("mine\n")
+
+        gone = installer("--uninstall", home=self.home, bindir=self.bindir,
+                         cwd=made, script=made / "install.sh")
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertFalse((made / "src").exists(), "the older program was left behind")
+        self.assertFalse((made / "rundesk").exists())
+        self.assertEqual("mine\n", (made / "agents" / "ava" / "home" / "SOUL.md").read_text(),
+                         "taking the older program away took an agent with it")
 
 
 class WhatAShippedProgramLooksForTheVirtualenvIn(unittest.TestCase):
