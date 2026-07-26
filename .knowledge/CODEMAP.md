@@ -44,7 +44,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 16 modules)
+## Backend / Services (src/rundesk/ — 15 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -70,8 +70,9 @@ file with it.
 - `src/rundesk/channel.py` — the seam a surface is reached through, and nothing about any
   particular platform. The mirror of `provider.py`: resolves a channel — a shipped adapter, or a path to
   a program somebody wrote — builds the environment it is told everything through, asks whether it can
-  reach what it was pointed at, frames one record each way, and holds what is written down about a
-  channel. **Enumerates nothing**: no list of platforms and no list of what one needs, so whatever a
+  reach what it was pointed at, and frames one record each way. What is *written down* about a channel is
+  part of what its agent keeps and is asked for through `store.py`; a record is handed to this module
+  rather than fetched by it. **Enumerates nothing**: no list of platforms and no list of what one needs, so whatever a
   surface calls its places arrives as options this file hands straight back unread. It also holds the two
   decisions a surface does not get to make — what state a turn is in, and that what a brain *says* is
   handed over once and whole. A platform's word appearing in this file is the seam already failing.
@@ -79,19 +80,17 @@ file with it.
   them and they import nothing of ours, so a platform's ids, intents and limits live in one file and
   reach no further.
 - `src/rundesk/answering.py` — what arrives on a channel, carried through to an answer: the mirror of
-  `turn.py`, and the only module that knows `channel`, `turn`, `session` and `agent` all exist. Two things
+  `turn.py`, and the only module that knows `channel`, `turn` and `agent` all exist. Two things
   live here and nowhere else, because two surfaces deciding either separately would eventually disagree
   about one run: **who may be answered**, checked against the record the owner wrote rather than trusted to
   an adapter, and **what state a turn is in**. Writes nothing down — the run's own account already records
   it, and a channel that kept a second copy would become the only place something existed.
-- `src/rundesk/transcript.py` — what a run did, written while it did it. Three files per run: the
-  account, in words no brain owns, added to and never rewritten; and beside it, verbatim, everything the
-  brain said and everything it said went wrong. Separate so a retention policy can one day take the raw and
-  leave the account standing. Ordered by a count rather than a clock, so two runs of one conversation read
-  in the order the work happened whatever the machine's clock did.
-- `src/rundesk/session.py` — where a conversation got to, kept for a conversation and a brain
-  **together**. The brain is the outer key, so handing one brain's session to another is not expressible.
-- `src/rundesk/turn.py` — the only module that knows the four above exist: resolve, write down what was
+- `src/rundesk/transcript.py` — the two files beside a run, and nothing else: what the brain itself
+  printed (`logs/runs/<run>.jsonl`, whose path an adapter is handed, because you cannot give a shell script
+  a database handle) and what it said went wrong (`.err`, an operating-system pipe). Both may be destroyed
+  to reclaim space, so every line an adapter produced is a row as well — which is what makes deleting
+  `logs/` cost an owner nothing they need.
+- `src/rundesk/turn.py` — the only module that knows the three above exist: resolve, write down what was
   resolved, run the brain, write down what it said, keep where the conversation got to, write down how it
   ended. Nothing reaches a brain that the account does not show.
 - `src/rundesk/store.py` — everything one agent keeps, and **the only way in to it**. One database per
@@ -156,8 +155,7 @@ provider. One file per contract, named for it:
 | `test_schedule.py` | 28 | `platform-schedule` — pure time arithmetic, the clock passed in |
 | `test_provider.py` | 31 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
 | `test_turn.py` | 39 | `agent-run` — one whole turn, and `rundesk ask` end to end |
-| `test_transcript.py` | 20 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
-| `test_session.py` | 9 | `agent-run` — a handle kept for a conversation and a brain together |
+| `test_transcript.py` | 19 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
 | `test_store.py` | 57 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
 | `test_channel.py` | 42 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
 | `test_answering.py` | 36 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |

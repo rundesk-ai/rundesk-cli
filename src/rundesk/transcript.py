@@ -1,222 +1,81 @@
-"""What a run did, written down while it did it — the thing all of this is for.
+"""What a brain itself printed, and what it said went wrong — the two files beside a run.
 
-An agent that worked all night is only worth having if what it did can be read back. So
-every run writes an account of itself, one record to a line, added to and never rewritten
-(R-RUN-5), and it outlives the gateway that wrote it (R-RUN-10).
+Everything a run *recorded* is in what the agent keeps, and is asked for through
+[`store.py`](store.py). What is here is the two things that cannot be a row:
 
-**Three files, because they are thrown away at different times.**
+    logs/runs/<run>.jsonl   what the brain printed, as it printed it. Its path is handed
+                            to the adapter through `RUNDESK_RAW`, and an adapter may be a
+                            shell script — you cannot hand one a database handle.
+    logs/runs/<run>.err     what it said went wrong. An operating-system pipe.
 
-    <run>.jsonl   the account   — what happened, in rundesk's words. Small, and kept.
-    <run>.raw     stdout        — every line the adapter reported, byte for byte.
-    <run>.err     stderr        — every line it said went wrong, byte for byte.
-    <run>.brain   the vendor's  — what the brain *itself* said, if the adapter kept it.
+**Both may be destroyed to reclaim space**, so nothing a run recorded is recoverable only
+from them (R-STO-5): every line an adapter produced is a row as well, understood or not.
+That is the whole reason they are kept apart from the account rather than inside it, and it
+is what makes deleting `logs/` cost an owner nothing they need.
 
-The account is what a channel renders and what a cost is read from, and it is written in
-a vocabulary no brain owns, so nothing downstream ever learns a vendor's words. The rest is
-the whole of what we were given, kept so a format that drifts can be probed and adapted to
-rather than guessed at — and kept *separately* so a retention policy can one day drop it and
-leave the account standing. Deleting a whole file is not rewriting one, which is how both
-rules hold at once.
+They stand under `logs/` rather than beside the records because that is what they are —
+diagnostics, of a piece with the gateway's own log, and swept by the same broom.
 
-**`.brain` is the one file nothing here writes.** An adapter is a program: what its *brain*
+**`.jsonl` is the one file nothing here writes.** An adapter is a program: what its *brain*
 said before the adapter made records of it never passes through rundesk at all, so without
 somewhere to put it, a vendor changing its stream shape would show up as records quietly
-going missing rather than as drift anybody could look at. The adapter is told where that
-file is and may append to it; one that does not is a perfectly good adapter, and the file
-simply is not there.
-
-**Order does not depend on a clock (R-RUN-7).** `seq` counts from nothing, per run, so
-concatenating two runs of one conversation reads in the order the work happened whatever
-the machine's clock did in between (R-RUN-8). `at` is wall time, for a person reading it,
-and is never what anything is sorted by.
-
-**This module knows nothing about brains.** It is told an event and given a raw line, and
-it writes them down. What the six kinds of record are, and which line is one of them, is
-`provider`'s — so a vocabulary that grows never reaches this file.
+going missing rather than as drift anybody could look at. The adapter is told where the file
+is and may append to it; one that does not is a perfectly good adapter, and it is not there.
 """
 
 from __future__ import annotations
 
-import json
-import os
-import random
-import time
 from pathlib import Path
 
-from rundesk import gateway
-
-#: Where the count of runs is kept, so a new one is never numbered behind an old one.
-#: Inside the run directory, because it is about those runs and nothing else — and it is
-#: only ever a hint: the directory itself is the truth, and a lost count is caught by the
-#: file that already stands under the name it would hand out.
-ALLOCATING = "allocating.json"
-
-#: What is added to a run's number to keep two of them apart. Numbers alone would be
-#: enough within one machine; this makes a transcript copied off one and read beside
-#: another's still obviously a different run.
-MARK_FROM = "abcdefghijklmnopqrstuvwxyz0123456789"
-MARK_LENGTH = 4
-
-#: What each of a run's files is called. The account is what survives a pruning; the
-#: other two are what a pruning takes.
-ACCOUNT = ".jsonl"
-RAW = ".raw"
+#: What each is called. The brain's own stream keeps the suffix its contents deserve: it is
+#: a stream of JSON records, whatever any particular adapter chooses to put in it.
+PRINTED = ".jsonl"
 ERRORS = ".err"
-#: What the brain itself said, written by the adapter and by nothing here.
-BRAIN = ".brain"
-KEPT = (RAW, ERRORS, BRAIN)
+
+#: The directory the two stand in, under the agent's logs.
+RUNS = "runs"
 
 
-def _marked(pick=None) -> str:
-    picking = pick or random.choice
-    return "".join(picking(MARK_FROM) for _ in range(MARK_LENGTH))
+def home(logs) -> Path:
+    """Where what a brain printed is kept, given where this agent's logs are."""
+    return Path(logs) / RUNS
 
 
-def allocate(runs: Path, pick=None) -> str:
-    """A run of this agent's own, numbered after every run before it (R-RUN-1).
+def printed(logs, run: str) -> Path:
+    """What the brain printed during this run — the path an adapter is handed."""
+    return home(logs) / (run + PRINTED)
 
-    Numbered rather than stamped, so the order runs were admitted in survives a clock
-    that went backwards, a machine in another timezone, and two transcripts read side by
-    side (R-RUN-7). The count is kept beside them and the name is claimed under the same
-    hold, so two turns admitted at once cannot be given one id — and if the count is ever
-    lost, the file already standing under a name is what catches it.
+
+def beside(logs, run: str) -> Path:
+    """What it said went wrong during this run."""
+    return home(logs) / (run + ERRORS)
+
+
+def kept(logs, run: str) -> list:
+    """Both files for one run, whether or not either is there.
+
+    Named in one place, so that removing a run and sweeping what a brain printed take the
+    same list that writing it made. A second list is one that falls behind.
     """
-    runs.mkdir(parents=True, exist_ok=True)
-    with gateway.changing(runs / ALLOCATING, {}, "the count of runs") as counted:
-        after = int(counted.get("last") or 0)
-        while True:
-            after += 1
-            named = f"{after}-{_marked(pick)}"
-            try:
-                os.close(os.open(runs / (named + ACCOUNT),
-                                 os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
-            except FileExistsError:
-                continue  # the count was behind the directory; the directory wins
-            counted["last"] = after
-            return named
+    return [printed(logs, run), beside(logs, run)]
 
 
-class Writer:
-    """One run's three files, open for as long as the run lasts.
+def read(logs, run: str, which: str = PRINTED) -> bytes:
+    """One of them, exactly as it was written. Missing is empty, which is what it means."""
+    try:
+        return (home(logs) / (run + which)).read_bytes()
+    except OSError:
+        return b""
 
-    Held open rather than reopened per record: a turn writes a record at a time for
-    however long the work takes, and opening a file for each would be the same decision
-    made thousands of times. Flushed on every record, because the point of an account is
-    that it is readable while the thing it accounts for is still happening.
+
+def known(logs) -> list:
+    """Every run this agent has what a brain printed for.
+
+    What is *on disk*, asked of the disk — never a list of runs, which is what the records
+    are for. The two are compared rather than assumed to agree: a run whose file has been
+    swept is ordinary, and a file whose run is unknown is not.
     """
-
-    def __init__(self, runs: Path, run: str, agent: str, now=None):
-        self.run = run
-        self.agent = agent
-        self._now = now or time.time
-        self._seq = 0
-        runs.mkdir(parents=True, exist_ok=True)
-        self._account = open(runs / (run + ACCOUNT), "a", encoding="utf-8")
-        self._raw = open(runs / (run + RAW), "ab")
-        self._errors = open(runs / (run + ERRORS), "ab")
-
-    def add(self, event: dict | None = None, raw: bytes | None = None) -> int:
-        """Write one record down, and say where in the run it stood.
-
-        `event` is what rundesk made of it and `raw` is what the brain actually said, and
-        either may be absent. A record of a kind nobody here knows arrives with a raw
-        line and no event: the account keeps its place in the order and says nothing
-        about it, the raw file keeps it verbatim, and the turn carries on (R-PRV-5).
-        """
-        self._seq += 1
-        if raw is not None:
-            self._raw.write(raw if raw.endswith(b"\n") else raw + b"\n")
-            self._raw.flush()
-        line = {"run": self.run, "agent": self.agent, "seq": self._seq,
-                "at": _stamped(self._now())}
-        if event is not None:
-            line["event"] = event
-        self._account.write(json.dumps(line, sort_keys=True) + "\n")
-        self._account.flush()
-        return self._seq
-
-    def went_wrong(self, said: bytes | str) -> None:
-        """One line of what the brain said went wrong, kept and kept apart (R-PRV-6).
-
-        Never given a place in the account: this is what went wrong rather than what
-        happened, and a reader that could not tell them apart would be reading a brain's
-        warnings as its work.
-        """
-        data = said if isinstance(said, bytes) else said.encode("utf-8", "replace")
-        self._errors.write(data if data.endswith(b"\n") else data + b"\n")
-        self._errors.flush()
-
-    def close(self) -> None:
-        for one in (self._account, self._raw, self._errors):
-            try:
-                one.close()
-            except OSError:
-                pass  # a run's account is written as it goes; nothing is owed at the end
-
-    def __enter__(self) -> "Writer":
-        return self
-
-    def __exit__(self, *gone) -> None:
-        self.close()
-
-
-def _stamped(when: float) -> str:
-    """Wall time, for a person reading it. Never what anything is ordered by (R-RUN-7)."""
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(when))
-
-
-def read(runs: Path, run: str) -> list[dict]:
-    """One run's account, in the order it happened (R-RUN-4).
-
-    Read straight off the file with no gateway anywhere near it, which is what makes an
-    account outlive the thing that wrote it (R-RUN-10). A line that cannot be read is
-    skipped rather than fatal: an account with a torn last line — a machine that lost
-    power mid-record — is still the account of everything before it.
-    """
-    at = runs / (run + ACCOUNT)
-    if not at.is_file():
+    at = home(logs)
+    if not at.is_dir():
         return []
-    said = []
-    for line in at.read_text(encoding="utf-8", errors="replace").splitlines():
-        if not line.strip():
-            continue
-        try:
-            one = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(one, dict):
-            said.append(one)
-    return said
-
-
-def raw(runs: Path, run: str, which: str = RAW) -> bytes:
-    """Everything the brain said, exactly as it said it — or nothing, once it is pruned."""
-    at = runs / (run + which)
-    return at.read_bytes() if at.is_file() else b""
-
-
-def known(runs: Path) -> list[str]:
-    """Every run this agent has, oldest first.
-
-    Sorted on the number rather than the name, because run ten sorts before run nine as
-    text and an account read in the wrong order is worse than none.
-    """
-    if not runs.is_dir():
-        return []
-    return [named for _, named in sorted(
-        (_numbered(at.name[:-len(ACCOUNT)]), at.name[:-len(ACCOUNT)])
-        for at in runs.iterdir()
-        if at.is_file() and at.name.endswith(ACCOUNT) and at.name != ALLOCATING
-    )]
-
-
-def _numbered(run: str) -> int:
-    before, _, _ = run.partition("-")
-    return int(before) if before.isdigit() else 0
-
-
-def events(runs: Path, run: str, kind: str | None = None) -> list[dict]:
-    """What rundesk understood of this run, without the lines it did not."""
-    return [one["event"] for one in read(runs, run)
-            if isinstance(one.get("event"), dict)
-            and (kind is None or one["event"].get("type") == kind)]
+    return sorted(one.name[: -len(PRINTED)] for one in at.glob("*" + PRINTED))

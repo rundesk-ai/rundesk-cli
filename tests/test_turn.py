@@ -162,12 +162,41 @@ class WithAnAgentToRunTurnsFor(unittest.IsolatedAsyncioTestCase):
     async def ask(self, which: str = "plain", prompt: str = "what changed?", **extra):
         return await turn.carry("ava", prompt, self.brain(which), where=self.where, **extra)
 
-    def runs(self, name: str = "ava") -> Path:
-        return agent.runs_home(name, self.where)
+    def kept(self, name: str = "ava"):
+        """What this agent keeps, read the way anything reads it."""
+        return agent.reading(name, self.where)
+
+    def logs(self, name: str = "ava") -> Path:
+        return agent.logs_home(name, self.where)
+
+    def settled(self, run: str, name: str = "ava") -> dict:
+        """What the run resolved and what became of it — the run's own row."""
+        return self.kept(name).run(run)
 
     def account(self, run: str, name: str = "ava") -> list:
-        return [one["event"] for one in transcript.read(self.runs(name), run)
-                if "event" in one]
+        """Every record of this run, in the order it happened.
+
+        Each is what the seam made of a line the brain reported. What was *said* is not
+        here: that is a message, in the conversation it was said in.
+        """
+        return [dict(one["event"] or {}, kind=one["kind"], seq=one["seq"])
+                for one in self.kept(name).records(run)]
+
+    def talk(self, run: str, name: str = "ava") -> list:
+        """What was said in this run's conversation, in the order it was said."""
+        kept = self.kept(name)
+        return kept.messages(kept.run(run)["conversation_id"])
+
+    def asked(self, run: str, name: str = "ava") -> dict:
+        """The message that caused this run."""
+        kept = self.kept(name)
+        wanted = kept.run(run)["trigger_message_id"]
+        return [one for one in self.talk(run, name) if one["id"] == wanted][0]
+
+    def answer(self, run: str, name: str = "ava") -> str:
+        """What the agent said in this run, joined the way it was written."""
+        said = [one["text"] for one in self.talk(run, name) if one["run_id"] == run]
+        return said[0] if said else ""
 
     def handle_for(self, which: str, conversation: str = turn.TERMINAL,
                    name: str = "ava") -> str | None:
@@ -192,12 +221,13 @@ class WhatATurnResolves(WithAnAgentToRunTurnsFor):
         was asked for, settled once and recorded."""
         said = await self.ask("nosy", model="a-model", posture=provider.READ,
                               settings={"effort": "high"}, conversation="operations")
-        admitted = self.only(said.run, turn.ADMITTED)
+        admitted = self.settled(said.run)
         self.assertEqual("a-model", admitted["model"])
         self.assertEqual("read", admitted["posture"])
-        self.assertEqual("operations", admitted["space"])
         self.assertEqual(store.conversation_id(turn.TERMINAL, "operations"),
-                         admitted["conversation"])
+                         admitted["conversation_id"])
+        self.assertEqual("operations",
+                         self.kept().conversation(turn.TERMINAL, "operations")["space"])
         self.assertEqual({"effort": "high"}, admitted["settings"])
 
     async def test_what_a_run_resolved_is_never_changed_after(self):
@@ -205,21 +235,21 @@ class WhatATurnResolves(WithAnAgentToRunTurnsFor):
         earlier one already did, which is what an account being append-only is for."""
         first = await self.ask("nosy", model="one")
         await self.ask("nosy", model="two")
-        self.assertEqual("one", self.only(first.run, turn.ADMITTED)["model"])
+        self.assertEqual("one", self.settled(first.run)["model"])
 
     async def test_what_a_brain_says_it_can_do_is_recorded_with_the_run(self):
         """R-PRV-15 — a turn that reported no tools and one whose brain has none read the
         same afterwards unless what it said it could do is part of the account."""
         said = await self.ask("quiet")
         self.assertEqual({what: False for what in provider.CAPABILITIES},
-                         self.only(said.run, turn.ADMITTED)["can"])
+                         self.settled(said.run)["can"])
 
     async def test_an_adapter_that_cannot_run_says_why_before_a_turn_is_admitted(self):
         """R-PRV-12 — before, so nothing is written down about a turn that never was."""
         with self.assertRaises(provider.NotRunnable):
             await turn.carry("ava", "hello", str(self.brains / "no-such-brain"),
                              where=self.where)
-        self.assertEqual([], transcript.known(self.runs()))
+        self.assertEqual([], [one['id'] for one in reversed(self.kept().runs())])
 
 
 class WhatReachesABrain(WithAnAgentToRunTurnsFor):
@@ -228,15 +258,19 @@ class WhatReachesABrain(WithAnAgentToRunTurnsFor):
         the audit makes the audit a lie, and it is invisible precisely because it is the
         audit."""
         said = await self.ask("plain", prompt="what changed today?")
-        self.assertEqual("what changed today?", self.only(said.run, turn.SENT)["text"])
+        self.assertEqual("what changed today?", self.asked(said.run)["text"])
 
     async def test_what_was_sent_is_written_down_before_the_brain_is_started(self):
         """R-RUN-9 — an account written afterwards is one that can be written to match
         whatever happened."""
         said = await self.ask("plain")
-        order = [one["type"] for one in self.account(said.run)]
-        self.assertLess(order.index(turn.SENT), order.index("text"))
-        self.assertLess(order.index(turn.ADMITTED), order.index(turn.SENT))
+        # The message the run names as its cause exists before the run does, so a turn
+        # that died before it reached the brain still shows what somebody asked for.
+        self.assertLess(self.asked(said.run)["id"],
+                        [one["id"] for one in self.talk(said.run)
+                         if one["author"] == "agent"][0])
+        self.assertEqual(self.asked(said.run)["id"],
+                         self.settled(said.run)["trigger_message_id"])
 
     async def test_a_turn_stands_where_its_own_agents_rules_stand(self):
         """R-PRV-3, R-PRV-14, R-AGT-15 — one agent reaching another's home is one agent
@@ -244,7 +278,7 @@ class WhatReachesABrain(WithAnAgentToRunTurnsFor):
         the rules written for it, because a brain loads them by standing beside them."""
         agent.add("bo", self.where)
         said = await self.ask("nosy")
-        told = json.loads(self.only(said.run, "text")["text"])["told"]
+        told = json.loads(self.answer(said.run))["told"]
         self.assertEqual(str(agent.home("ava", self.where)), told["RUNDESK_CWD"])
         self.assertTrue((Path(told["RUNDESK_CWD"]) / "AGENTS.md").is_file())
         self.assertNotIn("/bo/", told["RUNDESK_CWD"])
@@ -255,10 +289,15 @@ class WhatReachesABrain(WithAnAgentToRunTurnsFor):
         typed, and an account that does not say so cannot explain afterwards why it
         answered the way it did."""
         said = await self.ask("nosy", preface="You are in a room. Others read this.")
-        admitted = self.only(said.run, turn.ADMITTED)
-        self.assertEqual("You are in a room. Others read this.", admitted["preface"])
-        plain = await self.ask("nosy")
-        self.assertNotIn("preface", self.only(plain.run, turn.ADMITTED))
+        # Written as something rundesk said into the conversation, because that is what
+        # it is: an author of its own, told apart from the person and from the agent.
+        self.assertEqual([("rundesk", "You are in a room. Others read this.")],
+                         [(one["author"], one["text"]) for one in self.talk(said.run)
+                          if one["author"] == "rundesk"])
+        plain = await self.ask("nosy", conversation="somewhere-else")
+        self.assertEqual([], [one for one in self.talk(plain.run)
+                              if one["author"] == "rundesk"],
+                         "a turn nobody prefaced claimed to have read something")
 
     async def test_a_brain_is_told_where_its_own_things_would_go_but_given_no_home(self):
         """R-AGT-8, R-PRV-3 — an adapter is *told* where a place of its own is, and rundesk
@@ -270,7 +309,7 @@ class WhatReachesABrain(WithAnAgentToRunTurnsFor):
         machine has it installed; what an adapter wants to keep between turns it makes for
         itself."""
         said = await self.ask("nosy")
-        told = json.loads(self.only(said.run, "text")["text"])["told"]
+        told = json.loads(self.answer(said.run))["told"]
         home = Path(told["RUNDESK_PROVIDER_HOME"])
         self.assertFalse(home.exists(), "rundesk built a home no brain asked for")
         self.assertNotIn(str(agent.home("ava", self.where)), str(home),
@@ -286,30 +325,36 @@ class WhatATurnRecords(WithAnAgentToRunTurnsFor):
         watched: list = []
         said = await self.ask("strange", watching=watched.append)
         self.assertTrue(said.ok)
-        self.assertNotIn("constellation", [one["type"] for one in self.account(said.run)])
+        self.assertNotIn("constellation",
+                         [one.get("type") for one in self.account(said.run)])
         self.assertNotIn("constellation", [one["type"] for one in watched])
-        self.assertIn(b"constellation", transcript.raw(self.runs(), said.run))
+        # Kept as a record nobody here knows, with the brain's own words beside it — in a
+        # row rather than only in a file, so a machine that swept what the brain printed
+        # still has every line the adapter produced (R-RUN-6, R-STO-5).
+        unknown = [one for one in self.kept().records(said.run) if one["kind"] == "unknown"]
+        self.assertEqual(1, len(unknown), "a record nobody knows was dropped rather than kept")
+        self.assertIn("constellation", unknown[0]["raw"])
 
     async def test_what_a_brain_said_went_wrong_is_kept_apart_from_what_it_reported(self):
         """R-PRV-6 — all of it, not a tail of it: an account is only worth having if it
         is the whole of what the brain gave us."""
         said = await self.ask("strange")
         self.assertEqual(b"a warning worth keeping\n",
-                         transcript.raw(self.runs(), said.run, transcript.ERRORS))
+                         transcript.read(self.logs(), said.run, transcript.ERRORS))
 
     async def test_a_turn_that_failed_is_recorded_as_one(self):
         """R-RUN-4 — a brain that says the turn did not work is believed, whatever its
         exit code said."""
         said = await self.ask("failing")
         self.assertFalse(said.ok)
-        self.assertFalse(self.only(said.run, turn.OUTCOME)["ok"])
+        self.assertEqual("failed", self.settled(said.run)["outcome"])
 
     async def test_a_runs_account_is_found_by_the_runs_id(self):
         """R-RUN-2 — the id is what its account, its cost and its outcome are found by."""
         said = await self.ask("plain")
-        self.assertIn(said.run, transcript.known(self.runs()))
+        self.assertIn(said.run, [one["id"] for one in self.kept().runs()])
         self.assertTrue(self.account(said.run))
-        self.assertEqual(said.tokens, self.only(said.run, turn.OUTCOME)["tokens"])
+        self.assertEqual(said.tokens["input"], self.settled(said.run)["tokens_in"])
 
 
 class WhatAdmittedThisTurn(WithAnAgentToRunTurnsFor):
@@ -342,15 +387,22 @@ class WhatAdmittedThisTurn(WithAnAgentToRunTurnsFor):
     async def test_where_a_turn_came_from_is_written_into_its_account(self):
         """R-CH-15 — so a run read back afterwards says which conversation asked for it,
         and the channel needs to have written nothing."""
-        said = await self.ask("plain", asked_by={"channel": "ops", "on": "1180", "user": "2207"})
-        self.assertEqual({"channel": "ops", "on": "1180", "user": "2207"},
-                         self.only(said.run, turn.ADMITTED)["asked_by"])
+        said = await self.ask("plain", on="ops", kind="somewhere", conversation="1180",
+                              asked_by={"channel": "ops", "on": "1180", "user": "2207"})
+        one = self.settled(said.run)
+        self.assertEqual("channel", one["source"], "a turn from a surface read as a terminal's")
+        self.assertEqual("2207", self.asked(said.run)["who"],
+                         "the account does not say who asked")
+        where_it_is = self.kept().conversation("ops", "1180")
+        self.assertEqual(where_it_is["id"], one["conversation_id"])
 
     async def test_a_turn_nobody_admitted_from_anywhere_says_nothing_about_it(self):
         """R-CH-15 — `rundesk ask` is a turn from a terminal, and inventing an empty
         origin for it would make the account claim a surface that does not exist."""
         said = await self.ask("plain")
-        self.assertNotIn("asked_by", self.only(said.run, turn.ADMITTED))
+        self.assertEqual("terminal", self.settled(said.run)["source"])
+        self.assertIsNone(self.asked(said.run)["who"],
+                          "a turn from a terminal claimed somebody had asked for it")
 
 
 class CarryingAConversationOn(WithAnAgentToRunTurnsFor):
@@ -360,22 +412,22 @@ class CarryingAConversationOn(WithAnAgentToRunTurnsFor):
         self.assertEqual("s", first.handle)
         again = await self.ask("plain")
         self.assertEqual("ss", again.handle, "the second turn started a fresh session")
-        self.assertTrue(self.only(again.run, turn.ADMITTED)["resumed"])
+        self.assertTrue(self.settled(again.run)["resumed"])
 
     async def test_changing_the_brain_does_not_hand_over_the_other_ones_session(self):
         """R-RUN-12 — the failure this is all shaped to prevent: one brain resuming a
         conversation it was never part of."""
         await self.ask("plain")
         after = await self.ask("nosy")
-        told = json.loads(self.only(after.run, "text")["text"])["told"]
+        told = json.loads(self.answer(after.run))["told"]
         self.assertIsNone(told["RUNDESK_RESUME"], "one brain was given another's session")
-        self.assertFalse(self.only(after.run, turn.ADMITTED)["resumed"])
+        self.assertFalse(self.settled(after.run)["resumed"])
 
     async def test_two_conversations_of_one_brain_are_carried_on_separately(self):
         """R-RUN-12 — the conversation is the other half of the key."""
         await self.ask("plain", conversation="operations")
         elsewhere = await self.ask("nosy", conversation="planning")
-        told = json.loads(self.only(elsewhere.run, "text")["text"])["told"]
+        told = json.loads(self.answer(elsewhere.run))["told"]
         self.assertIsNone(told["RUNDESK_RESUME"])
 
     async def test_a_turn_asked_to_start_fresh_carries_nothing_on(self):
@@ -384,7 +436,7 @@ class CarryingAConversationOn(WithAnAgentToRunTurnsFor):
         self.assertEqual("a-handle", self.handle_for("nosy"),
                          "the first turn kept nothing to start fresh from")
         after = await self.ask("nosy", fresh=True)
-        told = json.loads(self.only(after.run, "text")["text"])["told"]
+        told = json.loads(self.answer(after.run))["told"]
         self.assertIsNone(told["RUNDESK_RESUME"])
 
     async def test_losing_what_a_conversation_was_continuing_costs_the_next_turn_its_context(self):
@@ -397,7 +449,7 @@ class CarryingAConversationOn(WithAnAgentToRunTurnsFor):
             store.conversation_id(turn.TERMINAL, turn.TERMINAL))
 
         after = await self.ask("nosy")
-        told = json.loads(self.only(after.run, "text")["text"])["told"]
+        told = json.loads(self.answer(after.run))["told"]
         self.assertIsNone(told["RUNDESK_RESUME"], "it carried on from a handle that had gone")
         self.assertTrue(after.ok, "a turn was refused over a handle nobody has to have")
         self.assertEqual("a-handle", self.handle_for("nosy"),
@@ -464,17 +516,19 @@ class WhatATurnCost(WithAnAgentToRunTurnsFor):
     async def test_what_an_agent_has_cost_is_read_without_a_brain_being_started(self):
         """R-USE-10 — a cost is a file, and reading it must not run anything."""
         said = await self.ask("plain")
-        self.assertEqual({"reported": True, "input": 100, "output": 8, "cached": 40,
-                          "model": "stand-in-1"},
-                         self.only(said.run, turn.OUTCOME)["tokens"])
+        one = self.settled(said.run)
+        self.assertEqual((100, 8, 40, True), (one["tokens_in"], one["tokens_out"],
+                                              one["tokens_cached"], one["tokens_reported"]))
 
     async def test_what_an_agent_has_cost_outlives_the_gateway_that_recorded_it(self):
         """R-USE-9 — nothing was running to record it in the first place, and nothing has
         to be running to read it back."""
         said = await self.ask("plain")
-        found = [one for one in transcript.events(self.runs(), said.run)
-                 if one["type"] == turn.OUTCOME]
-        self.assertEqual(1, len(found))
+        # Read from the records alone, with nothing of the turn that wrote them in reach.
+        back = store.Store(store.path_for(agent.directory("ava", self.where)))
+        back.made()
+        self.assertEqual(100, back.run(said.run)["tokens_in"])
+        self.assertEqual(1, back.usage()["reported"])
 
 
 class BeingSentToMidTurn(WithAnAgentToRunTurnsFor):
@@ -499,9 +553,9 @@ class BeingSentToMidTurn(WithAnAgentToRunTurnsFor):
         the account a lie, and this is the one thing that adds words after it starts."""
         said = await turn.carry("ava", "first", self.brain("steerable"), where=self.where,
                                 steering=self.words("second"))
-        sent = [one for one in self.account(said.run) if one["type"] == turn.SENT]
-        self.assertEqual(["first", "second"], [one["text"] for one in sent])
-        self.assertTrue(sent[1].get("mid"), "a word said mid-turn reads as the prompt")
+        sent = [one["text"] for one in self.talk(said.run) if one["author"] == "person"]
+        self.assertEqual(["first", "second"], sent,
+                         "a word said mid-turn is not in the account of the turn it reached")
 
     async def test_a_brain_that_cannot_be_steered_is_not_left_waiting_for_more(self):
         """R-PRV-19 — holding input open for a brain that will never read again is a turn
@@ -509,7 +563,7 @@ class BeingSentToMidTurn(WithAnAgentToRunTurnsFor):
         said = await turn.carry("ava", "hello", self.brain("plain"), where=self.where,
                                 steering=self.words("never arrives"))
         self.assertTrue(said.ok, "a brain that reads to the end of its input never finished")
-        sent = [one for one in self.account(said.run) if one["type"] == turn.SENT]
+        sent = [one for one in self.talk(said.run) if one["author"] == "person"]
         self.assertEqual(["hello"], [one["text"] for one in sent])
 
 
@@ -563,7 +617,7 @@ class WhatAReviewFound(WithAnAgentToRunTurnsFor):
         account to show for it."""
         said = await self.ask("steerable", prompt="hello")
         self.assertTrue(said.ok)
-        sent = [one for one in self.account(said.run) if one["type"] == turn.SENT]
+        sent = [one for one in self.talk(said.run) if one["author"] == "person"]
         self.assertEqual(["hello"], [one["text"] for one in sent],
                          "a turn reached a brain and its account does not show it")
 
@@ -577,7 +631,7 @@ class WhatAReviewFound(WithAnAgentToRunTurnsFor):
 
         said = await self.ask("steerable", steering=breaks_down())
         self.assertFalse(said.ok, "a turn that lost a word said it was fine")
-        lost = [one for one in self.account(said.run) if one["type"] == turn.LOST]
+        lost = [one for one in self.account(said.run) if one["kind"] == "lost"]
         self.assertTrue(lost, "what went wrong saying it reached nobody")
         self.assertIn("terminal went away", lost[0]["why"])
 
@@ -645,9 +699,9 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
         turn, and only one of the two is still there in the morning."""
         self.ask("add", "ava", "--provider", self.brain("plain"))
         _, _, why = self.ask("ask", "ava", "what changed?")
-        run = transcript.known(self.runs())[0]
+        run = [one['id'] for one in reversed(self.kept().runs())][0]
         self.assertIn(run, why, "it never said which run this was")
-        self.assertEqual("what changed?", self.only(run, turn.SENT)["text"])
+        self.assertEqual("what changed?", self.asked(run)["text"])
 
     def test_an_agent_that_reaches_for_no_brain_says_so_rather_than_guessing(self):
         """R-PRV-12 — there is no list of brains to fall back to, and picking one would
@@ -656,27 +710,27 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
         code, _, why = self.ask("ask", "ava", "what changed?")
         self.assertEqual(1, code)
         self.assertIn("NO BRAIN", why)
-        self.assertEqual([], transcript.known(self.runs()), "it wrote a run down anyway")
+        self.assertEqual([], [one['id'] for one in reversed(self.kept().runs())], "it wrote a run down anyway")
 
     def test_a_brain_named_for_one_turn_is_used_for_that_turn_only(self):
         """R-RUN-3 — what a turn resolved is the turn's, and an agent's default is a
         convenience rather than an identity."""
         self.ask("add", "ava", "--provider", self.brain("quiet"))
         self.ask("ask", "ava", "one", "--provider", self.brain("plain"))
-        first, second = transcript.known(self.runs())[0], None
-        self.assertIn("plain", self.only(first, turn.ADMITTED)["provider"])
+        first, second = [one['id'] for one in reversed(self.kept().runs())][0], None
+        self.assertIn("plain", self.settled(first)["provider"])
         self.ask("ask", "ava", "two")
-        second = transcript.known(self.runs())[1]
-        self.assertIn("quiet", self.only(second, turn.ADMITTED)["provider"])
+        second = [one['id'] for one in reversed(self.kept().runs())][1]
+        self.assertIn("quiet", self.settled(second)["provider"])
 
     def test_what_an_owner_set_reaches_the_brain_and_is_written_down(self):
         """R-PRV-16, R-RUN-9 — carried unread, and never carried without being recorded."""
         self.ask("add", "ava", "--provider", self.brain("nosy"))
         self.ask("ask", "ava", "hi", "--set", "effort=high", "--set", '{"flags":["-q"]}')
-        run = transcript.known(self.runs())[0]
+        run = [one['id'] for one in reversed(self.kept().runs())][0]
         self.assertEqual({"effort": "high", "flags": ["-q"]},
-                         self.only(run, turn.ADMITTED)["settings"])
-        told = json.loads(self.only(run, "text")["text"])["told"]
+                         self.settled(run)["settings"])
+        told = json.loads(self.answer(run))["told"]
         self.assertEqual({"effort": "high", "flags": ["-q"]},
                          json.loads(told["RUNDESK_SETTINGS"]))
 
@@ -686,30 +740,30 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
         code, _, why = self.ask("ask", "ava", "hi", "--set", "nonsense")
         self.assertEqual(1, code)
         self.assertIn("nonsense", why)
-        self.assertEqual([], transcript.known(self.runs()))
+        self.assertEqual([], [one['id'] for one in reversed(self.kept().runs())])
 
     def test_asking_the_same_agent_again_carries_the_conversation_on(self):
         """R-RUN-11 — what a person at a terminal means by asking again."""
         self.ask("add", "ava", "--provider", self.brain("plain"))
         self.ask("ask", "ava", "one")
         self.ask("ask", "ava", "two")
-        second = transcript.known(self.runs())[1]
-        self.assertTrue(self.only(second, turn.ADMITTED)["resumed"])
+        second = [one['id'] for one in reversed(self.kept().runs())][1]
+        self.assertTrue(self.settled(second)["resumed"])
 
     def test_asking_for_a_fresh_start_carries_nothing_on(self):
         """R-RUN-14"""
         self.ask("add", "ava", "--provider", self.brain("plain"))
         self.ask("ask", "ava", "one")
         self.ask("ask", "ava", "two", "--fresh")
-        second = transcript.known(self.runs())[1]
-        self.assertFalse(self.only(second, turn.ADMITTED)["resumed"])
+        second = [one['id'] for one in reversed(self.kept().runs())][1]
+        self.assertFalse(self.settled(second)["resumed"])
 
     def test_a_turn_asked_to_only_look_says_so_to_the_brain(self):
         """R-PRV-18 — a posture in rundesk's words, carried to the brain to act on."""
         self.ask("add", "ava", "--provider", self.brain("nosy"))
         self.ask("ask", "ava", "hi", "--read-only")
-        run = transcript.known(self.runs())[0]
-        self.assertEqual("read", self.only(run, turn.ADMITTED)["posture"])
+        run = [one['id'] for one in reversed(self.kept().runs())][0]
+        self.assertEqual("read", self.settled(run)["posture"])
 
     def test_asking_an_agent_that_was_never_made_says_so(self):
         """R-AGT-13 — and says what to type next, rather than what went wrong inside."""

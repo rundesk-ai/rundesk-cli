@@ -371,7 +371,7 @@ class Answering:
         on its own a reason to put a file into a chat room (R-CH-13).
         """
         whose = agents.paths(self.name, self._where)
-        mine = [whose["workspace"], whose["runs"], whose["home"]]
+        mine = [whose["workspace"], whose["logs"], whose["home"]]
         found = []
         for one in outcome.files:
             at = one.get("at")

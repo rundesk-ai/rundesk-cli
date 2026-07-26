@@ -1,14 +1,21 @@
-"""What a run leaves behind — every row of agent-run that is about the account itself.
+#!/usr/bin/env python3
+"""The account of a run: what is a record, what is a file, and what each survives.
 
-Nothing here starts a brain or reaches the network. An account is a file, and the whole
-point of it is that it can be read with nothing else running.
+Answers for the account half of `agent-run` (R-RUN-n). What a run *recorded* is rows and
+is asked for through `store.py`; what the brain itself printed and what it said went wrong
+are the two files beside it, because the path to one is handed to a program that may be a
+shell script and the other is an operating-system pipe.
+
+**The point of the split is what it costs to lose either.** Delete the files and every
+account still reads; the reverse is not true, and nothing here lets it become true.
+
+Nothing reaches the network or runs a brain: a run is written the way a turn writes one.
 
 Run: python3 tests/test_transcript.py
 """
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import sys
@@ -18,194 +25,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import agent, transcript  # noqa: E402
+from rundesk import agent, store, transcript  # noqa: E402
+
+AT = "2026-07-26T09:00:00Z"
+LATER = "2026-07-26T10:00:00Z"
 
 
-class WithSomewhereToKeepRuns(unittest.TestCase):
-    """A run directory of this case's own, and a clock it decides."""
-
-    def setUp(self):
-        self.runs = Path(tempfile.mkdtemp(prefix="rundesk-runs-"))
-        self.addCleanup(shutil.rmtree, self.runs, True)
-        self.clock = [1_700_000_000.0]
-
-    def now(self) -> float:
-        self.clock[0] += 1
-        return self.clock[0]
-
-    def writer(self, run: str | None = None, agent_name: str = "ava") -> transcript.Writer:
-        made = transcript.Writer(self.runs, run or self.allocate(), agent_name, now=self.now)
-        self.addCleanup(made.close)
-        return made
-
-    def allocate(self) -> str:
-        picked = iter("wxyz")
-        return transcript.allocate(self.runs, pick=lambda _: next(picked))
-
-
-class EveryRunHasAnIdOfItsOwn(WithSomewhereToKeepRuns):
-    def test_every_run_has_an_id_of_its_own(self):
-        """R-RUN-1"""
-        every = {transcript.allocate(self.runs) for _ in range(20)}
-        self.assertEqual(20, len(every), "two runs were given one id")
-
-    def test_a_runs_place_in_the_order_does_not_depend_on_a_clock(self):
-        """R-RUN-7 — numbered rather than stamped, so the order runs were admitted in
-        survives a clock that went backwards and a machine in another timezone."""
-        made = [transcript.allocate(self.runs) for _ in range(12)]
-        self.assertEqual([str(n) for n in range(1, 13)],
-                         [one.partition("-")[0] for one in made])
-
-    def test_runs_are_read_back_in_the_order_they_were_admitted(self):
-        """R-RUN-8 — run ten sorts before run nine as text, and an account read in the
-        wrong order is worse than no account."""
-        made = [transcript.allocate(self.runs) for _ in range(12)]
-        self.assertEqual(made, transcript.known(self.runs))
-
-    def test_a_lost_count_never_hands_out_a_name_that_is_taken(self):
-        """R-RUN-1 — the count beside the runs is a hint and the directory is the truth.
-        Losing the hint must not quietly write a second run into the first one's file.
-
-        The mark is fixed here on purpose. Left random it hides the very thing under
-        test: a second run numbered one gets a different mark, so no two names collide
-        and the case passes with nothing checking the directory at all."""
-        same = lambda _: "a"  # noqa: E731 — so a lost count really does repeat a name
-        made = [transcript.allocate(self.runs, pick=same) for _ in range(3)]
-        self.assertEqual(["1-aaaa", "2-aaaa", "3-aaaa"], made)
-        (self.runs / transcript.ALLOCATING).unlink()
-        after = transcript.allocate(self.runs, pick=same)
-        self.assertNotIn(after, made, "a name already taken was handed out again")
-        self.assertEqual(["1-aaaa", "2-aaaa", "3-aaaa", after], transcript.known(self.runs))
-
-
-class WhatARunWritesDown(WithSomewhereToKeepRuns):
-    def test_a_runs_account_records_every_event_in_the_order_it_happened(self):
-        """R-RUN-4"""
-        writing = self.writer()
-        for n in range(5):
-            writing.add(event={"type": "text", "text": f"n{n}"})
-        said = transcript.read(self.runs, writing.run)
-        self.assertEqual([1, 2, 3, 4, 5], [one["seq"] for one in said])
-        self.assertEqual(["n0", "n1", "n2", "n3", "n4"],
-                         [one["event"]["text"] for one in said])
-
-    def test_a_runs_account_is_added_to_and_never_rewritten(self):
-        """R-RUN-5 — an account that can be rewritten is one that can be made to say
-        something else afterwards, which is the one thing an account may not be."""
-        writing = self.writer()
-        writing.add(event={"type": "text", "text": "first"})
-        at = self.runs / (writing.run + transcript.ACCOUNT)
-        was = at.read_text()
-        writing.add(event={"type": "done", "ok": True})
-        self.assertTrue(at.read_text().startswith(was), "what was written was rewritten")
-
-    def test_the_order_of_a_runs_account_does_not_depend_on_a_clock(self):
-        """R-RUN-7 — a clock that goes backwards, which is an ordinary thing for a clock
-        to do, must not reorder what happened."""
-        going_back = iter([500.0, 400.0, 300.0])
-        writing = transcript.Writer(self.runs, self.allocate(), "ava",
-                                    now=lambda: next(going_back))
-        self.addCleanup(writing.close)
-        for n in range(3):
-            writing.add(event={"type": "text", "text": f"n{n}"})
-        said = transcript.read(self.runs, writing.run)
-        self.assertEqual([1, 2, 3], [one["seq"] for one in said])
-        self.assertEqual(["n0", "n1", "n2"], [one["event"]["text"] for one in said])
-
-    def test_two_accounts_of_one_conversation_read_in_the_order_the_work_happened(self):
-        """R-RUN-8 — a conversation is more than one run, and reading them together has
-        to give the order the work really happened in."""
-        first, second = self.writer(), self.writer()
-        first.add(event={"type": "text", "text": "earlier"})
-        second.add(event={"type": "text", "text": "later"})
-        together = [(run, one["seq"], one["event"]["text"])
-                    for run in transcript.known(self.runs)
-                    for one in transcript.read(self.runs, run)]
-        self.assertEqual([(first.run, 1, "earlier"), (second.run, 1, "later")], together)
-
-    def test_a_runs_account_outlives_the_gateway_that_wrote_it(self):
-        """R-RUN-10 — the whole point. An agent that worked all night is only worth
-        having if what it did can be read back, and nothing has to be running to do it."""
-        writing = self.writer()
-        writing.add(event={"type": "done", "ok": True})
-        writing.close()
-        said = transcript.read(self.runs, writing.run)
-        self.assertEqual([{"type": "done", "ok": True}],
-                         [one["event"] for one in said])
-
-    def test_an_account_torn_by_a_machine_going_down_is_still_an_account(self):
-        """R-RUN-4 — a record half written by a machine that lost power is the last one,
-        and everything before it happened. Refusing the file loses all of it."""
-        writing = self.writer()
-        writing.add(event={"type": "text", "text": "before"})
-        writing.close()
-        at = self.runs / (writing.run + transcript.ACCOUNT)
-        with open(at, "a", encoding="utf-8") as torn:
-            torn.write('{"run": "x", "seq": 2, "at')
-        said = transcript.read(self.runs, writing.run)
-        self.assertEqual(1, len(said))
-        self.assertEqual("before", said[0]["event"]["text"])
-
-
-class WhatTheBrainItselfSaid(WithSomewhereToKeepRuns):
-    def test_everything_a_brain_said_is_kept_exactly_as_it_said_it(self):
-        """R-RUN-6 — a format that drifts has to be visible as drift rather than as a
-        silent gap, and the only thing that can show that is what actually arrived."""
-        writing = self.writer()
-        writing.add(event={"type": "text", "text": "hello"},
-                    raw=b'{"type":"item.completed","item":{"text":"hello"}}')
-        writing.add(raw=b'{"type":"something.new","shape":"orion"}')
-        self.assertEqual(
-            b'{"type":"item.completed","item":{"text":"hello"}}\n'
-            b'{"type":"something.new","shape":"orion"}\n',
-            transcript.raw(self.runs, writing.run))
-
-    def test_a_record_rundesk_did_not_understand_is_still_in_the_run_afterwards(self):
-        """R-PRV-5 — a brain that can only grow when we release is one we have made
-        slower than we are. Its place in the order is kept, nothing is claimed about it,
-        and what it actually said is there to be read."""
-        writing = self.writer()
-        writing.add(raw=b'{"type":"constellation"}')
-        writing.add(event={"type": "done", "ok": True}, raw=b'{"type":"done"}')
-        said = transcript.read(self.runs, writing.run)
-        self.assertEqual(2, len(said), "it lost the record's place in the order")
-        self.assertNotIn("event", said[0], "it passed off a record it does not understand")
-        self.assertIn(b"constellation", transcript.raw(self.runs, writing.run))
-        self.assertEqual([{"type": "done", "ok": True}],
-                         transcript.events(self.runs, writing.run))
-
-    def test_what_a_brain_said_went_wrong_is_kept_and_kept_out_of_the_account(self):
-        """R-PRV-6 — it is where a brain says why it died, and a reader that could not
-        tell it from the work would be reading warnings as results."""
-        writing = self.writer()
-        writing.went_wrong(b"could not reach the model")
-        writing.add(event={"type": "done", "ok": False})
-        self.assertEqual(b"could not reach the model\n",
-                         transcript.raw(self.runs, writing.run, transcript.ERRORS))
-        self.assertEqual([{"type": "done", "ok": False}],
-                         transcript.events(self.runs, writing.run))
-
-    def test_what_a_brain_said_can_be_thrown_away_while_the_account_stands(self):
-        """R-RUN-5, R-RUN-10 — what a brain said is most of the bytes and the least of
-        the meaning. Kept in its own file, a retention policy can one day take it by
-        deleting a file, which is not the same as rewriting one."""
-        writing = self.writer()
-        writing.add(event={"type": "text", "text": "kept"}, raw=b'{"vendor":"noise"}')
-        writing.went_wrong(b"a warning nobody needs a year later")
-        # An adapter may have written what its own brain said beside these; nothing here
-        # does, so the case takes whichever of them a run turned out to have.
-        (self.runs / (writing.run + transcript.BRAIN)).write_bytes(b'{"vendor":"own words"}\n')
-        writing.close()
-        for which in transcript.KEPT:
-            (self.runs / (writing.run + which)).unlink()
-        self.assertEqual([{"type": "text", "text": "kept"}],
-                         transcript.events(self.runs, writing.run))
-        for which in transcript.KEPT:
-            self.assertEqual(b"", transcript.raw(self.runs, writing.run, which))
-
-
-class WhatAnAgentKeepsAnAccountIn(unittest.TestCase):
-    """The account stands with the agent's own things, and lasts as long as they do."""
+class WithAnAgentThatHasRun(unittest.TestCase):
+    """One agent of this case's own, and nothing of the machine's within reach."""
 
     def setUp(self):
         self.where = Path(tempfile.mkdtemp(prefix="rundesk-agents-"))
@@ -222,43 +49,224 @@ class WhatAnAgentKeepsAnAccountIn(unittest.TestCase):
             at.mkdir(parents=True, exist_ok=True)
         agent.add("ava", self.where)
 
+    def kept(self, name: str = "ava") -> store.Store:
+        return agent.records(name, self.where)
+
+    def logs(self, name: str = "ava") -> Path:
+        return agent.logs_home(name, self.where)
+
+    def where_it_is(self, kept, space: str = "terminal") -> str:
+        named = store.conversation_id("terminal", space)
+        kept.opened(named, "terminal", "terminal", space, AT)
+        return named
+
+    def a_run(self, kept, conversation=None, **held) -> str:
+        settled = dict(source="terminal", provider="codex", brain="codex", posture="work",
+                       started_at=AT, conversation_id=conversation)
+        settled.update(held)
+        return kept.began(**settled)
+
+    def printed(self, run: str, said: bytes = b'{"type":"text"}\n') -> Path:
+        """What a brain printed, written where an adapter would write it."""
+        at = transcript.printed(self.logs(), run)
+        at.parent.mkdir(parents=True, exist_ok=True)
+        at.write_bytes(said)
+        return at
+
+
+class EveryRunHasAnIdOfItsOwn(WithAnAgentThatHasRun):
+    def test_every_run_has_an_id_of_its_own(self):
+        """R-RUN-1 — what its account, its cost and its outcome are all found by."""
+        kept = self.kept()
+        named = [self.a_run(kept) for _ in range(5)]
+        self.assertEqual(5, len(set(named)))
+        for one in named:
+            self.assertIsNotNone(kept.run(one))
+
+    def test_a_runs_place_in_the_order_does_not_depend_on_a_clock(self):
+        """R-RUN-7 — the number counts, and a machine whose clock went backwards between
+        two runs still reads them in the order the work happened."""
+        kept = self.kept()
+        first = self.a_run(kept, started_at=LATER)
+        second = self.a_run(kept, started_at=AT)     # earlier by the clock, later in fact
+        self.assertLess(kept.run(first)["n"], kept.run(second)["n"])
+
+    def test_runs_are_read_back_in_the_order_they_were_admitted(self):
+        """R-RUN-8"""
+        kept = self.kept()
+        named = [self.a_run(kept) for _ in range(3)]
+        self.assertEqual(named, [one["id"] for one in reversed(kept.runs())])
+
+    def test_two_accounts_of_one_conversation_read_in_the_order_the_work_happened(self):
+        """R-RUN-8 — two turns in one conversation, read as one history rather than as
+        two piles somebody has to interleave."""
+        kept = self.kept()
+        here, elsewhere = self.where_it_is(kept), self.where_it_is(kept, "planning")
+        first = self.a_run(kept, here)
+        away = self.a_run(kept, elsewhere)
+        second = self.a_run(kept, here)
+        self.assertEqual([first, second],
+                         [one["id"] for one in reversed(kept.runs(conversation_id=here))])
+        self.assertNotIn(away, [one["id"] for one in kept.runs(conversation_id=here)])
+
+
+class WhatARunWritesDown(WithAnAgentThatHasRun):
+    def test_a_runs_account_records_every_event_in_the_order_it_happened(self):
+        """R-RUN-4"""
+        kept = self.kept()
+        run = self.a_run(kept)
+        for seq, kind in enumerate(("think", "tool", "result", "usage", "done"), start=1):
+            kept.recorded(run, seq, AT, kind, event={"type": kind})
+        self.assertEqual(["think", "tool", "result", "usage", "done"],
+                         [one["kind"] for one in kept.records(run)])
+
+    def test_a_runs_account_is_added_to_and_never_rewritten(self):
+        """R-RUN-5 — a place in the order is claimed once. A second record taking one
+        already taken is refused rather than replacing what stood there."""
+        kept = self.kept()
+        run = self.a_run(kept)
+        kept.recorded(run, 1, AT, "think", event={"text": "first"})
+        with self.assertRaises(Exception):
+            kept.recorded(run, 1, LATER, "think", event={"text": "written over it"})
+        self.assertEqual([{"text": "first"}], [one["event"] for one in kept.records(run)])
+
+    def test_the_order_of_a_runs_account_does_not_depend_on_a_clock(self):
+        """R-RUN-7 — `seq` is the order and a clock is not, so an account written by a
+        machine whose clock went backwards still reads in the order the work was done."""
+        kept = self.kept()
+        run = self.a_run(kept)
+        going_back = ("2026-07-26T09:00:03Z", "2026-07-26T09:00:02Z", "2026-07-26T09:00:01Z")
+        for seq, at in zip((3, 2, 1), going_back):
+            kept.recorded(run, seq, at, "think", event={"n": seq})
+        self.assertEqual([1, 2, 3], [one["seq"] for one in kept.records(run)])
+
+    def test_everything_a_brain_said_is_kept_exactly_as_it_said_it(self):
+        """R-RUN-6 — beside what rundesk made of it, and in a row rather than only in a
+        file, so a machine that swept what the brain printed still has every line."""
+        kept = self.kept()
+        run = self.a_run(kept)
+        said = '{"type":"tool","name":"grep","extra":"nobody here knows"}'
+        kept.recorded(run, 1, AT, "tool", event={"name": "grep"}, raw=said)
+        self.assertEqual(said, kept.records(run)[0]["raw"])
+
+    def test_a_record_rundesk_did_not_understand_is_still_in_the_run_afterwards(self):
+        """R-RUN-6, R-PRV-5 — kept as `unknown` with its own words beside it, because a
+        record nobody could read today is still there to be read next year."""
+        kept = self.kept()
+        run = self.a_run(kept)
+        kept.recorded(run, 1, AT, "unknown", raw='{"type":"constellation","shape":"orion"}')
+        one = kept.records(run)[0]
+        self.assertEqual("unknown", one["kind"])
+        self.assertIsNone(one["event"], "the seam claimed to have understood it")
+        self.assertIn("orion", one["raw"])
+
+
+class WhatTheBrainItselfSaid(WithAnAgentThatHasRun):
+    """The two files, and the whole reason they are files."""
+
+    def test_what_a_brain_said_went_wrong_is_kept_and_kept_out_of_the_account(self):
+        """R-PRV-6 — an operating-system pipe, kept where a person can read it and out of
+        the records, which are what a cost and a history are read from."""
+        kept = self.kept()
+        run = self.a_run(kept)
+        at = transcript.beside(self.logs(), run)
+        at.parent.mkdir(parents=True, exist_ok=True)
+        at.write_bytes(b"a warning worth keeping\n")
+
+        self.assertEqual(b"a warning worth keeping\n",
+                         transcript.read(self.logs(), run, transcript.ERRORS))
+        self.assertEqual([], kept.records(run), "what went wrong reached the account")
+
+    def test_what_a_brain_said_can_be_thrown_away_while_the_account_stands(self):
+        """R-RUN-5, R-STO-5 — the whole reason those files are separable. Deleting them
+        is not rewriting an account, which is how both rules hold at once."""
+        kept = self.kept()
+        run = self.a_run(kept)
+        kept.recorded(run, 1, AT, "tool", event={"name": "grep"}, raw='{"type":"tool"}')
+        self.printed(run)
+
+        shutil.rmtree(transcript.home(self.logs()))
+        self.assertEqual(b"", transcript.read(self.logs(), run))
+        self.assertEqual([("tool", '{"type":"tool"}')],
+                         [(one["kind"], one["raw"]) for one in kept.records(run)])
+
+    def test_both_files_of_one_run_are_named_in_one_place(self):
+        """A second list is one that falls behind: what removing a run has to take and
+        what writing it made must be the same answer."""
+        self.assertEqual([transcript.printed(self.logs(), "1-abcd"),
+                          transcript.beside(self.logs(), "1-abcd")],
+                         transcript.kept(self.logs(), "1-abcd"))
+
+    def test_what_is_on_disk_is_asked_of_the_disk_rather_than_of_the_records(self):
+        """The two are compared rather than assumed to agree — a run whose file was swept
+        is ordinary, and a file whose run is unknown is not."""
+        kept = self.kept()
+        run = self.a_run(kept)
+        self.assertEqual([], transcript.known(self.logs()), "a run that printed nothing")
+        self.printed(run)
+        self.printed("9-zzzz")
+        self.assertEqual([run, "9-zzzz"], sorted(transcript.known(self.logs())))
+        self.assertEqual([run], [one["id"] for one in kept.runs()])
+
+
+class WhatAnAgentKeepsAnAccountIn(WithAnAgentThatHasRun):
+    """The account stands with the agent's own things, and lasts as long as they do."""
+
     def test_an_agent_is_made_with_somewhere_to_keep_what_it_did(self):
-        """R-RUN-2 — made with the agent rather than on first use, so the one list that
-        making and diagnosing both read covers it."""
-        self.assertTrue(agent.runs_home("ava", self.where).is_dir())
-        self.assertIn("runs", agent.made_of("ava", self.where))
+        """R-RUN-2 — made with the agent rather than on first use, so nothing has to
+        decide, mid-turn, whether this is the first run there has ever been."""
+        self.assertEqual([], self.kept().runs())
         self.assertEqual([], agent.diagnosed("ava", self.where, root=self.before))
 
     def test_where_an_agent_keeps_what_it_did_is_not_where_its_gateway_keeps_what_it_is_doing(self):
         """R-RUN-10 — one is emptied when a gateway stops and the other is what an owner
-        still has afterwards. One letter apart and opposite in lifetime."""
+        still has afterwards."""
         self.assertNotEqual(agent.run_home("ava", self.where),
-                            agent.runs_home("ava", self.where))
-
-    def test_taking_an_agent_away_takes_what_a_run_did(self):
-        """R-AGW-5 — the account lasts as long as the agent and no longer. Left behind, it
-        was inherited by whoever took the name next, which is a new agent standing on an
-        old one's history."""
-        writing = transcript.Writer(agent.runs_home("ava", self.where), "1-abcd", "ava")
-        writing.add(event={"type": "done", "ok": True})
-        writing.close()
-        taken = agent.forget("ava", self.where)
-        self.assertIn("runs/", taken)
-        self.assertFalse(agent.runs_home("ava", self.where).exists())
+                            store.path_for(agent.directory("ava", self.where)))
 
     def test_one_agents_account_is_not_another_agents(self):
-        """R-AGT-7 — an account is what an agent did, and two of them sharing one would
-        make either unreadable."""
+        """R-AGT-7 — an account is what one agent did, and two of them sharing one would
+        put one agent's write lock in the other's way as well as its history."""
         agent.add("bo", self.where)
-        self.assertNotEqual(agent.runs_home("ava", self.where),
-                            agent.runs_home("bo", self.where))
+        mine = self.a_run(self.kept("ava"))
+        self.assertEqual([mine], [one["id"] for one in self.kept("ava").runs()])
+        self.assertEqual([], self.kept("bo").runs())
+
+    def test_a_runs_account_outlives_the_gateway_that_wrote_it(self):
+        """R-RUN-10 — nothing was running to record it and nothing has to be running to
+        read it back. Opened fresh, with no turn and no gateway anywhere in reach."""
+        kept = self.kept()
+        run = self.a_run(kept)
+        kept.recorded(run, 1, AT, "tool", event={"name": "grep"})
+        kept.ended(run, LATER, "finished", tokens={"input": 10, "reported": True})
+
+        back = store.Store(store.path_for(agent.directory("ava", self.where)))
+        back.made()
+        self.assertEqual("finished", back.run(run)["outcome"])
+        self.assertEqual([("tool", {"name": "grep"})],
+                         [(one["kind"], one["event"]) for one in back.records(run)])
+
+    def test_taking_an_agent_away_takes_what_a_run_did(self):
+        """R-AGW-5, R-RUN-10 — the account lasts as long as the agent and no longer. Left
+        behind, it was inherited by whoever took the name next, which is a new agent
+        standing on an old one's history."""
+        kept = self.kept()
+        run = self.a_run(kept)
+        kept.recorded(run, 1, AT, "tool", event={"name": "grep"})
+        self.printed(run)
+
+        taken = agent.forget("ava", self.where)
+        self.assertIn(store.NAME, taken)
+        self.assertIn("logs/", taken, "what the brain printed was left behind")
+        self.assertFalse(agent.directory("ava", self.where).exists())
 
     def test_every_place_an_agent_resolves_includes_where_its_account_goes(self):
         """R-AGT-14 — an owner asking where an agent keeps things is asking about all of
         them, and one left out of that answer is one nobody knows to look at."""
-        said = json.dumps({what: str(at) for what, at
-                           in agent.paths("ava", self.where).items()})
-        self.assertIn("runs", said)
+        said = agent.paths("ava", self.where)
+        self.assertIn(store.path_for(said["agent"]),
+                      [store.path_for(one) for one in said.values()])
+        self.assertTrue(store.path_for(said["agent"]).is_file())
 
 
 if __name__ == "__main__":

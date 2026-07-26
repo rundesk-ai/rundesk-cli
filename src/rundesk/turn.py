@@ -153,7 +153,10 @@ async def carry(
     # signed out so every agent needs its own login. An adapter's job is to reach the brain
     # the machine already has.
     home = agents.provider_home(name, brain, where)
-    whose["runs"].mkdir(parents=True, exist_ok=True)
+    # Made before the brain is started, because the path to what it prints is handed to
+    # a program: an adapter told to append to a file in a directory nobody made is one
+    # that fails for a reason that has nothing to do with the brain.
+    transcript.home(whose["logs"]).mkdir(parents=True, exist_ok=True)
 
     can = await provider.capabilities(at, provider.environment(
         home=whose["run"], cwd=whose["home"], provider_home=home, run="capabilities",
@@ -166,21 +169,27 @@ async def carry(
     if can["resume"] and not fresh:
         resume = kept.session(where_it_is, brain)
 
-    run = transcript.allocate(whose["runs"], pick=pick)
+    at_now = _stamped(now)
+    if preface:
+        # Written down as something *rundesk* said into the conversation, because a turn
+        # that read standing instructions read something the person never typed — and an
+        # account that does not show it cannot explain afterwards why it answered as it
+        # did (R-RUN-9). `rundesk` is an author for exactly this.
+        kept.arrived(where_it_is, at_now, preface, author="rundesk")
+    # What was asked, written *before* the run that answers it — so the run says what
+    # caused it (R-STO-10) rather than being linked to it afterwards, and so a turn that
+    # died before it reached the brain still shows what somebody asked for.
+    asked = kept.arrived(where_it_is, at_now, prompt,
+                         who=(asked_by or {}).get("user") or None)
+    run = kept.began(
+        "channel" if asked_by else "terminal", named, brain, posture, at_now,
+        conversation_id=where_it_is, trigger_message_id=asked, model=model, can=can,
+        settings=settings, resumed=bool(resume), pick=pick,
+    )
     if admitted is not None:
         admitted(run, dict(can))
-    with transcript.Writer(whose["runs"], run, name, now=now) as writing:
-        writing.add(event={
-            "type": ADMITTED, "provider": named, "brain": brain, "posture": posture,
-            "conversation": where_it_is, "on": on, "space": conversation,
-            "model": model, "resumed": bool(resume),
-            "settings": dict(settings or {}), "can": can,
-            **({"asked_by": dict(asked_by)} if asked_by else {}),
-            # Written down because a turn that was given standing instructions read
-            # something the person never typed, and an account that does not say so
-            # cannot explain afterwards why it answered the way it did.
-            **({"preface": preface} if preface else {}),
-        })
+    with _Account(kept, run, where_it_is, transcript.beside(whose["logs"], run),
+                  now=now) as writing:
         # Written before the brain is started, because what is sent is what the account
         # has to show — and an account written afterwards is one that can be written to
         # match whatever happened. A steered turn records it as it sends it instead, so
@@ -203,7 +212,7 @@ async def carry(
             env=provider.environment(
                 home=whose["run"], cwd=whose["home"], provider_home=home, run=run,
                 model=model, resume=resume, posture=posture, settings=settings,
-                raw=whose["runs"] / (run + transcript.BRAIN), preface=preface,
+                raw=transcript.printed(whose["logs"], run), preface=preface,
             ),
             # **The agent's home, not its workspace.** A brain loads the rules it is to
             # follow because they *stand in the directory it stands in* — that is the whole
@@ -229,14 +238,103 @@ async def carry(
         tokens = _tokens(said)
         ended = _ended(said)
         ok = result.ok and ended is not False
-        writing.add(event={
-            "type": OUTCOME, "ok": ok, "reason": result.reason, "code": result.code,
-            "tokens": tokens, "kept": carried if handle else None,
-            "lost": result.undelivered, "why": _why(said),
-        })
+        # What the brain finally said, as one thing said in the conversation. Written at
+        # the end because it is only whole then: a reply arrives a fragment at a time, and
+        # a row per fragment is a history nobody can read back and a search that matches
+        # half a sentence.
+        writing.answered("".join(one.get("text", "") for one in said
+                                 if one.get("type") == "text"))
+        # How it finished, in one word. A turn is `finished` only when the program ended
+        # well *and* the brain did not say otherwise — a brain that answered "no" through
+        # a process that exited zero is a failed turn, and the two used to be told apart
+        # by two fields that a reader had to combine correctly to get right.
+        became = "finished" if ok else ("failed" if result.ok else result.reason)
+        kept.ended(run, _stamped(now), became, exit_code=result.code,
+                   why=_why(said), tokens=tokens)
     return Outcome(run=run, ok=ok, reason=result.reason, said=said, tokens=tokens,
                    handle=handle if carried else None, why=_why(said),
                    trouble=[one for one in trouble if one.strip()][-TROUBLE_KEPT:])
+
+
+class _Account:
+    """What one run did, written down as it does it.
+
+    Rundesk's own records and a brain's went into one file and are told apart here
+    instead. **What was said is a message and what happened is a record**, because the two
+    are read for different things: a person reads a conversation back and searches it by
+    the words in it, and an owner reads a run back to find out what it did.
+
+    `seq` is a total order that does not depend on a clock (R-RUN-7), so an account still
+    reads in the order the work happened on a machine whose clock went backwards.
+
+    What the brain itself printed is not here. It goes to a file beside the log, because
+    the path is handed to a program that may be a shell script — and that file may be
+    destroyed, so nothing a run recorded is recoverable only from it (R-STO-5).
+    """
+
+    #: Every kind of record a brain may report, mapped to how it is kept. `text` is what it
+    #: *says*, which is a message; the rest are what it *did*. Anything else it reports is
+    #: kept as `unknown` with its own words beside it, because a record nobody could read
+    #: today is still there to be read later (R-RUN-6).
+    SAID = "text"
+
+    def __init__(self, kept, run: str, conversation: str, errors, now=None):
+        self.run = run
+        self._kept = kept
+        self._conversation = conversation
+        self._errors = errors
+        self._now = now or time.time
+        self._seq = 0
+        self._wrote = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *gone):
+        if self._wrote is not None:
+            self._wrote.close()
+            self._wrote = None
+        return False
+
+    def add(self, event: dict | None = None, raw: bytes | None = None) -> int:
+        """One thing that happened, added and never rewritten (R-RUN-5)."""
+        self._seq += 1
+        at = _stamped(self._now)
+        kind = (event or {}).get("type")
+        if kind == SENT:
+            # The prompt is already a message: it was written before the run, because a
+            # run has to say what caused it. What reaches here without `mid` *is* that
+            # one. What reaches here with it is a word somebody said while the turn was
+            # already running, which is a message of its own and belongs in the order it
+            # was said (R-RUN-9).
+            if event.get("mid"):
+                self._kept.arrived(self._conversation, at, str(event.get("text") or ""))
+            return self._seq
+        self._kept.recorded(
+            self.run, self._seq, at,
+            kind if kind in store.RECORD_KINDS else "unknown",
+            event=event,
+            raw=raw.decode("utf-8", "replace") if raw is not None else None,
+        )
+        return self._seq
+
+    def answered(self, text: str) -> None:
+        """What the brain finally said. Nothing is written for a turn that said nothing."""
+        if text.strip():
+            self._kept.answered(self._conversation, self.run, _stamped(self._now), text)
+
+    def went_wrong(self, said) -> None:
+        """One line of what the brain said went wrong, kept and kept apart (R-PRV-6).
+
+        A file rather than a row, and beside what it printed: this is an operating-system
+        pipe, and it may be destroyed to reclaim space without the account losing anything.
+        """
+        if self._wrote is None:
+            self._errors.parent.mkdir(parents=True, exist_ok=True)
+            self._wrote = open(self._errors, "ab")
+        line = said if isinstance(said, bytes) else str(said).encode("utf-8", "replace")
+        self._wrote.write(line if line.endswith(b"\n") else line + b"\n")
+        self._wrote.flush()
 
 
 def _stamped(now=None) -> str:

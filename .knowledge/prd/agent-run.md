@@ -21,10 +21,10 @@ worth having if what it did can be read back afterwards.
 
 |  | ID | Requirement | Evidence |
 |:--:|---|---|---|
-| ✅ | R-RUN-1 | Every run has an id of its own | `every run has an id of its own`, `a lost count never hands out a name that is taken` |
+| ✅ | R-RUN-1 | Every run has an id of its own | `every run has an id of its own`, `every run is named once and no name is handed out twice`, `a runs name carries a mark of its own beside the number` |
 | ✅ | R-RUN-2 | A run's id is what its account, its cost and its outcome are found by | `a runs account is found by the runs id`, `an agent is made with somewhere to keep what it did` |
 | ✅ | R-RUN-3 | What a run resolved is written when it is admitted and never changed after | `what a run resolved is written when it is admitted`, `what a run resolved is never changed after`, `a brain named for one turn is used for that turn only` |
-| ✅ | R-RUN-4 | A run's account records every event, in the order it happened | `a runs account records every event in the order it happened`, `an account torn by a machine going down is still an account`, `a turn that failed is recorded as one` |
+| ✅ | R-RUN-4 | A run's account records every event, in the order it happened | `a runs account records every event in the order it happened`, `a runs account is added to and never rewritten`, `a turn that failed is recorded as one` |
 | ✅ | R-RUN-5 | A run's account is added to and never rewritten | `a runs account is added to and never rewritten`, `what a brain said can be thrown away while the account stands` |
 | ✅ | R-RUN-6 | Each record carries what its brain reported alongside what Rundesk made of it | `everything a brain said is kept exactly as it said it`, `a record rundesk did not understand is still in the run afterwards` |
 | ✅ | R-RUN-7 | The order of a run's account does not depend on a clock | `the order of a runs account does not depend on a clock`, `a runs place in the order does not depend on a clock` |

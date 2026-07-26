@@ -176,18 +176,6 @@ def run_home(name: str, where: Path | None = None) -> Path:
     return directory(name, where) / "run"
 
 
-def runs_home(name: str, where: Path | None = None) -> Path:
-    """Where the account of every turn this agent took is kept — history, which lasts.
-
-    One letter from `run_home` and the opposite of it: that holds what the gateway is
-    doing at this moment and is emptied when it stops, and this holds what was done and
-    is what an owner still has afterwards (R-RUN-10) — for as long as the agent does.
-    Taking the agent away takes it (R-AGW-5): an account nobody can name an agent for is
-    an account nobody reads, and a name added back must inherit nothing.
-    """
-    return directory(name, where) / "runs"
-
-
 def logs_home(name: str, where: Path | None = None) -> Path:
     """Where this agent's gateway writes what happened — history, which outlives it."""
     return directory(name, where) / "logs"
@@ -212,7 +200,6 @@ def paths(name: str, where: Path | None = None) -> dict[str, Path]:
         "skills": skills(name, where),
         "providers": directory(name, where) / "providers",
         "run": run_home(name, where),
-        "runs": runs_home(name, where),
         "logs": logs_home(name, where),
         "schedules": schedules_home(name, where),
     }
@@ -427,13 +414,11 @@ def forget(name: str, where: Path | None = None) -> list[str]:
         if path.exists():
             path.unlink()
             taken.append(path.name)
-    for path in (logs_home(name, where), schedules_home(name, where),
-                 runs_home(name, where)):
+    for path in (logs_home(name, where), schedules_home(name, where)):
         if path.exists():
             shutil.rmtree(path)
             taken.append(path.name + "/")
-    for empty in (run_home(name, where), schedules_home(name, where),
-                  runs_home(name, where), stands):
+    for empty in (run_home(name, where), schedules_home(name, where), stands):
         try:
             empty.rmdir()
         except OSError:
