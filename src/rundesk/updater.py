@@ -130,6 +130,7 @@ def run(
     busy: Callable[[], list] | None = None,
     pause: Callable[[], tuple] | None = None,
     resume: Callable[[list], list] | None = None,
+    carry: Callable[[], str | None] | None = None,
 ) -> int:
     """Report where this install stands, and move it if asked.
 
@@ -140,6 +141,10 @@ def run(
     They resolve here rather than in the signature: a default argument is bound
     once, when the function is defined, so naming the function there would freeze
     it and quietly ignore anything that replaced it afterwards.
+
+    `carry` brings what is on the machine into the shape the new files expect, and says
+    what went wrong rather than raising it — the same shape `pause` already uses, and the
+    reason this module knows nothing of migrations, databases or agents.
     """
     published, why = (latest or latest_version_online)()
     print(describe(current_version, published, why))
@@ -173,11 +178,28 @@ def run(
         return 1
     try:
         moved = (apply or download_and_apply)(repo_root, published)
-    finally:
-        # Whatever became of the update, what was stopped to make room for it comes back
-        # (R-UPD-22). The failure path is the one that matters: an update that fell over
-        # must not also leave the machine's gateways down behind it.
-        left_down = (resume or (lambda _names: []))(stopped)
+    except BaseException:
+        # An update that fell over must not also leave the machine's gateways down behind
+        # it (R-UPD-22): the files are as they were, so the old code they are made of is
+        # still there to come back onto.
+        (resume or (lambda _names: []))(stopped)
+        raise
+    if moved == 0:
+        # The one window where nothing is up and the new files are already down. Asked only
+        # when they actually landed: a replacement that failed leaves the old shape on disk,
+        # and moving records forward for code that is not there is how an install ends up
+        # with data no version of it understands.
+        went_wrong = (carry or (lambda: None))()
+        if went_wrong:
+            # **And every agent stays down** (R-MIG-6). This is the one failure the
+            # resume above must not answer: bringing them back onto records half moved is
+            # worse than leaving them down and saying which one and why.
+            print(f"update: FAILED — {went_wrong}", file=sys.stderr)
+            print("        every agent is still down, and its records are as they were",
+                  file=sys.stderr)
+            print("        why: rundesk logs <name>", file=sys.stderr)
+            return 1
+    left_down = (resume or (lambda _names: []))(stopped)
     if left_down:
         print(
             f"update: {'applied' if moved == 0 else 'FAILED'}, but did not come back: "

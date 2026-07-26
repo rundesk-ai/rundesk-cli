@@ -46,13 +46,23 @@ STEPS = Path(__file__).resolve().parent.parent / "migrations"
 
 
 class Failed(Exception):
-    """A step did not finish. The data is as it was, and every agent stays down."""
+    """A step did not finish. The data is as it was, and every agent stays down.
 
-    def __init__(self, step, reached: int, why: BaseException):
+    Whose records these are is part of the answer, not context somebody looks up: an update
+    walks every agent, so "a migration failed" without a name leaves an owner opening each
+    of them in turn to find out which. `reached` is `None` where the version could not be
+    read at all, which is not the same fact as reaching zero.
+    """
+
+    def __init__(self, step, reached, why: BaseException, agent=None):
+        whose = f"{agent}: " if agent else ""
+        got = (f"the data is still at version {reached}" if reached is not None
+               else "the version on disk could not be read")
         super().__init__(
-            f"migration {step} did not finish — the data is still at version {reached}, "
+            f"{whose}migration {step} did not finish — {got}, "
             f"and nothing has been started: {why}"
         )
+        self.agent = agent
         self.step = step
         self.reached = reached
         self.why = why
@@ -212,7 +222,17 @@ def carry_every(agents, want: int, where=None, note=None, clock=None) -> dict:
             reached[home.name] = carry(database, home, want, where=where, note=say, clock=clock)
         except Failed as stopped:
             say(f"{home.name} could not be moved: {stopped}")
-            raise Failed(stopped.step, stopped.reached, stopped.why) from stopped
+            raise Failed(stopped.step, stopped.reached, stopped.why,
+                         agent=home.name) from stopped
+        except Exception as trouble:   # noqa: BLE001 — see below
+            # Records that cannot be opened at all never reach a step, so nothing above
+            # would name the agent or leave a line in its log — and an owner would be told
+            # only that a database somewhere was unreadable. Caught broadly because what
+            # went wrong matters far less than which agent it went wrong for.
+            logged(home, f"these records could not be opened at all: {trouble}",
+                   "ERROR", clock=clock)
+            say(f"{home.name} could not be moved: {trouble}")
+            raise Failed("(opening)", None, trouble, agent=home.name) from trouble
     return reached
 
 

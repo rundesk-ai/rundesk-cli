@@ -791,9 +791,10 @@ class AnUpdateAndWhatIsRunning(unittest.TestCase):
     for everything it has not, so it goes on serving a version nobody can see it is on.
     """
 
-    def _run(self, stopped=(), refused=None, down=(), applied_code=0):
+    def _run(self, stopped=(), refused=None, down=(), applied_code=0, carried=None):
         self.brought_back = None
         self.applied = []
+        self.carried = 0
 
         def pause():
             return list(stopped), refused
@@ -806,9 +807,13 @@ class AnUpdateAndWhatIsRunning(unittest.TestCase):
             self.applied.append(version)
             return applied_code
 
+        def carry():
+            self.carried += 1
+            return carried
+
         code = updater.run(
             Path("/tmp/rundesk-not-real"), "0.1.0", latest=lambda: ("9.9.9", None),
-            apply=apply, busy=lambda: [], pause=pause, resume=resume,
+            apply=apply, busy=lambda: [], pause=pause, resume=resume, carry=carry,
         )
         return code
 
@@ -822,6 +827,42 @@ class AnUpdateAndWhatIsRunning(unittest.TestCase):
         """R-UPD-22"""
         self._run(stopped=["alpha", "beta"])
         self.assertEqual(["alpha", "beta"], self.brought_back)
+
+    def test_records_are_moved_forward_while_nothing_an_owner_runs_is_up(self):
+        """R-MIG-1 — the only window there is: the new files are down and no gateway has
+        been brought back onto them. Moving records at any other moment is either code
+        reading a shape it does not know, or two gateways starting together and both
+        beginning to move one forward."""
+        order = []
+        updater.run(
+            Path("/tmp/rundesk-not-real"), "0.1.0", latest=lambda: ("9.9.9", None),
+            busy=lambda: [], pause=lambda: (order.append("stopped") or ["alpha"], None),
+            apply=lambda root, version: order.append("replaced") or 0,
+            carry=lambda: order.append("carried") or None,
+            resume=lambda names: order.append("started") or [],
+        )
+        self.assertEqual(["stopped", "replaced", "carried", "started"], order)
+
+    def test_a_migration_that_fails_leaves_every_agent_down_and_says_which_and_why(self):
+        """R-MIG-6 — the one failure `resume` must not answer for. Bringing agents back
+        onto records half moved is worse than leaving them down: the first is an agent
+        quietly reading a shape nobody wrote, and the second is a machine somebody looks at."""
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            code = self._run(stopped=["alpha"],
+                             carried="migration 002.py did not finish — the data is still "
+                                     "at version 1: no such column")
+        self.assertEqual(1, code)
+        self.assertIsNone(self.brought_back, "an agent came back onto records half moved")
+        self.assertIn("002.py", said.getvalue(), "it never said which step")
+        self.assertIn("no such column", said.getvalue(), "it never said why")
+        self.assertIn("still down", said.getvalue())
+
+    def test_records_are_left_alone_when_the_files_never_landed(self):
+        """R-MIG-18 — moving records forward for code that is not there is how an install
+        ends up with data no version of it understands, and there is no way back."""
+        self.assertEqual(1, self._run(stopped=["alpha"], applied_code=1))
+        self.assertEqual(0, self.carried, "it moved records onto a release that never landed")
+        self.assertEqual(["alpha"], self.brought_back)
 
     def test_an_update_that_failed_still_brings_back_what_it_stopped(self):
         """R-UPD-22 — the path that matters. An update that fell over must not also leave

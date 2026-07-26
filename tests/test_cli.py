@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk import __version__  # noqa: E402
 from rundesk import cli  # noqa: E402
+from rundesk import store  # noqa: E402
 
 
 #: How long the command waits on a gateway to appear or to go. Real seconds in the wild,
@@ -2423,6 +2424,61 @@ class WhichVersionEachGatewayIsActuallyOn(unittest.TestCase):
     def test_a_gateway_that_is_not_running_has_no_version_to_report(self):
         """R-GW-9 — a version read off a record whose process is gone says nothing."""
         self.assertEqual("-", cli._version_of(type("S", (), {"running": False, "version": "9"})()))
+
+
+class MovingEveryAgentForwardWhenAnUpdateLands(unittest.TestCase):
+    """R-MIG-1, R-MIG-6 — what the update hands the runner, and what a failure costs.
+
+    Nothing here reaches the network or an install: the agents are directories this case
+    made, and what an update *decides* is proved in `test_updater.py`.
+    """
+
+    def setUp(self):
+        self.where = Path(tempfile.mkdtemp(prefix="rundesk-agents-"))
+        self.addCleanup(shutil.rmtree, self.where, True)
+        where = self.where
+        self.agents = type("Agents", (), {"agents_home": staticmethod(lambda: where)})()
+
+    def an_agent(self, name: str) -> Path:
+        home = self.where / name
+        (home / "home").mkdir(parents=True, exist_ok=True)
+        kept = store.Store(store.path_for(home))
+        kept.made()
+        return home
+
+    def test_every_agent_is_brought_forward_when_an_update_lands(self):
+        """R-MIG-1 — every agent, not the first one, and each from wherever it is."""
+        self.an_agent("alpha")
+        self.an_agent("beta")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertIsNone(cli._carry_every(self.agents))
+        for name in ("alpha", "beta"):
+            kept = store.Store(store.path_for(self.where / name))
+            self.assertEqual(store.VERSION, kept.version())
+
+    def test_an_agent_whose_records_cannot_be_moved_names_that_agent(self):
+        """R-MIG-6, R-MIG-7 — an update walks every agent, so a failure with no name in it
+        leaves an owner opening each of them in turn to find out which."""
+        self.an_agent("alpha")
+        broken = self.an_agent("beta")
+        store.path_for(broken).write_bytes(b"this was never a database")
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            went_wrong = cli._carry_every(self.agents)
+        self.assertIsNotNone(went_wrong, "a database that is not one was carried anyway")
+        self.assertIn("beta", went_wrong, "it never said which agent")
+        self.assertNotIn("alpha", went_wrong)
+
+    def test_what_went_wrong_is_left_in_that_agents_own_log(self):
+        """R-STO-20 — an update that failed at three in the morning is read afterwards
+        rather than watched, and the one place an owner looks is the agent's own log."""
+        broken = self.an_agent("beta")
+        store.path_for(broken).write_bytes(b"this was never a database")
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli._carry_every(self.agents)
+        self.assertIn("could not be opened at all",
+                      (broken / "logs" / "gateway.log").read_text())
 
 
 if __name__ == "__main__":

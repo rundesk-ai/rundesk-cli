@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from rundesk import migration, store  # noqa: E402
 
 AT = "2026-07-26T09:00:00Z"
+LATER = "2026-07-26T10:00:00Z"
 
 # What a step that is never meant to run looks like — enough to be found, and no work in it.
 NOTHING = "def up(conn, home):\n    return []\n"
@@ -718,6 +719,82 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
             at.unlink()
         at.mkdir(parents=True)
         self.assertEqual({"ava": 2}, migration.carry_every(self.where, 2, where=self.steps))
+
+
+class WhatAnUpdateMustNotCost(WithStepsOfThisCasesOwn):
+    """R-MIG-17, R-MIG-18 — an update never costs an owner what their agents said, did or
+    were told, and nothing moved forward is ever moved back."""
+
+    def furnished(self) -> str:
+        """One agent with everything an owner would miss: what it was told, what it said,
+        what it ran, what it cost, what its schedules last did, and its own log."""
+        kept = self.records()
+        kept.remember_agent(provider="codex", instructions="be terse")
+        kept.remember_channel("ops", "discord", ["u1"], AT, describes="a room")
+        kept.remember_schedule("nightly", "0 3 * * *", AT, prompt="what changed?")
+        kept.schedule_fired("nightly", LATER)
+        kept.opened("c1", "ops", "thread", "99123", AT)
+        asked = kept.arrived("c1", AT, "what about the parser", who="u1")
+        named = kept.began("channel", "codex", "codex", "safe", AT, conversation_id="c1",
+                           trigger_message_id=asked, settings={"effort": "high"})
+        kept.recorded(named, 1, AT, "tool", event={"name": "grep"}, raw='{"type":"tool"}')
+        kept.answered("c1", named, LATER, "the parser was rewritten")
+        kept.ended(named, LATER, "failed", exit_code=1, why="401 Unauthorized",
+                   tokens={"input": 10, "output": 5, "reported": True})
+        migration.logged(self.home, "this agent was up", clock=lambda: "2026-07-25 09:00:00")
+        return named
+
+    def test_nothing_an_update_moves_loses_an_account_a_log_or_what_a_schedule_last_did(self):
+        """R-MIG-17 — asked of a step that really changes the shape, because a step that
+        changed nothing would prove only that nothing happened."""
+        named = self.furnished()
+        self.wrote(2, """
+            def up(conn, home):
+                conn.execute("ALTER TABLE run ADD COLUMN carried TEXT")
+                return []
+            """)
+        self.assertEqual({"ops": 2}, migration.carry_every(self.where, 2, where=self.steps))
+
+        kept = store.Store(self.at, version=2)
+        self.assertEqual("codex", kept.agent()["provider"])
+        self.assertEqual(["ops"], [one["name"] for one in kept.channels()])
+        self.assertEqual(LATER, kept.schedule("nightly")["last_auto_run_at"])
+        self.assertEqual([("person", "what about the parser"),
+                          ("agent", "the parser was rewritten")],
+                         [(one["author"], one["text"]) for one in kept.messages("c1")])
+        one = kept.run(named)
+        self.assertEqual(("failed", "401 Unauthorized", 10), (one["outcome"], one["why"],
+                                                              one["tokens_in"]))
+        self.assertEqual({"effort": "high"}, one["settings"])
+        self.assertEqual([(1, "tool")], [(r["seq"], r["kind"]) for r in kept.records(named)])
+        self.assertIn("this agent was up", (self.home / migration.LOG).read_text())
+
+    def test_records_moved_forward_are_never_moved_back(self):
+        """R-MIG-18 — going backwards is refusing to go forwards. A rundesk that has been
+        downgraded is kept down and told which version it found, rather than reading a shape
+        it cannot know what it is missing from."""
+        self.furnished()
+        self.wrote(2, "def up(conn, home):\n    return []\n")
+        migration.carry_every(self.where, 2, where=self.steps)
+
+        with self.assertRaises(migration.Failed) as refused:
+            migration.carry_every(self.where, 1, where=self.steps)
+        self.assertIn("ops", str(refused.exception), "it never said which agent")
+        self.assertEqual(2, self.stamped(), "an older rundesk moved the records back")
+
+    def test_an_agent_already_at_the_shape_installed_is_not_moved_again(self):
+        """R-MIG-4 — the same update run twice migrates once, which is what makes an update
+        that stopped part-way safe to simply run again."""
+        self.furnished()
+        self.ledger()
+        self.wrote(2, """
+            def up(conn, home):
+                conn.execute("INSERT INTO ran (step) VALUES ('two')")
+                return []
+            """)
+        migration.carry_every(self.where, 2, where=self.steps)
+        migration.carry_every(self.where, 2, where=self.steps)
+        self.assertEqual(["two"], self.ran())
 
 
 if __name__ == "__main__":

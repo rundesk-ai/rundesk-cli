@@ -453,7 +453,35 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
         busy=lambda: _in_flight(gateways, agents),
         pause=lambda: _stand_all_down(gateways, machine, agents),
         resume=lambda names: _bring_all_back(names, gateways, machine, agents),
+        carry=lambda: _carry_every(agents),
     )
+
+
+def _carry_every(agents) -> str | None:
+    """Bring every agent's records into the shape the new files expect (R-MIG-1).
+
+    Called in the window an update already opens: after the files are replaced and before
+    the first agent is brought back, which is the only moment nothing is reading them.
+    Never lazily and never by whoever opens a database first — two gateways starting
+    together would both begin moving one forward.
+
+    Says what went wrong rather than raising it, because the updater is a decision and
+    knows nothing of agents or of what they keep. Everything is caught: an agent whose
+    records cannot be opened at all is exactly the case where every agent must stay down
+    and the owner must be told, and a traceback out of the middle of an update tells them
+    which file it happened in and nothing about what to do. What each step did, or failed
+    to do, is already in that agent's own log.
+    """
+    try:
+        migration.carry_every(agents.agents_home(), store.VERSION, note=_out_loud)
+    except Exception as stopped:   # noqa: BLE001 — a process boundary, reporting truthfully
+        return str(stopped)
+    return None
+
+
+def _out_loud(said: str) -> None:
+    """Each agent as it is reached, so a long update is not a silent one."""
+    print(f"        {said}")
 
 
 def _every_name(gateways, machine, agents) -> list[str]:
