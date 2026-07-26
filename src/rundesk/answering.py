@@ -30,8 +30,8 @@ import asyncio
 import contextlib
 from pathlib import Path
 
-from rundesk_cli import agent as agents
-from rundesk_cli import channel, session, turn
+from rundesk import agent as agents
+from rundesk import channel, session, turn
 
 #: How many messages may be waiting for a conversation whose brain cannot be steered.
 #: Small on purpose: somebody typing while an agent works is answering the conversation,

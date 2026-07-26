@@ -35,7 +35,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from rundesk_cli import migration
+from rundesk import migration
 
 
 def version_wanted() -> int:

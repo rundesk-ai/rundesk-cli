@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from rundesk_cli import ROOT, gateway
+from rundesk import ROOT, gateway
 
 #: Every job rundesk writes is named this way, so what belongs to rundesk is obvious in
 #: a directory full of other people's jobs, and one gateway's job never collides with
@@ -391,7 +391,7 @@ def take_back(
     stubborn and every attempt after it unable to see the gateway at all, with the thing
     itself still running.
     """
-    from rundesk_cli import gateway  # here, so this module imports on a machine without one
+    from rundesk import gateway  # here, so this module imports on a machine without one
 
     standing = standing or gateway.standing
     said = remove(name, where, root, asking)

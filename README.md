@@ -208,7 +208,7 @@ script can tell "this rundesk does not have that" from "you typed it wrong".
 
 ## Version
 
-One source of truth: `__version__` in `src/rundesk_cli/__init__.py`. The command reports it, the updater
+One source of truth: `__version__` in `src/rundesk/__init__.py`. The command reports it, the updater
 compares against it, and a release tag must match it — CI fails a `vX.Y.Z` tag that disagrees.
 
 ```sh

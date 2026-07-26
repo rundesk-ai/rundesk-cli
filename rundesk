@@ -19,7 +19,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 for _packages in sorted((REPO_ROOT / ".venv" / "lib").glob("python3.*/site-packages")):
     sys.path.insert(0, str(_packages))
 
-from rundesk_cli.cli import main  # noqa: E402
+from rundesk.cli import main  # noqa: E402
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))

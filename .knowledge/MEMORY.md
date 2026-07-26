@@ -200,12 +200,12 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   asserting zeros on a fresh database fails.
 - **`/usr/bin/python3` caches bytecode outside the checkout, and a restored file can keep
   running the break.** macOS's system Python writes to `~/Library/Caches/com.apple.python/…`
-  rather than to `src/rundesk_cli/__pycache__`, so clearing the repo's `__pycache__` does
+  rather than to `src/rundesk/__pycache__`, so clearing the repo's `__pycache__` does
   nothing. A `.pyc` is reused when the source's *mtime and size* match what it recorded — and
   breaking a module for a teeth probe, then restoring it seconds later with a same-length edit
   (`step.version` → `step.at.name` is character-for-character the same size) matches both. The
   suite then keeps failing against code that is byte-for-byte correct, and `diff` says nothing
-  is wrong. `touch src/rundesk_cli/<module>.py` after restoring invalidates it.
+  is wrong. `touch src/rundesk/<module>.py` after restoring invalidates it.
 - **Breaking `migration.py` to remove a step's spare files *before* the version commits proves
   nothing** — a probe that looks decisive and fails silently. A step that dies never returns its
   list, so the runner has nothing to remove on the path the claim is about, and every case still

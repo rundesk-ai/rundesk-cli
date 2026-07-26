@@ -16,7 +16,7 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
 
 ## Domain / Data
 
-- `src/rundesk_cli/__init__.py` — **`__version__`, the one source of what version this is.** The command
+- `src/rundesk/__init__.py` — **`__version__`, the one source of what version this is.** The command
   reports it, the updater compares against it, and a release tag is expected to match it. Nothing else
   holds a copy. `ROOT` is the same idea for *where* this install is, resolved rather than assumed.
 
@@ -64,22 +64,22 @@ A run's account is the one thing here that is **appended** rather than written w
 written while the thing it accounts for is still happening and has to be readable throughout. Nothing
 rewrites it; a retention policy takes whole files.
 
-## Backend / Services (src/rundesk_cli/ — 16 modules)
+## Backend / Services (src/rundesk/ — 16 modules)
 
-- `src/rundesk_cli/cli.py` — the command surface: every verb the finished product will have, registered
+- `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
   the verbs and nothing of locks, records or process groups. `PLANNED` is the table of every operation
   registered and not built, each with the actions under it; every one answers and exits `NOT_AVAILABLE`
   rather than reporting a success it did not earn, and rather than argparse's usage code, which would
   make a missing command indistinguishable from a typo. An entry graduates out of that table into a real
   command as it lands.
-- `src/rundesk_cli/agent.py` — the named identity work is run for: its name, its home, and where
+- `src/rundesk/agent.py` — the named identity work is run for: its name, its home, and where
   everything of its own stands. Above the gateway and never beside it — it resolves an agent's three
   directories and hands them to a `Gateway`, which is why a gateway goes on knowing nothing of whose work it
   holds. A new agent's home is copied from `src/templates/agent/` — stubs an owner reads and edits, kept beside the package rather than inside it, and what a home holds is read off that
   directory rather than listed in code. What a name may be is stricter here than for a gateway: one path
   component, standing where agents are kept, and never a word a gateway writes beside some other name.
-- `src/rundesk_cli/provider.py` — the seam a brain is reached through, and nothing about any
+- `src/rundesk/provider.py` — the seam a brain is reached through, and nothing about any
   particular brain. Resolves a provider — a shipped adapter, or a path to a program somebody wrote — into
   something runnable, builds the environment it is told everything through, asks what it can do, and reads
   one of its records. **Enumerates nothing**: no list of providers and no list of models, so one rundesk
@@ -87,7 +87,7 @@ rewrites it; a retention policy takes whole files.
 - `src/providers/` — the brains that ship, one program each. Not modules: nothing imports them
   and they import nothing of ours, so a vendor's flags, stream shape, session file and usage arithmetic
   live in one file and reach no further. `adapters/codex` is the first.
-- `src/rundesk_cli/channel.py` — the seam a surface is reached through, and nothing about any
+- `src/rundesk/channel.py` — the seam a surface is reached through, and nothing about any
   particular platform. The mirror of `provider.py`: resolves a channel — a shipped adapter, or a path to
   a program somebody wrote — builds the environment it is told everything through, asks whether it can
   reach what it was pointed at, frames one record each way, and holds what is written down about a
@@ -98,29 +98,29 @@ rewrites it; a retention policy takes whole files.
 - `src/channels/` — the surfaces that ship, one program each. Not modules: nothing imports
   them and they import nothing of ours, so a platform's ids, intents and limits live in one file and
   reach no further.
-- `src/rundesk_cli/answering.py` — what arrives on a channel, carried through to an answer: the mirror of
+- `src/rundesk/answering.py` — what arrives on a channel, carried through to an answer: the mirror of
   `turn.py`, and the only module that knows `channel`, `turn`, `session` and `agent` all exist. Two things
   live here and nowhere else, because two surfaces deciding either separately would eventually disagree
   about one run: **who may be answered**, checked against the record the owner wrote rather than trusted to
   an adapter, and **what state a turn is in**. Writes nothing down — the run's own account already records
   it, and a channel that kept a second copy would become the only place something existed.
-- `src/rundesk_cli/transcript.py` — what a run did, written while it did it. Three files per run: the
+- `src/rundesk/transcript.py` — what a run did, written while it did it. Three files per run: the
   account, in words no brain owns, added to and never rewritten; and beside it, verbatim, everything the
   brain said and everything it said went wrong. Separate so a retention policy can one day take the raw and
   leave the account standing. Ordered by a count rather than a clock, so two runs of one conversation read
   in the order the work happened whatever the machine's clock did.
-- `src/rundesk_cli/session.py` — where a conversation got to, kept for a conversation and a brain
+- `src/rundesk/session.py` — where a conversation got to, kept for a conversation and a brain
   **together**. The brain is the outer key, so handing one brain's session to another is not expressible.
-- `src/rundesk_cli/turn.py` — the only module that knows the four above exist: resolve, write down what was
+- `src/rundesk/turn.py` — the only module that knows the four above exist: resolve, write down what was
   resolved, run the brain, write down what it said, keep where the conversation got to, write down how it
   ended. Nothing reaches a brain that the account does not show.
-- `src/rundesk_cli/store.py` — everything one agent keeps, and **the only way in to it**. One database per
+- `src/rundesk/store.py` — everything one agent keeps, and **the only way in to it**. One database per
   agent, never one shared, so a turn's write is never in another agent's way. Reading and writing are told
   apart at the connection: a reader is opened read-only, so it cannot begin work that would make a turn
   wait — refused by the database rather than by convention. No statement is written anywhere else and no
   connection ever leaves the module, both proved by looking. **Nothing reads it yet**; it is built and
   proved before anything moves onto it, so deleting it would leave the product exactly as it is.
-- `src/rundesk_cli/migration.py` — moving what is already on a machine into the shape a newer rundesk
+- `src/rundesk/migration.py` — moving what is already on a machine into the shape a newer rundesk
   expects. **A step is found, not listed**: each is `migrations/<version>.py`, ordered by that number, and
   what runs is whatever sits between the version on disk and the version installed. There is no table of
   what has run because **the version is the record** — SQLite keeps DDL inside a transaction, so a step's
@@ -133,9 +133,9 @@ rewrites it; a retention policy takes whole files.
 - `src/migrations/001.py` — **the schema, and the only description of it there is.** Making an
   agent runs the migration path from nothing rather than building tables directly, so the path is exercised
   every time anybody adds an agent and a fresh install cannot drift from an upgraded one.
-- `src/rundesk_cli/updater.py` — where this install stands against what is published, and moving between
+- `src/rundesk/updater.py` — where this install stands against what is published, and moving between
   them. Every network call is behind an argument, so the whole module is exercised offline.
-- `src/rundesk_cli/process.py` — a program rundesk runs, and how it keeps hold of it: its own session so
+- `src/rundesk/process.py` — a program rundesk runs, and how it keeps hold of it: its own session so
   ending it ends the whole tree, silence rather than duration as the failure, output streamed and never
   accumulated. Knows nothing of gateways or agents, and holds no state of its own, so any number of
   programs run at once. Two ways of reading one, sharing every rule about when to stop: output **meant to
@@ -143,15 +143,15 @@ rewrites it; a retention policy takes whole files.
   whole records through what is held for a receiver — kept apart from what the program says went wrong,
   written back to while it runs, and never split, so that a slow or failing receiver can neither hold up
   the program nor end it.
-- `src/rundesk_cli/gateway.py` — the part that stays running. One per name from the outset, since a
+- `src/rundesk/gateway.py` — the part that stays running. One per name from the outset, since a
   gateway per agent is how one agent is cycled without disturbing the rest. Owns every program started
   through it, and proves it is alive with a lock the kernel drops when the process dies. Writes what
   happened to its own log, kept apart from its run state because history has to outlive the gateway.
-- `src/rundesk_cli/schedule.py` — work that starts itself: what a schedule is, when one is next due, and
+- `src/rundesk/schedule.py` — work that starts itself: what a schedule is, when one is next due, and
   which are due now. Knows nothing of gateways or processes, and what a schedule names is carried without
   ever being read — so the day it names an agent rather than a command, nothing here changes. The time is
   an argument, so a year of firings is decided in a millisecond.
-- `src/rundesk_cli/supervisor.py` — handing a gateway to the machine that keeps it running: one job per
+- `src/rundesk/supervisor.py` — handing a gateway to the machine that keeps it running: one job per
   gateway, and never one this install did not write. Every call out to the machine is an argument, so it
   is exercised on a machine with no supervisor at all.
 

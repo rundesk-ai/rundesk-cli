@@ -35,7 +35,7 @@ fi
 # version of this function said otherwise — it excluded `SCRIPT_DIR == INSTALL_DIR`, so
 # running ./install.sh from a clone at ~/.rundesk deleted that clone, .git and all.
 is_local_checkout() {
-  [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/rundesk" && -d "$SCRIPT_DIR/src/rundesk_cli" ]]
+  [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/rundesk" && -d "$SCRIPT_DIR/src/rundesk" ]]
 }
 
 # Somebody's work, not ours. What the installer lays down is a plain tree unpacked from a
@@ -89,7 +89,7 @@ require_python() {
 stop_gateways() {
   local root="" candidate
   for candidate in "$INSTALL_DIR" "${SCRIPT_DIR:-}"; do
-    if [[ -n "$candidate" && -f "$candidate/src/rundesk_cli/supervisor.py" ]]; then
+    if [[ -n "$candidate" && -f "$candidate/src/rundesk/supervisor.py" ]]; then
       root="$candidate"; break
     fi
   done
@@ -103,7 +103,7 @@ stop_gateways() {
   if ! python3 - "$root" <<'STOP'
 import sys
 sys.path.insert(0, sys.argv[1] + "/src")
-from rundesk_cli import supervisor
+from rundesk import supervisor
 
 if not supervisor.available():
     raise SystemExit(0)          # nothing of the kind on this machine

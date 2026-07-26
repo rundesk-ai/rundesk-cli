@@ -26,7 +26,7 @@ REFERENCE = ROOT / "CLI.md"
 
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk_cli import cli  # noqa: E402
+from rundesk import cli  # noqa: E402
 
 #: The verbs a person meets in the order they meet them, rather than the order argparse
 #: happens to hold. A reference sorted alphabetically makes somebody read the whole thing

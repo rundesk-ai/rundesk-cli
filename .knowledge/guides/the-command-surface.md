@@ -164,7 +164,7 @@ while it is running, since moving what a running gateway reads leaves it writing
 1. Does an existing verb already answer this question? The table above exists because the answer was
    "yes" more often than expected.
 2. Is its object unambiguous at the level it sits? If not, it belongs under a group.
-3. Add it to `PLANNED` in `src/rundesk_cli/cli.py`, with the one line `--help` will show.
+3. Add it to `PLANNED` in `src/rundesk/cli.py`, with the one line `--help` will show.
 4. The tests walk the parser, so a verb registered and answered nowhere fails without anything being
    added to a list.
 

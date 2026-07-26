@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk_cli import migration, store  # noqa: E402
+from rundesk import migration, store  # noqa: E402
 
 AT = "2026-07-26T09:00:00Z"
 LATER = "2026-07-26T10:00:00Z"
@@ -1078,7 +1078,7 @@ class TheOnlyWayIn(unittest.TestCase):
     and six call sites reached through it. Every one began as a single read.
     """
 
-    SOURCE = Path(__file__).resolve().parent.parent / "src" / "rundesk_cli"
+    SOURCE = Path(__file__).resolve().parent.parent / "src" / "rundesk"
 
     # The seam, named rather than assumed. `store.py` is every question a caller may ask;
     # `migration.py` opens a database only to move it forward; a step under `migrations/` IS a

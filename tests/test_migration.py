@@ -25,7 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk_cli import migration, store  # noqa: E402
+from rundesk import migration, store  # noqa: E402
 
 AT = "2026-07-26T09:00:00Z"
 

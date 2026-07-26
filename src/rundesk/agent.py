@@ -25,7 +25,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from rundesk_cli import gateway
+from rundesk import gateway
 
 #: What a new agent's home is copied from. Ordinary Markdown files rather than text built
 #: in code, because they are what an owner reads first and edits next, and a rule about how
@@ -561,8 +561,8 @@ def reachable(name: str, where: Path | None = None, carry=None) -> list:
     stopping the others: one surface that cannot be run must not make an agent deaf on
     every other one it has.
     """
-    from rundesk_cli import answering as answers
-    from rundesk_cli import channel as channels
+    from rundesk import answering as answers
+    from rundesk import channel as channels
 
     whose = directory(name, where)
     found = []
@@ -599,7 +599,7 @@ def _answering(name, one, record, where, carry, answers):
 
 def unrunnable_channels(name: str, where: Path | None = None) -> list:
     """Which of this agent's channels name a kind that is not on this machine."""
-    from rundesk_cli import channel as channels
+    from rundesk import channel as channels
 
     whose = directory(name, where)
     missing = []

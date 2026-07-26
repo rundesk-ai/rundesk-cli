@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk_cli import agent, gateway  # noqa: E402
+from rundesk import agent, gateway  # noqa: E402
 
 
 def tree(where: Path) -> dict[str, bytes | None]:
@@ -392,7 +392,7 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
         """R-AGW-4, R-CAD-10 — the worst thing a name can inherit. An agent added back
         under a name that was on somebody's server would be on it again, answering
         whoever was allowed then, without anybody having asked for either."""
-        from rundesk_cli import channel
+        from rundesk import channel
 
         self.made()
         whose = agent.directory("ava", self.where)
@@ -409,7 +409,7 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
         """R-AGW-4 — the same rule, and the reason it is a rule rather than a list of
         names: where each conversation had got to outlived the agent and was handed to
         the next one to take the name, because nothing had thought to name that file."""
-        from rundesk_cli import session
+        from rundesk import session
 
         self.made()
         whose = agent.directory("ava", self.where)

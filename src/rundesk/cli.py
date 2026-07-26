@@ -26,15 +26,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from rundesk_cli import __version__  # noqa: E402
-from rundesk_cli import agent as _agent  # noqa: E402
-from rundesk_cli import channel  # noqa: E402
-from rundesk_cli import gateway as _gateway  # noqa: E402
-from rundesk_cli import process  # noqa: E402
-from rundesk_cli import provider  # noqa: E402
-from rundesk_cli import supervisor as _supervisor  # noqa: E402
-from rundesk_cli import turn  # noqa: E402
-from rundesk_cli import updater  # noqa: E402
+from rundesk import __version__  # noqa: E402
+from rundesk import agent as _agent  # noqa: E402
+from rundesk import channel  # noqa: E402
+from rundesk import gateway as _gateway  # noqa: E402
+from rundesk import process  # noqa: E402
+from rundesk import provider  # noqa: E402
+from rundesk import supervisor as _supervisor  # noqa: E402
+from rundesk import turn  # noqa: E402
+from rundesk import updater  # noqa: E402
 
 #: The installer as published, for the one case where this install has lost its own:
 #: removing rundesk is exactly when a broken install has to be removable.
@@ -1676,7 +1676,7 @@ def _note(gateways, name: str, said: str, whose=None) -> int:
 
 
 def _add_schedule(args: argparse.Namespace, gateways, whose) -> int:
-    from rundesk_cli import schedule
+    from rundesk import schedule
 
     try:
         made = schedule.Schedule(args.schedule, args.when)
@@ -1742,7 +1742,7 @@ def _run_schedule(args: argparse.Namespace, gateways, whose) -> int:
     gateway would have given it, so what it does here is what it does at three in the
     morning (R-PROC-1).
     """
-    from rundesk_cli import schedule
+    from rundesk import schedule
 
     wanted, _ = gateways.scheduled(args.name, whose.schedules)
     found = [one for one in wanted if one.name == args.schedule]
@@ -1790,7 +1790,7 @@ def _list_schedules(args: argparse.Namespace, gateways, whose) -> int:
     This gateway's, and no other's: a gateway's schedules are its own, which is what
     makes one agent's schedules that agent's alone (R-SCH-13, R-SCH-14).
     """
-    from rundesk_cli import schedule
+    from rundesk import schedule
 
     wanted, refused = gateways.scheduled(args.name, whose.schedules)
     if not wanted and not refused:

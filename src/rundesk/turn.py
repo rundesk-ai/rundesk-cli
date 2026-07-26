@@ -34,8 +34,8 @@ import contextlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from rundesk_cli import agent as agents
-from rundesk_cli import process, provider, session, transcript
+from rundesk import agent as agents
+from rundesk import process, provider, session, transcript
 
 #: What a conversation is called when nobody named one. A second `rundesk ask` carries the
 #: first one on, which is what a person at a terminal means by asking again.

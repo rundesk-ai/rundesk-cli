@@ -314,7 +314,7 @@ def _copy_over(src: Path, dst: Path) -> None:
     interruption leaves either the old thing or the new one and never half of either.
 
     The shape this replaces removed each directory and then copied the new one into place.
-    That left `src/rundesk_cli` — the package implementing update, version and uninstall —
+    That left `src/rundesk` — the package implementing update, version and uninstall —
     absent for the whole duration of a copy. A Ctrl-C or a full disk inside that window
     bricked every command, including the one that could have repaired it.
     """

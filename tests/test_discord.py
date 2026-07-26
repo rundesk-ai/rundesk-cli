@@ -32,7 +32,7 @@ for _packages in sorted((ROOT / ".venv" / "lib").glob("python3.*/site-packages")
 
 def _adapter():
     """The adapter, loaded from its path — it is a program, not a module."""
-    at = ROOT / "src" / "rundesk_cli" / "channels" / "discord"
+    at = ROOT / "src" / "rundesk" / "channels" / "discord"
     loader = importlib.machinery.SourceFileLoader("rundesk_discord", str(at))
     spec = importlib.util.spec_from_loader("rundesk_discord", loader)
     made = importlib.util.module_from_spec(spec)
@@ -149,7 +149,7 @@ class AnAnswerInAThread(unittest.TestCase):
         So a turn in a thread ended with a ✅ on the question and no answer under it: the
         mark went on the message in the channel, which works, and the reply quoting that
         same message was rejected outright."""
-        source = (ROOT / "src" / "rundesk_cli" / "channels" / "discord").read_text()
+        source = (ROOT / "src" / "rundesk" / "channels" / "discord").read_text()
         self.assertIn('str(getattr(anchor, "channel_id", "")) != str(', source,
                       "an answer can still quote a message outside the place it is sent")
 
@@ -337,7 +337,7 @@ class HowATurnIsMarked(unittest.TestCase):
     def test_every_state_the_seam_decides_has_something_to_show_for_it(self):
         """R-CAD-4, R-DIS-7 — the surface decides how, never whether. A state with no
         mark is a turn that ends and says nothing."""
-        from rundesk_cli import channel
+        from rundesk import channel
 
         shown = set(discord.MARKS) | {channel.TAKEN, channel.RUNNING}
         self.assertEqual(set(channel.STATES), shown,
@@ -476,7 +476,7 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         """R-PRV-8, R-CAD-4 — the list of what a tool did is the seam's and is closed. A
         verb with no mark here would quietly show as the fallback, which reads as "we do
         not know what that was" for something the contract does name."""
-        from rundesk_cli import provider
+        from rundesk import provider
 
         self.assertEqual(set(provider.DID), set(discord.DID),
                          "this surface and the seam disagree about what a tool can do")
@@ -503,7 +503,7 @@ class WhatOneTurnLooksLike(unittest.TestCase):
     def test_every_verb_has_something_a_person_would_say(self):
         """R-PRV-8 — a commentary is read as a sentence, so a mark with no words beside
         it is a row of emoji nobody can act on."""
-        from rundesk_cli import provider
+        from rundesk import provider
 
         self.assertEqual(set(provider.DID), set(discord.SHOWN))
 
@@ -515,7 +515,7 @@ class WhatItOffersAndWhatItIsTold(unittest.TestCase):
     def test_every_command_it_offers_is_a_gesture_the_seam_defines(self):
         """R-DIS-10 — the platform picks the word its people recognise and the seam keeps
         the meaning, so a surface cannot invent a gesture nothing acts on."""
-        from rundesk_cli import channel
+        from rundesk import channel
 
         for _name, _describes, gesture, _said in discord.COMMANDS:
             self.assertIn(gesture, channel.CONTROLS)
@@ -607,7 +607,7 @@ class WhatItSaysBack(unittest.TestCase):
     def test_everything_it_reports_is_a_record_the_seam_knows(self):
         """R-CAD-1 — a record of a kind nobody knows is kept and acted on by nothing, so
         an adapter reporting one is talking to itself."""
-        from rundesk_cli import channel
+        from rundesk import channel
 
         said = []
         was, discord.sys.stdout = discord.sys.stdout, _Collects(said)

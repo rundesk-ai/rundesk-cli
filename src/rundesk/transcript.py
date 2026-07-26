@@ -43,7 +43,7 @@ import random
 import time
 from pathlib import Path
 
-from rundesk_cli import gateway
+from rundesk import gateway
 
 #: Where the count of runs is kept, so a new one is never numbered behind an old one.
 #: Inside the run directory, because it is about those runs and nothing else — and it is

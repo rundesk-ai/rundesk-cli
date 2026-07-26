@@ -66,7 +66,7 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Every source and test file parses on this Python
-        run: python -c "import ast, glob; [ast.parse(open(f).read()) for f in glob.glob('src/rundesk_cli/*.py') + glob.glob('tests/*.py')]; print('parse OK')"
+        run: python -c "import ast, glob; [ast.parse(open(f).read()) for f in glob.glob('src/rundesk/*.py') + glob.glob('tests/*.py')]; print('parse OK')"
 
       - name: The installer is valid shell
         run: bash -n install.sh

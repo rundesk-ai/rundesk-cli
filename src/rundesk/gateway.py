@@ -39,9 +39,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from rundesk_cli import ROOT, __version__
-from rundesk_cli import process
-from rundesk_cli import schedule
+from rundesk import ROOT, __version__
+from rundesk import process
+from rundesk import schedule
 
 #: The gateway that exists before there are agents to name one after.
 DEFAULT_NAME = "gateway"
@@ -647,7 +647,7 @@ def _note_interrupted(name: str, where: Path | None, work: str, why: str,
     `ended` is the distinction worth keeping. Work rundesk ended and work it could not
     show was its to end are both interrupted, and only one of them is definitely gone.
     """
-    from rundesk_cli import schedule
+    from rundesk import schedule
 
     try:
         with changing(interrupted_path(name, where), {}, "interruptions", durable=True) as said:

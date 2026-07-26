@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from rundesk_cli import gateway
+from rundesk import gateway
 
 #: What the book is called, beside everything else that is one agent's own. Not inside a
 #: provider's private home, which is the adapter's to write in — a brain must not be able

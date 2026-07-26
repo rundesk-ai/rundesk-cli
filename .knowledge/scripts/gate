@@ -64,7 +64,7 @@ def checks() -> list[tuple[str, list[str]]]:
     """Every command the gate runs, in the order a failure is cheapest to read."""
     parses = (
         "import ast, glob, sys\n"
-        "for f in sorted(glob.glob('src/rundesk_cli/*.py') + glob.glob('tests/*.py')):\n"
+        "for f in sorted(glob.glob('src/rundesk/*.py') + glob.glob('tests/*.py')):\n"
         "    ast.parse(open(f).read(), f)\n"
     )
     listed: list[tuple[str, list[str]]] = [

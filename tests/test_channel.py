@@ -39,7 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk_cli import channel, process  # noqa: E402
+from rundesk import channel, process  # noqa: E402
 
 PY = sys.executable
 
@@ -757,7 +757,7 @@ class WhatTheSurfaceIsNeverGiven(DrivesAnAdapter):
         """R-PRV-8 — a brain says what it did and a surface shows it, so a second copy of
         the list is a second vocabulary: a reader shown a verb nothing produces, or a
         brain producing one nothing can show."""
-        from rundesk_cli import provider
+        from rundesk import provider
 
         self.assertIs(channel.DID, provider.DID)
         self.assertEqual(("read", "search", "run", "edit", "list", "make"), channel.DID)

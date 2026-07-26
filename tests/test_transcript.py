@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk_cli import agent, transcript  # noqa: E402
+from rundesk import agent, transcript  # noqa: E402
 
 
 class WithSomewhereToKeepRuns(unittest.TestCase):

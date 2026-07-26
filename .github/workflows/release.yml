@@ -28,7 +28,7 @@ jobs:
           python - "$GITHUB_REF_NAME" <<'CHECK'
           import sys
           sys.path.insert(0, "src")
-          from rundesk_cli import __version__, updater
+          from rundesk import __version__, updater
           tag = sys.argv[1]
           print(f"tag={tag}  code={__version__}")
           if not updater.tag_matches(tag, __version__):

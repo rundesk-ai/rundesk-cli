@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk_cli import updater  # noqa: E402
+from rundesk import updater  # noqa: E402
 
 
 def run(**kwargs) -> tuple[int, str]:
@@ -163,7 +163,7 @@ class BehindTests(unittest.TestCase):
         # is not — `is_newer` would answer False forever and this install would never learn it
         # was behind. Nothing else in the suite would notice.
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-        from rundesk_cli import __version__
+        from rundesk import __version__
 
         self.assertIsNotNone(
             updater.parse_version(__version__),
@@ -194,11 +194,11 @@ class BehindTests(unittest.TestCase):
 def _release(root: Path, version: str) -> Path:
     """A tree shaped like a release archive, unpacked."""
     top = root / f"rundesk-cli-{version}"
-    (top / "src" / "rundesk_cli").mkdir(parents=True)
+    (top / "src" / "rundesk").mkdir(parents=True)
     (top / "rundesk").write_text(f"#!/usr/bin/env python3\n# {version}\n")
     (top / "install.sh").write_text(f"#!/usr/bin/env bash\n# {version}\n")
     (top / "README.md").write_text(f"rundesk {version}\n")
-    (top / "src" / "rundesk_cli" / "__init__.py").write_text(f'__version__ = "{version}"\n')
+    (top / "src" / "rundesk" / "__init__.py").write_text(f'__version__ = "{version}"\n')
     return top
 
 
@@ -207,7 +207,7 @@ class InterruptedUpdateTests(unittest.TestCase):
 
     The likeliest real failure is not a hostile archive, it is Ctrl-C or a full disk. The
     shape this replaces removed each directory before copying the new one in, so `src/
-    rundesk_cli` — the package implementing update, version and uninstall — was absent for
+    rundesk` — the package implementing update, version and uninstall — was absent for
     the length of a copy. A kill inside that window left nothing able to repair itself.
     """
 
@@ -215,10 +215,10 @@ class InterruptedUpdateTests(unittest.TestCase):
         self._work = tempfile.TemporaryDirectory()
         self.root = Path(self._work.name)
         self.install = self.root / "install"
-        (self.install / "src" / "rundesk_cli").mkdir(parents=True)
+        (self.install / "src" / "rundesk").mkdir(parents=True)
         (self.install / "rundesk").write_text("# 0.1.0\n")
-        (self.install / "src" / "rundesk_cli" / "__init__.py").write_text('__version__ = "0.1.0"\n')
-        (self.install / "src" / "rundesk_cli" / "cli.py").write_text("# 0.1.0 surface\n")
+        (self.install / "src" / "rundesk" / "__init__.py").write_text('__version__ = "0.1.0"\n')
+        (self.install / "src" / "rundesk" / "cli.py").write_text("# 0.1.0 surface\n")
 
     def tearDown(self):
         self._work.cleanup()
@@ -243,7 +243,7 @@ class InterruptedUpdateTests(unittest.TestCase):
         finally:
             updater.shutil.copytree = original
 
-        package = self.install / "src" / "rundesk_cli"
+        package = self.install / "src" / "rundesk"
         self.assertTrue((package / "__init__.py").is_file(),
                         "an interrupted update left the package it needs to run missing")
         self.assertTrue((package / "cli.py").is_file(),
@@ -318,10 +318,10 @@ class ReplacesTheInstallTests(unittest.TestCase):
         # An install as it stands before the update: older content, plus things a release
         # does not ship and must not lose.
         self.install = self.root / "install"
-        (self.install / "src" / "rundesk_cli").mkdir(parents=True)
+        (self.install / "src" / "rundesk").mkdir(parents=True)
         (self.install / "rundesk").write_text("# 0.1.0\n")
-        (self.install / "src" / "rundesk_cli" / "__init__.py").write_text('__version__ = "0.1.0"\n')
-        (self.install / "src" / "rundesk_cli" / "gone_next_release.py").write_text("# removed upstream\n")
+        (self.install / "src" / "rundesk" / "__init__.py").write_text('__version__ = "0.1.0"\n')
+        (self.install / "src" / "rundesk" / "gone_next_release.py").write_text("# removed upstream\n")
         (self.install / ".git").mkdir()
         (self.install / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
         (self.install / "local-note.txt").write_text("mine\n")
@@ -335,7 +335,7 @@ class ReplacesTheInstallTests(unittest.TestCase):
         self.assertIn("0.2.0", (self.install / "rundesk").read_text(), "the entry point was not replaced")
         self.assertIn(
             '"0.2.0"',
-            (self.install / "src" / "rundesk_cli" / "__init__.py").read_text(),
+            (self.install / "src" / "rundesk" / "__init__.py").read_text(),
             "the version on disk still reports the old release",
         )
         self.assertTrue((self.install / "README.md").exists(), "a file new in the release never arrived")
@@ -344,7 +344,7 @@ class ReplacesTheInstallTests(unittest.TestCase):
         # A module deleted upstream must not survive inside the new tree, still importable.
         updater._copy_over(_release(self.root, "0.2.0"), self.install)
         self.assertFalse(
-            (self.install / "src" / "rundesk_cli" / "gone_next_release.py").exists(),
+            (self.install / "src" / "rundesk" / "gone_next_release.py").exists(),
             "a file removed upstream survived the update and is still importable",
         )
 
@@ -368,7 +368,7 @@ class DownloadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             install = root / "install"
-            (install / "src" / "rundesk_cli").mkdir(parents=True)
+            (install / "src" / "rundesk").mkdir(parents=True)
             (install / "rundesk").write_text("# 0.1.0\n")
 
             staged = root / "staged"
@@ -496,7 +496,7 @@ class SaysWhatItIsDoingTests(unittest.TestCase):
         self._work = tempfile.TemporaryDirectory()
         self.root = Path(self._work.name)
         self.install = self.root / "install"
-        (self.install / "src" / "rundesk_cli").mkdir(parents=True)
+        (self.install / "src" / "rundesk").mkdir(parents=True)
         (self.install / "rundesk").write_text("# 0.1.0\n")
 
     def tearDown(self):
@@ -539,7 +539,7 @@ class RecoveryTests(unittest.TestCase):
         self._work = tempfile.TemporaryDirectory()
         self.root = Path(self._work.name)
         self.install = self.root / "install"
-        (self.install / "src" / "rundesk_cli").mkdir(parents=True)
+        (self.install / "src" / "rundesk").mkdir(parents=True)
         (self.install / "rundesk").write_text("# 0.1.0\n")
 
     def tearDown(self):
@@ -609,7 +609,7 @@ class RecoveryTests(unittest.TestCase):
             updater.os.rename = real
 
         self.assertTrue(package.is_dir(), "a failed swap left the install without its package")
-        self.assertTrue((package / "rundesk_cli").is_dir(),
+        self.assertTrue((package / "rundesk").is_dir(),
                         "a failed swap put back something other than what was there")
 
     def test_staging_left_by_an_earlier_crash_is_cleared_rather_than_reused(self):
@@ -673,7 +673,7 @@ class PublishedNameTests(unittest.TestCase):
 
     def test_the_version_this_code_reports_would_be_accepted_by_its_own_tag(self):
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-        from rundesk_cli import __version__
+        from rundesk import __version__
 
         self.assertTrue(
             updater.tag_matches(f"v{__version__}", __version__),

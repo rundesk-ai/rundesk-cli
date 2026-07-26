@@ -26,8 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk_cli import __version__  # noqa: E402
-from rundesk_cli import cli  # noqa: E402
+from rundesk import __version__  # noqa: E402
+from rundesk import cli  # noqa: E402
 
 
 #: How long the command waits on a gateway to appear or to go. Real seconds in the wild,
@@ -72,9 +72,9 @@ def setUpModule():
 def tearDownModule():
     cli._remove_this_install = _REAL_REMOVAL
     cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS = _REAL_PATIENCE
-from rundesk_cli import agent as real_agent  # noqa: E402
-from rundesk_cli import channel  # noqa: E402
-from rundesk_cli import gateway as real_gateway  # noqa: E402
+from rundesk import agent as real_agent  # noqa: E402
+from rundesk import channel  # noqa: E402
+from rundesk import gateway as real_gateway  # noqa: E402
 
 
 def run(argv: list[str], published: str | None = None,
@@ -589,7 +589,7 @@ class FakeGateways:
             raise self.Unreadable(f"{name}.json could not be read as schedules")
 
     def scheduled(self, name, where=None):
-        from rundesk_cli import schedule
+        from rundesk import schedule
         self._still_readable(name)
         return schedule.read(self._written_schedules.get(name, []))
 
@@ -620,7 +620,7 @@ class FakeGateways:
         assert self._written is not None, "this case writes a log line and was given nowhere to put it"
         if self._unloggable is not None:
             return self._unloggable
-        from rundesk_cli import gateway as real
+        from rundesk import gateway as real
         return real.note(name, said, self._written.parent)
 
     def log_sources(self, name, logs=None, source=real_gateway.EVERY_LOG):
@@ -2406,7 +2406,7 @@ class WhichVersionEachGatewayIsActuallyOn(unittest.TestCase):
     def test_status_says_which_version_each_gateway_is_running(self):
         """R-GW-9 — asked of the gateway's own record, because that and this install come
         apart exactly when it matters."""
-        from rundesk_cli import __version__
+        from rundesk import __version__
         it = type("S", (), {"running": True, "version": __version__})()
         self.assertEqual(__version__, cli._version_of(it))
 

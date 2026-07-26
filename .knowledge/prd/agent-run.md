@@ -33,9 +33,9 @@ worth having if what it did can be read back afterwards.
 | ✅ | R-RUN-10 | A run's account outlives the gateway that wrote it | `a runs account outlives the gateway that wrote it`, `where an agent keeps what it did is not where its gateway keeps what it is doing`, `taking an agent away keeps the account of what it did` |
 | ✅ | R-RUN-11 | A conversation continues from the handle its brain last reported | `a conversation continues from the handle its brain last reported`, `a second turn resumes the conversations session`, `asking the same agent again carries the conversation on` |
 | ✅ | R-RUN-12 | A handle is kept for one conversation and one brain together, never for either alone | `a handle is kept for one conversation and one brain together`, `the brain a handle belongs to is the shape of the book`, `changing the brain does not hand over the other ones session`, `two conversations of one brain are carried on separately` |
-| ❌ | R-RUN-13 | A brain's own session files are referenced rather than copied | src/rundesk_cli/session.py:24 — nothing copies one, so nothing proves it is not copied |
+| ❌ | R-RUN-13 | A brain's own session files are referenced rather than copied | src/rundesk/session.py:24 — nothing copies one, so nothing proves it is not copied |
 | ✅ | R-RUN-14 | Losing what a conversation was continuing costs the next turn its context and nothing else | `losing what a conversation was continuing costs the next turn its context`, `a book that cannot be read is not an empty one`, `a turn asked to start fresh carries nothing on`, `asking for a fresh start carries nothing on` |
-| ❌ | R-RUN-15 | No credential a brain was given appears in a run's account | src/rundesk_cli/turn.py:118 — nothing puts one there; no test |
+| ❌ | R-RUN-15 | No credential a brain was given appears in a run's account | src/rundesk/turn.py:118 — nothing puts one there; no test |
 
 ## Open questions
 

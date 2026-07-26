@@ -91,7 +91,7 @@ class RemovingWhatIsRunningTests(Sandbox):
         jobs.mkdir()
         self.install(extra_env={"RUNDESK_JOBS_DIR": str(jobs)})
         sys.path.insert(0, str(REPO / "src"))
-        from rundesk_cli import supervisor
+        from rundesk import supervisor
         supervisor.write("left-running", REPO, self.root / "logs", str(jobs))
         self.assertTrue((jobs / "ai.rundesk.left-running.plist").exists())
 
@@ -111,7 +111,7 @@ class RemovingWhatIsRunningTests(Sandbox):
         have stopped it now gone.
         """
         sys.path.insert(0, str(REPO / "src"))
-        from rundesk_cli import gateway, supervisor
+        from rundesk import gateway, supervisor
         jobs, run = self.root / "jobs", self.root / "run"
         jobs.mkdir()
         run.mkdir()
@@ -223,7 +223,7 @@ class RemovalTests(Sandbox):
         self.install()
         self.uninstall()
         self.assertTrue((REPO / "rundesk").exists(), "uninstalling deleted the checkout it was run from")
-        self.assertTrue((REPO / "src" / "rundesk_cli" / "cli.py").exists())
+        self.assertTrue((REPO / "src" / "rundesk" / "cli.py").exists())
 
     def test_removing_rundesk_leaves_a_command_it_did_not_install(self):
         # Something else on this machine is called rundesk. Removing it would be this
@@ -437,7 +437,7 @@ class EverythingNeededTests(unittest.TestCase):
         import ast, sys, sysconfig
 
         stdlib = Path(sysconfig.get_paths()["stdlib"]).resolve()
-        ours = {p.stem for p in (REPO / "src" / "rundesk_cli").glob("*.py")} | {"rundesk_cli"}
+        ours = {p.stem for p in (REPO / "src" / "rundesk").glob("*.py")} | {"rundesk"}
         declared = self._declared()
         # discord.py installs as `discord`; a package name is not always its module name.
         aliases = {"discord.py": "discord", "discord_py": "discord"}
@@ -810,7 +810,7 @@ class OneInstructionTests(unittest.TestCase):
         # wearing one name — and nothing on disk remembers where a copy came from, so the
         # only thing keeping them together is that both name the same repository.
         sys.path.insert(0, str(REPO / "src"))
-        from rundesk_cli import updater
+        from rundesk import updater
 
         (slug, _asset), = self._published()
         declared = re.search(r'^REPO_SLUG="([^"]+)"', INSTALLER.read_text(), re.M)

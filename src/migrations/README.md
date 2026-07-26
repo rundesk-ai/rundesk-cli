@@ -53,5 +53,5 @@ No table recording what ran, no batches, and no way back. Going backwards is ref
 forwards: data a copy of rundesk does not understand keeps every agent down and says which
 version it found, rather than being read by code that cannot know what it is missing.
 
-The runner is [`../rundesk_cli/migration.py`](../rundesk_cli/migration.py); what it guarantees is
+The runner is [`../rundesk/migration.py`](../rundesk/migration.py); what it guarantees is
 [`lifecycle-migration`](../../.knowledge/prd/lifecycle-migration.md).

@@ -103,9 +103,9 @@ The executable owns nothing. `rundesk` resolves its own location, puts `src/` on
 
 | Layer | Owns | May depend on | Must not |
 |---|---|---|---|
-| `rundesk` | finding itself and handing off | `src/rundesk_cli/cli.py` | hold any logic |
-| `src/rundesk_cli/cli.py` | the command surface and dispatch | the modules below | do the work of a command inline |
-| `src/rundesk_cli/*.py` | one concern each, importable and testable alone | the standard library | know how it was invoked |
+| `rundesk` | finding itself and handing off | `src/rundesk/cli.py` | hold any logic |
+| `src/rundesk/cli.py` | the command surface and dispatch | the modules below | do the work of a command inline |
+| `src/rundesk/*.py` | one concern each, importable and testable alone | the standard library | know how it was invoked |
 | `install.sh` | putting the command on a PATH, and taking it off | nothing in `src/` | contain product behavior |
 
 ## Best practices — do / don't
@@ -190,7 +190,11 @@ A list written twice is a list that disagrees with itself.
 ```
 rundesk                     the executable the installer symlinks onto PATH
 CLI.md                      every operation and argument — generated from the parser, never edited
-src/rundesk_cli/            one concern per module; cli.py is the surface
+src/rundesk/                one concern per module; cli.py is the surface — the core
+src/providers/              the brains that ship, one program each; run, never imported
+src/channels/               the surfaces that ship, one program each; run, never imported
+src/migrations/             one step forward each, named for the version it brings data up to
+src/templates/              what a new agent's home is copied from
 tests/                      unittest, run directly, offline
 install.sh                  install, and --uninstall [--purge]
 requirements.txt            what is needed beyond the standard library, pinned

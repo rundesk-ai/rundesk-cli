@@ -1186,9 +1186,9 @@ it, the mechanical form of the one migration below, and the traps already paid f
 
 | already here | what it is |
 |---|---|
-| `src/rundesk_cli/store.py` | Everything an agent keeps, and the only way in. One database per agent, reading and writing told apart at the connection, no statement or connection outside the seam. 60 offline cases. |
-| `src/rundesk_cli/migration.py` | The runner: steps found not listed, ordered by number, each one transaction including its own version stamp. 25 offline cases. |
-| `src/rundesk_cli/migrations/001.py` | **The schema, and the only description of it there is.** |
+| `src/rundesk/store.py` | Everything an agent keeps, and the only way in. One database per agent, reading and writing told apart at the connection, no statement or connection outside the seam. 60 offline cases. |
+| `src/rundesk/migration.py` | The runner: steps found not listed, ordered by number, each one transaction including its own version stamp. 25 offline cases. |
+| `src/rundesk/migrations/001.py` | **The schema, and the only description of it there is.** |
 | [`agent-store`](.knowledge/prd/agent-store.md) · [`lifecycle-migration`](.knowledge/prd/lifecycle-migration.md) | What both guarantee — ratified, with glyphs set by what passes. |
 
 Four things about it that decide how this phase is written:

@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk_cli import agent, provider, session, transcript, turn  # noqa: E402
+from rundesk import agent, provider, session, transcript, turn  # noqa: E402
 
 PY = sys.executable
 
@@ -565,7 +565,7 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
     """`rundesk ask` — the whole slice, from a typed command to an account on disk."""
 
     def ask(self, *argv):
-        from rundesk_cli import cli
+        from rundesk import cli
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = cli.main(list(argv))

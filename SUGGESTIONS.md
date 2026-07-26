@@ -81,8 +81,8 @@ owned process, task, pipe, file handle, queue and buffer:
   records or allow a failed delivery task to disable all later delivery.
 
 Relevant implementation: `Program`, `Held` and `end_all()` in
-`src/rundesk_cli/process.py`, and program ownership in
-`src/rundesk_cli/gateway.py`.
+`src/rundesk/process.py`, and program ownership in
+`src/rundesk/gateway.py`.
 
 ### Crash recovery and idempotency
 
@@ -92,9 +92,9 @@ record or report a recovered state that was not proven. Finding 1 is the existin
 regression reference for keeping recovery evidence when descendants may still live.
 
 Relevant implementation: runtime and interruption records in
-`src/rundesk_cli/gateway.py`, schedule outcomes in
-`src/rundesk_cli/schedule.py`, and restart commands in
-`src/rundesk_cli/cli.py`.
+`src/rundesk/gateway.py`, schedule outcomes in
+`src/rundesk/schedule.py`, and restart commands in
+`src/rundesk/cli.py`.
 
 ### Concurrency, locks and atomic decisions
 
@@ -104,9 +104,9 @@ to protect, not only the initial check. Confirm that each durable fact has one w
 at a time and that an older completion cannot overwrite newer state.
 
 Relevant implementation: gateway and schedule locks in
-`src/rundesk_cli/gateway.py`, schedule mutation and outcome writes in
-`src/rundesk_cli/schedule.py`, and active-work checks in
-`src/rundesk_cli/updater.py`.
+`src/rundesk/gateway.py`, schedule mutation and outcome writes in
+`src/rundesk/schedule.py`, and active-work checks in
+`src/rundesk/updater.py`.
 
 ### Provider protocol boundary
 
@@ -117,8 +117,8 @@ events; channel adapters should present them. Recommend a new boundary only when
 current code would otherwise force those semantics into the runtime.
 
 Relevant implementation: structured input and output in
-`src/rundesk_cli/process.py` and orchestration in
-`src/rundesk_cli/gateway.py`.
+`src/rundesk/process.py` and orchestration in
+`src/rundesk/gateway.py`.
 
 ### Scheduling correctness
 
@@ -128,8 +128,8 @@ non-overlap, restart recovery and outcome ordering. Due-time calculation should
 remain pure; the gateway should own the work it starts; durable outcomes should
 never move backward.
 
-Relevant implementation: `src/rundesk_cli/schedule.py`, scheduled work in
-`src/rundesk_cli/gateway.py`, and `tests/test_schedule.py`.
+Relevant implementation: `src/rundesk/schedule.py`, scheduled work in
+`src/rundesk/gateway.py`, and `tests/test_schedule.py`.
 
 ### Install, update and removal safety
 
@@ -139,8 +139,8 @@ Extend the review to updates racing active work, partial replacement, rollback,
 multiple installed gateways and whether every destructive step preserves enough
 state for a safe retry.
 
-Relevant implementation: `src/rundesk_cli/updater.py`,
-`src/rundesk_cli/supervisor.py`, `src/rundesk_cli/cli.py` and `install.sh`.
+Relevant implementation: `src/rundesk/updater.py`,
+`src/rundesk/supervisor.py`, `src/rundesk/cli.py` and `install.sh`.
 
 ### Measured performance
 
@@ -149,8 +149,8 @@ and shutdown time under realistic long-running workloads. Recommend optimization
 only for a reproduced bottleneck, and prefer removing work or bounding it over
 introducing caching or concurrency.
 
-Relevant implementation: `src/rundesk_cli/process.py`,
-`src/rundesk_cli/gateway.py` and log rotation behavior.
+Relevant implementation: `src/rundesk/process.py`,
+`src/rundesk/gateway.py` and log rotation behavior.
 
 ### Failure-injection coverage
 
@@ -170,10 +170,10 @@ file permissions, untrusted provider output, secrets in logs and the future
 authorization boundary for Discord replies and approvals. A channel user must never
 gain broader process or filesystem authority merely by supplying message content.
 
-Relevant implementation: process creation in `src/rundesk_cli/process.py`, launchd
-job creation in `src/rundesk_cli/supervisor.py`, state and logs in
-`src/rundesk_cli/gateway.py`, and archive handling in
-`src/rundesk_cli/updater.py`.
+Relevant implementation: process creation in `src/rundesk/process.py`, launchd
+job creation in `src/rundesk/supervisor.py`, state and logs in
+`src/rundesk/gateway.py`, and archive handling in
+`src/rundesk/updater.py`.
 
 ## High impact
 
@@ -211,8 +211,8 @@ Regression criteria:
 - An unsupervised running gateway is reported as unsupervised with a non-zero exit.
 - An unanswered supervisor query cannot be reported as success.
 
-Relevant implementation: `loaded()` in `src/rundesk_cli/supervisor.py`;
-`cmd_start()` in `src/rundesk_cli/cli.py`.
+Relevant implementation: `loaded()` in `src/rundesk/supervisor.py`;
+`cmd_start()` in `src/rundesk/cli.py`.
 
 # Round two — 2026-07-25
 
@@ -269,10 +269,10 @@ Regression criteria, if the owner takes it:
 - A held gateway lock with unreadable state is never reported as plain `RUNNING` or `idle`;
   status names the unreadable state, points to its log and exits non-zero.
 
-Relevant implementation: `_held()` and `standing()` in `src/rundesk_cli/gateway.py`;
-`cmd_status()` in `src/rundesk_cli/cli.py`.
+Relevant implementation: `_held()` and `standing()` in `src/rundesk/gateway.py`;
+`cmd_status()` in `src/rundesk/cli.py`.
 
-# src/rundesk_cli/gateway.py:593-617
+# src/rundesk/gateway.py:593-617
     try:
         handle = os.open(path, os.O_RDWR)
     except OSError:
@@ -353,7 +353,7 @@ Regression criteria:
   non-zero.
 
 Relevant implementation: `_held()`, `standing()` and `_sweep_strays()` in
-`src/rundesk_cli/gateway.py`.
+`src/rundesk/gateway.py`.
 
 ### 9. Refuse work whose ownership cannot be established at the moment it starts
 
@@ -389,7 +389,7 @@ Regression criteria:
 - Work left by a gateway is still swept after a beat the machine did not answer.
 
 Relevant implementation: `Gateway.start()` and `started_at()` in
-`src/rundesk_cli/gateway.py`.
+`src/rundesk/gateway.py`.
 
 ## High impact
 
@@ -476,7 +476,7 @@ Regression criteria:
   asserted as wall-clock from `SIGTERM` to exit.
 
 Relevant implementation: `Gateway._go()` and `Gateway.serve()` in
-`src/rundesk_cli/gateway.py`; `describe()` in `src/rundesk_cli/supervisor.py`.
+`src/rundesk/gateway.py`; `describe()` in `src/rundesk/supervisor.py`.
 
 ### 13. Do not have the machine undo a stop the owner asked for
 
@@ -521,8 +521,8 @@ Regression criteria:
   logs and schedules.
 
 Relevant implementation: `Gateway.serve()` and `Gateway._go()` in
-`src/rundesk_cli/gateway.py`; `describe()` in `src/rundesk_cli/supervisor.py`;
-`_stand_down()` in `src/rundesk_cli/cli.py`.
+`src/rundesk/gateway.py`; `describe()` in `src/rundesk/supervisor.py`;
+`_stand_down()` in `src/rundesk/cli.py`.
 
 ### 14. Take the update lock before stopping anything
 
@@ -543,7 +543,7 @@ order=['busy-check', 'STOPPED the gateways', "STARTED them again: ['gateway']"]
 
 The losing update stopped the gateways, discovered it had lost, and started them again —
 at the moment the winner is inside `_copy_over()` replacing `rundesk` and
-`src/rundesk_cli` as separate renames. A gateway brought up in that window can import a
+`src/rundesk` as separate renames. A gateway brought up in that window can import a
 mixed tree, and `fitness()` can be asked about a `.venv` mid-rebuild.
 
 **Second face — a partial pause is never resumed.** `_stand_all_down()` stops gateways
@@ -574,7 +574,7 @@ Regression criteria:
   and proves the first is observed up again or is reported as failed to return.
 
 Relevant implementation: `run()`, `_only_one()` and `download_and_apply()` in
-`src/rundesk_cli/updater.py`.
+`src/rundesk/updater.py`.
 
 ### 15. Account for a gateway that has no launchd job before deleting anything
 
@@ -614,8 +614,8 @@ Regression criteria:
 - The test that proves it does **not** write a plist first — the existing one
   (`tests/test_install.py:89`) does, which is why this case was never exercised.
 
-Relevant implementation: `take_all_back()` in `src/rundesk_cli/supervisor.py`;
-`stop_gateways()` in `install.sh`; `every()` in `src/rundesk_cli/gateway.py`.
+Relevant implementation: `take_all_back()` in `src/rundesk/supervisor.py`;
+`stop_gateways()` in `install.sh`; `every()` in `src/rundesk/gateway.py`.
 
 ## Medium impact
 
@@ -663,7 +663,7 @@ Regression criteria:
 - No schedules command overwrites a file whose contents are not a schedule list (R-SCH-17).
 
 Relevant implementation: `checked()`, `ran_path()`, `seen_path()`,
-`interrupted_path()` and `schedules_path()` in `src/rundesk_cli/gateway.py`.
+`interrupted_path()` and `schedules_path()` in `src/rundesk/gateway.py`.
 
 ### 21. Give updates a durable maintenance barrier rather than a repeated check
 
@@ -680,8 +680,8 @@ The smallest honest fix is a maintenance flag the gateway consults in `_fire()` 
 refuses new work durably instead of racing.
 
 Relevant implementation: `_in_flight()` and `_stand_all_down()` in
-`src/rundesk_cli/cli.py`; `Gateway._fire()` and `Gateway.start()` in
-`src/rundesk_cli/gateway.py`.
+`src/rundesk/cli.py`; `Gateway._fire()` and `Gateway.start()` in
+`src/rundesk/gateway.py`.
 
 ### 22. Tell a program the gateway starts where rundesk's state lives
 
@@ -696,7 +696,7 @@ program that is itself `rundesk`.
 Regression criteria: a program the gateway starts reads the same places the gateway
 does.
 
-Relevant implementation: `environment()` in `src/rundesk_cli/process.py`.
+Relevant implementation: `environment()` in `src/rundesk/process.py`.
 
 # Round three — 2026-07-25
 
@@ -764,7 +764,7 @@ Regression criteria:
   the child and everything it started are gone.
 
 Relevant implementation: `Gateway.start()`, `Gateway._record()` and `Gateway._say()`
-in `src/rundesk_cli/gateway.py`; `_in_flight()` in `src/rundesk_cli/cli.py`.
+in `src/rundesk/gateway.py`; `_in_flight()` in `src/rundesk/cli.py`.
 
 ## High impact
 
@@ -802,7 +802,7 @@ Regression criteria:
 - Shutdown requested during claim still starts nothing.
 
 Relevant implementation: `Gateway.serve()`, `Gateway._tick()` and
-`Gateway._over_and_over()` in `src/rundesk_cli/gateway.py`.
+`Gateway._over_and_over()` in `src/rundesk/gateway.py`.
 
 ## Medium impact
 
@@ -842,8 +842,8 @@ Regression criteria:
   day/weekday fixture.
 
 Relevant implementation: `Schedule.next_after()`, `_matches()` and `_skip()` in
-`src/rundesk_cli/schedule.py`; schedule listing and missed-run reporting in
-`src/rundesk_cli/gateway.py` and `src/rundesk_cli/cli.py`.
+`src/rundesk/schedule.py`; schedule listing and missed-run reporting in
+`src/rundesk/gateway.py` and `src/rundesk/cli.py`.
 
 # Round four — 2026-07-25
 
@@ -901,9 +901,9 @@ Regression criteria:
 - The CLI prints the exact resolved install, run, schedule, log and launchd job paths for
   both default and overridden locations.
 
-Relevant implementation: `describe()` in `src/rundesk_cli/supervisor.py`; `home()`,
-`logs_home()` and `schedules_home()` in `src/rundesk_cli/gateway.py`; `cmd_agents()`,
-`_named()` and `_in_flight()` in `src/rundesk_cli/cli.py`.
+Relevant implementation: `describe()` in `src/rundesk/supervisor.py`; `home()`,
+`logs_home()` and `schedules_home()` in `src/rundesk/gateway.py`; `cmd_agents()`,
+`_named()` and `_in_flight()` in `src/rundesk/cli.py`.
 
 ## Medium impact
 
@@ -953,8 +953,8 @@ Regression criteria:
   channel adapter name the same run the same way.
 
 Relevant implementation: `Gateway.start()`, `_record()`, `_remember()` and
-`_note_interrupted()` in `src/rundesk_cli/gateway.py`; `RETAINED_LINES` and the module
-docstring in `src/rundesk_cli/process.py`.
+`_note_interrupted()` in `src/rundesk/gateway.py`; `RETAINED_LINES` and the module
+docstring in `src/rundesk/process.py`.
 
 # Round five — 2026-07-25
 
@@ -1005,8 +1005,8 @@ Regression criteria:
   increase the gateway's retained-output budget.
 
 Relevant implementation: `Gateway.running`, `Gateway.start()`, `Gateway._fire()` and
-`Gateway._run_scheduled()` in `src/rundesk_cli/gateway.py`; per-program receiver bounds
-in `src/rundesk_cli/process.py`.
+`Gateway._run_scheduled()` in `src/rundesk/gateway.py`; per-program receiver bounds
+in `src/rundesk/process.py`.
 
 # Round six — 2026-07-25
 
@@ -1020,7 +1020,7 @@ above; findings 32–35 are only the distinct consumer command-surface gaps.
 **Status:** Open
 
 1. **Command and location:** `rundesk stop`, `rundesk restart`;
-   `src/rundesk_cli/cli.py:101-105`, `:343-351`.
+   `src/rundesk/cli.py:101-105`, `:343-351`.
 2. **Current behaviour:** Both accept an optional singular `name`, but omission silently
    expands to every gateway found in runtime records or launchd jobs.
 3. **Why it blocks:** `rundesk restart` reads like the default gateway, not every gateway.
@@ -1035,7 +1035,7 @@ above; findings 32–35 are only the distinct consumer command-surface gaps.
 
 **Status:** Open — read with finding 15 for the ownership rule.
 
-1. **Command and location:** `rundesk uninstall`; `src/rundesk_cli/cli.py:89`,
+1. **Command and location:** `rundesk uninstall`; `src/rundesk/cli.py:89`,
    `:230-242`.
 2. **Current output:** It exits 0 after printing `uninstall: USE THE INSTALLER` and a
    checkout path or remote `curl | bash` instruction. It removes nothing.
@@ -1053,8 +1053,8 @@ above; findings 32–35 are only the distinct consumer command-surface gaps.
 **Status:** Open — what a gateway itself writes is now bounded and readable (R-GW-35, R-GW-36); this is the control log for what the *command* did, which still has none.
 
 1. **Command and location:** `start`, `stop`, `restart`, `update`;
-   `src/rundesk_cli/cli.py:275-321`, `:375-469`;
-   `src/rundesk_cli/updater.py:154-184`, `:211-262`.
+   `src/rundesk/cli.py:275-321`, `:375-469`;
+   `src/rundesk/updater.py:154-184`, `:211-262`.
 2. **Current behaviour:** Launchd refusals, failed restarts and update outcomes are
    terminal-only. Rundesk has per-gateway program logs, but no durable log for control
    actions; some launchd failures can contain an empty explanation.
@@ -1073,8 +1073,8 @@ above; findings 32–35 are only the distinct consumer command-surface gaps.
 **Status:** Open — read with findings 28 and 29 for inventory and run IDs.
 
 1. **Command and location:** `status`, `schedules`, and the missing work controls;
-   `src/rundesk_cli/cli.py:472-507`, `:610-635`;
-   `src/rundesk_cli/gateway.py:678-709`, `:880-910`.
+   `src/rundesk/cli.py:472-507`, `:610-635`;
+   `src/rundesk/gateway.py:678-709`, `:880-910`.
 2. **Current behaviour:** Schedule listing omits the stored `run` command. Status reduces
    live work to names, with no per-run details or control. There is no Rundesk command to
    inspect one run or stop one work item without stopping its gateway.

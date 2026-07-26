@@ -29,7 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk_cli import gateway, process, schedule  # noqa: E402
+from rundesk import gateway, process, schedule  # noqa: E402
 
 PY = sys.executable
 
@@ -1113,7 +1113,7 @@ class WorkThatStartsItself(WithARunDirectory):
 
     def setUp(self):
         super().setUp()
-        from rundesk_cli import schedule
+        from rundesk import schedule
         self.schedule = schedule
         self.told = self.scratch() / "it-ran"
 
@@ -1347,7 +1347,7 @@ class WhatCarriesAcrossARestart(WithARunDirectory):
 
     def setUp(self):
         super().setUp()
-        from rundesk_cli import schedule
+        from rundesk import schedule
         self.schedule = schedule
         self.told = self.scratch() / "it-ran"
 
@@ -1527,7 +1527,7 @@ class AsARealProcess(unittest.TestCase):
                 "-c",
                 "import sys, asyncio, pathlib\n"
                 f"sys.path.insert(0, {str(ROOT / 'src')!r})\n"
-                "from rundesk_cli import gateway\n"
+                "from rundesk import gateway\n"
                 f"gw = gateway.Gateway({name!r}, where=pathlib.Path({str(self.where)!r}), "
                 f"root=pathlib.Path({str(self.root)!r}))\n"
                 + (held if holding else "raise SystemExit(asyncio.run(gw.serve()))\n"),
@@ -1562,7 +1562,7 @@ class AsARealProcess(unittest.TestCase):
                 "-c",
                 "import sys, asyncio\n"
                 f"sys.path.insert(0, {str(ROOT / 'src')!r})\n"
-                "from rundesk_cli import gateway\n"
+                "from rundesk import gateway\n"
                 "import pathlib\n"
                 f"gw = gateway.Gateway('real', where=pathlib.Path({str(self.where)!r}), "
                 f"root=pathlib.Path({str(self.root)!r}))\n"
@@ -1840,7 +1840,7 @@ HOLDS_ITS_NAME = """
 import json, os, subprocess, sys, time
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-from rundesk_cli import gateway
+from rundesk import gateway
 
 where, name, ready, stop = Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]), Path(sys.argv[5])
 mine = gateway.Gateway(name, where=where, logs=Path(sys.argv[6]), schedules=Path(sys.argv[7]),
@@ -2177,7 +2177,7 @@ NOTES_INTERRUPTIONS = """
 import sys, time
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-from rundesk_cli import gateway
+from rundesk import gateway
 
 schedules, mine, how_many, start = Path(sys.argv[2]), sys.argv[3], int(sys.argv[4]), Path(sys.argv[5])
 while not start.exists():          # all of them held here, then let go together
@@ -2397,7 +2397,7 @@ class WhatCannotBeReadIsNotEmpty(WithARunDirectory):
 
     async def test_no_schedule_runs_while_the_file_cannot_be_read(self):
         """R-SCH-17 — and it is said once, not on every tick for as long as it is broken."""
-        from rundesk_cli import schedule as schedules_module
+        from rundesk import schedule as schedules_module
         self.garbled_for("gateway")
         gw = self.made()
         gw.claim()

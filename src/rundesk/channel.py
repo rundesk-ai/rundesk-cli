@@ -33,7 +33,7 @@ import os
 import re
 from pathlib import Path
 
-from rundesk_cli import gateway, process, provider
+from rundesk import gateway, process, provider
 
 #: Where the adapters that ship with rundesk stand. Read by looking rather than listed, so
 #: one added later is reachable the day it lands and no second copy of the list can come to

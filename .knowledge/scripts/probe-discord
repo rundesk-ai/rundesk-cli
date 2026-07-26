@@ -72,8 +72,8 @@ WALKED = [
 def channels() -> dict:
     """Every channel every agent on this machine is reachable on."""
     sys.path.insert(0, str(ROOT / "src"))
-    from rundesk_cli import agent as agents           # noqa: PLC0415 — a probe, not a module
-    from rundesk_cli import channel                   # noqa: PLC0415
+    from rundesk import agent as agents           # noqa: PLC0415 — a probe, not a module
+    from rundesk import channel                   # noqa: PLC0415
 
     found = {}
     for name in agents.known():

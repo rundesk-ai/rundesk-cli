@@ -25,13 +25,13 @@ account: how much of a plan is left is that provider's question, not this one's.
 | ✅ | R-USE-2 | Tokens are recorded as the provider reported them, and not adjusted | `tokens are recorded as the brain reported them` |
 | ✅ | R-USE-3 | A provider reporting a conversation's running total has only that turn's share recorded | `a brain reporting a running total reports only this turns share`, `what a brain remembers between turns survives the process` |
 | ✅ | R-USE-4 | Tokens written into a provider's cache are recorded apart from tokens read from it | `tokens written into a cache are recorded apart from ones read from it` |
-| ❌ | R-USE-5 | A cost in money says whether it was measured, worked out from prices, or unknown | src/rundesk_cli/turn.py:236 — nothing works a cost out from prices, so nothing says which it is |
+| ❌ | R-USE-5 | A cost in money says whether it was measured, worked out from prices, or unknown | src/rundesk/turn.py:236 — nothing works a cost out from prices, so nothing says which it is |
 | ✅ | R-USE-6 | A cost that could not be established is never recorded as nothing | `a run whose usage never arrived says so`, `a turn whose cost was never reported says that rather than nothing` |
 | ✅ | R-USE-7 | A run whose usage never arrived says so rather than reporting a cost of nothing | `a run whose usage never arrived says so`, `a turn whose cost was never reported says that rather than nothing` |
-| ❌ | R-USE-8 | What anything added to a turn cost is charged to that turn | src/rundesk_cli/turn.py:118 — what is added to a turn is in the prompt the brain counts; no test tells its share apart |
+| ❌ | R-USE-8 | What anything added to a turn cost is charged to that turn | src/rundesk/turn.py:118 — what is added to a turn is in the prompt the brain counts; no test tells its share apart |
 | ✅ | R-USE-9 | What an agent has cost outlives the gateway that recorded it | `what an agent has cost outlives the gateway that recorded it` |
 | ✅ | R-USE-10 | What an agent has cost is read without a provider being started | `what an agent has cost is read without a brain being started` |
-| ❌ | R-USE-11 | Nothing about a provider's plan or remaining allowance is claimed | src/rundesk_cli/turn.py:236 — nothing asks a brain about a plan, so nothing proves it is not asked |
+| ❌ | R-USE-11 | Nothing about a provider's plan or remaining allowance is claimed | src/rundesk/turn.py:236 — nothing asks a brain about a plan, so nothing proves it is not asked |
 
 ## Open questions
 

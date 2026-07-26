@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk_cli import process  # noqa: E402
+from rundesk import process  # noqa: E402
 
 PY = sys.executable
 

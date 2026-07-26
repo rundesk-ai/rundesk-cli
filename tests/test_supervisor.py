@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk_cli import supervisor  # noqa: E402
+from rundesk import supervisor  # noqa: E402
 
 
 class Machine:
@@ -236,7 +236,7 @@ class ANameIsNotAPath(WithAJobDirectory):
     def test_no_job_is_written_for_a_name_that_would_escape(self):
         """R-GW-20 — a job is a login-persistence mechanism the machine keeps running,
         so a name that reaches outside where jobs belong plants one wherever it likes."""
-        from rundesk_cli import gateway as gw
+        from rundesk import gateway as gw
         bad = "../../../../../../tmp/rundesk-escaped"
         for builds in (supervisor.label, supervisor.job_path):
             with self.assertRaises(gw.NotAName, msg=f"{builds.__name__} accepted it"):
@@ -404,8 +404,8 @@ class TheJobCarriesWhereThingsAre(WithAJobDirectory):
         somewhere else, which no test naming the variables by hand would ever notice."""
         import inspect
         import re as regex
-        from rundesk_cli import agent as agents
-        from rundesk_cli import gateway as real
+        from rundesk import agent as agents
+        from rundesk import gateway as real
 
         # Read off what a supervised gateway actually asks the environment for, rather
         # than a list kept by hand here — a hand-kept list has the same gap as the one in

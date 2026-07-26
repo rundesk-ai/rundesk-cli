@@ -30,7 +30,7 @@ import json
 import os
 from pathlib import Path
 
-from rundesk_cli import process
+from rundesk import process
 
 #: Where the adapters that ship with rundesk stand. Read by looking rather than listed,
 #: so one added later is reachable the day it lands and no second copy of the list can

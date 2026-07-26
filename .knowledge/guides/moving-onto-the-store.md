@@ -1,7 +1,7 @@
 # Moving onto the store — what Phase 5 does, and in what order
 
-Phase 4 built [`store.py`](../../src/rundesk_cli/store.py) and
-[`migration.py`](../../src/rundesk_cli/migration.py) and pointed nothing at them. This is the
+Phase 4 built [`store.py`](../../src/rundesk/store.py) and
+[`migration.py`](../../src/rundesk/migration.py) and pointed nothing at them. This is the
 page that says how to point everything at them without improvising.
 
 **If the design turns out to be wrong, the drafts move first.** The whole point of the phase
