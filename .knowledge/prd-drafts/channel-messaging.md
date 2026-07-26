@@ -36,10 +36,10 @@ it has not — what never differs is that the work runs and is answered.
 | ❌ | R-CH-14 | A conversation's session is found again after the gateway holding it restarted | — |
 | ❌ | R-CH-15 | Work a channel dispatched is findable afterwards by the run it became | — |
 | ❌ | R-CH-16 | A person can restart the agent answering them, from the channel they are on | — |
+| ❌ | R-CH-17 | What a person attached reaches the agent as a file already on this machine | — |
 
 ## Open questions
 
-- What a channel does with an attachment, which no provider consumes yet.
 - Whether a channel may carry a clarifying question before any provider work that raises one exists.
 - Whether showing work as it happens is the same decision on every surface, or each one's to make.
 - Where a channel's token is kept once it has been read, given it may never arrive as an argument.

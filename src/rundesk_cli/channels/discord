@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import io
 import json
 import os
 import signal
@@ -87,6 +88,17 @@ THREAD_CHARS = 80
 #: before insisting, so anything slower than this is a message nobody receives — and
 #: holding the shutdown open for it would only turn a clean stop into a kill.
 GOODBYE_SECONDS = 3.0
+
+#: How many attachments to carry in from one message, and how big one may be. A chat
+#: platform accepts far more than a turn can use, and an agent's own directory is not
+#: somewhere anybody who can message it gets to fill.
+ATTACHED_MOST = 10
+ATTACHED_BYTES = 32 * 1024 * 1024
+
+#: How many messages an answer may be split across before it is sent as a file instead.
+#: Past this it is a document rather than a message, and a dozen numbered fragments is
+#: not a thing anybody reads.
+ATTACH_AFTER = 3
 
 #: How many recent messages to keep hold of, so a mark can be put on one without asking
 #: Discord for it again. Bounded because this process runs for weeks.
@@ -159,6 +171,16 @@ def token_for(chose) -> str:
         return beside.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
+
+
+def _plain_name(name: str) -> str:
+    """A filename that can only ever be a filename.
+
+    What somebody attached is their text, and a name is the one place a path could be
+    smuggled in — so it is rebuilt from what is left rather than trusted after a check.
+    """
+    kept = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in name).strip(".-")
+    return kept[-120:] or "attachment"
 
 
 def clip(text: str, limit: int) -> str:
@@ -344,7 +366,8 @@ class Agent(discord.Client):
         if not within(direct, belongs_to, self.chose.channel, self.chose.dm):
             return
         text = _without_mentions(message.content)
-        if not text:
+        brought = await self._fetch(message)
+        if not text and not brought:
             return
         conversation = message.channel.id
         if where == "open-thread":
@@ -359,7 +382,40 @@ class Agent(discord.Client):
         while len(self.seen) > SEEN_KEPT:
             self.seen.pop(next(iter(self.seen)))
         say(type="arrived", conversation=str(conversation), user=str(message.author.id),
-            text=text, ref=str(message.id), direct=direct)
+            text=text, ref=str(message.id), direct=direct, attachments=brought)
+
+    async def _fetch(self, message: discord.Message) -> list:
+        """Put whatever somebody attached where the agent can read it (R-CH-17).
+
+        Onto this machine rather than passed on as a link: the brain that will read it
+        runs here, holds no credential for this platform, and handing it a URL would be
+        handing it an instruction to go and fetch something on a stranger's say-so.
+
+        Bounded on both count and size. A chat platform will accept far more than a turn
+        can use, and an agent's own directory is not somewhere anybody who can send it a
+        message gets to fill.
+        """
+        if not message.attachments:
+            return []
+        where = Path(os.environ.get("RUNDESK_CHANNEL_HOME") or ".") / "attachments" \
+            / str(message.id)
+        brought = []
+        for one in message.attachments[:ATTACHED_MOST]:
+            if one.size and one.size > ATTACHED_BYTES:
+                note(f"{one.filename} is too big to bring in ({one.size} bytes)")
+                continue
+            try:
+                where.mkdir(parents=True, exist_ok=True)
+                # Named by us from its own name, never by the name it arrived under: a
+                # filename is somebody else's text, and a path is a thing it must not be
+                # able to become.
+                at = where / _plain_name(one.filename)
+                await one.save(at)
+                brought.append({"name": one.filename, "at": str(at)})
+                note(f"brought in {one.filename} -> {at}")
+            except Exception as why:  # noqa: BLE001 — a platform boundary
+                note(f"could not bring in {one.filename}: {why}")
+        return brought
 
     async def _open(self, message: discord.Message, text: str):
         """A thread for this turn, or None if the platform would not give us one.
@@ -474,13 +530,22 @@ class Agent(discord.Client):
         whole = str(it.get("text") or "")
         if held.cost:
             whole = f"{held.cost}\n{whole}"
+        files = [one["at"] for one in (it.get("attachments") or [])
+                 if isinstance(one, dict) and isinstance(one.get("at"), str)]
+        # Past a certain length an answer is a document rather than a message, and a
+        # dozen numbered fragments is not something anybody reads (R-DIS-13).
+        if len(whole) > LIMIT * ATTACH_AFTER:
+            await self._post(it, f"{held.cost}\n-# the answer is long, so it is attached"
+                             .strip(), anchor=held.anchor, files=files, text_as=whole)
+            return
         rest, anchor = whole, held.anchor
         while rest:
             piece, rest = split_at(rest, LIMIT)
-            await self._post(it, piece, anchor=anchor)
+            await self._post(it, piece, anchor=anchor,
+                             files=files if not rest else [])
             anchor = None
 
-    async def _post(self, it: dict, content: str, anchor=None) -> None:
+    async def _post(self, it: dict, content: str, anchor=None, files=(), text_as=None) -> None:
         """One message, and never at the turn's expense: a delivery that fails is written
         to our own stderr and the turn goes on (R-CH-12)."""
         channel = self.get_channel(int(it["conversation"]))
@@ -490,11 +555,21 @@ class Agent(discord.Client):
         if channel is None:
             note(f"nowhere to write in {it.get('conversation')}")
             return
+        sending = []
+        for at in files:
+            try:
+                sending.append(discord.File(at))
+            except OSError as why:
+                note(f"could not attach {at}: {why}")
+        if text_as is not None:
+            sending.append(discord.File(io.BytesIO(text_as.encode("utf-8")),
+                                        filename="answer.md"))
         try:
             await channel.send(
                 content,
                 reference=anchor if anchor is not None else None,
                 mention_author=False,
+                files=sending or None,
             )
         except Exception as why:  # noqa: BLE001 — a platform boundary
             note(f"could not write: {why}")

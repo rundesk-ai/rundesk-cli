@@ -136,6 +136,9 @@ class Answering:
             # doing it (R-CH-4).
             self._note(f"channel '{self.channel}': a message from someone not allowed was not dispatched")
             return
+        brought = it.get(channel.ATTACHED) or []
+        if brought:
+            self._note(f"channel '{self.channel}': {len(brought)} attached, named to the agent")
         held = self.exchanges.get(it["conversation"])
         if held is None:
             self._make_room()
@@ -145,7 +148,8 @@ class Answering:
             return
         held.ref = it.get("ref")
         held.stopped = False
-        held.task = asyncio.ensure_future(self._one(held, it["text"], it["user"]))
+        held.task = asyncio.ensure_future(
+            self._one(held, _asked(it), it["user"]))
 
     def _make_room(self) -> None:
         """Drop the oldest conversations that have nothing running in them.
@@ -170,14 +174,14 @@ class Answering:
         them again is a turn that never ends — so they wait and become the next turn.
         """
         if held.can.get("steer") and held.saying is not None:
-            held.saying.put_nowait(it["text"])
+            held.saying.put_nowait(_asked(it))
             return
         # Whether the brain can be steered is not known until the turn is admitted, and a
         # burst arrives faster than that. So it waits here and is drained into the running
         # turn the moment the answer comes back — otherwise the first message of every
         # burst is steered and the rest become turns of their own, which is the same
         # conversation answered twice over.
-        held.waiting.append((it["text"], it["user"], it.get("ref")))
+        held.waiting.append((_asked(it), it["user"], it.get("ref")))
         if len(held.waiting) > WAITING:
             # Bounded, and said. One person typing faster than an agent can answer must
             # not be able to hand themselves the whole gateway.
@@ -448,6 +452,22 @@ async def _saying(queue: asyncio.Queue):
         if word is None:
             return
         yield word
+
+
+def _asked(it: dict) -> str:
+    """What the person actually asked, including anything they attached (R-CH-17).
+
+    A brain is given a prompt, so what somebody attached reaches it the only way
+    anything reaches it: named in the words of the turn, by a path on this machine that
+    the agent can open. Rundesk does not read the file and does not describe it — what it
+    is is the brain's to find out, with the tools it already has.
+    """
+    said = it.get("text") or ""
+    brought = it.get(channel.ATTACHED) or []
+    if not brought:
+        return said
+    named = "\n".join(f"- {one['name']}: {one['at']}" for one in brought)
+    return (f"{said}\n\nAttached to this message, on this machine:\n{named}").strip()
 
 
 def _why(outcome) -> str:

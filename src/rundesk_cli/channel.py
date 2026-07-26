@@ -56,6 +56,20 @@ NEEDED = {
     "gone": (),
 }
 
+#: What somebody attached to a message, once the adapter has put it somewhere on this
+#: machine (R-CH-17). A path and never a link: the brain that will read it runs here, has
+#: no credential for anybody's platform, and asking it to fetch one would be asking it to
+#: reach the network on a stranger's say-so.
+#:
+#: Kept out of `NEEDED` because a message with nothing attached is the ordinary one.
+ATTACHED = "attachments"
+
+#: How many attachments on one message are carried through, and how much of one. A chat
+#: platform will accept far more than a turn can use, and an agent's workspace is not
+#: somewhere a stranger gets to fill.
+ATTACHED_MOST = 10
+ATTACHED_BYTES = 32 * 1024 * 1024
+
 #: What an adapter is told, and the whole of it. Four of these are the brain's own records
 #: passed through in the words no brain owns; `state` and `answer` are rundesk's.
 #:
@@ -178,10 +192,13 @@ def environment(
         # is, and one that showed the list to anybody would be handing out the list.
         # Told, so it can address them; not trusted, because nothing here reads it back.
         said["RUNDESK_ALLOW"] = ",".join(str(one) for one in allow if one)
-    if settings:
-        # Written out sorted, so the same settings are the same bytes every time. Never
-        # read on the way past: what a platform needs is between it and its adapter.
-        said["RUNDESK_SETTINGS"] = json.dumps(settings, sort_keys=True)
+    # Always set, empty object and all. The guide says all four of these are always
+    # there, and an adapter that believed it and reached for the key rather than asking
+    # politely for it crashed the first time it was held open with nothing configured —
+    # which is exactly the case the guide's own smallest example produces. Sorted, so the
+    # same settings are the same bytes every time; never read on the way past, because
+    # what a platform needs is between it and its adapter.
+    said["RUNDESK_SETTINGS"] = json.dumps(settings or {}, sort_keys=True)
     named = (secret or {}).get("env")
     if named:
         found = (os.environ if environ is None else environ).get(named)
@@ -227,7 +244,33 @@ def understood(said: bytes | str) -> dict | None:
             return None
     if kind == "control" and it["control"] not in CONTROLS:
         return None
+    if kind == "arrived":
+        it[ATTACHED] = attached(it.get(ATTACHED))
     return it
+
+
+def attached(said) -> list:
+    """What arrived with a message, as things that are really on this machine (R-CH-17).
+
+    Anything that is not a readable file here is dropped rather than passed on. An
+    adapter that reports a path it never wrote, or a link it expected somebody else to
+    fetch, would be handing the brain an instruction to go and get something — and the
+    brain runs on this machine with the owner's tools.
+    """
+    if not isinstance(said, list):
+        return []
+    found = []
+    for one in said[:ATTACHED_MOST]:
+        if not isinstance(one, dict):
+            continue
+        at = one.get("at")
+        if not isinstance(at, str) or not at:
+            continue
+        stands = Path(at)
+        if not stands.is_absolute() or not stands.is_file():
+            continue
+        found.append({"name": str(one.get("name") or stands.name), "at": str(stands)})
+    return found
 
 
 def answered(said: object) -> dict:

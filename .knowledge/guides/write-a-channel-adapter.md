@@ -61,10 +61,21 @@ after somebody has asked again is a reply that failed.
 | `RUNDESK_CHANNEL` | this channel's name, the one the owner added it under |
 | `RUNDESK_AGENT` | whose channel it is |
 | `RUNDESK_CHANNEL_HOME` | yours alone, and it lasts: anything you must remember between restarts |
-| `RUNDESK_SETTINGS` | the object your own `--check` returned, handed straight back |
+| `RUNDESK_SETTINGS` | the object your own `--check` returned, handed straight back — `{}` if you returned nothing |
+| `RUNDESK_ALLOW` | who may reach this agent here, comma separated. The first is the owner |
 
-All four are always set. The one variable you named in `secret` is set too, and nothing
-else from the owner's environment reaches you — so name it, or you will not have it.
+All five are always set, and `RUNDESK_SETTINGS` is `{}` rather than absent when you have
+nothing kept. The one variable you named in `secret` is set too, and nothing else from
+the owner's environment reaches you — so name it, or you will not have it.
+
+**`RUNDESK_ALLOW` is for addressing people, never for deciding about them.** Rundesk
+checks who may be answered and you do not (see below); this is here so you can greet the
+owner, or show whose message you are marking. Do not filter on it and do not show it to
+anybody: it is a list of who can reach this agent, which is not a list to hand out.
+
+**The same four are set while you are being checked**, except `RUNDESK_SETTINGS` — you
+have not returned any yet. So `RUNDESK_CHANNEL_HOME` is there and is already made, which
+is what lets a credential in a file be found by the check that has to prove it.
 
 **You report on stdout, one JSON object per line**, flushed as it happens:
 
@@ -110,6 +121,14 @@ calls people. `ref` is what a mark would attach to, if your platform has marks.
 Read a line, show what you can of it, keep reading. Your stdin stays open for the whole
 life of the channel.
 
+**The order is fixed, and the last two are the ones worth knowing.** `taken` arrives
+first, on its own, the moment the message is picked up — it carries the `ref` of the
+message that asked but not yet a `run` or a `can`, because neither exists until a turn
+has been admitted. `running` arrives next and carries both. Then whatever the agent did,
+as it does it. Then the `answer`, **and only then** the `finished`. So by the time you
+are told a turn is finished you already have its answer, and a surface that waits for
+`finished` before posting anything will still post everything.
+
 ## The rules that will bite you
 
 **Rundesk decides what state a turn is in. You decide only how it looks.** There are five,
@@ -119,7 +138,7 @@ and they arrive as `state` records in this order:
 |---|---|
 | `taken` | it has been picked up — the first thing that happens, and the one worth showing fastest |
 | `running` | still going, said again from time to time for anything that lapses |
-| `finished` | it worked, and the answer is on its way |
+| `finished` | it worked, and the answer has already been handed to you |
 | `stopped` | somebody stopped it |
 | `failed` | it did not work, and `why` says what went wrong |
 
@@ -146,9 +165,11 @@ carries `can`, which is what the *brain* behind this agent declared. Offering so
 way to interrupt a turn whose brain said `steer: false` offers something that cannot
 happen. Read it, and offer what is real.
 
-**A control is a gesture at the conversation, not an answer to it.** `stop` ends the turn
-running in that conversation; `forget` throws away where that conversation had got to, so
-the next message starts fresh. Both are yours to offer however your platform offers
+**A control is a gesture, not an answer.** There are three. `stop` ends the turn running
+in that conversation; `forget` throws away where that conversation had got to, so the next
+message starts fresh; and `restart` cycles the whole agent, which is the only one whose
+effect is larger than the conversation it was made in — every conversation's turn ends
+with it, so offer it as something deliberate rather than as something easy to hit. Both are yours to offer however your platform offers
 things — a command, a word, a button. Acknowledge the gesture if your platform makes you,
 but **what a control did comes back as the turn's own outcome**, never as the acknowledgement.
 Answering a `stop` by publishing what the turn had written so far is how a half-finished
@@ -340,11 +361,15 @@ stranger confirms the agent is listening and spends the owner's tokens doing it.
 ## Proving it
 
 The same suite every shipped channel passes is the one yours passes — that is what makes
-"a surface Rundesk has never heard of" a claim rather than a hope. It checks that a whole
-conversation completes, that a surface with no marks and no typing still carries a turn
-from arrival to answer, that an unknown record survives, that a delivery that fails does
-not end the turn it was reporting, that a reconnection finds the conversation it already
-had, and that nobody unauthorized is ever dispatched.
+"a surface Rundesk has never heard of" a claim rather than a hope. It checks what can be checked of *your program*: that it answers `--check` with something
+that can be acted on, that it names a credential rather than handing one over, that what
+it reports is a record this seam understands, and that it is a program at all rather than
+something that has to be imported.
+
+What it does **not** check is the half that is ours — that a delivery which fails does not
+end the turn it was reporting, that a reconnection finds the conversation it already had,
+that nobody unauthorized is dispatched. Those hold whatever adapter is in front of them,
+and they are proved against a fake rather than against you.
 
 Run it against yours:
 
@@ -363,6 +388,6 @@ is the contract, and the code is what has to move.
 
 ---
 *This page is the contract — if your adapter follows it and the suite still fails, this page
-is what moves. [`../prd/channel-adapter.md`](../prd/channel-adapter.md) is the list of
-requirements it is held to, and which test proves each; it describes this page rather than
-the other way round.*
+is what moves. [`../prd-drafts/channel-adapter.md`](../prd-drafts/channel-adapter.md) is the
+list of requirements it is held to, and which test proves each; it describes this page
+rather than the other way round.*

@@ -37,6 +37,7 @@ to say an agent read a file is worse than one that buzzes once with the reply.
 | ❌ | R-DIS-15 | The owner is told when their agent comes up and when it goes down | — |
 | ❌ | R-DIS-16 | An agent shows as online for as long as the gateway running it is up | — |
 | ❌ | R-DIS-17 | A turn arrives as one message, with what it cost above the answer | — |
+| ❌ | R-DIS-18 | An answer too long to read as messages is attached as a file instead | — |
 
 ## Open questions
 
