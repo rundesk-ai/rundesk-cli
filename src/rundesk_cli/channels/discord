@@ -541,7 +541,7 @@ class Agent(discord.Client):
             return
         if self.chose.activity == OFF:
             return
-        line = _as_a_line(it)
+        line = commentary(it)
         if not line:
             return
         held.pending = (held.pending + "\n" + line).strip()
@@ -650,6 +650,20 @@ def _without_mentions(text: str) -> str:
         at = part.find(">")
         out.append(part[at + 1:] if at >= 0 else part)
     return "".join(out).strip()
+
+
+def commentary(it: dict) -> str:
+    """What belongs in the running commentary, and nothing else.
+
+    What a turn *cost* is not commentary: it goes above the answer, where somebody
+    reading the reply can see it without going back for it. And a turn that neither
+    thought nor ran anything has nothing to show while it works — so it gets no
+    commentary message at all rather than an empty one, which would be a notification
+    that says nothing (R-DIS-20).
+    """
+    if it.get("type") == "usage":
+        return ""
+    return _as_a_line(it)
 
 
 def _as_a_line(it: dict) -> str:

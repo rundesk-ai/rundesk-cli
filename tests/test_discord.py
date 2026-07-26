@@ -228,6 +228,27 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         self.assertEqual("", discord._as_a_line(
             {"type": "result", "id": "1", "ok": True, "summary": "3 files changed"}))
 
+    def test_what_a_turn_cost_never_goes_in_the_commentary(self):
+        """R-DIS-17 — it belongs above the answer, where somebody reading the reply sees
+        it without going back for it."""
+        self.assertEqual("", discord.commentary(
+            {"type": "usage", "input": 1200, "output": 340, "cached": 17000}))
+        self.assertNotEqual("", discord._as_a_line(
+            {"type": "usage", "input": 1200, "output": 340, "cached": 17000}))
+
+    def test_a_turn_that_neither_thought_nor_ran_anything_shows_no_commentary(self):
+        """R-DIS-20 — an empty commentary message is a notification that says nothing."""
+        for said in ({"type": "usage", "input": 1}, {"type": "result", "id": "1", "ok": True},
+                     {"type": "think", "text": "   "}, {"type": "answer", "text": "hi"}):
+            self.assertEqual("", discord.commentary(said), f"{said} became commentary")
+
+    def test_what_the_agent_did_does_become_commentary(self):
+        """R-DIS-20 — the other half, or the option would show nothing at all."""
+        self.assertNotEqual("", discord.commentary(
+            {"type": "tool", "name": "Bash", "did": "run"}))
+        self.assertNotEqual("", discord.commentary(
+            {"type": "think", "text": "the error is in the parser"}))
+
     def test_showing_the_work_is_off_unless_the_owner_asks(self):
         """R-DIS-20 — an owner who wants to watch says so, and one who does not gets one
         message per turn rather than a running commentary."""
