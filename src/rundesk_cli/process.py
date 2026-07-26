@@ -88,6 +88,24 @@ MAX_LINE_CHARS = 4 * 1024 * 1024
 #: program itself has gone. Short: this is a drain, not a wait for more work.
 DRAIN_SECONDS = 2.0
 
+#: How long the *receiver* gets to take what it is still owed once the program has gone
+#: (R-PROC-17). Its own constant, because it is the opposite of a drain: nothing is
+#: waiting on it, the read loop is finished and the program is already reaped, so the
+#: only thing this bounds is how long a slow receiver may go on receiving. Shared with
+#: `DRAIN_SECONDS` it was two seconds — a receiver spending a fifth of a second on a
+#: record, which a rate-limited channel post easily does, got nine of fifty and the run
+#: still reported that it had finished.
+RECEIVING_SECONDS = 30.0
+
+#: How many times one record is offered to a receiver that failed on it, and how long to
+#: wait between (R-PROC-17). A receiver that fails is often about to recover — a channel
+#: being rate-limited, a file being rotated — and the record it dropped is not
+#: independent of the ones around it. Capped so a receiver that will never recover cannot
+#: hold the queue, and doubled between tries so it cannot be spun on.
+DELIVERY_TRIES = 4
+DELIVERY_WAIT_SECONDS = 0.05
+DELIVERY_WAIT_CAP_SECONDS = 1.0
+
 #: How often a program that is saying nothing is looked in on. Silence is measured in
 #: these, so it is also how close to the mark the measurement lands — near enough for a
 #: window of half an hour, and cheap enough to spend on every session at once.
@@ -154,10 +172,23 @@ class Result:
     reason: str
     code: int | None
     output: str = ""
+    #: How many records never reached whoever was receiving them (R-PROC-17). Part of the
+    #: outcome rather than only a counter on the handle, because it is the difference
+    #: between an account of a run and an account with holes in it.
+    undelivered: int = 0
 
     @property
     def ok(self) -> bool:
-        return self.reason == FINISHED
+        """Did it finish, *and* was everything it said handed over?
+
+        Both, because a run whose records were lost is not one anything downstream can
+        act on. Fifty records written, nine received and `ok` — which is what this said
+        before — is the reading that misleads most: everything after the loss is read as
+        though nothing were missing. A receiver that failed on a record and recovered is
+        a different matter and does not land here; that is `refused`, and it is the
+        receiver's own to answer for.
+        """
+        return self.reason == FINISHED and not self.undelivered
 
 
 class NotListening(Exception):
@@ -224,10 +255,40 @@ class Held:
         self._waiting.append(record)
         self._bytes += self._weight(record)
         self._arrived.set()
-        dropped = 0
-        # Never the one just offered: a bound smaller than a single record would
-        # otherwise drop everything and deliver nothing at all.
-        merged = 0
+        self._evict()
+
+    def waiting(self) -> int:
+        """How many records are still held, undelivered."""
+        return sum(1 for one in self._waiting if not isinstance(one, Gap))
+
+    def lose(self, records: int, why: str) -> None:
+        """Say that records were lost here, without ever having held them.
+
+        Bounded like everything else that adds to the queue (R-PROC-17). This path used
+        to append and never check, so a program emitting nothing *but* records too large
+        to hold grew the queue without limit — the one side of the bound left one-sided.
+        A loss of the same kind is folded into the one before it rather than spending a
+        queue item each, so the count stays exact without the markers themselves becoming
+        the thing that overruns.
+        """
+        last = self._waiting[-1] if self._waiting else None
+        if isinstance(last, Gap) and last.why == why:
+            self._waiting[-1] = Gap(last.records + records, why)
+        else:
+            self._waiting.append(Gap(records, why))
+            self._bytes += self._weight(self._waiting[-1])
+        self._lost += records
+        self._arrived.set()
+        self._evict()
+
+    def _evict(self) -> None:
+        """Let the oldest go until what is held is inside the bound.
+
+        Never the newest: the end of what a program says is the part that matters. Never
+        the only one either — a bound smaller than a single record would otherwise drop
+        everything and deliver nothing at all.
+        """
+        dropped = merged = 0
         while self._bytes > self._held and len(self._waiting) > 1:
             went = self._waiting.popleft()
             self._bytes -= self._weight(went)
@@ -241,17 +302,6 @@ class Held:
             # Only what was lost *now*. A merged gap was counted when it was made, and
             # counting it again turned eight lost records into thirty-six.
             self._lost += dropped
-
-    def waiting(self) -> int:
-        """How many records are still held, undelivered."""
-        return sum(1 for one in self._waiting if not isinstance(one, Gap))
-
-    def lose(self, records: int, why: str) -> None:
-        """Say that records were lost here, without ever having held them."""
-        self._waiting.append(Gap(records, why))
-        self._bytes += self._weight(self._waiting[-1])
-        self._lost += records
-        self._arrived.set()
 
     def close(self) -> None:
         self._closed = True
@@ -443,9 +493,16 @@ class Program:
     #: chose. Every agent brain works on a project rather than in the abstract, so the one
     #: it is pointed at is a decision rundesk has to be able to make rather than inherit.
     cwd: str | Path | None = None
+    #: How long the receiver gets to take what it is owed once the program has gone
+    #: (R-PROC-17). `None` means `RECEIVING_SECONDS`, resolved where it is used — a
+    #: caller knows its own sink and nothing here does.
+    receiving: float | None = None
     _proc: asyncio.subprocess.Process | None = field(default=None, repr=False, init=False)
     _ended: bool = field(default=False, repr=False, init=False)
     _writable: bool = field(default=True, repr=False, init=False)
+    #: Held across write *and* drain, so two writes cannot interleave (R-PROC-14). Made in
+    #: `start`, where there is a loop to make it against.
+    _writing: object = field(default=None, repr=False, init=False)
     _refused: int = field(default=0, repr=False, init=False)
     _undelivered: int = field(default=0, repr=False, init=False)
     _heard: float = field(default=0.0, repr=False, init=False)
@@ -490,6 +547,9 @@ class Program:
             raise NotAbsolute(
                 f"'{program}' is a name, not a location — resolve it before running it"
             )
+        # Made here rather than in the field, because a lock belongs to the loop it is
+        # made on and this dataclass is built long before there is one.
+        self._writing = asyncio.Lock()
         self._proc = await asyncio.create_subprocess_exec(
             *self.argv,
             # Closed unless rundesk means to write to it (R-PROC-14). Nothing is read
@@ -553,11 +613,13 @@ class Program:
         self._heard = time.monotonic()
         # Started before anything is read, and run whatever the receiver is doing: this
         # is what keeps the streams we are not framing from filling up (R-PROC-16).
+        # Each with the budget its own kind of wait deserves — see `_settle`.
         beside = []
         if self.errors_apart and self._proc.stderr is not None:
-            beside.append(asyncio.ensure_future(self._drain_errors()))
+            beside.append((asyncio.ensure_future(self._drain_errors()), DRAIN_SECONDS))
         if held is not None:
-            beside.append(asyncio.ensure_future(self._deliver(held, sink)))
+            receiving = RECEIVING_SECONDS if self.receiving is None else self.receiving
+            beside.append((asyncio.ensure_future(self._deliver(held, sink)), receiving))
 
         # Read in short spells rather than one long one, so that between them we can look
         # at whether the program is still there. Waiting on its exit instead does not
@@ -613,7 +675,7 @@ class Program:
             # nothing holding it, which is the orphan this module exists to prevent
             # (R-PROC-4, R-PROC-11).
             await self.end()
-            await self._settle(beside, held)
+            await self._settle(beside, held, sink)
             raise
         finally:
             if reader is not None:
@@ -639,27 +701,28 @@ class Program:
         # to stop, which is the very shape of wedge this is all here to prevent.
         if overran or went_silent:
             await self.end()
-        await self._settle(beside, held)
+        await self._settle(beside, held, sink)
         return await self._became(frame.held, overran, went_silent)
 
-    async def _settle(self, beside: list, held: Held | None) -> None:
+    async def _settle(self, beside: list, held: Held | None, sink=None) -> None:
         """Let what is running beside the reading finish, then stop waiting for it.
 
-        Bounded, and quiet about it. The delivery is told there is nothing more coming
-        and given the drain to hand over what it holds — so a receiver still working
-        through the last of a program's output is not cut off at the moment the program
-        exits. What will not finish in that time is cancelled: this is a drain, not a
-        wait for more work.
+        Bounded, and quiet about it — but by **two** budgets, not one, because two
+        opposite things are being waited on here. Draining what a departed program left
+        holding the pipe is correctly impatient: nothing more is coming and something
+        else is holding it open. Letting a receiver finish is the opposite — the read
+        loop is over and the program is gone, so the only thing that patience costs is
+        itself. Shared, the short one won, and a receiver that was merely slow was cut
+        off mid-stream while the run reported that it had finished.
         """
         if held is not None:
             held.close()
-        # One deadline for all of them, not one each. Spent per task, two of them make a
-        # program that has already gone take twice as long to be answered for, and the
-        # gateway's own patience for stopping is what that eats into (R-GW-7).
-        by = time.monotonic() + DRAIN_SECONDS
-        for one in beside:
+        for one, budget in beside:
+            # A deadline per task rather than one across them, now that they are not the
+            # same kind of wait. They run concurrently, so the cost is the longest of
+            # them and not their sum.
             try:
-                await asyncio.wait_for(asyncio.shield(one), max(0.0, by - time.monotonic()))
+                await asyncio.wait_for(asyncio.shield(one), budget)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 one.cancel()
             except BaseException:
@@ -667,15 +730,22 @@ class Program:
         # Awaited after cancelling, so that what is being reported about a program is
         # settled before anyone reads it — and so a task that raised on the way out is
         # collected here rather than surfacing later as an exception nobody retrieved.
-        for one in beside:
+        for one, _ in beside:
             if one.cancelled() or not one.done():
                 with contextlib.suppress(BaseException):
                     await one
         beside.clear()
-        if held is not None:
-            # What the receiver never got. Said rather than discarded: a drain that ran
-            # out of patience is a real answer, and one nobody was being given.
-            self._undelivered += held.waiting()
+        if held is None:
+            return
+        # What the receiver never got. Said rather than discarded: patience that ran out
+        # is a real answer, and one nobody was being given. Handed over as a gap as well
+        # as counted, so the loss lands in the receiver's own stream where it can be
+        # reasoned about, rather than only in a number the caller has to think to read.
+        never = held.waiting()
+        if never:
+            self._undelivered += never
+            if sink is not None:
+                await self._taken(sink, Gap(never, "never delivered"), 1)
 
     async def _became(self, output: str, overran: bool, went_silent: bool) -> Result:
         """Reap it, take what it left running, and say what became of it.
@@ -686,13 +756,14 @@ class Program:
         """
         code = await self._reap()
         await self._sweep()
+        lost = self._undelivered
         if overran:
-            return Result(OVERRAN, code, output)
+            return Result(OVERRAN, code, output, lost)
         if went_silent:
-            return Result(SILENT, code, output)
+            return Result(SILENT, code, output, lost)
         if self._ended:
-            return Result(ENDED, code, output)
-        return Result(FINISHED if code == 0 else FAILED, code, output)
+            return Result(ENDED, code, output, lost)
+        return Result(FINISHED if code == 0 else FAILED, code, output, lost)
 
     async def _drain_errors(self) -> None:
         """Read what it says went wrong, always, whether or not anyone wants it.
@@ -719,11 +790,43 @@ class Program:
         Its own task, so that a receiver taking its time slows nothing but itself
         (R-PROC-17) — and so that one which fails does not reach the read loop, where
         anything raised takes the program with it.
+
+        A record a receiver failed on is offered again before anything later is, because
+        records are not independent — text arrives in pieces meant to be joined, and one
+        silently skipped leaves the receiver reading a sentence with a word missing and
+        no way to know. Once a receiver has been given up on, the next record gets one
+        attempt rather than four: it has just demonstrated that it is broken, and
+        spending the full patience on every record afterwards is how a broken receiver
+        comes to hold a program's whole output hostage.
         """
+        tries = DELIVERY_TRIES
         while True:
             it = await held.next()
             if it is None:
                 return
+            if await self._taken(sink, it, tries):
+                tries = DELIVERY_TRIES
+                continue
+            # Given up on, and said *here* — in the receiver's own stream, in the place
+            # the loss happened, before anything later reaches it. A count at the end
+            # says something went; only a gap in the right place says what the records
+            # around it can still be read as.
+            self._undelivered += 1
+            await self._taken(sink, Gap(1, "not taken"), 1)
+            tries = 1
+
+    async def _taken(self, sink, it, tries: int) -> bool:
+        """Offer this to the receiver until it takes it, or the patience runs out.
+
+        Counted once per record rather than once per attempt: `refused` answers "how many
+        records could this receiver not cope with", and offering the same one four times
+        does not make it four records. A loss marker is not counted at all — that a
+        broken receiver also failed to take the news of its own loss says nothing the
+        `undelivered` count has not already said.
+        """
+        counted = isinstance(it, Gap)
+        waited = DELIVERY_WAIT_SECONDS
+        for attempt in range(tries):
             try:
                 said = sink(it)
                 if inspect.isawaitable(said):
@@ -732,6 +835,7 @@ class Program:
                     # thing, and asking the narrower question drops its work on the floor
                     # without awaiting it and without a word.
                     await said
+                return True
             except asyncio.CancelledError:
                 # Taken off the queue and never finished with. Counted here or it is
                 # accounted for nowhere: the queue no longer holds it, and the receiver
@@ -742,7 +846,13 @@ class Program:
                 # A receiver that fails is not a reason to end the program. It may still
                 # be owed an answer, and whatever went wrong is the receiver's to
                 # recover from — counted here so it is not simply lost.
-                self._refused += 1
+                if not counted:
+                    self._refused += 1
+                    counted = True
+            if attempt + 1 < tries:
+                await asyncio.sleep(waited)
+                waited = min(waited * 2, DELIVERY_WAIT_CAP_SECONDS)
+        return False
 
     async def send(self, record: bytes | str) -> None:
         """Write to it while it is running (R-PROC-14).
@@ -759,22 +869,35 @@ class Program:
         them, so the next record would land behind half of one nobody thinks was sent.
         A caller that cannot wait can stop waiting itself, and decide for itself what
         that meant.
+
+        **One writer at a time, across both halves.** The write and the wait are one
+        operation: on the oldest Python this supports, the transport holds a single
+        waiter and asserts that nobody else is already there, so two records offered
+        close together — two channel messages, or an answer racing a queued message,
+        which is this product's ordinary case — raised `AssertionError` at the second
+        caller instead of the `NotListening` it is written to handle. With assertions off
+        the second waiter simply replaced the first, which is a permanent hang rather
+        than an error. Serialised here, both complete, and in the order they were issued.
         """
         if self._proc is None:
             raise RuntimeError("send() before start()")
         if self._proc.stdin is None:
             raise NotListening("this program was not started to be written to")
-        if not self._writable:
-            raise NotListening("this program is no longer being written to")
         data = record if isinstance(record, bytes) else record.encode("utf-8")
         if not data.endswith(b"\n"):
             data += b"\n"  # a record is a record because of where it ends
-        try:
-            self._proc.stdin.write(data)
-            await self._proc.stdin.drain()
-        except (BrokenPipeError, ConnectionResetError) as gone:
-            self._writable = False
-            raise NotListening("it is not there to be written to") from gone
+        async with self._writing:
+            # Asked inside the hold, not before it: whoever went first may have found the
+            # far end gone, and answering the second caller on what was true while it was
+            # queued would report a write that landed nowhere as one that happened.
+            if not self._writable:
+                raise NotListening("this program is no longer being written to")
+            try:
+                self._proc.stdin.write(data)
+                await self._proc.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError) as gone:
+                self._writable = False
+                raise NotListening("it is not there to be written to") from gone
 
     async def close_input(self) -> None:
         """Tell it there is no more coming, and leave it to finish (R-PROC-20).

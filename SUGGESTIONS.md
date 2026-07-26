@@ -9,6 +9,19 @@ reused and gaps are expected: they are cited in commits, in `ROADMAP.md` and in 
 Three findings are **partly** closed and say in their own status which half is still open —
 4, 6 and 9. Read the status before the body.
 
+**What the provider seam closed, and what it deliberately did not.** Opening the seam ran a
+receiver — the run's own transcript — behind a program for the first time, and writing to
+one for the first time. So 8, 10 and 16 are fixed and gone from here: the receiver has its
+own patience rather than sharing a departed program's drain, a record it failed on is
+offered again before anything later, a loss it was never given is handed over as a gap in
+the place it happened, a run that lost records no longer reports that it was fine, two
+writes that both have to wait no longer collide, and saying a record was lost is bounded
+like everything else that adds to the queue. **6, 9, 12, 23 and 30 are untouched on
+purpose** — every one of them is about admitting work into a gateway, or about handing a
+gateway back to the machine that supervises it, and a turn asked for from a terminal enters
+neither path. They come due when a channel or a schedule admits a turn instead, which is
+the next phase and not this one.
+
 **Where they came from.** Round two (6–22) reviewed the runtime and lifecycle against
 `205467b`, with reproduction scripts and their output quoted inline. Round three (23–25)
 followed up on the gateway foundation against `7841a0f`. Round four (26–29) asked which
@@ -34,9 +47,9 @@ so a later round does not spend the effort again without new reason:
 
 | Area | Outcome |
 |---|---|
-| Ownership, cleanup and bounded resources | findings **8**, **9**, **12**, **16**, **17**, **23**, **30** |
+| Ownership, cleanup and bounded resources | findings **9**, **12**, **17**, **23**, **30** |
 | Crash recovery and idempotency | findings **9**, **12**, **23**, **26** |
-| Concurrency, locks and atomic decisions | findings **10**, **12**, **14**, **21**, **30** |
+| Concurrency, locks and atomic decisions | findings **12**, **14**, **21**, **30** |
 | Provider protocol boundary | **no change needed** — see "Reviewed, no change needed" below |
 | Scheduling correctness | findings **12**, **21**, **24**, **25**, **26** |
 | Install, update and removal safety | findings **4**, **14**, **15**, **28** |
@@ -334,82 +347,6 @@ Regression criteria:
 Relevant implementation: `_held()`, `standing()` and `_sweep_strays()` in
 `src/rundesk_cli/gateway.py`.
 
-### 8. Give the receiver its own budget, and say what it never got
-
-**Status:** Open — **do not solve this by widening the post-exit drain.** That deadline was
-narrowed deliberately, and `DRAIN_SECONDS` is one budget for the whole post-exit drain.
-The same constant is now serving three unrelated purposes, and one of them is the
-opposite of a drain:
-
-- `Program.wait()` (`process.py:590`) — how long a leftover descendant may hold the
-  pipe. Correctly short, and deliberately so.
-- `_settle()` (`process.py:659`) — how long the *receiver* gets to take what it is
-  owed. Wrongly short, and shared with the stderr drain.
-- `close_input()` (`process.py:797`) — how long a stdin close may take to flush.
-
-When `_settle()`'s budget runs out it cancels delivery and discards whatever `Held`
-still holds. The `undelivered` counter added in `205467b` makes this audible in the
-gateway log, which is a real improvement, but the records are still lost, `Result.ok`
-is still `True`, and — unlike every other loss in this module — **no `Gap` reaches the
-receiver**, so its own stream never learns it was truncated.
-
-Reproduced outcome, production constants, a receiver taking 0.2s per record (a Discord
-post under rate limiting is slower than that):
-
-```text
-DRAIN_SECONDS=2.0
-result_reason='finished'
-result_ok=True
-records_written_by_program=50
-records_the_receiver_got=9
-program_undelivered=41
-program_refused=0
-elapsed=2.0s
-```
-
-Round five confirmed a second form of the same missing-delivery answer while the
-program is still running. `_deliver()` removes a record from `Held` before invoking
-the sink (`process.py:715-726`). If the sink raises, the exception path only increments
-`refused` (`:733-737`): the record is gone, delivery continues with the next record,
-and no `Gap` tells the recovered receiver where its stream broke. `Gateway.start()`
-does not log the refused count until the provider finishes (`gateway.py:966-970`), so
-a long-lived Claude or Codex process can lose an approval or clarification request and
-remain waiting while Discord receives later events as though nothing were missing.
-
-Reproduced with a sink that failed once and then recovered:
-
-```text
-receiver_after_failure=[b'two', b'three']
-refused=1
-gap_seen=False
-```
-
-The fix is to split the constant, **not** to loosen the post-exit drain deadline —
-those are different deadlines that happen to share a name today. The read loop is
-finished and the program is gone by the time `_settle()` runs, so nothing is waiting on
-the receiver. While a program is still running, the current record must remain pending
-until the sink accepts it; retry uses bounded backoff, later output remains inside
-`HELD_BYTES`, and eviction still becomes an ordered `Gap` rather than silent loss.
-
-Regression criteria:
-
-- The receiver's budget is a separate, generous constant, settable by the caller that
-  knows its own sink; the descendant drain keeps its short shared deadline.
-- A sink that fails temporarily and then recovers receives the pending record before
-  any later record, or receives an exact ordered `Gap` before later records if the
-  bounded queue had to evict it.
-- A failed sink cannot spin, block the provider process or grow the queue beyond its
-  byte budget.
-- Records still held when that budget runs out are handed over as a `Gap` before
-  delivery is cancelled, so the loss appears in the receiver's own stream.
-- `Result` carries the undelivered count, and a run that lost records does not report
-  `ok`.
-- Finding 3's regression criteria still hold afterwards.
-
-Relevant implementation: `Program.wait()`, `_settle()`, `Held` and `DRAIN_SECONDS` in
-`src/rundesk_cli/process.py`; the log lines in `Gateway.start()` in
-`src/rundesk_cli/gateway.py`.
-
 ### 9. Refuse work whose ownership cannot be established at the moment it starts
 
 **Status:** Open — **read finding 23; this is the same transaction.** The half that
@@ -447,43 +384,6 @@ Relevant implementation: `Gateway.start()` and `started_at()` in
 `src/rundesk_cli/gateway.py`.
 
 ## High impact
-
-### 10. Serialise writes to one program
-
-**Status:** Open
-
-`send()` (`process.py:747-777`) does `write()` then `await drain()` with nothing
-serialising the pair. On CPython ≤ 3.11 `FlowControlMixin._drain_helper` holds a single
-`_drain_waiter` and asserts nobody else is waiting; on 3.12+ it holds a list and the
-problem disappears. This project's floor is **3.9** (`AGENTS.md` "Tech stack";
-`.github/workflows/build.yml` matrix `{ ubuntu-latest, python: '3.9' }`), which is also
-`/usr/bin/python3` on macOS.
-
-Reproduced outcome under `/usr/bin/python3` (3.9.6), two concurrent sends larger than
-the pipe buffer to a program that is not reading:
-
-```text
-send_1='NotListening: it is not there to be written to'
-send_2='AssertionError'
-stderr='Future exception was never retrieved: BrokenPipeError(32, "Broken pipe")'
-```
-
-Under `python -O` the assert vanishes and the second waiter overwrites the first, so the
-first `send()` is never woken — a permanent hang instead of an error. The caller gets an
-`AssertionError` rather than the `NotListening` it is written to handle, and the bytes it
-already queued stay in the transport buffer.
-
-Two channel messages arriving close together, or an approval answer racing a queued user
-message, is the ordinary case for this product.
-
-Regression criteria:
-
-- Two concurrent writes to a program that is not reading complete without error and in
-  the order they were issued, on the oldest supported Python.
-- The test proving write ordering uses records large enough to pause the transport;
-  small ones never reach the code path (see "Tests that prove only the easy half").
-
-Relevant implementation: `Program.send()` in `src/rundesk_cli/process.py`.
 
 ### 12. Keep the shutdown budget inside the one launchd allows
 
@@ -710,50 +610,6 @@ Relevant implementation: `take_all_back()` in `src/rundesk_cli/supervisor.py`;
 `stop_gateways()` in `install.sh`; `every()` in `src/rundesk_cli/gateway.py`.
 
 ## Medium impact
-
-### 16. Bound `Held` on every path that adds to it
-
-**Status:** Open
-
-`Held.offer()` evicts when the bound is exceeded; `Held.lose()` (`process.py:222-254`)
-appends a `Gap`, adds its weight and never checks. Every oversized record calls `lose()`
-(`process.py:376-388`), so a program emitting only oversized records grows the queue
-without limit.
-
-Reproduced outcome with `MAX_RECORD_BYTES` lowered so the trigger is cheap:
-
-```text
-bound=1000 bytes
-accounted=1280000 bytes
-queued_items=20000
-over_bound_by=1280x
-```
-
-Round five reproduced the same path directly against the current `Held.lose()`
-(`process.py:249-254`), without relying on record framing:
-
-```text
-configured_bound=256
-loss_markers=10000
-accounted_bytes=640000
-```
-
-With production constants this needs roughly 80 GB of provider output, so it is slow
-rather than acute. It is recorded because it is the same one-sided-bound shape that
-`9916245` has just finished fixing on the other side, and the correction is to run the
-existing eviction loop from `lose()` as well. Adjacent compatible gaps should be
-coalesced so the retained loss count stays exact without spending one queue item per
-lost record.
-
-Regression criteria:
-
-- Records lost without ever having been held are still bounded in bytes and items.
-- Hundreds of thousands of oversized records against a non-consuming sink keep the
-  queue within its configured budget.
-- The eventual coalesced gaps report the exact number and reason of records lost.
-
-Relevant implementation: `Held.offer()` and `Held.lose()` in
-`src/rundesk_cli/process.py`.
 
 ### 17. Stop the rotated log from having an unrotated shadow
 
@@ -1395,8 +1251,6 @@ state it is named for.
 
 | Test | Cited for | What it does not reach |
 |---|---|---|
-| `test_what_is_written_arrives_in_the_order_it_was_written` (`tests/test_process.py:955-965`) | R-PROC-14 | 20 concurrent sends of four bytes each; the transport never pauses, so `drain()` returns before touching `_drain_waiter` — finding 10's state is never entered |
-| `test_a_receiver_that_is_slow_does_not_slow_the_program` (`tests/test_process.py:1144-1167`) | R-PROC-17 | Sets up finding 8 exactly, asserts only that the *program* was not slowed and `result.ok`; never looks at what the receiver got (9 of 50) |
 | `test_removing_rundesk_refuses_while_a_gateway_is_still_running` (`tests/test_install.py:89`) | R-RM-9 | Writes a plist first, so the no-job case in finding 15 is never exercised |
 
 ## Reviewed, no change needed
@@ -1407,7 +1261,8 @@ Recorded so a later round does not repeat the work without new reason.
 have leaked into the runtime. `schedule.run` is carried and never read; `process` has no
 knowledge of a gateway; `Held` and `Gap` are transport concepts. No new boundary is
 needed — the existing `sink` / `send` / `Gap` surface is sufficient for a provider
-adapter, once findings 8 and 10 are fixed.
+adapter, and the two findings that stood in the way of one — a write that had to wait,
+and a receiver sharing a departed program's drain — are fixed.
 
 **Scheduling arithmetic, except finding 25.** `_not_yet()` uses strictly-greater so a
 repeated hour cannot double-fire; `_remember()` refuses to move an outcome backwards;

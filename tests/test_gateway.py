@@ -1632,7 +1632,12 @@ class WorkTheGatewayTalksTo(WithARunDirectory):
 
     async def test_a_receiver_that_refuses_is_recorded_rather_than_lost(self):
         """R-PROC-17 — a receiver silently dropping everything it is handed looks exactly
-        like work that said nothing at all, which is the one reading that misleads."""
+        like work that said nothing at all, which is the one reading that misleads.
+
+        A receiver that never recovers loses the record, so the outcome says so: an
+        account with holes in it is not one anything downstream can act on, whoever is at
+        fault for the holes. A receiver that fails and then recovers is the other case,
+        and it is `refused` alone with the outcome left intact."""
         gw = self.made()
         gw.claim()
 
@@ -1643,7 +1648,8 @@ class WorkTheGatewayTalksTo(WithARunDirectory):
             [PY, "-c", "import sys; sys.stdout.write('{\"a\":1}\\n'); sys.stdout.flush()"],
             as_name="refused", silence=None, sink=refuses,
         ), 20)
-        self.assertTrue(outcome.ok, "the receiver failing was blamed on the work")
+        self.assertEqual(1, outcome.undelivered, "the record it never took was written off")
+        self.assertFalse(outcome.ok, "a run whose only record was lost reported success")
         said = gateway.log_path(gw.name, self.logs).read_text()
         self.assertIn("refused 1 record", said)
 

@@ -964,6 +964,38 @@ class WritingToAProgramWhileItRuns(Quickened):
         await program.end()
         await asyncio.wait_for(reading, 15)
 
+    async def test_two_writes_that_have_to_wait_still_arrive_whole_and_in_order(self):
+        """R-PROC-14 — the case the small-record ordering test never reaches.
+
+        A write only waits when what it is writing is past what the pipe will hold, and
+        the wait is where the trouble was: on the oldest Python this supports, the
+        transport keeps a single waiter and asserts nobody else is already there, so the
+        second concurrent record raised `AssertionError` instead of arriving — and with
+        assertions off it replaced the first waiter, which is a hang rather than an
+        error. Two channel messages arriving together is this product's ordinary case."""
+        big = 256 * 1024  # comfortably past any pipe buffer, so both sends must wait
+        program = process.Program(
+            script(
+                "import sys, time",
+                # Nothing is read for a moment, so both writes are still waiting when the
+                # second one starts — which is the whole point of the case.
+                "time.sleep(0.5)",
+                "data = sys.stdin.buffer.read()",
+                f"shape = data.replace(b'a' * {big}, b'A').replace(b'b' * {big}, b'B')",
+                "sys.stdout.write(shape.decode('utf-8', 'replace').replace('\\n', '.') + '\\n')",
+                "sys.stdout.flush()",
+            ),
+            takes_input=True, errors_apart=True, silence=None,
+        )
+        await program.start()
+        taken = Collected()
+        reading = asyncio.ensure_future(program.wait(sink=taken))
+        await asyncio.gather(program.send(b"a" * big), program.send(b"b" * big))
+        await program.close_input()
+        await asyncio.wait_for(reading, 30)
+        self.assertIn(taken.records[0], (b"A.B.", b"B.A."),
+                      "two records that had to wait interleaved with each other")
+
     async def test_a_program_that_has_gone_is_not_written_to_forever(self):
         """R-PROC-14 — writing alone never raises, and on a program that has gone it
         silently discards what it was given. Waiting is the only place the truth arrives,
@@ -1156,18 +1188,73 @@ class WhatAReceiverIsHanded(Quickened):
         await program.start()
         reading = asyncio.ensure_future(program.wait(sink=self._always_fails))
         await program.send(b"one")
-        deadline = time.time() + 10
-        while program.refused < 1 and time.time() < deadline:
-            await asyncio.sleep(0.02)
-        self.assertEqual(1, program.refused, "the receiver's failure was simply lost")
+        self.assertTrue(await self._given_up(program, 1), "the receiver's failure was simply lost")
+        self.assertGreater(program.refused, 0)
         self.assertTrue(program.alive, "a receiver failing took the program with it")
         await program.send(b"two")   # and it is still being talked to
-        deadline = time.time() + 10
-        while program.refused < 2 and time.time() < deadline:
-            await asyncio.sleep(0.02)
-        self.assertEqual(2, program.refused)
+        self.assertTrue(await self._given_up(program, 2))
         await program.end()
         await asyncio.wait_for(reading, 15)
+
+    async def test_a_receiver_that_fails_and_recovers_is_given_the_record_it_dropped(self):
+        """R-PROC-17 — records are not independent: text arrives in pieces meant to be
+        joined, so one skipped because a receiver was briefly rate-limited leaves it
+        reading a sentence with a word missing and no way to know. Offered again, before
+        anything later, until it is taken."""
+        taken: list = []
+        failures = [1]  # fails once, then recovers
+
+        def flaky(record):
+            if failures:
+                failures.pop()
+                raise RuntimeError("briefly unavailable")
+            taken.append(record)
+
+        program = process.Program(
+            script("import sys",
+                   "for n in range(3): sys.stdout.write('n%d\\n' % n)",
+                   "sys.stdout.flush()"),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        result = await asyncio.wait_for(program.wait(sink=flaky), 20)
+        self.assertEqual([b"n0", b"n1", b"n2"], taken,
+                         "the record it failed on was skipped rather than offered again")
+        self.assertEqual(1, program.refused)
+        self.assertEqual(0, program.undelivered, "a record it did take was written off")
+        self.assertTrue(result.ok)
+
+    async def test_a_receiver_given_up_on_is_told_where_the_record_went(self):
+        """R-PROC-17 — a record written off silently is worse than one that never
+        arrived: everything after it reads as though nothing were missing. The loss is
+        handed over in the place it happened, before anything later."""
+        taken: list = []
+
+        def refuses_the_first(record):
+            if record == b"n0":
+                raise RuntimeError("this receiver cannot take that one")
+            taken.append(record)
+
+        program = process.Program(
+            script("import sys",
+                   "for n in range(3): sys.stdout.write('n%d\\n' % n)",
+                   "sys.stdout.flush()"),
+            errors_apart=True, silence=None,
+        )
+        await program.start()
+        result = await asyncio.wait_for(program.wait(sink=refuses_the_first), 20)
+        self.assertEqual([process.Gap(1, "not taken"), b"n1", b"n2"], taken,
+                         "the gap did not land where the record was lost")
+        self.assertEqual(1, program.undelivered)
+        self.assertFalse(result.ok, "a run that lost a record reported that it was fine")
+
+    async def _given_up(self, program, many: int, seconds: float = 10.0) -> bool:
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if program.undelivered >= many:
+                return True
+            await asyncio.sleep(0.02)
+        return program.undelivered >= many
 
     @staticmethod
     def _always_fails(_record):
@@ -1175,7 +1262,11 @@ class WhatAReceiverIsHanded(Quickened):
 
     async def test_a_receiver_that_is_slow_does_not_slow_the_program(self):
         """R-PROC-17 — handed straight to a receiver, a slow one stops the reading, and
-        for a program rundesk also writes to that is the deadlock above."""
+        for a program rundesk also writes to that is the deadlock above.
+
+        Timed on the *program*, not on the call. Timing the call measured the receiver
+        being cut off at the drain and read it as the program running free — so the
+        assertion passed precisely because records were being lost."""
         taken = Collected()
 
         async def dawdles(record):
@@ -1192,23 +1283,53 @@ class WhatAReceiverIsHanded(Quickened):
         )
         await program.start()
         began = time.monotonic()
-        result = await asyncio.wait_for(program.wait(sink=dawdles), 20)
+        watching = asyncio.ensure_future(self._when_it_goes(program, began))
+        result = await asyncio.wait_for(program.wait(sink=dawdles), 40)
         # Fifty records at a fifth of a second each is ten seconds of receiving. The
-        # program is not waited on for any of it.
-        self.assertLess(time.monotonic() - began, 8.0, "the receiver held the program up")
+        # program itself waits for none of it, and every record still arrives.
+        self.assertLess(await watching, 8.0, "the receiver held the program up")
+        self.assertEqual(50, len(taken.records), "the receiver was cut off")
         self.assertTrue(result.ok)
 
+    @staticmethod
+    async def _when_it_goes(program, began: float) -> float:
+        """How long the program itself took to exit, whatever the receiver is still doing."""
+        while program.alive:
+            await asyncio.sleep(0.02)
+        return time.monotonic() - began
+
     async def test_what_a_receiver_never_got_is_counted_rather_than_discarded(self):
-        """R-PROC-17 — the drain is bounded, so a slow enough receiver will not be handed
-        everything. Cancelling delivery and saying nothing meant a run reported that it
-        had finished while forty-nine of fifty records had quietly gone."""
-        self.addCleanup(setattr, process, "DRAIN_SECONDS", process.DRAIN_SECONDS)
-        process.DRAIN_SECONDS = 0.2
-        taken = []
+        """R-PROC-17 — the receiver's patience is bounded, so a slow enough one will not
+        be handed everything. Cancelling delivery and saying nothing meant a run reported
+        that it had finished while forty-nine of fifty records had quietly gone."""
+        taken = Collected()
 
         async def dawdles(record):
             await asyncio.sleep(0.2)
-            taken.append(record)
+            taken(record)
+
+        program = process.Program(
+            script("import sys",
+                   "for n in range(30): sys.stdout.write('n%d\\n' % n)",
+                   "sys.stdout.flush()"),
+            errors_apart=True, silence=None, receiving=0.5,
+        )
+        await program.start()
+        result = await asyncio.wait_for(program.wait(sink=dawdles), 20)
+        self.assertGreater(program.undelivered, 0, "records went missing with nothing said")
+        self.assertEqual(30, len(taken.records) + program.undelivered,
+                         "what was framed is neither delivered nor accounted for")
+        self.assertFalse(result.ok, "a run that lost most of its records reported success")
+
+    async def test_a_receiver_is_not_cut_off_at_the_pace_a_departed_program_is_drained(self):
+        """R-PROC-17 — the two waits are opposites and used to share one constant. A
+        receiver spending a fifth of a second on a record, which a rate-limited channel
+        post easily does, got nine of fifty while the run reported that it finished."""
+        taken = Collected()
+
+        async def dawdles(record):
+            await asyncio.sleep(0.05)
+            taken(record)
 
         program = process.Program(
             script("import sys",
@@ -1217,11 +1338,19 @@ class WhatAReceiverIsHanded(Quickened):
             errors_apart=True, silence=None,
         )
         await program.start()
-        result = await asyncio.wait_for(program.wait(sink=dawdles), 20)
+        # `DRAIN_SECONDS` is 0.5 in this suite and the receiving alone needs three times
+        # that. Shared, this is exactly the run that lost most of its output.
+        result = await asyncio.wait_for(program.wait(sink=dawdles), 30)
+        self.assertEqual(30, len(taken.records), "the receiver was cut off at the drain")
+        self.assertEqual(0, program.undelivered)
         self.assertTrue(result.ok)
-        self.assertGreater(program.undelivered, 0, "records went missing with nothing said")
-        self.assertEqual(30, len(taken) + program.undelivered,
-                         "what was framed is neither delivered nor accounted for")
+
+    async def test_a_run_that_lost_records_is_told_apart_from_one_that_did_not(self):
+        """R-PROC-17 — `ok` is the whole answer most callers read, and a run whose
+        account has holes in it is not one anything downstream can act on."""
+        self.assertTrue(process.Result(process.FINISHED, 0).ok)
+        self.assertFalse(process.Result(process.FINISHED, 0, undelivered=1).ok)
+        self.assertFalse(process.Result(process.FAILED, 1).ok)
 
     async def test_a_receiver_that_never_reads_is_told_what_it_missed(self):
         """R-PROC-17 — what is held is bounded, so a receiver far enough behind loses
@@ -1254,6 +1383,36 @@ class WhatAReceiverIsHanded(Quickened):
             held.offer(b"y" * 500)
         self.assertLessEqual(held._bytes, 1000 + 500, "it held more than it is allowed")
         self.assertGreater(held.lost, 0)
+
+    async def test_records_lost_without_ever_being_held_are_bounded_too(self):
+        """R-PROC-17 — the bound was one-sided. Saying a record was lost added weight and
+        never checked it, so a program emitting nothing but records too large to hold grew
+        the queue without limit — the loss markers becoming the thing that overran."""
+        held = process.Held(256)
+        for _ in range(10000):
+            held.lose(1, "too large")
+        self.assertLessEqual(held._bytes, 256 + process.HELD_OVERHEAD,
+                             "it held more than it is allowed")
+        self.assertEqual(10000, held.lost, "the count of what went is no longer exact")
+
+    async def test_losses_of_one_kind_are_folded_together_rather_than_piled_up(self):
+        """R-PROC-17 — one queue item per lost record is a queue bounded in bytes being
+        filled by things that have none. Folded, the count stays exact and the queue
+        stays a handful of items whatever was lost."""
+        held = process.Held()
+        for _ in range(500):
+            held.lose(1, "too large")
+        held.offer(b"and then a real one")
+        held.lose(3, "too large")
+        held.close()
+        got = []
+        while True:
+            it = await held.next()
+            if it is None:
+                break
+            got.append(it)
+        self.assertEqual([process.Gap(500, "too large"), b"and then a real one",
+                          process.Gap(3, "too large")], got)
 
 
 class RecordsWholeOrNotAtAll(Quickened):
@@ -1416,7 +1575,11 @@ class RecordsWholeOrNotAtAll(Quickened):
         )
         await program.start()
         result = await asyncio.wait_for(program.wait(sink=fails_later), 20)
-        self.assertTrue(result.ok, "the receiver failing was blamed on the program")
+        # The program is not blamed for it. The record is still lost, because this
+        # receiver never recovers — which the outcome says separately, and truthfully.
+        self.assertEqual(process.FINISHED, result.reason,
+                         "the receiver failing was blamed on the program")
+        self.assertEqual(0, result.code)
         self.assertEqual(1, program.refused)
 
     async def test_records_are_refused_from_a_program_whose_streams_are_folded(self):
