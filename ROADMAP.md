@@ -935,6 +935,25 @@ then nothing may be recoverable only from there. The same rule already applies o
 provider's own session files are referenced and never copied: our record is what survives, so it has to be
 enough. A run whose account says "see the raw file" is a run that will one day say nothing.
 
+**What this actually unlocks: one history across every surface.** The account already records both sides
+of a turn — `sent` is what the person asked, `text` is what the agent answered — and `admitted` carries
+the conversation it happened in. Nothing new has to be captured; it is captured today and thrown into a
+file per run with no way to ask it anything. As rows, with the conversation as the key that ties runs
+together, the same store answers all of these:
+
+```text
+everything ava has ever been asked, wherever it was asked
+one Discord thread's whole history — across a dozen runs, in order
+what was said about the parser, on any surface, by any agent
+what an agent was told on Tuesday, and what it did about it
+the same conversation continued from the terminal and then from Discord
+```
+
+That last one is the point of doing it once rather than per channel: a surface is where a message arrived,
+not where it lives. Discord, a schedule and the terminal all dispatch into the same account, so history is
+not something each channel keeps its own version of — which is exactly what would have happened if each
+adapter had been left to record what it saw.
+
 **Searchable is a requirement, not a side effect.** The reason the history goes in the database is to be
 able to ask it something later — what did ava say about the parser, which run mentioned that file, what
 was I told last Tuesday. SQLite has `FTS5` for exactly this and it is present in every Python checked here
@@ -1004,6 +1023,9 @@ How it behaves, which is the part worth arguing about now rather than during an 
 - Deleting what a brain said leaves the account of that run whole and still readable.
 - Nothing a run recorded is recoverable only from a file that may be destroyed.
 - What an agent has been told and has said is searchable by words in it, where the machine can.
+- One conversation's whole history reads back in order, across every run it took.
+- A conversation carried on from a second surface is one history, not two.
+- What arrived on one surface is found by a search that names no surface at all.
 - A machine whose SQLite cannot search still lists, reads and queries every run.
 - `doctor` says when searching is unavailable rather than searching returning nothing.
 - Nothing an update touches loses a transcript, a log, or what a schedule last did.
