@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import subprocess
@@ -1369,6 +1370,8 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         print(f"{args.name}/{args.channel}: NOT ADDED — {why}", file=sys.stderr)
         return 1
 
+    # Somewhere for the check to work in, under the name that was typed. What each
+    # channel is finally given is made below, once the adapter has said what it reached.
     home = agents.channel_home(args.name, args.channel)
     home.mkdir(parents=True, exist_ok=True)
     # What follows `--` is taken off before the parser sees it, for the same reason a
@@ -1409,6 +1412,13 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         named.append((one, shape))
     unlogged = 0
     for one, shape in named:
+        # **Its own home, under its own name** (R-CAD-15). The check ran under the name
+        # that was typed, which is the right place for a question asked before any channel
+        # exists — but what a channel is *given* at start-up is the home of the name it was
+        # written under, and one `add` may write several. Made here, so a channel whose
+        # name gained a suffix is not handed a directory that was never created: the token
+        # an owner put beside it, and anything a person attaches, both live there.
+        agents.channel_home(args.name, one).mkdir(parents=True, exist_ok=True)
         if not channel.remember(whose, one, args.kind, args.allow,
                                 settings=shape["settings"], secret=said["secret"],
                                 describes=shape["describes"], says=shape[channel.INSTRUCTIONS],
@@ -1419,6 +1429,15 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         unlogged |= _note(gateways, args.name, f"channel '{one}' added ({args.kind})",
                           agents.resolved(args.name))
         print(f"{args.name}/{one}: ADDED — {shape['describes'] or args.kind}")
+    if not any(one == args.channel for one, _ in named):
+        # The check's own directory, when no channel ended up under that name. Removed only
+        # if it is empty, so an owner who had already put a token in it keeps it — and is
+        # told where it now belongs rather than left to find out when nothing connects.
+        with contextlib.suppress(OSError):
+            home.rmdir()
+        if home.is_dir():
+            print(f"        {home} is not empty — what is in it belongs beside "
+                  f"{', '.join(one for one, _ in named)} now")
     if len(named) > 1:
         # Said out loud, because they were made together and share the one allow-list that
         # was typed — and the whole reason they are separate channels is that a room and a
@@ -1520,7 +1539,6 @@ def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         ("secret", ", ".join(
             f"{one} — {'present' if os.environ.get(one) else 'not set'}" for one in named)
             or "none needed"),
-        ("added", str(it.get("added") or "-")),
         ("instructions", str(it.get(channel.INSTRUCTIONS)
                      or "nothing of its own — rundesk says where it is")),
         ("reachable", "yes" if gateways.standing(

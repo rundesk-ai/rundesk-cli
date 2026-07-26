@@ -951,7 +951,12 @@ async def check(chose) -> int:
             if chose.server and guild is not None and str(guild.id) != str(chose.server):
                 say(ok=False, why=f"channel {chose.channel} is not in server {chose.server}")
                 return 1
-            where = f"#{found.name}" + (f" in {guild.name}" if guild is not None else "")
+            # On the *name*, not on the guild existing. Fetched by id, a channel can come
+            # back attached to a guild that has not been resolved to a name yet — so this
+            # said "#development in " with nothing after it, which reads like something
+            # went missing rather than like there was nothing to say.
+            named = getattr(guild, "name", None)
+            where = f"#{found.name}" + (f" in {named}" if named else "")
             shapes.append(_shape(chose, ROOMS, where, channel=str(chose.channel),
                                  server=chose.server))
     except Exception as why:  # noqa: BLE001 — a platform boundary, and the diagnosis

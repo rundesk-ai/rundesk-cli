@@ -1796,6 +1796,39 @@ raise SystemExit(1)
         self.assertIn("acme-dms", said)
         self.assertIn("acme-rooms", said)
 
+    def test_each_kind_of_place_is_given_a_home_under_its_own_name(self):
+        """R-CAD-15 — the check runs under the name that was typed, which is right for a
+        question asked before any channel exists. What a channel is *given* at start-up is
+        the home of the name it was written under, and one `add` may write several: a
+        channel whose name gained a suffix was handed a directory nobody ever made, so the
+        token an owner put beside it was not where it was looked for."""
+        code, said = drive(["channels", "ava", "add", "acme",
+                            "--kind", self._adapter(self.TWO_PLACES), "--allow", "2207"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        homes = self.at / "ava" / "channels"
+        self.assertEqual(["acme-dms", "acme-rooms"],
+                         sorted(one.name for one in homes.iterdir() if one.is_dir()))
+
+    def test_the_checks_own_directory_is_not_left_behind_when_it_is_empty(self):
+        """R-CAD-15 — a directory under a name no channel ended up having is one an owner
+        would put a token in and wonder why nothing read it."""
+        drive(["channels", "ava", "add", "acme", "--kind", self._adapter(self.TWO_PLACES),
+               "--allow", "2207"], self._gateways(), agents=self.agents)
+        self.assertFalse((self.at / "ava" / "channels" / "acme").exists())
+
+    def test_a_check_directory_with_something_in_it_is_kept_and_said(self):
+        """R-CAD-15 — an owner who put a token there before adding keeps it, and is told
+        where it belongs now rather than finding out when nothing connects."""
+        (self.at / "ava" / "channels" / "acme").mkdir(parents=True)
+        (self.at / "ava" / "channels" / "acme" / "token").write_text("theirs")
+        _, said = drive(["channels", "ava", "add", "acme",
+                         "--kind", self._adapter(self.TWO_PLACES), "--allow", "2207"],
+                        self._gateways(), agents=self.agents)
+        self.assertTrue((self.at / "ava" / "channels" / "acme" / "token").exists())
+        self.assertIn("is not empty", said)
+        self.assertIn("acme-dms", said)
+
     def test_a_kind_of_place_whose_name_is_already_taken_adds_none_of_them(self):
         """R-CAD-15 — every name is checked before any is written, so a second kind
         colliding does not leave the first half-added under a command that then failed."""

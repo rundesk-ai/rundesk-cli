@@ -231,6 +231,15 @@ class WhereAMessageCameFrom(unittest.TestCase):
         self.assertEqual("#ops on the Rundesk server", discord._place(at, False, False))
         self.assertEqual("Tim", discord._who(at))
 
+    def test_a_server_with_no_name_to_show_is_not_shown_as_blank(self):
+        """R-DIS-21 — fetched by id, a channel comes back attached to a guild that may not
+        have been resolved to a name. '#development in ' with nothing after it reads like
+        something went missing rather than like there was nothing to say."""
+        at = self.message(self.Where("ops"), self.Where(None), shown="Tim")
+        self.assertEqual("#ops", discord._place(at, False, False))
+        blank = self.message(self.Where("ops"), self.Where(""), shown="Tim")
+        self.assertEqual("#ops", discord._place(blank, False, False))
+
     def test_a_direct_message_is_named_as_one_rather_than_as_a_channel(self):
         """A direct message has no name and no server, and calling it '#None' would be
         rundesk telling the agent something untrue about where it is."""

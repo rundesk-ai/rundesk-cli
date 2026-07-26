@@ -31,7 +31,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from pathlib import Path
 
 from rundesk_cli import gateway, process, provider
@@ -652,7 +651,7 @@ def of(directory: Path, name: str) -> dict | None:
 
 
 def remember(directory: Path, name: str, kind: str, allow, settings=None,
-             secret=None, describes=None, says=None, fills=None, now=None) -> bool:
+             secret=None, describes=None, says=None, fills=None) -> bool:
     """Write down a channel that has already proved it works (R-CAD-9).
 
     Read, decided and written under one hold, because two channels being added together
@@ -679,7 +678,6 @@ def remember(directory: Path, name: str, kind: str, allow, settings=None,
                 "settings": dict(settings or {}),
                 "secret": dict(secret) if secret else None,
                 "describes": describes,
-                "added": (now or _stamped)(),
             }
             if fills:
                 # What this surface said it can fill in, kept so a `{where.something}` an
@@ -751,9 +749,3 @@ def allowed(record: dict, user: str) -> bool:
         return False
     return bool(user) and user in who
 
-
-def _stamped() -> str:
-    """When a channel was added, for a person reading the record. Never what anything is
-    ordered by — the record is a mapping, and one channel's time says nothing about
-    another's."""
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
