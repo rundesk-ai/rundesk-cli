@@ -117,5 +117,31 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `python3 -m trace` once per test file overwrites the previous file's `.cover` and reports nonsense.
 
 
+- **`./install.sh --uninstall` deletes the *checkout's* `.venv`**, which is the one a
+  developer's own `./rundesk` uses. Run the uninstall half of the gate while a gateway is
+  serving a channel and the next restart of that channel cannot import `discord` — the
+  running process survives, because it imported it already, so this shows up minutes later
+  as a channel that will not come back. Rebuild it (`python3 -m venv .venv && .venv/bin/python
+  -m pip install -r requirements.txt`) before carrying on.
+- **A gateway holds the `channel.py` it imported when it started.** Editing a module and
+  restarting *the adapter* is not enough: the adapter is a fresh process each time and the
+  gateway is not. An attachment was downloaded correctly by a new adapter and dropped by an
+  old seam, which reads exactly like the adapter being broken. Restart the gateway after
+  touching anything under `src/`, and check the file's mtime against the gateway's start
+  line in its log before believing what you are seeing.
+- **A second connection with the same bot token silently wins.** Running the Discord
+  adapter by hand to diagnose it, while a gateway is already serving that channel, makes
+  one of the two stop receiving — with no error on either. Stop the gateway first, or
+  accept that what you are watching is not what the gateway sees.
+- **A stand-in that is more generous than the real thing hides whole features.** Twice
+  here: a fake `turn.carry` volunteered what the brain could do, which the real one never
+  passed on, so steering was dead behind a green suite; and a fake `Outcome` was missing an
+  attribute the real one has, so a code path raised only in production. Give a stand-in
+  exactly the surface of the thing it stands for — no more.
+- **Guessing a vendor's field names costs a whole feature, silently.** The Codex adapter
+  looked for `changes`, `files`, `artifacts` and `outputs`; Codex emits `savedPath`. Nothing
+  errored — a generated image was simply never reported. Read a real item out of a run's
+  `.brain` file before writing the name of a field.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*
