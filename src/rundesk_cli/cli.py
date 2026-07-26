@@ -371,12 +371,13 @@ def build_parser() -> argparse.ArgumentParser:
     telling = on.add_parser("says", help="what this agent is told about where it is")
     telling.add_argument("channel", metavar="<channel>",
                          help="which channel, by the name it was added under")
-    for situation, what in (
-            (channel.ANY, "said every time, whatever the conversation is"),
-            (channel.DIRECT, "said as well when it is a direct message"),
-            (channel.ROOM, "said as well when others can read along")):
-        telling.add_argument(f"--{situation}", metavar="<text>", default=None,
-                             help=what + " — empty takes it back off")
+    # One piece of text, because a channel is already one place. An owner who wants an
+    # agent to say different things in a room and in private wants two channels, and gets
+    # two allow-lists with them — which is what they wanted anyway.
+    telling.add_argument("said", nargs="?", metavar="<text>", default=None,
+                         help="what to tell it, with {agent} {channel} {surface} {where} "
+                              "{called} {user} {conversation} filled in — empty takes it "
+                              "back off, and left out shows what is there")
     return parser
 
 
@@ -1422,31 +1423,26 @@ def _channel_says(args: argparse.Namespace, gateways, agents, whose) -> int:
     this shows what is already there — so an owner can read back exactly what their agent
     will be told before anyone says anything to it.
     """
-    says = {one: getattr(args, one) for one in channel.SITUATIONS
-            if getattr(args, one, None) is not None}
     it = channel.of(whose, args.channel)
     if it is None:
         print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
               file=sys.stderr)
         return 1
-    if not says:
-        standing = it.get(channel.SAYS) or {}
+    if args.said is None:
+        standing = it.get(channel.SAYS)
         if not standing:
             print(f"{args.name}/{args.channel}: SAYS NOTHING — rundesk says where it is "
                   f"and no more")
             print(f"        write your own:  rundesk channels {args.name} says "
-                  f"{args.channel} --room \"<text>\"")
+                  f"{args.channel} \"<text>\"")
             return 0
-        _as_table(("WHEN", "SAID"), [(one, standing[one])
-                                     for one in channel.SITUATIONS if standing.get(one)])
+        print(standing)
         return 0
-    wrong = ""
-    for situation, said in says.items():
-        wrong = channel.wrong_with_says({situation: said}) if said else ""
-        if wrong:
-            print(f"{args.name}/{args.channel}: NOT CHANGED — {wrong}", file=sys.stderr)
-            return 1
-    written = channel.tell(whose, args.channel, says)
+    wrong = channel.wrong_with_says(args.said) if args.said else ""
+    if wrong:
+        print(f"{args.name}/{args.channel}: NOT CHANGED — {wrong}", file=sys.stderr)
+        return 1
+    written = channel.tell(whose, args.channel, args.said)
     if written is None:
         print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
               file=sys.stderr)
@@ -1456,10 +1452,10 @@ def _channel_says(args: argparse.Namespace, gateways, agents, whose) -> int:
               file=sys.stderr)
         return 1
     unlogged = _note(gateways, args.name,
-                     f"channel '{args.channel}' was told what to say in "
-                     + ", ".join(sorted(says)),
+                     f"channel '{args.channel}' was told what to say"
+                     if args.said else f"channel '{args.channel}' was told nothing",
                      agents.resolved(args.name))
-    print(f"{args.name}/{args.channel}: TOLD — {', '.join(sorted(says))}")
+    print(f"{args.name}/{args.channel}: " + ("TOLD" if args.said else "TOLD NOTHING"))
     # **New conversations, not the next turn.** A brain is told this where its conversation
     # is *opened*, which is the only place a brain of this shape reads it — measured against
     # a real one, where the same instruction was obeyed at the start of a thread and ignored
@@ -1495,9 +1491,8 @@ def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
             f"{one} — {'present' if os.environ.get(one) else 'not set'}" for one in named)
             or "none needed"),
         ("added", str(it.get("added") or "-")),
-        ("says", ", ".join(one for one in channel.SITUATIONS
-                           if (it.get(channel.SAYS) or {}).get(one))
-            or "nothing of its own — rundesk says where it is"),
+        ("says", str(it.get(channel.SAYS)
+                     or "nothing of its own — rundesk says where it is")),
         ("reachable", "yes" if gateways.standing(
             args.name, agents.resolved(args.name).run).running
             else "no — the agent is not running"),

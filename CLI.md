@@ -30,7 +30,7 @@ rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--con
 rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] [--says <text>] <agent> <prompt>   with standing instructions, told apart from the prompt
 rundesk channels <agent> add --kind <kind> --allow <user> <channel> -- <option> [<arg> ...]                                                                                    put this agent on a channel
 rundesk channels <agent> remove <channel>                                                                                                                                      take this agent off a channel
-rundesk channels <agent> says [--any <text>] [--direct <text>] [--room <text>] <channel>                                                                                       what this agent is told about where it is
+rundesk channels <agent> says <channel> <text>                                                                                                                                 what this agent is told about where it is
 rundesk channels <agent> show <channel>                                                                                                                                        one channel, and who may reach this agent through it
 rundesk schedules <agent> add --when <cron> <schedule> -- <program> [<arg> ...]                                                                                                add a schedule
 rundesk schedules <agent> off <schedule>                                                                                                                                       keep a schedule but stop it running
@@ -57,10 +57,8 @@ rundesk uninstall [--purge]                                                     
 ```sh
 --all                           every agent on this machine
 --allow <user>                  who may reach this agent through it — at least one, always; repeatable
---any <text>                    said every time, whatever the conversation is — empty takes it back off
 --check                         say whether a newer release exists
 --conversation <conversation>   which conversation to carry on — this terminal's, when left out
---direct <text>                 said as well when it is a direct message — empty takes it back off
 --fresh                         start the conversation again rather than carrying it on
 --here                          run it in this terminal instead of handing it to the machine
 --kind <kind>                   which kind of surface — one that ships, or the path of a program that speaks yours
@@ -68,7 +66,6 @@ rundesk uninstall [--purge]                                                     
 --provider <provider>           which brain answers for it when a turn does not say
 --purge                         also take every agent's home, log and history
 --read-only                     let this turn look at the machine without changing it
---room <text>                   said as well when others can read along — empty takes it back off
 --says <text>                   standing instructions for this turn, told to the brain apart from the prompt — what a schedule running unattended says
 --set <key=value>               anything that brain takes, carried to it unread; repeatable
 --source <source>               whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine
@@ -82,6 +79,7 @@ rundesk uninstall [--purge]                                                     
 <prompt>                        what to ask it, in quotes
 <run>                           which run — the id listed against each by `runs`
 <schedule>                      what to call it, and what to name it by later
+<text>                          what to tell it, with {agent} {channel} {surface} {where} {called} {user} {conversation} filled in — empty takes it back off, and left out shows what is there
 ```
 
 ## What it exits with

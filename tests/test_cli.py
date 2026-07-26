@@ -1831,32 +1831,29 @@ raise SystemExit(1)
         drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
                "--allow", "2207"], self._gateways(), agents=self.agents)
         code, said = drive(["channels", "ava", "says", "ops",
-                            "--room", "You are in {where}. Others read this."],
+                            "You are in {where}. Others read this."],
                            self._gateways(), agents=self.agents)
         self.assertEqual(0, code)
         self.assertIn("TOLD", said)
         kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
-        self.assertEqual({"room": "You are in {where}. Others read this."},
-                         kept[channel.SAYS])
+        self.assertEqual("You are in {where}. Others read this.", kept[channel.SAYS])
         _, back = drive(["channels", "ava", "says", "ops"], self._gateways(),
                         agents=self.agents)
         self.assertIn("Others read this", back)
 
-    def test_one_situation_being_written_does_not_drop_another(self):
-        """R-CH-22 — merged rather than replaced. An owner setting what is said in a room
-        must not silently lose what they wrote for a direct message a week ago."""
+    def test_writing_it_again_replaces_it_and_empty_takes_it_off(self):
+        """R-CH-22 — one piece of text for one channel, so there is nothing to merge.
+        Taking it off puts the channel back to the sentence rundesk would have said."""
         drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
                "--allow", "2207"], self._gateways(), agents=self.agents)
-        for flag, said in (("--direct", "Private."), ("--room", "Public.")):
-            drive(["channels", "ava", "says", "ops", flag, said],
+        for said in ("Public.", "Actually, be brief."):
+            drive(["channels", "ava", "says", "ops", said],
                   self._gateways(), agents=self.agents)
         kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
-        self.assertEqual({"direct": "Private.", "room": "Public."}, kept[channel.SAYS])
-        drive(["channels", "ava", "says", "ops", "--room", ""],
-              self._gateways(), agents=self.agents)
+        self.assertEqual("Actually, be brief.", kept[channel.SAYS])
+        drive(["channels", "ava", "says", "ops", ""], self._gateways(), agents=self.agents)
         kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
-        self.assertEqual({"direct": "Private."}, kept[channel.SAYS],
-                         "taking one situation back off took another with it")
+        self.assertNotIn(channel.SAYS, kept)
 
     def test_a_name_that_cannot_be_filled_in_is_refused_before_it_is_written(self):
         """R-CH-22 — checked when it is written, which is the whole reason this is a
@@ -1864,7 +1861,7 @@ raise SystemExit(1)
         turn from then on and never say so."""
         drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
                "--allow", "2207"], self._gateways(), agents=self.agents)
-        code, said = drive(["channels", "ava", "says", "ops", "--room", "Hello {wheree}."],
+        code, said = drive(["channels", "ava", "says", "ops", "Hello {wheree}."],
                            self._gateways(), agents=self.agents)
         self.assertEqual(1, code)
         self.assertIn("NOT CHANGED", said)
@@ -1875,7 +1872,7 @@ raise SystemExit(1)
     def test_telling_a_channel_that_is_not_there_says_so(self):
         """R-CH-22 — told apart from a record that could not be written, because one is
         the owner's typo and the other is a disk to look at."""
-        code, said = drive(["channels", "ava", "says", "nowhere", "--any", "Hello."],
+        code, said = drive(["channels", "ava", "says", "nowhere", "Hello."],
                            self._gateways(), agents=self.agents)
         self.assertEqual(1, code)
         self.assertIn("NOT FOUND", said)

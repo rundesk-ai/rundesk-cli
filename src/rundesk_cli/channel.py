@@ -76,17 +76,19 @@ ATTACHED = "attachments"
 #: where the conversation is, which is rundesk's to decide and not the sender's to say.
 WHERE, CALLED = "where", "called"
 
-#: What an owner has this agent told about its situation, before it reads a word of what
-#: somebody typed (R-CH-22). Three keys and no more: `any` is used every time, and then
-#: whichever of `direct` or `room` this conversation is. They compose rather than override,
-#: so what is true everywhere is written once.
+#: What an owner has this agent told about where it is, before it reads a word of what
+#: somebody typed (R-CH-22). One piece of text, because a channel is already one place.
 #:
-#: Closed, and deliberately not a language. A condition an owner can write is a condition
-#: rundesk has to explain, get right, and keep right — and what was actually asked for was
-#: "say something different in a room than in a direct message", which is three keys.
+#: **It was briefly three, keyed by situation** — one said every time, one for a direct
+#: message, one for a room — and that was a conditional language invented to paper over a
+#: single channel that had been pointed at everything. A channel record already *is* a
+#: scope: `--dm` takes direct messages, `--server` and `--channel` confine to a room. An
+#: owner who wants both wants two channels, and gets two allow-lists with them, which is
+#: what they wanted anyway — the people who may speak to an agent in a public room are not
+#: the people who may speak to it in private. With one channel per surface there is no
+#: branch left to write, and nothing here has to explain, get right, and keep right the
+#: rules for composing one.
 SAYS = "says"
-ANY, DIRECT, ROOM = "any", "direct", "room"
-SITUATIONS = (ANY, DIRECT, ROOM)
 
 #: What an owner may write `{like this}` and have filled in. Closed, because a name that is
 #: not here is a typo, and a typo that silently becomes empty is an instruction that quietly
@@ -371,26 +373,21 @@ def surface(kind: str) -> str:
 def preface(record: dict, agent: str, name: str, it: dict) -> str:
     """What this agent is told about its situation, for this arrival (R-CH-22).
 
-    `any` then the one that fits, joined — so what is true everywhere is written once and
-    what is true only in a room is written where it belongs. An owner who has written
-    nothing gets the sentence rundesk would have said anyway, which is the only default:
-    something that says where it is beats something that says nothing, and an owner who
-    disagrees says so by writing their own.
+    One piece of text, because a channel is already one place — see `SAYS`. An owner who
+    has written nothing gets the sentence rundesk would have said anyway, which is the only
+    default worth having: something that says where it is beats something that says
+    nothing, and an owner who disagrees says so by writing their own.
     """
-    says = record.get(SAYS)
-    said = []
-    if isinstance(says, dict):
-        said = [str(says.get(one) or "").strip()
-                for one in (ANY, DIRECT if it.get("direct") else ROOM)]
-    said = [one for one in said if one]
+    said = record.get(SAYS)
+    said = said.strip() if isinstance(said, str) else ""
     if not said:
-        said = [_by_default(record, it)]
+        said = _by_default(record, it)
     filling = {
         "agent": agent, "channel": name, "surface": surface(record.get("kind")),
         "where": plainly(it.get(WHERE)), "called": plainly(it.get(CALLED)),
         "user": str(it.get("user") or ""), "conversation": str(it.get("conversation") or ""),
     }
-    return _fill("\n\n".join(one for one in said if one), filling)[:SAYS_MOST]
+    return _fill(said, filling)[:SAYS_MOST]
 
 
 def _by_default(record: dict, it: dict) -> str:
@@ -427,7 +424,7 @@ def _fill(said: str, filling: dict) -> str:
     return said
 
 
-def wrong_with_says(says) -> str:
+def wrong_with_says(said) -> str:
     """Why these standing instructions cannot be stored, or empty if they can (R-CH-22).
 
     Said when an owner writes them, never when a turn runs. A name misspelled here is an
@@ -435,20 +432,14 @@ def wrong_with_says(says) -> str:
     to find out is the moment it is written — which is the same rule adding a channel
     already follows.
     """
-    if not isinstance(says, dict):
-        return "what an agent is told has to be written as a set of named situations"
-    for situation, said in says.items():
-        if situation not in SITUATIONS:
-            return (f"'{situation}' is not a situation — it is one of "
-                    + ", ".join(SITUATIONS))
-        if not isinstance(said, str):
-            return f"what is said in {situation} has to be written as words"
-        if len(said) > SAYS_MOST:
-            return f"what is said in {situation} is longer than {SAYS_MOST} characters"
-        for found in re.findall(r"\{([a-z_]+)\}", said):
-            if found not in FILLED:
-                return (f"there is nothing called '{found}' to fill in — there is "
-                        + ", ".join(FILLED))
+    if not isinstance(said, str):
+        return "what an agent is told has to be written as words"
+    if len(said) > SAYS_MOST:
+        return f"what an agent is told is longer than {SAYS_MOST} characters"
+    for found in re.findall(r"\{([a-z_]+)\}", said):
+        if found not in FILLED:
+            return (f"there is nothing called '{found}' to fill in — there is "
+                    + ", ".join(FILLED))
     return ""
 
 
@@ -604,14 +595,13 @@ def remember(directory: Path, name: str, kind: str, allow, settings=None,
     return True
 
 
-def tell(directory: Path, name: str, says: dict) -> bool | None:
+def tell(directory: Path, name: str, said: str) -> bool | None:
     """Change what this agent is told about a situation, leaving the rest of it alone
     (R-CH-22).
 
-    Under the same one hold everything else here writes under, and merged rather than
-    replaced: an owner setting what is said in a room must not silently drop what they
-    wrote for a direct message a week ago. A situation set to nothing is removed, which is
-    how one is taken back off.
+    Under the same one hold everything else here writes under. Nothing to merge: it is one
+    piece of text for one channel, and writing it replaces it. Empty takes it back off, and
+    the channel goes back to the sentence rundesk would have said.
 
     `None` when there is no channel by that name, so the difference between "changed
     nothing because it is not there" and "changed nothing because it could not be written"
@@ -622,14 +612,8 @@ def tell(directory: Path, name: str, says: dict) -> bool | None:
             it = kept.get(name)
             if it is None:
                 return None
-            standing = dict(it.get(SAYS) or {})
-            for situation, said in says.items():
-                if said:
-                    standing[situation] = said
-                else:
-                    standing.pop(situation, None)
-            if standing:
-                it[SAYS] = standing
+            if said.strip():
+                it[SAYS] = said.strip()
             else:
                 it.pop(SAYS, None)
             kept[name] = it

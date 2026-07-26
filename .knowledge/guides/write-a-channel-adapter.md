@@ -139,6 +139,14 @@ something this vocabulary has no word for yet, and its identifier is not a trans
 of that. A `did` you do not recognise cannot happen today
 and would mean this list had grown, so treat it the way you treat an absent one.
 
+**One channel is one place, so scope yourself and say so.** An owner names a channel and
+points it at somewhere: your `--check` decides what "somewhere" means on your platform and
+reports it in `describes`. Two kinds of place — private messages and rooms full of people —
+are **two channels**, not one channel that branches. That is not a style preference: a
+channel carries the list of who may reach the agent through it, and the people who may
+speak to an agent in a public room are not the people who may speak to it in private. One
+channel spanning both means one allow-list spanning both.
+
 **Say where it was said, and who said it — in the words your surface shows.** `where` is
 what a person reading your platform would call the place (`#ops on the Rundesk server`, `a
 direct message`, `the thread 'what changed today?' under #ops`), and `called` is the name

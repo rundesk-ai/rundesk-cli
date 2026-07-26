@@ -541,23 +541,32 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
         self.assertEqual("", odd[channel.CALLED])
         self.assertEqual("", odd[channel.WHERE])
 
-    def test_what_an_owner_has_an_agent_told_composes_what_is_always_true_with_what_fits(self):
-        """R-CH-22 — `any` every time, then the one situation this is, joined. Composing
-        rather than overriding is what lets what is true everywhere be written once."""
-        record = {"kind": "discord", channel.SAYS: {
-            "any": "You are {agent}, reached over {surface}.",
-            "room": "You are in {where}. Others read this.",
-            "direct": "A private conversation with {called}."}}
-        room = channel.preface(record, "ava", "dms", {
-            "direct": False, "where": "#ops", "called": "Tim"})
-        self.assertIn("You are ava, reached over discord.", room)
-        self.assertIn("You are in #ops. Others read this.", room)
-        self.assertNotIn("private conversation", room)
-        alone = channel.preface(record, "ava", "dms", {
-            "direct": True, "where": "a direct message", "called": "Tim"})
-        self.assertIn("You are ava, reached over discord.", alone)
-        self.assertIn("A private conversation with Tim.", alone)
-        self.assertNotIn("Others read this", alone)
+    def test_what_an_owner_has_an_agent_told_is_one_piece_of_text(self):
+        """R-CH-22 — a channel is already one place, so there is no branch to write. It
+        was briefly three, keyed by situation, which was a conditional language invented
+        to paper over one channel pointed at everything."""
+        record = {"kind": "discord", channel.SAYS:
+                  "You are {agent} in {where}, reached over {surface}. {called} asked."}
+        self.assertEqual("You are ava in #ops, reached over discord. Tim asked.",
+                         channel.preface(record, "ava", "dms", {
+                             "direct": False, "where": "#ops", "called": "Tim"}))
+
+    def test_a_channel_scopes_itself_so_two_surfaces_are_two_channels(self):
+        """R-CH-22 — the reason there is no branch. Two records are two scopes, two sets
+        of standing instructions *and* two allow-lists, which is the part that matters:
+        the people who may speak to an agent in a public room are not the people who may
+        speak to it in private."""
+        rooms = {"kind": "discord", "allow": ["2207", "9999"],
+                 channel.SAYS: "You are in {where}. Others read this."}
+        alone = {"kind": "discord", "allow": ["2207"],
+                 channel.SAYS: "A private conversation with {called}."}
+        self.assertIn("Others read this",
+                      channel.preface(rooms, "ava", "ops", {"where": "#ops"}))
+        self.assertIn("A private conversation with Tim",
+                      channel.preface(alone, "ava", "dms", {"called": "Tim"}))
+        self.assertTrue(channel.allowed(rooms, "9999"))
+        self.assertFalse(channel.allowed(alone, "9999"),
+                         "one allow-list reached across two surfaces")
 
     def test_an_owner_who_wrote_nothing_is_still_told_where_the_agent_is(self):
         """R-CH-21, R-CH-22 — something that says where it is beats something that says
@@ -585,33 +594,33 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
         # in the filling passed unnoticed.
         for record in ({"kind": "/opt/acme/my-telegram-adapter"},
                        {"kind": "/opt/acme/my-telegram-adapter",
-                        channel.SAYS: {"any": "You are reached over {surface}."}}):
+                        channel.SAYS: "You are reached over {surface}."}):
             said = channel.preface(record, "ava", "ops",
                                    {"direct": True, "where": "a direct message"})
             self.assertIn("over my-telegram-adapter", said)
             self.assertNotIn("/opt", said, "a path on this machine reached the prompt")
 
-    def test_a_situation_that_does_not_exist_is_refused_when_it_is_written(self):
+    def test_what_is_not_words_at_all_is_refused_when_it_is_written(self):
         """R-CH-22 — the moment an owner writes it, not quietly at every turn after."""
-        self.assertIn("not a situation", channel.wrong_with_says({"shouting": "hi"}))
-        self.assertIn("named situations", channel.wrong_with_says("hi"))
-        self.assertIn("as words", channel.wrong_with_says({"any": 12}))
-        self.assertIn("longer than", channel.wrong_with_says({"any": "x" * 5000}))
-        self.assertEqual("", channel.wrong_with_says({"any": "hi {called}", "room": ""}))
+        self.assertIn("as words", channel.wrong_with_says(12))
+        self.assertIn("as words", channel.wrong_with_says({"any": "hi"}))
+        self.assertIn("longer than", channel.wrong_with_says("x" * 5000))
+        self.assertEqual("", channel.wrong_with_says("hi {called}"))
 
     def test_a_name_that_cannot_be_filled_in_is_refused_when_it_is_written(self):
         """R-CH-22 — a misspelt name is an instruction that would have gone silently
         blank every turn from then on, and said nothing about having done so."""
         self.assertIn("nothing called 'calledd'",
-                      channel.wrong_with_says({"any": "hello {calledd}"}))
+                      channel.wrong_with_says("hello {calledd}"))
         self.assertEqual("", channel.wrong_with_says(
-            {"any": " ".join("{%s}" % one for one in channel.FILLED)}))
+            " ".join("{%s}" % one for one in channel.FILLED)))
 
     def test_a_brace_an_owner_wrote_for_its_own_sake_is_left_alone(self):
         """R-CH-22 — an owner asking for JSON, or writing a shell expansion, wrote a brace
         meaning a brace. Filling in by name rather than by format keeps it one."""
-        said = channel.preface({"kind": "discord", channel.SAYS: {
-            "any": 'Answer as {"ok": true} and sign it {agent}. $\{HOME\} is yours.'}},
+        said = channel.preface(
+            {"kind": "discord", channel.SAYS:
+                'Answer as {"ok": true} and sign it {agent}. $\{HOME\} is yours.'},
             "ava", "dms", {"direct": True})
         self.assertIn('{"ok": true}', said)
         self.assertIn("$\{HOME\}", said)
@@ -620,7 +629,7 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
     def test_what_an_agent_is_told_is_bounded_however_it_was_composed(self):
         """R-CH-22 — each piece is bounded when written, and so is the whole once the
         pieces are joined and what they name is filled in."""
-        record = {"kind": "discord", channel.SAYS: {"any": "x" * 3000, "room": "y" * 3000}}
+        record = {"kind": "discord", channel.SAYS: "{agent} " * 2000}
         self.assertEqual(channel.SAYS_MOST,
                          len(channel.preface(record, "ava", "dms", {"direct": False})))
 
