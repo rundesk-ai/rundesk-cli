@@ -577,7 +577,7 @@ gained — and **one file changed**. Nothing outside `adapters/codex` knew eithe
   - **`runs` and `usage` as verbs.** The contracts graduated on module-level evidence; reading a run
     back from the command line is a listing, and listings are cheap to add once a channel wants one.
   - **Approvals and questions.** `codex exec` cannot answer one mid-turn and `app-server` can; nothing
-    here uses that yet, and Phase 8 — questions and approvals — is where it belongs.
+    here uses that yet, and Phase 11 — questions and approvals — is where it belongs.
   - **A gateway you can ask for something.** `ask` runs in the terminal that typed it, exactly as a
     schedule run by hand does. Phase 3 is what forces the question.
 
@@ -735,7 +735,7 @@ The first slice needs:
 - local retention of the final run outcome when Discord is unavailable.
 
 **Stopping and forgetting are not approvals.** They are gestures aimed at the conversation, not at the
-provider's permission model, so they belong here while questions and approvals wait for Phase 8. What a
+provider's permission model, so they belong here while questions and approvals wait for Phase 11. What a
 control *did* arrives as the turn's own outcome, never as the command's answer — acknowledging a control
 with a lifecycle signal is what made resetting mid-turn publish the running turn's half-written output in
 the Node build (R-DIS-12).
@@ -1231,7 +1231,10 @@ Four things about it that decide how this phase is written:
 4. **Delete the old layout and the code that defaulted to it** — including `agent.resolved()` returning
    nothing for a name that is not an agent, which is what silently sends every unknown name to
    `~/.rundesk/{run,logs,schedules}` today.
-5. **Migrate the owner's own install**, with a copy kept until it is proved.
+5. **Prove it against a scratch install built for the purpose**, not against the owner's own.
+   Nothing here is released, so there is no consumer data to carry — a migration is proved by
+   building the old shape deliberately and moving it, which is repeatable, and not by moving the
+   one copy that cannot be rebuilt if it goes wrong.
 
 ### Three decisions this phase carries out rather than revisits
 
@@ -1286,9 +1289,9 @@ Four things about it that decide how this phase is written:
 An install of the previous release, with agents, schedules, channels, sessions and history on disk, is
 updated to this one: the migration runs in the window where nothing is up, every agent comes back, and
 everything that was there is readable in the new shape. The same update run twice migrates once. A
-migration made to fail leaves the agents down and says which one and why. And the owner's own install —
-the one with real history in it — is carried across, with what it looked like before kept until it is
-proved.
+migration made to fail leaves the agents down and says which one and why. The install it is proved
+against is one built for the purpose and thrown away after — nothing here is released, so there is no
+consumer's history to carry, and a migration proved against a copy nobody can rebuild is proved once.
 
 **And every part of it is hooked up, not merely present.** Phase 4 built the store, the runner and the
 new file layout against nothing. This phase is not finished while any of them is still reached by
@@ -1317,6 +1320,20 @@ A phase that has moved the data but left one reader on the old layout has not mo
 
 **Outcome:** an agent does work because the time came, through the same resolver, run record and
 provider adapter that Discord and the terminal already use.
+
+**This is the end-to-end proof, which is why it comes first.** A schedule already runs a *program*
+today. What it cannot do is run a *turn* — and making it work exercises the whole chain in one
+line: the clock fires, a gateway admits a turn, a brain answers, the account records it, and the
+outcome reaches a channel. Anything broken anywhere along that chain shows up here.
+
+### Deliverables
+
+1. `process.environment()` passes the state directories a gateway was given, so a program it
+   starts reads what it reads.
+2. A regression case: **a program the gateway starts reads the same places the gateway does.**
+3. A scheduled `rundesk ask <agent> "…"` that completes, records a run, and can be read back.
+4. The outcome of a scheduled turn reaching the agent's channel where it has one.
+5. `R-SCH` rows for both, and the finding-22 entry closed in `SUGGESTIONS.md`.
 
 **Most of the mechanism is already here, and one thing blocks it.** A schedule carries what it names
 without reading it (R-SCH-3), so a schedule whose program is `rundesk ask ava "…"` is a scheduled turn —
@@ -1376,7 +1393,100 @@ recorded as findings 24–26 and 31.
 One scheduled run passes through the same resolver, run record and provider adapter that Discord and the
 terminal already used — and its outcome is readable the next morning without a terminal having been open.
 
-## Phase 7 — Bootstrap Knowledge, Skills and Tool Discovery
+## Phase 7 — Two More Brains Behind the Seam
+
+**Outcome:** Claude Code and Grok each carry a whole turn for an agent, and **nothing inside
+rundesk changes to accommodate either.** If one of them needs a change in the core, that is the
+finding: the seam was not open, and the change belongs in the contract.
+
+**Most of this was already measured, and re-buying it costs real money.** The Node build drove
+all three CLIs and kept what it found, locked to `claude 2.1.219` and `grok 0.2.111` in
+`../rundesk/src/contracts/cli-versions.lock`. Carry the evidence in first; probe only the gaps.
+
+**What is already known, and must not be rediscovered:**
+
+| | Claude | Grok |
+|---|---|---|
+| text arrives | in fragments **and again whole** — reading both double-counts every reply | in fragments |
+| tool events | `tool_use` / `tool_result`, ids `toolu_…` | **none at all** — it runs a command and describes the result in prose |
+| usage | **per turn**, and `cache_creation` is billed above input so it can never be folded in with `cache_read` | split matches Claude's, not Codex's |
+| session | client-minted uuid, so the handle exists before the first byte | same shape |
+| system prompt | `--append-system-prompt` adds, `--system-prompt` replaces | `--rules` adds, `--system-prompt-override` replaces |
+| private home | `CLAUDE_CONFIG_DIR` isolates the login too — two agents need two `/login` runs | `GROK_HOME` **unproven** |
+| the trap | `--permission-mode` is not a read-only posture; the allowlist is | `--permission-mode dontAsk` is **accepted and silently ignored**, and `--sandbox` is a no-op |
+
+### Deliverables
+
+1. **The evidence carried in**, as dated research notes under `.knowledge/research/` with the
+   version lock recorded: the two golden streams (`claude-stream.jsonl`, `grok-stream.jsonl`) as
+   test fixtures, and the per-line mapping decisions with the reason each line is dropped.
+2. **Probes for the gaps only** — `.knowledge/scripts/probe-claude`, `probe-grok`, following
+   `probe-codex`'s shape: an `--offline` half that costs nothing, a live half, and a named
+   verdict rather than numbers to squint at. The gaps are precise: Grok's resume round-trip,
+   whether Grok's usage is per-turn or cumulative, whether `GROK_HOME` isolates a login, and
+   whether Claude's `--system-prompt` really replaces.
+3. `src/providers/claude` and `src/providers/grok`, declaring only what was measured.
+4. `tests/test_claude.py` and `tests/test_grok.py` driving the golden streams offline, plus a
+   step each in `build.yml`.
+5. Both pass `python3 tests/test_provider.py --adapter src/providers/<brain>` unchanged.
+6. `R-PRV-20` and `R-PRV-22` turned ✅ — Claude streams fragments and reports files, which is
+   exactly what no test has driven a real brain to do.
+
+### Exit proof
+
+Both brains answer for one agent, and `git diff --stat` for the phase touches nothing outside
+`src/providers/`, `tests/`, `.knowledge/` and `build.yml`.
+
+## Phase 8 — Provider Adapters: Audit the Seam
+
+**Outcome:** somebody who has never seen this code can write a brain — or point at an endpoint —
+and have it work with every feature, and what rundesk keeps about a brain is stable enough to
+build on.
+
+**Why an audit is a phase.** Three shipped adapters and a stranger's is the first point the seam
+can be judged honestly rather than from one example. It is also the point where the promises made
+early are checked against what shipped.
+
+### Deliverables
+
+1. **`src/providers/api`** — a generic endpoint adapter, so pointing rundesk at an
+   OpenAI-compatible or custom HTTP brain is **configuration rather than code**. The roadmap
+   already promises a self-hosted endpoint is reached the same way a shipped one is; today that
+   is only true if you write a program.
+2. **The decoupling test**: the poorest adapter imaginable — declaring `{}`, no tools, no usage,
+   no model, no steering — still gets schedules, channels, history, search and `doctor`. Every
+   feature works against the contract or degrades honestly, never against a shipped adapter.
+3. **A live defect fixed**: `make` is a legal verb in `provider.DID` and in the guide, and the
+   conformance suite's assertion omits it — so an adapter that emits it fails a suite it passes.
+4. **Two contradictions settled**: the shipped Codex adapter ignores `RUNDESK_PROVIDER_HOME`
+   against the guide's own advice, on measured grounds — either the guide moves or the adapter
+   does. And a brain's identity is a fingerprint of its *file path*, so moving your program
+   orphans its sessions.
+5. `R-PRV-13`, `-20`, `-22` closed or narrowed to what is true.
+6. **A new stranger's adapter**, written from the guide alone by someone without the code — the
+   same bar Phase 2 set, re-run against a guide that has since changed.
+7. `doctor` and `agents` show what each brain declared it can do, without starting one.
+8. The guide's dead link fixed, and what an author is guaranteed across versions written down.
+
+## Phase 9 — Channel Adapters: Audit the Seam
+
+**Outcome:** the same, on the other edge — a new surface hooks into every existing feature
+without touching one of them.
+
+### Deliverables
+
+1. **The decoupling test**: the poorest surface there is — no threads, no reactions, no typing,
+   no edits — carries a whole turn, and every feature either works on it or degrades honestly.
+   Correctness never degrades; only fidelity does.
+2. `R-CAD-6` and `R-CAD-7` turned ✅ — held open by the gateway, and reconnecting without a turn
+   noticing. Both are proved by hand today and by nothing repeatable.
+3. **A new stranger's channel adapter**, written from the guide alone.
+4. What is kept for a channel audited and written down: the opaque adapter blob, the credential
+   held as a *name* and never a value, and the per-channel directory an adapter owns.
+5. A capability-versus-feature matrix in the contract, so an author knows what declaring
+   nothing costs them.
+
+## Phase 10 — Bootstrap Knowledge, Skills and Tool Discovery
 
 **Outcome:** every provider can be given the same agent's knowledge and a basic skill without Rundesk
 becoming a second skills or tools engine.
@@ -1409,7 +1519,7 @@ Tool execution and richer grants wait until one provider turn is proven — whic
 Each supported provider has a current capability row marked proven, unsupported or unknown. Rundesk does
 not claim that a provider loaded a rule or skill based only on file presence.
 
-## Phase 8 — Questions, Approvals and Recovery
+## Phase 11 — Questions, Approvals and Recovery
 
 **Outcome:** a supported provider can pause for remote input without weakening its native permission
 model, and Rundesk can recover truthfully after a gateway/channel restart.
@@ -1438,31 +1548,25 @@ A manual canary completes one question and one approval through Discord, then re
 supported restart boundary. The public always-online claim waits until interrupted work can resume rather
 than restart and repeated crashes stop looping (the currently unproven R-GW-22 and R-GW-24).
 
-## Phase 9 — Add Provider and Channel Breadth One Adapter at a Time
+## Phase 12 — Add Channel Breadth One Adapter at a Time
 
-**Outcome:** Claude, Codex and Grok can each be selected where an entry point is made, and a second
-channel can reuse the same channel contract without changing the agent.
+**Outcome:** a second real surface — Slack — reuses the channel contract without changing the agent,
+the seam or any provider.
 
-Add the remaining providers one at a time behind the Phase 2 conformance suite — which by now a
-stranger's adapter has already passed, so adding one is writing a program against a published contract
-rather than extending a core. Preserve real differences: do not synthesize tool events a provider does
-not emit, claim interactive input a protocol cannot accept or hide cumulative usage behind guessed
-per-turn numbers.
+The brains were done in Phase 6. This is the other edge, and the same claim: adding a surface is
+writing a program against a published contract rather than extending a core. Only after Discord and
+the fake channel share a proven surface should Slack be added. A Slack channel selects its provider and
+model exactly as Discord and a schedule do; it does not add Slack fields to the agent.
 
-If adding one of these needs a change inside Rundesk, that is the finding — the seam was not open, and
-the change belongs in the contract rather than in a special case for whichever vendor exposed it.
-
-Only after Discord and the fake channel share a proven surface should Slack be added. A Slack binding
-selects its provider/model exactly as Discord and schedules do; it does not add Slack fields to the
-agent.
+If adding one needs a change inside Rundesk, that is the finding — the seam was not open, and the
+change belongs in the contract rather than in a special case for whichever platform exposed it.
 
 ### Exit proof
 
-- Each provider passes the supported subset of the same invocation/replay/recovery suite.
-- `doctor` reports installed version and proven/unsupported capabilities for each provider.
-- One agent is exercised through at least two channels and two schedules with different provider/model
-  selections and unchanged agent knowledge.
-- Adding the second real channel requires a wire/presentation adapter, not provider or agent changes.
+- One agent is exercised through at least two channels and two schedules with different provider and
+  model selections, and unchanged agent knowledge.
+- Adding the second real channel requires a wire and presentation adapter, and no provider or agent
+  change at all.
 
 ## Explicitly Deferred
 
@@ -1478,29 +1582,33 @@ agent.
 
 ## Ready-for-Next-Phase Verdict
 
-Phases 0 to 3 are done. Agents exist and are operated by name; a brain is reached through a seam a
-stranger has already written against; Discord is one channel adapter of several possible ones. **Next is
-the shape of what is kept** — because a consumer's data begins existing at the first release, and a record
-written without a version can never afterwards be read with certainty.
+Phases 0 to 4 are done. Agents exist and are operated by name; a brain is reached through a seam a
+stranger has already written against; Discord is one channel adapter of several possible ones; and the
+shape of everything durable is settled, ratified, and built against nothing that matters yet.
 
-The next implementation sequence should be:
+What remains, in order:
 
-1. ~~Make the dependency/test gate truthful and declare the approved product/CLI surface.~~ **Done.**
-2. ~~Build the agent and its home, and refactor the command surface so agents are what a person operates
-   and gateways are how they run.~~ **Done.**
-3. ~~Open the provider seam and put one brain behind it — the contract first, a shipped adapter as its
-   first customer, a stranger's adapter as the proof, and the transcript that makes any of it worth
-   having.~~ **Done.**
-4. ~~Reach that agent through Discord.~~ **Done** — the channel seam, with Discord as its first adapter
-   and a stranger's channel adapter proving it open.
-5. **Design the shape of what is kept, and build the way in.** The design settled and agreed — one home
-   per kind, a version on everything, what may be destroyed — and the schema and query seam built and
-   exercised against nothing that matters yet. **This is next, and it is next because it is the only work
-   here with a deadline** — the shape stops being cheap to change the day somebody installs.
-6. **Move everything onto it**, exactly as designed: the migration runner, every reader moved across to
-   that seam, the old layout deleted, and the owner's own install carried over.
-7. Let the clock start work, which is the trigger nobody is watching.
-8. Add skills and tool discovery, which are additive and change nothing already proven.
+| | Phase | What lands |
+|---|---|---|
+| 5 | Move everything onto it | Migration `002`, every reader on the store, the old layout deleted. **Against scratch** — nothing is pre-release data worth carrying |
+| 6 | Let the clock start work | The end-to-end proof: a schedule fires a *turn*, not just a program, and its outcome reaches a channel |
+| 7 | Two more brains | Claude and Grok, on evidence the Node build already measured, re-probing only the gaps |
+| 8 | Provider adapters — audit the seam | A generic endpoint adapter, the decoupling test, and the contradictions settled |
+| 9 | Channel adapters — audit the seam | The same, on the surfaces side |
+| 10 | Skills and tool discovery | Additive: a skill an agent loads, and an inventory of what it was granted |
+| 11 | Questions, approvals, recovery | A brain pausing mid-turn for an answer, and surviving a restart while it waits |
+| 12 | Channel breadth | Slack, needing no provider or agent change |
+
+**Six comes before seven on purpose.** The clock is one bug — a gateway's children are handed five
+environment variables and none of them are the state directories, so a scheduled `rundesk ask` cannot
+find its own agent. Fixing it exercises the entire chain in one line: clock, gateway, turn, brain,
+account, channel. Anything Phase 5 broke shows up there, before two more brains are added on top.
+
+**Eight and nine are audits, and they are phases because three shipped adapters plus a stranger's is the
+first point the seam can be judged rather than described.** Their shared claim is the one that decides
+whether anybody else can build here: **a feature is written against the contract, never against the
+adapter that shipped first.** The test is the poorest possible adapter — declaring nothing, doing
+nothing — still getting every feature that does not strictly require what it lacks.
 
 **A resolver phase used to sit at step 3 and no longer does.** With no `bindings` verb there was no
 object anyone creates, and its one durable artefact — the ledger that says which conversation is

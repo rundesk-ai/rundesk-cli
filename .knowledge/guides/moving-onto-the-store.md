@@ -27,7 +27,9 @@ against [`agent-store`](../prd/agent-store.md) or
    agent (`agent.py:255`), which is what silently sends every unknown name to the top level.
    **This is last, not first**: those helpers cannot go while the readers above still read
    through them, so the order is forced.
-5. **Migrate the owner's own install**, with a copy kept until it is proved.
+5. **Prove it against a scratch install built for the purpose.** Nothing here is released, so
+   there is no consumer data to carry. Build the old shape deliberately, migrate it, and throw it
+   away — that is repeatable, and moving the one copy that cannot be rebuilt is not.
 
 ## What already reports, and what still has to
 
