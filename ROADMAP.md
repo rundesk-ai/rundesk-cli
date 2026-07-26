@@ -562,6 +562,20 @@ owner chose. What this phase has to decide is whether the *next* shape change ge
 version was never meant to be the only evidence: `_refused` already asks whether the `agent` table is there,
 for exactly this reason, and it asks about one table out of ten.
 
+### What is left, in the order it is forced into
+
+1. **Findings 39 and 40**, above. 39 first: every verb this phase is about is a reader, and one of them
+   tracebacks today.
+2. **A step rather than an edit, if the shape changes again** — and the decision above about whether a version
+   number alone is enough evidence that a shape is there. This would be the runner's first real customer;
+   so far it has only carried steps a test wrote.
+3. **Move the gateway's two remaining readers over**, together, with a regression check each. What Phase 6
+   proved about the third is the shape to copy: a gateway is handed what it reads rather than a directory, and
+   never learns what holds it.
+4. **Delete the old layout and the code that defaulted to it**, including `agent.resolved()`'s empty answer.
+5. **Prove it against a scratch install built for the purpose**, not the owner's own — by hand as well as by
+   the suite. Driving it by hand is what found the defects a green suite did not, both times.
+
 ### The decision this phase still carries out
 
 **Cross-agent stray sweeping is already dead, and this makes it permanent.** `_sweep_strays()` globs a
@@ -574,8 +588,9 @@ left by an agent removed mid-run is never ended by anything.
 
 - Stopping an agent takes `gateway.json` and `gateway.lock` and touches nothing in `home/`, `logs/` or
   `state.db`.
-- Nothing reads or writes `~/.rundesk/run`, `logs` or `schedules` any more, and a name that is not an agent
-  gets an error rather than the old layout.
+- Nothing reads or writes `~/.rundesk/run` or `logs` any more, and a name that is not an agent gets an error
+  rather than the old layout. (`schedules` is already gone.)
+- A read-only verb answers on records whose `-wal` and `-shm` are absent, and still cannot write.
 - No lock file sits anywhere a record does, and the ones a transaction replaced are gone rather than unused.
 - A gateway's own log and what the machine caught before its logger existed are one file, and rotating it
   never leaves the machine writing into the rotated copy.
@@ -588,8 +603,8 @@ left by an agent removed mid-run is never ended by anything.
 
 ### Exit proof
 
-`~/.rundesk/{run,logs,schedules}` is gone rather than merely unused, and one agent's log tells the whole story
-of that agent. A phase that has moved the data but left one reader on the old layout has not moved the data.
+`~/.rundesk/{run,logs}` is gone rather than merely unused — `schedules` already is — and one agent's log tells
+the whole story of that agent. A phase that has moved the data but left one reader on the old layout has not moved the data.
 
 **Retention is still unanswered**, and it is the other thing between this and done — how long an account is
 kept, and whether an owner or a size decides. Phase 8 is where it is answered, because a copy kept until a
