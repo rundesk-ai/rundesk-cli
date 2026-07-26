@@ -96,17 +96,42 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         standing = {path.name for path in agent.home("ava", self.where).iterdir()}
         self.assertEqual(standing, set(agent.knowledge()) | set(agent.WORKING))
 
+    #: The files a provider loads because of *where they stand*, rather than because
+    #: something pointed at them. Everything else in a home is reached only by being named
+    #: from one of these, directly or through another that is.
+    LOADED = ("AGENTS.md", "CLAUDE.md")
+
     def test_the_file_every_provider_loads_names_the_ones_none_of_them_do(self):
-        """R-AGT-2 — the two files that are loaded because of where they stand are the only
-        way the other three are reached at all: no provider follows a link for free, and
-        only one of them expands an import. Drop the reference and an agent quietly loses
-        its character with nothing else failing, which is why this is asserted and not
-        merely written."""
+        """R-AGT-2 — the two files loaded because of where they stand are the only way the
+        other three are reached at all: no provider follows a Markdown link for free, and
+        only one of them expands an import. So each of the three has to be *named*, from a
+        loaded file or from one a loaded file names.
+
+        Walked rather than asserted file by file, because how the home chains is the
+        template's business and not this case's: `CLAUDE.md` naming only `AGENTS.md`, and
+        `AGENTS.md` naming the three, is as good as both naming all of them. What must not
+        happen is one of the three becoming unreachable from either starting point — an
+        agent that quietly loses its character, with nothing else failing.
+
+        **What this cannot see, and no case can:** that the sentence around the name is an
+        instruction to read it. `SOUL.md` mentioned only in a prohibition still counts here.
+        The name being present is the part a test can hold; whether the wording works is
+        what a probe against a real brain is for."""
         agent.add("ava", self.where)
-        for called in ("AGENTS.md", "CLAUDE.md"):
-            says = (agent.home("ava", self.where) / called).read_text()
-            for reached in ("SOUL.md", "USER.md", "MEMORY.md"):
-                self.assertIn(reached, says, f"{called} no longer reaches {reached}")
+        home = agent.home("ava", self.where)
+        for start in self.LOADED:
+            reached, walking = set(), [start]
+            while walking:
+                called = walking.pop()
+                if called in reached:
+                    continue
+                reached.add(called)
+                says = (home / called).read_text()
+                walking += [one for one in agent.knowledge() if one in says]
+            for wanted in ("SOUL.md", "USER.md", "MEMORY.md"):
+                self.assertIn(wanted, reached,
+                              f"nothing an agent loads reaches {wanted} from {start} — "
+                              f"only {sorted(reached)} is reachable")
 
     def test_what_an_agent_loads_is_reached_by_being_told_rather_than_by_a_link(self):
         """R-AGT-2 — a home that routed by Markdown link would be inert, and nothing would
