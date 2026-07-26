@@ -6,15 +6,16 @@ workspace and skills it loads, and exactly one gateway that runs it — see
 
 **Everything that is one agent's lives in one directory.** Before agents, what a gateway
 kept was sharded by kind — a run directory, a log directory, a schedules directory — with
-the gateway's name as a filename prefix inside each. That is why a gateway named `foo.ran`
-and one named `foo` share `foo.ran.json`: a name is only kept apart from its neighbours by
-a convention about suffixes. A directory each ends the whole class of collision, and it
-makes an agent one thing to look at, copy or take away.
+the gateway's name as a filename prefix inside each. That is why a gateway named `foo.log`
+and one named `foo` want one file between them: a name is only kept apart from its
+neighbours by a convention about suffixes. A directory each ends the whole class of
+collision, and it makes an agent one thing to look at, copy or take away.
 
-**This module knows about gateways; a gateway knows nothing about agents.** `Gateway`
-already takes the three directories it uses as arguments, so an agent resolves its own and
-hands them over. The dependency runs one way — `cli` -> `agent` -> `gateway` -> `process` —
-and a gateway that reached back for an agent would end it.
+**This module knows about gateways; a gateway knows nothing about agents.** `Gateway` takes
+what it uses as arguments — the two directories it writes in, where agents are kept, and the
+records it reads its schedules out of — so an agent resolves its own and hands them over. The
+dependency runs one way — `cli` -> `agent` -> `gateway` -> `process` — and a gateway that
+reached back for an agent would end it.
 """
 
 from __future__ import annotations
@@ -61,9 +62,9 @@ class InUse(Exception):
 def agents_home() -> Path:
     """Where agents are kept — one directory each, holding everything that is theirs.
 
-    Beside the run, log and schedule directories rather than inside any of them: those
-    three hold what rundesk wrote before there were agents to own it, and this is what an
-    ordinary uninstall preserves because it is the owner's rather than rundesk's (R-AGT-3).
+    Beside the run and log directories rather than inside either: those hold what rundesk
+    wrote before there were agents to own it, and this is what an ordinary uninstall
+    preserves because it is the owner's rather than rundesk's (R-AGT-3).
     """
     return Path(os.environ.get("RUNDESK_AGENTS_DIR") or Path.home() / ".rundesk" / "agents")
 
@@ -96,9 +97,9 @@ def checked(name: str) -> str:
 def _claimed_stems() -> frozenset[str]:
     """The first word of every suffix a gateway writes after a name.
 
-    A gateway writes `<name>.ran.json`, so an agent called `x.ran` and a gateway called `x`
-    would want one file between them. Read off what the gateway says it writes, because a
-    list of these kept here is a list that stops being true.
+    A gateway writes `<name>.log`, so an agent called `x.log` and a gateway called `x` would
+    want one file between them. Read off what the gateway says it writes, because a list of
+    these kept here is a list that stops being true.
     """
     return frozenset(
         suffix.lstrip(".").split(".")[0] for suffix in gateway.reserved_suffixes() if suffix
@@ -127,7 +128,7 @@ def home(name: str, where: Path | None = None) -> Path:
     """The agent's home: what it loads, and nothing rundesk wrote (R-AGT-2).
 
     A directory of its own inside the agent's, rather than the agent's directory itself,
-    so that what an owner writes is never mixed with the lock, the log and the schedules
+    so that what an owner writes is never mixed with the lock, the log and the records
     rundesk keeps beside it. It is also the whole of what an ordinary uninstall preserves.
     """
     return directory(name, where) / "home"
@@ -143,9 +144,10 @@ def skills(name: str, where: Path | None = None) -> Path:
 
     **No provider discovers a bare `skills/` directory**, and none is claimed to. Probes of
     the installed CLIs found each looks in a directory of its own — `.claude/skills`,
-    `.agents/skills`, `.grok/skills` — and that a plain one is read by nobody. Making those
-    links is Phase 10's, and it waits for probes of the versions actually installed rather
-    than for a layout that looks right. This is where an owner puts one until then.
+    `.agents/skills`, `.grok/skills` — and that a plain one is read by nobody. Presenting a
+    skill where each brain already looks is Phase 12's, and it waits for probes of the
+    versions actually installed rather than for a layout that looks right. This is where an
+    owner puts one until then.
     """
     return home(name, where) / "skills"
 
@@ -181,11 +183,6 @@ def logs_home(name: str, where: Path | None = None) -> Path:
     return directory(name, where) / "logs"
 
 
-def schedules_home(name: str, where: Path | None = None) -> Path:
-    """Where this agent's schedules and what became of each are kept — history."""
-    return directory(name, where) / "schedules"
-
-
 def paths(name: str, where: Path | None = None) -> dict[str, Path]:
     """Every place this agent resolves, by what it is for.
 
@@ -201,7 +198,6 @@ def paths(name: str, where: Path | None = None) -> dict[str, Path]:
         "providers": directory(name, where) / "providers",
         "run": run_home(name, where),
         "logs": logs_home(name, where),
-        "schedules": schedules_home(name, where),
     }
 
 
@@ -218,16 +214,18 @@ def made_of(name: str, where: Path | None = None) -> dict[str, Path]:
 
 @dataclass(frozen=True)
 class Where:
-    """The three directories a gateway of this name keeps things in.
+    """The two directories a gateway of this name keeps things in.
 
     `None` for each means the ones a gateway kept things in before there were agents to own
     them — which is what every gateway function already falls back to, so a name with no
     agent goes on being reached exactly as it always was.
+
+    It was three. What a gateway is scheduled to do, what each schedule last did and when it
+    was last up are rows an agent keeps, so there is no directory left for them to be in.
     """
 
     run: Path | None
     logs: Path | None
-    schedules: Path | None
 
 
 def resolved(name: str, where: Path | None = None) -> Where:
@@ -238,8 +236,8 @@ def resolved(name: str, where: Path | None = None) -> Where:
     configured it does not read (R-AGT-9).
     """
     if not exists(name, where):
-        return Where(None, None, None)
-    return Where(run_home(name, where), logs_home(name, where), schedules_home(name, where))
+        return Where(None, None)
+    return Where(run_home(name, where), logs_home(name, where))
 
 
 def standing_before(name: str, logs: Path | None = None,
@@ -330,7 +328,7 @@ def adopt(name: str, where: Path | None = None, logs: Path | None = None,
     stopped gateway is not doing anything and its lock is an empty file whose name the next
     claim makes again.
     """
-    goes = {"logs": logs_home(name, where), "schedules": schedules_home(name, where)}
+    goes = {"logs": logs_home(name, where)}
     moved = []
     with gateway.holding(name, run) as held:
         if not held:
@@ -353,9 +351,7 @@ def _wrote_before(name: str, logs: Path | None, schedules: Path | None):
     """
     return (
         (gateway.log_path(name, logs), "logs"),
-        (gateway.schedules_path(name, schedules), "schedules"),
-        (gateway.seen_path(name, schedules), "schedules"),
-        (gateway.interrupted_path(name, schedules), "schedules"),
+        (gateway.interrupted_path(name, logs), "logs"),
     )
 
 
@@ -417,7 +413,7 @@ def forget(name: str, where: Path | None = None) -> list[str]:
         if path.exists():
             shutil.rmtree(path)
             taken.append(path.name + "/")
-    for empty in (run_home(name, where), schedules_home(name, where), stands):
+    for empty in (run_home(name, where), stands):
         try:
             empty.rmdir()
         except OSError:

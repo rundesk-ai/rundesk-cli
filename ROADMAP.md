@@ -260,7 +260,7 @@ catalogued [below](#what-those-phases-left--on-purpose).
 
 **Left open, deliberately:** the gateway announces itself once *per channel*, so two channels mean two notices
 to the same person — the notice is about the gateway and wants deciding where it belongs. A second platform is
-Phase 14, and reviewing for it surfaced four owner questions: what `direct` means where there is no such
+Phase 15, and reviewing for it surfaced four owner questions: what `direct` means where there is no such
 thing, whether an adapter filters un-addressed messages in a busy room, how a conversation maps to a Slack
 thread, and what dialect prose is in. Hermes ships a per-platform hint describing the medium itself; ours makes
 the owner write both that and their own instructions.
@@ -337,7 +337,7 @@ is also the list of what the phases below have to pick up:
 | Nothing can prove what cannot be written | R-CH-2, R-RUN-13, R-RUN-15, R-USE-11, R-STO-19 | A case that *adds* the forbidden thing and watches it fail — see `MEMORY.md` on the guard that passed green through the commit that broke it |
 | Waits on money, which nothing computes | R-USE-5, R-USE-8 | Nothing works a cost out from prices yet |
 | Waits on a brain making a file, which nobody has captured | R-PRV-20 | Phase 10 |
-| Waits on recovery, which is not built | R-GW-22, R-GW-24, R-SCH-20 | Phase 13 |
+| Waits on recovery, which is not built | R-GW-22, R-GW-24, R-SCH-20 | Phase 14 |
 | Waits on a provider and a credential the suite has neither of | R-AGT-10 | Phase 12's canary |
 | Inherited from what runs a program at all; no test of its own | R-PRV-13 | Phase 10 |
 | **Possibly earnable today, and worth checking first** | R-AGW-9 | Channels are rows in `state.db` now and removing an agent takes its directory, so the behaviour may already be there with no row turned. Both `agent-gateway` rows carry no evidence at all |
@@ -354,9 +354,10 @@ is also the list of what the phases below have to pick up:
 | **9** | Templates an owner can make their own | The files a new agent is copied from become the owner's to override, one at a time, and survive an update |
 | **10** | Provider adapters — audit the seam | A generic endpoint adapter, the decoupling test, and the contradictions settled |
 | **11** | Channel adapters — audit the seam | The same, on the surfaces side |
-| **12** | Skills and tool discovery | Additive: a skill an agent loads, and an inventory of what it was granted |
-| **13** | Questions, approvals, recovery | A brain pausing mid-turn for an answer, and surviving a restart while it waits |
-| **14** | Channel breadth | Slack, needing no provider or agent change |
+| **12** | Skills a brain loads by itself | One skill, written once, discovered natively by every brain that has discovery — and a live probe proving each one sees it |
+| **13** | Know what an agent was granted | Inventory, search and explain: what each brain reports it has, and what this agent has actually run |
+| **14** | Questions, approvals, recovery | A brain pausing mid-turn for an answer, and surviving a restart while it waits |
+| **15** | Channel breadth | Slack, needing no provider or agent change |
 
 **Why this order.**
 
@@ -737,38 +738,138 @@ one of them.
 6. **The gateway's announcement decided.** It fires once per channel, so two channels mean two notices to the
    same person. The notice is about the gateway; it wants a home rather than papering over.
 
-## Phase 12 — Bootstrap Knowledge, Skills and Tool Discovery
+## Phase 12 — Skills a Brain Loads by Itself
 
-**Outcome:** every provider can be given the same agent's knowledge and a basic skill without Rundesk becoming
-a second skills or tools engine.
+**Outcome:** an owner writes a skill once, in one format, and **every brain that agent reaches picks it up on
+its own** — discovered natively by the provider rather than pasted into a prompt by rundesk — with a probe
+proving each one actually sees it.
 
-**This is additive, which is why it waits.** Nothing about the channel, the turn, the run record or the
-resolver changes when this lands. The corollary is a real constraint — if a change here forces a change in
-Phase 2 or 3, it is not a skill concern and belongs in the phase it disturbed.
+**One skill, written once. Provider-centric delivery.** The skill is universal: one `SKILL.md`, in the agent's
+own `skills/`, with no vendor in it. What is *not* universal is where a brain looks, and no amount of wishing
+makes it so — **no provider discovers a bare `skills/` directory** (`agent.py:141-151`). Probes of the
+installed CLIs found each reads a directory of its own: `.claude/skills`, `.agents/skills`, `.grok/skills`.
+So the same skill is *presented* to each brain where that brain already looks. One source, several
+placements, and the owner writes one file.
 
-Add one basic `SKILL.md` template, one canonical agent-visible skills library and only the provider discovery
-links that live probes prove. **No provider discovers a bare `skills/` directory** and none is claimed to;
-`agent.py:144-145` records that each looks in a directory of its own. Re-probe current CLI versions before
-making any of that a guarantee.
+**Auto-loading is the requirement, not a convenience.** Rundesk must not read a skill and inject its text
+into the prompt. That would make every skill cost tokens on every turn whether or not it was relevant, put
+rundesk in the business of deciding what is relevant, and — worst — make the audit lie, because `R-PRV-5`
+requires everything added to a turn to appear in its account. The brain's own discovery is what this phase
+delivers; if a brain has none, it has none, and that is reported rather than worked around.
 
-The first tool discovery kit should only inventory, search and explain granted tools. It should not duplicate
-provider-native file/shell tools, dynamically load plugins or execute arbitrary new actions.
+### The seam question this phase must answer first
+
+**A vendor's directory name may not appear above `src/providers/`.** That rule is what Phases 2, 5 and 10
+exist to hold, so `.claude/skills` cannot be written into `src/rundesk/`. Making skills provider-centric
+therefore requires the provider seam to carry *something* about them, which is a
+[`provider-adapter`](.knowledge/prd/provider-adapter.md) contract change and an owner decision:
+
+- **Recommended:** a `RUNDESK_SKILLS` variable pointing at the agent's `skills/`, handed over like
+  `RUNDESK_CWD` and `RUNDESK_PREFACE` already are, with **the adapter** placing or linking them where its own
+  brain looks. Every vendor path stays in the one file that already knows that vendor, a stranger's adapter
+  gets skills the day it reads one variable, and rundesk learns nothing about anybody's layout.
+- **The alternative** — an adapter *declaring* its discovery directory and rundesk doing the placement — puts
+  the mechanism in the core and gives the core a per-vendor path to hold. Cheaper to write, and it is the
+  shape the seam was built to prevent.
+
+Either way it is a new row in the contract and a new line in
+[`write-a-provider-adapter.md`](.knowledge/guides/write-a-provider-adapter.md), and the closed vocabularies
+are not reopened: a skill is not a record, a verb or a capability.
+
+### What is built
+
+- **One `SKILL.md` format**, and a template an owner starts from. What a skill is, what it may assume, and
+  what it may never contain — no credentials, no vendor flags.
+- **One canonical place per agent**: `home/skills/`, which already exists and is already the agent's own.
+- **Presentation to each shipped brain**, through whatever the seam decision above settles, for `codex`,
+  `claude` and `grok` — and honestly absent for a brain that discovers nothing.
+- **An agent does not inherit its owner's skills.** Rundesk-managed configuration must not turn on automatic
+  discovery of ungranted owner-level skills; that is the isolation `R-AGT-8` and the Boundaries section
+  already promise, one directory further in.
+- **`doctor` says, per brain, whether skills are discoverable, not discoverable, or unproven on this version.**
+
+### Probing — the part that decides whether any of this is true
+
+**Nothing here is claimed from file presence.** A linked directory is evidence that a link exists, not that a
+model read it. Each shipped brain gets a probe following `probe-codex`'s shape — an `--offline` half that
+costs nothing, a live half, and a named verdict rather than numbers to squint at — and the probe is what
+turns a row ✅.
+
+The traps are already paid for and are in `.knowledge/MEMORY.md`; re-read them before writing one:
+
+- **Do not test with a question the conversation can already answer.** A first attempt at a codex probe asked
+  for a codename the thread had been asked for before, and the model answered from its own earlier reply. Use
+  a fact only the skill can supply, and **run the control**: prove the same brain does *not* answer it when
+  the skill is absent.
+- **Make the canary unguessable per run.** Grok reads its other sessions — a probe passed once on
+  cross-session recall alone, with the model saying so. Pass `--no-memory` and suffix the canary with a uuid,
+  or a re-run reads the previous run's sessions.
+- **A signed-in machine is required, and isolating a home logs the brain out.** `CLAUDE_CONFIG_DIR` does not
+  redirect a login, it removes one, and claude reports `loggedIn: false` when `USER` is unset. A skills probe
+  that quietly runs unauthenticated proves nothing.
+- **Re-probe the installed versions.** Node-era findings suggested `.claude/skills/` and `.agents/skills/`;
+  they are prior art, not a guarantee, and a version bump reruns the probe before the claim changes.
 
 ### Tests and probes
 
-- Offline tests prove scaffold idempotency, link resolution and agent-specific grants.
+- Offline: scaffolding a skill twice changes nothing the second time; placement resolves to the right path
+  per brain; an agent's skills are never another agent's.
+- Offline: an adapter that discovers nothing still completes a turn, with the skill simply absent — the same
+  claim Phase 10's decoupling test makes.
 - Rundesk-managed config does not automatically discover ungranted owner-level skills.
+- **A canary skill is read by each shipped brain**, proved live, with the control proving it is not read when
+  absent — and saved, sanitized output recording provider version, invocation and result.
 - A canary agent proves each provider follows `AGENTS.md` to `SOUL.md`, `USER.md` and `MEMORY.md` — which is
-  `R-AGT-10`, ❌ today because a case needs a real provider and a credential the suite has neither of.
-- A basic skill canary proves actual provider discovery from the agent's workspace.
-- Saved, sanitized probe output records provider version, invocation and result.
+  `R-AGT-10`, ❌ today because a case needs a real provider and a credential the suite has neither of. This
+  phase is where that row is earned or explicitly left.
+- No vendor's skills directory appears outside its own adapter.
 
 ### Exit proof
 
-Each supported provider has a current capability row marked proven, unsupported or unknown. Rundesk does not
-claim that a provider loaded a rule or skill based only on file presence.
+One skill, written once by an owner, is picked up by every shipped brain that has discovery — proved by a
+live canary and its control, not by a link existing. Each supported provider has a current row marked proven,
+unsupported or unknown against a recorded version. **Rundesk does not claim that a provider loaded a rule or
+a skill based only on file presence**, and a brain that discovers nothing is reported as such rather than
+quietly given the text in its prompt.
 
-## Phase 13 — Questions, Approvals and Recovery
+## Phase 13 — Know What an Agent Was Granted
+
+**Outcome:** an owner can see what tools an agent's brains actually have, and what this agent was granted,
+without rundesk becoming a tool engine.
+
+**Split from skills on purpose.** A skill is content an owner authors and a brain reads; a tool is a
+capability the brain already has and a permission question about it. They travel together in most products
+and share nothing here: skills need discovery probes, tools need the provider's own inventory, and merging
+them is how a project ends up with a tool-execution loop nobody asked for.
+
+**Inventory, search and explain. Nothing else.** The first kit does not duplicate provider-native file or
+shell tools, does not dynamically load plugins, and does not execute arbitrary new actions. Rundesk does not
+run tools — the brain does, inside its own permission model, which the Boundaries section requires be kept
+intact.
+
+What already exists to build on: an adapter declares what it can do, `tools` among them, and a turn's record
+carries every `tool` and `result` the brain reported. So "what did this agent actually use" is a query
+against the store rather than anything new to capture.
+
+### Deliverables
+
+1. **What each brain reports it has**, read through the seam and shown by `agents` and `doctor` without
+   starting a turn.
+2. **What this agent was granted**, if grants are to exist at all — and that is an owner decision, because a
+   grant is persisted state and a permission claim rundesk cannot enforce. A posture is carried to the
+   adapter today and no tool list is believed in; adding one that *looks* enforced would be worse than none.
+3. **What an agent has actually run**, from the account: which tools, how often, in which runs.
+4. A row saying plainly what a grant does and does not guarantee — it is not filesystem containment, and a
+   provider's native tools may reach sibling paths unless a later phase adds and proves an enforcement
+   boundary.
+
+### Exit proof
+
+An owner asks what a brain can do and what this agent has done with it, and gets an answer that came from the
+adapter and the account rather than from a list rundesk keeps. Nothing claims a tool was prevented that was
+not.
+
+## Phase 14 — Questions, Approvals and Recovery
 
 **Outcome:** a supported provider can pause for remote input without weakening its native permission model,
 and Rundesk can recover truthfully after a gateway/channel restart.
@@ -802,7 +903,7 @@ supported restart boundary. The public always-online claim waits until interrupt
 restart and repeated crashes stop looping — `R-GW-22` and `R-GW-24`, both ❌ today because nothing records
 where a piece of work had got to.
 
-## Phase 14 — Add Channel Breadth One Adapter at a Time
+## Phase 15 — Add Channel Breadth One Adapter at a Time
 
 **Outcome:** a second real surface — Slack — reuses the channel contract without changing the agent, the seam
 or any provider.
