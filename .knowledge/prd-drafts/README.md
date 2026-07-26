@@ -8,5 +8,6 @@ Add a row when you add a draft; `doc-lint` fails the build if one is missing.
 
 | Draft | Proposes | Reserved namespace |
 |---|---|---|
+| [channel-adapter](./channel-adapter.md) | the seam a surface is reached through, and what any channel adapter must do | `CAD` |
 | [channel-messaging](./channel-messaging.md) | what any channel does, whatever its platform can and cannot show | `CH` |
 | [channel-discord](./channel-discord.md) | what a turn looks like on Discord — threads, marks and its own commands | `DIS` |

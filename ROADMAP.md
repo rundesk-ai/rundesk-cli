@@ -578,16 +578,87 @@ gained — and **one file changed**. Nothing outside `adapters/codex` knew eithe
   - **A gateway you can ask for something.** `ask` runs in the terminal that typed it, exactly as a
     schedule run by hand does. Phase 3 is what forces the question.
 
-## Phase 3 — Add Basic Discord Communication
+## Phase 3 — Open the Channel Seam, and Put Discord Behind It
 
-**Outcome:** one authorized Discord channel or thread can reach an agent and watch it work. Approvals and
-provider questions stay explicitly unsupported here — steering a running turn is not either of those, and
-is supported exactly as far as the adapter behind that agent declared it is.
+**Outcome:** one authorized Discord channel, thread or DM reaches an agent and watches it work — through
+a seam a second channel could be written against without changing anything here. Approvals and provider
+questions stay explicitly unsupported; steering a running turn is neither, and works exactly as far as
+the adapter behind that agent declared it does.
 
-What a channel must do is drafted in `channel-messaging` (`R-CH-n`) and what Discord does with it in
-`channel-discord` (`R-DIS-n`), both carried over from the Node build, which had all of this working:
+**The same shape as Phase 2, deliberately.** A channel adapter is a program Rundesk runs, not code it
+loads: it connects to whatever platform it speaks for, reports what arrives in words no platform owns,
+and is told what happened in the same six records a brain reports. Discord is the first one and is
+first-class — every Discord-shaped thing lives inside it — but iMessage, Slack or a webhook is one more
+program, not a change here. Two swappable edges, one core that knows neither:
+
+```text
+  CHANNEL ADAPTERS                                    PROVIDER ADAPTERS
+  discord  ─┐                                      ┌─ codex
+  slack    ─┼──▶   the gateway  ──▶  a turn  ──▶───┤─ claude
+  imessage ─┘      (knows neither edge)            └─ your own brain
+```
+
+The seam itself is drafted in `channel-adapter` (`R-CAD-n`), what any channel does with a turn in
+`channel-messaging` (`R-CH-n`), and what Discord does with both in `channel-discord` (`R-DIS-n`) — the
+last two carried over from the Node build, which had all of this working:
 threads opened on being named, reactions marking a turn seen, finished, stopped or failed, and steering
 through Discord's own commands rather than words typed into the chat.
+
+### It runs in the gateway, and it stays connected
+
+A channel is not started per turn. The agent's gateway holds the connection open for as long as it is
+up, because a message has to be picked up the moment it arrives — a poll, or a process started per
+message, is a reply that lands late enough for someone to have asked again. This is what the gateway was
+built to own: it already keeps a long-lived thing alive, ends everything it started, and comes back when
+the machine takes it away.
+
+The consequences to design for rather than discover: an agent that is stopped is not reachable, and that
+must be visible rather than silent; the connection is one more thing a gateway ends when it goes; and a
+channel that drops must reconnect without the agent's turns noticing.
+
+### What the system does, and what an adapter does
+
+The lifecycle of a turn is the same on every surface, so the **system** decides when a turn is seen,
+running, finished, stopped or failed, and the adapter only says how its platform shows that. An adapter
+that had to work out for itself when to mark something seen would be re-implementing the turn, and two
+adapters would disagree.
+
+| The system says | Discord shows | A surface with none of that |
+|---|---|---|
+| taken up | 👀 on the message, and starts typing | says it is working |
+| still running | keeps typing alive | — |
+| finished | ✅, and the answer posted whole | posts the answer |
+| stopped | ✋ | says it stopped |
+| failed | ⚠️, and why | says what failed |
+
+**Work goes out early; prose does not.** What the agent *did* — a tool it ran, a thought it closed — is
+worth watching as it happens and is shown during the turn. What it *says* is held and posted whole at
+the end, because a reply that rewrites itself in place is unreadable. The line between them is whole
+records, never part-written ones. This is a rule of the seam, not of Discord: every surface renders what
+it can and skips what it cannot, and correctness never degrades — only fidelity.
+
+### Setting one up, and proving it before it is trusted
+
+Adding a channel **tests itself**. `channels add` connects, authenticates, verifies it can see what it
+was pointed at, and refuses to write anything if it cannot — an agent whose channel is misconfigured
+must find out at setup, not at three in the morning when somebody asks it something.
+
+Discord needs, and is asked for:
+
+```text
+--kind discord
+--bot <application id>      which bot this is
+--allow <user id> …         who may reach the agent through it — at least one, always
+--server <id> --channel <id>   where it listens, or a DM
+token                       read from the environment or a file, never an argument
+```
+
+**At least one allowed user is required, not defaulted.** An unset owner means the agent answers whoever
+speaks to it, on a machine where it can run tools — a misconfiguration, never a mode. The Node build
+refused to start without one, and that refusal is worth keeping.
+
+`channels ava show ops` then says what it is, who may use it, and that a secret is present — never what
+the secret is.
 
 Build the Discord wire against a fake brain first, then attach it to the Phase 2 adapter. The already
 pinned `discord.py` dependency must earn its place through the same install and test path as the product;
@@ -622,20 +693,24 @@ A channel is **named the way a schedule is** — you give it a name to refer to 
 is comes from `--kind`. Each kind then needs different things, and those are its own options:
 
 ```text
-rundesk channels ava add ops   --kind discord --server <id> --channel <id> --allow <user> …
+rundesk channels ava add ops   --kind discord --bot <id> --server <id> --channel <id> --allow <user> …
+rundesk channels ava add dms   --kind discord --bot <id> --dm --allow <user>
 rundesk channels ava add plans --kind slack   --workspace <id> --channel <id> --allow <user>
 ```
 
 Exact field names are settled **here**, against the installed Discord API rather than from a
 specification read early. Until this phase, `channels` is registered and refuses truthfully. What was
-decided in advance is only the shape, and one hard rule:
+decided in advance is only the shape, and these rules:
 
 - **A secret is never an argument.** A bot token on a command line is readable by anything on the machine
   through the process list and is written into shell history. Tokens are read from an environment
   variable or a file the owner already controls, or asked for on a terminal — never `--token <value>`,
   and never stored anywhere Rundesk would print.
-- Who may use a channel is part of adding it, not a later step. A channel authorized for nobody reaches
-  nobody, which is the safe direction to fail in.
+- Who may use a channel is part of adding it, not a later step, and **at least one allowed user is
+  required rather than defaulted** — an agent that answers whoever speaks to it, on a machine where it
+  can run tools, is a misconfiguration and never a mode.
+- **Adding a channel proves it works before it is written down.** It connects, authenticates and checks
+  it can see what it was pointed at; if it cannot, nothing is saved and the reason is said.
 - `channels ava show <channel>` says what a channel is and who may reach the agent through it, with the
   secret named as present rather than shown.
 
@@ -672,25 +747,49 @@ the Node build (R-DIS-12).
 - A stop ends the turn running in that conversation and nothing else.
 - Forgetting a conversation means the next message starts a new session, not a resumed one.
 - A control raised mid-turn does not publish the running turn's half-written output as its answer.
+- **A channel adapter this code has never seen carries a whole conversation** — the claim the seam rests
+  on, and the same one Phase 2 makes of a brain.
+- The poorest surface there is — no reactions, no typing, no edits — still carries a turn from arrival to
+  answer, because correctness never degrades and only fidelity does.
+- The system decides a turn is seen, running, finished, stopped or failed; no adapter works that out.
+- Adding a channel that cannot connect writes nothing and says why.
+- Adding a channel with nobody allowed is refused.
+- A channel is held open by the gateway, comes back by itself after a drop, and goes when the gateway does.
+- An agent that is stopped is reported as unreachable rather than silently missing messages.
+- Work is shown while the turn runs; the answer arrives whole, and never part-written.
+- No Discord concept — a snowflake, an intent, a gateway opcode — appears outside the Discord adapter.
 
 ### Order of work
 
 Discord is the first phase where a mistake is visible to somebody who is not the owner, so the offline
-half is finished before a token exists:
+half is finished before a token exists — and, as in Phase 2, the seam is written before the adapter that
+proves it:
 
-1. The channel record — what `channels add` writes, and where the token is read from rather than typed.
-2. A fake channel, and every routing and failure case against it: unauthorized sender, disconnect, slow
-   delivery, retry exhaustion, reconnection finding the conversation it already had.
-3. Presentation: what the turn's records look like as messages, and what a long one does.
-4. The Discord wire behind that same fake-tested surface.
-5. A private-server canary, last, proving only what a fake cannot — Discord's own limits and timings.
+1. **The seam**: what a channel adapter is handed, what it reports, and what the system decides for it.
+   Written before any Discord code exists, and written for a stranger.
+2. **The channel record** — what `channels add` writes, where the token is read from rather than typed,
+   and the check at setup that refuses to write it when the platform will not answer.
+3. **A fake channel**, and every routing and failure case against it: unauthorized sender, disconnect,
+   slow delivery, retry exhaustion, reconnection finding the conversation it already had.
+4. **The turn's lifecycle as the system decides it** — seen, running, finished, stopped, failed — with
+   the fake showing it, so the marks are proved before an emoji exists.
+5. **Presentation**: what a turn's records look like as messages, work shown as it happens, the answer
+   posted whole, and what a long one does.
+6. **The Discord adapter**, behind that same fake-tested surface: threads, DMs, reactions, typing.
+7. **Held open by the gateway**, reconnecting on its own, ending when the gateway ends.
+8. **A private-server canary**, last, proving only what a fake cannot — Discord's own limits and timings.
 
 ### Exit proof
 
-A fake Discord integration proves all routing and failure cases offline. A manual private-server canary
-then sends one message, observes streamed progress and receives one final answer correlated to the same
-run ID — and the transcript of that run, read afterwards with `runs`, tells the same story the channel
-told, because the channel wrote none of it.
+A fake channel proves every routing and failure case offline. A manual private-server canary then sends
+one message, observes progress as the agent works, and receives one final answer correlated to the same
+run id — with 👀 on arrival and ✅ at the end — and the transcript of that run, read afterwards with
+`runs`, tells the same story the channel told, because the channel wrote none of it.
+
+**And the seam is proved open, not merely designed open:** a second channel adapter, written from its
+guide by someone who has not read this codebase, carries a whole conversation with nothing here changed —
+the same bar Phase 2 set for a brain, and the same reason. Until that has happened, "channels are
+swappable" is a hope.
 
 ## Phase 4 — Let the Clock Start Work
 
