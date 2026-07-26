@@ -20,50 +20,29 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
   reports it, the updater compares against it, and a release tag is expected to match it. Nothing else
   holds a copy. `ROOT` is the same idea for *where* this install is, resolved rather than assumed.
 
-### What is written down, and where (5 directories)
+### Where what an install keeps is decided (4 places)
 
-**What the product runs on today is below; what it is moving to is `store.py`, and nothing reads that
-yet.** Everything the shipped code persists is a small JSON file written whole and renamed into place,
-so a reader
-arriving mid-write finds the old one rather than half of the new one. Each directory is overridable by an
-environment variable, and every one of them is carried in the launchd job — a gateway reading somewhere
-other than the command that configured it is the fault that makes a schedule silently never run.
+An install's own directories are not mapped here — this is the source tree, and a layout written down
+twice is a layout that disagrees with itself. Each of these files *is* the answer for one part of it, and
+none of them is a copy of another:
 
-One reader and one writer serve all of them: `gateway._read()` says which of missing, unreadable or
-written a file turned out to be — the two absences being opposite decisions — and `gateway.changing()`
-holds the read, the decision and the write under one `flock`, asking the machine to put what records
-what has *already happened* onto the disk before saying it is there.
+| Decided in | What it settles |
+|---|---|
+| `src/rundesk/agent.py` — `agents_home()`, `directory()`, `paths()` | every directory that is one agent's own, off one list that making and diagnosing both read |
+| `src/migrations/001.py` | **the shape of everything an agent keeps**, and the only description of it there is |
+| `src/rundesk/store.py` | the only way in to it, and what may be asked of it |
+| `src/rundesk/supervisor.py` — `describe()` | what the machine's own job carries, so a gateway resolves what the command that made it resolved (R-AGT-9) |
 
-**Everything that is one agent's lives in one directory.** `~/.rundesk/agents/<agent>/` holds its `home/`
-(what it loads), the private homes providers are given, the account of every turn it has taken, and the
-three its gateway uses — so an agent is one
-thing to look at, copy or take away, and no name can claim a file belonging to another. The three
-directories below the agents one hold what rundesk wrote *before there were agents to own it*: a gateway
-still running from then goes on reading them, and rundesk writes nothing new there. Every schedule, log and
-lock in the finished product belongs to an agent.
+**Everything that is one agent's lives in one directory**, so an agent is one thing to look at, copy or
+take away, and no name can claim a file belonging to another. What is *not* in its records is deliberate
+and short: what a brain printed and what it said went wrong stay files, because the path is handed to a
+program that may be a shell script and stderr is a pipe the operating system gives us — so those may be
+destroyed to reclaim space, and nothing a run recorded is recoverable only from them (R-STO-5).
 
-| Where | Override | Holds | Lifetime |
-|---|---|---|---|
-| `~/.rundesk/agents/<agent>/home/` | `RUNDESK_AGENTS_DIR` | `AGENTS.md` · `CLAUDE.md` · `SOUL.md` · `USER.md` · `MEMORY.md` · `workspace/` · `skills/` | **The owner's** — kept by an ordinary uninstall, taken only by `--purge` (R-AGT-3) |
-| `~/.rundesk/agents/<agent>/providers/<provider>/` | `RUNDESK_AGENTS_DIR` | the private home a provider is given, per agent and provider pair | Rundesk's state about a pair, never the agent's knowledge (R-AGT-8) |
-| `~/.rundesk/agents/<agent>/run/` · `logs/` · `schedules/` | `RUNDESK_AGENTS_DIR` | what that agent's gateway keeps — the same files as below, in the agent's own place | As below, per agent |
-| `~/.rundesk/agents/<agent>/runs/` | `RUNDESK_AGENTS_DIR` | one run each: `<run>.jsonl` (the account, in words no brain owns) · `<run>.raw` and `<run>.err` (everything the brain said, and said went wrong, verbatim) · `allocating.json` (the count of runs, a hint — the directory is the truth) | **History** — goes when the agent does (R-AGW-5). The two raw files are separate so a retention policy can one day take them and leave the account (R-RUN-5) |
-| `~/.rundesk/agents/<agent>/state.db` | `RUNDESK_AGENTS_DIR` | **everything the agent keeps**, and the only way in is [`store.py`](../src/rundesk/store.py). Which brain it reaches for is here now; where each conversation got to and the surfaces it is reachable on are still `sessions.json` and `channels.json` beside it, and move next | Goes when the agent does (R-AGW-5, R-STO-14) |
-| `~/.rundesk/agents/<agent>/sessions.json` · `channels.json` | `RUNDESK_AGENTS_DIR` | where each conversation got to — keyed by brain *and* conversation together — and the surfaces it is reachable on, each holding who may use it and the *name* of the variable its credential is read from, never the credential | Rundesk's working state about the agent; goes when the agent does (R-RUN-12, R-RUN-14, R-CAD-12) |
-| `~/.rundesk/agents/<agent>/channels/<channel>/` | `RUNDESK_AGENTS_DIR` | the private home a channel is given, per agent and channel pair | Rundesk's state about a pair, never the agent's knowledge |
-| `~/.rundesk/run/` | `RUNDESK_RUN_DIR` | `<name>.lock` (liveness, held open) · `<name>.json` (what a gateway is doing now) | **State** — cleared when a gateway stops (R-GW-12) |
-| `~/.rundesk/logs/` | `RUNDESK_LOG_DIR` | `<name>.log` (rotated) | **History** — outlives the gateway (R-GW-18) |
-| `~/.rundesk/schedules/` | `RUNDESK_SCHEDULES_DIR` | `<name>.json` (what is scheduled) · `<name>.ran.json` (when each last fired and what became of it) · `<name>.seen.json` (when a gateway of this name was last up) · `<name>.interrupted.json` (work that never got to finish, and whether it is definitely gone) · `<name>.changing` and `<name>.interrupted.changing` (held across a read-and-write, so two writers cannot lose one another's change) | **History**, beside what it describes |
-| `~/Library/LaunchAgents/` | `RUNDESK_JOBS_DIR` | `ai.rundesk.<name>.plist` | The machine's, written by `supervisor.py` |
-
-The split is the point: stopping a gateway must clear what it is *doing* without clearing what it *did*.
-Putting the schedule history with the run state erased it on every ordinary restart. `run/` and `runs/`
-are one letter apart and opposite for the same reason — the first is emptied when a gateway stops, and the
-second is what an owner still has in the morning.
-
-A run's account is the one thing here that is **appended** rather than written whole, because it is
-written while the thing it accounts for is still happening and has to be readable throughout. Nothing
-rewrites it; a retention policy takes whole files.
+Anything still kept as a small JSON file is written whole and renamed into place, and `gateway.changing()`
+holds the read, the decision and the write under one `flock`. Those are what remain to move (see
+[`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
+file with it.
 
 ## Backend / Services (src/rundesk/ — 16 modules)
 
@@ -204,12 +183,12 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
 
 ## Scripts And Commands
 
-- `install.sh` — puts `rundesk` on a PATH and takes it off again (`--uninstall [--purge]`). Installs
-  into `~/.rundesk`, one directory under the person's home holding rundesk and its `.venv`; from a
-  checkout it symlinks that checkout instead, so development and installed use share one layout.
-  Removing takes the install directory entry by entry rather than whole, so an ordinary uninstall
-  keeps `logs/` and `schedules/` and only `--purge` takes them. It changes nothing else a person owns — a `PATH` that does not reach the command is reported, never
-  edited — and refuses to claim success until the installed command answers.
+- `install.sh` — puts `rundesk` on a PATH and takes it off again (`--uninstall [--purge]`). Installs into
+  one directory holding rundesk and its `.venv`; from a checkout it symlinks that checkout instead, so
+  development and installed use share one layout. Removing takes that directory entry by entry rather than
+  whole, keeping what an owner made unless `--purge` asks for it. It changes nothing else a person owns —
+  a `PATH` that does not reach the command is reported, never edited — and refuses to claim success until
+  the installed command answers.
 - `CLI.md` — every operation the command offers, how each is typed, and what each argument means.
   **Generated** by `.knowledge/scripts/cli-reference` from the parser, so it cannot describe a product
   nobody has; the gate fails when it and the command disagree.
