@@ -558,6 +558,24 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
                          [one["text"] for one in surface.of("answer")],
                          "the last thing it said was not the answer")
 
+    async def test_one_turn_never_repeats_what_the_last_one_ended_on(self):
+        """R-CH-19 — what a turn ends on is in hand when it finishes, and was still in
+        hand when the next turn began: the first thing said in the second turn pushed the
+        first turn's answer out as a remark, so every turn after the first posted a
+        message too many, quoting itself from a minute ago."""
+        brain = Brain(showing=[{"type": "text", "text": "First answer.", "whole": True}],
+                      outcome=Outcome(text="First answer."))
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived(text="one"))
+        await self.carry(held, self.arrived(text="two"))
+        await asyncio.sleep(0.05)
+        await self._settled(held)
+        self.assertEqual([], surface.of("said"),
+                         f"a turn repeated the last one: {surface.of('said')}")
+        self.assertEqual(["First answer.", "First answer."],
+                         [one["text"] for one in surface.of("answer")])
+
     async def test_only_one_finished_thing_said_is_all_answer_and_no_remark(self):
         """R-CH-19 — the ordinary turn. One message means there is nothing to show early
         and nothing is invented to fill the gap."""

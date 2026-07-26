@@ -252,6 +252,11 @@ class Answering:
         """Carry one turn, and say how it stands at each point rundesk decides it."""
         chose = agents.chosen(self.name, self._where)
         held.saying = asyncio.Queue()
+        # Emptied for each turn. Left standing, what the *last* turn ended on was still
+        # in hand when this one began — so the first finished thing said here pushed the
+        # previous turn's answer out as a remark, and every turn after the first posted
+        # one message too many, quoting itself from a minute ago.
+        held.spoken = []
         held.run = None
         shown = _Shown(self, held)
         self._say(channel.TAKEN, held, ref=held.ref)
