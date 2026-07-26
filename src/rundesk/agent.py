@@ -468,19 +468,65 @@ def chosen(name: str, where: Path | None = None) -> dict:
     return reading(name, where).agent()
 
 
+#: What rundesk itself tells every turn, before anything anybody else says (R-AGT-17).
+#:
+#: **Small, and the same words every time.** It is the front of what a brain is given, which is
+#: the part prompt caching keys on — anything that varies per turn belongs after it, never
+#: inside it, or every turn pays for a prefix that no longer matches. Only the agent's own name
+#: is filled in, so one agent's is byte-for-byte identical from one turn to the next.
+#:
+#: Said here rather than left to the home an agent loads, because a home is the owner's to edit
+#: and this is the one thing that must be true whatever they wrote — an agent that has been
+#: given no rules at all still knows what it is running inside and how to find out what it did.
+STANDING = """\
+You are {name}, an agent running inside rundesk.
+
+Your memory is per conversation; rundesk's record is not. Work you did on a schedule, in \
+another chat or in the terminal is written down and is not in your memory here. So when \
+something refers to work you cannot place, look it up before answering rather than guessing \
+or saying you have no access:
+
+  rundesk messages {name}                      what was said, newest first
+  rundesk messages {name} --conversation <id>  this room or direct message alone
+  rundesk messages {name} --source schedule    only what the clock started
+
+Narrow before you widen, and say you looked it up rather than implying you remembered. If \
+nothing is there, say that. Do this when you cannot place something, not on every message.
+
+Everything else rundesk does is in ~/.rundesk/USING-RUNDESK.md, and `rundesk --help` always \
+works."""
+
+
+def standing(name: str) -> str:
+    """Rundesk's own words to a turn, for this agent. One place, so it is one wording."""
+    return STANDING.format(name=name)
+
+
 def told(name: str, where: Path | None = None, said: str = "", otherwise: str = "") -> str:
     """What a turn for this agent is told about its situation, before it reads a prompt.
 
-    **The whole fallback, in one place** (R-AGT-16). What is nearest wins: the schedule's or
-    the turn's own, then the surface it arrived on, then the agent's, then whatever rundesk
-    would have said about that situation. `said` is whatever the nearer two came to and
-    `otherwise` is rundesk's own sentence, so every caller hands in what it knows and none of
-    them has to know the order.
+    **Rundesk's own words first, and then the nearest thing anybody else said** (R-AGT-16,
+    R-AGT-17). What an owner writes is *added to* ours rather than replacing it: they are
+    answering different questions — ours says what the agent is and how to find out what it
+    has done, theirs says what to do about the situation — and an agent that lost the first
+    because its owner supplied the second would be told where it is by nobody.
+
+    Among the rest the nearest still wins: the schedule's or the turn's own, then the surface
+    it arrived on, then the agent's, then whatever rundesk would have said about that
+    situation. `said` is whatever the nearer two came to and `otherwise` is rundesk's own
+    sentence about the situation, so every caller hands in what it knows and none of them has
+    to know the order.
 
     Written once because the order is the guarantee. Each caller working it out would be four
     orders that agree until one of them does not, and the way that fails is silent: an agent
     told the wrong thing about where it is answers perfectly well, and wrongly.
     """
+    return "\n\n".join(part for part in (standing(name), _situation(name, where, said,
+                                                                    otherwise)) if part)
+
+
+def _situation(name: str, where: Path | None, said: str, otherwise: str) -> str:
+    """The nearest thing anybody said about *this* turn's situation, or nothing."""
     if said and said.strip():
         return said
     mine = chosen(name, where).get("instructions")

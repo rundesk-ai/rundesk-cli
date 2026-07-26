@@ -2999,8 +2999,10 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         self.assertIn("will not be answered", told[0])
 
     async def test_what_a_schedule_was_told_to_say_wins_over_rundesks_own(self):
-        """R-SCH-30, R-AGT-16 — nearest first, and theirs stands alone rather than being added
-        to: an owner who wrote something has said what they want said."""
+        """R-SCH-30, R-AGT-16, R-AGT-17 — nearest first among the things that describe the
+        situation, and what the owner wrote is added to rundesk's own rather than replacing
+        them: ours says what the agent is and how to find what it did, theirs says what to do
+        about tonight, and an agent needs both."""
         self.agents.remember("ava", self.agents_at, provider=self.brain())
         self.asks(instructions="Only look at the deploy log.")
         gw = self.made()
@@ -3008,7 +3010,9 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         run = await self._fired(gw)
         told = [one["text"] for one in self.records.messages(run["conversation_id"])
                 if one["author"] == "rundesk"]
-        self.assertEqual(["Only look at the deploy log."], told)
+        self.assertEqual(1, len(told))
+        self.assertTrue(told[0].startswith(self.agents.standing("ava")))
+        self.assertTrue(told[0].endswith("Only look at the deploy log."))
 
     async def test_a_schedule_that_says_nothing_falls_to_what_the_agent_says(self):
         """R-AGT-16 — the tier in the middle, on the surface that has no other."""
@@ -3020,7 +3024,9 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         run = await self._fired(gw)
         told = [one["text"] for one in self.records.messages(run["conversation_id"])
                 if one["author"] == "rundesk"]
-        self.assertEqual(["You are ava, and you are always brief."], told)
+        self.assertEqual(1, len(told))
+        self.assertTrue(told[0].startswith(self.agents.standing("ava")))
+        self.assertTrue(told[0].endswith("You are ava, and you are always brief."))
 
     async def test_a_schedule_names_the_brain_that_answers_it(self):
         """R-SCH-28 — two schedules on one agent, resolving different brains: which one

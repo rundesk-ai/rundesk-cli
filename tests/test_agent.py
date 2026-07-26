@@ -555,33 +555,47 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
     well and wrongly.
     """
 
+    def situation(self, said: str) -> str:
+        """What a turn was told *after* rundesk's own words, which always come first.
+
+        Every case below is about which situation wins; that ours is there at all is
+        R-AGT-17's, tested on its own. Asserted here rather than assumed, so a change that
+        dropped the standing words would fail every one of these rather than none.
+        """
+        standing = agent.standing("ava")
+        self.assertTrue(said.startswith(standing),
+                        "rundesk's own words did not come first")
+        return said[len(standing):].strip()
+
     def test_what_a_turn_was_told_itself_wins(self):
         """R-AGT-16 — nearest first, so a schedule or a command can always override."""
         self.made()
         agent.remember("ava", self.where, instructions="what the agent says")
         self.assertEqual("what this turn says",
-                         agent.told("ava", self.where, said="what this turn says",
-                                    otherwise="what rundesk would say"))
+                         self.situation(agent.told("ava", self.where, said="what this turn says",
+                                    otherwise="what rundesk would say")))
 
     def test_the_agents_own_is_next(self):
         """R-AGT-16 — the tier that had a column, a writer and no reader at all."""
         self.made()
         agent.remember("ava", self.where, instructions="what the agent says")
         self.assertEqual("what the agent says",
-                         agent.told("ava", self.where, otherwise="what rundesk would say"))
+                         self.situation(agent.told("ava", self.where,
+                                                   otherwise="what rundesk would say")))
 
     def test_rundesks_own_line_is_last(self):
         """R-AGT-16 — something that says what the situation is beats something that says
         nothing, and an owner who disagrees says so by writing their own."""
         self.made()
         self.assertEqual("what rundesk would say",
-                         agent.told("ava", self.where, otherwise="what rundesk would say"))
+                         self.situation(agent.told("ava", self.where,
+                                                   otherwise="what rundesk would say")))
 
     def test_nothing_anywhere_is_nothing_rather_than_a_guess(self):
         """R-AGT-16 — a person at a terminal is watching, so there is nothing to tell them
         about the situation and nothing is what they get."""
         self.made()
-        self.assertEqual("", agent.told("ava", self.where))
+        self.assertEqual("", self.situation(agent.told("ava", self.where)))
 
     def test_what_an_agent_is_told_is_kept_and_read_back(self):
         """R-AGT-16 — written where an agent's brain is written, because `add` is what an
@@ -600,7 +614,8 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
         agent.remember("ava", self.where, instructions="be brief")
         agent.remember("ava", self.where, instructions="")
         self.assertEqual("what rundesk would say",
-                         agent.told("ava", self.where, otherwise="what rundesk would say"))
+                         self.situation(agent.told("ava", self.where,
+                                                   otherwise="what rundesk would say")))
 
     def test_a_turn_the_clock_started_is_told_nobody_is_watching(self):
         """R-SCH-30 — the first trigger with no person at the other end. Three facts, and the
@@ -696,6 +711,63 @@ class AGatewayThatHasNoAgentYet(WithSomewhereToKeepAgents):
         """R-AGW-1"""
         agent.add("fresh", self.where)
         self.assertEqual([], agent.adopt("fresh", self.where, logs=self.before / "logs"))
+
+
+class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):
+    """R-AGT-17 — rundesk's own words reach a turn whatever anybody else said."""
+
+    def test_the_agents_own_name_is_filled_in(self):
+        """The one thing that varies. A placeholder that survived would reach a brain as the
+        literal word, and an agent told it is called `{name}` is told nothing at all."""
+        said = agent.standing("ava")
+        self.assertIn("You are ava,", said)
+        self.assertNotIn("{name}", said)
+        self.assertNotIn("{", said, "a brace survived into what a brain is given")
+        self.assertNotIn("}", said)
+
+    def test_every_place_the_name_appears_is_filled_in(self):
+        """Not just the first: the commands it names are the ones a brain will type, and one
+        left as `{name}` is a command that cannot run."""
+        said = agent.standing("zebra")
+        self.assertEqual(0, said.count("{name}"))
+        self.assertGreater(said.count("zebra"), 1)
+        self.assertIn("rundesk messages zebra", said)
+
+    def test_rundesks_own_words_reach_a_turn_that_was_told_nothing_else(self):
+        self.made()
+        self.assertEqual(agent.standing("ava"), agent.told("ava", self.where))
+
+    def test_what_an_owner_says_is_added_to_rundesks_rather_than_replacing_it(self):
+        """The whole point. They answer different questions — ours says what the agent is and
+        how to find what it did, theirs says what to do about this situation — so an agent
+        whose owner wrote instructions must not lose the first for having the second."""
+        self.made()
+        agent.remember("ava", self.where, instructions="be brief")
+        said = agent.told("ava", self.where)
+        self.assertIn("rundesk messages ava", said, "rundesk's own words were replaced")
+        self.assertIn("be brief", said, "the owner's words were dropped")
+
+    def test_rundesks_own_words_come_first(self):
+        """Ours is the same on every turn and theirs is not, so ours is the part that caches.
+        Putting anything that varies in front of it would spend that on every turn."""
+        self.made()
+        agent.remember("ava", self.where, instructions="be brief")
+        said = agent.told("ava", self.where, said="and answer in French")
+        self.assertTrue(said.startswith(agent.standing("ava")))
+        self.assertLess(said.index("rundesk messages ava"), said.index("and answer in French"))
+
+    def test_what_rundesk_says_is_the_same_words_every_turn(self):
+        """What prompt caching keys on. Two turns for one agent must be byte-for-byte equal
+        here, or the front of the prefix moves and every turn pays for it again."""
+        self.assertEqual(agent.standing("ava"), agent.standing("ava"))
+        self.assertNotEqual(agent.standing("ava"), agent.standing("bea"))
+
+    def test_a_turn_is_told_how_to_find_what_it_did(self):
+        """The fact this exists to carry: look it up rather than guess, and where to read the
+        rest. Everything else rundesk can do is in the guide rather than in every prompt."""
+        said = agent.standing("ava")
+        self.assertIn("rundesk messages ava", said)
+        self.assertIn("USING-RUNDESK.md", said)
 
 
 if __name__ == "__main__":

@@ -695,16 +695,24 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
                                    "--instructions", "You are running unattended overnight.")
         self.assertEqual(0, code, why)
         told = json.loads(said)["told"]
-        self.assertEqual("You are running unattended overnight.", told["RUNDESK_PREFACE"])
+        # Added to rundesk's own rather than replacing them (R-AGT-17): ours says what the
+        # agent is and how to find what it did, theirs says what to do about tonight.
+        self.assertTrue(told["RUNDESK_PREFACE"].startswith(agent.standing("ava")))
+        self.assertTrue(told["RUNDESK_PREFACE"].endswith(
+            "You are running unattended overnight."))
         self.assertEqual("what changed?", json.loads(said)["prompt"].strip(),
                          "standing instructions were folded into what was asked")
 
-    def test_a_turn_asked_for_with_no_standing_instructions_is_given_none(self):
+    def test_a_turn_is_always_told_rundesks_own_words_whatever_else_it_was_told(self):
         """R-PRV-3, R-PRV-23 — unset rather than empty, so an adapter reading it can
         trust that there is something to act on."""
         self.ask("add", "ava", "--provider", self.brain("nosy"))
         _, said, _ = self.ask("ask", "ava", "what changed?")
-        self.assertIsNone(json.loads(said)["told"]["RUNDESK_PREFACE"])
+        # Never unset now: rundesk itself always has something to say, so what an adapter
+        # reads is ours alone rather than nothing (R-AGT-17). What is *absent* is anybody
+        # else's — nothing of the owner's is invented to fill it.
+        told = json.loads(said)["told"]["RUNDESK_PREFACE"]
+        self.assertEqual(agent.standing("ava"), told)
 
     def test_the_answer_goes_where_it_can_be_piped_and_the_rest_does_not(self):
         """R-CMD-4 — what comes out of `rundesk ask … > answer.txt` has to be the answer

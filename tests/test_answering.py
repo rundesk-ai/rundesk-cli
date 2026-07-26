@@ -273,7 +273,10 @@ class WhereABrainIsAnswering(CarriesAConversation):
         brain, surface = Brain(), Surface()
         held = self.answering(surface, brain)
         await self.carry(held, self.arrived())
-        self.assertEqual("You are ava, and you are brief.", brain.asked[0]["preface"],
+        # Added to rundesk's own rather than replacing them (R-AGT-17); which of the
+        # *situation* lines won is what this case is about.
+        said = brain.asked[0]["preface"].replace(agents.standing("ava"), "").strip()
+        self.assertEqual("You are ava, and you are brief.", said,
                          "the agent's own was passed over for rundesk's default sentence")
 
     async def test_what_this_channel_says_still_wins_over_the_agents(self):
@@ -308,7 +311,9 @@ class WhereABrainIsAnswering(CarriesAConversation):
         brain, surface = Brain(), Surface()
         held = self.answering(surface, brain)
         await self.carry(held, self.arrived())
-        said = brain.asked[0]["preface"]
+        # Rundesk's own words come first on every turn now (R-AGT-17) and legitimately
+        # contain ", in " — so the guard reads what the *surface* added, not the whole of it.
+        said = brain.asked[0]["preface"].replace(agents.standing("ava"), "").strip()
         self.assertIn("over somewhere", said)
         self.assertNotIn(", in ", said)
         self.assertNotIn(", from ", said)
@@ -321,7 +326,9 @@ class WhereABrainIsAnswering(CarriesAConversation):
                                                       "settings": {}})
         await self.carry(held, dict(self.arrived(), where="#ops", called="Tim"))
         self.assertEqual("what changed?", brain.asked[0]["prompt"])
-        self.assertEqual("", brain.asked[0]["preface"])
+        # Rundesk's own words and nothing else: nothing was invented about a surface that
+        # said nothing about itself (R-CH-21, R-AGT-17).
+        self.assertEqual(agents.standing("ava"), brain.asked[0]["preface"])
 
 
 class WhoMayBeAnswered(CarriesAConversation):
