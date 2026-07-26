@@ -928,8 +928,21 @@ making:
 | what the brain itself said, and what it said went wrong | **files, and they have no choice** | `RUNDESK_RAW` is a **path handed to the adapter**, and an adapter is a program in any language — the contract says a shell script is enough. You cannot hand `bash` a database handle. The same goes for stderr, which is a pipe the operating system gives us. Referenced from `state.db` by run id |
 | the gateway's log | **a file** | rotated, tailed, and read by a person while something is going wrong |
 
-So a run is one row and one pair of files, not four files sharing a stem — and the pair is the part
-Rundesk never authored. Both go when the run is forgotten, which is one rule rather than four.
+**The database is the history; the files are diagnostics, and may be destroyed.** That is the split's
+point, and it has one consequence that must be designed for rather than discovered: **the account has to
+stand on its own.** If what a brain said can be deleted to reclaim space — and it can, and should be —
+then nothing may be recoverable only from there. The same rule already applies one level out, where a
+provider's own session files are referenced and never copied: our record is what survives, so it has to be
+enough. A run whose account says "see the raw file" is a run that will one day say nothing.
+
+**Searchable is a requirement, not a side effect.** The reason the history goes in the database is to be
+able to ask it something later — what did ava say about the parser, which run mentioned that file, what
+was I told last Tuesday. SQLite has `FTS5` for exactly this and it is present in every Python checked here
+(3.11, 3.13, 3.14, SQLite 3.53). But **it is a compile-time option, not a guarantee**, and the floor is
+the oldest Python a fresh macOS ships, on Linux as well as macOS. So it is asked for rather than assumed:
+searching works where it is there, `doctor` says so where it is not, and the history is still readable and
+still queryable by agent, conversation, run and time without it. A feature that silently needs a build
+option nobody checked is how an install works on one machine and not the next.
 
 That split is the recommendation, not a foregone conclusion — **it is an owner decision and a persisted
 schema change, so it is confirmed before anything is written.** What must not happen is a live event
@@ -988,6 +1001,11 @@ How it behaves, which is the part worth arguing about now rather than during an 
 - An account of a run is readable without the gateway that wrote it, and after it has gone.
 - A turn writing its account does not hold up another command reading a schedule.
 - What a brain said is kept where a shell-script adapter can append to it.
+- Deleting what a brain said leaves the account of that run whole and still readable.
+- Nothing a run recorded is recoverable only from a file that may be destroyed.
+- What an agent has been told and has said is searchable by words in it, where the machine can.
+- A machine whose SQLite cannot search still lists, reads and queries every run.
+- `doctor` says when searching is unavailable rather than searching returning nothing.
 - Nothing an update touches loses a transcript, a log, or what a schedule last did.
 
 ### Exit proof
