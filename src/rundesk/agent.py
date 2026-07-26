@@ -616,6 +616,50 @@ def _answering(name, one, record, where, carry, answers):
     return made
 
 
+def asking(name: str, where: Path | None = None, carry=None):
+    """How a gateway admits a turn for a schedule that asks one (R-SCH-28).
+
+    Handed to the gateway already made, the way the surfaces it holds open are: a turn needs
+    an agent, a brain and an account to write into, and a gateway knows none of the three.
+    Made here because this is the layer that knows all of them, and the dependency goes one
+    way — `cli` -> `agent` -> `gateway` (R-AGT-9).
+
+    **A conversation of its own, per schedule, fresh every firing.** Named for the schedule on
+    the surface `schedule`, so it is never the terminal's and never a channel's: untouched, a
+    run at three in the morning resumed the session its owner types into. Fresh because a
+    schedule is told what its situation is before it reads a word, and a brain that binds
+    standing instructions when a conversation opens would be told once and never again.
+
+    Which brain answers is the schedule's, then the agent's, and a schedule that reaches for
+    neither cannot run — said as an outcome rather than passed over in silence.
+    """
+    from rundesk import turn as turns
+
+    carrying = carry if carry is not None else turns.carry
+
+    async def made(one):
+        kept = chosen(name, where)
+        named = one.provider or kept.get("provider")
+        if not named:
+            raise gateway.Unrunnable(
+                f"schedule '{one.name}' names no brain, and neither does this agent")
+        row = reading(name, where).schedule(one.name) or {}
+        return await carrying(
+            name, one.prompt, named, where=where,
+            model=one.model or kept.get("model"),
+            settings=kept.get("settings"),
+            conversation=one.name, on=turns.SCHEDULE, kind=turns.SCHEDULE,
+            fresh=True,
+            preface=one.instructions or "",
+            source=turns.SCHEDULE,
+            # What correlates this run with the schedule that started it, so what ran at
+            # three in the morning is found by the name an owner already knows.
+            schedule_id=row.get("id"),
+        )
+
+    return made
+
+
 def unrunnable_channels(name: str, where: Path | None = None) -> list:
     """Which of this agent's channels name a kind that is not on this machine."""
     from rundesk import channel as channels

@@ -97,6 +97,19 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   directory that does not exist yet leaves you with silence and a `FileNotFoundError` two assertions
   later, in the reader. Make the log directory in `setUp`; do not assume the first write makes it.
 
+- **`Gateway._started` is an attribute, not a name going spare.** `_record` sets it lazily
+  (`if not hasattr(self, "_started")`) and writes it into the gateway's record as the moment
+  it came up, so adding a *method* called `_started` makes `hasattr` true, puts a bound method
+  where a float goes, and the whole claim dies on `Object of type method is not JSON
+  serializable` — from `claim()`, nowhere near what you wrote. Grep `self\._<name>` before
+  naming a private method on `Gateway`: several of its attributes are set outside `__init__`.
+- **A fake brain written into a test as a plain triple-quoted string needs `\\n`, not `\n`.**
+  The brain is source code *written to a file*, so a real newline lands inside its string
+  literal and the adapter dies with `SyntaxError: EOL while scanning string literal` — exit 1,
+  nothing on stdout, and the turn recorded as `failed` with no clue why. Nothing points at the
+  test: the reason is in `logs/runs/<run>.err`, which is the first place to look when a
+  stand-in brain "runs" and says nothing. `r"""…"""` is the fix, and `tests/test_turn.py`
+  escapes it the other way.
 - **A capability gate and a caller-supplied-object gate look interchangeable right up until
   the caller has nothing to supply.** What a brain said it can do decided one half of how a
   turn was driven, and whether the caller passed a steering generator decided the other. They

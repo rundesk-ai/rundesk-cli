@@ -46,6 +46,12 @@ from rundesk import process, provider, store, transcript
 #: first one on, which is what a person at a terminal means by asking again.
 TERMINAL = "terminal"
 
+#: What a conversation the clock started is called, and the surface it happened on. One per
+#: schedule, so a scheduled turn is never in the terminal's conversation — which is what it
+#: was until this existed: a run at three in the morning resumed the session its owner types
+#: into, and left its own prompt and answer in the middle of it.
+SCHEDULE = "schedule"
+
 #: How many lines of what a brain said went wrong are carried back with the outcome. The
 #: whole of it is in the run's own file; this is the tail worth putting in front of a person.
 TROUBLE_KEPT = 20
@@ -92,6 +98,19 @@ class Outcome:
         return "".join(one.get("text", "") for one in self.said
                        if one.get("type") == "text")
 
+    @property
+    def became(self) -> str:
+        """What this turn came to, in one word — the word the run's own record holds.
+
+        **Not `reason`, which is what became of the program.** A brain that ran perfectly and
+        said it could not answer is a process that finished and a turn that failed, and
+        anything reporting the first would say a night's work went fine. One property rather
+        than the expression written wherever it is needed, because the two would drift and the
+        drift would be silent: a schedule saying `finished` about a turn that did not.
+        """
+        return "finished" if self.ok else ("failed" if self.reason == process.FINISHED
+                                          else self.reason)
+
 
 async def carry(
     name: str,
@@ -113,6 +132,8 @@ async def carry(
     asked_by: dict | None = None,
     admitted=None,
     preface: str = "",
+    source: str | None = None,
+    schedule_id: int | None = None,
 ) -> Outcome:
     """Run one turn for this agent, and write down everything about it.
 
@@ -185,8 +206,12 @@ async def carry(
     asked = kept.arrived(where_it_is, at_now, prompt,
                          who=(asked_by or {}).get("user") or None)
     run = kept.began(
-        "channel" if asked_by else "terminal", named, posture, at_now,
-        conversation_id=where_it_is, trigger_message_id=asked, model=model, can=can,
+        # How this turn came about, and one of the three the records declare (R-RUN-16).
+        # Said by the caller where the caller knows something this cannot work out — the
+        # clock does — and derived otherwise from whether a surface asked.
+        source or ("channel" if asked_by else "terminal"), named, posture, at_now,
+        conversation_id=where_it_is, schedule_id=schedule_id,
+        trigger_message_id=asked, model=model, can=can,
         settings=settings, resumed=bool(resume), pick=pick,
     )
     if admitted is not None:
@@ -247,16 +272,20 @@ async def carry(
         # half a sentence.
         writing.answered("".join(one.get("text", "") for one in said
                                  if one.get("type") == "text"))
+        # Built here rather than at the end, so the word written down and the word handed
+        # back are the same word: `Outcome.became` is the one place it is worked out, and a
+        # second copy of that expression would drift into a run recorded as finished and a
+        # schedule reporting it as failed, or the other way round.
+        outcome = Outcome(run=run, ok=ok, reason=result.reason, said=said, tokens=tokens,
+                          handle=handle if carried else None, why=_why(said),
+                          trouble=[one for one in trouble if one.strip()][-TROUBLE_KEPT:])
         # How it finished, in one word. A turn is `finished` only when the program ended
         # well *and* the brain did not say otherwise — a brain that answered "no" through
         # a process that exited zero is a failed turn, and the two used to be told apart
         # by two fields that a reader had to combine correctly to get right.
-        became = "finished" if ok else ("failed" if result.ok else result.reason)
-        kept.ended(run, store.stamped(now), became, exit_code=result.code,
+        kept.ended(run, store.stamped(now), outcome.became, exit_code=result.code,
                    why=_why(said), tokens=tokens)
-    return Outcome(run=run, ok=ok, reason=result.reason, said=said, tokens=tokens,
-                   handle=handle if carried else None, why=_why(said),
-                   trouble=[one for one in trouble if one.strip()][-TROUBLE_KEPT:])
+    return outcome
 
 
 class _Account:

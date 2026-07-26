@@ -167,10 +167,14 @@ EXAMPLES: list[tuple[str, list[tuple[str, str]]]] = [
          "what it is reachable on, and whether it is reachable at all"),
     ]),
     ("a schedule", [
-        ('rundesk schedules ava add nightly --when "0 3 * * *" -- rundesk ask ava "summarise what changed today"',
-         "at three every morning, one turn, in this agent's own conversation"),
-        ('rundesk schedules ava add nightly --when "0 3 * * *" -- rundesk ask ava "check the deploy" --instructions "Nobody is watching."',
+        ('rundesk schedules ava add nightly --when "0 3 * * *" --ask "summarise what changed today"',
+         "at three every morning, one turn, in a conversation of its own"),
+        ('rundesk schedules ava add nightly --when "0 3 * * *" --ask "check the deploy" --instructions "Nobody is watching."',
          "the same, told it is running unattended before it reads a word"),
+        ('rundesk schedules ava add weekly --when "0 9 * * 1" --ask "what is worth knowing?" --provider codex',
+         "a different brain for a different schedule, on the same agent"),
+        ("rundesk schedules ava add tidy --when \"0 4 * * *\" -- /usr/local/bin/tidy --quiet",
+         "a program rather than a turn, by its full path"),
         ("rundesk schedules ava off nightly",
          "keep it, and stop it running"),
     ]),
@@ -365,10 +369,34 @@ def build_parser() -> argparse.ArgumentParser:
     added.add_argument("schedule", metavar="<schedule>", help="what to call it, and what to name it by later")
     added.add_argument("--when", required=True, metavar="<cron>",
                        help="when it runs, as five cron fields — minute, hour, day, month, weekday")
-    # After `--`, and a positional rather than an option's remainder. What follows is the
-    # program and nothing else, so an option typed after it is a usage error rather than
-    # something quietly handed to the program.
-    added.add_argument("run", nargs="+", metavar="<program>",
+    # **A schedule starts a program or asks a turn, and never both.** The two are one verb
+    # because they are one thing to an owner — work that happens because the time came — and
+    # the difference is only what the gateway does when it is due. Refused rather than
+    # ranked: a schedule that named both would leave rundesk choosing, and the choice would
+    # be invisible in the listing.
+    added.add_argument("--ask", dest="prompt", metavar="<prompt>",
+                       help="what to ask this agent when it is due, in quotes — a turn "
+                            "rather than a program")
+    # Two of the three a turn takes, and not `--set`: what a brain is told to run with has
+    # no column on a schedule, and an option that could only ever refuse is worse in the
+    # help than one that is absent. Written out rather than through `_brain` for that reason
+    # alone — the spellings are the same because there is only one right spelling.
+    added.add_argument("--provider", metavar="<provider>",
+                       help="which brain answers this schedule, whatever the agent reaches "
+                            "for otherwise")
+    added.add_argument("--model", metavar="<model>",
+                       help="which model, in that brain's own words")
+    added.add_argument("--instructions", dest="says", metavar="<text>", default="",
+                       help="standing instructions for the turn this schedule starts, told to "
+                            "the brain apart from the prompt")
+    # After `--`, taken off before the parser sees it, and never read here. It was a
+    # required greedy positional, which argparse can carry a tail into on its own — but the
+    # moment this verb grew options of its own, an option *inside* the tail was read as one
+    # of them: `-- rundesk ask ava "…" --instructions "…"` set the schedule's instructions
+    # and dropped them from what it would run. That is finding 31 again by another route, and
+    # what stops it is splitting the tail off in front of argparse (see `_handed_on`), which
+    # is what naming it `CARRIED` asks for.
+    added.add_argument(CARRIED, nargs="*", metavar="<program>",
                        help="after `--`, the full path of what to start when it is due, and its "
                             "arguments — a bare name is refused, because a gateway runs with "
                             "almost no PATH")
@@ -741,6 +769,10 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
         # nothing to start for it. A gateway of that name still runs, holds its lock and
         # writes its log, exactly as it did before there were agents at all.
         records = agents.records(args.name) if agents.exists(args.name) else None
+        # How a schedule that asks a turn is admitted, resolved here and handed over made.
+        # None for a name that is not an agent, which is a gateway that can start programs
+        # and not turns — and says so rather than passing the minute over in silence.
+        asking = agents.asking(args.name) if agents.exists(args.name) else None
     except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         print(f"        what stands in the way:  rundesk doctor {args.name}", file=sys.stderr)
@@ -757,7 +789,8 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
                                             # finds the agents the gateway is running
                                             # (R-SCH-27).
                                             agents=agents.agents_home(),
-                                            records=records).serve())
+                                            records=records,
+                                            asking=asking).serve())
     except (gateways.AlreadyRunning, gateways.Unfit, gateways.NotAName) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         return 0
@@ -1024,6 +1057,20 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
         print(f"{name}: NOT ASKED — {why}", file=sys.stderr)
         return 1
 
+    # **The clock's work, or a person's.** A schedule that names `rundesk ask` rather than a
+    # prompt is still the clock's, and the gateway says which schedule through the one
+    # variable it adds to a scheduled program's environment. Read here, where the command
+    # adapts what it was invoked as, and handed on as an argument rather than reached for
+    # further in.
+    #
+    # An explicit `--conversation` wins: somebody who named one has said where this belongs.
+    # Otherwise a scheduled turn gets a conversation of its own, named for the schedule, and
+    # **starts fresh every firing** — untouched, it landed in the terminal's own conversation,
+    # so a run at three in the morning resumed the session its owner types into and left its
+    # prompt and answer in the middle of it.
+    clock = (os.environ.get("RUNDESK_SCHEDULE") or "").strip()
+    by_the_clock = bool(clock) and not args.conversation
+
     said = _Shown()
     try:
         outcome = asyncio.run(turn.carry(
@@ -1031,11 +1078,14 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
             model=args.model or reaches.get("model"),
             settings=settings,
             posture=provider.READ if args.read_only else provider.WORK,
-            conversation=args.conversation or turn.TERMINAL,
-            fresh=args.fresh,
+            conversation=clock if by_the_clock else (args.conversation or turn.TERMINAL),
+            on=turn.SCHEDULE if by_the_clock else turn.TERMINAL,
+            kind=turn.SCHEDULE if by_the_clock else turn.TERMINAL,
+            fresh=args.fresh or by_the_clock,
             watching=said,
             steering=_typed() if args.steer else None,
             preface=args.says,
+            source=turn.SCHEDULE if clock else None,
         ))
     except provider.NotRunnable as why:
         print(f"{name}: NO BRAIN THERE — {why}", file=sys.stderr)
@@ -1881,18 +1931,40 @@ def _note(gateways, name: str, said: str, whose=None) -> int:
 def _add_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
     from rundesk import schedule
 
+    # What it runs is the tail, whichever way argparse ended up with it: `_handed_on` takes
+    # it off in front of the parser, and the positional is there so the reference shows it.
+    runs = list(args.options) + list(getattr(args, "handed_on", []))
+    prompt = (args.prompt or "").strip()
     try:
         made = schedule.Schedule(args.schedule, args.when)
     except schedule.NotASchedule as why:
         print(f"{args.name}/{args.schedule}: NOT ADDED — {why}", file=sys.stderr)
         return 1
-    if not process.located(args.run[0]):
+    # Exactly one of the two, said here as well as refused by the records themselves: a
+    # schedule that named both would leave rundesk choosing which, and the choice would be
+    # invisible in the listing.
+    if bool(prompt) == bool(runs):
+        said = ("names both a program and a prompt" if prompt
+                else "names neither a program to run nor a prompt to ask")
+        print(f"{args.name}/{args.schedule}: NOT ADDED — it {said}", file=sys.stderr)
+        print("        say one:  -- <program> …   or   --ask \"<prompt>\"", file=sys.stderr)
+        return 1
+    for named, said in (("--provider", args.provider), ("--model", args.model),
+                        ("--instructions", args.says)):
+        # Said rather than silently kept: these reach a brain, and a schedule that starts a
+        # program has no brain for them to reach. Kept anyway they would sit in the records
+        # meaning nothing, and read back as though the schedule were a turn.
+        if said and not prompt:
+            print(f"{args.name}/{args.schedule}: NOT ADDED — {named} is for a turn, and this "
+                  f"schedule starts a program", file=sys.stderr)
+            return 1
+    if runs and not process.located(runs[0]):
         # Refused here rather than discovered at three in the morning. The gateway runs
         # with almost no PATH, so a program named rather than located resolves in the
         # shell that typed it and nowhere else (R-PROC-2) — and a schedule that cannot
         # start looks exactly like one that has simply never come due.
-        print(f"{args.name}/{args.schedule}: NOT ADDED — '{args.run[0]}' is a name, not a location; "
-              f"give the full path (try: command -v {args.run[0]})", file=sys.stderr)
+        print(f"{args.name}/{args.schedule}: NOT ADDED — '{runs[0]}' is a name, not a location; "
+              f"give the full path (try: command -v {runs[0]})", file=sys.stderr)
         return 1
     # Refused rather than replaced. `remember_schedule` writes over a name that is already
     # there, which is what `channels add` wants and what this must not do: a schedule that
@@ -1902,7 +1974,10 @@ def _add_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
               file=sys.stderr)
         return 1
     kept.remember_schedule(args.schedule, args.when, store.stamped(),
-                           command=list(args.run))
+                           command=runs or None,
+                           prompt=prompt or None,
+                           provider=args.provider, model=args.model,
+                           instructions=(args.says or "").strip() or None)
     unlogged = _note(gateways, args.name, f"schedule '{args.schedule}' added ({args.when})", whose)
     # Both named, because a schedule belongs to one agent and the success line saying only
     # its own name could not tell you it had landed on the wrong one.
@@ -1968,8 +2043,9 @@ def _run_schedule(args: argparse.Namespace, gateways, agents, kept, whose) -> in
         # Through what was passed in, never the module. Reaching for the real one here
         # read the machine's own directories from inside a suite that had redirected
         # nothing, which is the isolation every other line in this file keeps.
-        env=process.environment(whose.run or gateways.home(),
-                                agents=agents.agents_home()),
+        env=dict(process.environment(whose.run or gateways.home(),
+                                     agents=agents.agents_home()),
+                 **{_gateway.SCHEDULE_IS: one.name}),
         on_line=print,
     ))
     print(f"{args.name}/{args.schedule}: "
@@ -2016,12 +2092,16 @@ def _list_schedules(args: argparse.Namespace, gateways, kept, whose) -> int:
     rows = [(
         one.name,
         "OFF" if not one.enabled else "ON",
+        # What it starts, said in one word rather than in full: a prompt is a sentence and a
+        # program is a path, and neither fits a column beside four others. Which of the two it
+        # is decides everything about how it runs, so it is the part worth showing.
+        "asks" if one.prompt else "runs",
         one.when,
         schedule.describe(one, now),
         ran.get(one.name, {}).get("last_auto_run_at") or "-",
         _became(ran.get(one.name, {}).get("last_outcome") or "-", up),
     ) for one in wanted]
-    _as_table(("SCHEDULE", "STATE", "WHEN", "NEXT", "LAST RUN", "OUTCOME"), rows)
+    _as_table(("SCHEDULE", "STATE", "IT", "WHEN", "NEXT", "LAST RUN", "OUTCOME"), rows)
     for name, why in refused:
         print(f"{name or '(unnamed)'}: NOT UNDERSTOOD — {why}", file=sys.stderr)
     return 1 if refused else 0

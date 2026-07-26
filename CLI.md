@@ -32,7 +32,7 @@ rundesk channels <agent> add --kind <kind> --allow <user> [--token-stdin] [--act
 rundesk channels <agent> instructions <channel> <text>                                                                                                                                 what this agent is told about where it is
 rundesk channels <agent> remove <channel>                                                                                                                                              take this agent off a channel
 rundesk channels <agent> show <channel>                                                                                                                                                one channel, and who may reach this agent through it
-rundesk schedules <agent> add --when <cron> <schedule> -- <program> [<arg> ...]                                                                                                        add a schedule
+rundesk schedules <agent> add --when <cron> [--ask <prompt>] [--provider <provider>] [--model <model>] [--instructions <text>] <schedule> -- <program> [<arg> ...]                     add a schedule
 rundesk schedules <agent> off <schedule>                                                                                                                                               keep a schedule but stop it running
 rundesk schedules <agent> on <schedule>                                                                                                                                                let a schedule run
 rundesk schedules <agent> remove <schedule>                                                                                                                                            take a schedule away
@@ -85,10 +85,14 @@ rundesk channels ava
 **A schedule**
 
 ```sh
-# at three every morning, one turn, in this agent's own conversation
-rundesk schedules ava add nightly --when "0 3 * * *" -- rundesk ask ava "summarise what changed today"
+# at three every morning, one turn, in a conversation of its own
+rundesk schedules ava add nightly --when "0 3 * * *" --ask "summarise what changed today"
 # the same, told it is running unattended before it reads a word
-rundesk schedules ava add nightly --when "0 3 * * *" -- rundesk ask ava "check the deploy" --instructions "Nobody is watching."
+rundesk schedules ava add nightly --when "0 3 * * *" --ask "check the deploy" --instructions "Nobody is watching."
+# a different brain for a different schedule, on the same agent
+rundesk schedules ava add weekly --when "0 9 * * 1" --ask "what is worth knowing?" --provider codex
+# a program rather than a turn, by its full path
+rundesk schedules ava add tidy --when "0 4 * * *" -- /usr/local/bin/tidy --quiet
 # keep it, and stop it running
 rundesk schedules ava off nightly
 ```
@@ -99,6 +103,7 @@ rundesk schedules ava off nightly
 --activity, --no-activity       show what the agent is doing while it works, not only what it finally says (default: on)
 --all                           every agent on this machine
 --allow <user>                  who may reach this agent through it — at least one, always; repeatable
+--ask <prompt>                  what to ask this agent when it is due, in quotes — a turn rather than a program
 --check                         say whether a newer release exists
 --conversation <conversation>   which conversation to carry on — this terminal's, when left out
 --fresh                         start the conversation again rather than carrying it on

@@ -17,6 +17,7 @@ import logging
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -2795,6 +2796,198 @@ class ASchedulesOutcomeAfterACrash(WithARunDirectory):
         self.assertEqual(gateway.INTERRUPTED,
                          self.what_each_schedule_last_did()["nightly"]["last_outcome"],
                          "a schedule that never started was left saying it had")
+
+
+#: A brain, as a program: answers, says what it cost, and says where the conversation got
+#: to. The same shape `tests/test_turn.py` uses, and for the same reason — a stand-in more
+#: generous than a real adapter hides whole features, so this is exactly the seam's surface.
+A_BRAIN = r"""#!%s
+import json, os, sys
+if "--capabilities" in sys.argv:
+    print(json.dumps({"tools": True, "resume": True, "model": True, "usage": True}))
+    sys.exit(0)
+prompt = sys.stdin.read().strip()
+say = lambda **it: (sys.stdout.write(json.dumps(it) + "\n"), sys.stdout.flush())
+say(type="text", text="heard " + prompt)
+say(type="usage", input=100, output=8, cached=40, model="stand-in-1")
+say(type="done", ok=True, session=(os.environ.get("RUNDESK_RESUME") or "") + "s")
+""" % PY
+
+#: A brain that fails, so a schedule whose provider goes wrong leaves one durable outcome
+#: rather than silence.
+A_FAILING_BRAIN = r"""#!%s
+import json, sys
+if "--capabilities" in sys.argv:
+    print("{}")
+    sys.exit(0)
+sys.stdin.read()
+sys.stdout.write(json.dumps({"type": "done", "ok": False, "why": "it would not answer"}) + "\n")
+""" % PY
+
+
+class WhenTheClockAsksATurn(WithARunDirectory):
+    """R-SCH-28 — a schedule that asks a turn rather than starting a program.
+
+    The end of the chain this phase exists to prove: the clock fires, a gateway admits a turn,
+    a brain answers, and the account records it. Offline throughout — the brain is a program
+    this case writes, which is what any real adapter is.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from rundesk import agent as agents
+        self.agents_at = Path(tempfile.mkdtemp(prefix="rundesk-agents-"))
+        self.addCleanup(shutil.rmtree, self.agents_at, True)
+        self.addCleanup(os.environ.pop, "RUNDESK_AGENTS_DIR", None)
+        os.environ["RUNDESK_AGENTS_DIR"] = str(self.agents_at)
+        self.agents = agents
+        agents.add("ava", self.agents_at)
+        self.records = agents.records("ava", self.agents_at)
+        self.brains = Path(tempfile.mkdtemp(prefix="rundesk-brains-"))
+        self.addCleanup(shutil.rmtree, self.brains, True)
+
+    def brain(self, said: str = A_BRAIN, called: str = "stand-in") -> str:
+        at = self.brains / called
+        at.write_text(said, encoding="utf-8")
+        at.chmod(at.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        return str(at)
+
+    def asks(self, name="nightly", prompt="what changed?", **held) -> None:
+        """A schedule that asks a turn, written the way the command writes one."""
+        self.records.remember_schedule(name, held.pop("when", "* * * * *"), store.stamped(),
+                                       prompt=prompt, **held)
+
+    def made(self, name: str = "ava", **held) -> gateway.Gateway:
+        gw = gateway.Gateway(name, where=self.where, logs=self.logs, root=self.root,
+                             records=self.records, agents=self.agents_at,
+                             asking=self.agents.asking("ava", self.agents_at), **held)
+        self.addCleanup(gw.release)
+        return gw
+
+    async def _fired(self, gw, moment=None, seconds: float = 30.0) -> dict:
+        """Fire the clock and wait for the run the turn wrote. Returns the run's row."""
+        gw._fire(schedule, moment or datetime.now())
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            runs = self.records.runs()
+            if runs and runs[0].get("ended_at"):
+                return runs[0]
+            await asyncio.sleep(0.05)
+        self.fail(f"no run was recorded: {self.records.runs()}")
+
+    async def test_a_schedule_that_asks_a_turn_completes_and_records_it(self):
+        """R-SCH-28 — the whole line in one case: the time came, a brain answered, and what
+        it said is readable afterwards by somebody who was not there."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.asks()
+        gw = self.made()
+        gw.claim()
+        run = await self._fired(gw)
+        self.assertEqual("finished", run["outcome"], f"the turn did not finish: {run}")
+        said = [one for one in self.records.messages(run["conversation_id"])
+                if one["author"] == "agent"]
+        self.assertEqual(["heard what changed?"], [one["text"] for one in said],
+                         "what the brain answered is not readable afterwards")
+
+    async def test_a_turn_the_clock_started_says_so_in_the_account(self):
+        """R-RUN-16 — the column somebody reads at three in the morning to find out whether
+        they asked for what happened. It said `terminal`, because nothing could tell it
+        otherwise."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.asks()
+        gw = self.made()
+        gw.claim()
+        run = await self._fired(gw)
+        self.assertEqual("schedule", run["source"])
+        self.assertEqual(self.records.schedule("nightly")["id"], run["schedule_id"],
+                         "the run does not name the schedule that started it")
+
+    async def test_a_scheduled_turn_is_never_in_the_terminals_conversation(self):
+        """R-SCH-29 — untouched, a run at three in the morning landed in the conversation its
+        owner types into: it resumed that session and left its own prompt and answer in the
+        middle of it. Its own place, named for the schedule."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.asks()
+        gw = self.made()
+        gw.claim()
+        run = await self._fired(gw)
+        where_it_is = [one for one in self.records.conversations()
+                       if one["id"] == run["conversation_id"]][0]
+        self.assertEqual(("schedule", "nightly"), (where_it_is["channel"], where_it_is["space"]))
+        self.assertNotEqual(store.conversation_id("terminal", "terminal"), run["conversation_id"])
+
+    async def test_two_schedules_on_one_agent_are_two_conversations(self):
+        """R-SCH-29 — one place each, so what one asked is never in the other's history."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.asks("nightly", "what changed?")
+        self.asks("weekly", "what is worth knowing?")
+        gw = self.made()
+        gw.claim()
+        await self._fired(gw)
+        deadline = time.time() + 30
+        while time.time() < deadline and len(self.records.runs()) < 2:
+            await asyncio.sleep(0.05)
+        places = {one["space"] for one in self.records.conversations()}
+        self.assertEqual({"nightly", "weekly"}, places, "two schedules shared one conversation")
+
+    async def test_each_firing_of_a_schedule_starts_fresh(self):
+        """R-SCH-29 — a brain that binds its standing instructions when a conversation opens
+        is told what its situation is once and never again, so every firing stands on its own.
+        Proved by the handle: the stand-in appends to whatever it was resumed from, so a
+        carried-on conversation would report `ss` on the second turn."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.asks()
+        gw = self.made()
+        gw.claim()
+        await self._fired(gw, datetime(2026, 7, 26, 9, 0))
+        await self._fired(gw, datetime(2026, 7, 26, 9, 1))
+        deadline = time.time() + 30
+        while time.time() < deadline and len(self.records.runs()) < 2:
+            await asyncio.sleep(0.05)
+        self.assertEqual([False, False], [bool(one["resumed"]) for one in self.records.runs()],
+                         "a firing carried on from the one before it")
+
+    async def test_a_schedule_whose_brain_fails_leaves_one_durable_outcome(self):
+        """R-SCH-8 — a schedule that fails in silence looks exactly like one that has never
+        come due, and fails again every time it falls due."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain(A_FAILING_BRAIN, "sulky"))
+        self.asks()
+        gw = self.made()
+        gw.claim()
+        await self._fired(gw)
+        self.assertEqual("failed", self.records.schedule("nightly")["last_outcome"])
+
+    async def test_a_schedule_that_asks_a_turn_with_no_brain_anywhere_says_so(self):
+        """R-SCH-8 — refused as an outcome rather than passed over. A minute that did nothing
+        for a reason nobody wrote down is a schedule an owner cannot fix."""
+        self.asks()
+        gw = self.made()
+        gw.claim()
+        gw._fire(schedule, datetime.now())
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if self.records.schedule("nightly")["last_outcome"] not in (None, gateway.STARTED):
+                break
+            await asyncio.sleep(0.05)
+        self.assertEqual("could not start", self.records.schedule("nightly")["last_outcome"])
+        self.assertIn("names no brain", gateway.log_path("ava", self.logs).read_text())
+
+    async def test_a_gateway_with_nothing_to_ask_a_turn_with_says_so(self):
+        """R-SCH-8 — a gateway that is not an agent can start programs and not turns, and a
+        schedule that asks one has to say why it did not run rather than doing nothing."""
+        self.asks()
+        gw = gateway.Gateway("ava", where=self.where, logs=self.logs, root=self.root,
+                             records=self.records, agents=self.agents_at)
+        self.addCleanup(gw.release)
+        gw.claim()
+        gw._fire(schedule, datetime.now())
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if self.records.schedule("nightly")["last_outcome"] not in (None, gateway.STARTED):
+                break
+            await asyncio.sleep(0.05)
+        self.assertEqual("could not start", self.records.schedule("nightly")["last_outcome"])
+        self.assertIn("nothing to ask one with", gateway.log_path("ava", self.logs).read_text())
 
 
 if __name__ == "__main__":

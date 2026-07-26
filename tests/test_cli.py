@@ -615,15 +615,14 @@ class FakeGateways:
     def log_path(self, name, logs=None):
         return self._written if self._written is not None else pathlib.Path("/nowhere/x.log")
 
-    def Gateway(self, name, where=None, logs=None, schedules=None, reachable=(),
-                agents=None, records=None):
+    def Gateway(self, name, where=None, logs=None, reachable=(),
+                agents=None, records=None, asking=None):
         gateways = self
         # Kept, because what the command hands a gateway is the command's to get right:
         # a gateway told nothing about where agents are starts programs that cannot find
         # one (R-SCH-27), and only this side of the seam can be asked whether it was told.
         self.made_with.append({"name": name, "where": where, "logs": logs,
-                               "schedules": schedules, "agents": agents,
-                               "records": records})
+                               "agents": agents, "records": records, "asking": asking})
 
         class One:
             async def serve(inner):
@@ -667,6 +666,8 @@ class FakeAgents:
         self._complaints = dict(complaints or {})
         self._chosen: dict = {}
         self.asked_runnable = None
+        #: Which schedules a gateway asked a turn for, by agent.
+        self.asked: list = []
         #: What asking what this agent keeps raises, where a case is about that failing.
         self.refuses: BaseException | None = None
         #: What was made, adopted and taken away, in the order it was asked for.
@@ -755,6 +756,15 @@ class FakeAgents:
         kept = store.Store(store.path_for(self._at / name))
         kept.understood()
         return kept
+
+    def asking(self, name):
+        """What a gateway is handed to admit a turn with. A stand-in for the real one's shape
+        and nothing more: whether the command hands one over is this file's, and what it does
+        with a schedule is `tests/test_gateway.py`'s."""
+        async def made(one):
+            self.asked.append((name, one.name))
+            raise AssertionError("a turn was admitted by a case that only watches for one")
+        return made
 
     def agents_home(self):
         """Where this stand-in keeps them, which is a real directory for a case that writes.
@@ -1649,7 +1659,8 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         gateway silently missing it."""
         gateways = self._gateways(unloggable="Read-only file system")
         code, said = drive(
-            ["schedules", "ava", "add", "tidy", "--when", "0 3 * * *", "/bin/echo"], gateways, agents=self.agents)
+            ["schedules", "ava", "add", "tidy", "--when", "0 3 * * *", "--", "/bin/echo"],
+            gateways, agents=self.agents)
         self.assertIn("ADDED", said, "a good change was unwound because its audit line failed")
         self.assertIn("WARNING", said)
         self.assertIn("Read-only file system", said, "it did not say why")
@@ -1779,13 +1790,28 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         self.assertEqual([], self.schedules_of("gateway"))
 
     def test_a_schedule_naming_nothing_to_run_is_never_added(self):
-        """R-SCH-2 — refused by the grammar rather than by the command: what to run is
-        the words after `--`, and there is no way to say none of them."""
+        """R-SCH-2 — a schedule that starts nothing and asks nothing is not a schedule. It
+        used to be refused by the grammar, when what to run was a required positional; now
+        that a schedule may ask a turn instead, exactly one of the two is required and it is
+        said in rundesk's words rather than argparse's."""
         gateways = self._gateways()
-        code, said = drive(["schedules", "gateway", "add", "empty", "--when", "* * * * *", "--"], gateways, agents=self.agents)
-        self.assertEqual(2, code, said)
+        code, said = drive(["schedules", "gateway", "add", "empty", "--when", "* * * * *", "--"],
+                           gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("names neither", said)
         self.assertEqual([], self.schedules_of("gateway"),
                          "it added a schedule naming nothing")
+
+    def test_a_schedule_naming_both_a_program_and_a_prompt_is_never_added(self):
+        """R-SCH-2 — the other way round, and refused rather than ranked: rundesk choosing
+        which of the two it meant would be a choice invisible in the listing."""
+        gateways = self._gateways()
+        code, said = drive(["schedules", "gateway", "add", "both", "--when", "* * * * *",
+                            "--ask", "what changed?", "--", "/bin/echo"],
+                           gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("names both", said)
+        self.assertEqual([], self.schedules_of("gateway"))
 
     def test_a_schedule_naming_a_program_rather_than_locating_it_is_never_added(self):
         """R-SCH-1, R-PROC-2 — refused where it is written, not discovered at three in
@@ -2304,18 +2330,26 @@ print(json.dumps({"ok": True, "describes": "a room", "settings": {},
         kept = self.kept()
         self.assertEqual({"server": "9930", "room": "1180"}, kept["settings"])
 
-    def test_only_a_verb_that_carries_a_tail_has_one_taken_off_it(self):
-        """R-CAD-13 — read off the parser rather than listed, and scoped: argparse can
-        carry a tail into a positional that is required and greedy, which is what a
-        schedule's program is, and taking that away would break a form it already
-        accepts."""
+    def test_a_verb_that_carries_a_tail_has_it_taken_off_before_the_parser(self):
+        """R-CAD-13, R-SCH-1 — read off the parser rather than listed, so a verb that grows
+        one is covered the day it lands.
+
+        `schedules` is one of these now and was not: argparse can carry a tail into a
+        positional that is required and greedy on its own, which is what a schedule's program
+        used to be — until the verb grew options of its own, and an option *inside* the tail
+        was read as one of them. `-- rundesk ask ava "…" --instructions "…"` set the
+        schedule's instructions and dropped them from what it would run, which is finding 31
+        again by another route."""
         parser = cli.build_parser()
-        self.assertEqual({"channels"}, cli._carries_a_tail(parser))
+        self.assertEqual({"channels", "schedules"}, cli._carries_a_tail(parser))
         rest, tail = cli._handed_on(
-            ["schedules", "ava", "add", "t", "--when", "X", "--", "/bin/sh", "-c", "hi"],
+            ["schedules", "ava", "add", "t", "--when", "X", "--",
+             "/bin/rundesk", "ask", "ava", "hi", "--instructions", "nobody is watching"],
             cli._carries_a_tail(parser))
-        self.assertEqual([], tail, "a schedule's program was taken from the parser")
-        self.assertEqual(["/bin/sh", "-c", "hi"], parser.parse_args(rest).run)
+        self.assertEqual(["/bin/rundesk", "ask", "ava", "hi",
+                          "--instructions", "nobody is watching"], tail)
+        self.assertEqual("", parser.parse_args(rest).says,
+                         "an option inside the tail was read as the schedule's own")
 
 
 class WhatNeverFinished(unittest.TestCase):

@@ -94,6 +94,11 @@ INTERRUPTED = "interrupted"
 #: the start did, and two spellings would silently match nothing.
 SCHEDULED_AS = "schedule:"
 
+#: How a scheduled program is told which schedule started it. Read by `rundesk ask`, which is
+#: the one program a schedule is likely to name, so a turn the clock started says so in the
+#: account rather than looking like one somebody typed.
+SCHEDULE_IS = "RUNDESK_SCHEDULE"
+
 #: What a channel's work is called while a gateway holds it. Named like a schedule's, so
 #: what `status` shows and what a sweep ends read the same way for both.
 CHANNEL_AS = "channel:"
@@ -877,6 +882,15 @@ class Stopping(Exception):
     """This gateway is going away and is taking no more work (R-GW-6)."""
 
 
+class Unrunnable(Exception):
+    """This gateway was not given what the work it was asked to start needs.
+
+    A schedule that asks a turn needs an agent, a brain and an account to write into, and a
+    gateway is handed the way to all three rather than reaching for them. One that was handed
+    nothing says so where it can be read, rather than passing the minute over in silence.
+    """
+
+
 @dataclass
 class Standing:
     """How a gateway looks from outside it — what `status` is made of (R-GW-9)."""
@@ -1064,6 +1078,7 @@ class Gateway:
         reachable=(),
         agents: Path | None = None,
         records=None,
+        asking=None,
     ):
         self.name = checked(name)
         self.where = where or home()
@@ -1120,6 +1135,13 @@ class Gateway:
         self.reachable = list(reachable)
         #: Whether this gateway was asked to come back rather than merely to stop.
         self._come_back = False
+        #: How to admit a turn for a schedule that asks one, handed over already made by
+        #: whoever knows what an agent is. `None` is a gateway that can start programs and
+        #: not turns, which is what one with no agent behind it is.
+        self.asking = asking
+        #: Which schedules have a turn in flight. Kept apart from `running`, which holds
+        #: programs a shutdown ends: a turn's brain is not a program this gateway started.
+        self._asked_for: set[str] = set()
 
     # -- what it is made of -------------------------------------------------------
 
@@ -1761,13 +1783,27 @@ class Gateway:
         Under its own name on purpose: that is what makes a schedule refuse to begin
         again while the last one is still going (R-SCH-6), using the guard that already
         exists rather than a second one that could disagree with it.
+
+        **A schedule names a program or asks a turn**, and everything after starting it is
+        the same either way — which is why the two are one function with one set of handlers
+        rather than two that would drift about what an outcome is.
         """
-        if not isinstance(one.run, (list, tuple)) or not one.run:
+        held = f"{SCHEDULED_AS}{one.name}"
+        if not one.prompt and (not isinstance(one.run, (list, tuple)) or not one.run):
             self.log.error("schedule '%s' names nothing this gateway can start", one.name)
             return
         self.log.info("schedule '%s' is due", one.name)
         try:
-            outcome = await self.start(list(one.run), as_name=f"{SCHEDULED_AS}{one.name}")
+            # One word out of both branches, because everything after this is the same for
+            # a program and for a turn. Which word it is differs: a program has one answer
+            # and a turn has two — what became of the process, and what became of the turn
+            # it was carrying — and only the second is what a schedule reports (R-SCH-8).
+            if one.prompt:
+                became = await self._asked(one, held)
+            else:
+                ran = await self.start(list(one.run), as_name=held,
+                                       env=self._for_a_schedule(one.name))
+                became = ran.reason
         except AlreadyStarted:
             # R-SCH-7: said, not passed over. A schedule quietly skipping every time
             # because the last run never ended looks exactly like one that is working.
@@ -1803,7 +1839,48 @@ class Gateway:
             self.log.error("schedule '%s' could not be started: %s", one.name, would_not_start)
             self._remember_outcome(one.name, "could not start")
             return
-        self._remember_outcome(one.name, outcome.reason)
+        self._remember_outcome(one.name, became)
+
+    def _for_a_schedule(self, named: str) -> dict[str, str]:
+        """The environment a scheduled program is given: the ordinary one, and which schedule.
+
+        One variable more than anything else this gateway starts, and it is here for the
+        reason every addition to that environment has to have: a schedule whose program is
+        itself `rundesk ask` is the clock's work, and nothing else can tell it so. Untold, it
+        was admitted as though somebody had typed it — landing in the terminal's own
+        conversation, resuming the session its owner types into, and reading back in `runs`
+        as a turn a person asked for (R-RUN-16).
+        """
+        said = process.environment(self.where, agents=self.agents)
+        said[SCHEDULE_IS] = named
+        return said
+
+    async def _asked(self, one, held: str) -> str:
+        """Admit a turn for a schedule that asks one, and hand back how it ended.
+
+        **Through a collaborator, never by reaching for one.** A turn needs an agent, a brain
+        and an account of what it did, and a gateway knows none of those — so whoever knows
+        what an agent is builds this and hands it over already made, exactly as the surfaces
+        this gateway holds open are handed over (R-AGT-9). What comes back only has to say how
+        it ended, which is the one thing every outcome here has in common.
+
+        The overlap guard is the same one a program gets and is asked the same way: a turn is
+        registered under the schedule's own name for as long as it runs, so a schedule cannot
+        begin again over its own last one (R-SCH-6). A turn is not a program this gateway
+        started, so it is not in `running` and a shutdown does not end it — what it *does* do
+        is cancel the task waiting here, which is recorded as an interruption above.
+        """
+        if self.asking is None:
+            raise Unrunnable(
+                f"schedule '{one.name}' asks a turn, and this gateway was given nothing to "
+                f"ask one with")
+        if held in self._asked_for or held in self.running:
+            raise AlreadyStarted(f"'{held}' is already running under gateway '{self.name}'")
+        self._asked_for.add(held)
+        try:
+            return (await self.asking(one)).became
+        finally:
+            self._asked_for.discard(held)
 
     async def _over_and_over(self, every: float, do, failed: str,
                              at_once: bool = False) -> None:
