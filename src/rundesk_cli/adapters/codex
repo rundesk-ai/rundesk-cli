@@ -236,7 +236,11 @@ class Codex:
         if not kind or kind == OURS:
             return  # the echo of what we sent; the run's account already holds it
         if kind in SPOKEN:
-            say(type=SPOKEN[kind], text=item.get("text") or "")
+            # `whole`, because this arrives on the item having *completed*: what this
+            # brain says is finished by the time it says it, never a piece of something
+            # still being written. So a surface may show each as it is said rather than
+            # holding every one of them to the end.
+            say(type=SPOKEN[kind], text=item.get("text") or "", whole=True)
             return
         at = str(item.get("id") or "1")
         if at not in self._tools:

@@ -73,10 +73,16 @@ ATTACHED_BYTES = 32 * 1024 * 1024
 #: What an adapter is told, and the whole of it. Four of these are the brain's own records
 #: passed through in the words no brain owns; `state` and `answer` are rundesk's.
 #:
-#: **`text` is deliberately not here.** What a brain *says* is held and handed over once,
-#: whole, as `answer` — so an adapter cannot show a reply that rewrites itself in place,
-#: because it is never given one to show (R-CH-7, R-CH-8).
-TELLING = ("state", "think", "tool", "result", "usage", "answer")
+#: **`text` is deliberately not here.** A brain writing its reply a fragment at a time is
+#: held and handed over once, as `answer` — an adapter cannot show a reply that rewrites
+#: itself in place, because it is never given one to show (R-CH-7, R-CH-8).
+#:
+#: `said` is the other half of that: a *complete* thing a brain said while it was still
+#: working. Holding those to the end was the same rule applied too widely — an agent that
+#: says "I will look at the logs" and then, a minute later, what it found, is writing the
+#: way a person does, and both arriving at once loses the first one's whole purpose. The
+#: last thing it says is still the `answer`, because that is the one somebody replies to.
+TELLING = ("state", "think", "tool", "result", "usage", "said", "answer")
 
 #: What a tool did, in the words a surface shows. **The provider seam's list, not a
 #: second copy of it** — a brain says what it did and a surface shows it, so the two must

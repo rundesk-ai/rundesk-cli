@@ -105,7 +105,7 @@ open for one that will never read again is a turn that never ends.
 **You report on stdout, one JSON object per line**, flushed as it happens:
 
 ```json
-{"type": "text",   "text": "Looking at the logs now."}
+{"type": "text",   "text": "Looking at the logs now.", "whole": true}
 {"type": "think",  "text": "The error is in the parser."}
 {"type": "tool",   "id": "1", "name": "Bash", "did": "run"}
 {"type": "result", "id": "1", "ok": true, "summary": "3 files changed"}
@@ -123,7 +123,7 @@ That is the contract. Seven kinds of record, and only `done` is required.
 
 | | must have | may have |
 |---|---|---|
-| `text` · `think` | `text` | |
+| `text` · `think` | `text` | `whole` |
 | `tool` | `id` (a string) | `name` — your brain's own word · `did` |
 | `result` | `id`, matching a `tool` you sent | `ok` · `summary` |
 | `usage` | | `input` · `output` · `cached` · `model` |
@@ -141,6 +141,15 @@ the order you send them. A line that is not JSON, or is a kind not listed here, 
 verbatim and shown to nobody, so nothing you emit can break a turn.
 
 ## The rules that will bite you
+
+**Say `whole` when what you just said is finished.** A brain that writes its reply a
+fragment at a time says nothing complete until it stops, so nothing can be shown to
+anybody until the turn ends — a reply that rewrites itself under a reader is unreadable.
+A brain that says several complete things as it works — "I will look at the logs", and
+then what it found — is writing the way a person does, and marking each one `whole` lets
+a surface show it as it is said instead of delivering the lot at the end. The last one is
+still the answer. Leave it out and you get the old behaviour, which is correct and
+merely quieter.
 
 **Say when your brain made something, or nobody will ever see it.** A brain that draws a
 picture, renders a chart or writes a report can otherwise only mention it in a sentence —

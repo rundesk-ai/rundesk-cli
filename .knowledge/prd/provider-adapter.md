@@ -50,6 +50,8 @@ is a whole brain with that work absent, rather than a broken one.
 
 | ✅ | R-PRV-21 | What a tool did is one of a closed set of words, or is left unsaid | `the words for what a tool did are the same on both seams`, `every verb the seam defines has a mark of its own`, `a tool is shown by what it did and never by its brains name for it`, `a tool with no verb says something true rather than the vendors word`, `every verb has something a person would say` |
 
+| ❌ | R-PRV-22 | A brain says whether what it just said is finished or still being written | src/rundesk_cli/provider.py:60 — the shipped adapter reports it and a surface acts on it; no test drives a brain that streams fragments |
+
 ## Open questions
 
 - What a turn does when a word said into it arrives after it has already finished.

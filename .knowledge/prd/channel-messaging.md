@@ -41,6 +41,8 @@ it has not — what never differs is that the work runs and is answered.
 
 | ✅ | R-CH-18 | What the agent made is sent only from where that agent works | `what the agent made is sent from where it works`, `a file outside where the agent works is not sent`, `a file a brain never made is not invented` |
 
+| ✅ | R-CH-19 | A finished thing an agent says mid-turn is shown then, and its last is the answer | `a finished thing said mid turn is shown when the next one arrives`, `only one finished thing said is all answer and no remark`, `a reply written a piece at a time is still held to the end` |
+
 ## Open questions
 
 - Whether a channel may carry a clarifying question before any provider work that raises one exists.

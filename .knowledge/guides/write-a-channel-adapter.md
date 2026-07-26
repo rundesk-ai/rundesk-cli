@@ -136,12 +136,20 @@ both — so a photograph sent with nothing typed is an ordinary message and not 
 {"type": "result", "conversation": "1180", "run": "7-a3f1", "id": "1", "ok": true, "summary": "3 files changed"}
 {"type": "think",  "conversation": "1180", "run": "7-a3f1", "text": "The error is in the parser."}
 {"type": "usage",  "conversation": "1180", "run": "7-a3f1", "input": 1200, "output": 340, "cached": 8000}
+{"type": "said",   "conversation": "1180", "run": "7-a3f1", "text": "I'll look at the logs."}
 {"type": "answer", "conversation": "1180", "run": "7-a3f1", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png"}]}
 {"type": "state",  "conversation": "1180", "run": "7-a3f1", "state": "finished"}
 ```
 
 Read a line, show what you can of it, keep reading. Your stdin stays open for the whole
 life of the channel.
+
+**`said` is a finished remark, `answer` is the reply.** A brain that says several
+complete things while it works sends each as `said` as it says it, and the last thing it
+says arrives as the `answer` — which is the one somebody will reply to, and the one worth
+anchoring to the message that asked. A brain that writes its reply a piece at a time
+sends no `said` at all and only an `answer`, so a surface that treats them identically is
+still correct and merely noisier.
 
 **The order is fixed, and the last two are the ones worth knowing.** `taken` arrives
 first, on its own, the moment the message is picked up — it carries the `ref` of the

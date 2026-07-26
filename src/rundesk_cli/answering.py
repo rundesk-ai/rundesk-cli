@@ -66,6 +66,11 @@ class Exchange:
         #: What has been said to a running turn that can take it, and what is waiting for
         #: one that cannot. Two different things, deliberately: one reaches the brain now
         #: and the other becomes its own turn later.
+        #: Complete things the brain has said in this turn, in order. Each is shown as
+        #: the next one arrives, so the one still in hand at the end is the answer — the
+        #: last thing it said is the thing somebody replies to, and it is only knowable
+        #: as the last once the turn is over.
+        self.spoken: list = []
         self.saying: asyncio.Queue | None = None
         self.waiting: list = []
         self.stopped = False
@@ -322,7 +327,9 @@ class Answering:
         in place is unreadable, and the adapter is never given the chance to try: nothing
         of the brain's prose crosses the seam before this.
         """
-        text = outcome.text.strip()
+        # Whatever is still in hand: the last complete thing said, or every fragment of
+        # a reply that was written a piece at a time. Either way it is the answer.
+        text = "".join(one for _was, one in held.spoken).strip() or outcome.text.strip()
         made = self._made(outcome)
         if not text and not made:
             return
@@ -433,6 +440,10 @@ class _Shown:
     here, and a watcher waiting for one of rundesk's own kinds would wait for ever.
     """
 
+    #: A complete thing said mid-turn, which is shown, as against a fragment of a reply
+    #: still being written, which is not (R-CH-19).
+    WHOLE = "whole"
+
     #: What a surface is shown as it happens, and exactly which of each record's fields
     #: leave this machine (R-CH-13).
     #:
@@ -460,6 +471,9 @@ class _Shown:
 
     def __call__(self, said: dict) -> None:
         kind = said.get("type")
+        if kind == "text":
+            self._spoke(said)
+            return
         if kind not in self.AS_IT_HAPPENS:
             return
         it = {what: said[what] for what in self.AS_IT_HAPPENS[kind] if what in said}
@@ -467,6 +481,25 @@ class _Shown:
             it["summary"] = it["summary"][: self.SUMMARY_CHARS] + "…"
         self._answering._tell(
             type=kind, conversation=self._held.conversation, run=self._held.run, **it)
+
+    def _spoke(self, said: dict) -> None:
+        """A thing the brain said, shown now if it is finished and there is more coming.
+
+        A fragment of a reply still being written is kept for the end, because showing it
+        means showing a sentence that changes under somebody reading it. A *complete*
+        thing said while the turn runs is shown as soon as the next one arrives — which
+        is what makes the last one the answer, and is only knowable once there is a next.
+        """
+        text = str(said.get("text") or "")
+        if not said.get(self.WHOLE):
+            self._held.spoken.append(("fragment", text))
+            return
+        for was, older in list(self._held.spoken):
+            if was == "whole" and older.strip():
+                self._answering._tell(type="said", conversation=self._held.conversation,
+                                      run=self._held.run, text=older.strip())
+            self._held.spoken.remove((was, older))
+        self._held.spoken.append(("whole", text))
 
 
 async def _saying(queue: asyncio.Queue):

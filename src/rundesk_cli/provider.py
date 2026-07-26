@@ -48,6 +48,17 @@ ADAPTERS = Path(__file__).resolve().parent / "adapters"
 #: than a feature. A brain says so or nothing is sent.
 RECORDS = ("text", "think", "tool", "result", "usage", "file", "done")
 
+#: What a brain says on a `text` record when the thing it just said is *finished* rather
+#: than a piece of something still being written (R-PRV-22).
+#:
+#: The difference decides whether a person can be shown it while the turn runs. A brain
+#: that streams its reply a fragment at a time can only be shown at the end, because a
+#: reply that rewrites itself in place is unreadable. A brain that says several complete
+#: things as it works — "I will look at the logs", then later the answer — can have each
+#: shown as it is said, which is how a person would write in a chat. Absent means a
+#: fragment, so a brain that says nothing gets the old behaviour and nothing breaks.
+WHOLE = "whole"
+
 #: What a tool *did*, in words no brain owns (R-PRV-8). Closed and short on purpose: a
 #: surface that recognised a vendor's own tool names would be carrying that vendor's
 #: vocabulary forever, and every reader would need a table per brain.

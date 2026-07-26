@@ -478,6 +478,12 @@ class Agent(discord.Client):
             await self._state(it, held)
         elif kind == "answer":
             await self._answer(it, held)
+        elif kind == "said":
+            # A finished thing the agent said while it was still working, in a message of
+            # its own. Not the answer and not anchored to anything: it is a remark, and
+            # quoting the question on every remark buries the question.
+            await self._flush(it, held)
+            await self._post(it, str(it.get("text") or ""))
         elif kind in ("think", "tool", "result", "usage"):
             await self._doing(it, held)
 

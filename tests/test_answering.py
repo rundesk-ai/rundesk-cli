@@ -541,6 +541,47 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
         self.assertLess(kinds.index("think"), kinds.index("answer"),
                         "what it did was shown after what it said")
 
+    async def test_a_finished_thing_said_mid_turn_is_shown_when_the_next_one_arrives(self):
+        """R-CH-19 — an agent that says "I will look at the logs" and then, a minute
+        later, what it found is writing the way a person does. Both arriving at once
+        loses the first one's whole purpose."""
+        brain = Brain(showing=[
+            {"type": "text", "text": "I'll look at the logs.", "whole": True},
+            {"type": "text", "text": "Three files changed.", "whole": True}],
+            outcome=Outcome(text="I'll look at the logs.Three files changed."))
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual(["I'll look at the logs."],
+                         [one["text"] for one in surface.of("said")])
+        self.assertEqual(["Three files changed."],
+                         [one["text"] for one in surface.of("answer")],
+                         "the last thing it said was not the answer")
+
+    async def test_only_one_finished_thing_said_is_all_answer_and_no_remark(self):
+        """R-CH-19 — the ordinary turn. One message means there is nothing to show early
+        and nothing is invented to fill the gap."""
+        brain = Brain(showing=[{"type": "text", "text": "Three files.", "whole": True}],
+                      outcome=Outcome(text="Three files."))
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual([], surface.of("said"))
+        self.assertEqual(["Three files."], [one["text"] for one in surface.of("answer")])
+
+    async def test_a_reply_written_a_piece_at_a_time_is_still_held_to_the_end(self):
+        """R-CH-7 — a brain that streams fragments says nothing finished until it stops,
+        and showing one is showing a sentence that changes under whoever is reading."""
+        brain = Brain(showing=[{"type": "text", "text": "Three "},
+                               {"type": "text", "text": "files changed."}],
+                      outcome=Outcome(text="Three files changed."))
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual([], surface.of("said"), "a half-written reply was shown")
+        self.assertEqual(["Three files changed."],
+                         [one["text"] for one in surface.of("answer")])
+
     async def test_the_answer_arrives_whole_and_once(self):
         """R-CH-8 — however it was written, it is handed over in one piece at the end."""
         brain = Brain(showing=[{"type": "text", "text": "three "},
