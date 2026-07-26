@@ -37,9 +37,16 @@ from rundesk_cli import process
 #: come to disagree with the directory.
 ADAPTERS = Path(__file__).resolve().parent / "adapters"
 
-#: What an adapter reports, and the whole of it (R-PRV-4). A seventh is a change to the
+#: What an adapter reports, and the whole of it (R-PRV-4). An eighth is a change to the
 #: contract, deliberately.
-RECORDS = ("text", "think", "tool", "result", "usage", "done")
+#:
+#: `file` is the seventh, and it was added because the contract could not say a thing
+#: brains plainly do: make something. One generated a picture, said "here it is", and
+#: there was no way to tell anybody a file existed — so the surface showed the sentence
+#: and not the picture. Inferring it from what a tool printed was the alternative, and it
+#: would have meant sending anything a brain happened to name, which is a hole rather
+#: than a feature. A brain says so or nothing is sent.
+RECORDS = ("text", "think", "tool", "result", "usage", "file", "done")
 
 #: What an adapter may say it can do (R-PRV-15). Absent means no, so an adapter that
 #: answers with nothing at all is a whole brain with the work simply absent — which is

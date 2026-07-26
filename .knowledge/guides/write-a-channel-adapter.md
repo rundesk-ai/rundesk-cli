@@ -96,15 +96,24 @@ That is the whole of what you say. Four kinds of record, and only `arrived` real
 | | must have | may have |
 |---|---|---|
 | `ready` | | |
-| `arrived` | `conversation`, `user`, `text` | `ref` · `direct` |
+| `arrived` | `conversation`, `user` | `text` · `ref` · `direct` · `attachments` |
 | `control` | `conversation`, `user`, `control` | `ref` |
 | `gone` | | `why` |
+
+**Attachments go both ways, and both are files already on this machine.** What somebody
+attached arrives on `arrived` — download it yourself, put it somewhere under your own
+`RUNDESK_CHANNEL_HOME`, and report `{"name": …, "at": …}` with an absolute path. Anything
+that is not a readable file here is dropped rather than passed on, because the brain that
+would open it runs here and has no credential for your platform. What the *agent* made
+arrives on `answer` the same way, already checked to be inside where that agent works —
+send it if your surface can, and ignore it if it cannot.
 
 `conversation` is whatever your platform calls one exchange — a thread, a room, a chat, a
 phone number. Rundesk never parses it and never shows it to anyone; it is the key a
 conversation's session is kept under, so the only thing that matters is that the same
 exchange produces the same one every time. `user` is who spoke, in whatever your platform
-calls people. `ref` is what a mark would attach to, if your platform has marks.
+calls people. A message needs `text` or `attachments` — words, or something attached, or
+both — so a photograph sent with nothing typed is an ordinary message and not a broken one. `ref` is what a mark would attach to, if your platform has marks.
 
 **You are told how the turn is going, on stdin**, one JSON object per line:
 
@@ -114,7 +123,7 @@ calls people. `ref` is what a mark would attach to, if your platform has marks.
 {"type": "result", "conversation": "1180", "run": "7-a3f1", "id": "1", "ok": true, "summary": "3 files changed"}
 {"type": "think",  "conversation": "1180", "run": "7-a3f1", "text": "The error is in the parser."}
 {"type": "usage",  "conversation": "1180", "run": "7-a3f1", "input": 1200, "output": 340, "cached": 8000}
-{"type": "answer", "conversation": "1180", "run": "7-a3f1", "text": "Three files changed — the parser was dropping…"}
+{"type": "answer", "conversation": "1180", "run": "7-a3f1", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png"}]}
 {"type": "state",  "conversation": "1180", "run": "7-a3f1", "state": "finished"}
 ```
 

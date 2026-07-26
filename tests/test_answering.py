@@ -25,11 +25,17 @@ from rundesk_cli import answering, channel, session  # noqa: E402
 
 
 class Outcome:
-    """What a turn came to, in the shape `turn.carry` returns."""
+    """What a turn came to, in the shape `turn.carry` returns.
 
-    def __init__(self, run="1-aaaa", ok=True, reason="finished", text="", why=None):
+    Every attribute the real one has, including the ones a case does not use: a stand-in
+    missing one is a stand-in that passes while the thing it stands in for raises.
+    """
+
+    def __init__(self, run="1-aaaa", ok=True, reason="finished", text="", why=None,
+                 files=()):
         self.run, self.ok, self.reason, self.why = run, ok, reason, why
         self.text = text
+        self.files = list(files)
 
 
 class Brain:
@@ -605,6 +611,69 @@ class WhatAChannelHoldsForWeeks(CarriesAConversation):
         await self.carry(held, self.arrived(conversation="one", text="and now?"))
         self.assertEqual("abc-123",
                          session.of(self.whose, "a-brain", answering.named("ops", "one")))
+
+
+class WhatTheAgentMade(CarriesAConversation):
+    """R-CH-18 — a brain that makes something, and a surface that can send it.
+
+    Nothing could be sent at all until a brain had a way to say it had made one: it drew
+    a picture, said "here it is", and a surface showed the sentence and not the picture.
+    """
+
+    def _made(self, name="chart.png", inside=True):
+        whose = agents.paths("ava", self.where)
+        at = (whose["workspace"] if inside else self.where) / name
+        at.parent.mkdir(parents=True, exist_ok=True)
+        at.write_bytes(b"not really a picture")
+        return at
+
+    async def test_what_the_agent_made_is_sent_from_where_it_works(self):
+        """R-CH-18 — named by the brain, checked here, handed to the surface."""
+        at = self._made()
+        brain = Brain(outcome=Outcome(text="here it is",
+                                      files=[{"type": "file", "at": str(at)}]))
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        sent = surface.of("answer")[0]["attachments"]
+        # Compared resolved: a scratch directory reaches this machine through a symlink,
+        # and what is sent is the real path rather than the way it was named.
+        self.assertEqual(1, len(sent))
+        self.assertEqual("chart.png", sent[0]["name"])
+        self.assertEqual(at.resolve(), Path(sent[0]["at"]))
+
+    async def test_a_file_outside_where_the_agent_works_is_not_sent(self):
+        """R-CH-18 — a brain runs as the owner and can read anything they can, so "the
+        brain asked for it" is not on its own a reason to put a file in a chat room."""
+        at = self._made("secrets.txt", inside=False)
+        brain = Brain(outcome=Outcome(text="here", files=[{"type": "file", "at": str(at)}]))
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual([], surface.of("answer")[0]["attachments"])
+        self.assertTrue(any("outside where this agent works" in one for one in self.told),
+                        "it refused silently")
+
+    async def test_a_file_a_brain_never_made_is_not_invented(self):
+        """R-CH-18 — a path that is not there is not a file, however confidently it was
+        named, and nothing is guessed from what a tool happened to print."""
+        brain = Brain(outcome=Outcome(text="here", files=[
+            {"type": "file", "at": "/no/such/thing.png"},
+            {"type": "file", "at": "relative.png"},
+            {"type": "file"}]))
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual([], surface.of("answer")[0]["attachments"])
+
+    async def test_a_turn_that_only_made_something_still_arrives(self):
+        """R-CH-8, R-CH-18 — a picture with no words is an answer."""
+        at = self._made()
+        brain = Brain(outcome=Outcome(text="", files=[{"type": "file", "at": str(at)}]))
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual(1, len(surface.of("answer")), "the picture was never sent")
 
 
 class WhatAChannelDoesNotWriteDown(CarriesAConversation):

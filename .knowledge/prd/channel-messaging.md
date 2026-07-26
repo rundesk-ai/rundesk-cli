@@ -39,6 +39,8 @@ it has not — what never differs is that the work runs and is answered.
 | ❌ | R-CH-16 | A person can restart the agent answering them, from the channel they are on | src/rundesk_cli/answering.py:166 — proved by hand against a real gateway; a case needs one the machine will bring back |
 | ✅ | R-CH-17 | What a person attached reaches the agent as a file already on this machine | `a message with nothing but an attachment is still a message`, `a message with neither words nor anything attached is not one`, `something attached that is not on this machine is dropped` |
 
+| ✅ | R-CH-18 | What the agent made is sent only from where that agent works | `what the agent made is sent from where it works`, `a file outside where the agent works is not sent`, `a file a brain never made is not invented` |
+
 ## Open questions
 
 - Whether a channel may carry a clarifying question before any provider work that raises one exists.

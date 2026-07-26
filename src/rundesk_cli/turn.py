@@ -74,6 +74,15 @@ class Outcome:
     trouble: list = field(default_factory=list)
 
     @property
+    def files(self) -> list:
+        """Everything the brain said it made, in the order it said so (R-PRV-20).
+
+        Named by the brain and never guessed at: what a tool printed is not a promise
+        that a file exists, and treating it as one would send whatever a brain mentioned.
+        """
+        return [one for one in self.said if one.get("type") == "file"]
+
+    @property
     def text(self) -> str:
         """What a person asked for, joined back together."""
         return "".join(one.get("text", "") for one in self.said

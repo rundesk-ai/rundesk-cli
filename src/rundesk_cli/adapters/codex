@@ -242,6 +242,12 @@ class Codex:
         self._tools.pop(at, None)
         worked = item.get("exit_code") in (0, None) and item.get("status") != "failed"
         say(type="result", id=at, ok=bool(worked), summary=_summary(item))
+        if worked:
+            for made in _files(item):
+                # Said, so a surface can actually send it. Codex names what it wrote in
+                # the item that finished; without this a brain that generates a picture
+                # can only mention it in a sentence, and the picture never arrives.
+                say(type="file", at=made)
 
     def end(self) -> None:
         if self._proc.stdin is not None and not self._proc.stdin.closed:
@@ -253,6 +259,29 @@ class Codex:
             self._proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             self._proc.terminate()
+
+
+def _files(item: dict) -> list:
+    """Anything this item says it wrote, as absolute paths on this machine.
+
+    Codex spells it several ways depending on the item, so the shapes it uses are read
+    here — where every other Codex-shaped thing lives — and nothing outside this file has
+    to know any of them. A relative path is left alone rather than guessed at: resolving
+    it against the wrong directory is how a brain comes to name somebody else's file.
+    """
+    found = []
+    for what in ("changes", "files", "artifacts", "outputs"):
+        said = item.get(what)
+        if isinstance(said, dict):
+            said = list(said)
+        if not isinstance(said, list):
+            continue
+        for one in said:
+            at = one if isinstance(one, str) else (
+                one.get("path") or one.get("file") or "" if isinstance(one, dict) else "")
+            if isinstance(at, str) and at.startswith("/") and os.path.isfile(at):
+                found.append(at)
+    return found
 
 
 def _summary(item: dict) -> str:

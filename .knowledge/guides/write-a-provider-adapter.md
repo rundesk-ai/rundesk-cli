@@ -110,13 +110,14 @@ open for one that will never read again is a turn that never ends.
 {"type": "tool",   "id": "1", "name": "Bash", "did": "run"}
 {"type": "result", "id": "1", "ok": true, "summary": "3 files changed"}
 {"type": "usage",  "input": 1200, "output": 340, "cached": 8000, "model": "…"}
+{"type": "file",   "at": "/…/workspace/chart.png", "name": "chart.png"}
 {"type": "done",   "ok": true, "session": "019f954d-ad60-7f91"}
 ```
 
 **stderr is yours.** Say what went wrong there; it is kept, and it is never mistaken for what
 you reported.
 
-That is the contract. Six kinds of record, and only `done` is required.
+That is the contract. Seven kinds of record, and only `done` is required.
 
 **What each record needs**, and nothing else is required of you:
 
@@ -126,6 +127,7 @@ That is the contract. Six kinds of record, and only `done` is required.
 | `tool` | `id` (a string) | `name` — your brain's own word · `did` |
 | `result` | `id`, matching a `tool` you sent | `ok` · `summary` |
 | `usage` | | `input` · `output` · `cached` · `model` |
+| `file` | `at` (an absolute path) | `name` |
 | `done` | `ok` | `session` · `why`, when it failed |
 
 `input` is **fresh tokens only** — what `cached` counts is not in it. Send more than one
@@ -139,6 +141,16 @@ the order you send them. A line that is not JSON, or is a kind not listed here, 
 verbatim and shown to nobody, so nothing you emit can break a turn.
 
 ## The rules that will bite you
+
+**Say when your brain made something, or nobody will ever see it.** A brain that draws a
+picture, renders a chart or writes a report can otherwise only mention it in a sentence —
+and a surface showing that turn shows the sentence and not the picture. `file` is how you
+say a thing exists: an absolute path, on this machine, that you really wrote.
+
+Only say it about files you made. It is not read here and it is not opened here, but a
+surface may send it to wherever somebody is reading, and where it may be sent from is
+bounded — the agent's own workspace and home. Naming something outside that is not an
+error and simply will not be sent, so there is nothing to be gained by trying.
 
 **`did` is what the tool *did*, not what your brain calls it.** The same action is `Bash` on
 one brain, `shell` on the next and `run_terminal_command` on a third. A channel that

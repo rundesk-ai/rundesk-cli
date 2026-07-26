@@ -40,6 +40,8 @@ to say an agent read a file is worse than one that buzzes once with the reply.
 | ✅ | R-DIS-17 | A turn arrives as one message, with what it cost above the answer | `what a turn cost is shown as one line`, `a turn that reported no cost says nothing about it`, `a tool that worked is not a message of its own`, `a small count is not rounded into a zero` |
 | ❌ | R-DIS-18 | An answer too long to read as messages is attached as a file instead | src/rundesk_cli/channels/discord:447 — the splitting is proved offline; uploading is the platform's |
 
+| ❌ | R-DIS-19 | A file the agent made is uploaded rather than described | src/rundesk_cli/channels/discord:470 — the upload is the platform's, and proved by hand |
+
 ## Open questions
 
 - Whether a mark between seen and finished is worth having for a turn that runs a long time.

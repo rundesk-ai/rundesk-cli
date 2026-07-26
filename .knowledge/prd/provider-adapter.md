@@ -46,6 +46,8 @@ is a whole brain with that work absent, rather than a broken one.
 | ✅ | R-PRV-18 | An adapter is told how much of the machine a turn may touch, in words no brain owns | `an adapter is told how much of the machine a turn may touch`, `a turn asked to only look says so to the brain` |
 | ✅ | R-PRV-19 | A brain that says it can be sent to mid-turn is, and the turn carries on rather than starting again | `a brain that can be steered hears a word said mid turn`, `a brain that cannot be steered is not left waiting for more`, `an adapter can be steered exactly as much as it said it could` |
 
+| ❌ | R-PRV-20 | A brain says when it made a file, rather than a reader guessing from what a tool printed | src/rundesk_cli/turn.py:78 — the record is carried and the shipped adapter reports it; no test drives a brain that makes one |
+
 ## Open questions
 
 - What a turn does when a word said into it arrives after it has already finished.

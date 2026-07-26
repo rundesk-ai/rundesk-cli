@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from pathlib import Path
 
 from rundesk_cli import agent as agents
 from rundesk_cli import channel, session, turn
@@ -322,10 +323,37 @@ class Answering:
         of the brain's prose crosses the seam before this.
         """
         text = outcome.text.strip()
-        if not text:
+        made = self._made(outcome)
+        if not text and not made:
             return
         self._tell(type="answer", conversation=held.conversation, run=held.run,
-                   text=text)
+                   text=text, attachments=made)
+
+    def _made(self, outcome) -> list:
+        """What the brain said it made, as things a surface may actually send.
+
+        **Only from where this agent works.** A brain names a path and it is checked
+        against the agent's own directories before anything leaves the machine — it runs
+        as the owner and can read anything they can, so "the brain asked for it" is not
+        on its own a reason to put a file into a chat room (R-CH-13).
+        """
+        whose = agents.paths(self.name, self._where)
+        mine = [whose["workspace"], whose["runs"], whose["home"]]
+        found = []
+        for one in outcome.files:
+            at = one.get("at")
+            if not isinstance(at, str) or not at:
+                continue
+            stands = Path(at)
+            if not stands.is_absolute() or not stands.is_file():
+                continue
+            where = stands.resolve()
+            if not any(_within(where, one_of) for one_of in mine):
+                self._note(f"channel '{self.channel}': not sending {where}, which is "
+                           f"outside where this agent works")
+                continue
+            found.append({"name": str(one.get("name") or where.name), "at": str(where)})
+        return found[:channel.ATTACHED_MOST]
 
     def _say(self, state: str, held: Exchange, ref=None, why=None) -> None:
         """How the turn stands, which is rundesk's to decide (R-CAD-3)."""
@@ -452,6 +480,15 @@ async def _saying(queue: asyncio.Queue):
         if word is None:
             return
         yield word
+
+
+def _within(at: Path, inside: Path) -> bool:
+    """Whether this really is under that, once every link has been followed."""
+    try:
+        at.relative_to(inside.resolve())
+    except (ValueError, OSError):
+        return False
+    return True
 
 
 def _asked(it: dict) -> str:
