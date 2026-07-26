@@ -286,51 +286,68 @@ class Store:
         self.at.parent.mkdir(parents=True, exist_ok=True)
         conn = self._open(writing=True)
         try:
-            found = conn.execute("PRAGMA user_version").fetchone()[0]
-            # Both directions are refused, and that symmetry is the point. A newer shape is
-            # dangerous because this code does not know what it is missing; an older one is
-            # dangerous because this code assumes something that is not there yet. Neither is
-            # a reader's decision — what resolves the second is a migration, run while
-            # nothing is up.
-            if found > want:
-                self._noted(f"refusing these records: they are version {found} and this "
-                           f"rundesk understands {want}", "ERROR")
-                raise TooNew(found, want)
-            if found == 0:
-                if self._anything(conn):
-                    self._noted("these records hold tables but say no version — they were "
-                               "written partway and are left exactly as they are", "ERROR")
-                    raise Unreadable(
-                        f"{self.at} holds tables but says no version — it was written partway"
-                    )
+            found = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            if found == 0 and not self._anything(conn):
                 conn.close()
                 conn = None
                 # Built by walking the same steps an update walks, rather than by a second
                 # description of the shape kept beside them. A step that has rotted is then
                 # found by whoever next makes an agent, and a fresh install cannot drift from
                 # an upgraded one, because there is only one way to arrive.
-                migration.carry(self.at, self.at.parent, want=want)
+                found = migration.carry(self.at, self.at.parent, want=want)
                 conn = self._open(writing=True)
-            elif found < want:
-                self._noted(f"refusing these records: they are version {found} and this "
-                           f"rundesk expects {want} — they have not been brought forward",
-                           "ERROR")
-                raise Behind(found, want)
-            # A version says which shape this is meant to be, not that the shape is there. A
-            # header survives a truncated restore and a dropped table where the pages holding
-            # them do not, so a database can claim the current version and hold nothing. Asked
-            # every time rather than only when the version is zero: the mirror case was
-            # guarded and this one was not, and it is the one that reads as healthy.
-            if not self._anything(conn):
-                self._noted(f"these records say they are version {found or want} and hold "
-                           "none of it", "ERROR")
-                raise Unreadable(
-                    f"{self.at} says it is version {found or want} and holds none of it"
-                )
+            self._refused(conn, found, want)
             self._searchable = self._has_search(conn)
         finally:
             if conn is not None:
                 conn.close()
+
+    def understood(self) -> None:
+        """Check the records already there are ones we know, and never build any.
+
+        The same question `made` asks, asked by whoever may only read. Opening a writer to
+        find out would leave the two files SQLite keeps beside a database standing after a
+        command that promised to change nothing — `doctor` is exactly that command
+        (R-AGT-12), and it is also the one an owner runs when something is already wrong.
+        """
+        want = version_wanted() if self._version is None else self._version
+        with self._reading() as conn:
+            found = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            self._refused(conn, found, want)
+            self._searchable = self._has_search(conn)
+
+    def _refused(self, conn, found: int, want: int) -> None:
+        """Whether this shape may be read at all — one decision, said the same to everyone.
+
+        Both directions are refused, and that symmetry is the point. A newer shape is
+        dangerous because this code does not know what it is missing; an older one is
+        dangerous because this code assumes something that is not there yet. Neither is a
+        reader's decision — what resolves the second is a migration, run while nothing is up.
+        """
+        if found > want:
+            self._noted(f"refusing these records: they are version {found} and this "
+                       f"rundesk understands {want}", "ERROR")
+            raise TooNew(found, want)
+        if found == 0:
+            self._noted("these records hold tables but say no version — they were "
+                       "written partway and are left exactly as they are", "ERROR")
+            raise Unreadable(
+                f"{self.at} holds tables but says no version — it was written partway"
+            )
+        if found < want:
+            self._noted(f"refusing these records: they are version {found} and this "
+                       f"rundesk expects {want} — they have not been brought forward",
+                       "ERROR")
+            raise Behind(found, want)
+        # A version says which shape this is meant to be, not that the shape is there. A
+        # header survives a truncated restore and a dropped table where the pages holding
+        # them do not, so a database can claim the current version and hold nothing. Asked
+        # every time rather than only when the version is zero: the mirror case was
+        # guarded and this one was not, and it is the one that reads as healthy.
+        if not self._anything(conn):
+            self._noted(f"these records say they are version {found} and hold none of it",
+                       "ERROR")
+            raise Unreadable(f"{self.at} says it is version {found} and holds none of it")
 
     @staticmethod
     def _anything(conn) -> bool:

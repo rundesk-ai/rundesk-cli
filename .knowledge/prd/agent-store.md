@@ -31,7 +31,7 @@ has done. Each agent keeps its own, so nothing one agent holds is ever in anothe
 | ✅ | R-STO-10 | Every run says what caused it | `everything settled when a run was admitted is written down with it` |
 | ✅ | R-STO-11 | What an agent keeps says which shape it is in | `a fresh database is stamped with the shape this rundesk understands` |
 | ✅ | R-STO-12 | A shape this copy of rundesk does not understand is refused rather than read | `a version newer than this code understands is refused rather than read` |
-| ✅ | R-STO-13 | Records that are there and cannot be understood are never treated as absent | `a database holding tables and no version is unreadable rather than rebuilt` |
+| ✅ | R-STO-13 | Records that are there and cannot be understood are never treated as absent | `a database holding tables and no version is unreadable rather than rebuilt`, `diagnosing an agent never builds the records it reads` |
 | ✅ | R-STO-14 | Taking an agent away leaves nothing of what it kept behind | `nothing of an agents records is left behind` |
 | ✅ | R-STO-15 | What an agent keeps is reached only by asking for it by name | `no statement is written anywhere but the one module` |
 | ✅ | R-STO-16 | Nothing a caller is handed can be used to ask a question of its own | `nothing a caller is handed is a connection` |

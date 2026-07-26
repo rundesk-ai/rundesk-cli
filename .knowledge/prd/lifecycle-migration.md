@@ -27,7 +27,7 @@ update already stands every gateway down for. A step forward exists; a step back
 | ✅ | R-MIG-6 | A step that fails stops the update and leaves every agent down | `a migration that fails leaves every agent down and says which and why`, `an agent whose records cannot be moved names that agent` |
 | ✅ | R-MIG-7 | An owner is told which agent could not be moved, which step failed, and what it had reached | `which step failed and the version it reached are both named`, `an agent whose records cannot be moved names that agent`, `what went wrong is left in that agents own log` |
 | ✅ | R-MIG-8 | Data newer than this copy of rundesk understands is refused rather than read (R-STO-12) | `data newer than this rundesk understands is refused rather than read` |
-| ✅ | R-MIG-9 | A newly made agent is built by taking every step in order | `a brand new agent is built by running the steps that ship` |
+| ✅ | R-MIG-9 | A newly made agent is built by taking every step in order | `a brand new agent is built by running the steps that ship`, `an agent is made with the records it keeps` |
 | ✅ | R-MIG-10 | Data behind the shape installed is refused rather than moved forward by whatever opened it | `records behind the shape installed are refused on open and never moved forward` |
 | ✅ | R-MIG-11 | A step moves what is kept as files as well as what is kept as records | `what a step copied is let go of only once the version has committed` |
 | ✅ | R-MIG-12 | What a step copied is let go of only once the version it reached has been recorded | `a step that fails after copying leaves both copies and the version where it was` |

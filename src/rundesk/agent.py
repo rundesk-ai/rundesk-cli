@@ -19,7 +19,6 @@ and a gateway that reached back for an agent would end it.
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 from dataclasses import dataclass
@@ -446,22 +445,39 @@ def forget(name: str, where: Path | None = None) -> list[str]:
 #: purpose: which brain answers for an agent is rundesk's record about it, not knowledge
 #: the agent loads — a provider reading the agent's rules must not find our configuration
 #: sitting among them.
-CHOSEN = "agent.json"
+def records(name: str, where: Path | None = None) -> store.Store:
+    """What this agent keeps — named here, and opened only when something reads or writes.
+
+    The one place above the store that knows where an agent's records stand, so a caller
+    asks this agent for them rather than building a path of its own.
+    """
+    return store.Store(store.path_for(directory(name, where)))
 
 
 def chosen(name: str, where: Path | None = None) -> dict:
     """Which brain answers for this agent, and with what — or nothing decided yet.
 
     A convenience, never an identity: provider and model are what a turn resolved, and
-    this is only what the agent supplies for whatever a turn left out. Unreadable is read
-    as undecided, because a turn that could be asked for explicitly should not be refused
-    over a file nobody has to have.
+    this is only what the agent supplies for whatever a turn left out.
+
+    Nothing at all where there is no agent, because `agents` and `doctor` both ask this of
+    a name before anything has been made under it. Records that *are* there and cannot be
+    read are not nothing and are not answered for here (R-STO-13): the store says so in
+    the agent's own log and refuses, because a turn run against a brain nobody chose is
+    worse than a turn that did not start.
     """
     try:
-        said = json.loads((directory(name, where) / CHOSEN).read_text(encoding="utf-8"))
-    except (OSError, ValueError, NotAnAgentName):
+        at = store.path_for(directory(name, where))
+    except NotAnAgentName:
         return {}
-    return said if isinstance(said, dict) else {}
+    if not at.exists():
+        return {}
+    kept = store.Store(at)
+    # Never `made`: this is asked by `doctor`, which promises to change nothing (R-AGT-12),
+    # and opening a writer to find out what shape the records are in leaves the two files
+    # SQLite keeps beside a database standing after it.
+    kept.understood()
+    return kept.agent()
 
 
 def remember(name: str, where: Path | None = None, provider: str | None = None,
@@ -469,17 +485,15 @@ def remember(name: str, where: Path | None = None, provider: str | None = None,
     """Keep what this agent should reach for when a turn does not say.
 
     What is not given is left exactly as it was, so naming a model later does not quietly
-    forget the brain — which is exactly why the read, the decision and the write are under
-    one hold. Two commands each naming a different half, read the same file, merged only
-    their own, and the later write erased the other's with both reporting success.
+    forget the brain. Two commands each naming a different half used to read one whole
+    file, merge only their own, and write it back — the later one erasing the other's with
+    both reporting success. Each names its own columns now, and the read, the decision and
+    the write are one transaction rather than one lock file.
     """
-    at = directory(name, where) / CHOSEN
-    with gateway.changing(at, {}, "what this agent reaches for") as keeping:
-        for what, value in (("provider", provider), ("model", model),
-                            ("settings", settings)):
-            if value is not None:
-                keeping[what] = value
-        return dict(keeping)
+    kept = records(name, where)
+    kept.made()
+    kept.remember_agent(provider=provider, model=model, settings=settings)
+    return kept.agent()
 
 
 @dataclass(frozen=True)
@@ -527,7 +541,14 @@ def diagnosed(name: str, where: Path | None = None, root: Path | None = None,
     unfit = gateway.fitness(root)
     if unfit:
         found.append(Complaint("this install", unfit))
-    named = chosen(name, where).get("provider")
+    try:
+        named = chosen(name, where).get("provider")
+    except (store.Unreadable, store.TooNew, store.Behind) as why:
+        # A diagnosis is what an owner runs *because* something is already wrong, so
+        # records this rundesk will not read are the answer rather than an exception out
+        # of the middle of one. It is reported and the rest of the check still runs.
+        found.append(Complaint(str(store.path_for(directory(name, where))), str(why)))
+        named = None
     if runnable is not None and named:
         try:
             runnable(named)

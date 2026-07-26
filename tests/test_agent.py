@@ -25,14 +25,24 @@ sys.path.insert(0, str(ROOT / "src"))
 from rundesk import agent, gateway, store  # noqa: E402
 
 
+#: The two files SQLite keeps beside a database, which are its bookkeeping and not the
+#: agent's. **Merely reading a database in WAL brings them into being**, and a read-only
+#: connection cannot take them away again — only the last writer to close checkpoints. So a
+#: command that promises to change nothing about an agent still leaves these, and a case
+#: about what changed must compare what is the agent's own.
+BESIDE = ("state.db-wal", "state.db-shm")
+
+
 def tree(where: Path) -> dict[str, bytes | None]:
-    """Everything standing under here, and what is in it — for proving nothing moved.
+    """Everything of the agent's standing under here, and what is in it.
 
     Directories are carried as `None` so that one appearing or going is a difference too,
     and the whole thing is comparable with one assertion.
     """
     found: dict[str, bytes | None] = {}
     for path in sorted(where.rglob("*")):
+        if path.name in BESIDE:
+            continue
         at = str(path.relative_to(where))
         found[at] = None if path.is_dir() else path.read_bytes()
     return found
@@ -335,13 +345,32 @@ class WhatStandsBetweenAnAgentAndATurn(WithSomewhereToKeepAgents):
     def test_diagnosing_an_agent_changes_nothing_about_it(self):
         """R-AGT-12 — an owner asking what is wrong is usually asking because something
         already is, and a check that repaired what it found would answer a different
-        question the next time it was asked."""
+        question the next time it was asked. What a diagnosis reads is asked of a read-only
+        connection, so nothing it finds is written back and no records are built."""
         self.made()
         (agent.home("ava", self.where) / "MEMORY.md").unlink()
         before = tree(self.where)
 
         agent.diagnosed("ava", self.where, root=self.root)
         self.assertEqual(tree(self.where), before, "diagnosing an agent wrote something")
+
+    def test_diagnosing_an_agent_never_builds_the_records_it_reads(self):
+        """R-AGT-12, R-STO-13 — asking what shape records are in through anything that may
+        also *make* them turns the one command an owner runs when an agent is broken into
+        the one that quietly repairs it. Records written partway are the case: they are not
+        absent, so a diagnosis reports them and leaves them exactly as they are for somebody
+        to look at."""
+        self.made()
+        at = store.path_for(agent.directory("ava", self.where))
+        for gone in store.removes(agent.directory("ava", self.where)):
+            if gone.exists():
+                gone.unlink()
+        at.write_bytes(b"")
+
+        said = agent.diagnosed("ava", self.where, root=self.root)
+        self.assertEqual(b"", at.read_bytes(), "a diagnosis rebuilt the records it read")
+        self.assertIn(str(at), [one.about for one in said],
+                      "records that cannot be read were passed over in silence")
 
     def test_diagnosing_an_agent_that_is_not_there_changes_nothing(self):
         """R-AGT-12"""
@@ -444,7 +473,8 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
         agent.forget("ava", self.where)
         agent.add("ava", self.where)
         self.assertIsNone(session.of(agent.directory("ava", self.where), "codex", "terminal"))
-        self.assertEqual({}, agent.chosen("ava", self.where))
+        self.assertIsNone(agent.chosen("ava", self.where)["provider"],
+                          "a new agent inherited the brain the old one reached for")
 
     def test_nothing_of_an_agents_records_is_left_behind(self):
         """R-AGW-5, R-STO-14 — `state.db` is named rather than swept up: the removal takes

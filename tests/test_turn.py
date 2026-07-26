@@ -557,7 +557,7 @@ class WhatAReviewFound(WithAnAgentToRunTurnsFor):
         agent.remember("ava", self.where, provider="one")
         agent.remember("ava", self.where, model="a-model")
         keeping = agent.chosen("ava", self.where)
-        self.assertEqual({"provider": "one", "model": "a-model"}, keeping,
+        self.assertEqual(("one", "a-model"), (keeping["provider"], keeping["model"]),
                          "naming a model forgot the brain")
 
 
