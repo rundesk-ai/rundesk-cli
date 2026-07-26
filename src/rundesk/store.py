@@ -35,6 +35,7 @@ import os
 import random
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from rundesk import migration
@@ -129,6 +130,12 @@ def path_for(directory) -> Path:
     return Path(directory) / NAME
 
 
+#: How a durable moment is written down, and read back by `moment`. One spelling, because
+#: a writer and a reader that disagreed about it would fall to the reader's `except` and
+#: quietly answer "nothing was ever written".
+STAMPED_AS = "%Y-%m-%dT%H:%M:%SZ"
+
+
 def stamped(now=None) -> str:
     """Now, as what is written down beside a record.
 
@@ -141,7 +148,28 @@ def stamped(now=None) -> str:
     clock for itself would be a durable fact no case could fix, and two formats for one kind
     of fact the day either changed.
     """
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime((now or time.time)()))
+    return time.strftime(STAMPED_AS, time.gmtime((now or time.time)()))
+
+
+def moment(said) -> "datetime | None":
+    """A moment these records hold, read back — or None where there is nothing to read.
+
+    The inverse of `stamped`, and here rather than beside its caller for the same reason
+    `stamped` is here: one format, written once. A second copy of it is a durable fact no
+    case could fix the day either changed.
+
+    **Aware, and deliberately.** What is written down is UTC so two agents' records sort
+    against each other whatever machine wrote them, and a schedule is stated in the machine's
+    own local time. Handing back something that does not say which would let a caller compare
+    the two clock faces directly — an error invisible for most of the year and wrong by an
+    hour for the rest of it. The caller converts, and cannot forget to.
+    """
+    if not isinstance(said, str) or not said:
+        return None
+    try:
+        return datetime.strptime(said, STAMPED_AS).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def conversation_id(channel: str, space: str, thread: str = "") -> str:
@@ -488,14 +516,15 @@ class Store:
         with self._writing() as conn:
             conn.execute(f"UPDATE agent SET {', '.join(sets)} WHERE id = 1", values)
 
-    def seen(self, at: str) -> None:
+    def seen(self, at: str | None = None) -> None:
         """That a gateway of this name was up at this moment, so a later one can measure.
 
         Durable rather than swept with what a stop clears: the gateway that reads this is the
         *next* one, working out how long it was down and which firings it missed.
         """
         with self._writing() as conn:
-            conn.execute("UPDATE gateway SET last_seen_at = ? WHERE id = 1", (at,))
+            conn.execute("UPDATE gateway SET last_seen_at = ? WHERE id = 1",
+                         (at if at is not None else stamped(self._clock),))
 
     def last_seen(self):
         with self._reading() as conn:

@@ -1582,10 +1582,12 @@ class WhatCarriesAcrossARestart(WithARunDirectory):
         self.assertEqual("finished", carried["quick"]["last_outcome"])
 
     def _last_up(self, seconds_ago: float) -> None:
-        """Say when a gateway of this name was last known to be going round."""
-        gateway.seen_path("gateway", self.schedules).write_text(
-            json.dumps({"at": time.time() - seconds_ago})
-        )
+        """Say when a gateway of this name was last known to be going round.
+
+        Written through the store's own stamp rather than formatted here: what it holds is
+        UTC and a schedule is stated in local time, and a case that wrote the string itself
+        would be the second copy of that format the seam exists to prevent."""
+        self.records.seen(store.stamped(lambda: time.time() - seconds_ago))
 
     async def test_what_fell_due_while_nothing_ran_is_said(self):
         """R-SCH-5 — none of it is run, and saying nothing is the silence an owner
@@ -1624,7 +1626,7 @@ class WhatCarriesAcrossARestart(WithARunDirectory):
         gw = self.made()
         gw.claim()
         gw._say()
-        self.assertIsNotNone(gateway.last_seen(gw.name, self.schedules),
+        self.assertIsNotNone(store.moment(self.records.last_seen()),
                              "a running gateway left nothing to say it had been up")
 
 

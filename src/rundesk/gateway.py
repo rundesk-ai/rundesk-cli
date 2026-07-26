@@ -42,6 +42,7 @@ from typing import Callable, Sequence
 from rundesk import ROOT, __version__
 from rundesk import process
 from rundesk import schedule
+from rundesk import store
 
 #: The gateway that exists before there are agents to name one after.
 DEFAULT_NAME = "gateway"
@@ -367,13 +368,6 @@ def seen_path(name: str, where: Path | None = None) -> Path:
     one nobody was ever told about (R-SCH-5).
     """
     return (where or schedules_home()) / f"{checked(name)}.seen.json"
-
-
-def last_seen(name: str = DEFAULT_NAME, where: Path | None = None) -> float | None:
-    """When a gateway of this name was last known to be up, or None if never."""
-    said = _read_json(seen_path(name, where), {})
-    when = said.get("at") if isinstance(said, dict) else None
-    return when if isinstance(when, (int, float)) else None
 
 
 def _lock_path(name: str, where: Path) -> Path:
@@ -1233,6 +1227,26 @@ class Gateway:
             # below — these cannot be read — so it is said in rundesk's own words and once.
             raise Unreadable(f"this agent's schedules could not be read: {why}") from why
 
+    def _last_seen(self):
+        """When a gateway of this name was last up, as the wall clock a schedule is stated
+        in — or None where there is nothing to measure a gap against.
+
+        **Converted here, so nothing downstream can forget to.** What is kept is UTC, so two
+        agents' records sort against each other whatever machine wrote them; a cron field is
+        the machine's own local time. `store.moment` hands back something that says which,
+        which is what makes comparing the two clock faces directly inexpressible rather than
+        merely discouraged — an error invisible for most of the year and wrong by an hour for
+        the rest of it.
+        """
+        if self.records is None:
+            return None
+        try:
+            said = self.records.last_seen()
+        except Exception as why:  # noqa: BLE001 — a records boundary; see `_schedules`
+            raise Unreadable(f"when this agent was last up could not be read: {why}") from why
+        when = store.moment(said)
+        return when.astimezone().replace(tzinfo=None) if when is not None else None
+
     def _pick_up_where_it_left_off(self) -> None:
         """Take on what the last gateway of this name knew about its schedules.
 
@@ -1370,10 +1384,10 @@ class Gateway:
         an owner cannot tell from a schedule that never worked, so the count is written
         down even though nothing is done about it.
         """
-        since = last_seen(self.name, self.schedules)
-        if since is None:
-            return
         try:
+            since = self._last_seen()
+            if since is None:
+                return
             wanted = schedule.read(self._schedules())[0]
         except Unreadable as why:
             # Said, and survived (R-SCH-18). A command refuses when it cannot read these,
@@ -1381,11 +1395,10 @@ class Gateway:
             # would take everything else it does down with the one thing that is broken.
             self.log.error("cannot say what fell due while nothing was running: %s", why)
             return
-        was_down_since = datetime.fromtimestamp(since)
         for one in wanted:
             if not one.enabled:
                 continue
-            missed = schedule.passed_over(one, was_down_since, datetime.now())
+            missed = schedule.passed_over(one, since, datetime.now())
             if missed:
                 self.log.warning(
                     "schedule '%s' fell due %d time(s) while nothing was running, and was not run late",
@@ -1906,10 +1919,14 @@ class Gateway:
             # The same moment, kept where it outlives this gateway. The record goes when
             # the gateway is stopped cleanly, and this is the only thing left that can
             # say how long nothing was running (R-SCH-5).
-            _written_whole(seen_path(self.name, self.schedules), json.dumps({"at": time.time()}))
-        except OSError as err:
+            if self.records is not None:
+                self.records.seen()
+        except Exception as err:  # noqa: BLE001 — a durable-write boundary
             # A gateway that cannot say it is alive is still alive, and stopping serving
-            # over it would turn a full disk into an outage.
+            # over it would turn a full disk into an outage. Broad because this is called
+            # from `start`'s `finally` and from the shutdown, where raising would replace
+            # the thing being reported — and because what can go wrong here now belongs to
+            # whatever holds the records, which this file does not know.
             self.log.warning("could not update the record: %s", err)
 
     async def _beat(self) -> None:
