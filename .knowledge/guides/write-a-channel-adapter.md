@@ -159,6 +159,14 @@ line is readable through the process list and kept in a shell's history. Read yo
 from the environment variable you named in `secret`, or from a file the owner already
 controls. Do not put it in `settings`: that is written to a file that outlives you.
 
+**Look in both places, because only one of them is there when it matters.** A person
+adding your channel is at a terminal and has exported a variable. The machine that keeps
+an agent up has no terminal and no shell profile — it starts your program with a built
+environment, so that variable is not there, which is the state your channel spends its
+whole life in. Fall back to a file inside your own `RUNDESK_CHANNEL_HOME`, and never
+write one yourself: putting a credential on disk is the owner's decision to make, not
+yours to make for them.
+
 **You are running exactly when the agent is up, so say so if your platform can.** The
 gateway starts you when the agent starts and ends you when it stops; there is no record
 telling you either, because your own lifetime is the signal. If your surface has a

@@ -53,6 +53,16 @@ except ImportError:  # pragma: no cover - proved by the install, not by the suit
 #: history. Never written down either — what is kept is this name (R-CAD-11, R-CAD-12).
 TOKEN_FROM = "DISCORD_TOKEN"
 
+#: The file the token is read from when the variable is not set — a file the owner
+#: already controls, in this channel's own directory.
+#:
+#: **A supervised gateway has no shell.** The machine that keeps an agent up starts it
+#: with a built environment, so a token exported in somebody's terminal is a token the
+#: agent will never see once it is being kept up properly — which is the only way it is
+#: meant to run. Nothing here ever writes this file; it is the owner's to put there, and
+#: what rundesk keeps is still only the *name* of where to look.
+TOKEN_FILE = "token"
+
 #: Discord caps a message at two thousand characters. Left short of it on purpose: a
 #: reply is split at a line break where there is one, and the room to do that has to come
 #: from somewhere (R-DIS-13).
@@ -126,6 +136,23 @@ def options(argv) -> argparse.Namespace:
     known, rest = said.parse_known_args(list(argv))
     known.unknown = rest
     return known
+
+
+def token_for(chose) -> str:
+    """The credential, from the variable the owner named or the file they control.
+
+    In that order, and never from anywhere else. An argument is readable through the
+    process list; the record rundesk keeps holds the name of this variable and never what
+    is in it; and nothing here writes either one down.
+    """
+    said = os.environ.get(chose.token_from)
+    if said:
+        return said.strip()
+    beside = Path(os.environ.get("RUNDESK_CHANNEL_HOME") or ".") / TOKEN_FILE
+    try:
+        return beside.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def clip(text: str, limit: int) -> str:
@@ -493,10 +520,11 @@ async def check(chose) -> int:
     of the owner's diagnosis is what comes back from here, so it says what was wrong
     rather than that something was.
     """
-    token = os.environ.get(chose.token_from)
+    token = token_for(chose)
     if not token:
-        say(ok=False, why=f"{chose.token_from} is not set — export the bot token in the "
-                          f"shell you are running this from, never as an argument")
+        say(ok=False, why=f"no bot token — export {chose.token_from} in the shell you are "
+                          f"running this from, or put it in a file called '{TOKEN_FILE}' "
+                          f"in this channel's own directory; never as an argument")
         return 1
     if not chose.dm and not chose.channel:
         say(ok=False, why="say where it listens: --server <id> --channel <id>, or --dm")
@@ -533,9 +561,12 @@ async def check(chose) -> int:
 
 async def carry(chose) -> int:
     """Hold the connection open, and carry conversations until rundesk ends us."""
-    token = os.environ.get(chose.token_from)
+    token = token_for(chose)
     if not token:
-        note(f"{chose.token_from} is not set")
+        # Said where the gateway's log will show it: a machine keeping this agent up has
+        # no shell, so the variable an owner exported by hand is not here.
+        note(f"no bot token — {chose.token_from} is not set and there is no "
+             f"'{TOKEN_FILE}' file in this channel's own directory")
         return 1
     client = Agent(chose)
     reading = asyncio.ensure_future(_read(client))

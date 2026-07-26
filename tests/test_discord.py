@@ -259,6 +259,43 @@ class WhatItOffersAndWhatItIsTold(unittest.TestCase):
         self.assertEqual("DISCORD_TOKEN", chose.token_from,
                          "it stopped naming a variable to read the credential from")
 
+    def test_a_supervised_gateway_finds_its_token_without_a_shell(self):
+        """R-CAD-11 — the machine that keeps an agent up starts it with a built
+        environment, so a variable exported in somebody's terminal is one the agent will
+        never see once it is running the only way it is meant to. A file the owner
+        already controls is the other place, and nothing here ever writes it."""
+        import os
+        import tempfile
+
+        home = Path(tempfile.mkdtemp(prefix="rundesk-discord-token-"))
+        self.addCleanup(lambda: [f.unlink() for f in home.iterdir()] and home.rmdir())
+        (home / discord.TOKEN_FILE).write_text("  a-token-from-a-file  \n")
+        was_home = os.environ.get("RUNDESK_CHANNEL_HOME")
+        was_token = os.environ.pop("DISCORD_TOKEN", None)
+        os.environ["RUNDESK_CHANNEL_HOME"] = str(home)
+        try:
+            self.assertEqual("a-token-from-a-file", discord.token_for(discord.options([])))
+        finally:
+            os.environ.pop("RUNDESK_CHANNEL_HOME", None)
+            if was_home is not None:
+                os.environ["RUNDESK_CHANNEL_HOME"] = was_home
+            if was_token is not None:
+                os.environ["DISCORD_TOKEN"] = was_token
+
+    def test_the_variable_wins_over_the_file(self):
+        """R-CAD-11 — a person at a terminal is saying what to use right now, and a file
+        left over from last month must not quietly override them."""
+        import os
+
+        was = os.environ.get("DISCORD_TOKEN")
+        os.environ["DISCORD_TOKEN"] = "from-the-shell"
+        try:
+            self.assertEqual("from-the-shell", discord.token_for(discord.options([])))
+        finally:
+            os.environ.pop("DISCORD_TOKEN", None)
+            if was is not None:
+                os.environ["DISCORD_TOKEN"] = was
+
     def test_no_option_takes_a_secret_as_a_value(self):
         """R-CAD-11 — the whole point: there is no way to type one, so nobody can. What
         the owner may say is *which variable* holds it, never what is in it."""
