@@ -249,6 +249,20 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         self.assertNotEqual("", discord.commentary(
             {"type": "think", "text": "the error is in the parser"}))
 
+    def test_a_commentary_stops_growing_once_something_is_said_under_it(self):
+        """R-DIS-20 — a message something has been posted under is one the reader has
+        already scrolled past. Editing it changes history rather than showing progress:
+        the new line appears above whatever came after it, where nobody is looking. So
+        the next thing to show has to begin a message of its own."""
+        held = discord.Live()
+        held.posted, held.activity = object(), "-# 💻 ran a command"
+        # Unbound on purpose: the decision uses nothing of the connection, which is what
+        # makes it testable without one.
+        discord.Agent._no_longer_last(None, held)
+        self.assertIsNone(held.posted, "it would have gone on editing a buried message")
+        self.assertEqual("", held.activity,
+                         "a fresh message would have opened with the old one's lines")
+
     def test_showing_the_work_is_off_unless_the_owner_asks(self):
         """R-DIS-20 — an owner who wants to watch says so, and one who does not gets one
         message per turn rather than a running commentary."""

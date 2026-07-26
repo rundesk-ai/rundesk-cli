@@ -273,7 +273,7 @@ class Live:
         self.anchor = None          # the message that asked, for the mark to attach to
         self.activity = ""          # the running commentary, as it stands
         self.pending = ""           # what has happened since it was last written
-        self.posted = None          # the message it is being written into, if any
+        self.posted = None          # the message it is growing into, while it is the last
         self.typing = None
         self.pacing = None
         self.marked = False
@@ -404,7 +404,9 @@ class Agent(discord.Client):
         # sent while a turn was still running took the ✅ that belonged to the message
         # that asked for it. Which message a turn is *for* is rundesk's to say, and it
         # says so with the `ref` on the state — all this has to do is be able to find it.
-        self.live.setdefault(str(conversation), Live())
+        # Somebody has spoken here, so whatever commentary was growing is no longer the
+        # last thing in the conversation and must not be edited again.
+        self._no_longer_last(self.live.setdefault(str(conversation), Live()))
         self.seen[str(message.id)] = message
         while len(self.seen) > SEEN_KEPT:
             self.seen.pop(next(iter(self.seen)))
@@ -484,6 +486,7 @@ class Agent(discord.Client):
             # quoting the question on every remark buries the question.
             await self._flush(it, held)
             await self._post(it, str(it.get("text") or ""))
+            self._no_longer_last(held)
         elif kind in ("think", "tool", "result", "usage"):
             await self._doing(it, held)
 
@@ -505,6 +508,7 @@ class Agent(discord.Client):
                     task.cancel()
             held.typing = held.pacing = None
             await self._flush(it, held)
+            self._no_longer_last(held)
             if state == "failed" and it.get("why"):
                 await self._post(it, f"-# ⚠ {clip(str(it['why']), 400)}")
             await self._react(it, held, MARKS[state], instead_of=SEEN)
@@ -581,7 +585,16 @@ class Agent(discord.Client):
         if self.chose.activity == POSTS:
             await self._post(it, said)
             return
-        held.activity = (held.activity + "\n" + said).strip()
+        # **Only while it is still the last thing in the conversation.** A message that
+        # something has been posted under is one the reader has already scrolled past, and
+        # editing it changes history rather than showing progress — the new line appears
+        # above whatever came after it, where nobody is looking. So anything else being
+        # said starts a fresh one, and this grows only for as long as it is the newest
+        # thing there (R-DIS-20).
+        if held.posted is None:
+            held.activity = said
+        else:
+            held.activity = (held.activity + "\n" + said).strip()
         if len(held.activity) > ACTIVITY_CHARS:
             held.activity = "-# …\n" + held.activity[-ACTIVITY_CHARS:]
         if held.posted is None:
@@ -591,6 +604,17 @@ class Agent(discord.Client):
             await held.posted.edit(content=held.activity)
         except Exception as why:  # noqa: BLE001 — a platform boundary
             note(f"could not grow the commentary: {why}")
+            held.posted = None   # start a fresh one rather than keep failing on this
+
+    def _no_longer_last(self, held: Live) -> None:
+        """Something else has been said here, so the commentary stops growing.
+
+        Called wherever a message that is not the commentary is posted, and when somebody
+        speaks: both put something under it, and both mean the next thing to show belongs
+        in a message of its own.
+        """
+        held.posted = None
+        held.activity = ""
 
     async def _answer(self, it: dict, held: Live) -> None:
         """The answer, whole, at the end — split across messages rather than cut.
@@ -602,6 +626,7 @@ class Agent(discord.Client):
         # The cost first, then the answer, in one message (R-DIS-17). At the top rather
         # than the bottom because a long answer pushes anything after it off a phone
         # screen, and what a turn cost is worth seeing without scrolling.
+        self._no_longer_last(held)
         whole = str(it.get("text") or "")
         if held.cost:
             whole = f"{held.cost}\n{whole}"
