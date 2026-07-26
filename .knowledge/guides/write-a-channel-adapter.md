@@ -100,6 +100,19 @@ That is the whole of what you say. Four kinds of record, and only `arrived` real
 | `control` | `conversation`, `user`, `control` | `ref` |
 | `gone` | | `why` |
 
+**`did` is what a tool did, and the list is closed.** It is one of exactly six words —
+`read`, `search`, `run`, `edit`, `list`, `make` — or it is absent, and absent is common.
+Show a mark or a word of your own for each.
+
+**Do not show `name`.** It is the brain's own identifier for the tool — `commandExecution`
+on one, `Bash` on the next — and putting it in front of a reader means putting one
+vendor's vocabulary in front of somebody who has never heard of that vendor. It is in the
+record so an account can be read back afterwards, not so it can be displayed. Show the
+verb, and when there is none say something true and general: a brain that gave no verb did
+something this vocabulary has no word for yet, and its identifier is not a translation
+of that. A `did` you do not recognise cannot happen today
+and would mean this list had grown, so treat it the way you treat an absent one.
+
 **Attachments go both ways, and both are files already on this machine.** What somebody
 attached arrives on `arrived` — download it yourself, put it somewhere under your own
 `RUNDESK_CHANNEL_HOME`, and report `{"name": …, "at": …}` with an absolute path. Anything

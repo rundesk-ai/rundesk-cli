@@ -33,7 +33,7 @@ import os
 import time
 from pathlib import Path
 
-from rundesk_cli import gateway, process
+from rundesk_cli import gateway, process, provider
 
 #: Where the adapters that ship with rundesk stand. Read by looking rather than listed, so
 #: one added later is reachable the day it lands and no second copy of the list can come to
@@ -77,6 +77,13 @@ ATTACHED_BYTES = 32 * 1024 * 1024
 #: whole, as `answer` — so an adapter cannot show a reply that rewrites itself in place,
 #: because it is never given one to show (R-CH-7, R-CH-8).
 TELLING = ("state", "think", "tool", "result", "usage", "answer")
+
+#: What a tool did, in the words a surface shows. **The provider seam's list, not a
+#: second copy of it** — a brain says what it did and a surface shows it, so the two must
+#: be the same five words or a reader is shown a verb nothing produces, or a brain
+#: produces one nothing can show. Taken from where it is defined rather than repeated
+#: here, because a vocabulary written down twice is two vocabularies (R-PRV-8).
+DID = provider.DID
 
 #: How a turn stands, decided here and shown there (R-CAD-3, R-CAD-4). Told apart because
 #: each sends whoever is watching somewhere different: `TAKEN` says it was heard, `RUNNING`

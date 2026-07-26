@@ -76,6 +76,7 @@ DID = {
     "mcpToolCall": "run",
     "fileRead": "read",
     "listFiles": "list",
+    "imageGeneration": "make",
 }
 
 #: Item kinds that are not tools: what the brain said, what it thought, and the echo of

@@ -157,8 +157,8 @@ one brain, `shell` on the next and `run_terminal_command` on a third. A channel 
 recognised your vendor's names would be carrying your vocabulary forever, so it never sees
 them.
 
-The list is closed and short on purpose — `read`, `search`, `run`, `edit`, `list`. If what
-your tool did is not one of those, **leave `did` out**: `name` still carries your own word
+The list is closed and short on purpose — `read`, `search`, `run`, `edit`, `list`, `make`.
+If what your tool did is not one of those, **leave `did` out**: `name` still carries your own word
 for it, and a reader that shows nothing is better than one taught to believe a word that
 means something else here. Do not stretch one to fit; tell us instead, and the list can
 grow by a release rather than by every adapter guessing differently.

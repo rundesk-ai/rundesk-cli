@@ -272,13 +272,40 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             {"type": "result", "id": "1", "ok": False, "summary": "no such file"})
         self.assertIn("no such file", said)
 
-    def test_a_tool_is_marked_by_what_it_did_and_never_by_its_brains_name_for_it(self):
-        """R-CAD-13 — recognising a vendor's own tool names would carry that vendor's
-        vocabulary into this file forever."""
-        self.assertIn(discord.DID["run"], discord._as_a_line(
-            {"type": "tool", "name": "Bash", "did": "run"}))
-        self.assertIn("⚙", discord._as_a_line(
-            {"type": "tool", "name": "SomethingNobodyKnows"}))
+    def test_every_verb_the_seam_defines_has_a_mark_of_its_own(self):
+        """R-PRV-8, R-CAD-4 — the list of what a tool did is the seam's and is closed. A
+        verb with no mark here would quietly show as the fallback, which reads as "we do
+        not know what that was" for something the contract does name."""
+        from rundesk_cli import provider
+
+        self.assertEqual(set(provider.DID), set(discord.DID),
+                         "this surface and the seam disagree about what a tool can do")
+        self.assertEqual(len(set(discord.DID.values())), len(discord.DID),
+                         "two verbs share a mark, so a reader cannot tell them apart")
+        self.assertNotIn(discord.UNKNOWN, discord.DID.values(),
+                         "a named verb uses the mark that means 'no idea what that was'")
+
+    def test_a_tool_is_shown_by_what_it_did_and_never_by_its_brains_name_for_it(self):
+        """R-PRV-8 — this showed the brain's own word first, so a commentary read
+        `commandExecution` and `imageGeneration`: one vendor's identifiers, in front of
+        somebody who has never heard of that vendor and never should."""
+        said = discord.commentary({"type": "tool", "name": "commandExecution", "did": "run"})
+        self.assertIn(discord.DID["run"], said)
+        self.assertNotIn("commandExecution", said, "a vendor's own word reached a reader")
+
+    def test_a_tool_with_no_verb_says_something_true_rather_than_the_vendors_word(self):
+        """R-PRV-8 — a brain that gave no verb did something this vocabulary has no word
+        for yet, and its own identifier is not a translation of that."""
+        said = discord.commentary({"type": "tool", "name": "imageGeneration"})
+        self.assertIn(discord.UNKNOWN, said)
+        self.assertNotIn("imageGeneration", said)
+
+    def test_every_verb_has_something_a_person_would_say(self):
+        """R-PRV-8 — a commentary is read as a sentence, so a mark with no words beside
+        it is a row of emoji nobody can act on."""
+        from rundesk_cli import provider
+
+        self.assertEqual(set(provider.DID), set(discord.SHOWN))
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")

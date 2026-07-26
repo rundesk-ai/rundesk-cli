@@ -48,6 +48,8 @@ is a whole brain with that work absent, rather than a broken one.
 
 | ❌ | R-PRV-20 | A brain says when it made a file, rather than a reader guessing from what a tool printed | src/rundesk_cli/turn.py:78 — the record is carried and the shipped adapter reports it; no test drives a brain that makes one |
 
+| ✅ | R-PRV-21 | What a tool did is one of a closed set of words, or is left unsaid | `the words for what a tool did are the same on both seams`, `every verb the seam defines has a mark of its own`, `a tool is marked by what it did and never by its brains name for it` |
+
 ## Open questions
 
 - What a turn does when a word said into it arrives after it has already finished.

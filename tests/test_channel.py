@@ -503,6 +503,15 @@ class WhatTheSurfaceIsNeverGiven(DrivesAnAdapter):
         self.assertNotIn("text", channel.TELLING)
         self.assertIn("answer", channel.TELLING)
 
+    def test_the_words_for_what_a_tool_did_are_the_same_on_both_seams(self):
+        """R-PRV-8 — a brain says what it did and a surface shows it, so a second copy of
+        the list is a second vocabulary: a reader shown a verb nothing produces, or a
+        brain producing one nothing can show."""
+        from rundesk_cli import provider
+
+        self.assertIs(channel.DID, provider.DID)
+        self.assertEqual(("read", "search", "run", "edit", "list", "make"), channel.DID)
+
     def test_what_the_agent_did_is_shown_while_it_is_happening(self):
         """R-CH-6 — a tool it ran, a thought it closed. These are worth watching, and
         they are whole the moment they exist."""

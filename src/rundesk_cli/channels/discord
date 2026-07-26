@@ -141,10 +141,18 @@ COMMANDS = (
      "♻️ restarting the agent — it will be back in a moment."),
 )
 
-#: What a tool did, in a mark. Keyed on the closed list the seam defines, never on a
+#: What a tool did, in a mark. One per verb the seam defines, and never keyed on a
 #: brain's own name for a tool — recognising those would carry one vendor's vocabulary
-#: into this file forever.
-DID = {"read": "📖", "search": "🔎", "run": "💻", "edit": "✏️", "list": "📁"}
+#: into this file forever. A verb with no mark here would silently show as the fallback,
+#: so the suite checks this covers the seam's list rather than trusting it to.
+DID = {"read": "📖", "search": "🔎", "run": "💻", "edit": "✏️", "list": "📁",
+       "make": "🎨"}
+UNKNOWN = "⚙"
+
+#: The same verbs as a person would say them. A commentary is read as a sentence, and
+#: `edit` beside a pencil reads as an instruction rather than as something that happened.
+SHOWN = {"read": "read a file", "search": "searched", "run": "ran a command",
+         "edit": "edited a file", "list": "listed files", "make": "made something"}
 
 
 def say(**it) -> None:
@@ -673,8 +681,15 @@ def _as_a_line(it: dict) -> str:
         return "\n".join(f"-# 💭 {clip(line, 300)}"
                          for line in str(it.get("text") or "").splitlines() if line.strip())
     if kind == "tool":
-        mark = DID.get(it.get("did"), "⚙")
-        return f"-# {mark} {clip(str(it.get('name') or it.get('did') or 'working'), 120)}"
+        # **What it did, never what its brain calls it.** This showed `name` first, so a
+        # commentary read `commandExecution` and `imageGeneration` — one vendor's
+        # identifiers, in front of somebody who has never heard of that vendor and never
+        # should. The verb is the whole reason the seam translates at all; a brain that
+        # gave none is doing something this vocabulary has no word for yet, and "working"
+        # is the honest thing to say about it.
+        did = it.get("did")
+        mark = DID.get(did, UNKNOWN)
+        return f"-# {mark} {SHOWN.get(did, 'working')}"
     if kind == "result":
         # Only when it went wrong. A running commentary of everything that worked is
         # noise, and what somebody watching wants is the thing that did not.

@@ -48,6 +48,18 @@ ADAPTERS = Path(__file__).resolve().parent / "adapters"
 #: than a feature. A brain says so or nothing is sent.
 RECORDS = ("text", "think", "tool", "result", "usage", "file", "done")
 
+#: What a tool *did*, in words no brain owns (R-PRV-8). Closed and short on purpose: a
+#: surface that recognised a vendor's own tool names would be carrying that vendor's
+#: vocabulary forever, and every reader would need a table per brain.
+#:
+#: **This is the list, and it lives here** — it was written in the guide as prose and
+#: copied by hand into each adapter that used it, which is a list kept in three places
+#: and therefore three lists. A brain that did something outside it leaves `did` out
+#: rather than stretching one to fit: a reader shown nothing is better than one taught
+#: to believe a word that means something else here. Growing it is a release, not a
+#: guess an adapter makes on its own.
+DID = ("read", "search", "run", "edit", "list", "make")
+
 #: What an adapter may say it can do (R-PRV-15). Absent means no, so an adapter that
 #: answers with nothing at all is a whole brain with the work simply absent — which is
 #: what makes a plain conversational CLI first class rather than degraded.
