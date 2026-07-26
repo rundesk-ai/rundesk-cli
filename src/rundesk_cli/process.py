@@ -497,6 +497,10 @@ class Program:
     #: (R-PROC-17). `None` means `RECEIVING_SECONDS`, resolved where it is used — a
     #: caller knows its own sink and nothing here does.
     receiving: float | None = None
+    #: Handed every line the program says went wrong, as it says it (R-PROC-15). The
+    #: `errors` property keeps only a tail for diagnosis; a caller that means to write
+    #: all of it down somewhere durable needs each line, and a tail is not each line.
+    on_error: Callable[[str], None] | None = None
     _proc: asyncio.subprocess.Process | None = field(default=None, repr=False, init=False)
     _ended: bool = field(default=False, repr=False, init=False)
     _writable: bool = field(default=True, repr=False, init=False)
@@ -774,7 +778,7 @@ class Program:
         later as a perfectly healthy program having gone quiet.
         """
         assert self._proc is not None and self._proc.stderr is not None
-        frame = _Lines(None)
+        frame = _Lines(self._noted)
         self._errors = frame
         while True:
             chunk = await self._proc.stderr.read(READ_BYTES)
@@ -783,6 +787,20 @@ class Program:
             self._heard = time.monotonic()
             frame.feed(chunk)
         frame.finish()
+
+    def _noted(self, line: str) -> None:
+        """One line of what went wrong, handed on — and never allowed to stop the drain.
+
+        Unlike `on_line`, this one may not raise its way out. Reading this stream is not
+        optional (R-PROC-16): a pipe nobody empties fills, and a program blocked writing
+        to a full one stops reading what we write to it. So a caller whose own writing
+        fails loses that line and nothing else, which is a far smaller loss than a
+        deadlock that shows up half an hour later as a healthy program having gone quiet.
+        """
+        if self.on_error is None:
+            return
+        with contextlib.suppress(BaseException):
+            self.on_error(line)
 
     async def _deliver(self, held: Held, sink) -> None:
         """Hand records to whoever is receiving them, away from the reading.
