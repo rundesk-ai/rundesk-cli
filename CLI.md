@@ -12,45 +12,45 @@ file and the command disagree. *Why* the surface is shaped this way is
 
 ```sh
 # an agent, and its life
-rundesk add [--provider <provider>] [--model <model>] [--set <key=value>] [--instructions <text>] <agent>                                                                              make an agent, and the gateway that runs it
-rundesk remove <agent>                                                                                                                                                                 take an agent away for good
-rundesk agents                                                                                                                                                                         every agent this install has, and what each is doing
-rundesk agents <agent>                                                                                                                                                                 what one agent is, and where it keeps things
-rundesk doctor                                                                                                                                                                         what stands between every agent and a working turn
-rundesk doctor <agent>                                                                                                                                                                 what stands between one agent and a working turn
+rundesk add [--provider <provider>] [--model <model>] [--set <key=value>] [--instructions <text>] <agent>                                                                                            make an agent, and the gateway that runs it
+rundesk remove <agent>                                                                                                                                                                               take an agent away for good
+rundesk agents                                                                                                                                                                                       every agent this install has, and what each is doing
+rundesk agents <agent>                                                                                                                                                                               what one agent is, and where it keeps things
+rundesk doctor                                                                                                                                                                                       what stands between every agent and a working turn
+rundesk doctor <agent>                                                                                                                                                                               what stands between one agent and a working turn
 
 # running one
-rundesk start [--here] <agent>                                                                                                                                                         have the machine keep an agent running
-rundesk stop [--all] <agent>                                                                                                                                                           stand an agent down
-rundesk restart [--all] <agent>                                                                                                                                                        cycle an agent, leaving the others alone
-rundesk logs [-n <lines>] [--source <source>] <agent>                                                                                                                                  what an agent has been saying
+rundesk start [--here] <agent>                                                                                                                                                                       have the machine keep an agent running
+rundesk stop [--all] <agent>                                                                                                                                                                         stand an agent down
+rundesk restart [--all] <agent>                                                                                                                                                                      cycle an agent, leaving the others alone
+rundesk logs [-n <lines>] [--source <source>] <agent>                                                                                                                                                what an agent has been saying
 
 # reaching it
-rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] [--instructions <text>] <agent> <prompt>   one turn, streamed to this terminal
-rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] [--instructions <text>] <agent> <prompt>   with standing instructions, told apart from the prompt
-rundesk channels <agent> add --kind <kind> --allow <user> [--token-stdin] [--activity | --no-activity] <channel> -- <option> [<arg> ...]                                               put this agent on a channel
-rundesk channels <agent> instructions <channel> <text>                                                                                                                                 what this agent is told about where it is
-rundesk channels <agent> remove <channel>                                                                                                                                              take this agent off a channel
-rundesk channels <agent> show <channel>                                                                                                                                                one channel, and who may reach this agent through it
-rundesk schedules <agent> add --when <cron> [--ask <prompt>] [--provider <provider>] [--model <model>] [--instructions <text>] [--to <channel>] <schedule> -- <program> [<arg> ...]    add a schedule
-rundesk schedules <agent> off <schedule>                                                                                                                                               keep a schedule but stop it running
-rundesk schedules <agent> on <schedule>                                                                                                                                                let a schedule run
-rundesk schedules <agent> remove <schedule>                                                                                                                                            take a schedule away
-rundesk schedules <agent> run <schedule>                                                                                                                                               run a schedule now, whether or not it is due
-rundesk runs [--most <n>] <agent>                                                                                                                                                      what an agent has run, and what became of each
-rundesk usage                                                                                                                                                                          what every agent has cost
-rundesk usage <agent>                                                                                                                                                                  what one agent has cost
+rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] [--instructions <text>] <agent> <prompt>                 one turn, streamed to this terminal
+rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] [--instructions <text>] <agent> <prompt>                 with standing instructions, told apart from the prompt
+rundesk channels <agent> add --kind <kind> --allow <user> [--token-stdin] [--activity | --no-activity] <channel> -- <option> [<arg> ...]                                                             put this agent on a channel
+rundesk channels <agent> instructions <channel> <text>                                                                                                                                               what this agent is told about where it is
+rundesk channels <agent> remove <channel>                                                                                                                                                            take this agent off a channel
+rundesk channels <agent> show <channel>                                                                                                                                                              one channel, and who may reach this agent through it
+rundesk schedules <agent> add --when <cron> [--ask <prompt>] [--provider <provider>] [--model <model>] [--instructions <text>] [--to <channel>] [--in <where>] <schedule> -- <program> [<arg> ...]   add a schedule
+rundesk schedules <agent> off <schedule>                                                                                                                                                             keep a schedule but stop it running
+rundesk schedules <agent> on <schedule>                                                                                                                                                              let a schedule run
+rundesk schedules <agent> remove <schedule>                                                                                                                                                          take a schedule away
+rundesk schedules <agent> run <schedule>                                                                                                                                                             run a schedule now, whether or not it is due
+rundesk runs [--most <n>] <agent>                                                                                                                                                                    what an agent has run, and what became of each
+rundesk usage                                                                                                                                                                                        what every agent has cost
+rundesk usage <agent>                                                                                                                                                                                what one agent has cost
 
 # rundesk itself
-rundesk status                                                                                                                                                                         how rundesk itself is on this machine
-rundesk version [--check]                                                                                                                                                              what is installed, and whether that is current
-rundesk update [--check]                                                                                                                                                               move to the newest published release
-rundesk uninstall [--purge]                                                                                                                                                            remove rundesk from this machine
+rundesk status                                                                                                                                                                                       how rundesk itself is on this machine
+rundesk version [--check]                                                                                                                                                                            what is installed, and whether that is current
+rundesk update [--check]                                                                                                                                                                             move to the newest published release
+rundesk uninstall [--purge]                                                                                                                                                                          remove rundesk from this machine
 
 # not yet grouped
-rundesk messages [--most <n>] [--since <id>] [--channel <channel>] [--conversation <where>] [--author <who>] [--source <how>] <agent>                                                  what was said, newest first
-rundesk resume <agent>                                                                                                                                                                 carry one run on from where it stopped   [planned]
-rundesk search [--most <n>] <agent> <words>                                                                                                                                            what was said, by the words in it
+rundesk messages [--most <n>] [--since <id>] [--channel <channel>] [--conversation <where>] [--author <who>] [--source <how>] <agent>                                                                what was said, newest first
+rundesk resume <agent>                                                                                                                                                                               carry one run on from where it stopped   [planned]
+rundesk search [--most <n>] <agent> <words>                                                                                                                                                          what was said, by the words in it
 ```
 
 ## What it looks like
@@ -73,10 +73,10 @@ rundesk start ava
 
 ```sh
 # reachable in direct messages and in every room it has been invited to
-rundesk channels ava add discord --kind discord --allow 279024636254224384
+rundesk channels ava add discord --kind discord --allow 123456789012345678
 #   writes two channels — discord-dms and discord-rooms — each with its own allowed list, settings and instructions
 # direct messages only; --server <id> or --channel <id> narrows the rooms instead
-rundesk channels ava add discord --kind discord --allow 279024636254224384 -- --dm
+rundesk channels ava add discord --kind discord --allow 123456789012345678 -- --dm
 # what it is told about where it is, before it reads a word of the message
 rundesk channels ava instructions discord-rooms "You are {agent} in {where.channel}. Others read this, so keep it short."
 # what it is reachable on, and whether it is reachable at all
@@ -112,6 +112,7 @@ rundesk schedules ava off nightly
 --conversation <where>          only what was said in one place on it — the direct message or room, in the platform's own word for it
 --fresh                         start the conversation again rather than carrying it on
 --here                          run it in this terminal instead of handing it to the machine
+--in <where>                    which place on that channel to say it in — a room, a direct message, in whatever the surface calls them. Left out, it follows the conversation
 --instructions <text>           what every turn for this agent is told before it reads a prompt, where neither the schedule nor the surface said — empty takes it off
 --kind <kind>                   which kind of surface — one that ships, or the path of a program that speaks yours
 --model <model>                 which model, in that brain's own words

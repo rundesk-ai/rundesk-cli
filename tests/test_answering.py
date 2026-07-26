@@ -230,6 +230,37 @@ class WhereABrainIsAnswering(CarriesAConversation):
         await self._settled(held)
         self.assertIn("nothing broke overnight", surface.of("said")[0]["text"])
 
+    async def test_what_a_surface_is_shown_is_what_the_agent_said(self):
+        """R-SCH-34 — a person reading a room wants what their agent found, not a line of
+        rundesk's bookkeeping above it on every post for ever. Which schedule produced it is in
+        the account and in `schedules`, where somebody asking that is already looking."""
+        self.spoken_on()
+        row = self.a_schedule()
+        kept = agents.records("ava", self.where)
+        its_own = kept.opened(store.conversation_id("schedule", "nightly"), "schedule",
+                              "schedule", "nightly", store.stamped())["id"]
+        run = kept.began("schedule", "a-brain", "safe", store.stamped(),
+                         conversation_id=its_own, schedule_id=row["id"])
+        kept.answered(its_own, run, store.stamped(), "nothing broke overnight")
+        kept.ended(run, store.stamped(), "finished")
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_what_a_schedule_did("nightly", "finished")
+        await self._settled(held)
+        self.assertEqual("nothing broke overnight", surface.of("said")[0]["text"])
+
+    async def test_a_schedule_that_failed_says_so_rather_than_saying_nothing(self):
+        """R-SCH-34 — the half the answer alone must not swallow. A reader left to infer a
+        failure from a post that never came is a reader who infers nothing at all."""
+        self.spoken_on()
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_what_a_schedule_did("nightly", "failed")
+        await self._settled(held)
+        self.assertIn("failed", surface.of("said")[0]["text"])
+        self.assertIn("nightly", surface.of("said")[0]["text"])
+
     async def test_a_schedule_that_started_a_program_is_still_said(self):
         """R-SCH-31 — a program has no answer to read back, so the remark is what it came to
         and nothing else. One shape for both kinds rather than two callers deciding."""
@@ -254,6 +285,83 @@ class WhereABrainIsAnswering(CarriesAConversation):
         self.assertEqual([], surface.shown)
         self.assertTrue(any("could not show" in one for one in self.told),
                         f"a refusal was swallowed: {self.told}")
+
+    async def test_a_schedule_says_which_place_on_a_surface_it_reports_in(self):
+        """R-SCH-32 — a channel reaching a whole server has many rooms, and the newest
+        conversation is whichever somebody last spoke in. An owner naming one is the only
+        thing that makes a daily report land where they meant."""
+        self.spoken_on("one")
+        wanted = self.spoken_on("two")
+        self.a_schedule(place="two")
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_what_a_schedule_did("nightly", "finished")
+        await self._settled(held)
+        said = surface.of("said")[0]
+        self.assertEqual(wanted, said["conversation"],
+                         "it followed the conversation instead of the place it was given")
+        self.assertEqual("two", said["place"], "the surface was not told which place")
+
+    async def test_a_schedule_naming_no_place_follows_the_conversation(self):
+        """R-SCH-32 — the older behaviour, kept: a channel that reaches one place has one
+        place to report in, so requiring a word for it would be asking for nothing."""
+        where_it_is = self.spoken_on()
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_what_a_schedule_did("nightly", "finished")
+        await self._settled(held)
+        said = surface.of("said")[0]
+        self.assertEqual(where_it_is, said["conversation"])
+        self.assertIsNone(said["place"], "a place nobody named was invented")
+
+    async def test_what_a_place_is_called_is_never_read_on_the_way_past(self):
+        """R-SCH-32, R-CAD-16 — the core does not know this platform has rooms. A place it has
+        never seen a word in is the adapter's to resolve, so it goes over with no conversation
+        rather than being refused: only the surface can reach a room nobody has spoken in."""
+        self.spoken_on("one")
+        self.a_schedule(place="#a-room-nobody-has-used")
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_what_a_schedule_did("nightly", "finished")
+        await self._settled(held)
+        said = surface.of("said")[0]
+        self.assertEqual("#a-room-nobody-has-used", said["place"])
+        self.assertIsNone(said["conversation"], "a place we have not seen was guessed at")
+
+    async def test_what_a_schedule_reported_is_written_down_where_it_was_reported(self):
+        """R-SCH-33 — the gap that made an agent ask "what work?". The turn ran in the
+        schedule's own conversation, so a person replying in the room it was posted to reaches
+        a brain whose session never saw it — and the account of that room did not have it
+        either, which is the one place looking it up could have found it."""
+        where_it_is = self.spoken_on()
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_what_a_schedule_did("nightly", "finished")
+        await self._settled(held)
+        kept = agents.records("ava", self.where)
+        said = [one for one in kept.messages(where_it_is) if one["author"] == "agent"]
+        self.assertEqual(1, len(said), "what was posted was not written down where it went")
+        self.assertIn("nightly", said[0]["text"])
+
+    async def test_what_was_reported_names_the_run_that_produced_it(self):
+        """R-SCH-33 — one run, delivered into a second conversation. Naming it is what ties
+        the message somebody replies to back to the work it is about."""
+        where_it_is = self.spoken_on()
+        row = self.a_schedule()
+        kept = agents.records("ava", self.where)
+        its_own = kept.opened(store.conversation_id("schedule", "nightly"), "schedule",
+                              "schedule", "nightly", store.stamped())["id"]
+        run = kept.began("schedule", "a-brain", "safe", store.stamped(),
+                         conversation_id=its_own, schedule_id=row["id"])
+        kept.ended(run, store.stamped(), "finished")
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_what_a_schedule_did("nightly", "finished")
+        await self._settled(held)
+        said = [one for one in kept.messages(where_it_is) if one["author"] == "agent"]
+        self.assertEqual(run, said[0]["run_id"])
 
     async def test_a_surface_nobody_has_spoken_on_has_nowhere_to_say_it(self):
         """R-SCH-31 — said rather than invented. Guessing a place on a platform whose words

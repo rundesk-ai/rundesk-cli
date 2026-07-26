@@ -109,6 +109,12 @@ FILLS = {DMS: (), ROOMS: ("channel", "server", "thread")}
 #: from somewhere (R-DIS-13).
 LIMIT = 1900
 
+#: How long to wait for the connection before looking a room up by name. What rooms exist is
+#: the client's cache and it is empty until Discord has sent them, so this is the difference
+#: between a schedule that fires a minute after a gateway starts and one that fires six
+#: seconds after it. Bounded rather than open: nothing is waiting on this delivery.
+READY_SECONDS = 30.0
+
 #: How long Discord's typing indicator lasts before it lapses. Renewed inside it while a
 #: turn is running, because an indicator that stops is a turn that looks finished
 #: (R-DIS-6).
@@ -761,15 +767,63 @@ class Agent(discord.Client):
                              files=files if not rest else [])
             anchor = None
 
+    async def _where_to_write(self, it: dict):
+        """The room to write in: the place rundesk was told to say it in, or the conversation.
+
+        **A place is a word rundesk carried and never read** — `#operations`, a room id — so
+        resolving it is ours, and it is the only way to reach a room nobody has spoken in yet:
+        rundesk has no conversation for one, so it has nothing to hand us but the word
+        (R-CAD-16). A place we cannot find falls back to the conversation rather than failing,
+        because a report in the wrong room beats a report nowhere; it is said out loud so
+        nobody has to wonder which happened.
+        """
+        place = it.get("place")
+        if place:
+            found = await self._room_named(str(place))
+            if found is not None:
+                return found
+            note(f"could not find '{place}' on this surface — "
+                 f"saying it in the conversation instead")
+        at = it.get("conversation")
+        if at is None:
+            return None
+        channel = self.get_channel(int(at))
+        if channel is None:
+            with contextlib.suppress(Exception):
+                channel = await self.fetch_channel(int(at))
+        return channel
+
+    async def _room_named(self, said: str):
+        """One room, by the word an owner wrote for it: an id, or a name with or without its
+        hash. Confined to the server this channel is for, where it is for one.
+
+        **Waits for the connection first.** What rooms exist is Discord's cache, and it is
+        empty until the gateway has finished handshaking and sent them — so a schedule due in
+        the first seconds of a gateway's life resolved nothing and posted nowhere, while the
+        same schedule a minute later worked. It read as a bad room name and was a cold cache.
+        Bounded, because a client that never connects must not hold a delivery for ever; the
+        turn is long over by here and nothing is waiting on it (R-CH-12).
+        """
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(self.wait_until_ready(), READY_SECONDS)
+        if said.lstrip("#").isdigit():
+            with contextlib.suppress(Exception):
+                return await self.fetch_channel(int(said.lstrip("#")))
+            return None
+        for guild in self.guilds:
+            if self.chose.server and str(guild.id) != str(self.chose.server):
+                continue
+            for room in getattr(guild, "text_channels", ()):
+                if room_matches(said, getattr(room, "name", "")):
+                    return room
+        return None
+
     async def _post(self, it: dict, content: str, anchor=None, files=(), text_as=None):
         """One message, and never at the turn's expense: a delivery that fails is written
         to our own stderr and the turn goes on (R-CH-12)."""
-        channel = self.get_channel(int(it["conversation"]))
+        channel = await self._where_to_write(it)
         if channel is None:
-            with contextlib.suppress(Exception):
-                channel = await self.fetch_channel(int(it["conversation"]))
-        if channel is None:
-            note(f"nowhere to write in {it.get('conversation')}")
+            note(f"nowhere to write in {it.get('place') or it.get('conversation')}")
             return
         # **Only if it is in the same place.** Being named in a channel opens a thread
         # and the turn happens there, while the message that asked is still sitting in
@@ -845,6 +899,19 @@ def _parts(message, direct: bool, in_thread: bool) -> dict:
         ("server", getattr(getattr(message, "guild", None), "name", None)),
         ("thread", getattr(where, "name", None) if in_thread else None),
     ) if value}
+
+
+def room_matches(said: str, named: str) -> bool:
+    """Whether the word an owner wrote for a room names this one.
+
+    The hash is how Discord writes a channel and how anybody would type one, and it is not
+    part of the name — so `#operations` and `operations` are the same room asked for two ways.
+    Case-insensitively, because nobody types a room name the way the server stores it.
+
+    Pure, so the rule is proved without a token: what a case cannot drive is the fetching, and
+    what it must drive is which of two rooms a word means.
+    """
+    return said.strip().lstrip("#").casefold() == (named or "").strip().casefold()
 
 
 def _who(message) -> str:

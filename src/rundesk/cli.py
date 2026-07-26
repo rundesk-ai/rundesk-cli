@@ -156,11 +156,11 @@ EXAMPLES: list[tuple[str, list[tuple[str, str]]]] = [
          "have the machine keep it running, and bring it back when it falls over"),
     ]),
     ("a channel", [
-        ("rundesk channels ava add discord --kind discord --allow 279024636254224384",
+        ("rundesk channels ava add discord --kind discord --allow 123456789012345678",
          "reachable in direct messages and in every room it has been invited to"),
         ("", "writes two channels — discord-dms and discord-rooms — each with its own "
              "allowed list, settings and instructions"),
-        ("rundesk channels ava add discord --kind discord --allow 279024636254224384 -- --dm",
+        ("rundesk channels ava add discord --kind discord --allow 123456789012345678 -- --dm",
          "direct messages only; --server <id> or --channel <id> narrows the rooms instead"),
         ('rundesk channels ava instructions discord-rooms "You are {agent} in {where.channel}. Others read this, so keep it short."',
          "what it is told about where it is, before it reads a word of the message"),
@@ -403,6 +403,13 @@ def build_parser() -> argparse.ArgumentParser:
     added.add_argument("--to", dest="channel", metavar="<channel>",
                        help="which channel to say what this came to on, by the name it was "
                             "added under — the account and `schedules` say it either way")
+    # Which place on that channel, in the surface's own word for one. Never read here: a
+    # channel reaching a whole server has many rooms, and which of them an owner meant is
+    # theirs to say rather than rundesk's to guess from whoever spoke last.
+    added.add_argument("--in", dest="place", metavar="<where>",
+                       help="which place on that channel to say it in — a room, a direct "
+                            "message, in whatever the surface calls them. Left out, it "
+                            "follows the conversation")
     # After `--`, taken off before the parser sees it, and never read here. It was a
     # required greedy positional, which argparse can carry a tail into on its own — but the
     # moment this verb grew options of its own, an option *inside* the tail was read as one
@@ -2055,7 +2062,8 @@ def _add_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
                                prompt=prompt or None,
                                provider=args.provider, model=args.model,
                                instructions=(args.says or "").strip() or None,
-                               channel=to or None)
+                               channel=to or None,
+                               place=(args.place or "").strip() or None)
     except store.Taken:
         # The check above answers the ordinary case in words an owner can act on. This answers
         # the race: two of these asked at once both found the name free, and one of them is

@@ -187,27 +187,71 @@ class Answering:
         that is not anchored to a question, which is exactly what this is — there is no message
         to reply to and no reaction to put on one.
 
-        **Where** is the newest conversation this surface has had. A surface nobody has ever
-        spoken on has nowhere for this to go, and that is said rather than invented: guessing a
-        place on a platform whose words this code does not read is how an agent posts into a
-        room nobody meant it to be in.
+        **Where** is the place the schedule named, and the newest conversation on this surface
+        only when it named none. A channel reaching a whole server has many rooms, and picking
+        whichever one somebody last spoke in is how a daily report lands somewhere nobody meant
+        — so an owner says which, and the word they say is carried to the adapter unread
+        (R-SCH-32). A surface nobody has ever spoken on and no place named has nowhere for this
+        to go, and that is said rather than invented.
+
+        **What is delivered is written down where it was delivered** (R-SCH-33). Without that,
+        the next message in that conversation reaches a brain whose session never saw this, so
+        somebody saying "nice work" about it is asking about something the agent has no record
+        of having said there.
         """
         kept = agents.reading(self.name, self._where)
-        places = kept.conversations(channel=self.channel, limit=1)
-        if not places:
+        row = kept.schedule(named) or {}
+        place = row.get("place")
+        where_it_goes, said = self._where_to_say(kept, place)
+        if where_it_goes is None and not place:
             self._note(f"channel '{self.channel}': nowhere to say what '{named}' did — "
                        f"nothing has been said on this surface yet")
             return
-        self._tell(type="said", conversation=places[0]["id"],
-                   text=self._what_it_did(kept, named, became))
+        text = self._what_it_did(kept, named, became)
+        # The place goes over even when we resolved a conversation ourselves: only the adapter
+        # can reach a room nobody has spoken in yet, and it is the one that knows what the word
+        # means. A surface that cannot resolve one falls back to the conversation (R-CAD-16).
+        self._tell(type="said", conversation=where_it_goes, place=place or None, text=text)
+        if where_it_goes is not None:
+            ran = kept.runs(schedule_id=row.get("id"), limit=1)
+            kept.answered(where_it_goes, ran[0]["id"] if ran else None,
+                          store.stamped(), text)
+        elif said:
+            self._note(said)
+
+    def _where_to_say(self, kept, place):
+        """The conversation to say it in, and why there is none where there is none.
+
+        A place we have already seen is a conversation of ours. One we have not is the
+        adapter's to resolve, so nothing here is refused for it — the record goes over with the
+        place on it and no conversation, and a surface that can find the room says it there.
+        """
+        if place:
+            for one in kept.conversations(channel=self.channel, limit=CONVERSATIONS):
+                if one.get("space") == place:
+                    return one["id"], ""
+            return None, (f"channel '{self.channel}': nothing has been said in '{place}' yet, "
+                          f"so it is left to the surface to find it")
+        seen = kept.conversations(channel=self.channel, limit=1)
+        return (seen[0]["id"] if seen else None), ""
 
     @staticmethod
     def _what_it_did(kept, named: str, became: str) -> str:
-        """One remark: which schedule, what it came to, and what it said if it said anything.
+        """What the agent said, where it said anything — and what it came to where it did not.
 
-        What it said is read back out of the account rather than passed in, because the account
-        is where it already is — and because a schedule that started a *program* has no answer
-        to read, so there is one shape here for both kinds rather than two callers deciding.
+        **The answer alone when there is one** (R-SCH-34). A person reading a room wants what
+        their agent found, not a line of rundesk's bookkeeping in front of it: "schedule
+        'nightly' finished" above the answer is scaffolding they did not ask for, on every post,
+        for ever. Which schedule produced it is in the account and in `schedules`, where
+        somebody asking that question is already looking.
+
+        **What it came to, where that is all there is.** A schedule that started a *program* has
+        no answer to read back, and one that failed has something a reader must not be left to
+        infer from silence — so both still say what happened. One shape for every kind, decided
+        here rather than by two callers.
+
+        What it said is read out of the account rather than passed in, because the account is
+        where it already is.
         """
         row = kept.schedule(named) or {}
         said = ""
@@ -217,6 +261,8 @@ class Answering:
                 if one.get("run_id") == run["id"] and one.get("author") == "agent"
                 and (one.get("text") or "").strip()
             )
+        if said.strip() and became == "finished":
+            return said.strip()
         return f"schedule '{named}' {became}" + (f"\n\n{said}" if said.strip() else "")
 
     def _make_room(self) -> None:
