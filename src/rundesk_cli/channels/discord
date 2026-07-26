@@ -29,6 +29,7 @@ import asyncio
 import contextlib
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -81,6 +82,11 @@ POST_SECONDS = 2.5
 #: What a thread opened by being named is called. Discord allows a hundred; this is short
 #: enough to read in a sidebar.
 THREAD_CHARS = 80
+
+#: How long to spend saying goodbye. Rundesk signals a channel and waits a few seconds
+#: before insisting, so anything slower than this is a message nobody receives — and
+#: holding the shutdown open for it would only turn a clean stop into a kill.
+GOODBYE_SECONDS = 3.0
 
 #: How many recent messages to keep hold of, so a mark can be put on one without asking
 #: Discord for it again. Bounded because this process runs for weeks.
@@ -569,16 +575,31 @@ async def carry(chose) -> int:
              f"'{TOKEN_FILE}' file in this channel's own directory")
         return 1
     client = Agent(chose)
+    # **Asked to stop, rather than killed where we stand.** Rundesk ends a channel by
+    # signalling its whole process group and giving it a few seconds before it insists,
+    # and the default for these two signals is to die immediately — so the goodbye, the
+    # presence going away and every last write were simply never reached. Handled, they
+    # are: the wait below ends and the cleanup that was always written runs (R-DIS-15).
+    stopping = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(NotImplementedError, ValueError):
+            loop.add_signal_handler(sig, stopping.set)
     reading = asyncio.ensure_future(_read(client))
     connected = asyncio.ensure_future(client.start(token))
+    asked = asyncio.ensure_future(stopping.wait())
     try:
-        await asyncio.wait({reading, connected}, return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.wait({reading, connected, asked},
+                           return_when=asyncio.FIRST_COMPLETED)
     except asyncio.CancelledError:
         pass
     finally:
         say(type="gone", why="the connection is closing")
-        await client.going()
-        for task in (reading, connected):
+        # Bounded: rundesk waits a few seconds before it insists, and a goodbye that
+        # takes longer than that is one nobody will receive anyway.
+        with contextlib.suppress(BaseException):
+            await asyncio.wait_for(client.going(), timeout=GOODBYE_SECONDS)
+        for task in (reading, connected, asked):
             task.cancel()
             with contextlib.suppress(BaseException):
                 await task

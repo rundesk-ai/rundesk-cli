@@ -33,11 +33,11 @@ is the first one and is first-class; a second is one more program rather than a 
 | ❌ | R-CAD-11 | A credential a channel needs is read from where the owner keeps it, never from a command | — |
 | ❌ | R-CAD-12 | What shows a channel says a credential is present rather than what it is | — |
 | ❌ | R-CAD-13 | No word belonging to one platform appears outside the adapter that speaks it | — |
+| ❌ | R-CAD-14 | An adapter decides the shape of what Rundesk keeps for it, and Rundesk reads none of it | — |
 
 ## Open questions
 
 - Whether an adapter is told which of its abilities Rundesk will use, the way a brain is asked.
 - Whether one agent may be reached on two surfaces at once, and what that does to a conversation.
-- What an adapter does with something a platform offers that no other has — a voice note, a payment.
 - Whether a surface may refuse a turn outright, and what an owner sees when it does.
 - Where an adapter that is not on the machine is reported — by `doctor`, at setup, or both.

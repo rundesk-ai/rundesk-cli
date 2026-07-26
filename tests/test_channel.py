@@ -541,6 +541,29 @@ class WhatIsWrittenDownAboutAChannel(DrivesAnAdapter):
         self.assertEqual({"parliament": ["a", "b"], "quorum": 3},
                          channel.of(self.where, "ops")["settings"])
 
+    def test_an_adapter_decides_the_shape_of_what_is_kept_for_it(self):
+        """R-CAD-14 — nested, repeated, numbered, absent, true, false. Rundesk stores what
+        an adapter asked it to store and understands none of it, so a surface is never
+        limited to the shapes anybody here thought of."""
+        shape = {
+            "rooms": [{"id": "1", "tags": ["a", "b"]}, {"id": "2"}],
+            "deeply": {"nested": {"further": {"still": 1}}},
+            "on": True, "off": False, "absent": None,
+            "count": 3, "ratio": 1.5, "unicode": "é☃",
+        }
+        channel.remember(self.where, "ops", "somewhere", ["2207"], settings=shape)
+        self.assertEqual(shape, channel.of(self.where, "ops")["settings"],
+                         "what an adapter asked to keep came back as something else")
+
+    def test_what_an_adapter_keeps_for_itself_is_its_own_business(self):
+        """R-CAD-14 — the record is what rundesk hands back at start-up, and the private
+        home is where an adapter keeps anything else, in whatever form it likes. Nothing
+        here reads or writes inside it."""
+        home = self.channel_home / "whatever-it-likes.sqlite"
+        home.write_bytes(b"not json, not ours")
+        channel.remember(self.where, "ops", "somewhere", ["2207"])
+        self.assertEqual(b"not json, not ours", home.read_bytes())
+
     def test_two_channels_added_at_once_do_not_lose_one_another(self):
         """R-CAD-9 — read, decided and written under one hold. Each writing the whole
         record back would leave one channel simply not existing, with both reported as
