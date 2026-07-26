@@ -344,11 +344,27 @@ jobs:
       - name: The version it reports is the one the newest release carries
         # Ties the install to R-UPD-19 in reality rather than on paper: an install that
         # reports a number no release carries is one `rundesk update` cannot reason about.
+        env:
+          # **Asked with this job's own token.** Anonymously, api.github.com allows sixty
+          # calls an hour *per IP* — and hosted macOS runners share a handful of NAT'd
+          # addresses, so this call returned 403 and `set -e` killed the step on a release
+          # that was in fact perfectly correct. The token raises the limit to this
+          # repository's own, and costs nothing: it is issued to the run already.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
           installed="$("$RUNDESK_BIN_DIR/rundesk" version | tr -d '\r')"
-          tag="$(curl -fsSL https://api.github.com/repos/rundesk-ai/rundesk-cli/releases/latest |
+          # Asked separately from the check, so that "could not ask" and "the wrong
+          # version" are told apart rather than sharing one red tick — which is the same
+          # rule the product itself is held to (R-UPD-19).
+          if ! answer="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+                              -H "Accept: application/vnd.github+json" \
+                              https://api.github.com/repos/rundesk-ai/rundesk-cli/releases/latest)"; then
+            echo "::error::could not ask GitHub which release is newest — this says nothing about the install"
+            exit 1
+          fi
+          tag="$(printf '%s' "$answer" |
                  sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
           echo "installed: $installed | newest release: $tag"
           case "$installed" in
