@@ -1161,13 +1161,27 @@ against real data, which is why the walk exists.
 `logs` do not exist at all, so the legacy layout is far smaller than assumed; and a conversation
 key can be a session handle, which no migration written from the documentation would have expected.
 
-### Exit proof
+### Exit proof — met, with one decision deliberately left to its own moment
 
-The owner has agreed the layout, the split between rows and files, retention, and the migration mechanism,
-and each is written where the next phase can build from it without asking again — a second person could
-carry it out from what is written. The seam exists, is tested, and is reached by nothing: the old layout is
-still what runs, and deleting the new module would leave the product exactly as it was. Nothing on the
-owner's disk has changed.
+The owner agreed the layout, the split between rows and files, and the migration mechanism, and each is
+written where the next phase builds from it without asking again — [`agent-store`](.knowledge/prd/agent-store.md)
+and [`lifecycle-migration`](.knowledge/prd/lifecycle-migration.md) are ratified, and
+[`moving-onto-the-store`](.knowledge/guides/moving-onto-the-store.md) maps every reader to what replaces
+it. The seam exists, is tested and is reached by nothing: the old layout is still what runs, and deleting
+`store.py` and `migration.py` would leave the product exactly as it was. Nothing on the owner's disk has
+changed.
+
+**Retention is the one thing not settled**, and it is the open question both contracts carry: how long an
+account is kept, and whether an owner or a size decides. Nothing built here assumes an answer — what a
+brain printed is already separable from the account that survives it, so whichever way it goes is a policy
+on top rather than a change to the shape.
+
+**What this phase found by building rather than by drawing.** Two defects in its own work, each reproduced
+through the public surface before it was fixed: records older than the installed shape were read silently
+rather than refused, and building a database released the lock between reading the version and acting on
+it, so two commands arriving together told one of them that a healthy database had failed. Both are the
+kind that only appear once something runs. And the walk against a real install found a conversation key
+that is a session handle, which no migration written from the documentation would have expected.
 
 ## Phase 5 — Move Everything Onto It
 
