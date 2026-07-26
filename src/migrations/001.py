@@ -62,6 +62,13 @@ CREATE TABLE schedule (
     -- rundesk's to guess. A schedule naming none is not silence: the account and `schedules`
     -- say it either way, and referencing the channel is what stops one outliving the other.
     channel           TEXT REFERENCES channel(name),
+    -- *Which place on it*, in the surface's own word for one — `#operations`, a room id,
+    -- whatever that platform calls them. **Never parsed here**, the same rule
+    -- `conversation.space` already holds to: the core does not know this platform has rooms,
+    -- so it carries the word and the adapter resolves it. A schedule naming a channel but no
+    -- place is not wrong; it follows the conversation, which is what a channel reaching one
+    -- place already means.
+    place             TEXT,
     last_auto_run_at  TEXT,
     last_outcome      TEXT,
     created_at        TEXT NOT NULL,
@@ -102,7 +109,12 @@ CREATE TABLE run (
     n                   INTEGER PRIMARY KEY AUTOINCREMENT,
     id                  TEXT NOT NULL UNIQUE,
     conversation_id     TEXT REFERENCES conversation(id),
-    schedule_id         INTEGER REFERENCES schedule(id),
+    -- **The run outlives the schedule that started it** — `ON DELETE SET NULL` rather than
+    -- the default, which refuses. Without it a schedule that had ever fired could not be
+    -- removed at all: the delete failed on the foreign key, and since there is no verb that
+    -- edits one, a schedule became permanent the first time the clock reached it. The run
+    -- keeps saying it was a schedule's; only which one is lost, and that is the right cost.
+    schedule_id         INTEGER REFERENCES schedule(id) ON DELETE SET NULL,
     source              TEXT NOT NULL,
     trigger_message_id  INTEGER,
     -- Which provider answered, as the owner named it: a shipped adapter or the path to a

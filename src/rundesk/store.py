@@ -656,7 +656,7 @@ class Store:
 
     def remember_schedule(self, name, cron, created_at, command=None, prompt=None,
                           provider=None, model=None, instructions=None, enabled=True,
-                          channel=None):
+                          channel=None, place=None):
         """Work an agent does because the time came — either a program, or a turn.
 
         Exactly one of `command` and `prompt`, which the database enforces rather than trusts.
@@ -667,6 +667,11 @@ class Store:
         `channel` is where what this came to is said, by the name the owner gave that surface —
         and none is not silence: the account and `schedules` say it either way, and a schedule
         that named no surface is one nobody asked to be told about in a chat.
+
+        `place` is *which place on it*, in the surface's own word for one, and is carried
+        without ever being read: a channel reaching a whole server has many rooms and the one
+        an owner meant is not rundesk's to guess. Naming none follows the conversation, which
+        is the older behaviour and still the right one for a channel that reaches one place.
 
         **When it is next due is not kept.** The cron is the only thing that decides that, so
         a column holding it would be a second answer to one question — stale the moment an
@@ -684,11 +689,12 @@ class Store:
             with self._writing() as conn:
                 conn.execute(
                     "INSERT INTO schedule (name, enabled, cron, command, prompt, provider,"
-                    " model, instructions, channel, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    " model, instructions, channel, place, created_at)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         name, 1 if enabled else 0, cron,
                         json.dumps(command) if command is not None else None,
-                        prompt, provider, model, instructions, channel, created_at,
+                        prompt, provider, model, instructions, channel, place, created_at,
                     ),
                 )
         except sqlite3.IntegrityError as clash:

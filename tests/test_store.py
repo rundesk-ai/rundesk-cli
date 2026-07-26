@@ -1359,6 +1359,34 @@ class TheOnlyWayIn(unittest.TestCase):
         self.assertEqual([], opening)
 
 
+class TakingAScheduleAway(WithAnAgentsOwnRecords):
+    """R-SCH-35 — a schedule that has run is still one an owner can be rid of."""
+
+    def test_a_schedule_that_has_run_can_still_be_taken_away(self):
+        """The clock reaching a schedule must not make it permanent. There is no verb that
+        edits one, so a schedule that could not be removed could never be changed either —
+        an owner wanting a report an hour later would have to take the whole agent away."""
+        kept = self.built()
+        kept.remember_schedule("nightly", "0 3 * * *", AT, prompt="what changed?")
+        row = kept.schedule("nightly")
+        kept.began("schedule", "codex", "safe", AT, schedule_id=row["id"])
+        kept.forget_schedule("nightly")
+        self.assertIsNone(kept.schedule("nightly"))
+
+    def test_a_run_outlives_the_schedule_that_started_it(self):
+        """What it cost: which schedule is lost, and that it was one is not. A listing still
+        tells an owner the clock started it rather than a person."""
+        kept = self.built()
+        kept.remember_schedule("nightly", "0 3 * * *", AT, prompt="what changed?")
+        row = kept.schedule("nightly")
+        named = kept.began("schedule", "codex", "safe", AT, schedule_id=row["id"])
+        kept.forget_schedule("nightly")
+        ran = kept.run(named)
+        self.assertIsNotNone(ran, "the run went with the schedule")
+        self.assertEqual("schedule", ran["source"])
+        self.assertIsNone(ran["schedule_id"])
+
+
 class ReadingBackWhatWasSaid(WithAnAgentsOwnRecords):
     """R-STO-25, R-STO-26 — the listing an agent reads about itself.
 
