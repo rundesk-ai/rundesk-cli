@@ -108,6 +108,10 @@ authorized local invocation can.
   channel says a secret is present rather than what it is.
 - **What an owner wrote is the owner's.** An update replaces what rundesk is made of and never what a person
   authored. Phase 9 is where that stops being true only by accident.
+- **Nothing reaches in unless an owner decided it may.** Everything rundesk touches, it reaches out to;
+  nothing has ever been able to reach this machine. A surface that lets another program start work changes
+  that, and how it does — a poll, a tunnel, or a port on the owner's machine — is the owner's decision and
+  not an adapter author's. That an adapter *could* open one is not permission for the shipped one to.
 
 ## How Every Phase Is Proved
 
@@ -353,7 +357,7 @@ is also the list of what the phases below have to pick up:
 | **8** | Updates an owner can trust | Dependencies move with the records, `update --check` says what it would do, and where every agent stands is a question with an answer |
 | **9** | Templates an owner can make their own | The files a new agent is copied from become the owner's to override, one at a time, and survive an update |
 | **10** | Provider adapters — audit the seam | A generic endpoint adapter, the decoupling test, and the contradictions settled |
-| **11** | Channel adapters — audit the seam | The same, on the surfaces side |
+| **11** | Channel adapters — audit the seam, and prove it beyond chat | The same on the surfaces side, proved by a surface that is not a chat app: a board or a webhook fires work at an agent, and the outcome lands back on the task |
 | **12** | Skills a brain loads by itself | One skill, written once, discovered natively by every brain that has discovery — and a live probe proving each one sees it |
 | **13** | Know what an agent was granted | Inventory, search and explain: what each brain reports it has, and what this agent has actually run |
 | **14** | Questions, approvals, recovery | A brain pausing mid-turn for an answer, and surviving a restart while it waits |
@@ -384,6 +388,12 @@ first point either seam can be judged rather than described. Their shared claim 
 can build here: **a feature is written against the contract, never against the adapter that shipped first.**
 The test is the poorest possible adapter — declaring nothing, doing nothing — still getting every feature that
 does not strictly require what it lacks.
+
+**Eleven is also where the product stops being something you only talk to.** Its audit is proved by a surface
+that is not a chat app — a board, a tracker, a signed webhook — so that another program can start an agent's
+work rather than only a person. That is folded into the audit rather than given a phase of its own because it
+*is* the audit's own claim, made of something real: if work arriving from a kanban board needs a change inside
+the seam, the seam was not open, and the finding is worth more than the feature.
 
 **A resolver phase used to sit at step 3 and no longer does.** With no `bindings` verb there was no object
 anyone creates, and its one durable artefact — the ledger saying which conversation continues which session —
@@ -718,25 +728,109 @@ what shipped.
    their accounts inspected — runs, records, usage, session handles and resume all correct — but the suite
    proves the seam-to-store path with stand-ins only.
 
-## Phase 11 — Channel Adapters: Audit the Seam
+## Phase 11 — Channel Adapters: Audit the Seam, and Prove It Beyond Chat
 
-**Outcome:** the same, on the other edge — a new surface hooks into every existing feature without touching
-one of them.
+**Outcome:** the same audit as the other edge — a new surface hooks into every existing feature without
+touching one of them — **and the proof is a surface that is not a chat app at all.** A task assigned on a
+board, an issue opened in Linear, a webhook from something nobody here has heard of: work arrives, an agent
+does it, and what it did lands back where the work came from.
+
+**Why this belongs in the audit rather than beside it.** Phase 11's central claim is the decoupling test —
+the poorest surface imaginable still carries a whole turn, and every feature works against the contract or
+degrades honestly. A trigger surface *is* that test, made of something real instead of a stand-in: no
+threads, no reactions, no typing, no edits, and nobody typing anything at all. If a kanban board needs a
+change inside the seam, the audit has found exactly what it was looking for.
+
+**And it is where the product stops being a chat toy.** Everything that reaches an agent today was typed by
+a person or fired by that agent's own clock. A surface that lets *another program* start work — assign a
+task, open an issue, close a pull request — is the difference between an agent you talk to and an agent
+that is part of how work actually moves.
+
+### What already carries this, and must not be rebuilt
+
+The channel seam was built for Discord and turns out to want almost nothing for this. Verify each before
+leaning on it, then lean on it:
+
+| Already ratified | What it gives a trigger surface |
+|---|---|
+| `R-CAD-1` — an adapter is a program rundesk runs | **How the outside gets in is the adapter's business.** Poll an API, hold a tunnel, listen on a port — the core never learns which, and a self-hosted machine keeps its choice |
+| `R-CAD-14` — an adapter decides the shape of what rundesk keeps for it, and rundesk reads none of it | Issue ids, board ids, a delivery cursor, a signing secret's *name* — all in the adapter's own opaque record |
+| `R-CAD-15` — an adapter says which kinds of place it reached, and each becomes a channel of its own | "a project", "a board", "a repository" is one more kind of place. Nothing in the core enumerates them |
+| `R-CAD-5` — a surface that cannot show something still carries the turn | A board with no typing indicator is already a supported surface, not a degraded one |
+| `R-CAD-4` — an adapter is told how a turn stands and decides only how its platform shows it | Seen becomes *In Progress*, finished becomes a comment and *Done*, failed becomes a comment and a flag. Discord's emoji and a board's status column are the same row of the same table |
+| `R-CH-3` / `R-CH-21` — a conversation keeps its own session, and the agent is told which it is in | **One issue is one conversation.** Follow-up comments continue it, with the brain's session intact |
+| `store.SOURCES` is `terminal`, `channel`, `schedule` | Work triggered from a board is admitted as `channel`. **No schema change and no fourth source** |
+
+### What is genuinely new, and is what the phase has to settle
+
+Every requirement in `channel-messaging` today quietly assumes a person typed something. These do not:
+
+1. **Nobody typed it, so authorization is not about a speaker.** `R-CH-4` refuses a message from a user the
+   channel does not authorize. A trigger has an *actor* — who assigned the task — but what must be
+   authorized is the **source of work**: which project, board, label or repository may create it, and
+   whether the delivery itself is signed. An agent that runs whatever any webhook posts, on a machine where
+   it can run tools, is the same misconfiguration `R-CAD-10` already refuses for chat.
+2. **The prompt is composed, not received.** A chat message *is* the prompt. An issue is a title, a body,
+   an assignee, labels and a thread of comments. **The adapter composes it** — a core that knew what an
+   "issue" was would be `R-CAD-13` failing. State it, because the obvious implementation puts issue-shaped
+   fields into the core.
+3. **A delivery arrives twice.** Webhooks retry on a timeout or a non-2xx, and a poll that resumes from a
+   bad cursor re-reads. **The same trigger must not run the turn twice** — that is a duplicate paid turn and
+   possibly a duplicate side effect on somebody's repository. Needs an idempotency key taken from the
+   platform's own delivery or event id, and somewhere to remember what has been acted on. **New persisted
+   state, so an owner decision**, and the question of how long it is remembered is the retention question
+   Phase 8 settles.
+4. **The agent's own output can trigger it again.** It comments on the issue; the board fires an event for
+   new comments; the agent is triggered; it comments. Discord has the mild version of this and answers it by
+   ignoring itself. Here it is a **loop of paid turns on a machine that runs tools**, and it must be a
+   first-class requirement rather than a footnote: what an agent did must never be able to start it again.
+5. **Being reachable from outside is a new posture for this product.** Everything rundesk touches today it
+   reaches *out* to — GitHub Releases, a provider CLI, launchd. Nothing has ever been able to reach *in*.
+   Three shapes exist and the adapter can implement any of them without the core changing, which is the
+   claim this phase gets to test: **polling** costs nothing but latency and needs no exposure; a **tunnel**
+   adds a dependency and a third party who sees the traffic; a **local listener** puts a port on the owner's
+   machine, with everything that implies. Which one *ships* is an owner decision with a security dimension,
+   and "the adapter could do any of them" is not an answer to it.
+6. **Nobody is watching, so the outcome has to go back where the work came from.** The same rule Phase 6
+   settled for the clock: a turn nobody is waiting on must not be recorded only where nothing will surface
+   it. Here the natural place is the task itself.
 
 ### Deliverables
 
 1. **The decoupling test**: the poorest surface there is — no threads, no reactions, no typing, no edits —
    carries a whole turn, and every feature either works on it or degrades honestly. Correctness never
    degrades; only fidelity does.
-2. `R-AGW-3`, `R-CAD-6`, `R-CAD-7` and `R-CH-11` turned ✅ — held open by the gateway, reconnecting without a
+2. **One real trigger surface, shipped** — Linear or a plain signed webhook, whichever probes cheaper —
+   proving points 1 to 6 above against something that really retries, really fires on its own events, and
+   really has no person waiting.
+3. **New `R-CAD` and `R-CH` rows** for triggered work: what authorizes a source, what makes a delivery
+   idempotent, and that an agent's own act cannot re-trigger it. These are contract changes, written before
+   the adapter, exactly as Phases 2 and 3 did it.
+4. `R-AGW-3`, `R-CAD-6`, `R-CAD-7` and `R-CH-11` turned ✅ — held open by the gateway, reconnecting without a
    turn noticing, and leaving nothing running afterwards. All are proved by hand today and by nothing
    repeatable, and all need a real connection dropped at a chosen moment.
-3. **A new stranger's channel adapter**, written from the guide alone.
-4. What is kept for a channel audited and written down: the opaque adapter blob, the credential held as a
+5. **A new stranger's channel adapter**, written from the guide alone — and the guide grown to describe a
+   surface that triggers rather than converses, since it currently describes only the second kind.
+6. What is kept for a channel audited and written down: the opaque adapter blob, the credential held as a
    *name* and never a value, and the per-channel directory an adapter owns.
-5. A capability-versus-feature matrix in the contract, so an author knows what declaring nothing costs them.
-6. **The gateway's announcement decided.** It fires once per channel, so two channels mean two notices to the
+7. A capability-versus-feature matrix in the contract, so an author knows what declaring nothing costs them.
+8. **The gateway's announcement decided.** It fires once per channel, so two channels mean two notices to the
    same person. The notice is about the gateway; it wants a home rather than papering over.
+
+### Tests
+
+- A trigger from a source the channel does not authorize is refused before a run is admitted.
+- **The same delivery arriving twice runs one turn**, and the second is answered as already done rather than
+  ignored in silence.
+- **What the agent wrote back cannot trigger it**, however the surface reports that write.
+- A trigger whose payload names a provider, model or agent changes none of them (`R-CH-5`, on a surface that
+  can carry arbitrary structured fields rather than prose).
+- A surface that can show no state at all still carries a triggered turn from arrival to answer.
+- A triggered turn with nobody waiting still records, still reports, and still lands its outcome where the
+  work came from.
+- A trigger arriving while the agent is stopped is reported as out of reach rather than silently lost
+  (`R-CAD-8`), and the platform's own retry is what brings it back.
+- No word belonging to any board, tracker or webhook appears outside its own adapter.
 
 ## Phase 12 — Skills a Brain Loads by Itself
 
