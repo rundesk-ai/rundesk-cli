@@ -867,8 +867,8 @@ Which gives one shape per agent, and nothing outside it:
   agents/
     ava/
       state.db                  RECORDS — the agent, its channels, schedules and what each last
-                                did, its sessions, and an index of every run. One per agent,
-                                never one shared: see below.
+                                did, its sessions, every run, and the account of what happened
+                                in each. One per agent, never one shared: see below.
       home/                     THE PERSON'S — never touched by anything but --purge
         AGENTS.md  CLAUDE.md  SOUL.md  USER.md  MEMORY.md
         workspace/
@@ -876,10 +876,8 @@ Which gives one shape per agent, and nothing outside it:
       providers/<provider>/     a brain's own home, one per provider. Opaque to us.
       history/                  HISTORY — append-only, outlives the gateway
         gateway.log
-        runs/<run>/             one run is one directory, not four files sharing a stem
-          account.jsonl         the account of what happened
-          brain.raw             what the brain itself said
-          brain.err             what it said went wrong
+        brains/<run>.raw        what the brain itself said — the *adapter* appends here
+        brains/<run>.err        what it said went wrong
       running/                  RUNNING — what it is doing now, emptied when it stops
         gateway.lock
         gateway.json
@@ -897,7 +895,8 @@ What that fixes, item for item:
   it is *doing right now*. Naming both "state" would put the schedules, sessions and run index of an agent
   in the one directory a stop is supposed to empty — which is the worst mistake available here, and is why
   the tier a stop clears is named for what it holds rather than for how long it lasts.
-- **A run is one thing.** One directory, deleted or retained as a unit, with no stem to keep in step.
+- **A run is one thing.** One row, with what its brain said beside it in a file only because a stranger's
+  program is what appends there — and both forgotten together.
 - **A counter is not a record.** Allocating a run id is the database's, in a transaction, not a JSON file
   among the runs it numbers.
 - **Removing an agent is one directory**, and `--purge` versus not is the difference between taking
@@ -921,10 +920,16 @@ still says what it is.
 dependency, and `PRAGMA user_version` is a schema version designed for exactly this. The split worth
 making:
 
+**The line is who writes it, not how big it is.** That is the one place the split cannot be argued with:
+
 | | Where it goes | Why |
 |---|---|---|
-| the agent, its sessions, its channels, its schedules and what each last did, the run index — id, agent, provider, model, outcome, cost, times | **`state.db`, one per agent** | small, read-modify-write, and currently eight JSON files with four lock files beside them. One transaction replaces a `flock`, `user_version` gives migrations somewhere to live, and `runs` and `usage` become queries rather than directory walks |
-| the account of a run, what the brain said, its stderr, the gateway's log | **files, as now** | append-only, potentially huge, written while a turn runs, and valuable precisely because `cat` and `grep` reach them. `transcript.Writer` holds one handle open and flushes a record at a time, which is a transaction per record if it becomes a table. A crash mid-append costs one line; a crash mid-transaction can cost the file. Referenced from the database by run id |
+| the agent, its sessions, its channels, its schedules and what each last did, every run — and **the account of what happened in each** | **`state.db`, one per agent** | Rundesk writes all of it, from records an adapter reported. Small, structured, and the thing anyone would want to ask a question of. Today it is eight JSON files with four lock files beside them; one transaction replaces a `flock`, `user_version` gives migrations somewhere to live, and `runs` and `usage` become queries rather than directory walks |
+| what the brain itself said, and what it said went wrong | **files, and they have no choice** | `RUNDESK_RAW` is a **path handed to the adapter**, and an adapter is a program in any language — the contract says a shell script is enough. You cannot hand `bash` a database handle. The same goes for stderr, which is a pipe the operating system gives us. Referenced from `state.db` by run id |
+| the gateway's log | **a file** | rotated, tailed, and read by a person while something is going wrong |
+
+So a run is one row and one pair of files, not four files sharing a stem — and the pair is the part
+Rundesk never authored. Both go when the run is forgotten, which is one rule rather than four.
 
 That split is the recommendation, not a foregone conclusion — **it is an owner decision and a persisted
 schema change, so it is confirmed before anything is written.** What must not happen is a live event
@@ -969,7 +974,7 @@ How it behaves, which is the part worth arguing about now rather than during an 
 - Stopping an agent empties `running/` and touches nothing in `home/`, `history/` or `state.db`.
 - Removing an agent takes one directory; `--purge` is the only thing that takes `home/`.
 - No lock file sits anywhere a record does.
-- One run is one directory, and deleting it takes everything of that run and nothing of another's.
+- Forgetting a run takes its row and the brain's own files with it, and nothing of another run's.
 - Nothing reads or writes `~/.rundesk/run`, `logs` or `schedules` any more.
 - Two agents' gateways writing at once never wait on each other.
 - Every durable thing carries a version, and something that does not is refused rather than guessed at.
@@ -980,7 +985,9 @@ How it behaves, which is the part worth arguing about now rather than during an 
 - A version newer than this rundesk understands is refused rather than read.
 - A fresh install needs no migration and is stamped current.
 - Two commands changing one agent's records at once cannot lose one another's change.
-- An account of a run is still readable with ordinary tools after the change.
+- An account of a run is readable without the gateway that wrote it, and after it has gone.
+- A turn writing its account does not hold up another command reading a schedule.
+- What a brain said is kept where a shell-script adapter can append to it.
 - Nothing an update touches loses a transcript, a log, or what a schedule last did.
 
 ### Exit proof
