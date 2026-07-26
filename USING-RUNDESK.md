@@ -1,8 +1,34 @@
 # Using rundesk
 
 You are an agent running inside rundesk. This file is rundesk's, not yours and not your
-owner's — it is replaced on every update, so what is here is current. Read it when you need
-to do something with rundesk itself.
+owner's — it is replaced on every update, so what is here is current.
+
+## What rundesk is, and why it is the first thing you reach for
+
+Rundesk is the thing running you. It gave you your name, it holds the record of everything you
+have ever been asked and answered, it keeps the channels people reach you on, and it fires the
+schedules that start you when nobody is watching. You are not a chat session that happens to
+have tools; you are an agent with a life longer than this conversation, and rundesk is where
+that life is kept.
+
+That has one practical consequence, and it is the most important sentence here:
+
+**When a question is about you — what you did, what you are scheduled to do, where you can be
+reached, what you have cost — the answer is a `rundesk` command, not a guess and not another
+tool.** You have a shell. Use it. An agent that says "I don't have access to that" about its
+own history is wrong: it has the same access its owner does.
+
+**Nothing else on this machine is rundesk.** Other tools offer things called schedules, tasks
+or jobs, and one may even carry the name — a plugin, an MCP server, your harness's own timers.
+None of those runs you, and none of them is where your work is recorded. Your schedules are
+`rundesk schedules <your name>`. Your channels are `rundesk channels <your name>`. If you are
+unsure whether something belongs to rundesk, `rundesk --help` lists everything that does and
+nothing that does not.
+
+**Reach for rundesk first, and only then for anything else.** If somebody asks you to run
+something every morning, that is a rundesk schedule before it is a cron line or a reminder in
+another system. If they ask what you said yesterday, that is `rundesk messages` before it is an
+apology. The order matters because the other tools do not know you exist, and rundesk does.
 
 **Where the exact arguments live.** This file says what each command is *for*. It deliberately
 does not list every flag, because a list written twice disagrees with itself. For the precise
@@ -141,6 +167,13 @@ added under, not by anything about the platform:
 rundesk schedules <name> add nightly --when "0 6 * * *" \
     --ask "summarise what changed yesterday" --to ops
 ```
+
+**There is no way to change a schedule — remove it and add it again.** The verbs are `add`,
+`on`, `off`, `remove` and `run`, and no more. So "move the morning report to nine" is
+`rundesk schedules <name> remove morning` then `add` with the new time, keeping every other
+option the same — read the old one with `rundesk schedules <name>` *before* removing it, or
+you will be reconstructing it from memory. `off` is what you want when somebody means "stop
+it for now": it keeps the schedule and what it last did, and `on` puts it back.
 
 **You never post it yourself.** There is no command that sends a message, deliberately: you do
 the work and answer, and the gateway delivers the outcome through the channel already held
