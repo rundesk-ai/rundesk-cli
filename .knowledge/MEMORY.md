@@ -35,6 +35,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   Pass **`--no-memory`** on every turn of a probe *and* make the candidate words unguessable
   per run (a uuid suffix), or a re-run reads the previous run's sessions. The same finding is
   why the shipped adapter passes `--no-memory`: one agent's conversation is not another's.
+- **`RUNDESK_HOME` does not redirect where agents live — `RUNDESK_AGENTS_DIR` does.** The name
+  reads like the root of everything and is not: `agent.py` resolves the agents root from
+  `RUNDESK_AGENTS_DIR` alone, falling back to `~/.rundesk/agents`. So a scratch run that sets
+  `RUNDESK_HOME`, `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR`, `RUNDESK_SCHEDULES_DIR` and
+  `RUNDESK_JOBS_DIR` — which looks exhaustive — still writes real agents into the owner's own
+  `~/.rundesk/agents`, and `rundesk add` reports success while doing it. Three were created that
+  way and had to be removed with `rundesk remove`. Set `RUNDESK_AGENTS_DIR` too, and check
+  `find $SCRATCH` actually has something in it before believing a command was isolated.
 - **`CLAUDE_CONFIG_DIR` does not redirect the Claude login — setting it *removes* one.** The
   sign-in is in the macOS login keychain (`Claude Code-credentials`), not in any config
   directory, and this CLI stops consulting the keychain the moment the variable is set at
