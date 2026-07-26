@@ -16,8 +16,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import getpass
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -433,6 +435,12 @@ def build_parser() -> argparse.ArgumentParser:
     # as the thing it settles rather than as an instruction: `--activity` and
     # `--no-activity`, one of which is already true, so nobody has to remember which way
     # round the default is.
+    # Read from a pipe rather than typed, for a script that has the credential in hand. A
+    # flag with no value, deliberately: the moment one takes the credential *as* its value
+    # it is in `ps` for every user on the machine and in a shell history for ever (R-CAD-11).
+    joined.add_argument("--token-stdin", action="store_true", dest="token_stdin",
+                        help="read the credential this channel needs from standard input, "
+                             "one line; asked for at the terminal when left out")
     joined.add_argument("--activity", action=argparse.BooleanOptionalAction, default=True,
                         help="show what the agent is doing while it works, not only what "
                              "it finally says (default: on)")
@@ -1516,6 +1524,47 @@ def cmd_channels(args: argparse.Namespace, gateways, agents) -> int:
         return 1
 
 
+#: What the credential a surface reads is kept in, beside that channel's own things. The
+#: adapters that need one look here, so this is where one taken at the terminal is put.
+SECRET_FILE = "token"
+
+
+def _wants_a_secret(said: dict) -> bool:
+    """Whether this check failed for want of a credential, asked of what it named.
+
+    Read off `secret` — the *names* of the places the adapter reads one from — and never
+    off `why`, which is the platform's own words and this command's to print rather than
+    to parse (R-CAD-13).
+    """
+    return bool((said.get("secret") or {}).get("env"))
+
+
+def _took_a_secret(args: argparse.Namespace, said: dict, home: Path) -> bool:
+    """Take the credential this surface named, and keep it where the surface looks.
+
+    From a pipe when asked for that, and otherwise from a terminal with echo off. Neither
+    is an argument, so neither reaches `ps` or a shell history. Says whether it got one:
+    a check that failed for want of a credential nobody can supply is a refusal, not a
+    prompt in a script that would hang waiting for one.
+    """
+    named = ", ".join((said.get("secret") or {}).get("env") or [])
+    if getattr(args, "token_stdin", False):
+        given = sys.stdin.readline().strip()
+    elif sys.stdin.isatty():
+        given = getpass.getpass(f"        {args.kind} needs a credential ({named}): ").strip()
+    else:
+        return False
+    if not given:
+        return False
+    home.mkdir(parents=True, exist_ok=True)
+    at = home / SECRET_FILE
+    at.write_text(given + "\n", encoding="utf-8")
+    # Nobody else's to read. What is kept about a channel says a credential is present and
+    # never what it is (R-CAD-12); this file is the credential, so the mode is the guard.
+    os.chmod(at, 0o600)
+    return True
+
+
 def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     """Put this agent on a channel, once the channel has proved it works (R-CAD-9).
 
@@ -1548,9 +1597,23 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     # schedule's program is: a tail with an option in it is unparseable on the oldest
     # Python this runs on.
     carried = list(args.options) + list(getattr(args, "handed_on", []))
-    said = asyncio.run(channel.checked(at, carried, channel.environment(
-        home=agents.paths(args.name)["run"], channel=args.channel, agent=args.name,
-        channel_home=home, allow=args.allow, checking=True)))
+
+    def checking() -> dict:
+        return asyncio.run(channel.checked(at, carried, channel.environment(
+            home=agents.paths(args.name)["run"], channel=args.channel, agent=args.name,
+            channel_home=home, allow=args.allow, checking=True)))
+
+    said = checking()
+    if not said["ok"] and _wants_a_secret(said):
+        # **The one credential it named, taken and kept, and then asked again.** Exporting a
+        # variable before typing a command is friction that ends in the command failing after
+        # everything else about it worked — but a token given as an argument is in `ps` for
+        # every user on the machine and in a shell history for ever (R-CAD-11). So it is read
+        # from a terminal that is not echoing it, or from a pipe, and written where this
+        # adapter already looks. Asked *again* rather than assumed: the credential being
+        # present is not the channel being reachable, and only the adapter can say which.
+        if _took_a_secret(args, said, home):
+            said = checking()
     if not said["ok"]:
         # Nothing is written for a channel that has not proved itself, and the adapter's
         # own words are the whole of the owner's diagnosis.
@@ -1588,7 +1651,16 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         # written under, and one `add` may write several. Made here, so a channel whose
         # name gained a suffix is not handed a directory that was never created: the token
         # an owner put beside it, and anything a person attaches, both live there.
-        agents.channel_home(args.name, one).mkdir(parents=True, exist_ok=True)
+        beside = agents.channel_home(args.name, one)
+        beside.mkdir(parents=True, exist_ok=True)
+        # The credential goes with the channel that was written, not with the name that was
+        # checked. One `add` may write several, and each is started with the home of the
+        # name it was written under — so a token left only in the check's directory is a
+        # channel that proved itself at the terminal and cannot sign in at start-up.
+        kept_secret = home / SECRET_FILE
+        if kept_secret.is_file() and beside != home:
+            shutil.copy2(kept_secret, beside / SECRET_FILE)
+            os.chmod(beside / SECRET_FILE, 0o600)
         whose.remember_channel(one, args.kind, args.allow, store.stamped(),
                                settings=shape["settings"], secret=said["secret"],
                                describes=shape["describes"],
@@ -1599,13 +1671,17 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         print(f"{args.name}/{one}: ADDED — {shape['describes'] or args.kind}")
     if not any(one == args.channel for one, _ in named):
         # The check's own directory, when no channel ended up under that name. Removed only
-        # if it is empty, so an owner who had already put a token in it keeps it — and is
-        # told where it now belongs rather than left to find out when nothing connects.
+        # if it is empty, so anything an owner had already put there is theirs and stays.
+        # The credential is the one thing carried across for them, because a channel that
+        # cannot sign in at start-up is one that proved itself and then went quiet.
         with contextlib.suppress(OSError):
             home.rmdir()
         if home.is_dir():
-            print(f"        {home} is not empty — what is in it belongs beside "
-                  f"{', '.join(one for one, _ in named)} now")
+            beside = ", ".join(one for one, _ in named)
+            if (home / SECRET_FILE).is_file():
+                print(f"        the credential in {home} was carried to {beside}")
+            print(f"        {home} is not empty — what else is in it belongs beside "
+                  f"{beside} now")
     if len(named) > 1:
         # Said out loud, because they were made together and share the one allow-list that
         # was typed — and the whole reason they are separate channels is that a room and a

@@ -933,9 +933,15 @@ async def check(chose) -> int:
     """
     token = token_for(chose)
     if not token:
-        say(ok=False, why=f"no bot token — export {chose.token_from} in the shell you are "
-                          f"running this from, or put it in a file called '{TOKEN_FILE}' "
-                          f"in this channel's own directory; never as an argument")
+        # **Named on the way out, not only on the way in.** `secret` is where this adapter
+        # reads its credential from, and saying it here as well as on success is what lets
+        # rundesk offer to take the token without ever reading this sentence — a platform's
+        # words are this file's, and a caller that string-matched them would be the seam
+        # failing (R-CAD-12, R-CAD-13).
+        say(ok=False, secret={"env": [chose.token_from]},
+            why=f"no bot token — rundesk will ask for it, or export {chose.token_from} "
+                f"in the shell you are running this from, or put it in a file called "
+                f"'{TOKEN_FILE}' in this channel's own directory; never as an argument")
         return 1
     if chose.unknown:
         say(ok=False, why=f"this channel does not understand {' '.join(chose.unknown)}")

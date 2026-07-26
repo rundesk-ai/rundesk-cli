@@ -2122,6 +2122,70 @@ raise SystemExit(1)
         self.assertIn("NOT CHANGED", said)
         self.assertIn("the disk is full", said, "it never said what went wrong")
 
+    NEEDS_A_TOKEN = """
+import json, os, sys
+where = os.environ.get("RUNDESK_CHANNEL_HOME") or "."
+token = ""
+try:
+    token = open(os.path.join(where, "token")).read().strip()
+except OSError:
+    token = os.environ.get("DISCORD_TOKEN", "")
+if not token:
+    print(json.dumps({"ok": False, "secret": {"env": ["DISCORD_TOKEN"]},
+                      "why": "no bot token"}))
+    raise SystemExit(1)
+print(json.dumps({"ok": True, "describes": "a room", "settings": {},
+                  "secret": {"env": ["DISCORD_TOKEN"]}}))
+"""
+
+    def test_a_credential_is_taken_from_a_pipe_and_never_from_an_argument(self):
+        """R-CAD-11 — exporting a variable before typing a command is friction that ends in
+        the command failing after everything else about it worked. A credential given as an
+        argument is in `ps` for every user on the machine and in a shell history for ever,
+        so it comes off standard input instead and is kept where the adapter looks."""
+        kind = self._adapter(self.NEEDS_A_TOKEN)
+        with contextlib.redirect_stdout(io.StringIO()) as out, \
+                contextlib.redirect_stderr(io.StringIO()) as bad:
+            sys.stdin = io.StringIO("a-real-looking-token\n")
+            try:
+                code = cli.main(["channels", "ava", "add", "ops", "--kind", kind,
+                                 "--allow", "2207", "--token-stdin"],
+                                gateways=self._gateways(), machine=FakeMachine(),
+                                agents=self.agents)
+            finally:
+                sys.stdin = sys.__stdin__
+        said = out.getvalue() + bad.getvalue()
+        self.assertEqual(0, code, said)
+        self.assertIn("ADDED", said)
+        kept = self.at / "ava" / "channels" / "ops" / "token"
+        self.assertEqual("a-real-looking-token", kept.read_text().strip())
+        self.assertEqual(0o600, kept.stat().st_mode & 0o777,
+                         "the credential is readable by somebody else")
+        self.assertNotIn("a-real-looking-token", said, "it printed the credential back")
+
+    def test_a_credential_nobody_can_supply_is_a_refusal_rather_than_a_wait(self):
+        """R-CAD-11 — a check that failed for want of one, in a script with nothing on
+        standard input, must not sit there waiting for a terminal that is not attached."""
+        code, said = drive(["channels", "ava", "add", "ops",
+                            "--kind", self._adapter(self.NEEDS_A_TOKEN), "--allow", "2207"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT ADDED", said)
+        self.assertEqual({}, self.every(), "a channel with no credential was written down")
+
+    def test_no_option_on_the_command_takes_a_credential_as_its_value(self):
+        """R-CAD-11, R-CAD-12 — the guarantee the two above are shaped around. What an owner
+        may say is *where* the credential is, never what it is, so there is no way to type
+        one and nobody can. Read off the parser, so an option added later is covered."""
+        for parser in [_offered(cli.build_parser())["channels"]]:
+            for action in parser._actions:
+                for flag in action.option_strings:
+                    with self.subTest(flag=flag):
+                        self.assertFalse(
+                            flag in ("--token", "--secret", "--password", "--key")
+                            and action.nargs != 0,
+                            f"{flag} carries a credential as its value")
+
     def test_taking_one_channel_off_leaves_every_other_one_on(self):
         """R-CAD-9, R-AGW-4 — an agent reachable in three places and taken off one is
         still reachable in two. Taking the lot would put it out of reach of people who

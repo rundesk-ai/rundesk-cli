@@ -28,7 +28,7 @@ rundesk logs [-n <lines>] [--source <source>] <agent>                           
 # reaching it
 rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] [--instructions <text>] <agent> <prompt>   one turn, streamed to this terminal
 rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] [--instructions <text>] <agent> <prompt>   with standing instructions, told apart from the prompt
-rundesk channels <agent> add --kind <kind> --allow <user> [--activity | --no-activity] <channel> -- <option> [<arg> ...]                                                               put this agent on a channel
+rundesk channels <agent> add --kind <kind> --allow <user> [--token-stdin] [--activity | --no-activity] <channel> -- <option> [<arg> ...]                                               put this agent on a channel
 rundesk channels <agent> instructions <channel> <text>                                                                                                                                 what this agent is told about where it is
 rundesk channels <agent> remove <channel>                                                                                                                                              take this agent off a channel
 rundesk channels <agent> show <channel>                                                                                                                                                one channel, and who may reach this agent through it
@@ -113,6 +113,7 @@ rundesk schedules ava off nightly
 --set <key=value>               anything that brain takes, carried to it unread; repeatable
 --source <source>               whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine
 --steer                         keep saying more to it while it works — a line at a time, until you stop
+--token-stdin                   read the credential this channel needs from standard input, one line; asked for at the terminal when left out
 --when <cron>                   when it runs, as five cron fields — minute, hour, day, month, weekday
 -n, --lines <lines>             how many of the last lines to show, from each source
 <agent>                         which agent — the name it was made under
