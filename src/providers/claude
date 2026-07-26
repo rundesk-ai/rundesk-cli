@@ -37,6 +37,7 @@ outside the repository, and `plan` never returned. What holds is which tools exi
 
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import shutil
@@ -106,11 +107,19 @@ TROUBLE_KEPT = 20
 #: run out. Short: the program has already finished, and this is a pipe emptying.
 GOING_SECONDS = 5.0
 
-#: What this CLI says when the home it was given has no login in it. Measured against a
-#: fresh `CLAUDE_CONFIG_DIR`: the config directory gates the sign-in, so an agent's private
-#: home is logged out the first time it reaches this brain — which is the isolation working
-#: and never something to fix by copying somebody's credential in.
+#: What this CLI says when the home it was given has no login in it.
 LOGGED_OUT = ("not logged in", "please run /login", "invalid api key", "unauthorized")
+
+#: What this CLI says when the conversation it was told to carry on is not there. Losing
+#: a handle costs a turn its context, which is what losing one is supposed to cost; it
+#: must not cost the turn.
+GONE = "no conversation found"
+
+#: How this brain is asked whether it has a login, rather than guessed at. Offline, about
+#: two tenths of a second, and it answers `{"loggedIn": true|false, …}` — the vendor's own
+#: answer to the only question that decides which configuration directory a turn can use.
+ASKING_AUTH = ("auth", "status")
+ASKING_AUTH_SECONDS = 30.0
 
 
 def say(**it) -> None:
@@ -305,8 +314,14 @@ def _ended(one: dict, seen: dict) -> list:
     if seen.get("model"):
         usage["model"] = seen["model"]
 
-    ended = {"type": "done", "ok": not one.get("is_error"),
-             "session": seen.get("session") or ""}
+    # The handle is reported only when the turn worked. A conversation that failed may
+    # never have been created at all — this brain mints an id and answers `No conversation
+    # found with session ID` on the next resume — so handing one back for a turn that did
+    # not happen poisons the conversation for every turn after it. Not reporting one costs
+    # the next turn its context and nothing else, which is the cheaper of the two.
+    ended = {"type": "done", "ok": not one.get("is_error")}
+    if not one.get("is_error"):
+        ended["session"] = seen.get("session") or ""
     if one.get("is_error"):
         ended["why"] = str(one.get("result") or one.get("subtype") or "the turn failed")
         # Kept for the caller, because being logged out arrives here as an ordinary failed
@@ -351,20 +366,131 @@ def carry() -> int:
         return 1
 
     session = str(uuid.uuid4())
+    resume = os.environ.get("RUNDESK_RESUME")
     argv = [CLAUDE] + opening(posture, os.environ.get("RUNDESK_MODEL"),
-                              os.environ.get("RUNDESK_RESUME"), _settings(), session)
+                              resume, _settings(), session)
 
-    # This brain keeps its login in the directory it keeps its configuration in, so the
-    # agent's private home is both. Nothing is copied or linked into it: an empty one is
-    # logged out by design, and sharing a sign-in between agents is the owner's call.
-    env = dict(os.environ)
-    if home:
-        env["CLAUDE_CONFIG_DIR"] = home
-    return _turn(argv, where, asked, env, session)
+    env = _whose(os.environ)
+    config = _config_dir(home)
+    if config:
+        env["CLAUDE_CONFIG_DIR"] = config
+    else:
+        env.pop("CLAUDE_CONFIG_DIR", None)
+
+    code, lost = _turn(argv, where, asked, env, session, may_start_again=bool(resume))
+    if lost and resume:
+        # The conversation this turn was told to carry on is gone — cleaned up, or never
+        # created because the turn that reported the handle had failed. Losing a handle
+        # costs this turn its context, which is what losing a handle is supposed to cost;
+        # it must not cost the turn itself. The shipped codex adapter does the same.
+        went_wrong("that conversation could not be carried on; starting a new one")
+        session = str(uuid.uuid4())
+        argv = [CLAUDE] + opening(posture, os.environ.get("RUNDESK_MODEL"), None,
+                                  _settings(), session)
+        code, _ = _turn(argv, where, asked, env, session)
+    return code
 
 
-def _turn(argv: list, where: str, asked: str, env: dict, session: str) -> int:
-    """Run the brain, and report what it said as it says it."""
+def _config_dir(home, signed_in=None):
+    """Which configuration directory this turn should use, and why it may be the machine's.
+
+    **Setting `CLAUDE_CONFIG_DIR` does not redirect this brain's login — it removes one.**
+    Measured at 2.1.220 with the vendor's own tool: `claude auth status` answers
+    `loggedIn: true` with the variable unset and `loggedIn: false` with it set to
+    `~/.claude`, the very directory it defaults to. The sign-in is in the login keychain,
+    and setting the variable at all stops it being read. So isolating an agent into a
+    private home is, on this brain, the same act as logging it out.
+
+    The decision is therefore asked rather than assumed, once, before the turn:
+
+    - the private home has a login of its own -> use it, and the agent is isolated;
+    - it does not, but the machine does -> use the machine's, and say so. This is what the
+      shipped codex adapter does unconditionally, so it is the repository's precedent
+      rather than a new liberty, and it is the difference between an agent that answers
+      and one that cannot start;
+    - neither has one -> keep the private home, so the turn fails saying what to run there.
+
+    Nothing is copied or linked either way. `signed_in` is an argument so this whole
+    decision is testable without a brain, a network or an account.
+    """
+    if not home:
+        return None
+    asking = _signed_in if signed_in is None else signed_in
+    if asking(home):
+        return home
+    if asking(None):
+        went_wrong(
+            "this agent has no Claude login of its own, so this turn used the machine's. "
+            "Its conversations and configuration are shared with anything else that does "
+            "the same.\nTo give it one of its own, run:\n"
+            f"  CLAUDE_CONFIG_DIR={home} {CLAUDE} auth login")
+        return None
+    return home
+
+
+def _whose(env: dict) -> dict:
+    """The environment this brain is run in, with the one thing it needs and is not given.
+
+    **`USER` is what its keychain lookup is keyed on, and rundesk does not pass it.** The
+    environment a program here gets is built rather than inherited — `HOME`, `PATH`,
+    `RUNDESK_*`, `TERM`, `LANG` and nothing else — which is deliberate and right. But this
+    brain keeps its sign-in in the macOS login keychain under an account name, and with
+    `USER` absent it reports `loggedIn: false` on a machine that is signed in, with no
+    `CLAUDE_CONFIG_DIR` involved at all. Measured by bisecting the environment: `USER`
+    alone flips it, and `LOGNAME`, `SHELL`, `TMPDIR`, `XPC_SERVICE_NAME` and
+    `__CF_USER_TEXT_ENCODING` all leave it false.
+
+    Resolved from the process rather than read from an environment that does not have it,
+    which is the whole point — `getpass.getuser()` falls through to the password database.
+    This belongs here and not in the core: which variable a brain wants is that brain's
+    adapter's business, and putting it in front of every adapter would put this vendor in
+    the seam.
+    """
+    said = dict(env)
+    if not said.get("USER"):
+        try:
+            said["USER"] = getpass.getuser()
+        except (KeyError, OSError):
+            pass
+    return said
+
+
+def _signed_in(where) -> bool:
+    """Whether this brain has a login to reach, asked of it rather than worked out.
+
+    Guessing the name of the file a credential lives in is what `MEMORY.md` records as
+    costing a whole feature silently, and on this brain there is no such file to guess at
+    — the sign-in is in a keychain. So the CLI is asked, and anything unreadable is read
+    as *no*, which fails towards saying what to run.
+    """
+    env = _whose(os.environ)
+    if where:
+        env["CLAUDE_CONFIG_DIR"] = where
+    else:
+        env.pop("CLAUDE_CONFIG_DIR", None)
+    try:
+        said = subprocess.run([CLAUDE] + list(ASKING_AUTH), env=env, text=True,
+                              capture_output=True, timeout=ASKING_AUTH_SECONDS)
+        return bool(json.loads(said.stdout or "{}").get("loggedIn"))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
+def _lost(said: dict) -> bool:
+    """Whether this turn failed only because the conversation it was told to carry on is
+    not there — which is recoverable, and is not the same as the turn failing."""
+    return not said.get("ok") and GONE in str(said.get("why") or "").lower()
+
+
+def _turn(argv: list, where: str, asked: str, env: dict, session: str,
+          may_start_again: bool = False) -> tuple:
+    """Run the brain, and report what it said as it says it.
+
+    Returns what became of the program and whether the only thing wrong was a conversation
+    that has gone. When it may start again, the failing pair is held back rather than
+    reported — a turn that is about to be retried has not finished, and saying it had
+    would put an outcome in the account that the next attempt then contradicts.
+    """
     raw = _raw()
     seen = {"session": session, "model": None, "ended": False}
     trouble = []
@@ -375,7 +501,7 @@ def _turn(argv: list, where: str, asked: str, env: dict, session: str) -> int:
     except OSError as gone:
         went_wrong(f"the Claude Code CLI would not start: {gone}")
         say(type="done", ok=False, why="the Claude Code CLI would not start")
-        return 1
+        return 1, False
 
     # Drained for the brain's whole life, in its own thread. A second pipe with nothing
     # reading it fills its buffer and stops the program dead — which presents half an hour
@@ -391,12 +517,21 @@ def _turn(argv: list, where: str, asked: str, env: dict, session: str) -> int:
         # is collected by the thread above; there is nothing to be gained by raising here.
         pass
 
+    # Everything streams as it arrives except the pair that ends a turn. Those are held
+    # until the program is gone, because whether the conversation was lost is a thing this
+    # brain says on **stderr** — `No conversation found with session ID: …` — while its
+    # `result` line says only `error_during_execution`. Deciding on the stream alone would
+    # have missed it, which is exactly what it did.
+    ending = []
     for line in brain.stdout:
         if raw:
             raw.write(line)
             raw.flush()
         for it in records(line, seen):
-            say(**it)
+            if may_start_again and it["type"] in ("usage", "done"):
+                ending.append(it)
+            else:
+                say(**it)
 
     brain.stdout.close()
     draining.join(timeout=GOING_SECONDS)
@@ -404,13 +539,18 @@ def _turn(argv: list, where: str, asked: str, env: dict, session: str) -> int:
         raw.close()
 
     code = brain.wait()
+    said = " ".join(trouble + [seen.get("why") or ""]).lower()
+    if may_start_again and (GONE in said or any(_lost(one) for one in ending)):
+        return code, True
+    for it in ending:
+        say(**it)
     _said_how_to_sign_in(" ".join(trouble + [seen.get("why") or ""]), env)
     if not seen["ended"]:
         # A child that dies before its `result` line has said nothing terminal, and
         # whatever is waiting on this turn would wait for ever.
         say(type="done", ok=False, why=_why(trouble, code))
-        return code or 1
-    return code
+        return code or 1, False
+    return code, False
 
 
 def _said_how_to_sign_in(said: str, env: dict) -> None:

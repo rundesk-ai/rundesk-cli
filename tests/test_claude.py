@@ -355,6 +355,67 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
             self.opening(model="a-model").index("--model") + 1])
 
 
+class WhichConfigurationDirectoryATurnUses(unittest.TestCase):
+    """Measured at 2.1.220: setting `CLAUDE_CONFIG_DIR` does not redirect this brain's
+    login, it removes one — `claude auth status` answers `loggedIn: false` with the
+    variable set to the very directory it defaults to. So isolating an agent into a private
+    home is, on this brain, the same act as logging it out, and the decision has to be
+    asked rather than assumed.
+
+    Driven with the asking replaced, so none of it needs a brain or an account."""
+
+    def answering(self, private, machine):
+        return lambda where: private if where else machine
+
+    def test_an_agent_with_a_login_of_its_own_is_kept_to_it(self):
+        """The isolated case, and the one worth having: nothing is shared."""
+        self.assertEqual("/a/home", claude._config_dir(
+            "/a/home", self.answering(private=True, machine=True)))
+
+    def test_an_agent_with_no_login_uses_the_machines_rather_than_failing(self):
+        """What the shipped codex adapter does unconditionally — it never sets its own
+        home variable at all — so this is the repository's precedent rather than a new
+        liberty. It is the difference between an agent that answers and one that cannot
+        start, and it is said on stderr rather than done quietly."""
+        self.assertIsNone(claude._config_dir(
+            "/a/home", self.answering(private=False, machine=True)))
+
+    def test_when_nothing_is_signed_in_the_agent_keeps_its_own_home(self):
+        """So the turn fails naming the home to log *in* to, rather than pointing somebody
+        at a machine login that does not exist either."""
+        self.assertEqual("/a/home", claude._config_dir(
+            "/a/home", self.answering(private=False, machine=False)))
+
+    def test_a_turn_with_no_private_home_at_all_leaves_the_variable_alone(self):
+        self.assertIsNone(claude._config_dir(None, self.answering(True, True)))
+
+    def test_the_one_thing_this_brain_needs_that_rundesk_does_not_pass_is_supplied(self):
+        """`USER` is what this brain's keychain lookup is keyed on, and the environment
+        rundesk builds does not carry it — so on a signed-in machine it reports
+        `loggedIn: false` with no config directory involved at all. Measured by bisecting:
+        `USER` alone flips it, and `LOGNAME`, `SHELL`, `TMPDIR`, `XPC_SERVICE_NAME` and
+        `__CF_USER_TEXT_ENCODING` all leave it false.
+
+        It is resolved from the password database rather than read from an environment
+        that does not have it, and it lives in this adapter because which variable a brain
+        wants is that brain's business — in the core it would be this vendor in the seam."""
+        said = claude._whose({"HOME": "/somewhere", "PATH": "/usr/bin"})
+        self.assertTrue(said.get("USER"), "the brain is given no account name to look up")
+        self.assertEqual("/somewhere", said["HOME"], "the rest of the environment moved")
+
+    def test_an_account_name_rundesk_did_pass_is_left_alone(self):
+        self.assertEqual("someone-else",
+                         claude._whose({"USER": "someone-else"})["USER"])
+
+    def test_a_brain_that_cannot_answer_the_question_is_read_as_signed_out(self):
+        """Anything unreadable fails towards saying what to run, which is recoverable —
+        rather than towards silence, which is not."""
+        was = claude.CLAUDE
+        claude.CLAUDE = "/nonexistent/claude-that-is-not-there"
+        self.addCleanup(setattr, claude, "CLAUDE", was)
+        self.assertFalse(claude._signed_in(None))
+
+
 class WhatThisBrainCanDo(unittest.TestCase):
     """R-PRV-15 — declared, and only what was measured."""
 

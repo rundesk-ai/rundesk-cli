@@ -43,16 +43,29 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `~/.rundesk/agents`, and `rundesk add` reports success while doing it. Three were created that
   way and had to be removed with `rundesk remove`. Set `RUNDESK_AGENTS_DIR` too, and check
   `find $SCRATCH` actually has something in it before believing a command was isolated.
-- **`CLAUDE_CONFIG_DIR` does not redirect the Claude login — setting it *removes* one.** The
-  sign-in is in the macOS login keychain (`Claude Code-credentials`), not in any config
-  directory, and this CLI stops consulting the keychain the moment the variable is set at
-  all: pointing it at `~/.claude`, the very directory it defaults to, answers `Not logged in
-  · Please run /login` while the same turn with the variable unset answers fine. Measured at
-  2.1.220. So `test_provider.py --home ~/.claude` cannot give a real Claude a login, there is
-  nothing to copy in even if that were allowed, and the only way to give an agent one is
-  `CLAUDE_CONFIG_DIR=<dir> claude /login` once per agent — which needs a browser and is the
-  owner's to run. Being logged out also arrives as an ordinary failed turn on the `result`
-  line rather than on stderr, so an adapter that only watches stderr never says what to run.
+- **Claude reports `loggedIn: false` on a signed-in machine when `USER` is unset.** Its
+  sign-in is in the macOS login keychain (`Claude Code-credentials`, `acct=<username>`), and
+  the lookup is keyed on the account name — so under the environment rundesk *builds*
+  (`HOME`, `PATH`, `RUNDESK_*`, `TERM`, `LANG` and nothing else) it cannot find it, with no
+  `CLAUDE_CONFIG_DIR` involved at all. Bisected: `USER` alone flips it; `LOGNAME`, `SHELL`,
+  `TMPDIR`, `XPC_SERVICE_NAME` and `__CF_USER_TEXT_ENCODING` all leave it false. **Fix it in
+  the adapter, not the core** — `getpass.getuser()` reads the password database and needs no
+  environment. Ask `claude auth status` (offline, ~0.2s, answers `{"loggedIn": …}`) rather
+  than guessing at a credential filename; there is no file to guess at.
+- **`CLAUDE_CONFIG_DIR` does not redirect the Claude login — setting it *removes* one.**
+  Separate from the above and it survives it: with `USER` present and the variable pointed at
+  `~/.claude`, the very directory the CLI defaults to, `claude auth status` still answers
+  `loggedIn: false`. Setting it at all stops the keychain being read. So isolating an agent
+  into a private home is, on this brain, the same act as logging it out, and `--home
+  ~/.claude` cannot give a real Claude a login. Either give the home its own
+  (`CLAUDE_CONFIG_DIR=<dir> claude auth login`, needs a browser) or leave the variable unset
+  and share the machine's — which is what the shipped codex adapter does unconditionally.
+- **Claude says a lost conversation on stderr and `error_during_execution` on the stream.**
+  Resuming a session id that no longer exists — which happens whenever a *failed* turn
+  reported a handle — fails every turn after it, and the `result` line does not say why:
+  `No conversation found with session ID: …` is on stderr only. So an adapter deciding
+  whether to start again must read both streams, and must not report a handle for a turn
+  that failed, or it poisons the conversation for good.
 - **Do not test a model instruction with a question the conversation can already answer.** A first
   attempt at the above asked for a codename the thread had been asked for before, so the model
   answered from its own earlier reply and the resume looked like it worked. Use a rule the history

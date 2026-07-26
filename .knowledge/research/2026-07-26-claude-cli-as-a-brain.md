@@ -160,6 +160,17 @@ Measured: pointing `CLAUDE_CONFIG_DIR` at a fresh directory produces `Not logged
 per-user — but 2.1.219 does **not** authenticate a session from it when `CLAUDE_CONFIG_DIR` points
 elsewhere. The config dir gates it, so two agents need two `claude /login` runs.[4]
 
+**A second cause, and it is not the config directory at all.** Measured at 2.1.220 by bisecting
+the environment: this CLI reports `loggedIn: false` on a signed-in machine whenever **`USER` is
+unset**, with no `CLAUDE_CONFIG_DIR` involved.[12] The keychain item is
+`svce="Claude Code-credentials", acct="<username>"` and the lookup is keyed on the account name,
+so an environment that is *built* rather than inherited — which is what rundesk gives every
+program it runs — cannot find it. `USER` alone flips it; `LOGNAME`, `SHELL`, `TMPDIR`,
+`XPC_SERVICE_NAME` and `__CF_USER_TEXT_ENCODING` each leave it false.
+
+That is worth separating from the paragraph below, because the two look identical from outside —
+both present as `Not logged in · Please run /login` — and only one of them is about isolation.
+
 **Sharpened, and it is sharper than "points elsewhere".** Measured at 2.1.220: the variable does
 not *redirect* the login, it *removes* one. Pointing `CLAUDE_CONFIG_DIR` at `~/.claude` — the very
 directory the CLI defaults to, on a machine that is signed in — answers `Not logged in · Please run
