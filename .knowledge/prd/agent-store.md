@@ -42,6 +42,7 @@ has done. Each agent keeps its own, so nothing one agent holds is ever in anothe
 | ✅ | R-STO-21 | A write that gave up waiting says what was holding it | `a write that gave up waiting says what was holding it` |
 | ✅ | R-STO-22 | Something the machine cannot do is said once rather than on every attempt | `a machine that cannot search says so once rather than every time` |
 | ✅ | R-STO-23 | An ordinary read or write is not written to the agent's log | `an ordinary read and write says nothing at all` |
+| ✅ | R-STO-24 | A run that failed says why, where the run is read | `a run that failed says why beside the run and not only in a file`, `a run that finished well says nothing about why` |
 
 ## Open questions
 

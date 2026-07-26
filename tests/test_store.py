@@ -393,8 +393,20 @@ class WhatAnAgentIsConfiguredWith(WithAnAgentsOwnRecords):
         self.assertEqual(
             {"name": "discord", "kind": "discord", "enabled": True, "provider": "codex",
              "model": "gpt-5", "instructions": "be brief", "allow": ["amy", "zoe"],
-             "secret": None, "settings": {"prefix": "!"}, "created_at": AT},
+             "secret": None, "settings": {"prefix": "!"}, "describes": None, "fills": [],
+             "created_at": AT},
             kept.channel("discord"))
+
+    def test_what_a_surface_said_about_itself_is_kept_where_the_surface_is(self):
+        """What the adapter said this kind of place is like, and which parts of it it can
+        fill in — kept so a `{where.something}` an owner writes later is checked against
+        what will actually be there rather than against a guess."""
+        kept = self.built()
+        kept.remember_channel("rooms", "discord", ["amy"], AT,
+                              describes="a room other people read",
+                              fills=["channel", "server"])
+        self.assertEqual("a room other people read", kept.channel("rooms")["describes"])
+        self.assertEqual(["channel", "server"], kept.channel("rooms")["fills"])
 
     def test_a_channel_nobody_may_use_is_refused_rather_than_defaulted(self):
         """A surface with an empty allow answers whoever speaks to it. That is a
@@ -630,13 +642,15 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
         said = kept.arrived("c1", AT, "how are we")
         named = kept.began("channel", "codex", "/opt/my-brain", "safe", AT,
                            conversation_id="c1", trigger_message_id=said, model="gpt-5",
-                           can={"steer": True}, resumed=True, pick=lambda _: "a")
+                           can={"steer": True}, settings={"effort": "high"}, resumed=True,
+                           pick=lambda _: "a")
         self.assertEqual(
             {"n": 1, "id": named, "conversation_id": "c1", "schedule_id": None,
              "source": "channel", "trigger_message_id": said, "provider": "codex",
              "brain": "/opt/my-brain", "model": "gpt-5", "posture": "safe",
-             "can": {"steer": True}, "resumed": True, "started_at": AT, "ended_at": None,
-             "outcome": None, "exit_code": None, "tokens_in": None, "tokens_out": None,
+             "can": {"steer": True}, "settings": {"effort": "high"}, "resumed": True,
+             "started_at": AT, "ended_at": None, "outcome": None, "why": None,
+             "exit_code": None, "tokens_in": None, "tokens_out": None,
              "tokens_cached": None, "tokens_written": None, "tokens_reported": False},
             kept.run(named))
         self.assertEqual([named], [one["id"] for one in kept.runs(conversation_id="c1")])
@@ -656,6 +670,24 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
                          (finished["tokens_in"], finished["tokens_out"],
                           finished["tokens_cached"], finished["tokens_written"]))
         self.assertTrue(finished["tokens_reported"])
+
+    def test_a_run_that_failed_says_why_beside_the_run_and_not_only_in_a_file(self):
+        """The one actionable line, kept where the run is read. A run that never reached a
+        brain printed nothing at all, so a reason filed only in what the brain printed is a
+        reason nobody has — which is exactly the run somebody is stuck on."""
+        kept = self.built()
+        named = self.a_run(kept)
+        kept.ended(named, LATER, "failed", exit_code=1,
+                   why="unexpected status 401 Unauthorized")
+        self.assertEqual("unexpected status 401 Unauthorized", kept.run(named)["why"])
+        self.assertEqual([], kept.records(named), "nothing was printed, and why survives")
+
+    def test_a_run_that_finished_well_says_nothing_about_why(self):
+        """Absent rather than empty, so `why` reads as a reason and never as a field."""
+        kept = self.built()
+        named = self.a_run(kept)
+        kept.ended(named, LATER, "done", exit_code=0)
+        self.assertIsNone(kept.run(named)["why"])
 
     def test_a_run_whose_cost_never_arrived_is_left_absent_rather_than_written_as_nothing(self):
         """A run that cost an unknown amount and one that cost zero are different facts,

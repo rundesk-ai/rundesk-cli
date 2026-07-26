@@ -425,34 +425,42 @@ class Store:
         kept = _plain(row)
         kept["allow"] = json.loads(kept["allow"])
         kept["settings"] = json.loads(kept["settings"])
+        kept["fills"] = json.loads(kept["fills"])
         kept["secret"] = json.loads(kept["secret"]) if kept["secret"] else None
         kept["enabled"] = bool(kept["enabled"])
         return kept
 
     def remember_channel(self, name, kind, allow, created_at, provider=None, model=None,
-                         instructions=None, secret=None, settings=None, enabled=True):
+                         instructions=None, secret=None, settings=None, describes=None,
+                         fills=None, enabled=True):
         """Write down a surface an agent is reachable on, replacing one of the same name.
 
         `allow` is who may reach the agent through it and is never empty — a channel nobody
         may use answers whoever speaks to it, which is a misconfiguration and never a mode.
         `secret` holds the *names* of the places a credential is read from, never a credential.
+
+        `describes` and `fills` are what the adapter said about the kind of place this is
+        and which parts of it it can fill in, so a `{where.something}` an owner writes later
+        is checked against what will actually be there rather than against a guess.
         """
         if not allow:
             raise ValueError("a channel nobody may use is refused rather than defaulted")
         with self._writing() as conn:
             conn.execute(
                 "INSERT INTO channel (name, kind, enabled, provider, model, instructions,"
-                " allow, secret, settings, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?)"
+                " allow, secret, settings, describes, fills, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT(name) DO UPDATE SET"
                 " kind=excluded.kind, enabled=excluded.enabled, provider=excluded.provider,"
                 " model=excluded.model, instructions=excluded.instructions,"
-                " allow=excluded.allow, secret=excluded.secret, settings=excluded.settings",
+                " allow=excluded.allow, secret=excluded.secret, settings=excluded.settings,"
+                " describes=excluded.describes, fills=excluded.fills",
                 (
                     name, kind, 1 if enabled else 0, provider, model, instructions,
                     json.dumps(sorted(set(allow))),
                     json.dumps(secret, sort_keys=True) if secret else None,
                     json.dumps(settings or {}, sort_keys=True),
+                    describes, json.dumps(list(fills or [])),
                     created_at,
                 ),
             )
@@ -702,12 +710,16 @@ class Store:
 
     def began(self, source, provider, brain, posture, started_at, conversation_id=None,
               schedule_id=None, trigger_message_id=None, model=None, can=None,
-              resumed=False, pick=None) -> str:
+              settings=None, resumed=False, pick=None) -> str:
         """Admit one occurrence of work, and name it. Everything resolved here is final.
 
         The number is the database's and is never handed out twice — allocated inside the
         same transaction that writes the row, so the counter and what it counts cannot
         disagree the way a file beside a directory can.
+
+        `settings` is what the brain was told to run with, carried unread. It is part of
+        what the run resolved rather than of what it did, so it belongs here and is never
+        changed afterwards (R-RUN-3).
         """
         with self._writing() as conn:
             row = conn.execute("SELECT COALESCE(MAX(n), 0) + 1 FROM run").fetchone()
@@ -715,28 +727,35 @@ class Store:
             named = f"{number}-{_marked(pick)}"
             conn.execute(
                 "INSERT INTO run (n, id, conversation_id, schedule_id, source,"
-                " trigger_message_id, provider, brain, model, posture, can, resumed,"
-                " started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " trigger_message_id, provider, brain, model, posture, can, settings,"
+                " resumed, started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (number, named, conversation_id, schedule_id, source, trigger_message_id,
                  provider, brain, model, posture, json.dumps(can or {}, sort_keys=True),
+                 json.dumps(settings or {}, sort_keys=True),
                  1 if resumed else 0, started_at),
             )
             return named
 
-    def ended(self, run_id, ended_at, outcome, exit_code=None, tokens=None) -> None:
+    def ended(self, run_id, ended_at, outcome, exit_code=None, why=None,
+              tokens=None) -> None:
         """How it finished, and what it cost. Written once, at the end.
 
         A cost that never arrived is left absent rather than recorded as nothing: a run that
         cost an unknown amount and one that cost zero are different facts.
+
+        `why` is the one actionable line about a run that failed, kept beside the run rather
+        than only in what the brain printed — because a turn that failed with its reason
+        filed where nobody looks is a turn somebody is stuck on, and a run that never
+        reached a brain has nothing printed at all.
         """
         tokens = tokens or {}
         with self._writing() as conn:
             conn.execute(
-                "UPDATE run SET ended_at = ?, outcome = ?, exit_code = ?, tokens_in = ?,"
-                " tokens_out = ?, tokens_cached = ?, tokens_written = ?, tokens_reported = ?"
-                " WHERE id = ?",
+                "UPDATE run SET ended_at = ?, outcome = ?, exit_code = ?, why = ?,"
+                " tokens_in = ?, tokens_out = ?, tokens_cached = ?, tokens_written = ?,"
+                " tokens_reported = ? WHERE id = ?",
                 (
-                    ended_at, outcome, exit_code,
+                    ended_at, outcome, exit_code, why,
                     tokens.get("input"), tokens.get("output"),
                     tokens.get("cached"), tokens.get("written"),
                     1 if tokens.get("reported") else 0,
@@ -769,6 +788,7 @@ class Store:
     def _run(row) -> dict:
         kept = _plain(row)
         kept["can"] = json.loads(kept["can"])
+        kept["settings"] = json.loads(kept["settings"])
         kept["resumed"] = bool(kept["resumed"])
         kept["tokens_reported"] = bool(kept["tokens_reported"])
         return kept

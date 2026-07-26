@@ -32,6 +32,8 @@ CREATE TABLE channel (
     allow         TEXT NOT NULL,
     secret        TEXT,
     settings      TEXT NOT NULL DEFAULT '{}',
+    describes     TEXT,
+    fills         TEXT NOT NULL DEFAULT '[]',
     created_at    TEXT NOT NULL
 ) STRICT;
 
@@ -85,10 +87,12 @@ CREATE TABLE run (
     model               TEXT,
     posture             TEXT NOT NULL,
     can                 TEXT NOT NULL DEFAULT '{}',
+    settings            TEXT NOT NULL DEFAULT '{}',
     resumed             INTEGER NOT NULL DEFAULT 0,
     started_at          TEXT NOT NULL,
     ended_at            TEXT,
     outcome             TEXT,
+    why                 TEXT,
     exit_code           INTEGER,
     tokens_in           INTEGER,
     tokens_out          INTEGER,
