@@ -1,0 +1,483 @@
+#!/usr/bin/env python3
+"""Claude Code, as a brain behind rundesk's provider seam.
+
+A program, never a module. Rundesk runs this, hands it a turn through the environment and
+stdin, reads whole records off stdout and ends it — nothing here is imported by anything,
+and nothing here imports rundesk. Every fact about this vendor lives in this file.
+
+The contract is `.knowledge/guides/write-a-provider-adapter.md`. What is measured about
+this CLI is `.knowledge/research/2026-07-26-claude-cli-as-a-brain.md`, and the stream it
+is measured against is `tests/samples/claude-stream.jsonl` — 184 real lines that cost real
+money and cannot be re-derived by reading anything.
+
+Four decisions in here are the whole of the difficulty, and each one reads plausible when
+it is wrong:
+
+**The reply arrives twice, and this takes the second copy.** Ten `text_delta` fragments and
+three whole `assistant` blocks carry the same 574 bytes; reporting both reports every
+answer twice, because a turn joins every `text` record it is given. The whole blocks are
+what is reported, marked `whole`, because our seam has a word for the distinction and the
+fragments do not survive it: a fragment is held to the end of the turn either way, while a
+completed thought can be shown the moment the next one lands. Claude says several complete
+things as it works, so this is the brain that is *better* read whole.
+
+**Usage comes from the `result` line and nowhere else.** `message_start` and
+`message_delta` each carry a full usage block too, and counting them is how a turn ends up
+reporting three times what it cost.
+
+**Fresh and cached are never added together.** A captured turn shows 20 fresh tokens
+against 302,567 cache reads. Cache *creation* is billed above standard input, so it belongs
+with fresh; cache *reads* are the cheap volume and go on their own. Summing them reports
+320,020 tokens at one price, which is real and misleading.
+
+**A posture is the allowlist, not the mode.** `--permission-mode` is a prompting policy —
+measured: under `plan` with no allowlist this CLI reached for `Write` and wrote a file
+outside the repository, and `plan` never returned. What holds is which tools exist.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import threading
+import uuid
+
+CLAUDE = os.environ.get("RUNDESK_CLAUDE_BIN", "claude")
+
+#: What this brain can do, and only what was measured of it.
+#:
+#: `steer` is false because `claude -p` reads its prompt and runs to the end: there is no
+#: measured way to put a word into a turn that is already going. Asking for it would hold
+#: this adapter's input open for a brain that will never read again, which is a turn that
+#: never ends.
+CAN = {"tools": True, "resume": True, "usage": True, "model": True, "steer": False}
+
+#: What a tool *did*, in rundesk's words rather than this vendor's. The list is closed and
+#: short on purpose, and a tool whose work is not one of these leaves `did` out rather than
+#: stretching one to fit — `name` still carries Claude's own word for it.
+#:
+#: **This is not the whole tool list and must not become one.** Measured: the offered tools
+#: vary with the machine's plugins, skills and MCP servers — 31 on one run of this build and
+#: 29 on another — so anything absent here is a tool reported by name with no verb, which is
+#: exactly the honest outcome.
+DID = {
+    "Read": "read",
+    "NotebookRead": "read",
+    "Glob": "list",
+    "LS": "list",
+    "Grep": "search",
+    "WebSearch": "search",
+    "WebFetch": "search",
+    "ToolSearch": "search",
+    "Bash": "run",
+    "BashOutput": "run",
+    "Edit": "edit",
+    "Write": "edit",
+    "NotebookEdit": "edit",
+}
+
+#: Which tools a turn may reach for, per posture (R-PRV-18). The allowlist is the only
+#: thing measured to hold, so this is the whole of how a posture is honoured.
+#:
+#: `read` is deliberately not "everything except writes": a tool that is never granted
+#: cannot be called, and a list of what is allowed cannot be outgrown by a tool added next
+#: year the way a list of what is forbidden can.
+ALLOWED = {
+    "read": ("Read", "NotebookRead", "Glob", "LS", "Grep", "WebSearch", "WebFetch",
+             "ToolSearch", "Task"),
+    "work": ("Read", "NotebookRead", "Glob", "LS", "Grep", "WebSearch", "WebFetch",
+             "ToolSearch", "Task", "Bash", "BashOutput", "Edit", "Write", "NotebookEdit"),
+}
+
+#: How much of a tool's own output is passed on. A `tool_result` can hold a whole file,
+#: a command's entire output, a credential or a private path; the account keeps what we
+#: were given and a surface decides separately what it shows.
+SUMMARY_CHARS = 200
+
+#: How many of the brain's last complaints are kept to explain a turn that stopped without
+#: saying it had. Every one of them has already been passed straight on; this is only what
+#: is still to hand when a reason is needed.
+TROUBLE_KEPT = 20
+
+#: How long to wait for the last of what the brain said went wrong, once its records have
+#: run out. Short: the program has already finished, and this is a pipe emptying.
+GOING_SECONDS = 5.0
+
+#: What this CLI says when the home it was given has no login in it. Measured against a
+#: fresh `CLAUDE_CONFIG_DIR`: the config directory gates the sign-in, so an agent's private
+#: home is logged out the first time it reaches this brain — which is the isolation working
+#: and never something to fix by copying somebody's credential in.
+LOGGED_OUT = ("not logged in", "please run /login", "invalid api key", "unauthorized")
+
+
+def say(**it) -> None:
+    """One record, one line, flushed — because a turn is watched while it happens."""
+    sys.stdout.write(json.dumps(it) + "\n")
+    sys.stdout.flush()
+
+
+def went_wrong(said: str) -> None:
+    """Something to tell whoever is reading the run, on the stream that is ours.
+
+    Never stdout: what an adapter reports and what it says went wrong are kept apart, and
+    a line of this on stdout would be a record of a kind nobody knows.
+    """
+    sys.stderr.write(said.rstrip() + "\n")
+    sys.stderr.flush()
+
+
+def _settings() -> dict:
+    """Whatever the owner set, as they set it. Never read on the way past except for the
+    handful of keys this adapter knows how to honour."""
+    try:
+        given = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
+    except ValueError:
+        went_wrong("what was set for this brain is not readable JSON, so none of it was used")
+        return {}
+    if not isinstance(given, dict):
+        went_wrong("what was set for this brain is not a JSON object, so none of it was used")
+        return {}
+    return given
+
+
+def _flags(extra: dict) -> list:
+    """The owner's own flags, passed through as they gave them.
+
+    Their words for their brain: a new option on this CLI is theirs to reach today rather
+    than after a rundesk release. Anything unrecognised is left alone, and something
+    recognised but malformed is said on stderr so a mistyped setting is heard about.
+    """
+    given = extra.get("flags")
+    if given is None:
+        return []
+    if not isinstance(given, list) or not all(isinstance(one, str) for one in given):
+        went_wrong("`flags` is passed to this brain as a list of strings; it was not, "
+                   "so it was ignored")
+        return []
+    return list(given)
+
+
+def opening(posture: str, model, resume, extra: dict, session: str) -> list:
+    """Everything after the program's name, and why each part of it is there.
+
+    Kept in one function with no side effects so a test can read the whole command line
+    without starting anything — which is the only way the traps below stay proven rather
+    than remembered.
+    """
+    argv = ["-p", "--output-format", "stream-json", "--verbose"]
+
+    # Measured: `--output-format stream-json` exits 1 under `-p` without `--verbose`. It is
+    # above every branch below because there is no turn shape that does not need it.
+
+    # A conversation this brain already has, or a handle minted here before the first byte
+    # so that a turn dying mid-stream still leaves something to carry on from.
+    argv += ["--resume", resume] if resume else ["--session-id", session]
+
+    if model:
+        argv += ["--model", model]
+
+    # The posture, as the only thing measured to hold it. Passed as one comma-separated
+    # value rather than as many words: `--allowedTools` is variadic and would otherwise
+    # swallow whatever came next.
+    argv += ["--allowedTools", ",".join(ALLOWED[posture])]
+
+    preface = (os.environ.get("RUNDESK_PREFACE") or "").strip()
+    if preface:
+        # **Never `--system-prompt`.** Measured: it takes about 6,100 tokens of what this
+        # brain was built with away with it, while the rule still lands and the tools still
+        # work — so nothing reports the loss and the turn merely behaves differently. The
+        # append form adds, and adding is what standing instructions are.
+        argv += ["--append-system-prompt", preface]
+
+    argv += _flags(extra)
+    return argv
+
+
+def _text(block: dict) -> str:
+    return str(block.get("text") or "")
+
+
+def _summary(said) -> str:
+    """What a tool returned, shortened to something a person could be shown."""
+    if isinstance(said, list):
+        said = " ".join(_text(one) for one in said if isinstance(one, dict))
+    return str(said or "")[:SUMMARY_CHARS]
+
+
+def records(line: str, seen: dict) -> list:
+    """One line of this brain's stream, as the records rundesk understands — or none.
+
+    Pure, so the whole mapping is driven offline against a captured stream and none of it
+    is believed on the strength of having been written down. `seen` carries the two things
+    a later line needs: the conversation's handle and the model that answered.
+
+    A line kind that is not here is dropped **deliberately**, and the raw stream is kept
+    beside the run either way — so a vendor changing shape shows up as drift somebody can
+    read rather than as records quietly going missing.
+    """
+    try:
+        one = json.loads(line)
+    except ValueError:
+        return []
+    if not isinstance(one, dict):
+        return []
+    kind = one.get("type")
+
+    if kind == "system" and one.get("subtype") == "init":
+        # Nothing to report. It is the only line that names the model, and the session id
+        # is taken here too so a stream that stops early still has one.
+        seen["model"] = one.get("model") or seen.get("model")
+        seen["session"] = one.get("session_id") or seen.get("session")
+        return []
+
+    if kind == "assistant":
+        return _assistant(one, seen)
+
+    if kind == "user":
+        return _returned(one)
+
+    if kind == "result":
+        return _ended(one, seen)
+
+    # `stream_event` in all its forms, `system/status`, `system/thinking_tokens` and
+    # `rate_limit_event`. The first is framing and duplicated text; the last is the
+    # account's state rather than this turn's activity.
+    return []
+
+
+def _assistant(one: dict, seen: dict) -> list:
+    """What the brain said and what it reached for, from the line that carries both whole."""
+    said = []
+    seen["session"] = one.get("session_id") or seen.get("session")
+    for block in one.get("message", {}).get("content", []):
+        if not isinstance(block, dict):
+            continue
+        what = block.get("type")
+        if what == "text":
+            # `whole`, because this is a finished thought and not a piece of one. It is
+            # what lets a surface show each thing as it is said instead of delivering the
+            # lot at the end.
+            if _text(block).strip():
+                said.append({"type": "text", "text": _text(block), "whole": True})
+        elif what == "thinking":
+            # Measured: every captured thinking block carries an empty string, so the
+            # shape is proven and the content is not. An empty one is nothing to report.
+            thought = str(block.get("thinking") or "")
+            if thought.strip():
+                said.append({"type": "think", "text": thought, "whole": True})
+        elif what == "tool_use":
+            it = {"type": "tool", "id": str(block.get("id") or ""),
+                  "name": str(block.get("name") or "")}
+            did = DID.get(it["name"])
+            if did:
+                it["did"] = did
+            said.append(it)
+    return said
+
+
+def _returned(one: dict) -> list:
+    """What each tool gave back, paired to the call by the id this brain minted."""
+    said = []
+    for block in one.get("message", {}).get("content", []):
+        if not isinstance(block, dict) or block.get("type") != "tool_result":
+            continue
+        said.append({"type": "result", "id": str(block.get("tool_use_id") or ""),
+                     "ok": not block.get("is_error"),
+                     "summary": _summary(block.get("content"))})
+    return said
+
+
+def _ended(one: dict, seen: dict) -> list:
+    """What the turn cost and that it is over — the only line either is taken from."""
+    seen["ended"] = True
+    seen["session"] = one.get("session_id") or seen.get("session")
+    counted = one.get("usage") or {}
+
+    # Fresh is what was new: what was sent plus what was written into the cache, which is
+    # billed above standard input. Cached is what was re-read, and is reported apart
+    # because it is most of the volume at a fraction of the price.
+    fresh = _n(counted, "input_tokens") + _n(counted, "cache_creation_input_tokens")
+    usage = {"type": "usage", "input": fresh, "output": _n(counted, "output_tokens"),
+             "cached": _n(counted, "cache_read_input_tokens")}
+    if seen.get("model"):
+        usage["model"] = seen["model"]
+
+    ended = {"type": "done", "ok": not one.get("is_error"),
+             "session": seen.get("session") or ""}
+    if one.get("is_error"):
+        ended["why"] = str(one.get("result") or one.get("subtype") or "the turn failed")
+        # Kept for the caller, because being logged out arrives here as an ordinary failed
+        # turn — a `result` line like any other — rather than on stderr where a reader
+        # would look for it.
+        seen["why"] = ended["why"]
+    return [usage, ended]
+
+
+def _n(counted: dict, what: str) -> int:
+    value = counted.get(what)
+    return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _asked() -> str:
+    """What this turn was asked, read to the end of stdin.
+
+    `steer` is false, so the prompt is plain text and the input closes after it. It goes to
+    the brain on *its* stdin too, never as an argument: what somebody asks their agent is
+    readable through the process list otherwise, and `--allowedTools` would eat it anyway.
+    """
+    return sys.stdin.read()
+
+
+def carry() -> int:
+    """One turn, from what rundesk set to what this brain said about it."""
+    where = os.environ.get("RUNDESK_CWD") or os.getcwd()
+    home = os.environ.get("RUNDESK_PROVIDER_HOME")
+    posture = os.environ.get("RUNDESK_POSTURE") or "work"
+    if posture not in ALLOWED:
+        posture = "work"
+
+    if shutil.which(CLAUDE) is None and not (os.sep in CLAUDE and os.access(CLAUDE, os.X_OK)):
+        went_wrong(f"there is no {CLAUDE} on this machine's path — install the Claude Code "
+                   f"CLI, or point RUNDESK_CLAUDE_BIN at where it stands")
+        say(type="done", ok=False, why="the Claude Code CLI is not on this machine's path")
+        return 1
+
+    asked = _asked()
+    if not asked.strip():
+        say(type="done", ok=False, why="nothing was asked")
+        return 1
+
+    session = str(uuid.uuid4())
+    argv = [CLAUDE] + opening(posture, os.environ.get("RUNDESK_MODEL"),
+                              os.environ.get("RUNDESK_RESUME"), _settings(), session)
+
+    # This brain keeps its login in the directory it keeps its configuration in, so the
+    # agent's private home is both. Nothing is copied or linked into it: an empty one is
+    # logged out by design, and sharing a sign-in between agents is the owner's call.
+    env = dict(os.environ)
+    if home:
+        env["CLAUDE_CONFIG_DIR"] = home
+    return _turn(argv, where, asked, env, session)
+
+
+def _turn(argv: list, where: str, asked: str, env: dict, session: str) -> int:
+    """Run the brain, and report what it said as it says it."""
+    raw = _raw()
+    seen = {"session": session, "model": None, "ended": False}
+    trouble = []
+    try:
+        brain = subprocess.Popen(
+            argv, cwd=where, env=env, text=True, bufsize=1,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except OSError as gone:
+        went_wrong(f"the Claude Code CLI would not start: {gone}")
+        say(type="done", ok=False, why="the Claude Code CLI would not start")
+        return 1
+
+    # Drained for the brain's whole life, in its own thread. A second pipe with nothing
+    # reading it fills its buffer and stops the program dead — which presents half an hour
+    # later as a brain that simply went quiet, and sends you looking anywhere but here.
+    draining = threading.Thread(target=_drained, args=(brain.stderr, trouble), daemon=True)
+    draining.start()
+
+    try:
+        brain.stdin.write(asked)
+        brain.stdin.close()
+    except OSError:
+        # It went before it read the prompt. Whatever it said about that is on stderr and
+        # is collected by the thread above; there is nothing to be gained by raising here.
+        pass
+
+    for line in brain.stdout:
+        if raw:
+            raw.write(line)
+            raw.flush()
+        for it in records(line, seen):
+            say(**it)
+
+    brain.stdout.close()
+    draining.join(timeout=GOING_SECONDS)
+    if raw:
+        raw.close()
+
+    code = brain.wait()
+    _said_how_to_sign_in(" ".join(trouble + [seen.get("why") or ""]), env)
+    if not seen["ended"]:
+        # A child that dies before its `result` line has said nothing terminal, and
+        # whatever is waiting on this turn would wait for ever.
+        say(type="done", ok=False, why=_why(trouble, code))
+        return code or 1
+    return code
+
+
+def _said_how_to_sign_in(said: str, env: dict) -> None:
+    """Say what to run when this brain has no login to reach, and say it once.
+
+    Worth its own function because being logged out does **not** arrive on stderr: it comes
+    back as an ordinary failed turn on the `result` line, which is where nobody looks for
+    it. Measured on macOS at 2.1.220, and it is sharper than it reads: the sign-in lives in
+    the login keychain rather than in any config directory, and this CLI stops consulting
+    the keychain the moment `CLAUDE_CONFIG_DIR` is set **at all** — pointing it at the very
+    directory it defaults to is enough to be logged out.
+
+    So an agent's private home cannot borrow the machine's login, and there is nothing to
+    copy in even if that were allowed. One `/login` per agent is the whole of the answer.
+    """
+    if not any(one in said.lower() for one in LOGGED_OUT):
+        return
+    where = env.get("CLAUDE_CONFIG_DIR", "<this agent's provider home>")
+    went_wrong(f"this agent has no Claude login of its own — run:\n"
+               f"  CLAUDE_CONFIG_DIR={where} {CLAUDE} /login\n"
+               f"The machine's own login cannot be borrowed: it is in the login keychain, "
+               f"and this CLI stops reading it as soon as CLAUDE_CONFIG_DIR is set.")
+
+
+def _drained(stream, keep: list) -> None:
+    """Everything the brain says went wrong, passed straight on and the tail of it kept.
+
+    Passed on as it arrives rather than at the end, because it is the only thing an owner
+    has to read while a turn is still running — and because anything written to either
+    stream is what tells rundesk this turn has not gone quiet.
+    """
+    for line in stream:
+        went_wrong(line)
+        keep.append(line.rstrip())
+        if len(keep) > TROUBLE_KEPT:
+            del keep[0]
+    stream.close()
+
+
+def _why(trouble: list, code: int) -> str:
+    """One actionable line about a turn that stopped without saying it had."""
+    for said in reversed(trouble):
+        first = said.strip().splitlines()[0].strip() if said.strip() else ""
+        if first:
+            return first[:SUMMARY_CHARS]
+    return f"the Claude Code CLI stopped without finishing the turn (exit {code})"
+
+
+def _raw():
+    """Where this brain's own stream is kept, if rundesk offered somewhere.
+
+    Append only, verbatim, and nothing reads it — so a vendor changing shape is visible as
+    drift beside the run rather than as records that quietly stopped arriving.
+    """
+    at = os.environ.get("RUNDESK_RAW")
+    if not at:
+        return None
+    try:
+        os.makedirs(os.path.dirname(at) or ".", exist_ok=True)
+        return open(at, "a", encoding="utf-8")
+    except OSError as gone:
+        went_wrong(f"what this brain said could not be kept at {at}: {gone}")
+        return None
+
+
+if __name__ == "__main__":
+    if "--capabilities" in sys.argv:
+        print(json.dumps(CAN))
+        raise SystemExit(0)
+    raise SystemExit(carry())
