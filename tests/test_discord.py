@@ -87,6 +87,35 @@ class WhoItAnswers(unittest.TestCase):
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class WhereItListens(unittest.TestCase):
+    """R-DIS-1, R-DIS-4 — the places an owner said this agent may be reached."""
+
+    def test_a_thread_belongs_to_the_channel_it_was_opened_in(self):
+        """R-DIS-1 — asked by the thread's own id, the restriction matched nothing and
+        was skipped for every thread in the server, so an agent told to listen in one
+        channel would answer in a thread under any of them. A thread is where the
+        conversations under a channel happen, and it is confined with it."""
+        self.assertTrue(discord.within(False, belongs_to="1180",
+                                       listens_in="1180", dms=False))
+        self.assertFalse(discord.within(False, belongs_to="9999",
+                                        listens_in="1180", dms=False),
+                         "a thread under another channel was answered in")
+
+    def test_an_agent_confined_to_a_server_and_no_further_answers_anywhere_in_it(self):
+        """R-DIS-2 — naming no channel is a choice, not an omission."""
+        self.assertTrue(discord.within(False, belongs_to="9999",
+                                       listens_in=None, dms=False))
+
+    def test_a_direct_message_is_answered_only_when_that_is_what_was_asked_for(self):
+        """R-DIS-4 — a channel pointed at a room is not also a channel for private
+        messages, and an agent answering both when told about one is answering
+        somewhere its owner never put it."""
+        self.assertTrue(discord.within(True, belongs_to=None, listens_in=None, dms=True))
+        self.assertFalse(discord.within(True, belongs_to=None, listens_in="1180",
+                                        dms=False))
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class WhatAThreadIsCalled(unittest.TestCase):
     """R-DIS-1 — a thread an owner can find again in a sidebar."""
 

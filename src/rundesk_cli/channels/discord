@@ -204,6 +204,20 @@ def where_to_answer(direct: bool, in_thread: bool, ours: bool, mentioned: bool):
     return "open-thread"       # named in a channel: the turn happens in a thread (R-DIS-1)
 
 
+def within(direct: bool, belongs_to, listens_in, dms: bool) -> bool:
+    """Whether this is somewhere the owner said this agent listens.
+
+    A thread is asked about by the channel it was opened in, never by its own id: an
+    owner confining an agent to one channel means the conversations under it too, and
+    a thread is where those conversations happen.
+    """
+    if direct:
+        return bool(dms)
+    if not listens_in:
+        return True          # confined to a server and no further, which is a choice
+    return str(belongs_to) == str(listens_in)
+
+
 class Live:
     """One conversation, and what this agent is showing in it right now."""
 
@@ -322,10 +336,12 @@ class Agent(discord.Client):
         where = where_to_answer(direct, in_thread, ours, mentioned)
         if where == "ignore":
             return
-        if not direct and not in_thread and self.chose.channel \
-                and str(message.channel.id) != str(self.chose.channel):
-            return
-        if direct and not self.chose.dm:
+        # A thread belongs to the channel it was opened in, and that is what an owner
+        # confined this agent to. Asked of the thread's own id, the restriction matched
+        # nothing and was skipped for every thread in the server — so an agent told to
+        # listen in one channel would answer in a thread under any of them.
+        belongs_to = message.channel.parent_id if in_thread else message.channel.id
+        if not within(direct, belongs_to, self.chose.channel, self.chose.dm):
             return
         text = _without_mentions(message.content)
         if not text:

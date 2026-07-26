@@ -222,6 +222,43 @@ class OneConversationIsOneSession(CarriesAConversation):
         self.assertEqual("abc-123",
                          session.of(self.whose, "a-brain", answering.named("ops", "one")))
 
+    async def test_forgetting_while_a_turn_runs_is_not_undone_when_it_ends(self):
+        """R-CH-10 — the ordinary way somebody uses it, and the one that did not work.
+
+        Forgetting ends no turn: a person asking to start again is not asking to throw
+        away the answer they are waiting for. But a turn already running writes down
+        where it got to when it ends, and that lands *after* the forgetting — so the
+        session came back a few seconds later, put there by the very turn the gesture
+        deliberately did not interrupt, and the next message carried on from the
+        conversation somebody had just asked to leave. The gesture said it had worked
+        and the store disagreed.
+        """
+        session.remember(self.whose, "a-brain", answering.named("ops", "one"), "abc-123")
+        stop = asyncio.Event()
+
+        class KeepsIts(Brain):
+            """A turn that writes down where it got to, which every resumable one does."""
+
+            async def __call__(self, name, prompt, named_, **how):
+                said = await super().__call__(name, prompt, named_, **how)
+                session.remember(agents.directory("ava", how["where"]), "a-brain",
+                                 how["conversation"], "handle-from-the-turn")
+                return said
+
+        brain, surface = KeepsIts(holds=stop), Surface()
+        held = self.answering(surface, brain)
+        await held.heard(self.arrived())
+        await brain.started.wait()
+        await held.heard({"type": "control", "conversation": "one", "user": "2207",
+                          "control": "forget"})
+        self.assertIsNone(session.of(self.whose, "a-brain", answering.named("ops", "one")),
+                          "the gesture did not take effect at all")
+        stop.set()
+        await self._settled(held)
+        await asyncio.sleep(0.05)
+        self.assertIsNone(session.of(self.whose, "a-brain", answering.named("ops", "one")),
+                          "the turn put back a session the person had asked to be rid of")
+
     async def test_forgetting_a_conversation_starts_the_next_one_fresh(self):
         """R-CH-10 — and leaves every other conversation exactly as it was."""
         session.remember(self.whose, "a-brain", answering.named("ops", "one"), "abc-123")
@@ -527,6 +564,47 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
         await self.carry(held, self.arrived())
         self.assertEqual([], surface.of("answer"))
         self.assertIn(channel.FINISHED, surface.states)
+
+
+class WhatAChannelHoldsForWeeks(CarriesAConversation):
+    """R-CAD-6 — a channel is held open for as long as the agent is up, so anything that
+    only ever grows is a leak measured in weeks."""
+
+    async def test_conversations_do_not_pile_up_without_end(self):
+        """A thread opened once in March still had an entry in July. Everything else here
+        that accumulates over a gateway's life is bounded; this was not."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+        for i in range(answering.CONVERSATIONS + 20):
+            await self.carry(held, self.arrived(conversation=f"c{i}"))
+        self.assertLessEqual(len(held.exchanges), answering.CONVERSATIONS)
+
+    async def test_a_conversation_with_a_turn_running_is_never_dropped(self):
+        """The bound must not be able to take a conversation out from under the turn it
+        is carrying — that is a live answer nobody would ever receive."""
+        stop = asyncio.Event()
+        brain, surface = Brain(holds=stop), Surface()
+        held = self.answering(surface, brain)
+        await held.heard(self.arrived(conversation="busy"))
+        await brain.started.wait()
+        for i in range(answering.CONVERSATIONS + 5):
+            held.exchanges.setdefault(f"c{i}", answering.Exchange(f"c{i}"))
+        held._make_room()
+        self.assertIn("busy", held.exchanges, "it dropped a conversation that was working")
+        stop.set()
+        await self._settled(held)
+
+    async def test_forgetting_a_conversation_here_costs_nothing(self):
+        """Where a conversation got to lives in the agent's own record, found again by
+        name — so dropping what is held for it is bookkeeping, never data."""
+        session.remember(self.whose, "a-brain", answering.named("ops", "one"), "abc-123")
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived(conversation="one"))
+        held.exchanges.clear()
+        await self.carry(held, self.arrived(conversation="one", text="and now?"))
+        self.assertEqual("abc-123",
+                         session.of(self.whose, "a-brain", answering.named("ops", "one")))
 
 
 class WhatAChannelDoesNotWriteDown(CarriesAConversation):

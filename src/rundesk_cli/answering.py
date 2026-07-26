@@ -38,6 +38,14 @@ from rundesk_cli import channel, session, turn
 #: whole gateway. Past it the oldest waiting message goes and is said to have.
 WAITING = 4
 
+#: How many conversations to keep hold of. A channel is held open for weeks and every
+#: distinct conversation it has ever seen had an entry that nothing ever removed — a
+#: thread opened once in March still had one in July. What is kept for a conversation is
+#: only what a turn running in it needs, so the ones to drop are the ones with nothing
+#: running: where a conversation *got to* is in the agent's own record and is found again
+#: by name, so forgetting one here costs nothing at all.
+CONVERSATIONS = 200
+
 #: What a conversation is called in the run's account, so two channels cannot collide on
 #: one name and a session kept for a Discord thread is never handed to a Slack one.
 def named(channel_name: str, conversation: str) -> str:
@@ -60,6 +68,9 @@ class Exchange:
         self.saying: asyncio.Queue | None = None
         self.waiting: list = []
         self.stopped = False
+        #: Somebody asked for this conversation to be forgotten while a turn was running
+        #: in it. The turn is left to finish, and what it learned is not kept.
+        self.forgotten = False
 
 
 class Answering:
@@ -125,13 +136,30 @@ class Answering:
             # doing it (R-CH-4).
             self._note(f"channel '{self.channel}': a message from someone not allowed was not dispatched")
             return
-        held = self.exchanges.setdefault(it["conversation"], Exchange(it["conversation"]))
+        held = self.exchanges.get(it["conversation"])
+        if held is None:
+            self._make_room()
+            held = self.exchanges.setdefault(it["conversation"], Exchange(it["conversation"]))
         if held.task is not None and not held.task.done():
             await self._while_running(held, it)
             return
         held.ref = it.get("ref")
         held.stopped = False
         held.task = asyncio.ensure_future(self._one(held, it["text"], it["user"]))
+
+    def _make_room(self) -> None:
+        """Drop the oldest conversations that have nothing running in them.
+
+        Oldest first, and never one that is busy: what is held for a conversation is only
+        what a running turn needs, and where the conversation actually got to lives in the
+        agent's own record under a name that finds it again.
+        """
+        while len(self.exchanges) >= CONVERSATIONS:
+            idle = [one for one, held in self.exchanges.items()
+                    if held.task is None or held.task.done()]
+            if not idle:
+                return   # every one of them is working, and none is ours to drop
+            self.exchanges.pop(idle[0], None)
 
     async def _while_running(self, held: Exchange, it: dict) -> None:
         """A second message during a running turn, which is the ordinary case.
@@ -181,13 +209,32 @@ class Answering:
             held.stopped = True
             held.task.cancel()
             return
-        # Forgetting is about where the conversation had got to, and touches no turn.
-        # A turn still running is left to finish and, having been forgotten, its handle
-        # is not written back — the next message starts fresh either way.
+        # Forgetting is about where the conversation had got to, and it ends no turn: a
+        # person asking to start again is not asking to throw away the answer they are
+        # waiting for.
+        #
+        # **But a turn already running will write down where it got to when it ends**,
+        # and that lands after this — so forgetting mid-turn was undone a few seconds
+        # later by the turn it deliberately did not interrupt, and the next message
+        # carried on from the conversation somebody had just asked to leave (R-CH-10).
+        # Marked here and forgotten again once the turn has settled, which is the only
+        # point after which nothing else is going to write.
+        held = self.exchanges.get(it["conversation"])
+        if held is not None and held.task is not None and not held.task.done():
+            held.forgotten = True
+        self._forget(it["conversation"])
+        self._note(f"channel '{self.channel}': a conversation was forgotten")
+
+    def _forget(self, conversation: str) -> None:
+        """Throw away where this conversation had got to, under every brain it has had.
+
+        Under every brain, because an agent whose provider changed has conversations
+        under both — and leaving one behind means the next message carries on from a
+        session somebody just asked to be rid of.
+        """
         whose = agents.paths(self.name, self._where)["agent"]
         for brain in session.brains(whose):
-            session.forget(whose, brain, named(self.channel, it["conversation"]))
-        self._note(f"channel '{self.channel}': a conversation was forgotten")
+            session.forget(whose, brain, named(self.channel, conversation))
 
     # -- one turn --------------------------------------------------------------------
 
@@ -229,6 +276,11 @@ class Answering:
         finally:
             held.saying = None
             held.can = {}
+            if held.forgotten:
+                # After the turn, never before: this is the first moment at which
+                # nothing else is going to write where the conversation got to.
+                held.forgotten = False
+                self._forget(held.conversation)
             asyncio.ensure_future(self._next(held))
 
     async def _next(self, held: Exchange) -> None:

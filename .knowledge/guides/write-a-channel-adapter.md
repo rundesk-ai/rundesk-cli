@@ -247,6 +247,81 @@ Give it whatever your platform needs, without anything changing here:
 rundesk channels ava add ops --kind /opt/my-channel --allow 2207 -- --space 9930 --room 1180
 ```
 
+## What Rundesk keeps for you, and what you keep yourself
+
+Two places, and you decide the shape of both.
+
+**The record** is what your own `--check` returned as `settings`. Rundesk writes it down,
+hands it straight back in `RUNDESK_SETTINGS` every time it starts you, and reads none of
+it. Nest it, repeat it, number it — whatever your platform needs is a shape nobody here
+has to have thought of. The only thing Rundesk requires is that it is a JSON object, so
+that there is something to hand back.
+
+**Your own home** is `RUNDESK_CHANNEL_HOME`, and nothing here ever looks inside it. A
+file, a directory, a database, whatever you like. Use it for anything that changes while
+you run — a cursor into your platform's history, a cache of who is who, the last message
+id you saw. Rundesk never reads it, never writes it, and never tidies it.
+
+The line between them: the record is what an owner *configured*, and it changes when they
+run `channels add` again. Your home is what you *learned*, and it survives restarts
+without anybody being asked about it. Putting a credential in either is the one thing not
+to do — the record is a file that outlives you, and your home is a file you did not ask
+the owner's permission to write a secret into.
+
+## From nothing to a working channel
+
+The whole path, in the order you will actually do it.
+
+**1. Answer `--check` first, before anything else works.** Until it returns `ok`, nothing
+about your channel is written down and there is nothing to run. Get this right on its own:
+
+```sh
+MY_TOKEN=… /opt/my-channel --check --room 1180
+# {"ok": true, "settings": {"room": "1180"}, "secret": {"env": "MY_TOKEN"}, "describes": "#ops"}
+```
+
+**2. Run the suite against it.** It needs no platform and no token:
+
+```sh
+git clone https://github.com/rundesk-ai/rundesk-cli && cd rundesk-cli
+python3 tests/test_channel.py --adapter /opt/my-channel -- --room 1180
+```
+
+**3. Add it to an agent.** This runs your `--check` for real and refuses to write anything
+if it says no:
+
+```sh
+export MY_TOKEN=…
+rundesk add ava --provider codex
+rundesk channels ava add ops --kind /opt/my-channel --allow <your user id> -- --room 1180
+rundesk channels ava show ops
+```
+
+**4. Start the agent.** Your program is started here, and held open for as long as the
+agent is up:
+
+```sh
+rundesk start ava        # kept up by the machine
+rundesk start ava --here # or in this terminal, where you can watch it
+```
+
+**5. When it does not work, look here first:**
+
+```sh
+rundesk logs ava                     # everything, including what your program said went wrong
+rundesk logs ava --source machine    # what escaped before there was a log at all
+rundesk channels ava                 # is it reachable? is the agent even running?
+```
+
+Anything your program writes to stderr appears in that log as it happens, prefixed with
+your channel's name. **Use it.** A surface that fails silently is one nobody can help,
+and this is the one place an owner will look.
+
+**6. Remember there is no shell where this really runs.** Once the machine is keeping the
+agent up, your program starts with a built environment and none of your profile. A token
+exported in a terminal is gone; a `PATH` you rely on is not there. Find what you need from
+`RUNDESK_CHANNEL_HOME`, or from an absolute path.
+
 ## Who is allowed to use it
 
 **Rundesk decides, not you.** You report who spoke; whether that person may be answered is
