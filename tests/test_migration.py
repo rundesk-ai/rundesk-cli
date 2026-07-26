@@ -511,7 +511,7 @@ class TheShapeAnAgentStartsWith(WithStepsOfThisCasesOwn):
         kept.remember_channel("ops", "discord", ["u1"], AT)
         kept.opened("c1", "ops", "thread", "99123", AT)
         kept.arrived("c1", AT, "what about the parser")
-        run_id = kept.began(source="channel", provider="codex", brain="codex", posture="safe",
+        run_id = kept.began(source="channel", provider="codex", posture="safe",
                             started_at=AT, conversation_id="c1")
         self.assertEqual(["ops"], [one["name"] for one in kept.channels()])
         self.assertEqual(["what about the parser"], [one["text"] for one in kept.messages("c1")])
@@ -735,7 +735,7 @@ class WhatAnUpdateMustNotCost(WithStepsOfThisCasesOwn):
         kept.schedule_fired("nightly", LATER, "finished")
         kept.opened("c1", "ops", "thread", "99123", AT)
         asked = kept.arrived("c1", AT, "what about the parser", who="u1")
-        named = kept.began("channel", "codex", "codex", "safe", AT, conversation_id="c1",
+        named = kept.began("channel", "codex", "safe", AT, conversation_id="c1",
                            trigger_message_id=asked, settings={"effort": "high"})
         kept.recorded(named, 1, AT, "tool", event={"name": "grep"}, raw='{"type":"tool"}')
         kept.answered("c1", named, LATER, "the parser was rewritten")

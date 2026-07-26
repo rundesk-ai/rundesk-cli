@@ -62,7 +62,7 @@ class WithAnAgentsOwnRecords(unittest.TestCase):
         store.BUSY_SECONDS = 0.05
 
     def a_run(self, kept, **held) -> str:
-        settled = dict(source="channel", provider="codex", brain="codex", posture="safe",
+        settled = dict(source="channel", provider="codex", posture="safe",
                        started_at=AT)
         settled.update(held)
         return kept.began(**settled)
@@ -659,14 +659,14 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
         kept = self.built()
         kept.opened("c1", "discord", "discord", "general", AT)
         said = kept.arrived("c1", AT, "how are we")
-        named = kept.began("channel", "codex", "/opt/my-brain", "safe", AT,
+        named = kept.began("channel", "/opt/my-brain", "safe", AT,
                            conversation_id="c1", trigger_message_id=said, model="gpt-5",
                            can={"steer": True}, settings={"effort": "high"}, resumed=True,
                            pick=lambda _: "a")
         self.assertEqual(
             {"n": 1, "id": named, "conversation_id": "c1", "schedule_id": None,
-             "source": "channel", "trigger_message_id": said, "provider": "codex",
-             "brain": "/opt/my-brain", "model": "gpt-5", "posture": "safe",
+             "source": "channel", "trigger_message_id": said,
+             "provider": "/opt/my-brain", "model": "gpt-5", "posture": "safe",
              "can": {"steer": True}, "settings": {"effort": "high"}, "resumed": True,
              "started_at": AT, "ended_at": None, "outcome": None, "why": None,
              "exit_code": None, "tokens_in": None, "tokens_out": None,

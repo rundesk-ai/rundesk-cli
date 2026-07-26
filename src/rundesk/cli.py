@@ -1971,12 +1971,29 @@ def cmd_runs(args: argparse.Namespace, gateways, agents) -> int:
         print(f"{args.name}: NOTHING RUN YET")
         print(f'        ask it something:  rundesk ask {args.name} "…"')
         return 0
-    _as_table(("RUN", "WHEN", "SOURCE", "BRAIN", "OUTCOME", "COST"), [
-        (one["id"], str(one["started_at"]), str(one["source"]), str(one["brain"]),
+    _as_table(("RUN", "WHEN", "SOURCE", "ANSWERED BY", "OUTCOME", "COST"), [
+        (one["id"], str(one["started_at"]), str(one["source"]), _answered_by(one["provider"]),
          str(one["outcome"] or "running"), _spent(one))
         for one in found
     ])
     return 0
+
+
+def _answered_by(named: str) -> str:
+    """Which provider answered, as the owner named it — elided from the front if it is a path.
+
+    Their own words rather than the settled form that names its private directory: that one
+    carries a hash so two adapters of one name cannot share a directory, and nobody typed a
+    hash. A long path keeps its end, because the part that tells one adapter from another is
+    the last of it.
+    """
+    said = str(named or "-")
+    return said if len(said) <= _ANSWERED_BY_CHARS else "…" + said[-(_ANSWERED_BY_CHARS - 1):]
+
+
+#: How much of a provider's name a listing shows. Long enough for every shipped adapter and
+#: for the end of a path; the whole of it is in the record.
+_ANSWERED_BY_CHARS = 28
 
 
 def _spent(one: dict) -> str:

@@ -624,7 +624,7 @@ class Store:
         with self._writing() as conn:
             conn.execute("DELETE FROM schedule WHERE name = ?", (name,))
 
-    # ── conversations, and the brain's own token for each ─────────────────────────────────
+    # ── conversations, and the provider's own token for each ──────────────────────────────
 
     def conversation(self, channel: str, space: str, thread: str = ""):
         with self._reading() as conn:
@@ -680,39 +680,48 @@ class Store:
             ).fetchone()
             return _plain(made)
 
-    def session(self, conversation_id: str, brain: str):
-        """What this conversation was continuing, for this brain and no other.
+    def session(self, conversation_id: str, provider: str):
+        """What this conversation was continuing, for this provider and no other.
 
-        Kept for a conversation and a brain together, never for either alone: keyed by the
-        conversation only, changing which brain answers would hand one vendor's session to
-        another, and that must not be expressible.
+        Kept for a conversation and a provider together, never for either alone: keyed by
+        the conversation only, changing which provider answers would hand one vendor's
+        session to another, and that must not be expressible.
+
+        `provider` here is the settled form — `provider.key()` of what an owner named — so
+        one adapter typed two ways is one conversation carried on rather than two started.
         """
         with self._reading() as conn:
             row = conn.execute(
-                "SELECT handle FROM session WHERE conversation_id = ? AND brain = ?",
-                (conversation_id, brain),
+                "SELECT handle FROM session WHERE conversation_id = ? AND provider = ?",
+                (conversation_id, provider),
             ).fetchone()
         return row["handle"] if row else None
 
-    def remember_session(self, conversation_id: str, brain: str, handle: str) -> None:
+    def remember_session(self, conversation_id: str, provider: str, handle: str) -> None:
         with self._writing() as conn:
             conn.execute(
-                "INSERT INTO session (conversation_id, brain, handle) VALUES (?,?,?)"
-                " ON CONFLICT(conversation_id, brain) DO UPDATE SET handle = excluded.handle",
-                (conversation_id, brain, handle),
+                "INSERT INTO session (conversation_id, provider, handle) VALUES (?,?,?)"
+                " ON CONFLICT(conversation_id, provider) DO UPDATE SET"
+                " handle = excluded.handle",
+                (conversation_id, provider, handle),
             )
 
-    def forget_session(self, conversation_id: str, brain=None) -> None:
-        """So the next message starts a new one rather than resuming."""
+    def forget_session(self, conversation_id: str, provider=None) -> None:
+        """So the next message starts a new one rather than resuming.
+
+        Every provider the conversation has had, unless one is named: an agent whose
+        provider changed has a session under each, and leaving one behind means the next
+        message carrying on from something somebody just asked to be rid of.
+        """
         with self._writing() as conn:
-            if brain is None:
+            if provider is None:
                 conn.execute(
                     "DELETE FROM session WHERE conversation_id = ?", (conversation_id,)
                 )
             else:
                 conn.execute(
-                    "DELETE FROM session WHERE conversation_id = ? AND brain = ?",
-                    (conversation_id, brain),
+                    "DELETE FROM session WHERE conversation_id = ? AND provider = ?",
+                    (conversation_id, provider),
                 )
 
     # ── what was said: the searchable history ─────────────────────────────────────────────
@@ -780,7 +789,7 @@ class Store:
 
     # ── runs, and the account of each ─────────────────────────────────────────────────────
 
-    def began(self, source, provider, brain, posture, started_at, conversation_id=None,
+    def began(self, source, provider, posture, started_at, conversation_id=None,
               schedule_id=None, trigger_message_id=None, model=None, can=None,
               settings=None, resumed=False, pick=None) -> str:
         """Admit one occurrence of work, and name it. Everything resolved here is final.
@@ -792,6 +801,10 @@ class Store:
         `settings` is what the brain was told to run with, carried unread. It is part of
         what the run resolved rather than of what it did, so it belongs here and is never
         changed afterwards (R-RUN-3).
+
+        `provider` is the adapter as the owner named it. Its settled form — what names its
+        private directory and what `session` keys on — is `provider.key()` of that, derived,
+        so it is not kept here as well.
         """
         with self._writing() as conn:
             row = conn.execute("SELECT COALESCE(MAX(n), 0) + 1 FROM run").fetchone()
@@ -799,10 +812,10 @@ class Store:
             named = f"{number}-{_marked(pick)}"
             conn.execute(
                 "INSERT INTO run (n, id, conversation_id, schedule_id, source,"
-                " trigger_message_id, provider, brain, model, posture, can, settings,"
-                " resumed, started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " trigger_message_id, provider, model, posture, can, settings,"
+                " resumed, started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (number, named, conversation_id, schedule_id, source, trigger_message_id,
-                 provider, brain, model, posture, json.dumps(can or {}, sort_keys=True),
+                 provider, model, posture, json.dumps(can or {}, sort_keys=True),
                  json.dumps(settings or {}, sort_keys=True),
                  1 if resumed else 0, started_at),
             )

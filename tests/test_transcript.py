@@ -61,7 +61,7 @@ class WithAnAgentThatHasRun(unittest.TestCase):
         return named
 
     def a_run(self, kept, conversation=None, **held) -> str:
-        settled = dict(source="terminal", provider="codex", brain="codex", posture="work",
+        settled = dict(source="terminal", provider="codex", posture="work",
                        started_at=AT, conversation_id=conversation)
         settled.update(held)
         return kept.began(**settled)

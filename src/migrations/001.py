@@ -29,7 +29,7 @@ CREATE TABLE channel (
     name          TEXT PRIMARY KEY,
     kind          TEXT NOT NULL,
     enabled       INTEGER NOT NULL DEFAULT 1,
-    -- Which brain answers what arrives here, where the turn did not say. Part of the same
+    -- Which provider answers what arrives here, where the turn did not say. Part of the same
     -- fallback as the agent's; no option sets them yet.
     provider      TEXT,
     model         TEXT,
@@ -50,7 +50,7 @@ CREATE TABLE schedule (
     cron              TEXT NOT NULL,
     command           TEXT,
     prompt            TEXT,
-    -- Which brain answers work this schedule starts, and what it is told before it reads
+    -- Which provider answers work this schedule starts, and what it is told before it reads
     -- the prompt. Nothing sets them yet: a schedule that asks a turn rather than running a
     -- program is Phase 6, and `prompt` and the CHECK below are the shape it needs.
     provider          TEXT,
@@ -81,9 +81,15 @@ CREATE INDEX conversation_in_space ON conversation(channel, space, last_at);
 
 CREATE TABLE session (
     conversation_id  TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
-    brain            TEXT NOT NULL,
+    -- The same kind of thing `run.provider` holds, in its settled form: `provider.key()`
+    -- of what the owner named, so one adapter typed two ways — `~/tools/x` and the path
+    -- that expands to — is one provider with one session rather than two. Kept for a
+    -- conversation and a provider together and never for either alone: keyed on the
+    -- conversation only, changing which provider answers would hand one vendor's session
+    -- to another, and that must not be expressible.
+    provider         TEXT NOT NULL,
     handle           TEXT NOT NULL,
-    PRIMARY KEY (conversation_id, brain)
+    PRIMARY KEY (conversation_id, provider)
 ) STRICT;
 
 CREATE TABLE run (
@@ -93,8 +99,12 @@ CREATE TABLE run (
     schedule_id         INTEGER REFERENCES schedule(id),
     source              TEXT NOT NULL,
     trigger_message_id  INTEGER,
+    -- Which provider answered, as the owner named it: a shipped adapter or the path to a
+    -- program they wrote, carried through unread, so what a listing shows is what somebody
+    -- typed. `provider.key()` of this is its settled form — the one `session` keys on and
+    -- the one that names its private directory — and it is derived, so it is not a second
+    -- column here that could disagree with this one.
     provider            TEXT NOT NULL,
-    brain               TEXT NOT NULL,
     model               TEXT,
     posture             TEXT NOT NULL,
     can                 TEXT NOT NULL DEFAULT '{}',

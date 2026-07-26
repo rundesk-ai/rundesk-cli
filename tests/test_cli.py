@@ -2570,7 +2570,7 @@ class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
         kept.opened(where_it_is, "ops", "discord", "general", "2026-07-26T09:00:00Z")
         asked = kept.arrived(where_it_is, "2026-07-26T09:00:00Z",
                              "what happened to the parser", who="2207")
-        run = kept.began("channel", "codex", "codex", "work", "2026-07-26T09:00:00Z",
+        run = kept.began("channel", "codex", "work", "2026-07-26T09:00:00Z",
                          conversation_id=where_it_is, trigger_message_id=asked)
         kept.recorded(run, 1, "2026-07-26T09:00:01Z", "tool", event={"name": "grep"})
         kept.answered(where_it_is, run, "2026-07-26T09:00:02Z", "the parser was rewritten")
@@ -2609,9 +2609,9 @@ class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
         printed beside the total rather than folded into it."""
         kept = self.agents.records("ava")
         for _ in range(2):
-            run = kept.began("terminal", "codex", "codex", "work", "2026-07-26T09:00:00Z")
+            run = kept.began("terminal", "codex", "work", "2026-07-26T09:00:00Z")
             kept.ended(run, "2026-07-26T09:00:01Z", "finished")
-        told = kept.began("terminal", "codex", "codex", "work", "2026-07-26T09:00:00Z")
+        told = kept.began("terminal", "codex", "work", "2026-07-26T09:00:00Z")
         kept.ended(told, "2026-07-26T09:00:01Z", "finished",
                    tokens={"input": 5, "reported": True})
 

@@ -185,7 +185,7 @@ async def carry(
     asked = kept.arrived(where_it_is, at_now, prompt,
                          who=(asked_by or {}).get("user") or None)
     run = kept.began(
-        "channel" if asked_by else "terminal", named, brain, posture, at_now,
+        "channel" if asked_by else "terminal", named, posture, at_now,
         conversation_id=where_it_is, trigger_message_id=asked, model=model, can=can,
         settings=settings, resumed=bool(resume), pick=pick,
     )
