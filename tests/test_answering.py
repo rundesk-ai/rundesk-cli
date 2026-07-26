@@ -21,7 +21,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk import agent as agents  # noqa: E402
-from rundesk import answering, channel, session  # noqa: E402
+from rundesk import answering, channel, store  # noqa: E402
+
+#: When a conversation was opened. A calendar fact, never what anything is ordered by.
+AT = "2026-07-26T09:00:00Z"
 
 
 class Outcome:
@@ -119,6 +122,20 @@ class CarriesAConversation(unittest.IsolatedAsyncioTestCase):
         self.whose = agents.directory("ava", self.where)
         self.record = {"kind": "somewhere", "allow": ["2207"], "settings": {}}
         self.told: list = []
+
+    def kept(self, conversation: str = "one", brain: str = "a-brain",
+             channel: str = "ops") -> str | None:
+        """Where this conversation got to for this brain, asked the way a turn asks."""
+        return agents.reading("ava", self.where).session(
+            store.conversation_id(channel, conversation), brain)
+
+    def keeping(self, conversation: str, handle: str, brain: str = "a-brain",
+                channel: str = "ops") -> None:
+        """Arrange a conversation that has already got somewhere, as a restart finds it."""
+        records = agents.records("ava", self.where)
+        where_it_is = store.conversation_id(channel, conversation)
+        records.opened(where_it_is, channel, "somewhere", conversation, AT)
+        records.remember_session(where_it_is, brain, handle)
 
     def answering(self, surface, brain, record=None) -> answering.Answering:
         return answering.Answering(
@@ -261,25 +278,25 @@ class OneConversationIsOneSession(CarriesAConversation):
         held = self.answering(surface, brain)
         await self.carry(held, self.arrived(conversation="one"),
                          self.arrived(conversation="two"))
-        self.assertEqual({"ops/one", "ops/two"},
-                         {one["conversation"] for one in brain.asked})
+        self.assertEqual({"one", "two"}, {one["conversation"] for one in brain.asked})
+        self.assertEqual({"ops"}, {one["on"] for one in brain.asked})
 
     async def test_a_conversation_is_named_so_two_channels_cannot_collide(self):
         """R-CH-3 — a thread called `general` on one surface and on another are two
-        conversations, and one session handed to both is one of them answering wrongly."""
-        self.assertNotEqual(answering.named("ops", "general"),
-                            answering.named("plans", "general"))
+        conversations, and one session handed to both is one of them answering wrongly.
+        The surface is part of what names it, so this is not a rule anybody applies."""
+        self.assertNotEqual(store.conversation_id("ops", "general"),
+                            store.conversation_id("plans", "general"))
 
     async def test_a_conversations_session_is_found_again_after_a_restart(self):
         """R-CH-14 — the handle is kept where the agent keeps things, not in the channel,
         so a gateway coming back finds the conversation exactly where it left it."""
-        session.remember(self.whose, "a-brain", answering.named("ops", "one"), "abc-123")
+        self.keeping("one", "abc-123")
         brain, surface = Brain(), Surface()
         # A second Answering entirely, which is what a restart is.
         held = self.answering(surface, brain)
         await self.carry(held, self.arrived())
-        self.assertEqual("abc-123",
-                         session.of(self.whose, "a-brain", answering.named("ops", "one")))
+        self.assertEqual("abc-123", self.kept("one"))
 
     async def test_forgetting_while_a_turn_runs_is_not_undone_when_it_ends(self):
         """R-CH-10 — the ordinary way somebody uses it, and the one that did not work.
@@ -292,7 +309,7 @@ class OneConversationIsOneSession(CarriesAConversation):
         conversation somebody had just asked to leave. The gesture said it had worked
         and the store disagreed.
         """
-        session.remember(self.whose, "a-brain", answering.named("ops", "one"), "abc-123")
+        self.keeping("one", "abc-123")
         stop = asyncio.Event()
 
         class KeepsIts(Brain):
@@ -300,8 +317,9 @@ class OneConversationIsOneSession(CarriesAConversation):
 
             async def __call__(self, name, prompt, named_, **how):
                 said = await super().__call__(name, prompt, named_, **how)
-                session.remember(agents.directory("ava", how["where"]), "a-brain",
-                                 how["conversation"], "handle-from-the-turn")
+                agents.records("ava", how["where"]).remember_session(
+                    store.conversation_id(how["on"], how["conversation"]), "a-brain",
+                    "handle-from-the-turn")
                 return said
 
         brain, surface = KeepsIts(holds=stop), Surface()
@@ -310,25 +328,24 @@ class OneConversationIsOneSession(CarriesAConversation):
         await brain.started.wait()
         await held.heard({"type": "control", "conversation": "one", "user": "2207",
                           "control": "forget"})
-        self.assertIsNone(session.of(self.whose, "a-brain", answering.named("ops", "one")),
-                          "the gesture did not take effect at all")
+        self.assertIsNone(self.kept("one"), "the gesture did not take effect at all")
         stop.set()
         await self._settled(held)
         await asyncio.sleep(0.05)
-        self.assertIsNone(session.of(self.whose, "a-brain", answering.named("ops", "one")),
+        self.assertIsNone(self.kept("one"),
                           "the turn put back a session the person had asked to be rid of")
 
     async def test_forgetting_a_conversation_starts_the_next_one_fresh(self):
         """R-CH-10 — and leaves every other conversation exactly as it was."""
-        session.remember(self.whose, "a-brain", answering.named("ops", "one"), "abc-123")
-        session.remember(self.whose, "a-brain", answering.named("ops", "two"), "def-456")
+        self.keeping("one", "abc-123")
+        self.keeping("two", "def-456")
         brain, surface = Brain(), Surface()
         held = self.answering(surface, brain)
         await self.carry(held, {"type": "control", "conversation": "one", "user": "2207",
                                 "control": "forget"})
-        self.assertIsNone(session.of(self.whose, "a-brain", answering.named("ops", "one")))
-        self.assertEqual("def-456",
-                         session.of(self.whose, "a-brain", answering.named("ops", "two")))
+        self.assertIsNone(self.kept("one"))
+        self.assertEqual("def-456", self.kept("two"),
+                         "forgetting one conversation took another with it")
 
 
 class StoppingWhatIsRunning(CarriesAConversation):
@@ -539,8 +556,8 @@ class WhenTheConnectionComesAndGoes(CarriesAConversation):
         await self.carry(held, {"type": "gone"}, {"type": "ready"})
         await self.carry(held, self.arrived(text="and now?"))
         self.assertEqual(1, len(held.exchanges), "reconnecting made a second conversation")
-        self.assertEqual(["ops/one", "ops/one"],
-                         [one["conversation"] for one in brain.asked])
+        self.assertEqual([("ops", "one"), ("ops", "one")],
+                         [(one["on"], one["conversation"]) for one in brain.asked])
 
 
 class WhatDoesNotLeaveTheMachine(CarriesAConversation):
@@ -768,14 +785,13 @@ class WhatAChannelHoldsForWeeks(CarriesAConversation):
     async def test_forgetting_a_conversation_here_costs_nothing(self):
         """Where a conversation got to lives in the agent's own record, found again by
         name — so dropping what is held for it is bookkeeping, never data."""
-        session.remember(self.whose, "a-brain", answering.named("ops", "one"), "abc-123")
+        self.keeping("one", "abc-123")
         brain, surface = Brain(), Surface()
         held = self.answering(surface, brain)
         await self.carry(held, self.arrived(conversation="one"))
         held.exchanges.clear()
         await self.carry(held, self.arrived(conversation="one", text="and now?"))
-        self.assertEqual("abc-123",
-                         session.of(self.whose, "a-brain", answering.named("ops", "one")))
+        self.assertEqual("abc-123", self.kept("one"))
 
 
 class WhatTheAgentMade(CarriesAConversation):

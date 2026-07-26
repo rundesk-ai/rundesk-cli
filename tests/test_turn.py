@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import agent, provider, session, transcript, turn  # noqa: E402
+from rundesk import agent, provider, store, transcript, turn  # noqa: E402
 
 PY = sys.executable
 
@@ -176,8 +176,9 @@ class WithAnAgentToRunTurnsFor(unittest.IsolatedAsyncioTestCase):
         Asked with the path an owner typed rather than the key derived from it, every
         `assertIsNone` here passes because the lookup misses, which proves nothing at all.
         """
-        return session.of(agent.directory(name, self.where),
-                          provider.key(self.brain(which)), conversation)
+        return agent.reading(name, self.where).session(
+            store.conversation_id(turn.TERMINAL, conversation),
+            provider.key(self.brain(which)))
 
     def only(self, run: str, kind: str, name: str = "ava") -> dict:
         found = [one for one in self.account(run, name) if one["type"] == kind]
@@ -194,7 +195,9 @@ class WhatATurnResolves(WithAnAgentToRunTurnsFor):
         admitted = self.only(said.run, turn.ADMITTED)
         self.assertEqual("a-model", admitted["model"])
         self.assertEqual("read", admitted["posture"])
-        self.assertEqual("operations", admitted["conversation"])
+        self.assertEqual("operations", admitted["space"])
+        self.assertEqual(store.conversation_id(turn.TERMINAL, "operations"),
+                         admitted["conversation"])
         self.assertEqual({"effort": "high"}, admitted["settings"])
 
     async def test_what_a_run_resolved_is_never_changed_after(self):
@@ -383,6 +386,34 @@ class CarryingAConversationOn(WithAnAgentToRunTurnsFor):
         after = await self.ask("nosy", fresh=True)
         told = json.loads(self.only(after.run, "text")["text"])["told"]
         self.assertIsNone(told["RUNDESK_RESUME"])
+
+    async def test_losing_what_a_conversation_was_continuing_costs_the_next_turn_its_context(self):
+        """R-RUN-14 — and nothing else. A handle is a convenience the next turn is better
+        for having; a turn refused because it was missing would make an agent that cannot
+        answer out of one that would merely answer without remembering."""
+        await self.ask("nosy")
+        self.assertEqual("a-handle", self.handle_for("nosy"))
+        agent.records("ava", self.where).forget_session(
+            store.conversation_id(turn.TERMINAL, turn.TERMINAL))
+
+        after = await self.ask("nosy")
+        told = json.loads(self.only(after.run, "text")["text"])["told"]
+        self.assertIsNone(told["RUNDESK_RESUME"], "it carried on from a handle that had gone")
+        self.assertTrue(after.ok, "a turn was refused over a handle nobody has to have")
+        self.assertEqual("a-handle", self.handle_for("nosy"),
+                         "the turn that started fresh kept nothing to carry on from")
+
+    async def test_a_handle_is_kept_for_one_conversation_and_one_brain_together(self):
+        """R-RUN-12 — never for either alone. Keyed on the conversation only, changing
+        which brain answers hands one vendor's session to another; keyed on the brain only,
+        every conversation it has had shares one."""
+        await self.ask("plain", conversation="operations")
+        await self.ask("nosy", conversation="operations")
+
+        self.assertEqual("s", self.handle_for("plain", "operations"))
+        self.assertEqual("a-handle", self.handle_for("nosy", "operations"))
+        self.assertIsNone(self.handle_for("plain"), "one conversation answered for another")
+        self.assertIsNone(self.handle_for("nosy"))
 
     async def test_a_brain_that_cannot_carry_a_conversation_on_is_not_asked_to(self):
         """R-PRV-15 — it said it cannot, so nothing is kept for it and nothing is handed

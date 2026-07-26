@@ -1,6 +1,6 @@
 """What arrives on a channel, carried through to an answer.
 
-The only module that knows `channel`, `turn`, `session` and `agent` all exist — the mirror
+The only module that knows `channel`, `turn` and `agent` all exist — the mirror
 of what `turn` is for a brain. The shape, in the order it happens:
 
     somebody spoke -> may they? -> admit a turn -> say it is taken up
@@ -31,7 +31,7 @@ import contextlib
 from pathlib import Path
 
 from rundesk import agent as agents
-from rundesk import channel, session, turn
+from rundesk import channel, store, turn
 
 #: How many messages may be waiting for a conversation whose brain cannot be steered.
 #: Small on purpose: somebody typing while an agent works is answering the conversation,
@@ -52,13 +52,6 @@ _UNWINDING = 3
 #: running: where a conversation *got to* is in the agent's own record and is found again
 #: by name, so forgetting one here costs nothing at all.
 CONVERSATIONS = 200
-
-#: What a conversation is called in the run's account, so two channels cannot collide on
-#: one name and a session kept for a Discord thread is never handed to a Slack one.
-def named(channel_name: str, conversation: str) -> str:
-    """One conversation, named so it is this channel's and no other's (R-CH-3)."""
-    return f"{channel_name}/{conversation}"
-
 
 class Exchange:
     """One conversation, and the turn running in it if there is one."""
@@ -260,11 +253,11 @@ class Answering:
 
         Under every brain, because an agent whose provider changed has conversations
         under both — and leaving one behind means the next message carries on from a
-        session somebody just asked to be rid of.
+        session somebody just asked to be rid of. Asked of the conversation rather than
+        walked brain by brain: which brains it has had is the record's to know.
         """
-        whose = agents.paths(self.name, self._where)["agent"]
-        for brain in session.brains(whose):
-            session.forget(whose, brain, named(self.channel, conversation))
+        agents.records(self.name, self._where).forget_session(
+            store.conversation_id(self.channel, conversation))
 
     # -- one turn --------------------------------------------------------------------
 
@@ -287,7 +280,9 @@ class Answering:
                 where=self._where,
                 model=chose.get("model"),
                 settings=chose.get("settings"),
-                conversation=named(self.channel, held.conversation),
+                conversation=held.conversation,
+                on=self.channel,
+                kind=str(self.record.get("kind") or ""),
                 watching=shown,
                 steering=_saying(held.saying),
                 asked_by={"channel": self.channel, "on": held.conversation, "user": user},

@@ -28,6 +28,7 @@ second, so that what moves has somewhere already known to work.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import random
@@ -110,6 +111,23 @@ class Unsearchable(Exception):
 def path_for(directory) -> Path:
     """Where an agent's records stand, given the directory everything of its own is under."""
     return Path(directory) / NAME
+
+
+def conversation_id(channel: str, space: str, thread: str = "") -> str:
+    """What one conversation is called, worked out the same way every time it is opened.
+
+    Derived rather than handed out, because the three that identify a conversation are
+    already unique together and a name minted afresh each time would need somewhere to be
+    remembered — which is the row it is the name of. So two turns arriving in one Discord
+    room, weeks apart and from different processes, land on one conversation without
+    either having asked anything first.
+
+    Hashed rather than joined, because a separator is only unambiguous until one of the
+    three contains it: a platform's own words are its own, and `a` in `b:c` must never be
+    the same conversation as `a:b` in `c`.
+    """
+    said = "\x00".join((channel, space, thread)).encode("utf-8")
+    return hashlib.sha256(said).hexdigest()[:16]
 
 
 def _plain(row) -> dict:

@@ -1,7 +1,7 @@
 """One turn: what it resolved, what it ran, and the account it left behind.
 
 The only module that knows the others exist. `provider` is the seam, `transcript` is the
-account and `session` is where a conversation got to — each of them is about one thing and
+account and the store is where a conversation got to — each of them is about one thing and
 none of them knows about the rest, which is what lets every one be tested on its own. This
 is where they meet, and the whole of what it does is:
 
@@ -31,11 +31,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from rundesk import agent as agents
-from rundesk import process, provider, session, transcript
+from rundesk import process, provider, store, transcript
 
 #: What a conversation is called when nobody named one. A second `rundesk ask` carries the
 #: first one on, which is what a person at a terminal means by asking again.
@@ -98,6 +99,8 @@ async def carry(
     settings: dict | None = None,
     posture: str = provider.WORK,
     conversation: str = TERMINAL,
+    on: str = TERMINAL,
+    kind: str = TERMINAL,
     fresh: bool = False,
     watching=None,
     steering=None,
@@ -119,6 +122,12 @@ async def carry(
     about where it came from — a channel and the person who spoke, when one did. Carried
     into the admitted record and never read here, so the turn goes on knowing nothing
     about surfaces (R-CH-15).
+
+    **A conversation is a place, not a string.** `conversation` is what the surface calls
+    the space this is happening in — a Discord channel id, or `terminal` — and `on` and
+    `kind` are which surface that is. The three together are what makes one conversation
+    one conversation, so two turns arriving in the same room weeks apart carry on from
+    each other and two rooms that happen to share an id do not.
 
     `preface` is what the thing that admitted this turn wants the brain told about the
     situation before it reads a word of the prompt — an owner's standing instructions for
@@ -150,9 +159,12 @@ async def carry(
         home=whose["run"], cwd=whose["home"], provider_home=home, run="capabilities",
         posture=posture, path=None,
     ))
+    kept = agents.records(name, where)
+    where_it_is = kept.opened(store.conversation_id(on, conversation), on, kind,
+                              conversation, _stamped(now))["id"]
     resume = None
     if can["resume"] and not fresh:
-        resume = session.of(whose["agent"], brain, conversation)
+        resume = kept.session(where_it_is, brain)
 
     run = transcript.allocate(whose["runs"], pick=pick)
     if admitted is not None:
@@ -160,7 +172,8 @@ async def carry(
     with transcript.Writer(whose["runs"], run, name, now=now) as writing:
         writing.add(event={
             "type": ADMITTED, "provider": named, "brain": brain, "posture": posture,
-            "conversation": conversation, "model": model, "resumed": bool(resume),
+            "conversation": where_it_is, "on": on, "space": conversation,
+            "model": model, "resumed": bool(resume),
             "settings": dict(settings or {}), "can": can,
             **({"asked_by": dict(asked_by)} if asked_by else {}),
             # Written down because a turn that was given standing instructions read
@@ -210,19 +223,28 @@ async def carry(
         # Inside the same writer, and last. A second one would count from nothing and
         # give the end of a run the same places in the order as its beginning.
         handle = _handle(said)
-        kept = bool(handle) and can["resume"] and session.remember(
-            whose["agent"], brain, conversation, handle)
+        carried = bool(handle) and can["resume"]
+        if carried:
+            kept.remember_session(where_it_is, brain, handle)
         tokens = _tokens(said)
         ended = _ended(said)
         ok = result.ok and ended is not False
         writing.add(event={
             "type": OUTCOME, "ok": ok, "reason": result.reason, "code": result.code,
-            "tokens": tokens, "kept": kept if handle else None,
+            "tokens": tokens, "kept": carried if handle else None,
             "lost": result.undelivered, "why": _why(said),
         })
     return Outcome(run=run, ok=ok, reason=result.reason, said=said, tokens=tokens,
-                   handle=handle if kept else None, why=_why(said),
+                   handle=handle if carried else None, why=_why(said),
                    trouble=[one for one in trouble if one.strip()][-TROUBLE_KEPT:])
+
+
+def _stamped(now=None) -> str:
+    """Wall time, for a person reading it back. Never what anything is ordered by (R-RUN-7).
+
+    The clock is the caller's, so a case fixes it and every record of that turn agrees.
+    """
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime((now or time.time)()))
 
 
 def _noting(writing, trouble: list):

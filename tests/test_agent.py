@@ -461,17 +461,19 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
         """R-AGW-4 — the same rule, and the reason it is a rule rather than a list of
         names: where each conversation had got to outlived the agent and was handed to
         the next one to take the name, because nothing had thought to name that file."""
-        from rundesk import session
-
         self.made()
-        whose = agent.directory("ava", self.where)
-        session.remember(whose, "codex", "terminal", "abc-123")
+        where_it_is = store.conversation_id("terminal", "terminal")
+        kept = agent.records("ava", self.where)
+        kept.opened(where_it_is, "terminal", "terminal", "terminal", "2026-07-26T09:00:00Z")
+        kept.remember_session(where_it_is, "codex", "abc-123")
         agent.remember("ava", self.where, provider="codex")
 
         agent.forget("ava", self.where)
         agent.add("ava", self.where)
-        self.assertIsNone(session.of(agent.directory("ava", self.where), "codex", "terminal"))
-        self.assertIsNone(agent.chosen("ava", self.where)["provider"],
+        back = agent.reading("ava", self.where)
+        self.assertIsNone(back.session(where_it_is, "codex"),
+                          "a new agent carried on from the old one's conversation")
+        self.assertIsNone(back.agent()["provider"],
                           "a new agent inherited the brain the old one reached for")
 
     def test_nothing_of_an_agents_records_is_left_behind(self):
