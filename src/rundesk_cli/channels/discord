@@ -275,12 +275,27 @@ class Agent(discord.Client):
         await self._tell_the_owner("🟢 **Gateway online** — rundesk is up and listening.")
 
     async def _tell_the_owner(self, said: str) -> None:
-        """R-DIS-15 — the owner hears about coming up and going down, wherever they are."""
-        for who in self.chose.allow:
-            with contextlib.suppress(Exception):
-                person = await self.fetch_user(int(who))
-                await person.send(said)
-            return   # the first allowed user is the owner; the rest are guests
+        """R-DIS-15 — the owner hears about coming up and going down, wherever they are.
+
+        The first allowed user is the owner; the rest are guests. Failures are said out
+        loud rather than swallowed: a greeting that silently never arrives is
+        indistinguishable from an agent that never came up, which is the one thing this
+        message exists to tell apart.
+        """
+        if not self.chose.allow:
+            note("nobody to greet — RUNDESK_ALLOW is empty")
+            return
+        who = self.chose.allow[0]
+        try:
+            person = await self.fetch_user(int(who))
+            await person.send(said)
+        except Exception as why:  # noqa: BLE001 — a platform boundary
+            note(f"could not tell the owner ({who}): {type(why).__name__}: {why}")
+        else:
+            # Said on success as well as on failure. "It reported nothing" was read as
+            # "it worked" for three restarts running, and the two are only the same
+            # thing when success has a line of its own.
+            note(f"told the owner ({person}): {said.splitlines()[0]}")
 
     async def going(self) -> None:
         await self._tell_the_owner("🔴 **Gateway offline** — rundesk has shut down.")
