@@ -1220,23 +1220,25 @@ Four things about it that decide how this phase is written:
 
 ### Order of work
 
-1. **Write `migrations/002.py`** — the step that brings today's layout to the new one. Its mechanical
-   form is in the guide; the walk against a real install is in Phase 4 above. Nothing reads the store
-   yet, so this can land and be re-run against copies of a real install until it is right.
-2. **Call the runner from the update**, in the window `R-UPD-21` already opens and already tests: after
-   the files are replaced, before the first agent is brought back. A step that fails stops the update
-   and leaves every agent down.
-3. **Move readers and writers over**, one at a time, each with its own regression check, working down
-   the guide's table.
+1. ~~**Write `migrations/002.py`**~~ — **not written, and not to be.** Nothing is released, so there is no
+   history on any machine to bring forward: `001.py` is the whole shape, and every column the move proved
+   missing went into it rather than into a step after it.
+2. **Call the runner from the update** — done, in the window `R-UPD-21` already opens: after the files are
+   replaced, before the first agent is brought back. A step that fails stops the update and leaves every
+   agent down, which meant narrowing `R-UPD-22`, whose resume was unconditional.
+3. **Move readers and writers over**, one at a time, each with its own regression check, working down the
+   guide's table — done for everything an *agent* keeps; the gateway's three are what remain.
 4. **Delete the old layout and the code that defaulted to it** — including `agent.resolved()` returning
    nothing for a name that is not an agent, which is what silently sends every unknown name to
-   `~/.rundesk/{run,logs,schedules}` today.
-5. **Prove it against a scratch install built for the purpose**, not against the owner's own.
-   Nothing here is released, so there is no consumer data to carry — a migration is proved by
-   building the old shape deliberately and moving it, which is repeatable, and not by moving the
-   one copy that cannot be rebuilt if it goes wrong.
+   `~/.rundesk/{run,logs,schedules}` today. **Not done**, and it cannot be until 3 finishes: those helpers
+   are what the gateway still reads through, so the order is forced.
+5. **Prove it against a scratch install built for the purpose**, not against the owner's own — done for
+   what has moved, by hand as well as by the suite. Driving it is what found the two defects a green
+   suite did not, so it is the step to repeat rather than trust.
 
 ### Three decisions this phase carries out rather than revisits
+
+The first two are done; the third waits on the gateway move that owns it.
 
 - **Removing an agent takes its account.** The owner decided this, and it contradicts ratified
   `R-AGW-5` and the `runs_home()` docstring at `agent.py:180`, which both argue the other way. The
@@ -1284,14 +1286,28 @@ Four things about it that decide how this phase is written:
 - Nothing an update touches loses a transcript, a log, or what a schedule last did.
 - No SQL appears outside the one module that owns it.
 
-### Exit proof
+### Exit proof — not met: everything but the gateway's own three directories
 
-An install of the previous release, with agents, schedules, channels, sessions and history on disk, is
-updated to this one: the migration runs in the window where nothing is up, every agent comes back, and
-everything that was there is readable in the new shape. The same update run twice migrates once. A
-migration made to fail leaves the agents down and says which one and why. The install it is proved
-against is one built for the purpose and thrown away after — nothing here is released, so there is no
-consumer's history to carry, and a migration proved against a copy nobody can rebuild is proved once.
+**What is done.** Every JSON file an agent kept is gone and is rows: `agent.json`, `channels.json`,
+`sessions.json` (and `session.py` with it), `runs/<run>.jsonl`, `.raw` and `allocating.json`. A run is
+numbered inside the transaction that writes it. `transcript.py` is down to the two things that cannot be
+rows — what the brain printed and what it said went wrong — and both stand under `logs/`, so deleting
+that directory costs an owner nothing an account needed. `runs`, `usage` and `search` are built, so what
+an agent did is readable by somebody who types rather than only by a test. R-MIG-1, R-MIG-6, R-MIG-17 and
+R-MIG-18 are green; R-AGW-5 is reversed, and removing an agent takes everything of its own.
+
+**What is not.** The gateway still keeps what it is doing, what it wrote and what it is scheduled to do in
+`run/`, `logs/` and `schedules/`, so `~/.rundesk/{run,logs,schedules}` is not gone and one agent's log does
+not yet tell the whole story of that agent. That is one move rather than four — a gateway reading its
+schedules from one place and its record from another is half-moved — and
+[`moving-onto-the-store`](.knowledge/guides/moving-onto-the-store.md) holds the list, the forced order and
+the two traps in it. **Retention is still unanswered**, and it is the other thing between this and done.
+
+**There is no migration `002`, and the exit proof no longer asks for one.** Nothing is released, so there
+is no history on any machine to carry: `001.py` is the whole shape, and everything the move proved missing
+went into it. The runner is wired into the update and proved against steps a case writes, because the
+version that *does* have data to carry must not be the one that discovers the wiring. The same update run
+twice migrates once; one made to fail leaves every agent down and says which and why.
 
 **And every part of it is hooked up, not merely present.** Phase 4 built the store, the runner and the
 new file layout against nothing. This phase is not finished while any of them is still reached by
@@ -1310,11 +1326,20 @@ nothing, so the proof is one whole turn walked end to end and then read back fro
   here against one a real turn wrote).
 - **The gateway's log is one file**, written by both the gateway and the machine, rotating by date
   without either losing a line.
-- `runs`, `usage` and searching answer from the store for an agent whose history was migrated rather
-  than created — which is the only way to find out whether the migration actually preserved what it
-  claimed to.
+- `runs`, `usage` and searching answer from the store for an agent that has actually run — the check the
+  migration would have been the occasion for, made against a turn instead, because there is no history to
+  migrate.
 
-A phase that has moved the data but left one reader on the old layout has not moved the data.
+A phase that has moved the data but left one reader on the old layout has not moved the data. **This one
+has left the gateway's**, which is why the proof above is marked not met rather than argued down.
+
+**What driving it found that the suite did not**, and the reason the last two are worth the trouble: the
+agent's answer was written twice, once as a message and once as a record — the rule this shape exists to
+hold, broken in the code holding it — and every run's account began at `seq` 2, with a hole where the
+prompt went past. Both were green in 1,100 cases. Reviewing it found three more, the worst of them
+`rundesk serve` ending *badly* on records it refuses, which is what the machine restarts every ten
+seconds for as long as it is up. Auditing the shape column by column found six that nothing could write,
+one of them a second answer to a question the cron already answered.
 
 ## Phase 6 — Let the Clock Start Work
 
