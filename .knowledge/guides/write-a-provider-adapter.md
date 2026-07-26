@@ -58,7 +58,9 @@ rundesk add ava --provider /opt/my-brain   # yours
 | `RUNDESK_POSTURE` | `read` or `work` — how much of the machine this turn may touch |
 | `RUNDESK_SETTINGS` | a JSON object of whatever the owner set, passed through unread |
 
-The prompt arrives on **stdin**.
+The prompt arrives on **stdin**. Read it to the end — stdin closes when there is no more,
+and what you get is the whole of what was asked, with the newline that terminated it still
+on the end.
 
 **You report on stdout, one JSON object per line**, flushed as it happens:
 

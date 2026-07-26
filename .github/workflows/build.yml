@@ -131,6 +131,16 @@ jobs:
           tail -c 200000 suite.log
           exit $ran
 
+      # -- the seam a brain is reached through --------------------------------------
+      - name: provider-adapter — the contract any brain is reached by, shipped or a stranger's
+        run: |
+          # Run bare, which drives the stand-in adapters the suite writes itself. Given
+          # `--adapter`, the same cases drive a real one — which is a probe against a
+          # real account, and never something CI depends on.
+          set +e; python -u tests/test_provider.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
+
       # -- the surface, and this copy of rundesk on a machine ------------------------
       - name: command-surface — every verb, and what it honestly refuses
         run: |
