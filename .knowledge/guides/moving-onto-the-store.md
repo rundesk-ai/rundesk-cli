@@ -14,12 +14,31 @@ against [`agent-store`](../prd/agent-store.md) or
 1. **Write migration `002`.** One step, bringing today's layout to the new one. Nothing reads
    the store yet, so this can land and be re-run against copies of a real install until it is
    right.
-2. **Move readers and writers over, one at a time**, each with its own regression check. The map
+2. **Call `migration.carry_every(agents, want)` from the update**, in the window `R-UPD-21`
+   already opens and already tests — after the files are replaced, before the first agent is
+   brought back. It walks every agent on its own, carries each from wherever *it* is, and stops
+   at the first that cannot be moved. What each migration did lands in that agent's own log.
+3. **Move readers and writers over, one at a time**, each with its own regression check. The map
    below is the whole list — every place that touches durable state today.
-3. **Delete the old layout and the code that defaulted to it**, including
-   `agent.resolved()` returning `Where(None, None, None)` for a name that is not an agent, which
-   is what silently sends every unknown name to `~/.rundesk/{run,logs,schedules}`.
-4. **Migrate the owner's own install**, with a copy kept until it is proved.
+4. **Delete the old layout and the code that defaulted to it** — `gateway.home()`,
+   `logs_home()` and `schedules_home()` (`gateway.py:180`, `:282`, `:372`), the
+   `RUNDESK_{RUN,LOG,SCHEDULES}_DIR` variables `supervisor.py:153` and `:166` bake into the
+   job, and `agent.resolved()` returning `Where(None, None, None)` for a name that is not an
+   agent (`agent.py:255`), which is what silently sends every unknown name to the top level.
+   **This is last, not first**: those helpers cannot go while the readers above still read
+   through them, so the order is forced.
+5. **Migrate the owner's own install**, with a copy kept until it is proved.
+
+## What already reports, and what still has to
+
+`store.py` and `migration.py` write into the agent's own log — a refused version, records that
+cannot be understood, a write that gave up, a machine with no WAL or no search, and every
+migration step that ran or failed. An ordinary read or write writes nothing, deliberately.
+
+**Nothing else does yet.** As each reader moves onto the store, whatever it used to report has
+to keep being reported — a schedule that could not fire, a channel that could not connect, a
+turn whose account could not be written. The rule to hold: after Phase 5, one agent's log tells
+the whole story of that agent, and no part of that story is only in a caller's return value.
 
 ## Every place that touches durable state today
 

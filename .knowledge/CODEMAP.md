@@ -127,6 +127,9 @@ rewrites it; a retention policy takes whole files.
   schema change, its data change and its version stamp commit together. A step may copy a file and never
   delete one; the runner removes what it hands back only once the version has committed, so a step that
   died halfway leaves both copies rather than neither. Going backwards is refusing to go forwards.
+  `carry_every()` walks every agent in turn and stops at the first that cannot be moved, and every step
+  that ran or failed is written into that agent's own log — an update that went wrong overnight is read
+  afterwards rather than watched.
 - `src/rundesk_cli/migrations/001.py` — **the schema, and the only description of it there is.** Making an
   agent runs the migration path from nothing rather than building tables directly, so the path is exercised
   every time anybody adds an agent and a fresh install cannot drift from an upgraded one.
