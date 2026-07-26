@@ -62,7 +62,7 @@ A run's account is the one thing here that is **appended** rather than written w
 written while the thing it accounts for is still happening and has to be readable throughout. Nothing
 rewrites it; a retention policy takes whole files.
 
-## Backend / Services (src/rundesk_cli/ — 12 modules)
+## Backend / Services (src/rundesk_cli/ — 13 modules)
 
 - `src/rundesk_cli/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -96,6 +96,12 @@ rewrites it; a retention policy takes whole files.
 - `src/rundesk_cli/channels/` — the surfaces that ship, one program each. Not modules: nothing imports
   them and they import nothing of ours, so a platform's ids, intents and limits live in one file and
   reach no further.
+- `src/rundesk_cli/answering.py` — what arrives on a channel, carried through to an answer: the mirror of
+  `turn.py`, and the only module that knows `channel`, `turn`, `session` and `agent` all exist. Two things
+  live here and nowhere else, because two surfaces deciding either separately would eventually disagree
+  about one run: **who may be answered**, checked against the record the owner wrote rather than trusted to
+  an adapter, and **what state a turn is in**. Writes nothing down — the run's own account already records
+  it, and a channel that kept a second copy would become the only place something existed.
 - `src/rundesk_cli/transcript.py` — what a run did, written while it did it. Three files per run: the
   account, in words no brain owns, added to and never rewritten; and beside it, verbatim, everything the
   brain said and everything it said went wrong. Separate so a retention policy can one day take the raw and
@@ -132,7 +138,7 @@ rewrites it; a retention policy takes whole files.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 13 files, ~700 cases)
+## Tests (tests/ — 15 files, ~790 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
@@ -151,7 +157,9 @@ provider. One file per contract, named for it:
 | `test_turn.py` | 39 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_transcript.py` | 20 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
 | `test_session.py` | 9 | `agent-run` — a handle kept for a conversation and a brain together |
-| `test_channel.py` | 40 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token |
+| `test_channel.py` | 42 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
+| `test_answering.py` | 36 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
+| `test_discord.py` | 37 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and
 `.knowledge/scripts/check-evidence` fails the build when a row names one that does not exist.

@@ -14,8 +14,10 @@ inside, one per agent, kept up by the machine itself and owning every program it
 which turn a stated time into work that gateway starts and owns like any other; and the **brain** an agent
 reaches, through a seam that is a program rundesk runs rather than code it loads — so one nobody here has
 heard of is first class, and every turn leaves an account of what it did, what its brain said and what it
-cost. The chat apps an agent is reached *from* are not here yet; those verbs are registered and say so
-plainly until they land.
+cost; and the **surfaces** an agent is reached *from*, through a seam of exactly the same shape — a
+program rundesk runs rather than code it loads — so a chat app nobody here has heard of is one more
+program rather than a change to any of this. Discord is the first, and its gateway is held open by the
+agent's own for as long as it is up.
 
 ## Why it exists
 
@@ -48,12 +50,16 @@ supervises nothing itself; it hands that to what the machine already has.
   which are per gateway so that an agent's are its own, are never run late and never overlap; **the seam a
   brain is reached through** — a program rundesk runs rather than code it loads, so a brain nobody here has
   heard of is reached exactly as one that ships is; **one turn**, asked for from this terminal and streamed
-  back to it, carried on where it left off and steered while it runs; and **the account a turn leaves** —
-  what it did, what its brain actually said, and what it cost.
-- **Out of scope:** chat channels, and reading a run back from the command line. Every operation that will
-  reach them is registered and answers "coming soon" until it is built — the channels an agent answers on,
-  and what each run became and cost said in a listing rather than read off the account itself. Nothing here
-  claims a provider loaded a rule, works a cost out from prices, or asks a brain what its plan has left.
+  back to it, carried on where it left off and steered while it runs; **the account a turn leaves** —
+  what it did, what its brain actually said, and what it cost; and **the seam a surface is reached
+  through**, the mirror of the first — putting an agent on a channel, proving it before writing anything
+  down, holding it open inside the agent's gateway, deciding there and only there what state a turn is in,
+  and carrying what arrives on it through to an answer.
+- **Out of scope:** reading a run back from the command line. Those operations are registered and answer
+  "coming soon" until built — what each run became and cost, said in a listing rather than read off the
+  account itself. Nothing here claims a provider loaded a rule, works a cost out from prices, or asks a
+  brain what its plan has left. Approvals and a brain's own questions are a later phase; stopping a turn
+  and starting a conversation again are gestures at the conversation and are here.
   rundesk also does not supervise: keeping a gateway up is the machine's, and writing our own would be
   the largest thing here that nobody asked for. No dependencies, no build step, and no second way into
   the product besides this command.

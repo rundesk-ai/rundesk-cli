@@ -408,6 +408,35 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
         self.assertIsNone(channel.understood(
             json.dumps({"type": "arrived", "user": "u", "text": "hello"})))
 
+    def test_a_message_with_nothing_but_an_attachment_is_still_a_message(self):
+        """R-CH-17 — a photograph sent with nothing typed is the most ordinary message
+        there is. Text was required to be non-empty, so an adapter that dutifully
+        reported one had it refused here and said nothing about refusing it, which is
+        the worst of the three possible outcomes."""
+        at = self.where / "photo.png"
+        at.write_bytes(b"not really a photo")
+        said = channel.understood(json.dumps({
+            "type": "arrived", "conversation": "one", "user": "2207", "text": "",
+            "attachments": [{"name": "photo.png", "at": str(at)}]}))
+        self.assertIsNotNone(said, "a message with only an attachment was dropped")
+        self.assertEqual(1, len(said["attachments"]))
+
+    def test_a_message_with_neither_words_nor_anything_attached_is_not_one(self):
+        """R-CH-17 — nothing to answer and nothing to look at is not a turn."""
+        self.assertIsNone(channel.understood(json.dumps({
+            "type": "arrived", "conversation": "one", "user": "2207", "text": ""})))
+
+    def test_something_attached_that_is_not_on_this_machine_is_dropped(self):
+        """R-CH-17 — a path nothing wrote, or a link somebody expected the brain to
+        fetch, is an instruction to go and get something on a stranger's say-so — and
+        the brain runs here, with the owner's tools."""
+        said = channel.understood(json.dumps({
+            "type": "arrived", "conversation": "one", "user": "2207", "text": "look",
+            "attachments": [{"name": "a", "at": "https://example.invalid/a.png"},
+                            {"name": "b", "at": "/no/such/file.png"},
+                            {"name": "c", "at": "relative.png"}]}))
+        self.assertEqual([], said["attachments"])
+
     def test_a_gesture_that_is_not_one_is_refused(self):
         """R-CAD-1 — acting on it means guessing which of two things somebody meant, and
         one of them ends a turn."""

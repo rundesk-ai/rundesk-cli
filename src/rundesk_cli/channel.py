@@ -240,12 +240,20 @@ def understood(said: bytes | str) -> dict | None:
     if kind not in ARRIVING:
         return None
     for wanted in NEEDED[kind]:
-        if not isinstance(it.get(wanted), str) or not it[wanted]:
+        if not isinstance(it.get(wanted), str):
+            return None
+        if not it[wanted] and wanted != "text":
             return None
     if kind == "control" and it["control"] not in CONTROLS:
         return None
     if kind == "arrived":
         it[ATTACHED] = attached(it.get(ATTACHED))
+        # A message is words, or something attached, or both — and a photograph sent with
+        # nothing typed is the most ordinary message there is. Text was required to be
+        # non-empty, so an adapter that dutifully reported one had it refused here and
+        # said nothing, which is the worst of the three possible outcomes.
+        if not it["text"] and not it[ATTACHED]:
+            return None
     return it
 
 
