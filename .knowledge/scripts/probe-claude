@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""Probe the installed Claude Code CLI against the one thing nobody measured.
+
+Evidence, never a CI dependency: the live half reaches a real account and costs real
+money, so nothing in the suite runs it. Rerun it when the CLI version moves and write what
+changed into `.knowledge/research/2026-07-26-claude-cli-as-a-brain.md`.
+
+    python3 .knowledge/scripts/probe-claude            # everything, including live turns
+    python3 .knowledge/scripts/probe-claude --offline  # only what costs nothing
+
+One question, because the rest of this brain is already measured and committed at
+`tests/samples/` — 184 lines of real output that cost real money and cannot be re-derived
+by reading anything.
+
+**Does `--system-prompt` genuinely replace what the brain was built with?** Only the
+append form has ever been passed, so "it replaces" is a reading of a help string. The
+guide tells adapter authors never to reach for it on the strength of that reading, and an
+argument that is accepted and then dropped is worse than one never sent.
+
+Asked with a rule the conversation cannot supply on its own — every reply must end with a
+word nothing else would produce — and settled on **two mechanical signals, never on tone**:
+
+  1. *Did the rule land?* The word is in the reply, or it is not.
+  2. *Did the brain's own instructions go with it?* The default system prompt is what
+     tells this CLI how to use its own tools, so a run that is given a shell and does not
+     reach for it has lost them. Same shape as the codex probe: an instruction that
+     arrives by breaking the brain is not an instruction that arrived.
+
+And it runs the control. Without the append form beside it, "it ignored the rule" and "it
+ignores that kind of rule" are the same observation. A third run passes no system-prompt
+flag at all, so a reader can see the ask itself works before anything is concluded from it.
+
+The prompt token counts are printed beside each run and are the quantitative half of
+signal 2: replacing a system prompt this large should be visible in what the turn was
+charged for, and a replacement that costs the same as an append did not replace anything.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+CLAUDE = os.environ.get("RUNDESK_CLAUDE_BIN", "claude")
+
+#: A rule the history cannot supply and the model would never volunteer. The first attempt
+#: at this kind of probe elsewhere in this repo asked for something the conversation had
+#: already been told, so the model answered from its own earlier reply and the probe looked
+#: like it worked.
+WORD = "PINEAPPLE"
+RULE = f"You must end EVERY reply with the single word {WORD} on its own line."
+
+#: The ask. Small on purpose — this is charged at whatever the account's default model
+#: costs — and it needs a tool, because whether the tool still works is half the answer.
+ASKING = "Run the shell command `echo ZEPHYR` and tell me what it printed."
+
+ANSWER_SECONDS = 300.0
+
+
+def ran(argv, **extra) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True, **extra)
+
+
+def says(what: str, said: str) -> None:
+    print(f"\n{'=' * 78}\n{what}\n{'=' * 78}\n{said.rstrip()}")
+
+
+def _findable() -> str | None:
+    """Where this machine's claude stands, or nothing."""
+    if os.sep in CLAUDE:
+        return CLAUDE if os.access(CLAUDE, os.X_OK) else None
+    return shutil.which(CLAUDE)
+
+
+def spoke(said: str) -> dict:
+    """One turn's stream, read into the handful of things a probe asks of it.
+
+    Text is taken from the `assistant` lines and never from the `text_delta` fragments:
+    both carry the same bytes, and reading both would count every reply twice.
+    """
+    reply, tools, ended, model = [], [], {}, None
+    for line in said.splitlines():
+        try:
+            one = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(one, dict):
+            continue
+        kind = one.get("type")
+        if kind == "system" and one.get("subtype") == "init":
+            model = one.get("model")
+        elif kind == "assistant":
+            for block in one.get("message", {}).get("content", []):
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "text":
+                    reply.append(str(block.get("text") or ""))
+                elif block.get("type") == "tool_use":
+                    tools.append(str(block.get("name") or ""))
+        elif kind == "result":
+            ended = one
+    return {"reply": "".join(reply), "tools": tools, "end": ended, "model": model}
+
+
+def _charged(ended: dict) -> int:
+    """Everything the turn was charged for on the way in, however it was tiered.
+
+    Fresh, cache-written and cache-read together — which is the one place summing them is
+    right, because the question here is how much prompt there was and not what it cost.
+    """
+    counted = ended.get("usage") or {}
+    return sum(int(counted.get(what) or 0) for what in
+               ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+
+
+def turn(where: str, how: list) -> dict:
+    """One headless turn, with the prompt on stdin where nothing can swallow it.
+
+    `--allowedTools` is variadic and eats a trailing positional, and `--output-format
+    stream-json` exits 1 without `--verbose` while naming only the format. Both are
+    already measured; this is what honouring them looks like.
+    """
+    argv = [CLAUDE, "-p", "--output-format", "stream-json", "--verbose",
+            "--allowedTools", "Bash"] + how
+    said = ran(argv, cwd=where, input=ASKING, timeout=ANSWER_SECONDS)
+    got = spoke(said.stdout)
+    got["code"], got["stderr"] = said.returncode, said.stderr
+    return got
+
+
+def _reports(what: str, got: dict) -> tuple:
+    """One run, printed as the two signals and the numbers behind them."""
+    landed = WORD in got["reply"].upper()
+    reached = "Bash" in got["tools"]
+    says(what, (
+        f"exit {got['code']}   model {got['model']}   prompt {_charged(got['end'])} tokens\n"
+        f"the rule landed:      {'YES' if landed else 'NO'}\n"
+        f"it still used Bash:   {'YES' if reached else 'NO'}   (tools it reached for: "
+        f"{got['tools'] or 'none'})\n"
+        f"reply: {got['reply'][:600]!r}\n"
+        f"stderr: {(got['stderr'] or '')[:300].rstrip()}"))
+    return landed, reached
+
+
+def offline() -> None:
+    """What can be asked without an account, a network or a penny."""
+    says("version", ran([CLAUDE, "--version"]).stdout)
+
+    # The trap: the error names the format and never the flag that is missing, so an
+    # adapter author reads it and goes looking at the wrong argument entirely.
+    without = ran([CLAUDE, "-p", "--output-format", "stream-json"], input="say hi",
+                  timeout=60)
+    says("`--output-format stream-json` with no `--verbose`",
+         f"exit {without.returncode}\n{(without.stderr or without.stdout).rstrip()}")
+
+    home = tempfile.mkdtemp(prefix="claude-probe-home-")
+    where = tempfile.mkdtemp(prefix="claude-probe-empty-")
+    apart = ran([CLAUDE, "-p", "--output-format", "json"], input="say hi", cwd=where,
+                env={**os.environ, "CLAUDE_CONFIG_DIR": home}, timeout=120)
+    says(f"CLAUDE_CONFIG_DIR pointed at an empty {home}",
+         f"exit {apart.returncode}\n"
+         f"{((apart.stdout or '') + (apart.stderr or '')).rstrip()[:600] or '(nothing at all)'}\n"
+         f"what it wrote into that home: {sorted(os.listdir(home)) or '(nothing at all)'}")
+
+
+#: How much smaller a turn's prompt has to be before the difference is a system prompt
+#: going missing rather than the cache landing differently. The default prompt here is
+#: tens of thousands of tokens, so anything this size is a substitution and nothing else.
+GONE_TOKENS = 2000
+
+
+def live() -> int:
+    """The three runs, and which of the two flags did what."""
+    where = tempfile.mkdtemp(prefix="claude-probe-work-")
+    print(f"probing {CLAUDE} in {where} — this reaches a real account and costs real money")
+
+    # The control runs first, so a reader can see the ask itself works before anything is
+    # concluded from a run that behaved oddly.
+    control = turn(where, [])
+    _, control_reached = _reports("the control — no system-prompt flag at all", control)
+    appended = turn(where, ["--append-system-prompt", RULE])
+    added, _ = _reports("--append-system-prompt", appended)
+    substituted = turn(where, ["--system-prompt", RULE])
+    replaced, replaced_reached = _reports("--system-prompt", substituted)
+
+    # The quantitative half. A flag that only *adds* cannot make a turn's prompt smaller,
+    # so what this measures is whether the default went — and how much of it there was.
+    lost = _charged(control["end"]) - _charged(substituted["end"])
+    grew = _charged(appended["end"]) - _charged(control["end"])
+    says("what each form did to the size of the prompt",
+         f"no flag:                 {_charged(control['end'])} tokens\n"
+         f"--append-system-prompt:  {_charged(appended['end'])} tokens  ({grew:+d})\n"
+         f"--system-prompt:         {_charged(substituted['end'])} tokens  ({-lost:+d})")
+
+    if not control_reached:
+        says("verdict — --system-prompt", (
+            "UNSETTLED — the control could not reach the shell either, so 'it stopped\n"
+            "using its tools' means nothing here. Give the ask a tool this build really\n"
+            "offers and run it again; do not read anything into the two runs above."))
+        return 1
+    if not added:
+        says("verdict — --system-prompt", (
+            "UNSETTLED — the rule did not land through the *append* form, which is the\n"
+            "form the shipped adapters use. Either this build ignores a rule of this kind\n"
+            "or the rule is a bad one. Nothing can be concluded about the replace form\n"
+            "until the control form works."))
+        return 1
+    if not replaced:
+        says("verdict — --system-prompt", (
+            "IGNORED — the rule landed through the append form and not through this one,\n"
+            "so this flag is accepted and dropped. An argument that reads like it works\n"
+            "and does nothing is the worst kind: an owner rewording an instruction would\n"
+            "watch nothing happen with nothing to tell them why."))
+        return 0
+    if lost < GONE_TOKENS:
+        says("verdict — --system-prompt", (
+            f"ADDS, IT DOES NOT REPLACE — the rule landed and the prompt did not shrink\n"
+            f"({-lost:+d} tokens against the control). Whatever this flag is named for, on\n"
+            f"this build it puts the words in beside what the brain was built with rather\n"
+            f"than in place of them. The guide's warning is then wrong about this CLI and\n"
+            f"the guide is what moves."))
+        return 0
+    says("verdict — --system-prompt", (
+        f"REPLACES — the rule landed and {lost} tokens of what the brain was built with\n"
+        f"went with it, against {grew:+d} for the append form on the same ask. "
+        f"{'The tool' if replaced_reached else 'Its tool'} instructions\n"
+        f"{'survived it — a shell still ran — so what is substituted is the prose above them' if replaced_reached else 'went too — it could not reach a shell it had been given'}.\n"
+        f"Either way this is the flag the guide says never to map standing instructions\n"
+        f"onto, and it is now measured rather than read off a help string."))
+    return 0
+
+
+def main() -> int:
+    if _findable() is None:
+        print(f"there is no {CLAUDE} on this machine's path — install the Claude Code "
+              f"CLI, or point RUNDESK_CLAUDE_BIN at where it stands", file=sys.stderr)
+        return 2
+    offline()
+    return 0 if "--offline" in sys.argv else live()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

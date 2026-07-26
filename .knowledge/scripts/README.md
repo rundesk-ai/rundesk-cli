@@ -19,9 +19,11 @@ by version bump. Everything else you drop in here is yours.
 | [`check-evidence`](./check-evidence) | Every ✅ in a contract names a test the suite actually declares. `doc-lint` cannot see that. |
 | [`cli-reference`](./cli-reference) | Writes `CLI.md` from the parser, so the reference cannot drift from the command. `--check` fails when it has. |
 | [`gate`](./gate) | Everything that has to be true before work here is finished, in one command. Finds the suites rather than listing them. |
+| [`probe-claude`](./probe-claude) | Whether `--system-prompt` genuinely replaces what the Claude Code CLI was built with, which has only ever been read off a help string. Runs the append form beside it as the control, because without one "it ignored the rule" and "it ignores that kind of rule" are the same observation. |
 | [`probe-codex`](./probe-codex) | What the installed Codex CLI really does, asked of it rather than assumed. Evidence for `research/`, never a test dependency — the live half reaches a real account. |
 | [`probe-codex-instructions`](./probe-codex-instructions) | Where Codex reads standing instructions, and which of its two instruction fields replaces what the brain was built with. Both were established by probing, not by reading its schema, which describes neither. |
 | [`probe-discord`](./probe-discord) | The canary. Prints what to do and what to watch for each channel row a fake cannot settle — a mark appearing, an indicator running, a bot showing online. It does not drive Discord: every row here is *what a person sees*, so a script reporting success would be asserting the one thing it cannot observe. |
+| [`probe-grok`](./probe-grok) | The four things nobody measured about the Grok CLI: whether a resume round trip carries context, whether its usage is a turn's or a conversation's, whether `GROK_HOME` isolates a login, and whether the prompt can stay off the command line. Each settled by what happened rather than by how a reply read. |
 
 ## Usage
 
