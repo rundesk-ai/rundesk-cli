@@ -133,6 +133,54 @@ rundesk channels <name>        what it is reachable on — add, show, remove, in
 rundesk schedules <name>       what it runs on its own — add, on, off, remove, run
 ```
 
+**Work that starts itself, and where its answer goes.** A schedule can run a program or ask a
+turn, and `--to <channel>` is how its outcome reaches a surface — named by the channel it was
+added under, not by anything about the platform:
+
+```sh
+rundesk schedules <name> add nightly --when "0 6 * * *" \
+    --ask "summarise what changed yesterday" --to ops
+```
+
+**You never post it yourself.** There is no command that sends a message, deliberately: you do
+the work and answer, and the gateway delivers the outcome through the channel already held
+open. So a schedule needs no knowledge of the platform at all.
+
+**Find out where it will actually land before you promise anything.** Look first:
+
+```sh
+rundesk channels <name>                  every channel, and what each one points at
+rundesk channels <name> show <channel>   one of them, in full
+```
+
+Read the **`POINTS AT`** column. It is written by the surface itself when the channel was
+added, and it is the whole answer:
+
+```text
+#operations in the 'Acme' server      confined to one room — a schedule lands there, always
+every room in the 'Acme' server       NOT one room. See below
+every room in 'Acme', 'Side Project'  the same, across more than one server
+direct messages to <bot>              a direct message
+```
+
+**A channel that spans a server has no one room to post in**, so the outcome goes to whichever
+conversation on it was *most recently active* — a different room on a different morning, or a
+thread somebody opened. If an owner asks for a daily post in one named room and the channel
+points at "every room", **say so rather than setting it up**: what they want is a channel added
+confined to that room, which only they can do, and then there is exactly one place it can go.
+Promising a room you cannot guarantee is the failure mode here, and it will not show up until
+the morning it lands somewhere else.
+
+You can see which places on a channel have actually been used — the `WHERE` column names each:
+
+```sh
+rundesk messages <name> --channel ops
+```
+
+A schedule that fires with no channel configured still runs and is still recorded — it is
+reported by `rundesk schedules <name>` and readable with `rundesk messages <name> --source
+schedule`.
+
 **What things cost, and how rundesk itself is.**
 
 ```sh

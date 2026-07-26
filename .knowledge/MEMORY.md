@@ -13,6 +13,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   too, so the Discord cases silently start skipping, and a gateway you have running would fail on its
   next restart with no obvious cause. Run `./install.sh` again straight afterwards, and check
   `.venv/bin/python -c "import discord"` before believing a green suite.
+- **Waiting for the gate with `while pgrep -f "scripts/gate"` never ends, because the waiter
+  matches itself.** The pattern is in the waiting shell's own command line, so `pgrep` finds it
+  and every waiter keeps every other waiter alive — six of them were still spinning long after
+  the runs they watched had finished, and one looked like a gate that would not end. Wait on
+  the *output* instead: `until grep -q "GATE_EXIT=" "$log"; do sleep 20; done`. And do not
+  trust the exit code of `gate > log; echo "GATE_EXIT=$?" >> log` either — what a caller sees
+  is the `echo`'s, so a failed gate reports success. Read the line out of the log; a run that
+  said `ok` against all 19 suites still exited 1 on a check above them.
 - **A brain running `rundesk` picks a different `python3` than you did, and `fitness()` then
   refuses.** `rundesk` is `#!/usr/bin/env python3`, so what it resolves depends on the PATH of
   whoever ran it — a developer's shell finds Homebrew's 3.14, and a brain's tool shell finds
