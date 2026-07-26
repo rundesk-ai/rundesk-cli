@@ -30,9 +30,10 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
-from rundesk_cli import process
+from rundesk_cli import gateway, process
 
 #: Where the adapters that ship with rundesk stand. Read by looking rather than listed, so
 #: one added later is reachable the day it lands and no second copy of the list can come to
@@ -263,3 +264,115 @@ async def checked(at: Path, options, env: dict[str, str] | None = None) -> dict:
     said = answered(None)
     said["why"] = (asked.errors or "").strip() or f"it said nothing, and {outcome.reason}"
     return said
+
+
+# ------------------------------------------------------------------------------------
+# What is written down about a channel. Beside the agent's other working state, never
+# inside the home it loads: which surfaces an agent is reachable on is rundesk's record
+# about the agent, not knowledge the agent reads.
+# ------------------------------------------------------------------------------------
+
+#: What the record is called, beside `agent.json` and the book of conversations. One file
+#: per agent rather than one per channel: they are read together every time — a gateway
+#: coming up opens all of them — and a listing that had to walk a directory would be a
+#: second way of finding out what exists.
+BOOK = "channels.json"
+
+
+def book(directory: Path) -> Path:
+    """Where this agent's channels are written down."""
+    return directory / BOOK
+
+
+def known(directory: Path) -> dict:
+    """Every channel this agent is reachable on, by the name it was added under.
+
+    Read rather than changed, so nothing here writes an empty record over one that was
+    merely unreadable. An entry that is not an object is passed over rather than being
+    allowed to stop the rest: one hand-edited channel must not make an agent deaf on
+    every other.
+    """
+    try:
+        said = json.loads(book(directory).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(said, dict):
+        return {}
+    return {name: how for name, how in said.items() if isinstance(how, dict)}
+
+
+def of(directory: Path, name: str) -> dict | None:
+    """One channel, or nothing if this agent has no such channel."""
+    return known(directory).get(name)
+
+
+def remember(directory: Path, name: str, kind: str, allow, settings=None,
+             secret=None, describes=None, now=None) -> bool:
+    """Write down a channel that has already proved it works (R-CAD-9).
+
+    Read, decided and written under one hold, because two channels being added together
+    each write the whole record back and the later one would erase the other with both
+    reporting success.
+
+    **What is kept is a reference to the credential and never the credential** (R-CAD-12).
+    `secret` is the name of a variable the adapter itself said it read, so what shows a
+    channel can say a secret is present without anything here ever having held one.
+
+    `settings` is whatever the adapter asked to have handed back, kept exactly as it gave
+    it and never read — which is what keeps every word of every platform out of here.
+    """
+    if not allow:
+        # Refused here as well as at the command, because this is the last place before
+        # the disk and an agent that answers whoever speaks to it, on a machine where it
+        # runs tools, is a misconfiguration rather than a mode (R-CAD-10).
+        return False
+    try:
+        with gateway.changing(book(directory), {}, "the channels this agent is on") as kept:
+            kept[name] = {
+                "kind": kind,
+                "allow": sorted({one for one in allow if one}),
+                "settings": dict(settings or {}),
+                "secret": dict(secret) if secret else None,
+                "describes": describes,
+                "added": (now or _stamped)(),
+            }
+    except (gateway.Unreadable, OSError):
+        return False
+    return True
+
+
+def forget(directory: Path, name: str) -> bool:
+    """Take this agent off one channel, leaving every other one alone."""
+    try:
+        with gateway.changing(book(directory), {}, "the channels this agent is on") as kept:
+            if name not in kept:
+                return False
+            kept.pop(name)
+    except (gateway.Unreadable, OSError):
+        return False
+    return True
+
+
+def allowed(record: dict, user: str) -> bool:
+    """Whether this person may reach the agent through this channel (R-CH-4).
+
+    **Asked here and never of the adapter.** Being addressed is not the same as being
+    authorized, and naming a bot in a shared room is something anyone present can do. An
+    adapter that filtered for itself would be one whose author could get it wrong, on a
+    machine where the agent runs tools — so a stranger's adapter is safe because of where
+    this decision lives rather than because of how carefully it was written.
+
+    A record with nobody allowed authorizes nobody. That is the same answer adding one
+    refuses to write, said again at the point it would be acted on.
+    """
+    who = record.get("allow")
+    if not isinstance(who, list):
+        return False
+    return bool(user) and user in who
+
+
+def _stamped() -> str:
+    """When a channel was added, for a person reading the record. Never what anything is
+    ordered by — the record is a mapping, and one channel's time says nothing about
+    another's."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

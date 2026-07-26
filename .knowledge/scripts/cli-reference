@@ -138,10 +138,11 @@ UNWRAP = [
 ]
 
 #: argparse writes a positional taking one or more as `<x> [<x> ...]`, which says the same
-#: word twice and says nothing about the `--` in front of it. The `--` is grammar and not
-#: decoration — without it the first thing that looks like an option is refused — so the
-#: reference has to show it or it is describing a command nobody can type.
-REPEATED = re.compile(r"(<[^>]+>) \[\1 \.\.\.\]")
+#: word twice and says nothing about the `--` in front of it, and one taking any number as
+#: `[<x> ...]`, which says nothing about it either. The `--` is grammar and not decoration
+#: — without it the first thing that looks like an option is refused — so the reference has
+#: to show it or it is describing a command nobody can type.
+REPEATED = re.compile(r"(<[^>]+>) \[\1 \.\.\.\]|\[(<[^>]+>) \.\.\.\]")
 
 
 def usage_of(parser) -> str:
@@ -151,7 +152,7 @@ def usage_of(parser) -> str:
     usage = usage.replace("[-h] ", "").replace("[-h]", "")
     for pattern, into in UNWRAP:
         usage = pattern.sub(into, usage)
-    return REPEATED.sub(r"-- \1 [<arg> ...]", usage).strip()
+    return REPEATED.sub(lambda it: f"-- {it.group(1) or it.group(2)} [<arg> ...]", usage).strip()
 
 
 def operations(name: str, parser, summary: str = "") -> list[tuple[str, str]]:

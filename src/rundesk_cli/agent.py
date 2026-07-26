@@ -161,6 +161,17 @@ def provider_home(name: str, provider: str, where: Path | None = None) -> Path:
     return directory(name, where) / "providers" / gateway.checked(provider)
 
 
+def channel_home(name: str, channel: str, where: Path | None = None) -> Path:
+    """The private home a channel is given for this agent, and for no other.
+
+    The same reasoning as a provider's (R-AGT-8), and outside the agent's home for the
+    same reason: what a surface must remember between restarts is rundesk-managed state
+    about a pair, not knowledge the agent loads. Keyed by the channel's own name rather
+    than by its kind, because two Discord channels on one agent are two channels.
+    """
+    return directory(name, where) / "channels" / gateway.checked(channel)
+
+
 def run_home(name: str, where: Path | None = None) -> Path:
     """Where this agent's gateway keeps what it is doing now — cleared when it stops."""
     return directory(name, where) / "run"
@@ -380,10 +391,24 @@ def forget(name: str, where: Path | None = None, history: bool = False) -> list[
     """
     stands = directory(name, where)
     taken = []
-    for path in (home(name, where), directory(name, where) / "providers"):
+    for path in (home(name, where), directory(name, where) / "providers",
+                 directory(name, where) / "channels"):
         if path.exists():
             shutil.rmtree(path)
             taken.append(path.name + "/")
+    # Everything rundesk holds *about* this agent, by where it is rather than by name
+    # (R-AGW-4). One rule, because naming the files one by one is a list that has already
+    # been wrong once: which brain it reached for and where each conversation got to both
+    # outlived the agent and were inherited by the next one to take the name. History is
+    # never here — that is in the directories above, and only `--purge` takes it.
+    #
+    # It matters most for the channels a name was reachable on. An agent added back under
+    # a name that was on somebody's server would be on it again, answering whoever was
+    # allowed then, without anybody having asked for either.
+    for path in sorted(stands.glob("*.json")) + sorted(stands.glob("*.changing")):
+        if path.is_file():
+            path.unlink()
+            taken.append(path.name)
     # The schedules go and the account of them stays, and they sit side by side: what is
     # scheduled is work the name would inherit, and what each schedule last did is the
     # account. Taking the directory would take both, so the file is named.

@@ -119,9 +119,43 @@ nightly   OFF    0 3 * * *    off               2026-07-24 03:00  finished
   so a program named rather than located is refused by `add` rather than discovered at
   three in the morning.
 
+### The surfaces an agent is reachable on
+
+A channel is a messaging surface an agent answers on, named the way a schedule is: you
+give it a name to refer to it by later, and what it *is* comes from `--kind`. Whatever
+that platform needs goes after `--` and is carried to it unread.
+
+```sh
+rundesk channels <agent>                                        # what it is reachable on
+rundesk channels <agent> add ops --kind discord --allow <user> \
+    -- --bot <id> --server <id> --channel <id>                  # put it on one
+rundesk channels <agent> show ops                               # what it is, and who may use it
+rundesk channels <agent> remove ops                             # take it off
+```
+
+```
+CHANNEL  KIND     POINTS AT            ALLOWED  REACHABLE
+ops      discord  #operations in Acme  1        yes
+dms      discord  a direct message     1        yes
+```
+
+- **Adding one proves it works.** It connects, signs in and checks it can see what it was
+  pointed at. If it cannot, nothing is written down and the reason is said — a channel
+  that was never added beats one that is silently deaf.
+- **At least one allowed user is required**, never defaulted, and there is deliberately no
+  way to say "anybody". An agent that answers whoever speaks to it, on a machine where it
+  runs tools, is a misconfiguration and not a mode.
+- **A token is never an argument.** It is read from an environment variable the adapter
+  names, or from a file the owner already controls. What shows a channel says a secret is
+  present, never what it is — a command line is readable through the process list and
+  lands in shell history.
+- **A channel is a program rundesk runs**, not code it loads, so a surface nobody here has
+  heard of is reached exactly as one that ships is. See
+  [`write-a-channel-adapter`](.knowledge/guides/write-a-channel-adapter.md).
+
 An agent and its gateway now share one name and one home: `rundesk add ava` makes both,
 `rundesk start ava` starts its gateway, and `rundesk schedules ava` shows its schedules.
-Provider turns, channels, runs and usage are registered and still say **coming soon**.
+Runs and usage are registered and still say **coming soon**.
 Run `rundesk --help` for the list; it is read off the command rather than copied out here,
 so it cannot come to disagree with what you have installed. A command that is not built
 exits `69` rather than reporting a success it did not earn — a number of its own, so a

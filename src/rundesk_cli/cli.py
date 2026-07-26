@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import time
@@ -26,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from rundesk_cli import __version__  # noqa: E402
 from rundesk_cli import agent as _agent  # noqa: E402
+from rundesk_cli import channel  # noqa: E402
 from rundesk_cli import gateway as _gateway  # noqa: E402
 from rundesk_cli import process  # noqa: E402
 from rundesk_cli import provider  # noqa: E402
@@ -98,11 +100,6 @@ NOT_AVAILABLE = 69
 #: supplies what was left out — so reaching an agent from Discord is one command and not
 #: two, and a binding stays what a run resolved rather than a thing anyone maintains.
 PLANNED: dict[str, tuple[str, dict[str, tuple[str, str]]]] = {
-    "channels": ("the channels an agent is reachable on, and who may use them", {
-        "add": ("<channel> --kind <kind>", "put this agent on a channel, named as a schedule is"),
-        "remove": ("<channel>", "take this agent off a channel"),
-        "show": ("<channel>", "one channel, and who is allowed to reach this agent through it"),
-    }),
     "usage": ("what agents have cost, in tokens and in money", {}),
     "runs": ("what an agent has run, and what became of each", {
         "resume": ("<run>", "carry one run on from where it stopped"),
@@ -121,7 +118,7 @@ HIDDEN = {"serve"}
 #: The planned verbs that are about one agent's things rather than about an agent, and so
 #: name whose before saying which. Optional to the parser and required by the command once
 #: built, so that leaving it out is answered in our words rather than by a usage dump.
-WHOSE = {"channels", "runs"}
+WHOSE = {"runs"}
 
 #: Every form a planned verb will be typed in, and what each form does — the bare listing
 #: and the one that names a thing are different operations, and a reference that showed
@@ -133,8 +130,6 @@ WHOSE = {"channels", "runs"}
 MEANS: dict[str, str] = {
     "<agent>": "which agent — the name it was made under",
     "<prompt>": "what to ask it, in quotes",
-    "--kind <kind>": "which kind of channel it is — `discord`, and others as they land",
-    "<channel>": "what to call this channel, and what to name it by later",
     "<run>": "which run — the id listed against each by `runs`",
     "--provider <provider>": "which brain — one that ships, or the path to a program you wrote",
     "--model <model>": "which model, in that brain's own words — rundesk never reads it",
@@ -327,6 +322,38 @@ def build_parser() -> argparse.ArgumentParser:
                       default=_gateway.EVERY_LOG, metavar="<source>",
                       help="whose lines to show — what the gateway wrote, or what the "
                            "machine caught that never reached it")
+
+    # Named the way schedules are: the agent is the word after the verb, the channel is
+    # what you call it, and what it *is* comes from `--kind`. Everything a particular
+    # platform needs goes after `--` and is never read here (R-CAD-13).
+    reachable = sub.add_parser("channels", help="the surfaces an agent is reachable on")
+    reachable.add_argument("name", metavar="<agent>",
+                           help="whose channels — a channel belongs to one agent")
+    on = reachable.add_subparsers(dest="act", metavar="<action>")
+    joined = on.add_parser("add", help="put this agent on a channel")
+    joined.add_argument("channel", metavar="<channel>",
+                        help="what to call it, and what to name it by later")
+    joined.add_argument("--kind", required=True, metavar="<kind>",
+                        help="which kind of surface — one that ships, or the path of a "
+                             "program that speaks yours")
+    # Repeatable and required, with no default there is any way to ask for. An agent that
+    # answers whoever speaks to it, on a machine where it runs tools, is a
+    # misconfiguration and never a mode (R-CAD-10).
+    joined.add_argument("--allow", action="append", default=[], required=True,
+                        metavar="<user>",
+                        help="who may reach this agent through it — at least one, always; "
+                             "repeatable")
+    # Declared so the reference shows it, and carried rather than read. Whatever the
+    # platform needs is the adapter's own vocabulary, and the `--` in front is grammar:
+    # without it the first thing that looks like an option is refused (R-CAD-13).
+    joined.add_argument("options", nargs="*", metavar="<option>",
+                        help="after `--`, whatever this kind of channel needs — carried to "
+                             "it exactly as typed, and never read here")
+    for act, what in (("remove", "take this agent off a channel"),
+                      ("show", "one channel, and who may reach this agent through it")):
+        one = on.add_parser(act, help=what)
+        one.add_argument("channel", metavar="<channel>",
+                         help="which channel, by the name it was added under")
     return parser
 
 
@@ -1253,6 +1280,137 @@ def _how_long(started: float | None) -> str:
     return f"{seconds // 86400}d{(seconds % 86400) // 3600:02d}h"
 
 
+def cmd_channels(args: argparse.Namespace, gateways, agents) -> int:
+    """The surfaces an agent is reachable on — list them, or change them."""
+    if not agents.exists(args.name):
+        print(f"{args.name}: NO SUCH AGENT", file=sys.stderr)
+        print("        what there is:  rundesk agents", file=sys.stderr)
+        return 1
+    whose = agents.paths(args.name)["agent"]
+    act = getattr(args, "act", None)
+    if act == "add":
+        return _add_channel(args, gateways, agents, whose)
+    if act == "remove":
+        return _remove_channel(args, gateways, agents, whose)
+    if act == "show":
+        return _show_channel(args, gateways, agents, whose)
+    return _list_channels(args, gateways, agents, whose)
+
+
+def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
+    """Put this agent on a channel, once the channel has proved it works (R-CAD-9).
+
+    In this order, and the order is the requirement: the kind resolves, somebody is
+    allowed, the adapter connects and reports what it can see, and only then is anything
+    written. An agent whose channel is misconfigured finds out while a person is standing
+    at the terminal, rather than at three in the morning when somebody asks it something.
+    """
+    if not [one for one in args.allow if one]:
+        # The grammar already refuses the flag being absent. This catches it being there
+        # and empty, which allows exactly as many people. Never defaulted, and there is
+        # deliberately no way to say "anybody" — that is the shortest path to the worst
+        # outcome this product has (R-CAD-10).
+        print(f"{args.name}/{args.channel}: NOT ADDED — nobody is allowed to use it",
+              file=sys.stderr)
+        print(f"        say who:  rundesk channels {args.name} add {args.channel} "
+              f"--kind {args.kind} --allow <user>", file=sys.stderr)
+        return 1
+    try:
+        at = channel.program(args.kind)
+    except channel.NotRunnable as why:
+        print(f"{args.name}/{args.channel}: NOT ADDED — {why}", file=sys.stderr)
+        return 1
+    if channel.of(whose, args.channel) is not None:
+        print(f"{args.name}/{args.channel}: EXISTS — remove it first, or use a different name",
+              file=sys.stderr)
+        return 1
+    home = agents.channel_home(args.name, args.channel)
+    home.mkdir(parents=True, exist_ok=True)
+    # What follows `--` is taken off before the parser sees it, for the same reason a
+    # schedule's program is: a tail with an option in it is unparseable on the oldest
+    # Python this runs on.
+    carried = list(args.options) + list(getattr(args, "handed_on", []))
+    said = asyncio.run(channel.checked(at, carried, channel.environment(
+        home=agents.paths(args.name)["run"], channel=args.channel, agent=args.name,
+        channel_home=home)))
+    if not said["ok"]:
+        # Nothing is written for a channel that has not proved itself, and the adapter's
+        # own words are the whole of the owner's diagnosis.
+        print(f"{args.name}/{args.channel}: NOT ADDED — {said['why'] or 'it could not be reached'}",
+              file=sys.stderr)
+        return 1
+    if not channel.remember(whose, args.channel, args.kind, args.allow,
+                            settings=said["settings"], secret=said["secret"],
+                            describes=said["describes"]):
+        print(f"{args.name}/{args.channel}: NOT ADDED — the record could not be written",
+              file=sys.stderr)
+        return 1
+    unlogged = _note(gateways, args.name,
+                     f"channel '{args.channel}' added ({args.kind})",
+                     agents.resolved(args.name))
+    print(f"{args.name}/{args.channel}: ADDED — {said['describes'] or args.kind}")
+    if not gateways.standing(args.name, agents.resolved(args.name).run).running:
+        # An agent that is not running is not reachable, and saying so here is the
+        # difference between a channel that is quiet and one that is deaf (R-CAD-8).
+        print(f"        not reachable yet:  rundesk start {args.name}")
+    return unlogged
+
+
+def _remove_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
+    if not channel.forget(whose, args.channel):
+        print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
+              file=sys.stderr)
+        return 1
+    unlogged = _note(gateways, args.name, f"channel '{args.channel}' removed",
+                     agents.resolved(args.name))
+    print(f"{args.name}/{args.channel}: REMOVED")
+    return unlogged
+
+
+def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
+    """One channel, and who may reach the agent through it.
+
+    The secret is named as present and never shown (R-CAD-12). Nothing here has ever held
+    one — the record keeps the name of a variable the adapter itself said it read, so
+    there is no value to print by accident.
+    """
+    it = channel.of(whose, args.channel)
+    if it is None:
+        print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
+              file=sys.stderr)
+        return 1
+    named = (it.get("secret") or {}).get("env")
+    rows = [
+        ("kind", str(it.get("kind", "-"))),
+        ("points at", str(it.get("describes") or "-")),
+        ("allowed", ", ".join(it.get("allow") or []) or "nobody"),
+        ("secret", f"{named} — {'present' if os.environ.get(named) else 'not set'}"
+                   if named else "none needed"),
+        ("added", str(it.get("added") or "-")),
+        ("reachable", "yes" if gateways.standing(
+            args.name, agents.resolved(args.name).run).running
+            else "no — the agent is not running"),
+    ]
+    _as_table(("WHAT", "IS"), rows)
+    return 0
+
+
+def _list_channels(args: argparse.Namespace, gateways, agents, whose) -> int:
+    reachable = channel.known(whose)
+    if not reachable:
+        print(f"{args.name}: NO CHANNELS")
+        print(f"        put it on one:  rundesk channels {args.name} add <channel> "
+              f"--kind <kind> --allow <user>")
+        return 0
+    up = gateways.standing(args.name, agents.resolved(args.name).run).running
+    _as_table(("CHANNEL", "KIND", "POINTS AT", "ALLOWED", "REACHABLE"), [
+        (name, str(it.get("kind", "-")), str(it.get("describes") or "-"),
+         str(len(it.get("allow") or [])), "yes" if up else "no")
+        for name, it in sorted(reachable.items())
+    ])
+    return 0
+
+
 def cmd_schedules(args: argparse.Namespace, gateways, agents) -> int:
     """List an agent's schedules, or change them."""
     if args.gateway_was:
@@ -1490,6 +1648,54 @@ def cmd_logs(args: argparse.Namespace, gateways, agents) -> int:
     return 0
 
 
+#: What a verb calls the tail it carries and does not read. One name, so the verbs that
+#: have one are found by looking at the parser rather than by being listed here.
+CARRIED = "options"
+
+
+def _carries_a_tail(parser: argparse.ArgumentParser) -> set:
+    """Which verbs hand everything after `--` to something that is not rundesk.
+
+    Walked off the parser, so a verb that grows one is covered the day it lands and no
+    hand-kept copy of the list can come to disagree with it. A verb is one of these
+    exactly when an action under it declares the tail as a positional.
+    """
+    carries = set()
+    for verb, under in _offered(parser).items():
+        for act in _offered(under).values():
+            if any(not it.option_strings and it.dest == CARRIED for it in act._actions):
+                carries.add(verb)
+    return carries
+
+
+def _offered(parser: argparse.ArgumentParser) -> dict:
+    """The commands a parser offers, by name — its own sub-parsers, or none."""
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action.choices
+    return {}
+
+
+def _handed_on(argv: list[str], carries: set) -> tuple[list[str], list[str]]:
+    """Split what rundesk reads from what it only carries, for the verbs that carry one.
+
+    Taken out **before** the parser rather than left to it, because argparse cannot do
+    this on the oldest Python a fresh macOS ships: a tail with an option in it
+    (`-- --room 1180`) is accepted on a current one and refused as an unrecognized
+    argument on the floor version CI pins. A surface that works on the developer's machine
+    and not on the user's is worse than one that does neither.
+
+    Scoped to those verbs rather than done to every one, because argparse *can* carry a
+    tail into a positional that is required and greedy — which is what a schedule's
+    program is — and taking that one away from it would break the form it already
+    accepts on both.
+    """
+    if not argv or argv[0] not in carries or "--" not in argv:
+        return list(argv), []
+    at = argv.index("--")
+    return list(argv[:at]), list(argv[at + 1:])
+
+
 def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
     """The command surface.
 
@@ -1501,7 +1707,9 @@ def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
     machine = machine if machine is not None else _supervisor
     agents = agents if agents is not None else _agent
     parser = build_parser()
+    argv, handed_on = _handed_on(argv, _carries_a_tail(parser))
     args = parser.parse_args(argv)
+    args.handed_on = handed_on
 
     if args.command is None:
         parser.print_help()
@@ -1541,6 +1749,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
         return cmd_restart(args, gateways, machine, agents)
     if args.command == "status":
         return cmd_status(args, gateways, machine, agents)
+    if args.command == "channels":
+        return cmd_channels(args, gateways, agents)
     if args.command == "schedules":
         return cmd_schedules(args, gateways, agents)
     if args.command == "logs":

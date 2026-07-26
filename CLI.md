@@ -27,10 +27,9 @@ rundesk logs [-n <lines>] [--source <source>] <agent>                           
 
 # reaching it
 rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] <agent> <prompt>   one turn, streamed to this terminal
-rundesk channels <agent>                                                                                                                                       the channels an agent is reachable on, and who may use them   [planned]
-rundesk channels <agent> add <channel> --kind <kind>                                                                                                           put this agent on a channel, named as a schedule is   [planned]
-rundesk channels <agent> remove <channel>                                                                                                                      take this agent off a channel   [planned]
-rundesk channels <agent> show <channel>                                                                                                                        one channel, and who is allowed to reach this agent through it   [planned]
+rundesk channels <agent> add --kind <kind> --allow <user> <channel> -- <option> [<arg> ...]                                                                    put this agent on a channel
+rundesk channels <agent> remove <channel>                                                                                                                      take this agent off a channel
+rundesk channels <agent> show <channel>                                                                                                                        one channel, and who may reach this agent through it
 rundesk schedules <agent> add --when <cron> <schedule> -- <program> [<arg> ...]                                                                                add a schedule
 rundesk schedules <agent> off <schedule>                                                                                                                       keep a schedule but stop it running
 rundesk schedules <agent> on <schedule>                                                                                                                        let a schedule run
@@ -55,11 +54,12 @@ rundesk uninstall [--purge]                                                     
 
 ```sh
 --all                           every agent on this machine
+--allow <user>                  who may reach this agent through it — at least one, always; repeatable
 --check                         say whether a newer release exists
 --conversation <conversation>   which conversation to carry on — this terminal's, when left out
 --fresh                         start the conversation again rather than carrying it on
 --here                          run it in this terminal instead of handing it to the machine
---kind <kind>                   which kind of channel it is — `discord`, and others as they land
+--kind <kind>                   which kind of surface — one that ships, or the path of a program that speaks yours
 --model <model>                 which model, in that brain's own words
 --provider <provider>           which brain answers for it when a turn does not say
 --purge                         also take every agent's home, log and history
@@ -70,7 +70,8 @@ rundesk uninstall [--purge]                                                     
 --when <cron>                   when it runs, as five cron fields — minute, hour, day, month, weekday
 -n, --lines <lines>             how many of the last lines to show, from each source
 <agent>                         which agent — the name it was made under
-<channel>                       what to call this channel, and what to name it by later
+<channel>                       what to call it, and what to name it by later
+<option>                        after `--`, whatever this kind of channel needs — carried to it exactly as typed, and never read here
 <program>                       after `--`, the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH
 <prompt>                        what to ask it, in quotes
 <run>                           which run — the id listed against each by `runs`

@@ -388,6 +388,48 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
         self.assertFalse(gateway.schedules_path("ava", kept).exists(), "the work was inherited")
         self.assertIn("tidy", gateway.ran_path("ava", kept).read_text())
 
+    def test_taking_an_agent_away_takes_the_channels_it_was_reachable_on(self):
+        """R-AGW-4, R-CAD-10 — the worst thing a name can inherit. An agent added back
+        under a name that was on somebody's server would be on it again, answering
+        whoever was allowed then, without anybody having asked for either."""
+        from rundesk_cli import channel
+
+        self.made()
+        whose = agent.directory("ava", self.where)
+        channel.remember(whose, "ops", "discord", ["2207"])
+        agent.channel_home("ava", "ops", self.where).mkdir(parents=True, exist_ok=True)
+
+        agent.forget("ava", self.where)
+        agent.add("ava", self.where)
+        self.assertEqual({}, channel.known(agent.directory("ava", self.where)),
+                         "a new agent inherited who was allowed to reach the old one")
+        self.assertFalse(agent.channel_home("ava", "ops", self.where).exists())
+
+    def test_taking_an_agent_away_takes_what_its_conversations_got_to(self):
+        """R-AGW-4 — the same rule, and the reason it is a rule rather than a list of
+        names: where each conversation had got to outlived the agent and was handed to
+        the next one to take the name, because nothing had thought to name that file."""
+        from rundesk_cli import session
+
+        self.made()
+        whose = agent.directory("ava", self.where)
+        session.remember(whose, "codex", "terminal", "abc-123")
+        agent.remember("ava", self.where, provider="codex")
+
+        agent.forget("ava", self.where)
+        agent.add("ava", self.where)
+        self.assertIsNone(session.of(agent.directory("ava", self.where), "codex", "terminal"))
+        self.assertEqual({}, agent.chosen("ava", self.where))
+
+    def test_taking_an_agent_away_still_keeps_the_account_of_what_it_did(self):
+        """R-AGW-5 — history is in the directories beside it, and only `--purge` takes
+        that. Taking every file about an agent must not become taking its account."""
+        self.made()
+        kept = agent.schedules_home("ava", self.where)
+        gateway.ran_path("ava", kept).write_text('{"tidy": {"outcome": "ok"}}', encoding="utf-8")
+        agent.forget("ava", self.where)
+        self.assertIn("tidy", gateway.ran_path("ava", kept).read_text())
+
     def test_where_an_agent_keeps_things_is_its_own(self):
         """R-AGT-9 — asked once and handed on, because a command working these out for
         itself in three places is how a gateway comes to write where nothing reads."""

@@ -46,7 +46,8 @@ lock in the finished product belongs to an agent.
 | `~/.rundesk/agents/<agent>/providers/<provider>/` | `RUNDESK_AGENTS_DIR` | the private home a provider is given, per agent and provider pair | Rundesk's state about a pair, never the agent's knowledge (R-AGT-8) |
 | `~/.rundesk/agents/<agent>/run/` · `logs/` · `schedules/` | `RUNDESK_AGENTS_DIR` | what that agent's gateway keeps — the same files as below, in the agent's own place | As below, per agent |
 | `~/.rundesk/agents/<agent>/runs/` | `RUNDESK_AGENTS_DIR` | one run each: `<run>.jsonl` (the account, in words no brain owns) · `<run>.raw` and `<run>.err` (everything the brain said, and said went wrong, verbatim) · `allocating.json` (the count of runs, a hint — the directory is the truth) | **History** — kept when an agent is taken away, taken by `--purge` (R-AGW-5). The two raw files are separate so a retention policy can one day take them and leave the account (R-RUN-5) |
-| `~/.rundesk/agents/<agent>/agent.json` · `sessions.json` | `RUNDESK_AGENTS_DIR` | which brain the agent reaches for, and where each of its conversations got to — keyed by brain *and* conversation together | Rundesk's working state about the agent; goes when the agent does (R-RUN-12, R-RUN-14) |
+| `~/.rundesk/agents/<agent>/agent.json` · `sessions.json` · `channels.json` | `RUNDESK_AGENTS_DIR` | which brain the agent reaches for, where each of its conversations got to — keyed by brain *and* conversation together — and the surfaces it is reachable on, each holding who may use it and the *name* of the variable its credential is read from, never the credential | Rundesk's working state about the agent; goes when the agent does (R-RUN-12, R-RUN-14, R-CAD-12) |
+| `~/.rundesk/agents/<agent>/channels/<channel>/` | `RUNDESK_AGENTS_DIR` | the private home a channel is given, per agent and channel pair | Rundesk's state about a pair, never the agent's knowledge |
 | `~/.rundesk/run/` | `RUNDESK_RUN_DIR` | `<name>.lock` (liveness, held open) · `<name>.json` (what a gateway is doing now) | **State** — cleared when a gateway stops (R-GW-12) |
 | `~/.rundesk/logs/` | `RUNDESK_LOG_DIR` | `<name>.log` (rotated) | **History** — outlives the gateway (R-GW-18) |
 | `~/.rundesk/schedules/` | `RUNDESK_SCHEDULES_DIR` | `<name>.json` (what is scheduled) · `<name>.ran.json` (when each last fired and what became of it) · `<name>.seen.json` (when a gateway of this name was last up) · `<name>.interrupted.json` (work that never got to finish, and whether it is definitely gone) · `<name>.changing` and `<name>.interrupted.changing` (held across a read-and-write, so two writers cannot lose one another's change) | **History**, beside what it describes |
@@ -61,7 +62,7 @@ A run's account is the one thing here that is **appended** rather than written w
 written while the thing it accounts for is still happening and has to be readable throughout. Nothing
 rewrites it; a retention policy takes whole files.
 
-## Backend / Services (src/rundesk_cli/ — 11 modules)
+## Backend / Services (src/rundesk_cli/ — 12 modules)
 
 - `src/rundesk_cli/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -84,6 +85,17 @@ rewrites it; a retention policy takes whole files.
 - `src/rundesk_cli/adapters/` — the brains that ship, one program each. Not modules: nothing imports them
   and they import nothing of ours, so a vendor's flags, stream shape, session file and usage arithmetic
   live in one file and reach no further. `adapters/codex` is the first.
+- `src/rundesk_cli/channel.py` — the seam a surface is reached through, and nothing about any
+  particular platform. The mirror of `provider.py`: resolves a channel — a shipped adapter, or a path to
+  a program somebody wrote — builds the environment it is told everything through, asks whether it can
+  reach what it was pointed at, frames one record each way, and holds what is written down about a
+  channel. **Enumerates nothing**: no list of platforms and no list of what one needs, so whatever a
+  surface calls its places arrives as options this file hands straight back unread. It also holds the two
+  decisions a surface does not get to make — what state a turn is in, and that what a brain *says* is
+  handed over once and whole. A platform's word appearing in this file is the seam already failing.
+- `src/rundesk_cli/channels/` — the surfaces that ship, one program each. Not modules: nothing imports
+  them and they import nothing of ours, so a platform's ids, intents and limits live in one file and
+  reach no further.
 - `src/rundesk_cli/transcript.py` — what a run did, written while it did it. Three files per run: the
   account, in words no brain owns, added to and never rewritten; and beside it, verbatim, everything the
   brain said and everything it said went wrong. Separate so a retention policy can one day take the raw and
@@ -120,7 +132,7 @@ rewrites it; a retention policy takes whole files.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 12 files, ~640 cases)
+## Tests (tests/ — 13 files, ~700 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
@@ -139,6 +151,7 @@ provider. One file per contract, named for it:
 | `test_turn.py` | 39 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_transcript.py` | 20 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
 | `test_session.py` | 9 | `agent-run` — a handle kept for a conversation and a brain together |
+| `test_channel.py` | 40 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and
 `.knowledge/scripts/check-evidence` fails the build when a row names one that does not exist.

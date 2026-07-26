@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import io
 import contextlib
+import json
+import os
 import pathlib
 import re
 import shutil
@@ -405,7 +407,8 @@ class BuiltCommandTests(unittest.TestCase):
         # A command that is both "coming soon" and handled would answer twice, and
         # which answer wins would depend on the order of the checks in `main`.
         built = {"version", "update", "uninstall", "add", "ask", "doctor", "agents",
-                 "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules"}
+                 "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
+                 "channels"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 
@@ -649,7 +652,11 @@ class FakeAgents:
     NotAnAgentName = real_agent.NotAnAgentName
     Where = real_agent.Where
 
-    def __init__(self, made=(), wrote=(), complaints=None):
+    def __init__(self, made=(), wrote=(), complaints=None, at=None):
+        #: A real directory to resolve into, for the cases that write something. Without
+        #: one every path here is under `/nowhere`, which is what keeps a case that only
+        #: reads from ever touching a disk.
+        self._at = pathlib.Path(at) if at else pathlib.Path("/nowhere/agents")
         #: The agents that exist, and the directories each resolves.
         self._made = list(made)
         #: What a gateway of this name wrote before there were agents to own it.
@@ -667,13 +674,16 @@ class FakeAgents:
         return sorted(self._made)
 
     def home(self, name):
-        return pathlib.Path(f"/nowhere/agents/{name}/home")
+        return self._at / name / "home"
 
     def resolved(self, name):
         if name not in self._made:
             return self.Where(None, None, None)
-        at = pathlib.Path(f"/nowhere/agents/{name}")
+        at = self._at / name
         return self.Where(at / "run", at / "logs", at / "schedules")
+
+    def channel_home(self, name, channel):
+        return self._at / name / "channels" / channel
 
     def standing_before(self, name):
         return [pathlib.Path(f"/nowhere/{one}") for one in self._wrote] if name in ("gateway",) else []
@@ -699,7 +709,7 @@ class FakeAgents:
         return pathlib.Path("/nowhere/agents")
 
     def paths(self, name):
-        at = pathlib.Path(f"/nowhere/agents/{name}")
+        at = self._at / name
         return {"agent": at, "home": at / "home", "workspace": at / "home" / "workspace",
                 "run": at / "run", "logs": at / "logs", "schedules": at / "schedules"}
 
@@ -1690,6 +1700,182 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         self.assertIn("NO SCHEDULES", said)
         drive(["schedules", "gateway", "add", "mine", "--when", "* * * * *", "--", "/bin/echo"], gateways)
         self.assertEqual(["theirs"], [one["name"] for one in gateways.written_schedules("agent-two")])
+
+
+class TheSurfacesAnAgentIsReachableOn(unittest.TestCase):
+    """R-CAD-9, R-CAD-10, R-CAD-12 — adding a channel, and what it takes.
+
+    A channel is named the way a schedule is, and what it *is* comes from `--kind`.
+    Everything a particular platform needs goes after `--` and is never read here.
+    """
+
+    def setUp(self):
+        self.at = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-channels-"))
+        self.addCleanup(shutil.rmtree, self.at, True)
+        self.written = self.at / "logs" / "ava.log"
+        self.agents = FakeAgents(made=["ava"], at=self.at)
+        (self.at / "ava").mkdir(parents=True, exist_ok=True)
+
+    def _adapter(self, source: str) -> str:
+        at = self.at / "a-channel"
+        at.write_text("#!%s\n%s" % (sys.executable, source), encoding="utf-8")
+        at.chmod(0o755)
+        return str(at)
+
+    #: Says it can see what it was pointed at, and hands back what it wants kept.
+    WORKS = '''
+import json, sys
+rest = sys.argv[sys.argv.index("--check") + 1:]
+settings = {rest[i].lstrip("-"): rest[i + 1] for i in range(0, len(rest) - 1, 2)}
+print(json.dumps({"ok": True, "settings": settings, "describes": "#operations in Acme",
+                  "secret": {"env": "A_CHANNEL_TOKEN"}}))
+'''
+    #: Cannot, and says why.
+    CANNOT = '''
+import json, sys
+print(json.dumps({"ok": False, "why": "that room does not exist"}))
+raise SystemExit(1)
+'''
+
+    def _gateways(self, **kw):
+        return FakeGateways(written=self.written, **kw)
+
+    def test_adding_a_channel_that_cannot_connect_writes_nothing_and_says_why(self):
+        """R-CAD-9 — an agent whose channel is misconfigured finds out while somebody is
+        standing at the terminal, not at three in the morning when it is asked
+        something."""
+        code, said = drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.CANNOT),
+                            "--allow", "2207"], self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT ADDED", said)
+        self.assertIn("that room does not exist", said, "the adapter's reason was swallowed")
+        self.assertFalse((self.at / "ava" / "channels.json").exists(),
+                         "a channel that proved nothing was written down anyway")
+
+    def test_adding_a_channel_with_nobody_allowed_is_refused(self):
+        """R-CAD-10 — refused by the grammar, like the time a schedule runs at: an agent
+        that answers whoever speaks to it, on a machine where it runs tools, is a
+        misconfiguration and never a mode, and there is deliberately no way to ask for
+        anybody."""
+        code, said = drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS)],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(2, code)
+        self.assertIn("--allow", said)
+        self.assertFalse((self.at / "ava" / "channels.json").exists())
+
+    def test_allowing_nobody_in_particular_is_refused_too(self):
+        """R-CAD-10 — the grammar is satisfied by an empty one, and an empty one allows
+        exactly as many people as no flag at all."""
+        code, said = drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
+                            "--allow", ""], self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("nobody is allowed", said)
+        self.assertFalse((self.at / "ava" / "channels.json").exists())
+
+    def test_adding_a_channel_that_works_writes_what_the_adapter_asked_to_keep(self):
+        """R-CAD-9, R-CAD-13 — the settings come back from the adapter rather than from
+        the command line, so what an owner is running on in a year is what the adapter
+        understood rather than what they typed."""
+        code, said = drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
+                            "--allow", "2207", "--", "--server", "9930", "--room", "1180"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("ADDED", said)
+        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        self.assertEqual({"server": "9930", "room": "1180"}, kept["settings"])
+        self.assertEqual(["2207"], kept["allow"])
+
+    def test_what_a_platform_needs_is_never_read_by_the_command(self):
+        """R-CAD-13 — the core parses `--kind` and `--allow`, and carries the rest. A
+        second surface needs no change here, and no word of any platform's is in it."""
+        drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
+               "--allow", "2207", "--", "--workspace", "T04", "--dm"],
+              self._gateways(), agents=self.agents)
+        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        self.assertEqual({"workspace": "T04"}, kept["settings"],
+                         "the command decided what a platform's options meant")
+
+    def test_a_credential_is_named_as_present_rather_than_shown(self):
+        """R-CAD-12 — the record holds the name of a variable the adapter said it read.
+        There is no value here to print by accident, because nothing ever held one."""
+        drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
+               "--allow", "2207"], self._gateways(), agents=self.agents)
+        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        self.assertEqual({"env": "A_CHANNEL_TOKEN"}, kept["secret"])
+        was = os.environ.get("A_CHANNEL_TOKEN")
+        os.environ["A_CHANNEL_TOKEN"] = "not for printing"
+        self.addCleanup(lambda: os.environ.pop("A_CHANNEL_TOKEN", None)
+                        if was is None else os.environ.__setitem__("A_CHANNEL_TOKEN", was))
+        _, said = drive(["channels", "ava", "show", "ops"], self._gateways(), agents=self.agents)
+        self.assertIn("A_CHANNEL_TOKEN", said)
+        self.assertIn("present", said)
+        self.assertNotIn("not for printing", said, "a channel's secret was printed")
+
+    def test_a_channel_that_is_added_twice_is_refused(self):
+        """R-CAD-9 — the second one would silently replace the first, including who was
+        allowed to use it."""
+        for _ in range(1):
+            drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
+                   "--allow", "2207"], self._gateways(), agents=self.agents)
+        code, said = drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
+                            "--allow", "9999"], self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("EXISTS", said)
+        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        self.assertEqual(["2207"], kept["allow"], "who may use it was replaced by a refusal")
+
+    def test_an_agent_that_is_not_running_is_reported_as_out_of_reach(self):
+        """R-CAD-8 — a channel on a stopped agent is deaf rather than quiet, and the
+        difference is the whole of what an owner needs to know."""
+        drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
+               "--allow", "2207"], self._gateways(), agents=self.agents)
+        _, said = drive(["channels", "ava"], self._gateways(), agents=self.agents)
+        self.assertIn("REACHABLE", said)
+        self.assertRegex(said, r"ops\s+.*\s+no")
+
+    def test_a_channel_can_be_taken_off_an_agent(self):
+        """R-CAD-9 — and the record says so afterwards."""
+        drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
+               "--allow", "2207"], self._gateways(), agents=self.agents)
+        code, said = drive(["channels", "ava", "remove", "ops"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("REMOVED", said)
+        self.assertEqual({}, json.loads((self.at / "ava" / "channels.json").read_text()))
+
+    def test_an_agent_with_no_channels_says_so_and_says_what_to_do(self):
+        code, said = drive(["channels", "ava"], self._gateways(), agents=self.agents)
+        self.assertEqual(0, code)
+        self.assertIn("NO CHANNELS", said)
+        self.assertIn("rundesk channels ava add", said)
+
+    def test_channels_for_an_agent_that_does_not_exist_says_so(self):
+        code, said = drive(["channels", "nobody"], self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NO SUCH AGENT", said)
+
+    def test_a_platforms_options_survive_looking_like_rundesks_own(self):
+        """R-CAD-13 — `--server` and `--dm` are a platform's words, and argparse would
+        refuse them as unrecognized. They are taken off before the parser, which is the
+        only way a tail with an option in it parses on the oldest Python this runs on."""
+        drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
+               "--allow", "2207", "--", "--server", "9930", "--room", "1180"],
+              self._gateways(), agents=self.agents)
+        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        self.assertEqual({"server": "9930", "room": "1180"}, kept["settings"])
+
+    def test_only_a_verb_that_carries_a_tail_has_one_taken_off_it(self):
+        """R-CAD-13 — read off the parser rather than listed, and scoped: argparse can
+        carry a tail into a positional that is required and greedy, which is what a
+        schedule's program is, and taking that away would break a form it already
+        accepts."""
+        parser = cli.build_parser()
+        self.assertEqual({"channels"}, cli._carries_a_tail(parser))
+        rest, tail = cli._handed_on(
+            ["schedules", "ava", "add", "t", "--when", "X", "--", "/bin/sh", "-c", "hi"],
+            cli._carries_a_tail(parser))
+        self.assertEqual([], tail, "a schedule's program was taken from the parser")
+        self.assertEqual(["/bin/sh", "-c", "hi"], parser.parse_args(rest).run)
 
 
 class WhatNeverFinished(unittest.TestCase):

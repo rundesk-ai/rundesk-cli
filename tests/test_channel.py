@@ -515,6 +515,86 @@ class TheStateOfATurnIsNotTheSurfacesToDecide(DrivesAnAdapter):
         self.assertIs(False, shown["can"]["steer"])
 
 
+class WhatIsWrittenDownAboutAChannel(DrivesAnAdapter):
+    """R-CAD-10, R-CAD-12 — the record, and the two things it must never hold."""
+
+    def test_a_channel_nobody_may_use_is_never_written_down(self):
+        """R-CAD-10 — refused at the last place before the disk as well as at the
+        command, because this is the one that cannot be got round."""
+        self.assertFalse(channel.remember(self.where, "ops", "discord", []))
+        self.assertEqual({}, channel.known(self.where))
+
+    def test_what_is_kept_is_the_name_of_a_credential_and_never_one(self):
+        """R-CAD-12 — nothing here has ever held a secret, so there is none to print by
+        accident. What is kept is where the adapter said it found one."""
+        channel.remember(self.where, "ops", "discord", ["2207"],
+                         secret={"env": "MY_CHANNEL_TOKEN"})
+        written = channel.book(self.where).read_text()
+        self.assertIn("MY_CHANNEL_TOKEN", written)
+        self.assertEqual({"env": "MY_CHANNEL_TOKEN"}, channel.of(self.where, "ops")["secret"])
+
+    def test_a_platforms_own_words_are_kept_exactly_as_it_gave_them(self):
+        """R-CAD-13 — never read, so a surface can need something nobody here has heard
+        of and the record still holds it."""
+        channel.remember(self.where, "ops", "somewhere", ["2207"],
+                         settings={"parliament": ["a", "b"], "quorum": 3})
+        self.assertEqual({"parliament": ["a", "b"], "quorum": 3},
+                         channel.of(self.where, "ops")["settings"])
+
+    def test_two_channels_added_at_once_do_not_lose_one_another(self):
+        """R-CAD-9 — read, decided and written under one hold. Each writing the whole
+        record back would leave one channel simply not existing, with both reported as
+        added."""
+        for name in ("ops", "dms", "plans"):
+            channel.remember(self.where, name, "discord", ["2207"])
+        self.assertEqual(["dms", "ops", "plans"], sorted(channel.known(self.where)))
+
+    def test_a_record_that_cannot_be_read_is_not_an_empty_one(self):
+        """R-CAD-9 — writing an empty record over one that was merely unreadable would
+        take an agent off every channel it had, silently."""
+        channel.book(self.where).write_text("{ this is not json")
+        self.assertEqual({}, channel.known(self.where))
+        self.assertFalse(channel.remember(self.where, "ops", "discord", ["2207"]))
+        self.assertIn("not json", channel.book(self.where).read_text(),
+                      "a record that could not be read was written over")
+
+    def test_one_channel_nobody_can_read_does_not_make_an_agent_deaf_on_the_rest(self):
+        """R-CAD-9 — a hand-edited entry is one channel to fix, not every channel gone."""
+        channel.book(self.where).write_text(json.dumps({"ops": "not an object",
+                                                        "dms": {"kind": "discord"}}))
+        self.assertEqual(["dms"], sorted(channel.known(self.where)))
+
+    def test_taking_a_channel_off_leaves_every_other_one_alone(self):
+        for name in ("ops", "dms"):
+            channel.remember(self.where, name, "discord", ["2207"])
+        self.assertTrue(channel.forget(self.where, "ops"))
+        self.assertEqual(["dms"], sorted(channel.known(self.where)))
+        self.assertFalse(channel.forget(self.where, "ops"), "it removed it twice")
+
+
+class WhoMayReachTheAgent(DrivesAnAdapter):
+    """R-CH-4 — asked here, and never of the adapter."""
+
+    def test_somebody_the_channel_does_not_authorize_is_not_dispatched(self):
+        """R-CH-4 — being addressed is not being authorized, and naming a bot in a shared
+        room is something anyone present can do."""
+        channel.remember(self.where, "ops", "discord", ["2207"])
+        record = channel.of(self.where, "ops")
+        self.assertTrue(channel.allowed(record, "2207"))
+        self.assertFalse(channel.allowed(record, "9999"))
+
+    def test_a_record_allowing_nobody_authorizes_nobody(self):
+        """R-CAD-10 — the answer adding one refuses to write, said again at the point it
+        would be acted on. A hand-edited record must not be a way round it."""
+        self.assertFalse(channel.allowed({"allow": []}, "2207"))
+        self.assertFalse(channel.allowed({}, "2207"))
+        self.assertFalse(channel.allowed({"allow": "everyone"}, "2207"))
+
+    def test_nobody_in_particular_is_not_somebody(self):
+        """R-CH-4 — an adapter reporting an empty speaker must not match an empty entry."""
+        self.assertFalse(channel.allowed({"allow": [""]}, ""))
+
+
 def _taken(argv: list, flag: str) -> tuple[Path | None, list]:
     """`--adapter <path>`, out before unittest sees the arguments."""
     if flag not in argv:
