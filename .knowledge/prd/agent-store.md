@@ -48,3 +48,7 @@ has done. Each agent keeps its own, so nothing one agent holds is ever in anothe
 - Whether a conversation may ever span two surfaces, and what joining two of them would mean.
 - Whether what a brain printed is deleted on a schedule, on a size, or only when asked.
 - What an agent has cost reads as nothing rather than as absent when it has run nothing at all.
+- Whether a channel can be turned off and left in place, the way a schedule can. What is kept
+  has somewhere to say so, and no command offers it.
+- Whether what a person calls a conversation is worth keeping, given no surface reports one yet.
+- When a run is ever taken away on its own, rather than with the agent that ran it.

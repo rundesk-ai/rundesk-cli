@@ -780,12 +780,6 @@ class Store:
             kept.append(one)
         return kept
 
-    def forget_run(self, run_id: str) -> None:
-        """Take a run and its account. What its brain said is a file, and goes with it."""
-        with self._writing() as conn:
-            conn.execute("DELETE FROM record WHERE run_id = ?", (run_id,))
-            conn.execute("UPDATE message SET run_id = NULL WHERE run_id = ?", (run_id,))
-            conn.execute("DELETE FROM run WHERE id = ?", (run_id,))
 
 
 def removes(directory) -> list:

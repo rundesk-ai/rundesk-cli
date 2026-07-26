@@ -1273,6 +1273,29 @@ migration made to fail leaves the agents down and says which one and why. And th
 the one with real history in it — is carried across, with what it looked like before kept until it is
 proved.
 
+**And every part of it is hooked up, not merely present.** Phase 4 built the store, the runner and the
+new file layout against nothing. This phase is not finished while any of them is still reached by
+nothing, so the proof is one whole turn walked end to end and then read back from both sides:
+
+- A real turn is taken through a channel, and afterwards **the same facts are found in both places** —
+  the run, its account, what was asked and what was answered as rows; and what the brain itself printed
+  as `logs/runs/<run>.jsonl` beside it, with the run naming it.
+- **Nothing is written in two places that could disagree.** A schedule fires, a turn runs, a channel
+  delivers, and each fact has exactly one home: no reader falls back to the old layout, and
+  `~/.rundesk/{run,logs,schedules}` is gone rather than merely unused.
+- **What is on disk matches what the store says is on disk**, item for item, for a real agent — every
+  run row has its log file or is known to have had it destroyed, and every log file has its run.
+- **Deleting every file but `state.db` leaves a working agent** with its whole history, and deleting
+  `logs/` costs nothing an account needed (R-STO-18, proved in Phase 4 against a made-up store, proved
+  here against one a real turn wrote).
+- **The gateway's log is one file**, written by both the gateway and the machine, rotating by date
+  without either losing a line.
+- `runs`, `usage` and searching answer from the store for an agent whose history was migrated rather
+  than created — which is the only way to find out whether the migration actually preserved what it
+  claimed to.
+
+A phase that has moved the data but left one reader on the old layout has not moved the data.
+
 ## Phase 6 — Let the Clock Start Work
 
 **Outcome:** an agent does work because the time came, through the same resolver, run record and

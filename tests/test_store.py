@@ -736,21 +736,6 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
             kept.recorded(named, 1, AT, "constellation")
         self.assertEqual([], kept.records(named))
 
-    def test_taking_a_run_away_takes_its_account_and_leaves_what_was_said(self):
-        """What a person said is theirs and outlives the run that answered it; the answer
-        stays too, no longer claiming a run that is gone."""
-        kept = self.built()
-        kept.opened("c1", "discord", "discord", "general", AT)
-        named = self.a_run(kept, conversation_id="c1")
-        kept.recorded(named, 1, AT, "done", event={"ok": True})
-        kept.arrived("c1", AT, "how are we")
-        kept.answered("c1", named, LATER, "we are well")
-        kept.forget_run(named)
-        self.assertIsNone(kept.run(named))
-        self.assertEqual([], kept.records(named))
-        self.assertEqual(["how are we", "we are well"],
-                         [one["text"] for one in kept.messages("c1")])
-        self.assertEqual([None, None], [one["run_id"] for one in kept.messages("c1")])
 
 
 class WhatWasSaid(WithAnAgentsOwnRecords):
