@@ -404,11 +404,7 @@ def _turn(codex, where: str) -> int:
         return 1
     codex.tell("initialized")
 
-    opening = {"cwd": where, "sandbox": {posture: {}}}
-    if model:
-        opening["model"] = model
-    if extra.get("config"):
-        opening["config"] = extra["config"]
+    opening = _opening(where, posture, model, extra)
     started = _opened(codex, opening, resume)
     if started is None:
         say(type="done", ok=False, why="Codex would not open a conversation")
@@ -444,7 +440,7 @@ def _turn(codex, where: str) -> int:
             if word is None:
                 continue
             if not asked:
-                codex.ask("turn/start", {**beginning, "input": _first(word)})
+                codex.ask("turn/start", {**beginning, "input": [_text(word)]})
                 asked = True
                 # Said *after* the turn is really under way, never before. Set first, the
                 # waiter woke while the turn id was still on its way and read a turn that
@@ -490,6 +486,31 @@ def _turn(codex, where: str) -> int:
     return 0 if codex.ok else 1
 
 
+def _opening(where: str, posture: str, model, extra: dict) -> dict:
+    """What codex is given to open a conversation with.
+
+    **Standing instructions go in `developerInstructions`, and never in
+    `baseInstructions`.** They sit next to each other in the protocol and one of them is a
+    trap: "base" means base, and what is put there stands in place of the instructions
+    codex was built with — including the ones telling it how to use its own tools. Nothing
+    reports that; the turn merely behaves strangely and the model gets the blame. Both were
+    probed against a real codex: given standing instructions here it obeyed them *and* its
+    shell tool still worked, which is the whole test.
+
+    Set only where a conversation is *opened*, because that is the only place codex reads
+    it — see `_opened`.
+    """
+    opening = {"cwd": where, "sandbox": {posture: {}}}
+    if model:
+        opening["model"] = model
+    if extra.get("config"):
+        opening["config"] = extra["config"]
+    preface = (os.environ.get("RUNDESK_PREFACE") or "").strip()
+    if preface:
+        opening["developerInstructions"] = preface
+    return opening
+
+
 def _opened(codex, opening: dict, resume):
     """The conversation this turn belongs to — the one being carried on, or a new one.
 
@@ -499,7 +520,14 @@ def _opened(codex, opening: dict, resume):
     better than refusing to answer at all.
     """
     if resume:
-        said = codex.answered(codex.ask("thread/resume", {**opening, "threadId": resume}))
+        # **Without the standing instructions.** Passed here they are accepted and then
+        # ignored — probed with a rule the conversation's own history could not supply,
+        # obeyed at `thread/start` and absent after a resume, in a fresh process, which is
+        # the shape rundesk actually runs. An argument that is quietly dropped is worse
+        # than one that was never sent, because it reads like it works. A conversation
+        # keeps the wording it was opened with, which is part of what makes it one.
+        carried = {one: it for one, it in opening.items() if one != "developerInstructions"}
+        said = codex.answered(codex.ask("thread/resume", {**carried, "threadId": resume}))
         if said and "result" in said:
             return said["result"]
         sys.stderr.write("that conversation could not be carried on; starting a new one\n")
@@ -529,25 +557,6 @@ def _word(line: str):
 def _text(word: str) -> dict:
     return {"type": "text", "text": word}
 
-
-def _first(word: str) -> list:
-    """What the turn opens with — the standing instructions, then what somebody asked.
-
-    **Not `baseInstructions`, and this is the whole reason it is here.** Codex takes one on
-    `thread/start`, and "base" means base: it stands in place of the instructions codex was
-    built with, the ones telling it how to use its own tools. An owner's paragraph sent
-    there does not add a paragraph, it deletes the brain and leaves the paragraph — and
-    nothing says so, the turn merely behaves strangely and the model gets the blame. Codex
-    offers nothing that *adds* to its instructions over this protocol, so the next best
-    thing is what happens: its own block at the top of the turn, saying whose words these
-    are, rather than glued onto the end of somebody's sentence where the brain would read
-    them as the person talking.
-    """
-    preface = os.environ.get("RUNDESK_PREFACE") or ""
-    if not preface.strip():
-        return [_text(word)]
-    return [_text("Standing instructions from rundesk, not from the person you are "
-                  "answering:\n\n" + preface.strip()), _text(word)]
 
 
 def _until(ready, patience: float = ANSWER_SECONDS) -> None:

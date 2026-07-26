@@ -8,6 +8,21 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **Codex has two instruction fields and one of them is a trap.** `baseInstructions` on
+  `thread/start` *replaces* what codex was built with, including the instructions telling it how to
+  use its own tools — nothing reports this, the turn merely behaves strangely and the model gets the
+  blame. `developerInstructions`, right beside it, *adds*. Probed: given one, codex obeyed it and its
+  shell tool still worked. Neither is described in the schema, which types both as a nullable string.
+- **`developerInstructions` binds where a thread is created and is ignored on resume.** Probed twice,
+  once in a fresh process, which is the shape rundesk runs: the same rule was obeyed at `thread/start`
+  and absent after `thread/resume`, while the resume itself reported success. So a reworded
+  instruction reaches new conversations only. **Do not read a codex field's behaviour off its schema
+  — both of these facts are invisible there**, and the probes are in `.knowledge/scripts/`.
+- **Do not test a model instruction with a question the conversation can already answer.** A first
+  attempt at the above asked for a codename the thread had been asked for before, so the model
+  answered from its own earlier reply and the resume looked like it worked. Use a rule the history
+  cannot supply, and run the control: prove the same rule *is* obeyed when given at the start.
+
 - Installing dependencies leaves **caches outside rundesk's own directory** — pip and any build
   tooling it reaches for write under `~/.cache`, `~/Library/Caches`, even `~/.rustup`. Removing
   rundesk cannot take those and does not try. Do not word a requirement as "everything an install

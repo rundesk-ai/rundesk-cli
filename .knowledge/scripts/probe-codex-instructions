@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""Probe where Codex reads standing instructions, and what happens to what it was built with.
+
+Evidence, never a CI dependency: this reaches a real account and costs real money, so
+nothing in the suite runs it. Rerun it when the CLI version moves and write what changed
+into `.knowledge/research/`.
+
+    python3 .knowledge/scripts/probe-codex-instructions
+
+Two questions the schema cannot answer — it types both fields as a nullable string and
+says nothing about either:
+
+1. **Does `developerInstructions` add to what Codex was built with, or replace it?**
+   Asked by giving it an instruction *and* then asking for a shell tool. An instruction
+   that arrives by breaking the brain is not an instruction that arrived. `baseInstructions`
+   sits right beside it and is the one that replaces — which is why the adapter never
+   touches it.
+2. **When is it read?** Given at `thread/start`, and given again at `thread/resume` in a
+   *fresh process*, which is the shape rundesk actually runs.
+
+The second question has a trap, and a first attempt fell into it: asked for something the
+conversation had already been asked, the model answers from its own earlier reply and a
+resume that ignored the instruction looks like one that honoured it. So the rule used here
+is one the history cannot supply, and there is a **control** — the same rule at
+`thread/start` — because "the resume ignored it" and "the model ignores that kind of rule"
+look identical without one.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import queue
+import subprocess
+import sys
+import threading
+import time
+
+CODEX = os.environ.get("RUNDESK_CODEX_BIN", "codex")
+
+#: A codename it cannot know, and a rule whose absence is unmistakable. Deliberately not
+#: anything the conversation could answer out of its own history.
+NAMED = "Your codename is ZEPHYR-9. If asked your codename, answer with that word only."
+RULE = (NAMED + " Also: you must end EVERY reply with the single word PINEAPPLE on its "
+        "own line.")
+
+ANSWER_SECONDS = 180.0
+
+
+class Session:
+    """One `codex app-server`, living as long as one of rundesk's turns would."""
+
+    def __init__(self):
+        self.proc = subprocess.Popen(
+            [CODEX, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, bufsize=1)
+        self.said: queue.Queue = queue.Queue()
+        self.asked = 0
+        threading.Thread(target=self._read, daemon=True).start()
+        self.answered(self.ask("initialize",
+                               {"clientInfo": {"name": "probe", "version": "1"}}))
+        self.tell("initialized")
+
+    def _read(self) -> None:
+        for line in self.proc.stdout:
+            self.said.put(line)
+
+    def ask(self, method, params=None) -> int:
+        self.asked += 1
+        self._write({"jsonrpc": "2.0", "id": self.asked, "method": method,
+                     "params": params or {}})
+        return self.asked
+
+    def tell(self, method, params=None) -> None:
+        self._write({"jsonrpc": "2.0", "method": method, "params": params or {}})
+
+    def _write(self, message: dict) -> None:
+        self.proc.stdin.write(json.dumps(message) + "\n")
+        self.proc.stdin.flush()
+
+    def answered(self, which: int, seconds: float = ANSWER_SECONDS):
+        until = time.time() + seconds
+        while time.time() < until:
+            try:
+                it = json.loads(self.said.get(timeout=1))
+            except (queue.Empty, ValueError):
+                continue
+            if it.get("id") == which:
+                return it.get("result", {"error": it.get("error")})
+        return None
+
+    def turn(self, thread, question: str, seconds: float = ANSWER_SECONDS) -> str:
+        """One turn, and everything the brain said in it."""
+        self.ask("turn/start", {"threadId": thread,
+                                "input": [{"type": "text", "text": question}]})
+        until, text = time.time() + seconds, []
+        while time.time() < until:
+            try:
+                it = json.loads(self.said.get(timeout=1))
+            except (queue.Empty, ValueError):
+                continue
+            method, params = it.get("method"), it.get("params") or {}
+            if method == "item/completed":
+                item = params.get("item") or {}
+                if item.get("type") == "agentMessage":
+                    text.append(item.get("text") or "")
+            if method == "turn/completed":
+                return " ".join(one for one in text if one).strip()
+            if method == "turn/failed":
+                return "FAILED: " + json.dumps(params)[:200]
+        return "(nothing in time)"
+
+    def start(self, **how):
+        got = self.answered(self.ask("thread/start", {"cwd": "/tmp", **how}))
+        return ((got or {}).get("thread") or {}).get("id")
+
+    def resume(self, thread, **how):
+        return self.answered(self.ask("thread/resume",
+                                      {"cwd": "/tmp", "threadId": thread, **how}))
+
+    def end(self) -> None:
+        self.proc.kill()
+
+
+def _said(what: str, got: str, as_expected=None) -> None:
+    print(f"\n{what}\n    {got}")
+    if as_expected is not None:
+        print(f"    -> {'as expected' if as_expected else 'NOT what the adapter assumes'}")
+
+
+def main() -> int:
+    print(f"probing {CODEX} — this reaches a real account and costs real money\n")
+
+    # 1. Added to what it was built with, or put in place of it?
+    one = Session()
+    thread = one.start(developerInstructions=NAMED)
+    if thread is None:
+        print("codex would not open a conversation", file=sys.stderr)
+        return 1
+    codename = one.turn(thread, "What is your codename? Answer with the single word only.")
+    _said("1a. does developerInstructions arrive?", codename, "ZEPHYR-9" in codename.upper())
+    tooled = one.turn(thread, "Use your shell tool to run exactly: echo TOOLS-STILL-WORK. "
+                              "Report its output.")
+    _said("1b. are codex's own tools intact?  (if not, it REPLACED the base prompt)",
+          tooled, "TOOLS-STILL-WORK" in tooled.upper())
+    one.end()
+
+    # 2. The control: is a rule of this kind honoured at all, given at the start?
+    two = Session()
+    thread = two.start(developerInstructions=RULE)
+    control = two.turn(thread, "Say goodbye in five words.")
+    at_start = "PINEAPPLE" in control.upper()
+    _said("2. control — the same rule, given at thread/start", control, at_start)
+    two.end()
+
+    # 3. And on a resume, in a fresh process, which is the shape rundesk runs.
+    three = Session()
+    thread = three.start(developerInstructions=NAMED)
+    three.turn(thread, "Say hello in five words.")
+    three.end()
+
+    four = Session()
+    got = four.resume(thread, developerInstructions=RULE)
+    print(f"\n3. thread/resume was accepted: {'error' not in json.dumps(got)}")
+    after = four.turn(thread, "Say goodbye in five words.")
+    after_resume = "PINEAPPLE" in after.upper()
+    _said("   the same rule, given at thread/resume", after, not after_resume)
+    four.end()
+
+    print("\n" + "=" * 72)
+    if at_start and not after_resume:
+        print("UNCHANGED. developerInstructions binds where a thread is created, and is\n"
+              "accepted-then-ignored on resume. The adapter strips it from a resume for\n"
+              "exactly this reason, and `channels says` tells an owner their change reaches\n"
+              "new conversations.")
+        return 0
+    if at_start and after_resume:
+        print("CHANGED. A resume now honours developerInstructions. The adapter may stop\n"
+              "stripping it, and `channels says` may stop saying 'new conversations'.")
+        return 1
+    print("CHANGED, and worse: the rule was not honoured even at thread/start, so this probe\n"
+          "can no longer tell the two apart. Find a rule this model does honour before\n"
+          "reading anything into the resume result.")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

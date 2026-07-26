@@ -180,6 +180,16 @@ jobs:
           tail -c 200000 suite.log
           exit $ran
 
+      - name: provider-codex — where standing instructions go, and where they must not
+        run: |
+          # The policy this adapter decides on its own. `developerInstructions` adds to
+          # what codex was built with; `baseInstructions`, next to it, replaces them —
+          # including the ones telling it how to use its own tools. Both were established
+          # by probing a real codex, and this holds the adapter to what was measured.
+          set +e; python -u tests/test_codex.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
+
       - name: channel-discord — what a turn looks like on Discord, decided offline
         run: |
           # The policy, never the wire: which messages are for this agent, what a mark

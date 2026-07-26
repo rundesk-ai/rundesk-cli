@@ -86,17 +86,27 @@ know what your brain offers:
 
 - **If your brain has a way to *add* to its instructions, use that.** `claude` has
   `--append-system-prompt`. `grok` has `--rules`, described in its own help as "extra rules
-  to append to the system prompt". That is the right home for this.
+  to append to the system prompt". Codex has `developerInstructions`. That is the right
+  home for this, and it costs nothing: standing instructions never take up a message, so
+  they never accumulate in a conversation.
 - **Never map it to anything that replaces the system prompt.** `claude --system-prompt`,
   `grok --system-prompt-override` and codex's `baseInstructions` all *substitute* for what
   the brain was built with — the instructions that tell it how to use its own tools. Send
   an owner's paragraph there and you have not added a paragraph, you have deleted the brain
   and left the paragraph. Rundesk cannot stop you doing this and will not know you did; the
   turn will simply behave strangely, and it will look like the model's fault.
-- **If your brain has no way to add to its instructions, put it at the top of the turn as
-  its own block**, marked as rundesk's rather than the person's. Codex has none, so that is
-  what the shipped codex adapter does. This is worse than a real system channel and it is
-  fine: correctness never degrades, only fidelity.
+- **Find out *when* your brain will read it, and do not guess.** Some take it every time
+  they are run; some bind it when a conversation is created and silently ignore it after.
+  Codex is the second kind — probed, because its schema says nothing about it: the same
+  instruction was obeyed at `thread/start` and absent after `thread/resume`. So the shipped
+  adapter sets it only where a conversation is opened, and deliberately strips it from a
+  resume. **An argument that is accepted and then dropped is worse than one never sent**,
+  because it reads like it works, and an owner rewording something would watch nothing
+  happen with nothing to tell them why.
+- **If your brain has no way to add to its instructions at all**, put it at the top of the
+  turn as its own block, marked as rundesk's rather than the person's — and know what that
+  costs: a block sent every turn accumulates in the conversation for the life of it. Worse
+  than a real channel, and fine: correctness never degrades, only fidelity.
 - **Ignoring it entirely is a whole adapter.** A brain with no notion of standing
   instructions is not a broken one.
 
