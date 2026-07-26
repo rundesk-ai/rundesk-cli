@@ -597,7 +597,12 @@ def _where(record: dict, name: str, it: dict) -> str:
         return ""
     at = channel.plainly(it.get(channel.WHERE))
     who = channel.plainly(it.get(channel.CALLED))
-    said = f"This reached you over {kind}, on the '{name}' channel"
+    # **Not the channel's name.** That is the label an owner gave this connection when
+    # they set it up — `dms`, `ops`, `the-loud-one` — and it means nothing to a brain
+    # except that the word "channel" now appears twice in one sentence saying two
+    # different things. One named `dms`, pointing at a room, had an agent announce it was
+    # in "DMs in #development": it reconciled the two the only way the sentence allowed.
+    said = f"This reached you over {kind}"
     if at:
         said += f", in {at}"
     if who:

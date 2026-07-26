@@ -171,7 +171,8 @@ class WhereABrainIsAnswering(CarriesAConversation):
                                     where="#ops on the Rundesk server", called="Tim"))
         said = brain.asked[0]["prompt"]
         self.assertIn("over somewhere", said)
-        self.assertIn("'ops'", said)
+        self.assertNotIn("'ops'", said, "rundesk's own label for the connection is not "
+                         "the agent's business, and collides with the platform's own word")
         self.assertIn("in #ops on the Rundesk server", said)
         self.assertIn("from Tim", said)
 
