@@ -816,6 +816,31 @@ migration can find every question, whether reading can be told from writing — 
 until something has been built against a real database. So it is built here, where the only database it
 touches is one made for a test, and the phase after moves real data onto something already proven to work.
 
+### First, the shape of each part — with the owner, one at a time
+
+**This is the phase's first task and it is not done alone.** Every one of these is persisted state, which
+`AGENTS.md` makes a hard gate, and a schema settled by an agent on its own is a schema the owner has to
+live with. So they are worked through together, in this order, each one finished before the next is opened.
+
+What each holds *today* is listed so the conversation starts from what is true rather than from a proposal.
+Read them off a real install first — these were read off one — and correct this list where it has drifted.
+
+| | What it is | What it holds today |
+|---|---|---|
+| 1 | **the agent** | `{"provider": "…"}` — one field, a path or a shipped name |
+| 2 | **its channels** | one per surface: its kind, where it listens, who may use it, and what it is told about where it is (`channels says`). Its credential is *referenced*, never held — a token in the environment or a file in the channel's own directory |
+| 3 | **its schedules** | `[{name, when, run: [program, args…], enabled}]` |
+| 4 | **what each schedule last did** | when it last fired, and what became of it — kept apart from the schedule itself, so a stop clears neither |
+| 5 | **its sessions** | `{brain-fingerprint: {conversation: handle}}` — keyed by the brain *and* the conversation, so changing provider cannot resume the wrong one |
+| 6 | **its runs** | one per turn: the id, the conversation, the provider and brain that answered, the model, the posture, what the adapter said it could do, when it started and ended, how it ended, and what it cost |
+| 7 | **the account of each run** | every record in order — `admitted`, `sent`, `think`, `tool`, `result`, `text`, `usage`, `done`, `outcome` — with its sequence and time. **This is the searchable history**, and the largest thing here by far |
+| 8 | **how a run is named, and what version the data is** | ids look like `1-co8m` today, allocated through a counter file; the version has nowhere to live yet |
+
+For each, the questions worth answering before it is a table: what identifies it, what may be absent versus
+what may never be, what is one row versus many, what is asked of it often enough to be indexed, what is
+allowed to be deleted, and **what a migration would have to do if this part changed shape**. That last one
+is the point of asking now: a shape nobody can imagine migrating is a shape to change while it is free.
+
 ### What it must settle
 
 Everything below is the current proposal, arrived at by walking what is actually on disk. It is where this
