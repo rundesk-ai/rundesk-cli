@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""A fake `driftwood --serve` for driving the adapter.
+
+Behaviour is chosen with FAKE_MODE:
+  normal   one turn, thinking + tool + speech + meter + finished
+  steer    waits for a second `say` before finishing the same turn
+  crash    writes an explanation to stderr and exits 3 without finishing
+  bad      finishes with good:false
+  noisy    emits an unknown kind and a non-JSON line
+  quiet    emits no meter at all
+  restart  meter totals lower than the stored baseline
+"""
+import json
+import os
+import sys
+import time
+
+MODE = os.environ.get("FAKE_MODE", "normal")
+ARGS = sys.argv[1:]
+
+
+def out(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def main():
+    assert "--serve" in ARGS, "adapter must pass --serve"
+
+    # Record how we were invoked so the test can assert on it.
+    trace = os.environ.get("FAKE_TRACE")
+    if trace:
+        with open(trace, "a") as fh:
+            fh.write(json.dumps({"argv": ARGS, "cwd": os.getcwd()}) + "\n")
+
+    session = ARGS[ARGS.index("--session") + 1] if "--session" in ARGS else "sess-new-001"
+    out({"kind": "session", "id": session})
+
+    if MODE == "crash":
+        # Consume the prompt first, then fail like a real brain would.
+        sys.stdin.readline()
+        sys.stderr.write("driftwood: model endpoint refused the request (403)\n")
+        sys.stderr.flush()
+        sys.exit(3)
+
+    heard = []
+    for line in iter(sys.stdin.readline, ""):
+        line = line.strip()
+        if not line:
+            continue
+        msg = json.loads(line)
+        heard.append(msg["say"])
+
+        if MODE == "steer" and len(heard) == 1:
+            out({"kind": "thinking", "body": "counting"})
+            # keep the turn open: wait for the steer line
+            continue
+
+        out({"kind": "thinking", "body": "heard %d thing(s)" % len(heard)})
+
+        if MODE == "noisy":
+            sys.stdout.write("this line is not JSON at all\n")
+            out({"kind": "weather", "outlook": "grim"})
+
+        out({"kind": "action", "ref": "a1", "what": "shell_exec", "cmd": "ls -la"})
+        out({"kind": "action_done", "ref": "a1", "failed": False, "output": "x" * 5000})
+        out({"kind": "action", "ref": "a2", "what": "summon_daemon", "cmd": "?"})
+        out({"kind": "action_done", "ref": "a2", "failed": True, "output": "nope"})
+
+        out({"kind": "speech", "body": "I heard: " + " | ".join(heard)})
+
+        if MODE == "restart":
+            out({"kind": "meter", "prompt_tokens": 300, "reply_tokens": 10,
+                 "reused_tokens": 100})
+        elif MODE == "quiet":
+            pass
+        else:
+            if session == "sess-new-001":
+                out({"kind": "meter", "prompt_tokens": 1200,
+                     "reply_tokens": 340, "reused_tokens": 0})
+            else:
+                out({"kind": "meter", "prompt_tokens": 10000,
+                     "reply_tokens": 400, "reused_tokens": 8000})
+
+        out({"kind": "finished", "good": MODE != "bad"})
+        # a real driftwood keeps reading for more
+    sys.exit(0)
+
+
+main()

@@ -27,7 +27,7 @@ is a whole brain with that work absent, rather than a broken one.
 |  | ID | Requirement | Evidence |
 |:--:|---|---|---|
 | ✅ | R-PRV-1 | An adapter is a program Rundesk runs, never code it loads | `a brain this rundesk has never heard of is the ordinary case`, `a shipped adapter is found by looking rather than by being listed`, `no vendor variable is put in front of an adapter` |
-| ❌ | R-PRV-2 | An adapter Rundesk has never heard of carries a whole turn, with nothing here changed | — |
+| ✅ | R-PRV-2 | An adapter Rundesk has never heard of carries a whole turn, with nothing here changed | `an adapter this code has never seen carries a whole turn` |
 | ✅ | R-PRV-3 | An adapter is told the agent's working directory and its own private home | `an adapter is told where to work and where its own things go`, `what was not asked for is left unset rather than set to nothing`, `a turn works in its own agents workspace`, `a brain is given a private home of its own under this agent` |
 | ✅ | R-PRV-4 | An adapter reports what happened as whole records, one to a line | `an adapter carries a whole turn`, `what an adapter reports is whole records one to a line`, `the prompt arrives on the stream meant for it`, `a turn that failed says so rather than going quiet` |
 | ✅ | R-PRV-5 | A record of a kind Rundesk does not know is kept rather than refused | `a record of a kind we do not know is kept rather than refused`, `a line that is not a record at all is understood as nothing`, `a record rundesk did not understand is still in the run afterwards`, `a record rundesk did not understand is kept and shown to nobody` |

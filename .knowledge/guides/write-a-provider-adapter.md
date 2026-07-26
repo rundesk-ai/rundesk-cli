@@ -65,7 +65,7 @@ rundesk add ava --provider /opt/my-brain   # yours
 | | |
 |---|---|
 | `RUNDESK_CWD` | the agent's workspace — work here |
-| `RUNDESK_PROVIDER_HOME` | yours alone, for config, credentials, session files and anything you need to remember between turns |
+| `RUNDESK_PROVIDER_HOME` | yours alone, and it lasts: config, credentials, session files, anything you must remember between turns |
 | `RUNDESK_MODEL` | the model asked for, or unset — a name you understand, not one we enumerate |
 | `RUNDESK_RUN` | the id of this run, for correlating anything you keep |
 | `RUNDESK_RESUME` | the handle you reported last time on this conversation, or unset for a new one |
@@ -81,7 +81,12 @@ yours to write in.
 **`RUNDESK_RAW` is worth using.** Rundesk sees what *you* report and never what your brain
 said before you made records of it — so if your brain changes its output shape, that shows
 up as records quietly going missing with nothing to compare against. Append your brain's own
-stream to that file and the evidence is there. Ignore it and nothing breaks.
+stream to that file, verbatim, and the evidence is there.
+
+Append only, and in whatever shape your brain speaks — **nothing reads it**, so there is no
+format to match and nothing you can get wrong. Make it if it is not there. It is thrown away
+with the rest of a run's raw when a retention policy takes them, and the account survives
+without it. Ignore it and nothing breaks.
 
 **The prompt arrives on stdin**, and how depends on the one capability that changes how a
 turn is *run*:
@@ -123,8 +128,13 @@ That is the contract. Six kinds of record, and only `done` is required.
 | `usage` | | `input` · `output` · `cached` · `model` |
 | `done` | `ok` | `session` · `why`, when it failed |
 
+`input` is **fresh tokens only** — what `cached` counts is not in it. Send more than one
+`usage` and they are added together, so report each as a share and never as a new total.
+
 Leave a field out rather than guessing at it: an absent `cached` means *you could not tell*,
-and is recorded differently from a `cached` of zero. Order is yours — records are kept in
+and is recorded differently from a `cached` of zero. If your brain gives you one input
+number that silently includes an unknown amount of cache, report it as `input` and omit
+`cached` — a total you cannot split is still the truth, and a split you invented is not. Order is yours — records are kept in
 the order you send them. A line that is not JSON, or is a kind not listed here, is kept
 verbatim and shown to nobody, so nothing you emit can break a turn.
 
@@ -197,8 +207,9 @@ turn. Anything on a command line is readable through the process list and kept i
 history. Read a secret from your own `RUNDESK_PROVIDER_HOME`, or from an environment
 variable that never reaches an argument.
 
-**Do not go looking for the owner's own configuration.** `RUNDESK_PROVIDER_HOME` is yours
-and it starts out empty, which for most brains means not signed in. Say so, and say what to
+**Do not go looking for the owner's own configuration.** `RUNDESK_PROVIDER_HOME` is yours,
+and it persists — what you leave there is there next turn. It is empty the *first* time an
+agent reaches your brain, which for most brains means not signed in. Say so, and say what to
 run — do not quietly copy or link somebody's credentials into it. Sharing one sign-in
 between agents may well be what they want, and it is theirs to decide rather than yours to
 arrange on their behalf.
@@ -219,8 +230,15 @@ a `done` record on the way out is welcome and not required.
 **Both your exit code and your `done` matter, and they mean different things.** `done.ok`
 is what *your brain* made of the turn; the exit code is what became of *your program*. A
 turn is only recorded as having worked when both say so, so a brain that answered fine
-inside an adapter that then crashed reads as the failure it was. Exiting without any `done`
-at all is a turn that never said it finished.
+inside an adapter that then crashed reads as the failure it was.
+
+A brain that simply said no is not your program failing — `done ok:false` and exit `0` is
+the exact answer. Exiting non-zero as well is allowed and says nothing extra. What you must
+not do is exit without any `done` at all: that is a turn that never said it finished, and
+nothing downstream can tell it from one still running.
+
+**When a turn is stopped**, exit however you like — nothing reads the code of a program that
+was told to stop. A parting `done` is welcome and never required.
 
 ## A working adapter
 
@@ -265,18 +283,9 @@ Give it whatever your CLI takes, without anything changing here:
 rundesk ask ava "…" --set effort=high --set '{"flags":["--no-color"]}'
 ```
 
-## Proving it
-
-The same suite every shipped adapter passes is the one yours passes — that is what makes "a
-brain Rundesk has never heard of" a claim rather than a hope. It checks that a whole turn
-completes, that a brain reporting no tools still produces a well-formed turn, that an unknown
-record survives, that a running total is reported as this turn's share, that stopping ends
-everything, and that one adapter cannot reach another agent's workspace.
-
 ## Steering, if your brain can take it
 
-Only if you said `steer: true`. Your stdin stays open for as long as the turn runs, and
-every line is a record:
+Only if you said `steer: true`. Your stdin stays open, and every line is a record:
 
 ```json
 {"type":"say","text":"count from one to ten"}      <- the prompt
@@ -284,13 +293,24 @@ every line is a record:
 ```
 
 Read a line, act on it, keep reading. Everything that arrives goes to the turn that is
-*already running* — it is not a new turn and the old one is not thrown away. When rundesk
-has nothing more to say it closes your stdin, which is your signal that no more is coming.
+*already running* — it is not a new turn, and the old one is not thrown away.
+
+**The turn ends when your brain is finished, not when your stdin closes.** Say `done` and
+exit the moment the work is over, whatever your input is doing. Rundesk may hold it open
+long after — a person typing at a terminal has not closed anything just because they have
+stopped typing — so an adapter that waited for the close would be waiting on somebody who
+is waiting on it. A close is a promise that nothing more is coming, and nothing else.
 
 Rundesk writes every one of these into the run's record as it sends it, so a word put into
 a turn is never a word the account cannot show.
 
 ## Proving it
+
+The same suite every shipped adapter passes is the one yours passes — that is what makes "a
+brain Rundesk has never heard of" a claim rather than a hope. It checks that a whole turn
+completes, that a brain reporting no tools still produces a well-formed turn, that an
+unknown record survives, that a running total is reported as this turn's share, that
+stopping ends everything, and that one adapter cannot reach another agent's workspace.
 
 Run it against yours:
 

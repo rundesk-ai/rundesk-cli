@@ -279,6 +279,13 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
         instantly, so the gate is quick; only an adapter that has genuinely stopped
         talking waits.
         """
+        # **Asked, never assumed.** How an adapter is given its input is decided by what it
+        # said it can do, exactly as rundesk decides it — an adapter that declared it can
+        # be steered reads records and would choke on plain text, and one that did not
+        # reads to the end of its input and would wait forever for an end that never came.
+        # Driving every adapter one way was this suite telling adapters to follow a guide
+        # it did not follow itself.
+        can = await provider.capabilities(adapter, self.told())
         raw: list = []
         program = process.Program(
             [str(adapter)], env=self.told(**extra), cwd=self.where / "cwd",
@@ -289,16 +296,20 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
         if started is not None:
             started(program)
         reading = asyncio.ensure_future(program.wait(sink=raw.append))
-        if steering is None:
-            await program.send(prompt.encode("utf-8"))
-        else:
-            # Records, and the input held open, exactly as rundesk drives one that said it
-            # can be steered. Anything after the prompt reaches a turn already running.
-            await program.send(provider.spoken(prompt))
-            for word in steering:
-                await asyncio.sleep(0.2)
-                await program.send(provider.spoken(word))
-        await program.close_input()
+        try:
+            if not can["steer"]:
+                await program.send(prompt.encode("utf-8"))
+            else:
+                # Records, and the input held open, exactly as rundesk drives one that
+                # said it can be steered. Anything after the prompt reaches a turn that is
+                # already running.
+                await program.send(provider.spoken(prompt))
+                for word in steering or []:
+                    await asyncio.sleep(0.2)
+                    await program.send(provider.spoken(word))
+            await program.close_input()
+        except process.NotListening:
+            pass  # it answered and left while we were still writing; not a failure
         outcome = await reading
         records = [it for it in (provider.understood(one) for one in raw
                                  if isinstance(one, bytes)) if it is not None]
@@ -382,9 +393,7 @@ class TheContract(DrivesAnAdapter):
         saying it wrongly is a turn that hangs rather than a feature that is missing. An
         adapter that says it can be steered has its input held open and reads records; one
         that says it cannot is given the prompt and told there is no more."""
-        can = await provider.capabilities(self.under_test(), self.told())
-        turn = await self.carry(self.under_test(), steering=["and one more thing"]
-                                if can["steer"] else None)
+        turn = await self.carry(self.under_test(), steering=["and one more thing"])
         self.assertIsNotNone(turn.done, "it did not finish a turn run the way it asked for")
         self.assertTrue(turn.done.get("ok"), f"the turn failed: {turn.errors}")
 
@@ -580,6 +589,72 @@ class EndingATurn(DrivesAnAdapter):
                     return int(said["text"].split()[-1])
             await asyncio.sleep(0.05)
         self.fail("the adapter never said what it had started")
+
+
+class TheClaimTheWholeSeamRestsOn(DrivesAnAdapter):
+    """R-PRV-2 — the one thing that cannot be proved from the inside.
+
+    Every other case here is this codebase checking its own work. This one drives an
+    adapter written by somebody who was given the guide and nothing else — no repository,
+    no source, no tests — and committed exactly as it was handed over. If it fails, the
+    guide is what moves; nothing in `tests/strangers/` is ever tidied to make it pass.
+    """
+
+    STRANGERS = Path(__file__).resolve().parent / "strangers"
+
+    def _nothing_of_ours_is_on(self, path: str, adapter: Path) -> None:
+        """Refuse to run an adapter that could find itself on the path it is given.
+
+        An adapter resolves its brain by name. If the adapter itself is reachable under
+        that name, it runs itself, and that copy runs itself, without end. This is the one
+        check worth failing loudly rather than discovering by watching a machine die.
+        """
+        for where in path.split(os.pathsep):
+            found = Path(where or ".") / adapter.name
+            if found.is_file() and found.samefile(adapter):
+                self.fail(f"{adapter.name} is on the path it is given ({where}) — an "
+                          f"adapter that can find itself will run itself, without end")
+
+    async def test_an_adapter_this_code_has_never_seen_carries_a_whole_turn(self):
+        """R-PRV-2"""
+        theirs = self.STRANGERS / "driftwood-adapter"
+        if not theirs.is_file():
+            self.skipTest("no stranger's adapter is committed here")
+        # Its author's own fake brain, kept beside it, so this needs nothing installed.
+        #
+        # **The adapter must never be findable on the path it is given.** An adapter looks
+        # its brain up by name; put the adapter on that path under that name and it finds
+        # *itself*, runs itself, and the copy does the same — a fork bomb that took this
+        # machine to eight thousand processes before anybody noticed. The brain here is
+        # `driftwood` and the adapter is `driftwood-adapter`, and `_nothing_of_ours_is_on`
+        # below refuses to run at all if that ever stops being true.
+        # Only the *brains* directory goes on the path. The adapter is never on it, which
+        # is what makes finding itself impossible rather than merely unlikely.
+        told = self.told()
+        told["PATH"] = f"{self.STRANGERS / 'brains'}{os.pathsep}{told.get('PATH', '')}"
+        self._nothing_of_ours_is_on(told["PATH"], theirs)
+        can = await provider.capabilities(theirs, told)
+        self.assertTrue(any(can.values()), "it could not even say what it can do")
+
+        raw: list = []
+        program = process.Program(
+            [str(theirs)], env=told, cwd=self.where / "cwd",
+            takes_input=True, errors_apart=True, silence=PATIENCE_SECONDS, ceiling=None,
+        )
+        await program.start()
+        reading = asyncio.ensure_future(program.wait(sink=raw.append))
+        try:
+            await program.send(provider.spoken("what changed today?")
+                               if can["steer"] else b"what changed today?")
+            await program.close_input()
+        except process.NotListening:
+            pass
+        await reading
+        said = [it for it in (provider.understood(one) for one in raw
+                              if isinstance(one, bytes)) if it is not None]
+        ended = [one for one in said if one.get("type") == "done"]
+        self.assertTrue(ended, f"a stranger's adapter never finished a turn: {program.errors}")
+        self.assertTrue(ended[-1].get("ok"), f"the turn failed: {program.errors}")
 
 
 class AnAdapterThatCannotBeRun(DrivesAnAdapter):

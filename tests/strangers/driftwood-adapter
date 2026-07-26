@@ -1,0 +1,571 @@
+#!/usr/bin/env python3
+"""
+driftwood-adapter — a Rundesk provider adapter for the `driftwood` CLI.
+
+    rundesk add ava --provider /tmp/driftwood-adapter
+
+Two modes, per the provider-adapter contract:
+
+  * `--capabilities`  print one JSON object saying what we can do, exit 0.
+  * no arguments      carry one turn: prompt in on stdin, records out on stdout.
+
+The brain is `driftwood --serve [--session ID] [--model NAME] [--effort low|high]`.
+It speaks JSON lines both ways. Everything it says is translated into Rundesk's
+six record kinds; nothing of its vocabulary is passed through.
+"""
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+# ---------------------------------------------------------------- constants
+
+CAPABILITIES = {
+    "tools": True,    # driftwood reports action / action_done
+    "resume": True,   # driftwood takes --session and reports its own id
+    "usage": True,    # driftwood reports meter
+    "model": False,   # driftwood never says which model answered
+    "steer": True,    # driftwood keeps reading stdin while a turn runs
+}
+
+# driftwood's own tool names -> Rundesk's closed verb list
+# (read, search, run, edit, list).  Exact matches only: the guide is explicit
+# that a verb which does not really fit must be left out rather than stretched,
+# so anything not named here is reported with `name` and no `did`.
+DID_BY_NAME = {
+    "shell_exec": "run",
+    "shell": "run",
+    "run": "run",
+    "read_file": "read",
+    "file_read": "read",
+    "read": "read",
+    "write_file": "edit",
+    "file_write": "edit",
+    "edit_file": "edit",
+    "edit": "edit",
+    "search": "search",
+    "grep": "search",
+    "list_dir": "list",
+    "list": "list",
+}
+
+SUMMARY_LIMIT = 2000        # bytes of tool output kept as `summary`
+QUIET_LIMIT = 15 * 60       # say something on stderr after this much silence
+DRAIN_SECONDS = 5           # grace for the brain to leave after a turn ends
+
+# ---------------------------------------------------------------- plumbing
+
+_out_lock = threading.Lock()
+_last_spoke = time.time()
+_done_sent = False
+_raw_fh = None
+_raw_lock = threading.Lock()
+
+
+def emit(record):
+    """One JSON record per line on stdout, flushed as it happens."""
+    global _last_spoke
+    line = json.dumps(record, ensure_ascii=False)
+    with _out_lock:
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+        _last_spoke = time.time()
+
+
+def note(message):
+    """stderr is ours. It is kept, and it counts as not being silent."""
+    global _last_spoke
+    with _out_lock:
+        sys.stderr.write(message.rstrip("\n") + "\n")
+        sys.stderr.flush()
+        _last_spoke = time.time()
+
+
+def raw(line):
+    """Append the brain's own stream to RUNDESK_RAW, so records that go
+    missing can be compared against what was actually said."""
+    if _raw_fh is None:
+        return
+    try:
+        with _raw_lock:
+            _raw_fh.write(line.rstrip("\n") + "\n")
+            _raw_fh.flush()
+    except OSError:
+        pass
+
+
+def done(ok, session=None, why=None):
+    """At most one `done`, whoever gets there first."""
+    global _done_sent
+    with _out_lock:
+        if _done_sent:
+            return
+        _done_sent = True
+    record = {"type": "done", "ok": bool(ok)}
+    if session:
+        record["session"] = session
+    if why and not ok:
+        record["why"] = why
+    emit(record)
+
+
+# ---------------------------------------------------------------- settings
+
+def load_settings():
+    blob = os.environ.get("RUNDESK_SETTINGS")
+    if not blob:
+        return {}
+    try:
+        parsed = json.loads(blob)
+    except ValueError as exc:
+        note("RUNDESK_SETTINGS is not valid JSON, ignoring it: %s" % exc)
+        return {}
+    if not isinstance(parsed, dict):
+        note("RUNDESK_SETTINGS is not a JSON object, ignoring it.")
+        return {}
+    return parsed
+
+
+def brain_command(settings):
+    binary = os.environ.get("DRIFTWOOD_BIN") or "driftwood"
+    argv = [binary, "--serve"]
+
+    resume = os.environ.get("RUNDESK_RESUME")
+    if resume:
+        argv += ["--session", resume]
+
+    model = os.environ.get("RUNDESK_MODEL")
+    if model:
+        argv += ["--model", model]
+
+    # The only setting key this brain understands. Everything else the owner
+    # set is theirs and none of our business.
+    if "effort" in settings:
+        effort = settings["effort"]
+        if effort in ("low", "high"):
+            argv += ["--effort", effort]
+        else:
+            note("--set effort=%r is not understood by driftwood "
+                 "(expected 'low' or 'high'); ignoring it." % (effort,))
+    return argv
+
+
+# ------------------------------------------------------------ usage totals
+
+class Totals(object):
+    """driftwood's meter is the whole session's running total, and its
+    prompt_tokens already includes reused_tokens. Rundesk wants this turn's
+    own share, with cache reads kept apart from fresh input. So we keep the
+    last totals we reported, keyed by driftwood's own session handle, under
+    RUNDESK_PROVIDER_HOME."""
+
+    def __init__(self):
+        home = os.environ.get("RUNDESK_PROVIDER_HOME")
+        self.path = os.path.join(home, "usage-totals.json") if home else None
+        self.store = {}
+        self.usable = self.path is not None
+        if not self.usable:
+            note("RUNDESK_PROVIDER_HOME is unset; cannot tell this turn's "
+                 "share of a running total, so no usage will be reported.")
+            return
+        try:
+            with open(self.path, "r") as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, dict):
+                self.store = loaded
+        except (OSError, ValueError):
+            self.store = {}
+
+    def _save(self):
+        try:
+            tmp = self.path + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump(self.store, fh)
+            os.replace(tmp, self.path)
+        except OSError as exc:
+            note("could not write %s: %s" % (self.path, exc))
+
+    def delta(self, session, meter):
+        """Return a `usage` record for this meter, or None if we cannot tell."""
+        if not self.usable or not session:
+            return None
+
+        prompt = meter.get("prompt_tokens")
+        reply = meter.get("reply_tokens")
+        reused = meter.get("reused_tokens")
+
+        # Fresh input is what was not a cache read. Absent reused_tokens means
+        # we cannot tell what was cached, so `cached` is left out entirely
+        # rather than reported as zero.
+        if isinstance(prompt, (int, float)) and isinstance(reused, (int, float)):
+            fresh = prompt - reused
+            if fresh < 0:
+                note("driftwood reported reused_tokens (%s) above prompt_tokens "
+                     "(%s); treating fresh input as 0." % (reused, prompt))
+                fresh = 0
+        else:
+            fresh, reused = prompt, None
+
+        current = {}
+        if isinstance(fresh, (int, float)):
+            current["input"] = int(fresh)
+        if isinstance(reply, (int, float)):
+            current["output"] = int(reply)
+        if isinstance(reused, (int, float)):
+            current["cached"] = int(reused)
+        if not current:
+            return None
+
+        previous = self.store.get(session) or {}
+        restarted = any(
+            field in previous and current.get(field, 0) < previous[field]
+            for field in ("input", "output", "cached")
+        )
+        if restarted:
+            # The conversation was restarted underneath us: report the total
+            # whole rather than a negative.
+            note("driftwood's running total for session %s went backwards; "
+                 "reporting this turn whole." % session)
+            share = dict(current)
+        else:
+            share = dict(
+                (field, value - previous.get(field, 0))
+                for field, value in current.items()
+            )
+
+        self.store[session] = current
+        self._save()
+
+        record = {"type": "usage"}
+        record.update(share)
+        # `model` is deliberately absent: driftwood never says which model
+        # answered, and nothing unmeasured is claimed.
+        return record
+
+
+# ---------------------------------------------------------------- the turn
+
+class Turn(object):
+    def __init__(self):
+        self.session = None
+        self.finished = threading.Event()
+        self.good = None
+        self.totals = Totals()
+        self.tools_seen = set()
+        self.stderr_tail = []
+
+    # -- brain -> rundesk -------------------------------------------------
+
+    def on_brain_line(self, line):
+        raw(line)
+        text = line.strip()
+        if not text:
+            return
+        try:
+            event = json.loads(text)
+        except ValueError:
+            # Not JSON. Keep it in RUNDESK_RAW and say nothing we cannot vouch for.
+            note("driftwood said something that is not JSON: %.200s" % text)
+            return
+        if not isinstance(event, dict):
+            return
+
+        kind = event.get("kind")
+
+        if kind == "session":
+            if isinstance(event.get("id"), str):
+                self.session = event["id"]
+
+        elif kind == "thinking":
+            emit({"type": "think", "text": as_text(event.get("body"))})
+
+        elif kind == "speech":
+            emit({"type": "text", "text": as_text(event.get("body"))})
+
+        elif kind == "action":
+            ref = as_id(event.get("ref"))
+            name = event.get("what")
+            record = {"type": "tool", "id": ref}
+            if isinstance(name, str) and name:
+                record["name"] = name
+                did = DID_BY_NAME.get(name.lower())
+                if did:
+                    record["did"] = did
+            self.tools_seen.add(ref)
+            emit(record)
+
+        elif kind == "action_done":
+            ref = as_id(event.get("ref"))
+            record = {"type": "result", "id": ref}
+            failed = event.get("failed")
+            if isinstance(failed, bool):
+                record["ok"] = not failed
+            summary = summarise(event.get("output"))
+            if summary is not None:
+                record["summary"] = summary
+            if ref not in self.tools_seen:
+                # A `result` must match a `tool` we sent; invent the tool
+                # rather than send a dangling result.
+                self.tools_seen.add(ref)
+                emit({"type": "tool", "id": ref})
+            emit(record)
+
+        elif kind == "meter":
+            usage = self.totals.delta(self.session, event)
+            if usage:
+                emit(usage)
+
+        elif kind == "finished":
+            self.good = bool(event.get("good"))
+            self.finished.set()
+
+        else:
+            # Unknown to us but real: an unrecognised record is kept, not
+            # refused, so pass it along rather than lose it.
+            emit({"type": "driftwood.event", "event": event})
+
+    # -- threads ----------------------------------------------------------
+
+    def pump_stdout(self, brain):
+        for line in iter(brain.stdout.readline, ""):
+            try:
+                self.on_brain_line(line)
+            except Exception as exc:      # never let one bad line end a turn
+                note("adapter could not handle a driftwood line: %s" % exc)
+        try:
+            brain.stdout.close()
+        except OSError:
+            pass
+
+    def pump_stderr(self, brain):
+        for line in iter(brain.stderr.readline, ""):
+            raw(line)
+            self.stderr_tail.append(line.rstrip("\n"))
+            del self.stderr_tail[:-20]
+            note("driftwood: " + line.rstrip("\n"))
+        try:
+            brain.stderr.close()
+        except OSError:
+            pass
+
+    def pump_stdin(self, brain):
+        """We said steer:true, so stdin is one JSON record per line, the
+        prompt first and anything said later the same way, until it closes."""
+        try:
+            for line in iter(sys.stdin.readline, ""):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    note("ignoring a line on stdin that is not JSON: %.200s" % line)
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                if record.get("type") != "say":
+                    note("ignoring a stdin record of unknown type %r"
+                         % (record.get("type"),))
+                    continue
+                text = record.get("text")
+                if not isinstance(text, str):
+                    continue
+                self.tell(brain, text)
+        except (OSError, ValueError):
+            pass
+        finally:
+            # Rundesk has nothing more to say. Tell the brain the same, so it
+            # stops reading and leaves.
+            close_stdin(brain)
+
+    def tell(self, brain, text):
+        try:
+            brain.stdin.write(json.dumps({"say": text}, ensure_ascii=False) + "\n")
+            brain.stdin.flush()
+        except (OSError, ValueError):
+            pass
+
+    def watchdog(self):
+        """Nothing bounds how long a turn runs; what is bounded is how long we
+        may say nothing at all. Break a long silence on stderr."""
+        while not self.finished.wait(30):
+            if time.time() - _last_spoke > QUIET_LIMIT:
+                note("driftwood is still working (%d minutes without output)."
+                     % int((time.time() - _last_spoke) / 60))
+
+
+# ---------------------------------------------------------------- helpers
+
+def as_text(value):
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def as_id(value):
+    """`tool.id` must be a string."""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value) if value is not None else ""
+
+
+def summarise(output):
+    if output is None:
+        return None
+    text = output if isinstance(output, str) else json.dumps(output, ensure_ascii=False)
+    if len(text) <= SUMMARY_LIMIT:
+        return text
+    return text[:SUMMARY_LIMIT] + "\n… (%d characters truncated)" % (len(text) - SUMMARY_LIMIT)
+
+
+def close_stdin(brain):
+    try:
+        if brain.stdin and not brain.stdin.closed:
+            brain.stdin.close()
+    except OSError:
+        pass
+
+
+def reap(brain):
+    """Take our children with us."""
+    close_stdin(brain)
+    try:
+        brain.wait(timeout=DRAIN_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            brain.terminate()
+            brain.wait(timeout=DRAIN_SECONDS)
+        except (subprocess.TimeoutExpired, OSError):
+            try:
+                brain.kill()
+            except OSError:
+                pass
+
+
+# ------------------------------------------------------------------- main
+
+def main(argv):
+    global _raw_fh
+
+    if "--capabilities" in argv:
+        sys.stdout.write(json.dumps(CAPABILITIES) + "\n")
+        return 0
+
+    raw_path = os.environ.get("RUNDESK_RAW")
+    if raw_path:
+        try:
+            _raw_fh = open(raw_path, "a")
+        except OSError as exc:
+            note("could not open RUNDESK_RAW (%s): %s" % (raw_path, exc))
+
+    workspace = os.environ.get("RUNDESK_CWD")
+    if workspace:
+        try:
+            os.chdir(workspace)
+        except OSError as exc:
+            note("RUNDESK_CWD (%s) is not usable: %s" % (workspace, exc))
+            done(False, why="workspace %s is not usable: %s" % (workspace, exc))
+            return 1
+
+    if os.environ.get("RUNDESK_POSTURE") == "read":
+        # driftwood has no sandbox, tool list or permission mode to map this
+        # onto, so it is passed on as words rather than claimed as containment.
+        note("RUNDESK_POSTURE=read: driftwood has no mechanism to enforce a "
+             "read-only posture; it is being asked, not constrained.")
+
+    settings = load_settings()
+    argv_brain = brain_command(settings)
+    turn = Turn()
+
+    try:
+        brain = subprocess.Popen(
+            argv_brain,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=os.getcwd(),
+            universal_newlines=True,
+            bufsize=1,
+        )
+    except OSError as exc:
+        note("could not start %s: %s" % (argv_brain[0], exc))
+        done(False, why="could not start %s: %s" % (argv_brain[0], exc))
+        return 1
+
+    stopped = {"flag": False}
+
+    def on_stop(signum, _frame):
+        stopped["flag"] = True
+        note("stopped by signal %d" % signum)
+        try:
+            brain.terminate()
+        except OSError:
+            pass
+        turn.finished.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(sig, on_stop)
+        except (ValueError, OSError):
+            pass
+
+    threads = [
+        threading.Thread(target=turn.pump_stdout, args=(brain,)),
+        threading.Thread(target=turn.pump_stderr, args=(brain,)),
+        threading.Thread(target=turn.pump_stdin, args=(brain,)),
+        threading.Thread(target=turn.watchdog),
+    ]
+    for thread in threads:
+        thread.daemon = True
+        thread.start()
+
+    # A turn is over when driftwood says `finished`, or when it leaves.
+    while not turn.finished.is_set():
+        if brain.poll() is not None:
+            # Give the readers a moment to drain what is still in the pipes.
+            turn.finished.wait(0.5)
+            break
+        turn.finished.wait(0.1)
+
+    reap(brain)
+    for thread in threads[:2]:
+        thread.join(timeout=2)
+
+    if stopped["flag"]:
+        done(False, session=turn.session, why="stopped")
+        return 143
+
+    if turn.good is None:
+        why = "driftwood exited without finishing the turn"
+        tail = " ".join(turn.stderr_tail).strip()
+        if tail:
+            why += ": " + tail[-500:]
+        note(why)
+        done(False, session=turn.session, why=why)
+        return brain.returncode if brain.returncode else 1
+
+    # `done.ok` is what the brain made of the turn; the exit code is what
+    # became of this program. The brain answered, so this program worked.
+    if turn.good:
+        done(True, session=turn.session)
+    else:
+        why = "driftwood reported the turn as unsuccessful"
+        tail = " ".join(turn.stderr_tail).strip()
+        if tail:
+            why += ": " + tail[-500:]
+        done(False, session=turn.session, why=why)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        done(False, why="interrupted")
+        sys.exit(130)

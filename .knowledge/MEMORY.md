@@ -37,6 +37,20 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   into the owner's real `~/.rundesk/schedules` — `RUNDESK_RUN_DIR` and `RUNDESK_LOG_DIR` alone are not
   enough, because the schedule checkpoint lives beside the schedules, not with the run state.
 
+- **An adapter that can find itself on its own PATH is a fork bomb.** An adapter looks its
+  brain up by name; committing the stranger's adapter as `strangers/driftwood` and putting
+  that directory on `PATH` meant it resolved `driftwood` to *itself*, ran itself, and that
+  copy did the same — **eight thousand processes and a load average of 641** before anyone
+  noticed, because each generation looks exactly like a legitimate adapter run. The brain is
+  named what the adapter looks for and the adapter is named something else, and
+  `_nothing_of_ours_is_on` in `test_provider.py` now fails the case rather than the machine.
+- **Never leave overlapping runs of a suite in the background.** Repeatedly relaunching the
+  gate and `test_provider.py` while earlier ones were still going left real gateways, real
+  `codex app-server` processes and `sleep 300` stand-ins alive across a dozen generations —
+  and made the fork bomb above take minutes to spot rather than seconds, because the process
+  list was already full of things that belonged there. One run at a time; check the previous
+  one is gone before starting another.
+
 - **A test flag that points at a real directory points *every* case at it.** `test_provider.py
   --home ~/.codex` was meant for the adapter under test and reached the stand-ins too, so they
   wrote their own bookkeeping into the owner's real Codex home and read what an earlier run had
