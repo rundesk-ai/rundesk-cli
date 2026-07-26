@@ -111,7 +111,7 @@ That is the whole of what you say. Four kinds of record, and only `arrived` real
 | | must have | may have |
 |---|---|---|
 | `ready` | | |
-| `arrived` | `conversation`, `user` | `text` · `ref` · `direct` · `attachments` |
+| `arrived` | `conversation`, `user` | `text` · `ref` · `direct` · `attachments` · `where` · `called` |
 | `control` | `conversation`, `user`, `control` | `ref` |
 | `gone` | | `why` |
 
@@ -138,6 +138,21 @@ verb, and when there is none say something true and general: a brain that gave n
 something this vocabulary has no word for yet, and its identifier is not a translation
 of that. A `did` you do not recognise cannot happen today
 and would mean this list had grown, so treat it the way you treat an absent one.
+
+**Say where it was said, and who said it — in the words your surface shows.** `where` is
+what a person reading your platform would call the place (`#ops on the Rundesk server`, `a
+direct message`, `the thread 'what changed today?' under #ops`), and `called` is the name
+your platform shows for the person, not their identifier. Both are optional and separately
+so; say neither and everything works exactly as before.
+
+Say them anyway. Without them a brain is handed the words and nothing else, so it answers a
+room of forty people in the same voice it uses for a direct message, and the person it is
+talking to is a number it never sees. They reach the brain the way everything reaches it —
+named in the words of the turn — and they are never a control: where an answer goes is
+decided from `conversation` and never from these, so nothing a sender can type in their own
+display name can redirect anything. Rundesk flattens both to one line and clips them before
+they go anywhere, so a name with a newline in it cannot end rundesk's sentence and begin one
+of its own.
 
 **Attachments go both ways, and both are files already on this machine.** What somebody
 attached arrives on `arrived` — download it yourself, put it somewhere under your own

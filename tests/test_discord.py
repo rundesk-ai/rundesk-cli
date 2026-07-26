@@ -179,6 +179,48 @@ class WhatAThreadIsCalled(unittest.TestCase):
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class WhereAMessageCameFrom(unittest.TestCase):
+    """R-DIS-21, R-CH-21 — the agent was handed a snowflake, which told it nothing, so it
+    answered a room of forty people in the voice it used for a direct message."""
+
+    class Where:
+        def __init__(self, name=None):
+            self.name = name
+
+    class Thread(Where):
+        pass
+
+    class Message:
+        def __init__(self, channel, server=None, shown=None, name="tim"):
+            self.channel, self.guild = channel, server
+            self.author = type("A", (), {"display_name": shown, "name": name})()
+
+    def message(self, channel, server=None, **how):
+        return WhereAMessageCameFrom.Message(channel, server, **how)
+
+    def test_discord_says_which_room_and_which_person_a_message_came_from(self):
+        at = self.message(self.Where("ops"), self.Where("Rundesk"), shown="Tim")
+        self.assertEqual("#ops on the Rundesk server", discord._place(at, False, False))
+        self.assertEqual("Tim", discord._who(at))
+
+    def test_a_direct_message_is_named_as_one_rather_than_as_a_channel(self):
+        """A direct message has no name and no server, and calling it '#None' would be
+        rundesk telling the agent something untrue about where it is."""
+        at = self.message(self.Where(), shown=None)
+        self.assertEqual("a direct message", discord._place(at, True, False))
+        self.assertEqual("tim", discord._who(at), "no display name is still a name")
+
+    def test_a_thread_is_named_under_the_channel_it_was_opened_in(self):
+        """A thread's own name says what the turn is about; the channel it hangs under is
+        what says where in the server it is happening."""
+        thread = self.Thread("what changed today?")
+        thread.parent = self.Where("ops")
+        at = self.message(thread, self.Where("Rundesk"), shown="Tim")
+        self.assertEqual("the thread 'what changed today?' under #ops on the Rundesk server",
+                         discord._place(at, False, True))
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class AnAnswerTooLongForOneMessage(unittest.TestCase):
     """R-DIS-13 — split or attached, never cut in silence."""
 

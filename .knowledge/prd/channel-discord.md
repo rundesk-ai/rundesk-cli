@@ -42,6 +42,7 @@ so only a running commentary may grow.
 | ❌ | R-DIS-18 | An answer too long to read as messages is attached as a file instead | src/rundesk_cli/channels/discord:447 — the splitting is proved offline; uploading is the platform's |
 | ❌ | R-DIS-19 | A file the agent made is uploaded rather than described | src/rundesk_cli/channels/discord:470 — the upload is the platform's, and proved by hand |
 | ✅ | R-DIS-20 | What an agent is doing is shown while it works only if the owner asked for it | `showing the work is off unless the owner asks`, `the commentary may grow but the answer may never`, `a long commentary is kept to what one message holds` |
+| ✅ | R-DIS-21 | Discord says which room and which person a message came from, in the words Discord shows | `discord says which room and which person a message came from`, `a direct message is named as one rather than as a channel`, `a thread is named under the channel it was opened in` |
 
 ## Open questions
 

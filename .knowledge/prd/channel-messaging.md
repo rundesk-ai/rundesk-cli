@@ -40,6 +40,7 @@ it has not — what never differs is that the work runs and is answered.
 | ✅ | R-CH-17 | What a person attached reaches the agent as a file already on this machine | `a message with nothing but an attachment is still a message`, `a message with neither words nor anything attached is not one`, `something attached that is not on this machine is dropped` |
 | ✅ | R-CH-18 | What the agent made is sent only from where that agent works | `what the agent made is sent from where it works`, `a file outside where the agent works is not sent`, `a file a brain never made is not invented` |
 | ✅ | R-CH-19 | A finished thing an agent says mid-turn is shown then, and its last is the answer | `a finished thing said mid turn is shown when the next one arrives`, `only one finished thing said is all answer and no remark`, `a reply written a piece at a time is still held to the end` |
+| ✅ | R-CH-21 | An agent is told which surface and which conversation it is answering in | `a brain is told which surface and conversation it is answering in`, `a surface that names neither is answered exactly as before`, `a surface that names neither says neither`, `a name somebody chose cannot write its own line in the prompt`, `a channel of an unnamed kind says nothing about where it is` |
 | ✅ | R-CH-20 | Nothing an agent's surface does for somebody it may not answer is visible or costly | `nothing of this channels is still running afterwards`, `a turn waiting behind another never starts during a shutdown` |
 
 ## Open questions

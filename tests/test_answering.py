@@ -142,9 +142,58 @@ class CarriesAConversation(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.005)
 
     @staticmethod
+    def words(prompt: str) -> str:
+        """What somebody actually typed, without what rundesk added under it (R-CH-21).
+
+        A prompt is the words, then what was attached, then where it was said — so a case
+        about the words says so, and does not have to be rewritten every time something
+        else is worth telling a brain.
+        """
+        return prompt.split("\n\n")[0]
+
+    @staticmethod
     def arrived(text="what changed?", user="2207", conversation="one", ref="8841") -> dict:
         return {"type": "arrived", "conversation": conversation, "user": user,
                 "text": text, "ref": ref}
+
+
+class WhereABrainIsAnswering(CarriesAConversation):
+    """R-CH-21 — a brain was handed the words and nothing else, so it answered a room of
+    forty people in exactly the voice it used for a direct message, and the person it was
+    talking to was a number it never saw."""
+
+    async def test_a_brain_is_told_which_surface_and_conversation_it_is_answering_in(self):
+        """R-CH-21 — the surface, the channel the owner named, the place as that surface
+        shows it, and who is asking."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, dict(self.arrived(),
+                                    where="#ops on the Rundesk server", called="Tim"))
+        said = brain.asked[0]["prompt"]
+        self.assertIn("over somewhere", said)
+        self.assertIn("'ops'", said)
+        self.assertIn("in #ops on the Rundesk server", said)
+        self.assertIn("from Tim", said)
+
+    async def test_a_surface_that_names_neither_is_answered_exactly_as_before(self):
+        """R-CH-21 — separately optional. A surface with no name for the place or the
+        person still says which surface it is, and nothing is invented for the rest."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        said = brain.asked[0]["prompt"]
+        self.assertIn("over somewhere", said)
+        self.assertNotIn(", in ", said)
+        self.assertNotIn(", from ", said)
+
+    async def test_a_channel_of_an_unnamed_kind_says_nothing_about_where_it_is(self):
+        """R-CH-21 — a half-written line about a surface with no name is worse than no
+        line: it is rundesk telling a brain something it does not know."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain, record={"kind": "", "allow": ["2207"],
+                                                      "settings": {}})
+        await self.carry(held, dict(self.arrived(), where="#ops", called="Tim"))
+        self.assertEqual("what changed?", brain.asked[0]["prompt"])
 
 
 class WhoMayBeAnswered(CarriesAConversation):
@@ -165,7 +214,7 @@ class WhoMayBeAnswered(CarriesAConversation):
         held = self.answering(surface, brain)
         await self.carry(held, self.arrived())
         self.assertEqual(1, len(brain.asked))
-        self.assertEqual("what changed?", brain.asked[0]["prompt"])
+        self.assertEqual("what changed?", self.words(brain.asked[0]["prompt"]))
 
     async def test_a_gesture_from_somebody_not_allowed_ends_nothing(self):
         """R-CH-4, R-CH-9 — stopping is a gesture at a conversation, and being able to
@@ -346,7 +395,8 @@ class ASecondMessageWhileOneIsRunning(CarriesAConversation):
         await asyncio.sleep(0.02)
         stop.set()
         await self._settled(held)
-        self.assertEqual(["actually, stop at three"], brain.steered)
+        self.assertEqual(["actually, stop at three"],
+                         [self.words(one) for one in brain.steered])
         self.assertEqual(1, len(brain.asked), "it started a second turn as well")
 
     async def test_a_brain_that_cannot_be_steered_answers_the_second_message_after(self):
@@ -359,7 +409,8 @@ class ASecondMessageWhileOneIsRunning(CarriesAConversation):
         await self._settled(held)
         await asyncio.sleep(0.05)
         await self._settled(held)
-        self.assertEqual(["first", "second"], [one["prompt"] for one in brain.asked])
+        self.assertEqual(["first", "second"],
+                         [self.words(one["prompt"]) for one in brain.asked])
 
     async def test_a_burst_arriving_before_the_turn_is_admitted_still_steers_it(self):
         """R-CH-9 — whether a brain can be steered is not known until the turn is
@@ -378,7 +429,8 @@ class ASecondMessageWhileOneIsRunning(CarriesAConversation):
         stop.set()
         await self._settled(held)
         self.assertEqual(1, len(brain.asked), "a burst became several turns")
-        self.assertEqual(["and also this", "and this"], brain.steered)
+        self.assertEqual(["and also this", "and this"],
+                         [self.words(one) for one in brain.steered])
 
     async def test_the_mark_stays_on_the_message_that_asked(self):
         """R-DIS-8 — a second message sent while a turn runs took the mark that belonged

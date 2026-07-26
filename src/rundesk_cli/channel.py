@@ -64,6 +64,22 @@ NEEDED = {
 #: Kept out of `NEEDED` because a message with nothing attached is the ordinary one.
 ATTACHED = "attachments"
 
+#: What the surface calls the place this was said, and the person who said it — as it shows
+#: them to a human, not as it stores them (R-CH-21). A brain was being handed the words and
+#: nothing else, so it answered every conversation as though it were the only one: it could
+#: not tell a room from a direct message, and the person it was talking to was an opaque
+#: number it never saw.
+#:
+#: Optional, and separately so. A surface that has no name for either says neither and the
+#: turn is exactly what it was before. What is here is never a control: the answer goes
+#: where the conversation is, which is rundesk's to decide and not the sender's to say.
+WHERE, CALLED = "where", "called"
+
+#: How much of either is carried. These are a stranger's words on their way into a prompt,
+#: so they are clipped and flattened to one line — a display name is a place somebody can
+#: write whatever they like, including something shaped like an instruction.
+SAID_MOST = 80
+
 #: How many attachments on one message are carried through, and how much of one. A chat
 #: platform will accept far more than a turn can use, and an agent's workspace is not
 #: somewhere a stranger gets to fill.
@@ -266,7 +282,20 @@ def understood(said: bytes | str) -> dict | None:
         # said nothing, which is the worst of the three possible outcomes.
         if not it["text"] and not it[ATTACHED]:
             return None
+        it[WHERE], it[CALLED] = plainly(it.get(WHERE)), plainly(it.get(CALLED))
     return it
+
+
+def plainly(said) -> str:
+    """A name a surface shows, made safe to put in a sentence (R-CH-21).
+
+    One line and a bounded one. A display name is chosen by whoever holds the account, and
+    it reaches a brain inside a prompt — so a newline, which is how somebody would try to
+    end our sentence and start one of their own, is not a character it gets to have.
+    """
+    if not isinstance(said, str):
+        return ""
+    return " ".join(said.split())[:SAID_MOST]
 
 
 def attached(said) -> list:
