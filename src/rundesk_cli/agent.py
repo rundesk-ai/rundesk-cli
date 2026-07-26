@@ -433,19 +433,17 @@ def remember(name: str, where: Path | None = None, provider: str | None = None,
     """Keep what this agent should reach for when a turn does not say.
 
     What is not given is left exactly as it was, so naming a model later does not quietly
-    forget the brain. Written whole and renamed into place, so a reader arriving mid-write
-    sees one or the other and never half of each.
+    forget the brain — which is exactly why the read, the decision and the write are under
+    one hold. Two commands each naming a different half, read the same file, merged only
+    their own, and the later write erased the other's with both reporting success.
     """
-    keeping = chosen(name, where)
-    for what, value in (("provider", provider), ("model", model), ("settings", settings)):
-        if value is not None:
-            keeping[what] = value
     at = directory(name, where) / CHOSEN
-    at.parent.mkdir(parents=True, exist_ok=True)
-    beside = at.with_suffix(".writing")
-    beside.write_text(json.dumps(keeping, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    beside.replace(at)
-    return keeping
+    with gateway.changing(at, {}, "what this agent reaches for") as keeping:
+        for what, value in (("provider", provider), ("model", model),
+                            ("settings", settings)):
+            if value is not None:
+                keeping[what] = value
+        return dict(keeping)
 
 
 @dataclass(frozen=True)

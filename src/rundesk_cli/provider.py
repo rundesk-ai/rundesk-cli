@@ -79,6 +79,15 @@ ASKING = "--capabilities"
 #: the adapter already knows, asked offline and by contract without a network.
 ASKING_SILENCE_SECONDS = 60.0
 
+#: The longest the answering may take however much it is saying. Silence cannot see a
+#: program wedged in a loop that keeps announcing itself, which is the whole reason a
+#: ceiling exists beside it (R-PROC-13) — and this is the one place rundesk runs a program
+#: nobody here has vetted *before* a turn is admitted, so switching the backstop off left a
+#: chatty or broken adapter able to hang every `rundesk ask` with nothing written down.
+#: Generous against a loaded machine, and far short of a turn's, because this is a question
+#: whose answer the adapter already knows.
+ASKING_CEILING_SECONDS = 300.0
+
 
 class NotRunnable(Exception):
     """There is nothing runnable where this provider said there would be (R-PRV-12).
@@ -237,7 +246,7 @@ async def capabilities(at: Path, env: dict[str, str] | None = None) -> dict:
         env=dict(env or {}),
         errors_apart=True,
         silence=ASKING_SILENCE_SECONDS,
-        ceiling=None,
+        ceiling=ASKING_CEILING_SECONDS,
     )
     await asked.start()
     heard: list = []

@@ -397,6 +397,49 @@ class BeingSentToMidTurn(WithAnAgentToRunTurnsFor):
         self.assertEqual(["hello"], [one["text"] for one in sent])
 
 
+class WhatAReviewFound(WithAnAgentToRunTurnsFor):
+    """Three defects a review caught, each with the case that would have caught them."""
+
+    async def test_a_brain_that_can_be_steered_is_given_records_even_with_nothing_to_add(self):
+        """R-RUN-9, R-PRV-10 — how a brain is spoken to is decided by what *it* said it
+        can do, and never by whether the caller happened to have a second thing to say.
+
+        Decided in two places it was two rules: what the brain can do gated the account,
+        and whether the caller passed anything gated the transport. They agree until the
+        ordinary case — `rundesk ask` with no `--steer` — where the record was skipped in
+        one and never written in the other, so a turn reached a brain with nothing in its
+        account to show for it."""
+        said = await self.ask("steerable", prompt="hello")
+        self.assertTrue(said.ok)
+        sent = [one for one in self.account(said.run) if one["type"] == turn.SENT]
+        self.assertEqual(["hello"], [one["text"] for one in sent],
+                         "a turn reached a brain and its account does not show it")
+
+    async def test_a_word_that_could_not_be_said_is_not_reported_as_a_turn_that_was_fine(self):
+        """R-RUN-9 — saying it runs as a task of its own, and a task whose exception
+        nobody retrieves is one that failed invisibly. A word that never reached the brain
+        left the turn reporting success it had not earned."""
+        async def breaks_down():
+            yield "this one arrives"
+            raise RuntimeError("the terminal went away")
+
+        said = await self.ask("steerable", steering=breaks_down())
+        self.assertFalse(said.ok, "a turn that lost a word said it was fine")
+        lost = [one for one in self.account(said.run) if one["type"] == turn.LOST]
+        self.assertTrue(lost, "what went wrong saying it reached nobody")
+        self.assertIn("terminal went away", lost[0]["why"])
+
+    async def test_two_things_named_at_once_do_not_erase_one_another(self):
+        """R-AGT-4 — read, decide and write under one hold. Each read the same file, each
+        merged only its own half, and the later write erased the other's with both
+        reporting success."""
+        agent.remember("ava", self.where, provider="one")
+        agent.remember("ava", self.where, model="a-model")
+        keeping = agent.chosen("ava", self.where)
+        self.assertEqual({"provider": "one", "model": "a-model"}, keeping,
+                         "naming a model forgot the brain")
+
+
 class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
     """`rundesk ask` — the whole slice, from a typed command to an account on disk."""
 

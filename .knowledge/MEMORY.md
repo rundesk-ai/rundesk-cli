@@ -37,6 +37,18 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   into the owner's real `~/.rundesk/schedules` — `RUNDESK_RUN_DIR` and `RUNDESK_LOG_DIR` alone are not
   enough, because the schedule checkpoint lives beside the schedules, not with the run state.
 
+- **A capability gate and a caller-supplied-object gate look interchangeable right up until
+  the caller has nothing to supply.** What a brain said it can do decided one half of how a
+  turn was driven, and whether the caller passed a steering generator decided the other. They
+  agree in every case except the ordinary one — `rundesk ask` with no `--steer` — where the
+  record was skipped by the first gate and never written by the second, so a turn reached a
+  brain with nothing in its account to show for it. One decision, asked once, threaded
+  explicitly.
+- **A turn that holds a brain's input open must close it on every path, including the ones
+  where *we* went wrong.** A steerable brain reads until its input closes; leaving it open
+  because the thing feeding it raised is a turn that never ends, waiting on somebody who has
+  already stopped speaking. Close it in a `finally`, not at the end of the happy path.
+
 - **An adapter that can find itself on its own PATH is a fork bomb.** An adapter looks its
   brain up by name; committing the stranger's adapter as `strangers/driftwood` and putting
   that directory on `PATH` meant it resolved `driftwood` to *itself*, ran itself, and that

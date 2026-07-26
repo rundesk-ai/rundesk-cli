@@ -425,6 +425,23 @@ class ABrainWithNoLoopOfItsOwn(DrivesAnAdapter):
         said = await provider.capabilities(self.stand_in("bare"), self.told())
         self.assertEqual({what: False for what in provider.CAPABILITIES}, said)
 
+    async def test_an_adapter_that_never_stops_answering_is_not_waited_on_forever(self):
+        """R-PRV-15 — silence cannot see a program wedged in a loop that keeps announcing
+        itself, which is the whole reason a ceiling exists beside it. This is the one place
+        rundesk runs a program nobody has vetted *before* a turn is admitted, and with the
+        backstop switched off a chatty adapter hung every ask with nothing written down."""
+        self.addCleanup(setattr, provider, "ASKING_CEILING_SECONDS",
+                        provider.ASKING_CEILING_SECONDS)
+        provider.ASKING_CEILING_SECONDS = 1.0
+        chatty = self.where / "chatty"
+        chatty.write_text(
+            "#!%s\nimport sys, time\n"
+            "while True:\n    sys.stdout.write('{}\\n'); sys.stdout.flush(); time.sleep(0.05)\n"
+            % PY, encoding="utf-8")
+        chatty.chmod(0o755)
+        said = await provider.capabilities(chatty, self.told())
+        self.assertEqual({what: False for what in provider.CAPABILITIES}, said)
+
     async def test_an_adapter_that_cannot_answer_the_question_can_do_nothing(self):
         """R-PRV-15 — the smallest legitimate adapter in the guide is a shell script that
         answers a prompt. Telling its author their brain is broken for not knowing a flag

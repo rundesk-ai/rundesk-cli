@@ -120,6 +120,13 @@ async def carry(
         # has to show — and an account written afterwards is one that can be written to
         # match whatever happened. A steered turn records it as it sends it instead, so
         # that everything said mid-turn lands in the order it was said.
+        #
+        # **One gate, asked once.** This used to be decided here by what the brain can do
+        # and again inside `_run` by whether the caller had anything to steer with. The two
+        # look interchangeable right up until the caller has nothing to add — which is
+        # every ordinary `rundesk ask` — and then the record was skipped here and never
+        # written there, so a turn reached a brain with nothing in its account to show for
+        # it (R-RUN-9, R-PRV-10).
         if not can["steer"]:
             writing.add(event={"type": SENT, "text": prompt})
 
@@ -137,7 +144,7 @@ async def carry(
             on_error=writing.went_wrong,
         )
         result = await _run(program, prompt, writing, said, watching,
-                            steering=steering if can["steer"] else None)
+                            steer=can["steer"], steering=steering)
 
         # Inside the same writer, and last. A second one would count from nothing and
         # give the end of a run the same places in the order as its beginning.
@@ -157,7 +164,7 @@ async def carry(
 
 
 async def _run(program, prompt: str, writing, said: list, watching,
-               steering=None) -> process.Result:
+               steer: bool = False, steering=None) -> process.Result:
     """Start the brain, feed it the turn, and write down every line it answers with.
 
     The sink is the account itself. Every line lands in the run's raw exactly as it
@@ -181,9 +188,12 @@ async def _run(program, prompt: str, writing, said: list, watching,
 
     await program.start()
     reading = asyncio.ensure_future(program.wait(sink=heard))
-    if steering is None:
-        # A brain that cannot be sent to mid-turn is given the prompt and told there is no
-        # more coming, so one that reads its input to the end can answer at all.
+    if not steer:
+        # Decided by what the brain said it can do, and by nothing else. A brain that
+        # cannot be sent to mid-turn is given the prompt and told there is no more coming,
+        # so one that reads its input to the end can answer at all — and one that *can* is
+        # given records whether or not anybody has a second thing to say, because that is
+        # what it was promised and what it is written to read.
         try:
             await program.send(prompt.encode("utf-8"))
             await program.close_input()
@@ -194,26 +204,70 @@ async def _run(program, prompt: str, writing, said: list, watching,
     # plain text, because nothing can mean "the prompt ended" any more. Everything sent is
     # written into the account first: a word put into a turn that the account does not
     # show makes the account a lie, and this is the one thing that adds words mid-turn.
-    saying = asyncio.ensure_future(_saying(program, prompt, writing, steering))
+    # What went wrong saying it, if anything did. Read after the turn rather than raised
+    # through it: the brain may well have finished properly, and a word that never reached
+    # it is a hole in the account rather than a reason to throw the account away.
+    trouble: list = []
+    saying = asyncio.ensure_future(
+        _saying(program, prompt, writing,
+                steering if steering is not None else _nothing(), trouble))
     try:
-        return await reading
+        result = await reading
     finally:
         saying.cancel()
         with contextlib.suppress(BaseException):
             await saying
+    if trouble:
+        # Counted the same way a record the receiver never got is counted, because it is
+        # the same kind of loss seen from the other end: something belonging to this turn
+        # did not make it. A turn that lost a word must not report that it was fine.
+        return process.Result(result.reason, result.code, result.output,
+                              result.undelivered + len(trouble))
+    return result
 
 
-async def _saying(program, prompt: str, writing, steering) -> None:
-    """The prompt, and anything said after it while the brain is still working."""
+async def _nothing():
+    """Nothing more to say, said in the one shape the sender reads.
+
+    A turn with no second word still goes down the steered path, because the path is the
+    brain's to choose and not the caller's — so the absence of anything to add has to be
+    expressible rather than a reason to take the other one.
+    """
+    return
+    yield  # noqa: unreachable — what makes this an async iterator rather than a coroutine
+
+
+async def _saying(program, prompt: str, writing, steering, trouble: list) -> None:
+    """The prompt, and anything said after it while the brain is still working.
+
+    **Nothing that goes wrong in here is allowed to be silent.** This runs as a task of its
+    own, and a task whose exception nobody retrieves is one that failed invisibly — so a
+    word that could not be written down, or a terminal that raised while somebody was
+    typing into it, would leave the turn reporting that it was fine. What went wrong is put
+    into the run's account and into `trouble`, which the turn's outcome reads.
+
+    A brain that has already finished is the one exception: somebody still typing at a turn
+    that is over is nobody's fault, and there is nothing lost to report.
+    """
     try:
         writing.add(event={"type": SENT, "text": prompt})
         await program.send(provider.spoken(prompt))
         async for word in steering:
             writing.add(event={"type": SENT, "text": word, "mid": True})
             await program.send(provider.spoken(word))
-        await program.close_input()
     except process.NotListening:
         pass  # it finished while somebody was still typing, which is nobody's fault
+    except asyncio.CancelledError:
+        raise  # the turn ended first and this is being tidied up; not a loss
+    except BaseException as why:
+        trouble.append(str(why) or why.__class__.__name__)
+        with contextlib.suppress(BaseException):
+            writing.add(event={"type": LOST, "records": 1, "why": f"not said: {why}"})
+    # **Whatever happened, the brain is told there is no more coming.** A steerable brain
+    # reads until its input closes; leaving it open because *we* went wrong is a turn that
+    # never ends, waiting on somebody who has already stopped speaking.
+    with contextlib.suppress(BaseException):
+        await program.close_input()
 
 
 def _handle(said: list) -> str | None:
