@@ -1024,6 +1024,76 @@ state it is named for.
 |---|---|---|
 | `test_removing_rundesk_refuses_while_a_gateway_is_still_running` (`tests/test_install.py:89`) | R-RM-9 | Writes a plist first, so the no-job case in finding 15 is never exercised |
 
+# Round seven — 2026-07-26
+
+Line numbers are against `0197953` plus the working tree that closed the clock phase. Found by
+three reviews of that phase's diff and by driving it end to end; each was reproduced against the
+code as it stands rather than argued from the source.
+
+## Critical
+
+### 39. A read-only command cannot read records whose `-shm` is not there
+
+**Status:** Open, and the first thing to settle in the phase that owns the store.
+
+`Store._reading` opens `file:<path>?mode=ro` (`store.py:270-277`). The database is in WAL mode,
+and **a read-only SQLite connection cannot open a WAL database when the `-shm` file is absent**:
+it has to create it and cannot. That is not a rare state — it is what a clean close leaves
+behind, so a gateway or a turn that finishes and closes tidily is what puts the records into it.
+
+Reproduced from nothing:
+
+```text
+store.Store(at).made()
+rm state.db-wal state.db-shm
+store.Store(at).runs()
+  -> sqlite3.OperationalError: unable to open database file
+```
+
+Every read-only verb goes through this connection — `runs`, `usage`, `search`, `schedules`,
+`agents`, `doctor` — and none of them catches `sqlite3.OperationalError`, because nothing of the
+database's is supposed to reach them (`store.py` says so in its own docstring). So the owner gets
+a traceback from the command they typed to find out what happened last night.
+
+Nothing in the suite catches it: every case writes before it reads, in the same process, which
+leaves the two files in place. It was found by a case that reads while a *separate* process is
+writing — `tests/test_gateway.py`'s `_fired` waits it out and says why.
+
+Regression criteria:
+
+- Reading records whose `-wal` and `-shm` are absent answers, rather than raising.
+- A read still cannot write: whatever makes the read work is enforced by the database, not by a
+  convention a reviewer has to notice.
+- The four read-only verbs answer with a gateway of that agent writing at the same moment.
+
+Relevant implementation: `Store._reading()` and `Store._open()` in `src/rundesk/store.py`.
+
+## High impact
+
+### 40. A turn a schedule asked for is not ended when its gateway goes
+
+**Status:** Open — **half closed.** The reporting is fixed and the ending is not.
+
+`Gateway.asking` admits a turn whose brain is started by `turn.carry`, not by `Gateway.start`, so
+it is not in `running` and `process.end_all` cannot reach it. As of `0197953` the gateway counts
+it: `_go()` reports `drained=False`, exits non-zero, keeps its record and writes an interruption
+naming it, so a supervisor is no longer told a clean stop happened while a brain was answering.
+
+What is still open is that nothing ends the brain. Cancelling the task would not: `turn.carry`
+has no cleanup that ends its `process.Program`, so the adapter and everything it started outlive
+the gateway. **A channel turn has the same hole** — `Answering.stop()` cancels the exchange and
+the program is left the same way — so this is one fix in `turn.carry`, not two, and it is not
+specific to the clock.
+
+Regression criteria:
+
+- A gateway that goes while a turn is in flight leaves no adapter process behind, from either a
+  schedule or a channel.
+- The turn's outcome is still recorded as interrupted rather than as a failure to start.
+
+Relevant implementation: `turn.carry()` in `src/rundesk/turn.py`; `Gateway._go()` and
+`Gateway._asked()` in `src/rundesk/gateway.py`; `Answering.stop()` in `src/rundesk/answering.py`.
+
 ## Recorded on the way past, and not fixed
 
 Neither meets the threshold — no reproduced consequence — and both would be found again by
