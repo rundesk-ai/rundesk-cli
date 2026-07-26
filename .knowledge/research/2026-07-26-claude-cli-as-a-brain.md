@@ -160,6 +160,23 @@ Measured: pointing `CLAUDE_CONFIG_DIR` at a fresh directory produces `Not logged
 per-user — but 2.1.219 does **not** authenticate a session from it when `CLAUDE_CONFIG_DIR` points
 elsewhere. The config dir gates it, so two agents need two `claude /login` runs.[4]
 
+**Sharpened, and it is sharper than "points elsewhere".** Measured at 2.1.220: the variable does
+not *redirect* the login, it *removes* one. Pointing `CLAUDE_CONFIG_DIR` at `~/.claude` — the very
+directory the CLI defaults to, on a machine that is signed in — answers `Not logged in · Please run
+/login`, while the identical turn with the variable unset answers normally.[12] There is no
+credential file in `~/.claude` at all; the sign-in is the keychain item, and setting the variable
+at all is what stops it being read.
+
+Three consequences, and the third is the one that bites:
+
+- An agent's private home cannot borrow the machine's login, and **there is nothing to copy into it
+  even if that were allowed** — which retires the question of whether rundesk should.
+- One `claude /login` per agent, run as `CLAUDE_CONFIG_DIR=<dir> claude /login`. It needs a browser,
+  so it is the owner's to run and cannot be arranged by an adapter or a test.
+- **Being logged out is not an error on stderr.** It arrives as an ordinary failed turn on the
+  `result` line, with `is_error: true` and the message in `result`. An adapter watching only the
+  stream it was told errors go on reports the failure and never says what to run about it.[12]
+
 Not re-tested: whether two agents with different homes running *simultaneously* stay independent,
 and whether a Keychain-write race appears under load.[4]
 

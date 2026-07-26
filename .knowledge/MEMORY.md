@@ -35,6 +35,16 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   Pass **`--no-memory`** on every turn of a probe *and* make the candidate words unguessable
   per run (a uuid suffix), or a re-run reads the previous run's sessions. The same finding is
   why the shipped adapter passes `--no-memory`: one agent's conversation is not another's.
+- **`CLAUDE_CONFIG_DIR` does not redirect the Claude login — setting it *removes* one.** The
+  sign-in is in the macOS login keychain (`Claude Code-credentials`), not in any config
+  directory, and this CLI stops consulting the keychain the moment the variable is set at
+  all: pointing it at `~/.claude`, the very directory it defaults to, answers `Not logged in
+  · Please run /login` while the same turn with the variable unset answers fine. Measured at
+  2.1.220. So `test_provider.py --home ~/.claude` cannot give a real Claude a login, there is
+  nothing to copy in even if that were allowed, and the only way to give an agent one is
+  `CLAUDE_CONFIG_DIR=<dir> claude /login` once per agent — which needs a browser and is the
+  owner's to run. Being logged out also arrives as an ordinary failed turn on the `result`
+  line rather than on stderr, so an adapter that only watches stderr never says what to run.
 - **Do not test a model instruction with a question the conversation can already answer.** A first
   attempt at the above asked for a codename the thread had been asked for before, so the model
   answered from its own earlier reply and the resume looked like it worked. Use a rule the history

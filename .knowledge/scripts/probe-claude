@@ -7,6 +7,7 @@ changed into `.knowledge/research/2026-07-26-claude-cli-as-a-brain.md`.
 
     python3 .knowledge/scripts/probe-claude            # everything, including live turns
     python3 .knowledge/scripts/probe-claude --offline  # only what costs nothing
+    python3 .knowledge/scripts/probe-claude --caching  # only what a resumed turn costs
 
 One question, because the rest of this brain is already measured and committed at
 `tests/samples/` — 184 lines of real output that cost real money and cannot be re-derived
@@ -43,6 +44,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 
 CLAUDE = os.environ.get("RUNDESK_CLAUDE_BIN", "claude")
 
@@ -116,7 +118,7 @@ def _charged(ended: dict) -> int:
                ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
 
 
-def turn(where: str, how: list) -> dict:
+def turn(where: str, how: list, asking: str = ASKING) -> dict:
     """One headless turn, with the prompt on stdin where nothing can swallow it.
 
     `--allowedTools` is variadic and eats a trailing positional, and `--output-format
@@ -125,10 +127,71 @@ def turn(where: str, how: list) -> dict:
     """
     argv = [CLAUDE, "-p", "--output-format", "stream-json", "--verbose",
             "--allowedTools", "Bash"] + how
-    said = ran(argv, cwd=where, input=ASKING, timeout=ANSWER_SECONDS)
+    said = ran(argv, cwd=where, input=asking, timeout=ANSWER_SECONDS)
     got = spoke(said.stdout)
     got["code"], got["stderr"] = said.returncode, said.stderr
     return got
+
+
+def _split(ended: dict) -> tuple:
+    """A turn's prompt, split the way it is billed: fresh, written, re-read."""
+    counted = ended.get("usage") or {}
+    return (int(counted.get("input_tokens") or 0),
+            int(counted.get("cache_creation_input_tokens") or 0),
+            int(counted.get("cache_read_input_tokens") or 0))
+
+
+def caching(where: str) -> None:
+    """Whether a resumed turn re-reads its prompt instead of paying for it again.
+
+    Two turns on one conversation, run twice — once as the CLI stands, once with the flag
+    whose help says it improves prompt-cache reuse by moving the per-machine sections
+    (cwd, environment, git status) out of the system prompt. Those sections are exactly
+    what changes under an agent that edits files, and a prefix that changes is a prefix
+    that cannot be re-read.
+
+    What decides it is not how much the second turn re-read — that is the conversation
+    prefix and is the same either way — but whether the part it had to *write again* grew.
+    A prefix that is stable between turns is one the cache can keep; a prefix that moves
+    is paid for every turn, and the per-machine sections are what move.
+    """
+    grew, read_back = {}, {}
+    for what, how in (("as it stands", []),
+                      ("--exclude-dynamic-system-prompt-sections",
+                       ["--exclude-dynamic-system-prompt-sections"])):
+        named = str(uuid.uuid4())
+        first = turn(where, how + ["--session-id", named], "Reply with the word ONE.")
+        second = turn(where, how + ["--resume", named], "Reply with the word TWO.")
+        was, now = _split(first["end"]), _split(second["end"])
+        grew[what], read_back[what] = now[1] - was[1], now[2]
+        says(f"two turns on one conversation — {what}",
+             f"turn 1  fresh {was[0]:>6}   written {was[1]:>6}   re-read {was[2]:>6}\n"
+             f"turn 2  fresh {now[0]:>6}   written {now[1]:>6}   re-read {now[2]:>6}\n"
+             f"what turn 2 had to write again: {grew[what]:+d} against turn 1")
+
+    plain = grew["as it stands"]
+    steady = grew["--exclude-dynamic-system-prompt-sections"]
+    warm = min(read_back.values())
+    if warm < 1000:
+        says("verdict — prompt caching", (
+            f"COLD — the second turn of a resumed conversation re-read only {warm} tokens,\n"
+            "so resuming is not buying a warm prompt here and something is breaking the\n"
+            "prefix before either flag gets a say. Find that before tuning anything."))
+        return
+    if plain - steady < 1000:
+        says("verdict — prompt caching", (
+            f"RESUMING IS WHAT BUYS IT — a second turn re-read {warm} tokens of its prompt\n"
+            f"either way, and the flag changed what had to be written again by only\n"
+            f"{plain - steady} tokens. Carry the conversation on and do not pass the flag: it\n"
+            "would be a claim nobody measured."))
+        return
+    says("verdict — prompt caching", (
+        f"THE FLAG HOLDS THE PREFIX STILL — a second turn re-read {warm} tokens either way,\n"
+        f"but without the flag the part it had to write again grew by {plain:+d} tokens\n"
+        f"between turn one and turn two, and with it by {steady:+d}. The per-machine\n"
+        "sections — cwd, environment, git status — are what move, and an agent that edits\n"
+        "files moves them every turn. Pass it: a prefix that changes is a prefix nothing\n"
+        "can re-read."))
 
 
 def _reports(what: str, got: dict) -> tuple:
@@ -195,6 +258,10 @@ def live() -> int:
          f"--append-system-prompt:  {_charged(appended['end'])} tokens  ({grew:+d})\n"
          f"--system-prompt:         {_charged(substituted['end'])} tokens  ({-lost:+d})")
 
+    # Asked before the verdicts below return early on an unsettled run: whether a resumed
+    # conversation is cheap is a question of its own, and it is answerable either way.
+    caching(where)
+
     if not control_reached:
         says("verdict — --system-prompt", (
             "UNSETTLED — the control could not reach the shell either, so 'it stopped\n"
@@ -234,12 +301,24 @@ def live() -> int:
 
 
 def main() -> int:
+    """What to ask, and how much of a real account to spend asking it.
+
+    `--caching` exists because that half is the one worth re-running on its own: what a
+    resumed conversation costs moves with every release, while what `--system-prompt`
+    substitutes does not — and re-buying a settled answer to reach an unsettled one is
+    exactly what the evidence in `tests/samples/` was committed to prevent.
+    """
     if _findable() is None:
         print(f"there is no {CLAUDE} on this machine's path — install the Claude Code "
               f"CLI, or point RUNDESK_CLAUDE_BIN at where it stands", file=sys.stderr)
         return 2
     offline()
-    return 0 if "--offline" in sys.argv else live()
+    if "--offline" in sys.argv:
+        return 0
+    if "--caching" in sys.argv:
+        caching(tempfile.mkdtemp(prefix="claude-probe-work-"))
+        return 0
+    return live()
 
 
 if __name__ == "__main__":
