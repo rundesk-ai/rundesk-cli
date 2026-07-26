@@ -551,8 +551,9 @@ suite the shipped one does. Until that has happened, the seam is a hope.
 
 ## Phase 3 — Add Basic Discord Communication
 
-**Outcome:** one authorized Discord channel/thread can send text to one proven provider binding and receive
-streamed results. Approvals and provider questions remain explicitly unsupported in this phase.
+**Outcome:** one authorized Discord channel or thread can reach an agent and watch it work. Approvals and
+provider questions stay explicitly unsupported here — steering a running turn is not either of those, and
+is supported exactly as far as the adapter behind that agent declared it is.
 
 What a channel must do is drafted in `channel-messaging` (`R-CH-n`) and what Discord does with it in
 `channel-discord` (`R-DIS-n`), both carried over from the Node build, which had all of this working:
@@ -562,6 +563,24 @@ through Discord's own commands rather than words typed into the chat.
 Build the Discord wire against a fake brain first, then attach it to the Phase 2 adapter. The already
 pinned `discord.py` dependency must earn its place through the same install and test path as the product;
 do not add a second Discord stack.
+
+**What Phase 2 changed, and this phase must use rather than rebuild:**
+
+- **Adapters declare what they can do**, so a channel asks rather than assumes. `steer`, `resume`,
+  `tools`, `usage` and `model` are answered per adapter and written into the run's record. A channel
+  that offers to interrupt a brain that declared `steer: false` is offering something that cannot
+  happen — read the capability, and show what is possible.
+- **Steering exists at the seam.** A brain that declared `steer: true` takes words mid-turn. That is
+  not the same as an approval, and it does not make questions supported — it means a second Discord
+  message during a running turn has somewhere real to go rather than needing to queue.
+- **Every turn already writes a transcript**, keyed by run id, ordered by sequence rather than clock.
+  A channel adds delivery on top; it does not add a second record, and it must not become the only
+  place something was written down.
+- **A run already carries its own cost and outcome.** Discord reports them; it does not compute them.
+
+The rule that follows: **a channel is presentation and authorisation, and nothing else.** If this phase
+needs a change inside the seam or the turn, that is the finding — the boundary was wrong, and the change
+belongs there rather than as a Discord-shaped special case.
 
 **The fake channel is this phase's offline half, not a phase of its own.** Every routing and failure case
 — disconnect, slow delivery, retry exhaustion, reconnecting to an existing conversation — is proved
@@ -625,11 +644,24 @@ the Node build (R-DIS-12).
 - Forgetting a conversation means the next message starts a new session, not a resumed one.
 - A control raised mid-turn does not publish the running turn's half-written output as its answer.
 
+### Order of work
+
+Discord is the first phase where a mistake is visible to somebody who is not the owner, so the offline
+half is finished before a token exists:
+
+1. The channel record — what `channels add` writes, and where the token is read from rather than typed.
+2. A fake channel, and every routing and failure case against it: unauthorized sender, disconnect, slow
+   delivery, retry exhaustion, reconnection finding the conversation it already had.
+3. Presentation: what the turn's records look like as messages, and what a long one does.
+4. The Discord wire behind that same fake-tested surface.
+5. A private-server canary, last, proving only what a fake cannot — Discord's own limits and timings.
+
 ### Exit proof
 
 A fake Discord integration proves all routing and failure cases offline. A manual private-server canary
 then sends one message, observes streamed progress and receives one final answer correlated to the same
-run ID.
+run ID — and the transcript of that run, read afterwards with `runs`, tells the same story the channel
+told, because the channel wrote none of it.
 
 ## Phase 4 — Let the Clock Start Work
 
