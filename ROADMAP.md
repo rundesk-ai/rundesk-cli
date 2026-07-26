@@ -1674,6 +1674,80 @@ change belongs in the contract rather than in a special case for whichever platf
 - A budget that throttles or stops an agent that has cost too much. Recording comes first, so a cap is
   set against history rather than a guess — and a wrong reading stops a working agent.
 
+## Phase 13 — Updates an Owner Can Trust — **next, after 6 and before the audits**
+
+**Outcome:** an owner on any released version can reach any later one and know, before they start,
+what it will change and what it will move — and afterwards, that it moved. What an install is *made
+of* and what an agent *keeps* both come forward, or neither does and nothing comes back up.
+
+**Why the number is not the order.** Numbers here are labels; the table above is the order. This runs
+straight after the clock, because until updates are trustworthy every phase after it ships changes
+nobody can safely take.
+
+**Why it is a phase.** Phase 5 built one half of this and proved it: records move in the window an
+update already stands every gateway down for, and a step that fails leaves them down and says which
+and why (R-MIG-1, R-MIG-6). The other half is missing entirely, and the same window is where it
+belongs — `updater.py` contains no mention of `pip`, `.venv` or `requirements`, so **an update
+replaces the source and never touches what it is made of.**
+
+Three things that costs today, in order of how quietly they happen:
+
+| a release that | happens now |
+|---|---|
+| **adds** a dependency | it is not installed. `gateway.fitness()` catches it, so every gateway refuses to start — ending *well*, so nothing loops — with "what rundesk needs is not all there". An update that leaves every agent down until somebody notices and re-runs the installer |
+| **bumps** a version | it is not upgraded, and `fitness()` asks only whether the name *imports*. A release needing a newer one runs against the old one and fails wherever the difference bites. **Nothing catches this** |
+| **removes** one | it stays in the virtualenv for ever, and only removing rundesk clears it |
+
+### Deliverables
+
+1. **What an install is made of comes forward in the same window the records do.** Requirements are
+   reinstalled after the files are replaced and before the first agent is brought back, with
+   `pip check` after — installed is not the same as usable, and the installer already knows that
+   (`install.sh:302`). A failure leaves every agent down and says so, exactly as a failed step does.
+2. **Fitness asks what was declared, not only whether a name loads.** A version too old to satisfy
+   `requirements.txt` is an install that does not fit, and today it reads as one that does.
+3. **`update --check` says what it would do before it does it** — the version, the steps that would
+   run against each agent, and what would be installed or upgraded. This is
+   [`lifecycle-migration`](.knowledge/prd/lifecycle-migration.md)'s open question "whether an owner
+   may ask what a step would do before it does it", answered.
+4. **A full view of where every agent stands.** One command saying, per agent, the shape on disk, the
+   shape installed, and what sits between them — so "which of my agents is behind" is a question with
+   an answer rather than a database to open. Today the version is readable only through the seam.
+5. **What ran is readable after the fact.** Each agent's own log has it (R-STO-20, R-MIG-7); a
+   command should say it, because an owner reading three logs to find out whether last night's update
+   finished is an owner who will not.
+6. **An update part-way through is resumable, and that is written down.** R-MIG-4 already makes
+   running again safe; the open question of whether it may be *resumed* or must be re-run from the
+   version on disk is answered rather than left.
+7. **A copy of what was there, kept until the move is proved.** The other open question on that
+   contract. A step that fails leaves the data as it was (R-MIG-5), but a step that *succeeds* and is
+   wrong has no way back, because going backwards is refusing to go forwards. What an owner does then
+   is currently nothing. **This is where retention meets it** — how long a copy is kept is the same
+   question as how long an account is kept, and answering one settles the other.
+8. **`002.py`, written as a step rather than an edit.** `001.py` was edited freely while nothing was
+   released. v0.5.0 ended that: an installed agent claims version 1, so every later change to the
+   shape is a step after it. The first one to need this is the gateway move Phase 5 has left.
+
+### Tests
+
+- A release that adds a dependency is installable and every gateway comes back.
+- A release that bumps one leaves the install running the version it declared, not the one it had.
+- An install whose virtualenv no longer satisfies what is declared does not fit, and says which.
+- `update --check` names every step it would run and installs nothing.
+- An update that cannot install what a release needs leaves every agent down and says why.
+- An update interrupted between replacing the files and installing what they need is recoverable by
+  running it again, and says what it found.
+- Where every agent stands is answered without opening a database.
+- A copy taken before records are moved is found afterwards, and something says when it may go.
+
+### Exit proof
+
+An install of an earlier release, with agents, schedules, channels and history, reaches this one in one
+command: what it is made of and what its agents keep both move, every gateway comes back, and the
+command said beforehand what both of those would be. The same update run twice changes nothing the
+second time. An update made to fail at each of its three points — the download, the dependencies, a
+step — leaves the agents down, the data as it was, and a sentence naming which point and why.
+
 ## Ready-for-Next-Phase Verdict
 
 Phases 0 to 4 are done. Agents exist and are operated by name; a brain is reached through a seam a
@@ -1686,6 +1760,7 @@ What remains, in order:
 |---|---|---|
 | 5 | Move everything onto it | Migration `002`, every reader on the store, the old layout deleted. **Against scratch** — nothing is pre-release data worth carrying |
 | 6 | Let the clock start work | The end-to-end proof: a schedule fires a *turn*, not just a program, and its outcome reaches a channel |
+| 13 | **Updates an owner can trust** | Dependencies move with the records, `update --check` says what it would do, and where every agent stands is a question with an answer. Runs next; the number is a label |
 | 7 | Two more brains — **done** | Claude and Grok each carry a whole turn, on evidence the Node build measured plus six gaps probed. Nothing in `src/rundesk/` changed, which was the point |
 | 8 | Provider adapters — audit the seam | A generic endpoint adapter, the decoupling test, and the contradictions settled |
 | 9 | Channel adapters — audit the seam | The same, on the surfaces side |
@@ -1701,6 +1776,12 @@ account, channel. Anything Phase 5 broke shows up there, before two more brains 
 *Seven landed first anyway, and that was the plan for it rather than a departure from this one: a
 brain is a program, so adding one reads no durable state and could run beside Phase 5 without waiting
 on Phase 6. The ordering above still holds for what remains — six is what proves the chain.*
+
+**Thirteen comes straight after six, and its number is only a label.** Phase 5 shipped v0.5.0, so
+there are installed agents now and every later change to the shape is a step rather than an edit —
+and an update still replaces the source without touching what the source is made of. Until that is
+fixed, every phase after it ships changes an owner cannot safely take, which makes it the next thing
+rather than a tidy-up to reach eventually.*
 
 **Eight and nine are audits, and they are phases because three shipped adapters plus a stranger's is the
 first point the seam can be judged rather than described.** Their shared claim is the one that decides
