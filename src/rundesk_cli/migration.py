@@ -42,7 +42,7 @@ NAMED = re.compile(r"^(\d+)\.py$")
 # keep a table of applied versions precisely because their timestamps have nowhere else to live.
 CEILING = 2147483647
 
-STEPS = Path(__file__).resolve().parent / "migrations"
+STEPS = Path(__file__).resolve().parent.parent / "migrations"
 
 
 class Failed(Exception):

@@ -82,7 +82,7 @@ shell script a database handle), `logs/runs/<run>.err`, `gateway.json`, `gateway
 ## What migration `002` has to do
 
 Walked against a real install in the roadmap's Phase 4; this is the mechanical form. Follow
-[`migrations/README.md`](../../src/rundesk_cli/migrations/README.md) — you are handed a
+[`migrations/README.md`](../../src/migrations/README.md) — you are handed a
 connection inside a transaction, you never commit, and you never delete.
 
 1. Read `agent.json` → one `UPDATE agent`.
