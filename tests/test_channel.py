@@ -39,7 +39,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import channel, process  # noqa: E402
+from rundesk import channel, process, store  # noqa: E402
+
+#: When a channel was written down. A calendar fact the record carries; never read here.
+AT = "2026-07-26T09:00:00Z"
 
 PY = sys.executable
 
@@ -815,31 +818,43 @@ class TheStateOfATurnIsNotTheSurfacesToDecide(DrivesAnAdapter):
 
 
 class WhatIsWrittenDownAboutAChannel(DrivesAnAdapter):
-    """R-CAD-10, R-CAD-12 — the record, and the two things it must never hold."""
+    """R-CAD-10, R-CAD-12, R-CAD-14 — the record, and the two things it must never hold.
+
+    What is written down about a channel is part of what its agent keeps, so these ask it
+    the way everything does. Nothing about the claims changed when it stopped being a file;
+    what changed is that a hand-edited entry is no longer a shape anyone can write.
+    """
+
+    def kept(self) -> store.Store:
+        made = store.Store(store.path_for(self.where))
+        made.made()
+        return made
 
     def test_a_channel_nobody_may_use_is_never_written_down(self):
         """R-CAD-10 — refused at the last place before the disk as well as at the
         command, because this is the one that cannot be got round."""
-        self.assertFalse(channel.remember(self.where, "ops", "discord", []))
-        self.assertEqual({}, channel.known(self.where))
+        keeping = self.kept()
+        with self.assertRaises(ValueError):
+            keeping.remember_channel("ops", "discord", [], AT)
+        self.assertEqual([], keeping.channels())
 
     def test_what_is_kept_is_the_name_of_a_credential_and_never_one(self):
         """R-CAD-12 — nothing here has ever held a secret, so there is none to print by
         accident. What is kept is where the adapter said it found one."""
-        channel.remember(self.where, "ops", "discord", ["2207"],
-                         secret={"env": ["MY_CHANNEL_TOKEN"]})
-        written = channel.book(self.where).read_text()
-        self.assertIn("MY_CHANNEL_TOKEN", written)
+        keeping = self.kept()
+        keeping.remember_channel("ops", "discord", ["2207"], AT,
+                                 secret={"env": ["MY_CHANNEL_TOKEN"]})
         self.assertEqual({"env": ["MY_CHANNEL_TOKEN"]},
-                         channel.of(self.where, "ops")["secret"])
+                         keeping.channel("ops")["secret"])
 
     def test_a_platforms_own_words_are_kept_exactly_as_it_gave_them(self):
         """R-CAD-13 — never read, so a surface can need something nobody here has heard
         of and the record still holds it."""
-        channel.remember(self.where, "ops", "somewhere", ["2207"],
-                         settings={"parliament": ["a", "b"], "quorum": 3})
+        keeping = self.kept()
+        keeping.remember_channel("ops", "somewhere", ["2207"], AT,
+                                 settings={"parliament": ["a", "b"], "quorum": 3})
         self.assertEqual({"parliament": ["a", "b"], "quorum": 3},
-                         channel.of(self.where, "ops")["settings"])
+                         keeping.channel("ops")["settings"])
 
     def test_an_adapter_decides_the_shape_of_what_is_kept_for_it(self):
         """R-CAD-14 — nested, repeated, numbered, absent, true, false. Rundesk stores what
@@ -849,10 +864,11 @@ class WhatIsWrittenDownAboutAChannel(DrivesAnAdapter):
             "rooms": [{"id": "1", "tags": ["a", "b"]}, {"id": "2"}],
             "deeply": {"nested": {"further": {"still": 1}}},
             "on": True, "off": False, "absent": None,
-            "count": 3, "ratio": 1.5, "unicode": "é☃",
+            "count": 3, "ratio": 1.5, "unicode": "\u00e9\u2603",
         }
-        channel.remember(self.where, "ops", "somewhere", ["2207"], settings=shape)
-        self.assertEqual(shape, channel.of(self.where, "ops")["settings"],
+        keeping = self.kept()
+        keeping.remember_channel("ops", "somewhere", ["2207"], AT, settings=shape)
+        self.assertEqual(shape, keeping.channel("ops")["settings"],
                          "what an adapter asked to keep came back as something else")
 
     def test_what_an_adapter_keeps_for_itself_is_its_own_business(self):
@@ -861,38 +877,28 @@ class WhatIsWrittenDownAboutAChannel(DrivesAnAdapter):
         here reads or writes inside it."""
         home = self.channel_home / "whatever-it-likes.sqlite"
         home.write_bytes(b"not json, not ours")
-        channel.remember(self.where, "ops", "somewhere", ["2207"])
+        self.kept().remember_channel("ops", "somewhere", ["2207"], AT)
         self.assertEqual(b"not json, not ours", home.read_bytes())
 
     def test_two_channels_added_at_once_do_not_lose_one_another(self):
-        """R-CAD-9 — read, decided and written under one hold. Each writing the whole
-        record back would leave one channel simply not existing, with both reported as
-        added."""
+        """R-CAD-9 — each writing the whole record back would leave one channel simply
+        not existing, with both reported as added. Each is its own row now, so there is
+        no whole record for either of them to write."""
+        keeping = self.kept()
         for name in ("ops", "dms", "plans"):
-            channel.remember(self.where, name, "discord", ["2207"])
-        self.assertEqual(["dms", "ops", "plans"], sorted(channel.known(self.where)))
-
-    def test_a_record_that_cannot_be_read_is_not_an_empty_one(self):
-        """R-CAD-9 — writing an empty record over one that was merely unreadable would
-        take an agent off every channel it had, silently."""
-        channel.book(self.where).write_text("{ this is not json")
-        self.assertEqual({}, channel.known(self.where))
-        self.assertFalse(channel.remember(self.where, "ops", "discord", ["2207"]))
-        self.assertIn("not json", channel.book(self.where).read_text(),
-                      "a record that could not be read was written over")
-
-    def test_one_channel_nobody_can_read_does_not_make_an_agent_deaf_on_the_rest(self):
-        """R-CAD-9 — a hand-edited entry is one channel to fix, not every channel gone."""
-        channel.book(self.where).write_text(json.dumps({"ops": "not an object",
-                                                        "dms": {"kind": "discord"}}))
-        self.assertEqual(["dms"], sorted(channel.known(self.where)))
+            keeping.remember_channel(name, "discord", ["2207"], AT)
+        self.assertEqual(["dms", "ops", "plans"],
+                         [one["name"] for one in keeping.channels()])
 
     def test_taking_a_channel_off_leaves_every_other_one_alone(self):
+        keeping = self.kept()
         for name in ("ops", "dms"):
-            channel.remember(self.where, name, "discord", ["2207"])
-        self.assertTrue(channel.forget(self.where, "ops"))
-        self.assertEqual(["dms"], sorted(channel.known(self.where)))
-        self.assertFalse(channel.forget(self.where, "ops"), "it removed it twice")
+            keeping.remember_channel(name, "discord", ["2207"], AT)
+        keeping.forget_channel("ops")
+        self.assertEqual(["dms"], [one["name"] for one in keeping.channels()])
+        keeping.forget_channel("ops")
+        self.assertEqual(["dms"], [one["name"] for one in keeping.channels()],
+                         "taking one off twice took something else with it")
 
 
 class WhoMayReachTheAgent(DrivesAnAdapter):
@@ -901,8 +907,10 @@ class WhoMayReachTheAgent(DrivesAnAdapter):
     def test_somebody_the_channel_does_not_authorize_is_not_dispatched(self):
         """R-CH-4 — being addressed is not being authorized, and naming a bot in a shared
         room is something anyone present can do."""
-        channel.remember(self.where, "ops", "discord", ["2207"])
-        record = channel.of(self.where, "ops")
+        keeping = store.Store(store.path_for(self.where))
+        keeping.made()
+        keeping.remember_channel("ops", "discord", ["2207"], AT)
+        record = keeping.channel("ops")
         self.assertTrue(channel.allowed(record, "2207"))
         self.assertFalse(channel.allowed(record, "9999"))
 

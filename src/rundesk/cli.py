@@ -21,7 +21,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -1396,6 +1396,16 @@ def _version_of(it) -> str:
     return it.version if it.version == __version__ else f"{it.version} (old)"
 
 
+def _stamped() -> str:
+    """Now, as what is written down beside a record.
+
+    Wall time, and deliberately: this is a calendar fact somebody reads back months later,
+    never a duration — nothing here measures how long anything took. In UTC and to the
+    second, so two agents' records sort against each other whatever machine wrote them.
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _how_long(started: float | None) -> str:
     """How long it has been up, in the shortest form that is still exact enough."""
     if not started:
@@ -1427,7 +1437,15 @@ def cmd_channels(args: argparse.Namespace, gateways, agents) -> int:
         except gateways.NotAName as why:
             print(f"{args.name}/{named}: INVALID NAME — {why}", file=sys.stderr)
             return 1
-    whose = agents.paths(args.name)["agent"]
+    # What this agent keeps, resolved once and handed to whichever of the five acts on
+    # it — the same reason the three directories are resolved once (R-AGT-9). A listing
+    # only asks, so it is opened for reading and never built.
+    try:
+        whose = (agents.reading(args.name) if getattr(args, "act", None) in (None, "show")
+                 else agents.records(args.name))
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
+        print(f"{args.name}: RECORDS UNREADABLE — {why}", file=sys.stderr)
+        return 1
     act = getattr(args, "act", None)
     if act == "add":
         return _add_channel(args, gateways, agents, whose)
@@ -1497,7 +1515,7 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         except gateways.NotAName as why:
             print(f"{args.name}/{one}: NOT ADDED — {why}", file=sys.stderr)
             return 1
-        if channel.of(whose, one) is not None:
+        if whose.channel(one) is not None:
             # Checked for every one of them *before* any is written, so a second shape
             # colliding does not leave the first half-added.
             print(f"{args.name}/{one}: EXISTS — remove it first, or use a different name",
@@ -1513,13 +1531,11 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         # name gained a suffix is not handed a directory that was never created: the token
         # an owner put beside it, and anything a person attaches, both live there.
         agents.channel_home(args.name, one).mkdir(parents=True, exist_ok=True)
-        if not channel.remember(whose, one, args.kind, args.allow,
-                                settings=shape["settings"], secret=said["secret"],
-                                describes=shape["describes"], says=shape[channel.INSTRUCTIONS],
-                                fills=shape[channel.FILLS]):
-            print(f"{args.name}/{one}: NOT ADDED — the record could not be written",
-                  file=sys.stderr)
-            return 1
+        whose.remember_channel(one, args.kind, args.allow, _stamped(),
+                               settings=shape["settings"], secret=said["secret"],
+                               describes=shape["describes"],
+                               instructions=shape[channel.INSTRUCTIONS] or None,
+                               fills=shape[channel.FILLS])
         unlogged |= _note(gateways, args.name, f"channel '{one}' added ({args.kind})",
                           agents.resolved(args.name))
         print(f"{args.name}/{one}: ADDED — {shape['describes'] or args.kind}")
@@ -1546,10 +1562,11 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
 
 
 def _remove_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
-    if not channel.forget(whose, args.channel):
+    if whose.channel(args.channel) is None:
         print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
               file=sys.stderr)
         return 1
+    whose.forget_channel(args.channel)
     unlogged = _note(gateways, args.name, f"channel '{args.channel}' removed",
                      agents.resolved(args.name))
     print(f"{args.name}/{args.channel}: REMOVED")
@@ -1565,7 +1582,7 @@ def _channel_instructions(args: argparse.Namespace, gateways, agents, whose) -> 
     this shows what is already there — so an owner can read back exactly what their agent
     will be told before anyone says anything to it.
     """
-    it = channel.of(whose, args.channel)
+    it = whose.channel(args.channel)
     if it is None:
         print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
               file=sys.stderr)
@@ -1584,15 +1601,7 @@ def _channel_instructions(args: argparse.Namespace, gateways, agents, whose) -> 
     if wrong:
         print(f"{args.name}/{args.channel}: NOT CHANGED — {wrong}", file=sys.stderr)
         return 1
-    written = channel.tell(whose, args.channel, args.said)
-    if written is None:
-        print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
-              file=sys.stderr)
-        return 1
-    if not written:
-        print(f"{args.name}/{args.channel}: NOT CHANGED — the record could not be written",
-              file=sys.stderr)
-        return 1
+    whose.tell_channel(args.channel, (args.said or "").strip() or None)
     unlogged = _note(gateways, args.name,
                      f"channel '{args.channel}' was given instructions"
                      if args.said else f"channel '{args.channel}' had its instructions taken off",
@@ -1616,7 +1625,7 @@ def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     one — the record keeps the name of a variable the adapter itself said it read, so
     there is no value to print by accident.
     """
-    it = channel.of(whose, args.channel)
+    it = whose.channel(args.channel)
     if it is None:
         print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
               file=sys.stderr)
@@ -1644,7 +1653,7 @@ def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
 
 
 def _list_channels(args: argparse.Namespace, gateways, agents, whose) -> int:
-    reachable = channel.known(whose)
+    reachable = whose.channels()
     if not reachable:
         print(f"{args.name}: NO CHANNELS")
         print(f"        put it on one:  rundesk channels {args.name} add <channel> "
@@ -1652,9 +1661,9 @@ def _list_channels(args: argparse.Namespace, gateways, agents, whose) -> int:
         return 0
     up = gateways.standing(args.name, agents.resolved(args.name).run).running
     _as_table(("CHANNEL", "KIND", "POINTS AT", "ALLOWED", "REACHABLE"), [
-        (name, str(it.get("kind", "-")), str(it.get("describes") or "-"),
+        (it["name"], str(it.get("kind", "-")), str(it.get("describes") or "-"),
          str(len(it.get("allow") or [])), "yes" if up else "no")
-        for name, it in sorted(reachable.items())
+        for it in reachable
     ])
     return 0
 

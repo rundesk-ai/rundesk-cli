@@ -674,6 +674,10 @@ class FakeAgents:
         #: one every path here is under `/nowhere`, which is what keeps a case that only
         #: reads from ever touching a disk.
         self._at = pathlib.Path(at) if at else pathlib.Path("/nowhere/agents")
+        #: Whether this case gave anywhere to write. Without one every path here is under
+        #: `/nowhere`, which is what keeps a case that only reads from touching a disk —
+        #: so records are built only where there is somewhere to build them.
+        self._writes = at is not None
         #: What a gateway would be handed to hold open, and what could not be resolved.
         self._reachable: list = []
         self._unrunnable: list = []
@@ -686,6 +690,15 @@ class FakeAgents:
         self.asked_runnable = None
         #: What was made, adopted and taken away, in the order it was asked for.
         self.added, self.adopted, self.forgotten = [], [], []
+        for one in self._made:
+            self._built(one)
+
+    def _built(self, name):
+        """An agent that exists has records, which is what the real one guarantees
+        (R-MIG-9). A stand-in where it did not would let a case prove a command works
+        against an agent that could not exist."""
+        if self._writes:
+            store.Store(store.path_for(self._at / name)).made()
 
     def exists(self, name):
         return name in self._made
@@ -722,17 +735,35 @@ class FakeAgents:
         made = [] if name in self._made else ["AGENTS.md", "home/"]
         if name not in self._made:
             self._made.append(name)
+        self._built(name)
         return made
 
     def adopt(self, name):
         self.adopted.append(name)
         return list(self._wrote)
 
-    def forget(self, name, history=False):
-        self.forgotten.append((name, history))
+    def forget(self, name):
+        self.forgotten.append(name)
         if name in self._made:
             self._made.remove(name)
         return ["home/"]
+
+    def records(self, name):
+        """A **real** store, in this case's own scratch directory.
+
+        Not a stand-in: what the command asks of what an agent keeps is exactly the
+        surface `store.py` has, and one written here that was more generous would hide
+        whichever question the command actually asks. Cases that reach this pass `at=`.
+        """
+        kept = store.Store(store.path_for(self._at / name))
+        kept.made()
+        return kept
+
+    def reading(self, name):
+        """The same records, never built — exactly as the real one tells the two apart."""
+        kept = store.Store(store.path_for(self._at / name))
+        kept.understood()
+        return kept
 
     def agents_home(self):
         return pathlib.Path("/nowhere/agents")
@@ -1749,6 +1780,14 @@ class TheSurfacesAnAgentIsReachableOn(unittest.TestCase):
         self.agents = FakeAgents(made=["ava"], at=self.at)
         (self.at / "ava").mkdir(parents=True, exist_ok=True)
 
+    def kept(self, name: str = "ops") -> dict:
+        """What was written down about one channel, asked for the way anything asks."""
+        return self.agents.reading("ava").channel(name)
+
+    def every(self) -> dict:
+        """Every channel written down for this agent, by the name it was added under."""
+        return {one["name"]: one for one in self.agents.reading("ava").channels()}
+
     def _adapter(self, source: str) -> str:
         at = self.at / "a-channel"
         at.write_text("#!%s\n%s" % (sys.executable, source), encoding="utf-8")
@@ -1794,7 +1833,7 @@ raise SystemExit(1)
         self.assertEqual(1, code)
         self.assertIn("NOT ADDED", said)
         self.assertIn("that room does not exist", said, "the adapter's reason was swallowed")
-        self.assertFalse((self.at / "ava" / "channels.json").exists(),
+        self.assertEqual({}, self.every(),
                          "a channel that proved nothing was written down anyway")
 
     def test_one_add_makes_a_channel_for_each_kind_of_place(self):
@@ -1805,7 +1844,7 @@ raise SystemExit(1)
                             "--kind", self._adapter(self.TWO_PLACES), "--allow", "2207"],
                            self._gateways(), agents=self.agents)
         self.assertEqual(0, code, said)
-        kept = json.loads((self.at / "ava" / "channels.json").read_text())
+        kept = self.every()
         self.assertEqual(["acme-dms", "acme-rooms"], sorted(kept))
         self.assertEqual({"dm": True}, kept["acme-dms"]["settings"],
                          "one kind of place was told about another")
@@ -1813,7 +1852,7 @@ raise SystemExit(1)
         self.assertEqual("You are in {where.channel} on {where.server}.",
                          kept["acme-rooms"][channel.INSTRUCTIONS])
         self.assertEqual(["channel", "server"], kept["acme-rooms"][channel.FILLS])
-        self.assertNotIn(channel.FILLS, kept["acme-dms"], "a place with no parts kept one")
+        self.assertEqual([], kept["acme-dms"][channel.FILLS], "a place with no parts kept one")
         self.assertIn("acme-dms", said)
         self.assertIn("acme-rooms", said)
 
@@ -1860,7 +1899,7 @@ raise SystemExit(1)
                            self._gateways(), agents=self.agents)
         self.assertEqual(1, code)
         self.assertIn("EXISTS", said)
-        kept = json.loads((self.at / "ava" / "channels.json").read_text())
+        kept = self.every()
         self.assertEqual(["acme-rooms"], sorted(kept), "half of them were written anyway")
         self.assertEqual(["9999"], kept["acme-rooms"]["allow"],
                          "who may use the one that was there was overwritten")
@@ -1894,9 +1933,13 @@ raise SystemExit(1)
                            self._gateways(), agents=self.agents)
         self.assertEqual(0, code, said)
         self.assertIn("ADDED", said)
-        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        kept = self.kept()
         self.assertEqual({"server": "9930", "room": "1180"}, kept["settings"])
         self.assertEqual(["2207"], kept["allow"])
+        # What the adapter said the place *is*, kept as it said it: it is what `channels`
+        # and `show` put in front of an owner, and a record without it names a kind and
+        # leaves them to work out which of their rooms it reached.
+        self.assertEqual("#operations in Acme", kept["describes"])
 
     def test_what_a_platform_needs_is_never_read_by_the_command(self):
         """R-CAD-13 — the core parses `--kind` and `--allow`, and carries the rest. A
@@ -1904,7 +1947,7 @@ raise SystemExit(1)
         drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
                "--allow", "2207", "--", "--workspace", "T04", "--dm"],
               self._gateways(), agents=self.agents)
-        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        kept = self.kept()
         self.assertEqual({"workspace": "T04"}, kept["settings"],
                          "the command decided what a platform's options meant")
 
@@ -1913,7 +1956,7 @@ raise SystemExit(1)
         There is no value here to print by accident, because nothing ever held one."""
         drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
                "--allow", "2207"], self._gateways(), agents=self.agents)
-        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        kept = self.kept()
         self.assertEqual({"env": ["A_CHANNEL_TOKEN"]}, kept["secret"])
         was = os.environ.get("A_CHANNEL_TOKEN")
         os.environ["A_CHANNEL_TOKEN"] = "not for printing"
@@ -1935,7 +1978,7 @@ raise SystemExit(1)
                            self._gateways(), agents=self.agents)
         self.assertEqual(0, code)
         self.assertIn("INSTRUCTED", said)
-        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        kept = self.kept()
         self.assertEqual("You are in {where}. Others read this.", kept[channel.INSTRUCTIONS])
         _, back = drive(["channels", "ava", "instructions", "ops"], self._gateways(),
                         agents=self.agents)
@@ -1949,11 +1992,11 @@ raise SystemExit(1)
         for said in ("Public.", "Actually, be brief."):
             drive(["channels", "ava", "instructions", "ops", said],
                   self._gateways(), agents=self.agents)
-        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        kept = self.kept()
         self.assertEqual("Actually, be brief.", kept[channel.INSTRUCTIONS])
         drive(["channels", "ava", "instructions", "ops", ""], self._gateways(), agents=self.agents)
-        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
-        self.assertNotIn(channel.INSTRUCTIONS, kept)
+        kept = self.kept()
+        self.assertIsNone(kept[channel.INSTRUCTIONS], "empty is kept as text rather than taken off")
 
     def test_a_name_that_cannot_be_filled_in_is_refused_before_it_is_written(self):
         """R-CH-22 — checked when it is written, which is the whole reason this is a
@@ -1966,8 +2009,8 @@ raise SystemExit(1)
         self.assertEqual(1, code)
         self.assertIn("NOT CHANGED", said)
         self.assertIn("wheree", said)
-        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
-        self.assertNotIn(channel.INSTRUCTIONS, kept)
+        kept = self.kept()
+        self.assertIsNone(kept[channel.INSTRUCTIONS], "empty is kept as text rather than taken off")
 
     def test_telling_a_channel_that_is_not_there_says_so(self):
         """R-CH-22 — told apart from a record that could not be written, because one is
@@ -1987,7 +2030,7 @@ raise SystemExit(1)
                             "--allow", "9999"], self._gateways(), agents=self.agents)
         self.assertEqual(1, code)
         self.assertIn("EXISTS", said)
-        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        kept = self.kept()
         self.assertEqual(["2207"], kept["allow"], "who may use it was replaced by a refusal")
 
     def test_an_agent_that_is_not_running_is_reported_as_out_of_reach(self):
@@ -2007,7 +2050,19 @@ raise SystemExit(1)
                            self._gateways(), agents=self.agents)
         self.assertEqual(0, code, said)
         self.assertIn("REMOVED", said)
-        self.assertEqual({}, json.loads((self.at / "ava" / "channels.json").read_text()))
+        self.assertEqual({}, self.every())
+
+    def test_taking_one_channel_off_leaves_every_other_one_on(self):
+        """R-CAD-9, R-AGW-4 — an agent reachable in three places and taken off one is
+        still reachable in two. Taking the lot would put it out of reach of people who
+        were never mentioned, and nothing would say it had happened."""
+        for one in ("ops", "dms", "plans"):
+            drive(["channels", "ava", "add", one, "--kind", self._adapter(self.WORKS),
+                   "--allow", "2207"], self._gateways(), agents=self.agents)
+        code, said = drive(["channels", "ava", "remove", "dms"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["ops", "plans"], sorted(self.every()))
 
     def test_an_agent_with_no_channels_says_so_and_says_what_to_do(self):
         code, said = drive(["channels", "ava"], self._gateways(), agents=self.agents)
@@ -2049,7 +2104,7 @@ raise SystemExit(1)
         drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
                "--allow", "2207", "--", "--server", "9930", "--room", "1180"],
               self._gateways(), agents=self.agents)
-        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        kept = self.kept()
         self.assertEqual({"server": "9930", "room": "1180"}, kept["settings"])
 
     def test_only_a_verb_that_carries_a_tail_has_one_taken_off_it(self):

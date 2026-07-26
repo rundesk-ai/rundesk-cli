@@ -446,16 +446,14 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
         """R-AGW-4, R-CAD-10 — the worst thing a name can inherit. An agent added back
         under a name that was on somebody's server would be on it again, answering
         whoever was allowed then, without anybody having asked for either."""
-        from rundesk import channel
-
         self.made()
-        whose = agent.directory("ava", self.where)
-        channel.remember(whose, "ops", "discord", ["2207"])
+        agent.records("ava", self.where).remember_channel(
+            "ops", "discord", ["2207"], "2026-07-26T09:00:00Z")
         agent.channel_home("ava", "ops", self.where).mkdir(parents=True, exist_ok=True)
 
         agent.forget("ava", self.where)
         agent.add("ava", self.where)
-        self.assertEqual({}, channel.known(agent.directory("ava", self.where)),
+        self.assertEqual([], agent.reading("ava", self.where).channels(),
                          "a new agent inherited who was allowed to reach the old one")
         self.assertFalse(agent.channel_home("ava", "ops", self.where).exists())
 

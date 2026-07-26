@@ -144,7 +144,7 @@ def skills(name: str, where: Path | None = None) -> Path:
     **No provider discovers a bare `skills/` directory**, and none is claimed to. Probes of
     the installed CLIs found each looks in a directory of its own — `.claude/skills`,
     `.agents/skills`, `.grok/skills` — and that a plain one is read by nobody. Making those
-    links is Phase 6's, and it waits for probes of the versions actually installed rather
+    links is Phase 10's, and it waits for probes of the versions actually installed rather
     than for a layout that looks right. This is where an owner puts one until then.
     """
     return home(name, where) / "skills"
@@ -446,12 +446,27 @@ def forget(name: str, where: Path | None = None) -> list[str]:
 #: the agent loads — a provider reading the agent's rules must not find our configuration
 #: sitting among them.
 def records(name: str, where: Path | None = None) -> store.Store:
-    """What this agent keeps — named here, and opened only when something reads or writes.
+    """What this agent keeps, ready to be written to — built if it is not there yet.
 
     The one place above the store that knows where an agent's records stand, so a caller
     asks this agent for them rather than building a path of its own.
     """
-    return store.Store(store.path_for(directory(name, where)))
+    kept = store.Store(store.path_for(directory(name, where)))
+    kept.made()
+    return kept
+
+
+def reading(name: str, where: Path | None = None) -> store.Store:
+    """The same records, for a command that only asks — never built and never repaired.
+
+    Told apart from `records` because the difference is a behaviour rather than a habit:
+    `doctor` promises to change nothing (R-AGT-12) and `agents` only lists, and asking
+    what shape records are in through anything that may also *make* them turns the command
+    an owner runs when something is broken into the one that quietly repairs it.
+    """
+    kept = store.Store(store.path_for(directory(name, where)))
+    kept.understood()
+    return kept
 
 
 def chosen(name: str, where: Path | None = None) -> dict:
@@ -472,12 +487,7 @@ def chosen(name: str, where: Path | None = None) -> dict:
         return {}
     if not at.exists():
         return {}
-    kept = store.Store(at)
-    # Never `made`: this is asked by `doctor`, which promises to change nothing (R-AGT-12),
-    # and opening a writer to find out what shape the records are in leaves the two files
-    # SQLite keeps beside a database standing after it.
-    kept.understood()
-    return kept.agent()
+    return reading(name, where).agent()
 
 
 def remember(name: str, where: Path | None = None, provider: str | None = None,
@@ -491,7 +501,6 @@ def remember(name: str, where: Path | None = None, provider: str | None = None,
     the write are one transaction rather than one lock file.
     """
     kept = records(name, where)
-    kept.made()
     kept.remember_agent(provider=provider, model=model, settings=settings)
     return kept.agent()
 
@@ -596,9 +605,9 @@ def reachable(name: str, where: Path | None = None, carry=None) -> list:
     from rundesk import answering as answers
     from rundesk import channel as channels
 
-    whose = directory(name, where)
     found = []
-    for one, record in sorted(channels.known(whose).items()):
+    for record in reading(name, where).channels():
+        one = record["name"]
         try:
             at = channels.program(str(record.get("kind") or ""))
         except channels.NotRunnable:
@@ -633,11 +642,10 @@ def unrunnable_channels(name: str, where: Path | None = None) -> list:
     """Which of this agent's channels name a kind that is not on this machine."""
     from rundesk import channel as channels
 
-    whose = directory(name, where)
     missing = []
-    for one, record in sorted(channels.known(whose).items()):
+    for record in reading(name, where).channels():
         try:
             channels.program(str(record.get("kind") or ""))
         except channels.NotRunnable as why:
-            missing.append((one, str(why)))
+            missing.append((record["name"], str(why)))
     return missing
