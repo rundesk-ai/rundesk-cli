@@ -20,7 +20,7 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
   reports it, the updater compares against it, and a release tag is expected to match it. Nothing else
   holds a copy. `ROOT` is the same idea for *where* this install is, resolved rather than assumed.
 
-### What is written down, and where (4 directories)
+### What is written down, and where (5 directories)
 
 No database. Everything persisted is a small JSON file written whole and renamed into place, so a reader
 arriving mid-write finds the old one rather than half of the new one. Each directory is overridable by an
@@ -33,7 +33,8 @@ holds the read, the decision and the write under one `flock`, asking the machine
 what has *already happened* onto the disk before saying it is there.
 
 **Everything that is one agent's lives in one directory.** `~/.rundesk/agents/<agent>/` holds its `home/`
-(what it loads), the private homes providers are given, and the three its gateway uses — so an agent is one
+(what it loads), the private homes providers are given, the account of every turn it has taken, and the
+three its gateway uses — so an agent is one
 thing to look at, copy or take away, and no name can claim a file belonging to another. The three
 directories below the agents one hold what rundesk wrote *before there were agents to own it*: a gateway
 still running from then goes on reading them, and rundesk writes nothing new there. Every schedule, log and
@@ -44,15 +45,23 @@ lock in the finished product belongs to an agent.
 | `~/.rundesk/agents/<agent>/home/` | `RUNDESK_AGENTS_DIR` | `AGENTS.md` · `CLAUDE.md` · `SOUL.md` · `USER.md` · `MEMORY.md` · `workspace/` · `skills/` | **The owner's** — kept by an ordinary uninstall, taken only by `--purge` (R-AGT-3) |
 | `~/.rundesk/agents/<agent>/providers/<provider>/` | `RUNDESK_AGENTS_DIR` | the private home a provider is given, per agent and provider pair | Rundesk's state about a pair, never the agent's knowledge (R-AGT-8) |
 | `~/.rundesk/agents/<agent>/run/` · `logs/` · `schedules/` | `RUNDESK_AGENTS_DIR` | what that agent's gateway keeps — the same files as below, in the agent's own place | As below, per agent |
+| `~/.rundesk/agents/<agent>/runs/` | `RUNDESK_AGENTS_DIR` | one run each: `<run>.jsonl` (the account, in words no brain owns) · `<run>.raw` and `<run>.err` (everything the brain said, and said went wrong, verbatim) · `allocating.json` (the count of runs, a hint — the directory is the truth) | **History** — kept when an agent is taken away, taken by `--purge` (R-AGW-5). The two raw files are separate so a retention policy can one day take them and leave the account (R-RUN-5) |
+| `~/.rundesk/agents/<agent>/agent.json` · `sessions.json` | `RUNDESK_AGENTS_DIR` | which brain the agent reaches for, and where each of its conversations got to — keyed by brain *and* conversation together | Rundesk's working state about the agent; goes when the agent does (R-RUN-12, R-RUN-14) |
 | `~/.rundesk/run/` | `RUNDESK_RUN_DIR` | `<name>.lock` (liveness, held open) · `<name>.json` (what a gateway is doing now) | **State** — cleared when a gateway stops (R-GW-12) |
 | `~/.rundesk/logs/` | `RUNDESK_LOG_DIR` | `<name>.log` (rotated) | **History** — outlives the gateway (R-GW-18) |
 | `~/.rundesk/schedules/` | `RUNDESK_SCHEDULES_DIR` | `<name>.json` (what is scheduled) · `<name>.ran.json` (when each last fired and what became of it) · `<name>.seen.json` (when a gateway of this name was last up) · `<name>.interrupted.json` (work that never got to finish, and whether it is definitely gone) · `<name>.changing` and `<name>.interrupted.changing` (held across a read-and-write, so two writers cannot lose one another's change) | **History**, beside what it describes |
 | `~/Library/LaunchAgents/` | `RUNDESK_JOBS_DIR` | `ai.rundesk.<name>.plist` | The machine's, written by `supervisor.py` |
 
 The split is the point: stopping a gateway must clear what it is *doing* without clearing what it *did*.
-Putting the schedule history with the run state erased it on every ordinary restart.
+Putting the schedule history with the run state erased it on every ordinary restart. `run/` and `runs/`
+are one letter apart and opposite for the same reason — the first is emptied when a gateway stops, and the
+second is what an owner still has in the morning.
 
-## Backend / Services (src/rundesk_cli/ — 7 modules)
+A run's account is the one thing here that is **appended** rather than written whole, because it is
+written while the thing it accounts for is still happening and has to be readable throughout. Nothing
+rewrites it; a retention policy takes whole files.
+
+## Backend / Services (src/rundesk_cli/ — 11 modules)
 
 - `src/rundesk_cli/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -67,6 +76,24 @@ Putting the schedule history with the run state erased it on every ordinary rest
   holds. A new agent's home is copied from `templates/agent/`, and what a home holds is read off that
   directory rather than listed in code. What a name may be is stricter here than for a gateway: one path
   component, standing where agents are kept, and never a word a gateway writes beside some other name.
+- `src/rundesk_cli/provider.py` — the seam a brain is reached through, and nothing about any
+  particular brain. Resolves a provider — a shipped adapter, or a path to a program somebody wrote — into
+  something runnable, builds the environment it is told everything through, asks what it can do, and reads
+  one of its records. **Enumerates nothing**: no list of providers and no list of models, so one rundesk
+  has never heard of is the ordinary case. A vendor name appearing in this file is the seam already failing.
+- `src/rundesk_cli/adapters/` — the brains that ship, one program each. Not modules: nothing imports them
+  and they import nothing of ours, so a vendor's flags, stream shape, session file and usage arithmetic
+  live in one file and reach no further. `adapters/codex` is the first.
+- `src/rundesk_cli/transcript.py` — what a run did, written while it did it. Three files per run: the
+  account, in words no brain owns, added to and never rewritten; and beside it, verbatim, everything the
+  brain said and everything it said went wrong. Separate so a retention policy can one day take the raw and
+  leave the account standing. Ordered by a count rather than a clock, so two runs of one conversation read
+  in the order the work happened whatever the machine's clock did.
+- `src/rundesk_cli/session.py` — where a conversation got to, kept for a conversation and a brain
+  **together**. The brain is the outer key, so handing one brain's session to another is not expressible.
+- `src/rundesk_cli/turn.py` — the only module that knows the four above exist: resolve, write down what was
+  resolved, run the brain, write down what it said, keep where the conversation got to, write down how it
+  ended. Nothing reaches a brain that the account does not show.
 - `src/rundesk_cli/updater.py` — where this install stands against what is published, and moving between
   them. Every network call is behind an argument, so the whole module is exercised offline.
 - `src/rundesk_cli/process.py` — a program rundesk runs, and how it keeps hold of it: its own session so
@@ -93,7 +120,7 @@ Putting the schedule history with the run state erased it on every ordinary rest
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 7 files, ~470 cases)
+## Tests (tests/ — 12 files, ~600 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
@@ -108,6 +135,10 @@ provider. One file per contract, named for it:
 | `test_install.py` | 41 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
 | `test_supervisor.py` | 38 | the launchd job — a fake `launchctl`, so it runs where there is none |
 | `test_schedule.py` | 28 | `platform-schedule` — pure time arithmetic, the clock passed in |
+| `test_provider.py` | 29 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account |
+| `test_turn.py` | 36 | `agent-run` — one whole turn, and `rundesk ask` end to end |
+| `test_transcript.py` | 20 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
+| `test_session.py` | 9 | `agent-run` — a handle kept for a conversation and a brain together |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and
 `.knowledge/scripts/check-evidence` fails the build when a row names one that does not exist.

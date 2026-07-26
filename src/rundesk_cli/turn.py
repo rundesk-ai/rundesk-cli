@@ -30,6 +30,7 @@ knows, exactly like any other.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -81,6 +82,7 @@ async def carry(
     conversation: str = TERMINAL,
     fresh: bool = False,
     watching=None,
+    steering=None,
     root: Path | None = None,
     now=None,
     pick=None,
@@ -116,8 +118,10 @@ async def carry(
         })
         # Written before the brain is started, because what is sent is what the account
         # has to show — and an account written afterwards is one that can be written to
-        # match whatever happened.
-        writing.add(event={"type": SENT, "text": prompt})
+        # match whatever happened. A steered turn records it as it sends it instead, so
+        # that everything said mid-turn lands in the order it was said.
+        if not can["steer"]:
+            writing.add(event={"type": SENT, "text": prompt})
 
         said: list = []
         program = process.Program(
@@ -125,13 +129,15 @@ async def carry(
             env=provider.environment(
                 home=whose["run"], cwd=whose["workspace"], provider_home=home, run=run,
                 model=model, resume=resume, posture=posture, settings=settings,
+                raw=whose["runs"] / (run + transcript.BRAIN),
             ),
             cwd=whose["workspace"],
             takes_input=True,
             errors_apart=True,
             on_error=writing.went_wrong,
         )
-        result = await _run(program, prompt, writing, said, watching)
+        result = await _run(program, prompt, writing, said, watching,
+                            steering=steering if can["steer"] else None)
 
         # Inside the same writer, and last. A second one would count from nothing and
         # give the end of a run the same places in the order as its beginning.
@@ -144,13 +150,14 @@ async def carry(
         writing.add(event={
             "type": OUTCOME, "ok": ok, "reason": result.reason, "code": result.code,
             "tokens": tokens, "kept": kept if handle else None,
-            "lost": result.undelivered,
+            "lost": result.undelivered, "why": _why(said),
         })
     return Outcome(run=run, ok=ok, reason=result.reason, said=said, tokens=tokens,
                    handle=handle if kept else None)
 
 
-async def _run(program, prompt: str, writing, said: list, watching) -> process.Result:
+async def _run(program, prompt: str, writing, said: list, watching,
+               steering=None) -> process.Result:
     """Start the brain, feed it the turn, and write down every line it answers with.
 
     The sink is the account itself. Every line lands in the run's raw exactly as it
@@ -174,12 +181,39 @@ async def _run(program, prompt: str, writing, said: list, watching) -> process.R
 
     await program.start()
     reading = asyncio.ensure_future(program.wait(sink=heard))
+    if steering is None:
+        # A brain that cannot be sent to mid-turn is given the prompt and told there is no
+        # more coming, so one that reads its input to the end can answer at all.
+        try:
+            await program.send(prompt.encode("utf-8"))
+            await program.close_input()
+        except process.NotListening:
+            pass  # it answered and left before we finished writing; not a failure
+        return await reading
+    # A brain that can be steered has its input held open and gets records rather than
+    # plain text, because nothing can mean "the prompt ended" any more. Everything sent is
+    # written into the account first: a word put into a turn that the account does not
+    # show makes the account a lie, and this is the one thing that adds words mid-turn.
+    saying = asyncio.ensure_future(_saying(program, prompt, writing, steering))
     try:
-        await program.send(prompt.encode("utf-8"))
+        return await reading
+    finally:
+        saying.cancel()
+        with contextlib.suppress(BaseException):
+            await saying
+
+
+async def _saying(program, prompt: str, writing, steering) -> None:
+    """The prompt, and anything said after it while the brain is still working."""
+    try:
+        writing.add(event={"type": SENT, "text": prompt})
+        await program.send(provider.spoken(prompt))
+        async for word in steering:
+            writing.add(event={"type": SENT, "text": word, "mid": True})
+            await program.send(provider.spoken(word))
         await program.close_input()
     except process.NotListening:
-        pass  # a brain that answered and left before we finished writing is not a failure
-    return await reading
+        pass  # it finished while somebody was still typing, which is nobody's fault
 
 
 def _handle(said: list) -> str | None:
@@ -188,6 +222,19 @@ def _handle(said: list) -> str | None:
         if one.get("type") == "done":
             handle = one.get("session")
             return handle if isinstance(handle, str) and handle else None
+    return None
+
+
+def _why(said: list) -> str | None:
+    """What the brain said went wrong, when it said anything at all.
+
+    Off the record that ends the turn, because stderr is kept beside a run and not *in*
+    it — so a turn that failed had its reason in a file nobody reads a run back from.
+    """
+    for one in reversed(said):
+        if one.get("type") == "done":
+            why = one.get("why")
+            return why if isinstance(why, str) and why else None
     return None
 
 
@@ -213,12 +260,16 @@ def _tokens(said: list) -> dict:
     counted = [one for one in said if one.get("type") == "usage"]
     if not counted:
         return {"reported": False}
-    adding = {"reported": True, "input": 0, "output": 0, "cached": 0}
-    for one in counted:
-        for what in ("input", "output", "cached"):
-            value = one.get(what)
-            if isinstance(value, int) and not isinstance(value, bool):
-                adding[what] += value
+    adding: dict = {"reported": True}
+    # Only what was actually reported. A brain that cannot tell fresh tokens from cached
+    # ones omits `cached`, and summing that into nothing would say it read nothing from
+    # the cache — which is the same lie as a cost of nothing, one level down. What nobody
+    # measured is absent here too.
+    for what in ("input", "output", "cached"):
+        values = [one[what] for one in counted
+                  if isinstance(one.get(what), int) and not isinstance(one.get(what), bool)]
+        if values:
+            adding[what] = sum(values)
     model = [one.get("model") for one in counted if one.get("model")]
     if model:
         # Only ever what a brain said actually answered. One that names none leaves none

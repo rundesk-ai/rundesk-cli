@@ -8,6 +8,7 @@ Run: python3 tests/test_turn.py
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import io
 import json
@@ -90,8 +91,25 @@ sys.stdout.write(json.dumps({"type": "done", "ok": False}) + "\\n")
 sys.stdout.flush()
 '''
 
+#: Can be sent to mid-turn: reads records for as long as its input stays open, and reports
+#: each one back so a case can see it arrived while the turn was still going.
+STEERABLE = '''
+import json, sys
+if "--capabilities" in sys.argv:
+    print(json.dumps({"steer": True, "resume": True}))
+    sys.exit(0)
+say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    said = json.loads(line)
+    say(type="text", text="heard:" + said["text"])
+say(type="done", ok=True, session="steered")
+'''
+
 BRAINS = {"plain": PLAIN, "quiet": QUIET, "nosy": NOSY, "strange": STRANGE,
-          "failing": FAILING}
+          "failing": FAILING, "steerable": STEERABLE}
 
 
 class WithAnAgentToRunTurnsFor(unittest.IsolatedAsyncioTestCase):
@@ -341,6 +359,42 @@ class WhatATurnCost(WithAnAgentToRunTurnsFor):
         found = [one for one in transcript.events(self.runs(), said.run)
                  if one["type"] == turn.OUTCOME]
         self.assertEqual(1, len(found))
+
+
+class BeingSentToMidTurn(WithAnAgentToRunTurnsFor):
+    """R-PRV-19 — a word said to a brain that is already working, without stopping it."""
+
+    async def words(self, *said):
+        for one in said:
+            await asyncio.sleep(0.05)   # after the turn is under way, not before it
+            yield one
+
+    async def test_a_brain_that_can_be_steered_hears_a_word_said_mid_turn(self):
+        """R-PRV-19 — the whole point: more can be said to a turn that is already running,
+        and the turn carries on rather than being taken away and started again."""
+        said = await turn.carry("ava", "first", self.brain("steerable"), where=self.where,
+                                steering=self.words("second", "third"))
+        self.assertTrue(said.ok)
+        self.assertEqual(["heard:first", "heard:second", "heard:third"],
+                         [one["text"] for one in said.said if one["type"] == "text"])
+
+    async def test_everything_said_mid_turn_is_in_that_turns_account(self):
+        """R-RUN-9, R-PRV-10 — a word put into a turn that the account does not show makes
+        the account a lie, and this is the one thing that adds words after it starts."""
+        said = await turn.carry("ava", "first", self.brain("steerable"), where=self.where,
+                                steering=self.words("second"))
+        sent = [one for one in self.account(said.run) if one["type"] == turn.SENT]
+        self.assertEqual(["first", "second"], [one["text"] for one in sent])
+        self.assertTrue(sent[1].get("mid"), "a word said mid-turn reads as the prompt")
+
+    async def test_a_brain_that_cannot_be_steered_is_not_left_waiting_for_more(self):
+        """R-PRV-19 — holding input open for a brain that will never read again is a turn
+        that never ends, so what it said it can do decides how it is run."""
+        said = await turn.carry("ava", "hello", self.brain("plain"), where=self.where,
+                                steering=self.words("never arrives"))
+        self.assertTrue(said.ok, "a brain that reads to the end of its input never finished")
+        sent = [one for one in self.account(said.run) if one["type"] == turn.SENT]
+        self.assertEqual(["hello"], [one["text"] for one in sent])
 
 
 class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):

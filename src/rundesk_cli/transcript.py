@@ -7,15 +7,23 @@ every run writes an account of itself, one record to a line, added to and never 
 **Three files, because they are thrown away at different times.**
 
     <run>.jsonl   the account   — what happened, in rundesk's words. Small, and kept.
-    <run>.raw     stdout        — every line the brain said, byte for byte.
+    <run>.raw     stdout        — every line the adapter reported, byte for byte.
     <run>.err     stderr        — every line it said went wrong, byte for byte.
+    <run>.brain   the vendor's  — what the brain *itself* said, if the adapter kept it.
 
 The account is what a channel renders and what a cost is read from, and it is written in
-a vocabulary no brain owns, so nothing downstream ever learns a vendor's words. The two
-raw files are the whole of what the brain gave us, kept so that a format that drifts can
-be probed and adapted to rather than guessed at — and kept *separately* so a retention
-policy can one day drop them and leave the account standing. Deleting a whole file is not
-rewriting one, which is how both rules hold at once.
+a vocabulary no brain owns, so nothing downstream ever learns a vendor's words. The rest is
+the whole of what we were given, kept so a format that drifts can be probed and adapted to
+rather than guessed at — and kept *separately* so a retention policy can one day drop it and
+leave the account standing. Deleting a whole file is not rewriting one, which is how both
+rules hold at once.
+
+**`.brain` is the one file nothing here writes.** An adapter is a program: what its *brain*
+said before the adapter made records of it never passes through rundesk at all, so without
+somewhere to put it, a vendor changing its stream shape would show up as records quietly
+going missing rather than as drift anybody could look at. The adapter is told where that
+file is and may append to it; one that does not is a perfectly good adapter, and the file
+simply is not there.
 
 **Order does not depend on a clock (R-RUN-7).** `seq` counts from nothing, per run, so
 concatenating two runs of one conversation reads in the order the work happened whatever
@@ -54,7 +62,9 @@ MARK_LENGTH = 4
 ACCOUNT = ".jsonl"
 RAW = ".raw"
 ERRORS = ".err"
-KEPT = (RAW, ERRORS)
+#: What the brain itself said, written by the adapter and by nothing here.
+BRAIN = ".brain"
+KEPT = (RAW, ERRORS, BRAIN)
 
 
 def _marked(pick=None) -> str:

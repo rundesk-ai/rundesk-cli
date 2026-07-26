@@ -14,6 +14,7 @@
 | Keep one agent's sign-in from another's | `CODEX_HOME`. Measured: pointed at an empty directory, every request is `401 Unauthorized … Missing bearer or basic authentication`.[4] |
 | Choose how much of the machine it may touch | `--sandbox` with `read-only`, `workspace-write` or `danger-full-access`; a process-level sandbox rather than a tool list.[1] |
 | Say which model answered | Nothing in the stream names one.[4] |
+| Be sent to mid-turn | **Not through `codex exec`**, which reads its prompt and runs to the end. Through `codex app-server` it is a first-class request: `turn/steer` takes the thread, the id of the turn it expects to still be running, and more input.[4] |
 
 **Usage is cumulative, and this is the finding that matters most.** Three turns on one
 thread, each asking for a single word:
@@ -91,6 +92,33 @@ adapter recognises what Codex says when a home is logged out, and says what to r
   Check for it and say what to do, rather than keeping a list of the places it might be
   installed — such a list is wrong on the first machine that did something else.
 
+**Steering exists, and it is on the other surface.** `codex exec` cannot be sent to once
+it has started; that is what makes the shipped adapter say it cannot be steered. But
+`codex app-server` — a bidirectional stdio protocol on the same binary — has it, and the
+protocol can be read offline without an account:
+
+```sh
+codex app-server generate-json-schema --out <dir>
+```
+
+What that schema says, at 0.145.0:[4]
+
+```text
+turn/steer         {threadId, expectedTurnId, input: [UserInput], clientUserMessageId?}
+                   -> {turnId}
+                   expectedTurnId is a precondition: the request fails when the turn it
+                   names is no longer the running one, so a word cannot land in a turn
+                   the sender did not mean.
+turn/interrupt     the other thing — stopping, rather than adding to, a running turn.
+thread/injectItems raw items appended to what the model can see.
+```
+
+Only two kinds of turn refuse to be steered — `review` and `compact`. An ordinary one
+takes it. So a Codex adapter built on `app-server` rather than `exec` would report
+`steer` and carry a word said mid-turn; the shipped one is built on `exec`, reports that
+it cannot, and is honest about it. That is the seam working as intended — what a brain can
+do is asked rather than assumed, and a brain gaining a capability is one adapter's change.
+
 ## Verdict for us
 
 Codex is a sound first shipped adapter, and it was chosen because it is the **hardest** of
@@ -112,6 +140,8 @@ Rerun `.knowledge/scripts/probe-codex` when the version moves, and write what ch
   in every turn measured, so nothing here depends on the answer yet.
 - Whether an owner sharing one sign-in across agents wants that arranged for them, and by
   what — nothing does it today, deliberately.
+- What an adapter on `app-server` costs to keep: it is a protocol with a lifecycle rather
+  than one command, and the surface is still marked experimental on this version.
 - Whether a thread whose total went backwards has really been restarted, or whether the
   count can legitimately fall for a reason not yet seen.
 - Which of its item kinds carry an id that is stable between `item.started` and

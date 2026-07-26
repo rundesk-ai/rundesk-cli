@@ -192,12 +192,16 @@ class WhatTheBrainItselfSaid(WithSomewhereToKeepRuns):
         writing = self.writer()
         writing.add(event={"type": "text", "text": "kept"}, raw=b'{"vendor":"noise"}')
         writing.went_wrong(b"a warning nobody needs a year later")
+        # An adapter may have written what its own brain said beside these; nothing here
+        # does, so the case takes whichever of them a run turned out to have.
+        (self.runs / (writing.run + transcript.BRAIN)).write_bytes(b'{"vendor":"own words"}\n')
         writing.close()
         for which in transcript.KEPT:
             (self.runs / (writing.run + which)).unlink()
         self.assertEqual([{"type": "text", "text": "kept"}],
                          transcript.events(self.runs, writing.run))
-        self.assertEqual(b"", transcript.raw(self.runs, writing.run))
+        for which in transcript.KEPT:
+            self.assertEqual(b"", transcript.raw(self.runs, writing.run, which))
 
 
 class WhatAnAgentKeepsAnAccountIn(unittest.TestCase):

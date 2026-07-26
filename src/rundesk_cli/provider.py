@@ -44,7 +44,17 @@ RECORDS = ("text", "think", "tool", "result", "usage", "done")
 #: What an adapter may say it can do (R-PRV-15). Absent means no, so an adapter that
 #: answers with nothing at all is a whole brain with the work simply absent — which is
 #: what makes a plain conversational CLI first class rather than degraded.
-CAPABILITIES = ("tools", "resume", "model", "usage")
+#:
+#: `steer` is the one that changes how a turn is *run* rather than only what is recorded
+#: of it: an adapter that can be sent to mid-turn is given its input as records and has
+#: its input held open, and one that cannot is given the prompt and told there is no more.
+#: Declared rather than attempted, because holding input open for a brain that will never
+#: read again is a turn that never ends.
+CAPABILITIES = ("tools", "resume", "model", "usage", "steer")
+
+#: What rundesk sends a brain that can be steered — the prompt, and anything after it.
+#: One kind, because there is one thing to say to a running brain: more words.
+SAY = "say"
 
 #: How much of the machine a turn may touch, in rundesk's words rather than any vendor's
 #: (R-PRV-18). Two, because a posture nobody can act on is not worth carrying: an adapter
@@ -130,6 +140,7 @@ def environment(
     resume: str | None = None,
     posture: str = WORK,
     settings: dict | None = None,
+    raw: Path | None = None,
     path: str | None = None,
 ) -> dict[str, str]:
     """Everything an adapter is told, and the whole of it (R-PRV-3).
@@ -159,7 +170,24 @@ def environment(
         # transcript can be compared with another one (R-PRV-16). Never read on the way
         # past: what an owner set is between them and their brain.
         said["RUNDESK_SETTINGS"] = json.dumps(settings, sort_keys=True)
+    if raw is not None:
+        # Somewhere to put what the *brain* said, which rundesk never sees: an adapter
+        # stands between the two, so a vendor changing its stream shape would otherwise
+        # show up as records quietly going missing rather than as drift anyone can read.
+        # Offered, never required — an adapter that ignores it is a whole adapter.
+        said["RUNDESK_RAW"] = str(raw)
     return said
+
+
+def spoken(text: str) -> bytes:
+    """One thing said *to* a brain, as a record it reads a line at a time (R-PRV-19).
+
+    Records rather than plain text, and only for an adapter that said it can be steered.
+    Its input has to stay open for more, so nothing can mean "the prompt ended" any more —
+    a brain reading to the end of its input would wait for an end that is not coming. A
+    line each, with the text encoded, so a prompt with newlines in it is still one thing.
+    """
+    return (json.dumps({"type": SAY, "text": text}) + "\n").encode("utf-8")
 
 
 def understood(said: bytes | str) -> dict | None:

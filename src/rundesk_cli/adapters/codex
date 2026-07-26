@@ -252,8 +252,24 @@ def carry() -> int:
     running.stdin.write(prompt)
     running.stdin.close()
 
+    # Everything Codex says, exactly as it says it, when rundesk offered somewhere to put
+    # it. This is the only place the *vendor's* own stream can be kept: rundesk sees what
+    # this adapter reports and never what it was made from, so without this a change to
+    # Codex's stream shape would show up as records quietly going missing rather than as
+    # drift somebody can read. Best effort — a turn is not failed over a log.
+    keeping = None
+    at = os.environ.get("RUNDESK_RAW")
+    if at:
+        try:
+            keeping = open(at, "ab")
+        except OSError as why:
+            sys.stderr.write(f"could not keep what the brain said: {why}\n")
+
     thread, ok, total, tools = None, None, None, {}
     for line in running.stdout:
+        if keeping is not None:
+            keeping.write(line.encode("utf-8", "replace"))
+            keeping.flush()
         try:
             said = json.loads(line)
         except ValueError:
@@ -275,6 +291,8 @@ def carry() -> int:
             _went_wrong(str(said.get("message", "")), home)
 
     running.wait()
+    if keeping is not None:
+        keeping.close()
     if total is not None and thread:
         say(type="usage", **share(total, billed(home).get(thread) or {}))
         remember(home, thread, total)
