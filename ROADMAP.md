@@ -796,12 +796,40 @@ swappable" is a hope.
 **Outcome:** an agent does work because the time came, through the same resolver, run record and
 provider adapter that Discord and the terminal already use.
 
-One schedule names a binding and runs the proven provider under an autonomous permission policy. The
-fake channel was Phase 3's offline half, so what is left here is the trigger that has no one watching
-it — which is the one that must never fail silently.
+**Most of the mechanism is already here, and one thing blocks it.** A schedule carries what it names
+without reading it (R-SCH-3), so a schedule whose program is `rundesk ask ava "…"` is a scheduled turn —
+no new schema, no binding, nothing to migrate. `ask --says` already exists so a scheduled turn can be
+given its own standing instructions.
+
+What stops it today is **finding 22**, and it reproduces in one command:
+
+```text
+rundesk schedules ava run nightly
+  → rundesk ask ava "what changed?"
+  → ava: NO SUCH AGENT — nothing of that name has been made
+```
+
+`process.environment()` builds a deliberately bare environment — right, because a gateway must not hand
+every secret it holds to every program it runs — but it passes `RUNDESK_HOME` and not the state
+directories. `supervisor.describe()` carries all of them *into* the gateway, with a comment recording
+that leaving one out "silently split the machine in two"; the same split is reintroduced one level down
+for any scheduled program that is itself `rundesk`. **Close that first, and most of this phase is
+already standing.**
 
 Any change to existing schedule files is a persisted-schema decision and requires owner approval plus a
-tested migration or an additive format that keeps old schedules truthful.
+tested migration or an additive format that keeps old schedules truthful — but on the evidence above,
+none is needed.
+
+### Nobody is watching, so the outcome has to go somewhere
+
+This is the first trigger with no person at the other end, and Phase 3 is what makes that survivable: an
+agent now has channels. A scheduled turn that failed at three in the morning should be readable where its
+owner already looks, rather than only in a log nobody opens.
+
+What that means, and what it must not become: the outcome of a scheduled turn reaches the agent's channel
+when it has one, and a scheduled turn is never *only* recorded where nothing will surface it. What it must
+not become is a channel deciding anything about schedules — a schedule that fires with no channel
+configured still runs, still records, and still reports through `schedules`.
 
 Before enabling provider-backed schedules, the scheduler must prove that it examines work immediately
 after gateway start, agrees on cron next-time and firing semantics, reconciles a stale `started` outcome
@@ -815,6 +843,11 @@ recorded as findings 24–26 and 31.
 - An interactive request in an autonomous schedule becomes a clear outcome instead of waiting forever.
 - A schedule run by hand runs, and leaves the time it next falls due where it was (R-SCH-21, R-SCH-22).
 - A schedule whose provider fails leaves one durable outcome that `schedules` reports, not silence.
+- **A program the gateway starts reads the same places the gateway does** — the regression check for
+  finding 22, and the one that makes a scheduled `rundesk ask` find its agent at all.
+- A scheduled turn's outcome reaches the agent's channel where it has one.
+- A scheduled turn on an agent with no channel still runs, records, and is reported by `schedules`.
+- A scheduled turn is never the only thing that knew what happened.
 
 ### Exit proof
 

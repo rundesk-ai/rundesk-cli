@@ -41,8 +41,8 @@ gateway each, which is how one agent's schedules stay that agent's alone.
 | ✅ | R-SCH-18 | A gateway's schedules that cannot be read are reported as unreadable rather than as none | `listing schedules that cannot be read never reports having none`, `a gateway whose schedules cannot be read still starts and says so`, `no schedule runs while the file cannot be read` |
 | ✅ | R-SCH-19 | A change that altered no schedule leaves the file exactly as it was | `a change that changed nothing does not rewrite the file`, `a change that did change something is written` |
 | ❌ | R-SCH-20 | A schedule run that already began is not begun again after the machine loses power | src/rundesk_cli/gateway.py:204 — no test, nothing here can cut the power |
-| ❌ | R-SCH-21 | A schedule can be run by hand at any time, whether or not it is due | — |
-| ❌ | R-SCH-22 | A schedule run by hand does not change when it next falls due on its own | — |
+| ✅ | R-SCH-21 | A schedule can be run by hand at any time, whether or not it is due | `a schedule can be run by hand whether or not it is due` |
+| ✅ | R-SCH-22 | A schedule run by hand does not change when it next falls due on its own | `running a schedule by hand leaves the time it next falls due alone` |
 | ✅ | R-SCH-23 | A schedule left saying it started by a gateway that is gone is reconciled | `a schedule left saying started by a gone gateway is reconciled`, `reconciling does not move the minute it fell due`, `work the sweep found still running is left alone`, `a schedule refused by a shutdown leaves no stale start` |
 | ✅ | R-SCH-24 | A schedule is never shown as running when no gateway of its name is up | `a schedule whose gateway is gone is not shown as still running`, `a schedule running right now is shown as started` |
 
