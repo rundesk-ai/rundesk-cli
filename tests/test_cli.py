@@ -688,6 +688,8 @@ class FakeAgents:
         self._complaints = dict(complaints or {})
         self._chosen: dict = {}
         self.asked_runnable = None
+        #: What asking what this agent keeps raises, where a case is about that failing.
+        self.refuses: BaseException | None = None
         #: What was made, adopted and taken away, in the order it was asked for.
         self.added, self.adopted, self.forgotten = [], [], []
         for one in self._made:
@@ -722,9 +724,19 @@ class FakeAgents:
         return self._at / name / "channels" / real_gateway.checked(channel)
 
     def reachable(self, name, where=None, carry=None):
+        """What a gateway would hold open — or the refusal the real one raises.
+
+        The real one asks what the agent keeps, so records this rundesk will not read are
+        an outcome of asking. A stand-in that could only ever succeed let the one caller
+        that is a supervisor entry point go unguarded (R-GW-25).
+        """
+        if self.refuses is not None:
+            raise self.refuses
         return list(self._reachable)
 
     def unrunnable_channels(self, name, where=None):
+        if self.refuses is not None:
+            raise self.refuses
         return list(self._unrunnable)
 
     def standing_before(self, name):
@@ -888,6 +900,22 @@ def drive(argv, gateways=None, machine=None, agents=None):
 
 
 class ServingAGateway(unittest.TestCase):
+    def test_a_gateway_whose_records_this_rundesk_will_not_read_ends_well(self):
+        """R-GW-25, R-STO-12 — this is what the machine's job invokes, so a refusal that
+        ended *badly* would be started again every ten seconds for as long as the machine
+        is up. An agent whose store is behind the installed shape is the ordinary case
+        after a checkout is updated by any means other than `rundesk update`, so it is one
+        line an owner can act on rather than a log filling for a week."""
+        agents = FakeAgents(made=["ava"])
+        agents.refuses = store.TooNew(99, 1)
+        gateways = FakeGateways()
+        code, said = drive(["serve", "ava"], gateways, agents=agents)
+        self.assertEqual(0, code, "a gateway that will never start ended badly")
+        self.assertIn("NOT STARTED", said)
+        self.assertIn("version 99", said, "it never said what was wrong")
+        self.assertIn("rundesk doctor ava", said, "it left nowhere to go")
+        self.assertEqual([], gateways.served, "it started a gateway on records it refused")
+
     def test_serving_runs_the_gateway_of_the_name_given(self):
         """R-GW-13"""
         gateways = FakeGateways()

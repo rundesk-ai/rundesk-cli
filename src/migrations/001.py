@@ -13,6 +13,9 @@ CREATE TABLE agent (
     id            INTEGER PRIMARY KEY CHECK (id = 1),
     provider      TEXT,
     model         TEXT,
+    -- What every turn for this agent is told before it reads a prompt, where neither the
+    -- surface nor the schedule said. The fallback the other two inherit from; no command
+    -- sets it yet, which is why a channel's are the only ones an owner can write today.
     instructions  TEXT,
     settings      TEXT NOT NULL DEFAULT '{}'
 ) STRICT;
@@ -26,6 +29,8 @@ CREATE TABLE channel (
     name          TEXT PRIMARY KEY,
     kind          TEXT NOT NULL,
     enabled       INTEGER NOT NULL DEFAULT 1,
+    -- Which brain answers what arrives here, where the turn did not say. Part of the same
+    -- fallback as the agent's; no option sets them yet.
     provider      TEXT,
     model         TEXT,
     instructions  TEXT,
@@ -45,12 +50,14 @@ CREATE TABLE schedule (
     cron              TEXT NOT NULL,
     command           TEXT,
     prompt            TEXT,
+    -- Which brain answers work this schedule starts, and what it is told before it reads
+    -- the prompt. Nothing sets them yet: a schedule that asks a turn rather than running a
+    -- program is Phase 6, and `prompt` and the CHECK below are the shape it needs.
     provider          TEXT,
     model             TEXT,
     instructions      TEXT,
     last_auto_run_at  TEXT,
     last_outcome      TEXT,
-    next_auto_run_at  TEXT,
     created_at        TEXT NOT NULL,
     CHECK ((command IS NULL) <> (prompt IS NULL))
 ) STRICT;
@@ -61,8 +68,10 @@ CREATE TABLE conversation (
     kind       TEXT NOT NULL,
     space      TEXT NOT NULL,
     thread     TEXT NOT NULL DEFAULT '',
+    -- What this conversation branched from, where a surface has threads (R-STO-9). No
+    -- adapter reports one yet, so nothing sets it; it is the shape the requirement names
+    -- rather than a field waiting for a use to be found for it.
     parent_id  TEXT REFERENCES conversation(id),
-    title      TEXT,
     opened_at  TEXT NOT NULL,
     last_at    TEXT NOT NULL,
     UNIQUE (channel, space, thread)
@@ -99,7 +108,6 @@ CREATE TABLE run (
     tokens_in           INTEGER,
     tokens_out          INTEGER,
     tokens_cached       INTEGER,
-    tokens_written      INTEGER,
     tokens_reported     INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
@@ -110,12 +118,13 @@ CREATE TABLE message (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id  TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
     run_id           TEXT REFERENCES run(id),
+    -- The platform's own id for this message, which is what makes work arriving twice from
+    -- one surface recorded once (R-STO-6) — enforced by `message_once` below rather than by
+    -- anything remembering to check. No adapter passes one through the seam yet.
     external_id      TEXT,
-    reply_to_id      INTEGER REFERENCES message(id),
     at               TEXT NOT NULL,
     author           TEXT NOT NULL,
     who              TEXT,
-    who_label        TEXT,
     text             TEXT NOT NULL
 ) STRICT;
 

@@ -732,7 +732,7 @@ class WhatAnUpdateMustNotCost(WithStepsOfThisCasesOwn):
         kept.remember_agent(provider="codex", instructions="be terse")
         kept.remember_channel("ops", "discord", ["u1"], AT, describes="a room")
         kept.remember_schedule("nightly", "0 3 * * *", AT, prompt="what changed?")
-        kept.schedule_fired("nightly", LATER)
+        kept.schedule_fired("nightly", LATER, "finished")
         kept.opened("c1", "ops", "thread", "99123", AT)
         asked = kept.arrived("c1", AT, "what about the parser", who="u1")
         named = kept.began("channel", "codex", "codex", "safe", AT, conversation_id="c1",

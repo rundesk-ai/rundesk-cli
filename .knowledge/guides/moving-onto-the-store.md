@@ -1,35 +1,64 @@
-# Moving onto the store — what Phase 5 does, and in what order
+# Moving onto the store — what Phase 5 did, and what is left
 
 Phase 4 built [`store.py`](../../src/rundesk/store.py) and
 [`migration.py`](../../src/rundesk/migration.py) and pointed nothing at them. This is the
-page that says how to point everything at them without improvising.
+page that says how everything is pointed at them without improvising.
 
-**If the design turns out to be wrong, the drafts move first.** The whole point of the phase
+**If the design turns out to be wrong, the contract moves first.** The whole point of the phase
 before was that this one does not discover its design while building it. A surprise is a finding
 against [`agent-store`](../prd/agent-store.md) or
-[`lifecycle-migration`](../prd/lifecycle-migration.md), not a special case in the code.
+[`lifecycle-migration`](../prd/lifecycle-migration.md), not a special case in the code. Several
+were found, each recorded in the roadmap's Phase 5 with what was decided about it.
 
-## Order of work
+**There is no migration `002`.** Nothing is released, so there is no data on any machine to
+carry: `001.py` is the whole shape, and everything the move proved missing went into it —
+`run.why`, `run.settings`, `channel.describes`, `channel.fills`, `channel.activity` and
+`schedule.last_outcome`, each of which the shipped code already wrote and the drawn shape had
+nowhere for. The runner is wired to the update and proved anyway, because the version that *does*
+have data to carry must not be the one that discovers the wiring.
 
-1. **Write migration `002`.** One step, bringing today's layout to the new one. Nothing reads
-   the store yet, so this can land and be re-run against copies of a real install until it is
-   right.
-2. **Call `migration.carry_every(agents, want)` from the update**, in the window `R-UPD-21`
-   already opens and already tests — after the files are replaced, before the first agent is
-   brought back. It walks every agent on its own, carries each from wherever *it* is, and stops
-   at the first that cannot be moved. What each migration did lands in that agent's own log.
-3. **Move readers and writers over, one at a time**, each with its own regression check. The map
-   below is the whole list — every place that touches durable state today.
-4. **Delete the old layout and the code that defaulted to it** — `gateway.home()`,
-   `logs_home()` and `schedules_home()` (`gateway.py:180`, `:282`, `:372`), the
-   `RUNDESK_{RUN,LOG,SCHEDULES}_DIR` variables `supervisor.py:153` and `:166` bake into the
-   job, and `agent.resolved()` returning `Where(None, None, None)` for a name that is not an
-   agent (`agent.py:255`), which is what silently sends every unknown name to the top level.
-   **This is last, not first**: those helpers cannot go while the readers above still read
-   through them, so the order is forced.
-5. **Prove it against a scratch install built for the purpose.** Nothing here is released, so
-   there is no consumer data to carry. Build the old shape deliberately, migrate it, and throw it
-   away — that is repeatable, and moving the one copy that cannot be rebuilt is not.
+## What has moved
+
+| was | is |
+|---|---|
+| `agent.json` | `store.agent()` · `remember_agent()`, reached through `agent.records()` for a caller that may write and `agent.reading()` for one that may only ask — `doctor` must not be able to repair what it was asked to inspect |
+| `channels.json` | `store.channels()` · `channel()` · `remember_channel()` · `tell_channel()` · `forget_channel()`. `channel.py` is now only the seam a *surface* is reached through; a record is handed to it rather than fetched by it |
+| `sessions.json`, and `session.py` with it | `store.session()` · `remember_session()` · `forget_session()` over `store.opened()`. A conversation is a *place* — `store.conversation_id(channel, space, thread)` — rather than a string two callers built to different recipes |
+| `runs/<run>.jsonl` · `.raw` · `allocating.json` | `store.began()` · `recorded()` · `arrived()` · `answered()` · `ended()`. The run number is the database's, allocated inside the transaction that writes the row |
+| `runs/<run>.brain` · `.err` | `logs/runs/<run>.jsonl` · `.err` — all that is left of `transcript.py` |
+| nothing; new surface | `runs`, `usage` and `search`, which is what makes any of the above readable by an owner rather than by a test |
+
+## What is left, and why it is one move
+
+**The gateway's own three directories.** `run/`, `logs/` and `schedules/` are where they were, and
+`Gateway` still takes them as three arguments. What goes with them:
+
+- `changing_schedules()` · `written_schedules()` · `scheduled()` → `store.schedules()` and the
+  four writers beside it. **`schedule.read()` parses `{name, when, run}` and a row is
+  `{name, cron, command}`** — that mapping is the only real design work left in the phase.
+- `what_was_scheduled()` · `Gateway._remember()` → `store.schedule_fired()` ·
+  `schedule_became()`, which exist and are proved.
+- `last_seen()` · `Gateway._say()` → `store.last_seen()` · `seen()`. **Mind the units:** the file
+  held `time.time()` as a float and the store holds an ISO string, so `_say_what_was_missed`
+  changes with it — and AGENTS.md forbids comparing the two kinds of clock.
+- `what_was_interrupted()` · `_note_interrupted()` → `store.runs()` filtered on outcome ·
+  `store.ended(outcome="interrupted")`. `_sweep_strays()` is deleted; R-GW-21 and R-GW-23 narrow,
+  and their tests stop sharing one `where`.
+- `run/<name>.json` and `.lock` → `gateway.json` and `gateway.lock` at the agent root. **No file
+  a gateway writes carries a name any more**, so `reserved_suffixes()` and the whole class of
+  collision R-AGT-6 guards against go away with it.
+- `every()` and `remembered()` walk files to find gateways. The agents directory is that list now,
+  so both move above the gateway rather than being rewritten inside it.
+- Last, and only once every reader above has moved: `gateway.home()`, `logs_home()`,
+  `schedules_home()`, the `RUNDESK_{RUN,LOG,SCHEDULES}_DIR` variables `supervisor.describe()`
+  bakes into the job, `agent.resolved()` returning `Where(None, None, None)`, `agent.adopt()` and
+  `standing_before()` with it, and `logs` and `schedules` off `install.sh`'s keep-list.
+
+**It is one move rather than four** because a `Gateway` reading its schedules from one place and
+its record from another is half-moved, and the constructor that decides both would otherwise be
+changed four times. The seam it turns on is `Gateway(name, at=<the agent's directory>)`, resolving
+its own store, log and record from that one argument — which is also what makes a gateway stop
+needing to know that names and files were ever related.
 
 ## What already reports, and what still has to
 

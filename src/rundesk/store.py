@@ -51,7 +51,10 @@ def version_wanted() -> int:
 
 VERSION = version_wanted()
 
-NAME = "state.db"
+#: Read off the runner rather than written here: it opens a database before there is a store
+#: to ask, so the name is its, and two spellings of it would leave an update walking every
+#: agent, finding nothing, and reporting that everything moved.
+NAME = migration.RECORDS
 
 # Short, because waiting is handled here with jitter rather than inside SQLite. Its own busy
 # handler backs off on a near-deterministic schedule, so concurrent writers re-collide in
@@ -111,6 +114,21 @@ class Unsearchable(Exception):
 def path_for(directory) -> Path:
     """Where an agent's records stand, given the directory everything of its own is under."""
     return Path(directory) / NAME
+
+
+def stamped(now=None) -> str:
+    """Now, as what is written down beside a record.
+
+    Wall time, and deliberately: these are calendar facts somebody reads back months later,
+    never durations — nothing here measures how long anything took, so nothing compares one
+    of these with a monotonic clock. In UTC and to the second, so two agents' records sort
+    against each other whatever machine wrote them.
+
+    One of these, not one per caller, and it takes the clock: a second copy that read the
+    clock for itself would be a durable fact no case could fix, and two formats for one kind
+    of fact the day either changed.
+    """
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime((now or time.time)()))
 
 
 def conversation_id(channel: str, space: str, thread: str = "") -> str:
@@ -539,30 +557,30 @@ class Store:
         return kept
 
     def remember_schedule(self, name, cron, created_at, command=None, prompt=None,
-                          provider=None, model=None, instructions=None, enabled=True,
-                          next_auto_run_at=None):
+                          provider=None, model=None, instructions=None, enabled=True):
         """Work an agent does because the time came — either a program, or a turn.
 
         Exactly one of `command` and `prompt`, which the database enforces rather than trusts.
-        `next_auto_run_at` is reported rather than authoritative: the cron is the only thing
-        that decides when work is due, and this is recomputed whenever the cron changes so a
-        listing can show it without working it out again.
+
+        **When it is next due is not kept.** The cron is the only thing that decides that, so
+        a column holding it would be a second answer to one question — stale the moment an
+        owner edits the cron, and read in preference to the thing that is actually true.
+        Whoever wants it works it out from the cron and the clock.
         """
         if (command is None) == (prompt is None):
             raise ValueError("a schedule runs a command or asks a turn, never both or neither")
         with self._writing() as conn:
             conn.execute(
                 "INSERT INTO schedule (name, enabled, cron, command, prompt, provider, model,"
-                " instructions, next_auto_run_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)"
+                " instructions, created_at) VALUES (?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT(name) DO UPDATE SET"
                 " enabled=excluded.enabled, cron=excluded.cron, command=excluded.command,"
                 " prompt=excluded.prompt, provider=excluded.provider, model=excluded.model,"
-                " instructions=excluded.instructions,"
-                " next_auto_run_at=excluded.next_auto_run_at",
+                " instructions=excluded.instructions",
                 (
                     name, 1 if enabled else 0, cron,
                     json.dumps(command) if command is not None else None,
-                    prompt, provider, model, instructions, next_auto_run_at, created_at,
+                    prompt, provider, model, instructions, created_at,
                 ),
             )
 
@@ -573,7 +591,7 @@ class Store:
                 "UPDATE schedule SET enabled = ? WHERE name = ?", (1 if on else 0, name)
             )
 
-    def schedule_fired(self, name: str, at: str, outcome: str, next_at=None) -> None:
+    def schedule_fired(self, name: str, at: str, outcome: str) -> None:
         """That the clock started this, written before it runs.
 
         Only the clock moves this. Running one by hand leaves both times where they were,
@@ -587,9 +605,8 @@ class Store:
         with self._writing() as conn:
             conn.execute(
                 "UPDATE schedule SET last_auto_run_at = MAX(COALESCE(last_auto_run_at, ''), ?),"
-                " last_outcome = ?,"
-                " next_auto_run_at = COALESCE(?, next_auto_run_at) WHERE name = ?",
-                (at, outcome, next_at, name),
+                " last_outcome = ? WHERE name = ?",
+                (at, outcome, name),
             )
 
     def schedule_became(self, name: str, outcome: str) -> None:
@@ -633,8 +650,8 @@ class Store:
             ).fetchall()
         return [_plain(row) for row in rows]
 
-    def opened(self, conversation_id, channel, kind, space, at, thread="", parent_id=None,
-               title=None) -> dict:
+    def opened(self, conversation_id, channel, kind, space, at, thread="",
+               parent_id=None) -> dict:
         """Find where this is happening, or begin knowing about it.
 
         `space` and `thread` are the platform's own words and are never parsed here — a
@@ -655,8 +672,8 @@ class Store:
                 return found
             conn.execute(
                 "INSERT INTO conversation (id, channel, kind, space, thread, parent_id,"
-                " title, opened_at, last_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                (conversation_id, channel, kind, space, thread, parent_id, title, at, at),
+                " opened_at, last_at) VALUES (?,?,?,?,?,?,?,?)",
+                (conversation_id, channel, kind, space, thread, parent_id, at, at),
             )
             made = conn.execute(
                 "SELECT * FROM conversation WHERE id = ?", (conversation_id,)
@@ -700,31 +717,27 @@ class Store:
 
     # ── what was said: the searchable history ─────────────────────────────────────────────
 
-    def arrived(self, conversation_id, at, text, author="person", who=None, who_label=None,
-                external_id=None, reply_to_id=None):
+    def arrived(self, conversation_id, at, text, author="person", who=None,
+                external_id=None):
         """Something a person said. Returns what it is known by, so a run can name its cause.
 
         A platform's own id makes this the same message however often a channel reconnects —
         recording it twice is refused by the database rather than guarded against here.
         """
-        return self._said(conversation_id, at, text, author, who, who_label, external_id,
-                          reply_to_id, None)
+        return self._said(conversation_id, at, text, author, who, external_id, None)
 
-    def answered(self, conversation_id, run_id, at, text, external_id=None, reply_to_id=None):
+    def answered(self, conversation_id, run_id, at, text, external_id=None):
         """What the agent said, and which run produced it."""
-        return self._said(conversation_id, at, text, "agent", None, None, external_id,
-                          reply_to_id, run_id)
+        return self._said(conversation_id, at, text, "agent", None, external_id, run_id)
 
-    def _said(self, conversation_id, at, text, author, who, who_label, external_id,
-              reply_to_id, run_id):
+    def _said(self, conversation_id, at, text, author, who, external_id, run_id):
         if author not in AUTHORS:
             raise ValueError(f"an author is one of {AUTHORS}, not {author!r}")
         with self._writing() as conn:
             cursor = conn.execute(
-                "INSERT INTO message (conversation_id, run_id, external_id, reply_to_id,"
-                " at, author, who, who_label, text) VALUES (?,?,?,?,?,?,?,?,?)",
-                (conversation_id, run_id, external_id, reply_to_id, at, author, who,
-                 who_label, text),
+                "INSERT INTO message (conversation_id, run_id, external_id,"
+                " at, author, who, text) VALUES (?,?,?,?,?,?,?)",
+                (conversation_id, run_id, external_id, at, author, who, text),
             )
             conn.execute(
                 "UPDATE conversation SET last_at = ? WHERE id = ? AND last_at < ?",
@@ -811,12 +824,11 @@ class Store:
         with self._writing() as conn:
             conn.execute(
                 "UPDATE run SET ended_at = ?, outcome = ?, exit_code = ?, why = ?,"
-                " tokens_in = ?, tokens_out = ?, tokens_cached = ?, tokens_written = ?,"
+                " tokens_in = ?, tokens_out = ?, tokens_cached = ?,"
                 " tokens_reported = ? WHERE id = ?",
                 (
                     ended_at, outcome, exit_code, why,
-                    tokens.get("input"), tokens.get("output"),
-                    tokens.get("cached"), tokens.get("written"),
+                    tokens.get("input"), tokens.get("output"), tokens.get("cached"),
                     1 if tokens.get("reported") else 0,
                     run_id,
                 ),
@@ -864,8 +876,7 @@ class Store:
                 " SUM(tokens_reported) AS reported,"
                 " SUM(COALESCE(tokens_in, 0)) AS input,"
                 " SUM(COALESCE(tokens_out, 0)) AS output,"
-                " SUM(COALESCE(tokens_cached, 0)) AS cached,"
-                " SUM(COALESCE(tokens_written, 0)) AS written FROM run"
+                " SUM(COALESCE(tokens_cached, 0)) AS cached FROM run"
             ).fetchone()
         kept = _plain(row)
         kept["reported"] = int(kept["reported"] or 0)

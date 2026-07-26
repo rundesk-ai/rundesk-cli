@@ -21,10 +21,14 @@ the audit makes the audit a lie, and it is invisible precisely because it *is* t
 that thinks for an hour is working, and a clock that ends it is a clock that ends real
 work (R-PROC-6). Nothing here imposes anything shorter than the platform's own window.
 
-**Four records are rundesk's own** — `admitted`, `sent`, `outcome` and `lost` — and they
-cannot be confused with a brain's, because a brain's six are the only ones the seam
-understands: an adapter that emitted `admitted` would have it kept as a record nobody here
-knows, exactly like any other.
+**What a turn resolved and what became of it are the run's own columns**, written when it
+is admitted and when it ends — not records in a list somebody has to find them in. Two
+things rundesk puts into a turn *are* said, and are written as things said: what was asked,
+and any standing instructions the surface gave. One is a record of its own, `lost`, which is
+where a hole in what the brain reported is written down, in the order it happened.
+
+A brain's six are the only kinds the seam understands, so an adapter that emitted `lost`
+would have it kept as a record nobody here knows, exactly like any other.
 """
 
 from __future__ import annotations
@@ -42,16 +46,15 @@ from rundesk import process, provider, store, transcript
 #: first one on, which is what a person at a terminal means by asking again.
 TERMINAL = "terminal"
 
-#: Rundesk's own records in an account. Kept apart from the six a brain may report — not
-#: by convention but by construction, since the seam understands only those six and would
-#: keep one of these from an adapter as a record it does not know.
 #: How many lines of what a brain said went wrong are carried back with the outcome. The
 #: whole of it is in the run's own file; this is the tail worth putting in front of a person.
 TROUBLE_KEPT = 20
 
-ADMITTED = "admitted"
+#: The two rundesk puts into a turn itself, and the one it records about a turn going wrong.
+#: `SENT` is a thing *said* and becomes a message; `LOST` is a record, and is the only one of
+#: rundesk's own that `store.RECORD_KINDS` knows — using any other name here would be stored
+#: as `unknown`, which is why there are no other names here to use.
 SENT = "sent"
-OUTCOME = "outcome"
 LOST = "lost"
 
 
@@ -164,12 +167,12 @@ async def carry(
     ))
     kept = agents.records(name, where)
     where_it_is = kept.opened(store.conversation_id(on, conversation), on, kind,
-                              conversation, _stamped(now))["id"]
+                              conversation, store.stamped(now))["id"]
     resume = None
     if can["resume"] and not fresh:
         resume = kept.session(where_it_is, brain)
 
-    at_now = _stamped(now)
+    at_now = store.stamped(now)
     if preface:
         # Written down as something *rundesk* said into the conversation, because a turn
         # that read standing instructions read something the person never typed — and an
@@ -249,7 +252,7 @@ async def carry(
         # a process that exited zero is a failed turn, and the two used to be told apart
         # by two fields that a reader had to combine correctly to get right.
         became = "finished" if ok else ("failed" if result.ok else result.reason)
-        kept.ended(run, _stamped(now), became, exit_code=result.code,
+        kept.ended(run, store.stamped(now), became, exit_code=result.code,
                    why=_why(said), tokens=tokens)
     return Outcome(run=run, ok=ok, reason=result.reason, said=said, tokens=tokens,
                    handle=handle if carried else None, why=_why(said),
@@ -304,7 +307,7 @@ class _Account:
         Only what happened claims a place in the order, so the order has no holes in it
         where something that was not a record went by.
         """
-        at = _stamped(self._now)
+        at = store.stamped(self._now)
         kind = (event or {}).get("type")
         if kind == SENT:
             # The prompt is already a message: it was written before the run, because a
@@ -331,7 +334,7 @@ class _Account:
     def answered(self, text: str) -> None:
         """What the brain finally said. Nothing is written for a turn that said nothing."""
         if text.strip():
-            self._kept.answered(self._conversation, self.run, _stamped(self._now), text)
+            self._kept.answered(self._conversation, self.run, store.stamped(self._now), text)
 
     def went_wrong(self, said) -> None:
         """One line of what the brain said went wrong, kept and kept apart (R-PRV-6).
@@ -345,14 +348,6 @@ class _Account:
         line = said if isinstance(said, bytes) else str(said).encode("utf-8", "replace")
         self._wrote.write(line if line.endswith(b"\n") else line + b"\n")
         self._wrote.flush()
-
-
-def _stamped(now=None) -> str:
-    """Wall time, for a person reading it back. Never what anything is ordered by (R-RUN-7).
-
-    The clock is the caller's, so a case fixes it and every record of that turn agrees.
-    """
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime((now or time.time)()))
 
 
 def _noting(writing, trouble: list):

@@ -474,15 +474,13 @@ class WhatAnAgentIsConfiguredWith(WithAnAgentsOwnRecords):
         with self.assertRaises(ValueError):
             kept.remember_schedule("nightly", "0 3 * * *", AT, command=["ls"], prompt="how are we")
         self.assertEqual([], kept.schedules())
-        kept.remember_schedule("nightly", "0 3 * * *", AT, command=["ls", "-l"],
-                               next_auto_run_at=LATER)
+        kept.remember_schedule("nightly", "0 3 * * *", AT, command=["ls", "-l"])
         kept.remember_schedule("standup", "0 9 * * 1", AT, prompt="how are we",
                                provider="codex", model="gpt-5", instructions="be brief")
         self.assertEqual(["nightly", "standup"], [one["name"] for one in kept.schedules()])
         nightly = kept.schedule("nightly")
         self.assertEqual(["ls", "-l"], nightly["command"])
         self.assertIsNone(nightly["prompt"])
-        self.assertEqual(LATER, nightly["next_auto_run_at"])
         standup = kept.schedule("standup")
         self.assertEqual("how are we", standup["prompt"])
         self.assertIsNone(standup["command"])
@@ -510,32 +508,24 @@ class WhenTheClockStartsWork(WithAnAgentsOwnRecords):
         super().setUp()
         self.kept = self.built()
         self.kept.remember_schedule("nightly", "0 3 * * *", AT, command=["ls"],
-                                    next_auto_run_at=LATER)
+)
 
     def test_the_clock_starting_a_schedule_moves_when_it_last_ran_on_its_own(self):
-        self.kept.schedule_fired("nightly", LATER, "started",
-                                 next_at="2026-07-27T10:00:00Z")
+        self.kept.schedule_fired("nightly", LATER, "started")
         fired = self.kept.schedule("nightly")
         self.assertEqual(LATER, fired["last_auto_run_at"])
         self.assertEqual("started", fired["last_outcome"])
-        self.assertEqual("2026-07-27T10:00:00Z", fired["next_auto_run_at"])
-
-    def test_a_firing_that_says_nothing_about_the_next_one_leaves_it_where_it_was(self):
-        self.kept.schedule_fired("nightly", LATER, "started")
-        self.assertEqual(LATER, self.kept.schedule("nightly")["last_auto_run_at"])
-        self.assertEqual(LATER, self.kept.schedule("nightly")["next_auto_run_at"])
 
     def test_running_a_schedule_by_hand_leaves_both_of_its_times_where_they_were(self):
         """Only the clock moves these. A hand-run that moved them would push out the next
         automatic firing, so asking for something now would quietly cancel tonight."""
-        self.kept.schedule_fired("nightly", AT, "started", next_at=LATER)
+        self.kept.schedule_fired("nightly", AT, "started")
         by_hand = self.a_run(self.kept, source="hand",
                              schedule_id=self.kept.schedule("nightly")["id"])
         self.kept.recorded(by_hand, 1, LATER, "done", event={"ok": True})
         self.kept.ended(by_hand, LATER, "done", exit_code=0)
         after = self.kept.schedule("nightly")
         self.assertEqual(AT, after["last_auto_run_at"], "a hand-run moved when it last ran")
-        self.assertEqual(LATER, after["next_auto_run_at"], "a hand-run moved when it is next due")
         self.assertEqual([by_hand],
                          [one["id"] for one in self.kept.runs(schedule_id=after["id"])])
 
@@ -558,7 +548,7 @@ class WhenTheClockStartsWork(WithAnAgentsOwnRecords):
     def test_writing_a_schedule_down_again_does_not_forget_when_it_last_ran(self):
         """Editing a cron is an ordinary thing to do, and it must not make the gateway
         think every firing since the schedule was made has been missed."""
-        self.kept.schedule_fired("nightly", AT, "started", next_at=LATER)
+        self.kept.schedule_fired("nightly", AT, "started")
         self.kept.remember_schedule("nightly", "0 4 * * *", LATER, command=["ls", "-l"])
         after = self.kept.schedule("nightly")
         self.assertEqual("0 4 * * *", after["cron"])
@@ -593,10 +583,9 @@ class WhereAConversationIsHappening(WithAnAgentsOwnRecords):
         kept = self.built()
         kept.opened("c1", "discord", "discord", "general", AT)
         branched = kept.opened("c2", "discord", "discord", "general", LATER,
-                               thread="t-1", parent_id="c1", title="about orion")
+                               thread="t-1", parent_id="c1")
         self.assertEqual("c2", branched["id"])
         self.assertEqual("c1", branched["parent_id"])
-        self.assertEqual("about orion", branched["title"])
         self.assertEqual(2, len(kept.conversations()))
         self.assertIsNone(kept.conversation("discord", "general")["parent_id"])
 
@@ -681,7 +670,7 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
              "can": {"steer": True}, "settings": {"effort": "high"}, "resumed": True,
              "started_at": AT, "ended_at": None, "outcome": None, "why": None,
              "exit_code": None, "tokens_in": None, "tokens_out": None,
-             "tokens_cached": None, "tokens_written": None, "tokens_reported": False},
+             "tokens_cached": None, "tokens_reported": False},
             kept.run(named))
         self.assertEqual([named], [one["id"] for one in kept.runs(conversation_id="c1")])
         self.assertIsNone(kept.run("404-zzzz"))
@@ -690,15 +679,14 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
         kept = self.built()
         named = self.a_run(kept)
         kept.ended(named, LATER, "done", exit_code=0,
-                   tokens={"input": 120, "output": 30, "cached": 10, "written": 5,
-                           "reported": True})
+                   tokens={"input": 120, "output": 30, "cached": 10, "reported": True})
         finished = kept.run(named)
         self.assertEqual(LATER, finished["ended_at"])
         self.assertEqual("done", finished["outcome"])
         self.assertEqual(0, finished["exit_code"])
-        self.assertEqual((120, 30, 10, 5),
+        self.assertEqual((120, 30, 10),
                          (finished["tokens_in"], finished["tokens_out"],
-                          finished["tokens_cached"], finished["tokens_written"]))
+                          finished["tokens_cached"]))
         self.assertTrue(finished["tokens_reported"])
 
     def test_a_run_that_failed_says_why_beside_the_run_and_not_only_in_a_file(self):
@@ -726,7 +714,7 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
         named = self.a_run(kept)
         kept.ended(named, LATER, "lost", exit_code=1)
         silent = kept.run(named)
-        for column in ("tokens_in", "tokens_out", "tokens_cached", "tokens_written"):
+        for column in ("tokens_in", "tokens_out", "tokens_cached"):
             self.assertIsNone(silent[column], f"{column} was written as nothing")
         self.assertFalse(silent["tokens_reported"])
 
@@ -739,16 +727,15 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
         self.assertEqual({"runs": 0, "reported": 0, "unreported": 0},
                          {word: nothing_yet[word]
                           for word in ("runs", "reported", "unreported")})
-        self.assertEqual([None] * 4, [nothing_yet[word] for word
-                                      in ("input", "output", "cached", "written")])
+        self.assertEqual([None] * 3, [nothing_yet[word] for word
+                                      in ("input", "output", "cached")])
         silent = self.a_run(kept)
         kept.ended(silent, LATER, "done")
         told = self.a_run(kept)
         kept.ended(told, LATER, "done",
-                   tokens={"input": 120, "output": 30, "cached": 10, "written": 5,
-                           "reported": True})
+                   tokens={"input": 120, "output": 30, "cached": 10, "reported": True})
         self.assertEqual({"runs": 2, "reported": 1, "unreported": 1, "input": 120,
-                          "output": 30, "cached": 10, "written": 5}, kept.usage())
+                          "output": 30, "cached": 10}, kept.usage())
 
     def test_a_runs_account_is_read_back_in_the_order_the_work_happened(self):
         """`seq` is the order and a clock is not, so an account written by a machine whose
@@ -804,15 +791,14 @@ class WhatWasSaid(WithAnAgentsOwnRecords):
 
     def test_a_conversation_is_read_back_in_the_order_it_happened(self):
         named = self.a_run(self.kept, conversation_id="c1")
-        self.kept.arrived("c1", AT, "how are we", who="u-1", who_label="amy",
-                          external_id="d-1")
+        self.kept.arrived("c1", AT, "how are we", who="u-1", external_id="d-1")
         self.kept.answered("c1", named, LATER, "we are well", external_id="d-2")
         self.kept.arrived("c1", LATER, "good", who="u-1")
         said = self.kept.messages("c1")
         self.assertEqual(["how are we", "we are well", "good"],
                          [one["text"] for one in said])
         self.assertEqual(["person", "agent", "person"], [one["author"] for one in said])
-        self.assertEqual("amy", said[0]["who_label"])
+        self.assertEqual("u-1", said[0]["who"])
         self.assertEqual(named, said[1]["run_id"])
         self.assertEqual(LATER, self.kept.conversation("discord", "general")["last_at"])
 

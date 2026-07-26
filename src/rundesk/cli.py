@@ -21,7 +21,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -716,8 +716,22 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
     # The surfaces this agent is reachable on, resolved here and handed over made. A
     # gateway holds them open for as long as it is up (R-CAD-6) and never works out for
     # itself what an agent is.
-    reachable = agents.reachable(args.name) if agents.exists(args.name) else []
-    for one, why in (agents.unrunnable_channels(args.name) if agents.exists(args.name) else []):
+    #
+    # **Records this rundesk will not read end the same way as a virtualenv that does not
+    # fit: well, and once** (R-GW-25). This is what the machine's job invokes, so anything
+    # that leaves it exiting badly is started again in ten seconds and for as long as the
+    # machine is up — and an agent whose store is behind the installed shape is the
+    # ordinary case after a checkout is updated by any means other than `rundesk update`.
+    # Refusing loudly and ending well is the whole difference between one line an owner
+    # can act on and a log filling for a week.
+    try:
+        reachable = agents.reachable(args.name) if agents.exists(args.name) else []
+        unrunnable = agents.unrunnable_channels(args.name) if agents.exists(args.name) else []
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
+        print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
+        print(f"        what stands in the way:  rundesk doctor {args.name}", file=sys.stderr)
+        return 0
+    for one, why in unrunnable:
         # Said, and the others still held: one surface that cannot be run must not make
         # an agent deaf on every other one it has.
         print(f"{args.name}/{one}: CHANNEL UNAVAILABLE — {why}", file=sys.stderr)
@@ -1444,16 +1458,6 @@ def _version_of(it) -> str:
     return it.version if it.version == __version__ else f"{it.version} (old)"
 
 
-def _stamped() -> str:
-    """Now, as what is written down beside a record.
-
-    Wall time, and deliberately: this is a calendar fact somebody reads back months later,
-    never a duration — nothing here measures how long anything took. In UTC and to the
-    second, so two agents' records sort against each other whatever machine wrote them.
-    """
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def _how_long(started: float | None) -> str:
     """How long it has been up, in the shortest form that is still exact enough."""
     if not started:
@@ -1579,7 +1583,7 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         # name gained a suffix is not handed a directory that was never created: the token
         # an owner put beside it, and anything a person attaches, both live there.
         agents.channel_home(args.name, one).mkdir(parents=True, exist_ok=True)
-        whose.remember_channel(one, args.kind, args.allow, _stamped(),
+        whose.remember_channel(one, args.kind, args.allow, store.stamped(),
                                settings=shape["settings"], secret=said["secret"],
                                describes=shape["describes"],
                                instructions=shape[channel.INSTRUCTIONS] or None,

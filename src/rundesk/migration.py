@@ -44,6 +44,13 @@ CEILING = 2147483647
 
 STEPS = Path(__file__).resolve().parent.parent / "migrations"
 
+#: What an agent's records are called. Here rather than in `store.py`, which is where a
+#: reader would look for it, because the runner has to find one *without* the store — it is
+#: the thing the store is built by, so `store` imports this and not the other way round.
+#: Spelled out in both, `carry_every` would go on looking for the old name after the new one
+#: shipped, walk every agent, find nothing, and report an update in which nothing moved.
+RECORDS = "state.db"
+
 
 class Failed(Exception):
     """A step did not finish. The data is as it was, and every agent stays down.
@@ -215,7 +222,7 @@ def carry_every(agents, want: int, where=None, note=None, clock=None) -> dict:
     for home in sorted(Path(agents).iterdir()):
         if not home.is_dir():
             continue
-        database = home / "state.db"
+        database = home / RECORDS
         if not database.exists():
             continue
         try:
