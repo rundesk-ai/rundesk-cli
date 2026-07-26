@@ -1341,6 +1341,97 @@ class WorkThatStartsItself(WithARunDirectory):
         self.assertFalse(self.told.exists(), "a gateway on its way out started new work")
 
 
+class TheClockIsLookedAtAsSoonAsThereIsAGatewayToLookAtIt(WithARunDirectory):
+    """R-SCH-26 — the tick slept before its first look, so a gateway examined nothing for
+    twenty seconds after claiming its name. A schedule is due only in its stated minute, so
+    a gateway the machine started or recovered in the last twenty seconds of that minute
+    lost the occurrence outright — and nothing else covers it: what fell due while nothing
+    was running is reported and deliberately not run late (R-SCH-4), and that runs during
+    `claim`, before this gap begins.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from rundesk import schedule
+        self.schedule = schedule
+        self.told = self.scratch() / "it-ran"
+
+    def _appends(self, name="ran"):
+        """A schedule whose program can be run twice and say so. Counting is the point
+        here: an immediate look plus an ordinary tick must still be one firing."""
+        return {"name": name, "when": "* * * * *",
+                "run": [PY, "-c",
+                        f"import pathlib; p = pathlib.Path({str(self.told)!r}); "
+                        f"p.write_text((p.read_text() if p.exists() else '') + 'x')"]}
+
+    def _ran(self) -> int:
+        return len(self.told.read_text()) if self.told.exists() else 0
+
+    async def _ran_within(self, seconds: float) -> bool:
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if self._ran():
+                return True
+            await asyncio.sleep(0.02)
+        return False
+
+    async def test_a_gateway_looks_at_the_clock_as_soon_as_it_has_its_name(self):
+        """R-SCH-26 — with the interval set far longer than the case waits, anything that
+        runs at all ran because the first look does not wait for it."""
+        self.addCleanup(setattr, gateway, "TICK_SECONDS", gateway.TICK_SECONDS)
+        gateway.TICK_SECONDS = 600.0
+        gw = self.made()
+        self.schedules_for(gw.name, self._appends())
+        serving = asyncio.ensure_future(gw.serve())
+        await self._up(gw)
+        started = await self._ran_within(5.0)
+        gw.ask_to_stop()
+        await asyncio.wait_for(serving, 10)
+        self.assertTrue(started, "nothing due was started until a whole interval had passed")
+
+    async def test_the_first_look_and_the_ordinary_tick_do_not_start_one_minute_twice(self):
+        """R-SCH-9, R-SCH-26 — the durable per-minute guard is what makes looking early
+        safe, and it is the thing an extra look would have broken."""
+        self.addCleanup(setattr, gateway, "TICK_SECONDS", gateway.TICK_SECONDS)
+        gateway.TICK_SECONDS = 0.05
+        gw = self.made()
+        self.schedules_for(gw.name, self._appends())
+        serving = asyncio.ensure_future(gw.serve())
+        await self._up(gw)
+        self.assertTrue(await self._ran_within(5.0), "nothing due was started at all")
+        # Long enough for many more ticks than the one that has already happened.
+        await asyncio.sleep(1.0)
+        gw.ask_to_stop()
+        await asyncio.wait_for(serving, 10)
+        self.assertEqual(1, self._ran(), "one minute was started more than once")
+
+    async def test_a_stop_asked_for_while_it_takes_hold_starts_nothing(self):
+        """R-GW-6, R-SCH-26 — the immediate look happens after `claim`, which is inside the
+        window a supervisor may ask a gateway to stop in. Looking at once must not be a way
+        to start work a shutdown had already refused."""
+        self.addCleanup(setattr, gateway, "TICK_SECONDS", gateway.TICK_SECONDS)
+        gateway.TICK_SECONDS = 0.05
+        gw = self.made()
+        self.schedules_for(gw.name, self._appends())
+        gw.ask_to_stop()
+        self.assertEqual(0, await asyncio.wait_for(gw.serve(), 10))
+        self.assertEqual(0, self._ran(), "a gateway on its way out started work at once")
+
+    async def test_the_beat_still_waits_before_saying_anything(self):
+        """R-SCH-26 — `at_once` is asked for rather than assumed, because the two callers of
+        the loop want opposite things: the beat has nothing to report until there is
+        something to report about, and a beat before the record exists is a beat about
+        nothing."""
+        gw = self.made()
+        looked = []
+        held = asyncio.ensure_future(gw._over_and_over(60.0, lambda: looked.append(1), "%s"))
+        await asyncio.sleep(0.1)
+        held.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await held
+        self.assertEqual([], looked, "the loop looked before waiting without being asked to")
+
+
 class WhatCarriesAcrossARestart(WithARunDirectory):
     """Cycling a gateway is the most ordinary thing that happens to one, and two things
     were lost every time it did."""

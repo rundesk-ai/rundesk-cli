@@ -1720,10 +1720,19 @@ class Gateway:
         Unkillable by anything but cancellation, for the same reason the beat is: this is
         a task nobody awaits, so an exception in it would simply end the ticking and
         every schedule would quietly stop running.
+
+        **The first look happens straight away, not one interval later.** A schedule is due
+        only in its stated minute, so a gateway that waited twenty seconds before looking
+        lost every occurrence due in the last twenty seconds of the minute it started in —
+        and the machine restarting a gateway is exactly the moment that happens. Nothing
+        else covers it: what fell due while nothing was running is *reported* and
+        deliberately not run late (R-SCH-4), and that runs during `claim`, before this gap
+        exists at all. The per-minute guard is what makes the immediate look safe — this
+        look and the first ordinary tick cannot start one minute twice (R-SCH-9).
         """
         await self._over_and_over(
             TICK_SECONDS, lambda: self._fire(schedule, datetime.now()),
-            "could not look at the clock: %s",
+            "could not look at the clock: %s", at_once=True,
         )
 
     def _fire(self, schedule, now) -> None:
@@ -1814,17 +1823,27 @@ class Gateway:
             return
         self._remember(one.name, outcome.reason, fired)
 
-    async def _over_and_over(self, every: float, do, failed: str) -> None:
+    async def _over_and_over(self, every: float, do, failed: str,
+                             at_once: bool = False) -> None:
         """Do this at intervals, for as long as the gateway lives.
 
         Nothing short of being cancelled stops it. Both callers are tasks nobody awaits,
         so an exception in either is raised nowhere at all — it simply ends the task, and
         the gateway carries on having quietly stopped beating, or stopped looking at the
         clock, with nothing to say it had.
+
+        `at_once` also does it before the first wait. Asked for rather than assumed,
+        because the two callers want opposite things: the clock has a minute it can miss
+        and the beat has nothing to say until there is something to say it about.
         """
+        waiting = not at_once
         while True:
             try:
-                await asyncio.sleep(every)
+                if waiting:
+                    await asyncio.sleep(every)
+                # Set before `do`, not after: something that raised has still had its turn,
+                # and a first look that failed must not become a second one with no wait.
+                waiting = True
                 do()
             except asyncio.CancelledError:
                 raise
