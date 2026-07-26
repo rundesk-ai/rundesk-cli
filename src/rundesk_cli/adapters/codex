@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""The Codex CLI, behind a Rundesk agent.
+
+**Everything about this vendor is in this file and nowhere else.** Its flags, the order
+they have to go in, the shape of its stream, where it keeps its sign-in, and the
+arithmetic its usage needs are all here — nothing outside knows this brain exists, which
+is the point of the seam. Read
+`.knowledge/guides/write-a-provider-adapter.md` and you can write another of these for any
+brain at all, in any language; this one happens to be Python because Python is what this
+repository already has.
+
+An adapter is a *program*, not a plugin. Nothing here is imported by Rundesk, and nothing
+here imports Rundesk. It can be run by hand:
+
+    RUNDESK_CWD=/tmp/somewhere RUNDESK_PROVIDER_HOME=/tmp/home \\
+      echo "what changed?" | src/rundesk_cli/adapters/codex
+
+Measured against `codex-cli 0.145.0` — see `.knowledge/research/`. Four things that
+version does, each of which this file exists to absorb:
+
+1. **Its usage is the whole thread's running total, not this turn's.** Three one-word
+   replies climb. Reported as a turn's cost that overstates every turn after the first,
+   and a spend limit reading it fires on how long a conversation is rather than what it
+   cost. So the last total is kept — in this adapter's own private home, which outlives
+   the process, unlike the build this replaces whose running totals lived in a gateway's
+   memory and went with every restart.
+2. **Its cached tokens are folded inside its input count.** Left folded, most of the
+   volume is reported at the fresh rate, which is a number that is technically real and
+   practically a lie. They come apart here.
+3. **Global flags are rejected after the `resume` subcommand.** `--sandbox` placed after
+   it is `unexpected argument '--sandbox' found`, so the whole command line has to be
+   built in one order and never appended to.
+4. **It names no model in its stream.** So none is claimed. A model that was merely asked
+   for is not a measurement, and claiming it would make every later reading of the cost a
+   guess wearing a fact's clothes.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+#: What to run. Overridable so a machine keeping it somewhere unusual — and the probes —
+#: can point at it without this file being edited.
+CODEX = os.environ.get("RUNDESK_CODEX_BIN", "codex")
+
+#: Where the last thread total is kept, so this turn's share can be worked out from it.
+#: In the private home Rundesk gives this adapter, because that is the only thing here
+#: that outlives one turn.
+BILLED = "billed.json"
+
+#: What Codex says when the home it was given holds no sign-in. Recognised so this adapter
+#: can say what to do about it, and for no other reason: **nothing here ever reads, writes,
+#: copies or links a credential.** Codex keeps its sign-in in the home it is given rather
+#: than in a keychain, so a private home starts out logged out, and whether to sign that
+#: home in on its own or to point it at one the owner already has is the owner's decision
+#: and not an adapter's to make quietly on their behalf.
+LOGGED_OUT = "401 Unauthorized"
+
+#: How much of the machine a turn may touch, in this brain's words. Rundesk says `read` or
+#: `work`; what those mean to Codex is this file's business and nobody else's.
+SANDBOX = {"read": "read-only", "work": "workspace-write"}
+
+#: What Codex calls the things it does, said in words no brain owns. Anything not here is
+#: reported without a `did` at all rather than in this vendor's vocabulary.
+DID = {
+    "command_execution": "run",
+    "file_change": "edit",
+    "web_search": "search",
+    "mcp_tool_call": "run",
+    "file_read": "read",
+}
+
+#: What this brain can do. Asked before a turn, offline, and the same every time.
+CAN = {"tools": True, "resume": True, "usage": True, "model": False}
+
+
+def say(**it) -> None:
+    """One record, one line, flushed — because a turn is watched while it happens."""
+    sys.stdout.write(json.dumps(it) + "\n")
+    sys.stdout.flush()
+
+
+def argv() -> list:
+    """The command line, built in one go.
+
+    Built whole rather than appended to, because every global flag is *rejected* after
+    the `resume` subcommand — `unexpected argument '--sandbox' found`, measured at
+    0.145.0. So there is one place the order is decided and nothing may append to it
+    afterwards.
+
+    The prompt is `-`, meaning stdin. Never a positional: anything on a command line is
+    readable through the process list and kept in a shell's history, and what somebody
+    asks their agent is theirs.
+    """
+    resume = os.environ.get("RUNDESK_RESUME")
+    model = os.environ.get("RUNDESK_MODEL")
+    posture = SANDBOX.get(os.environ.get("RUNDESK_POSTURE", "work"), "workspace-write")
+    line = [CODEX, "exec", "--json", "--sandbox", posture,
+            # The agent's workspace is a directory, not necessarily a repository, and
+            # Codex otherwise refuses to start outside one.
+            "--skip-git-repo-check"]
+    if model:
+        line += ["-m", model]
+    line += _settings()
+    if resume:
+        line += ["resume", resume]
+    return line + ["-"]
+
+
+def _settings() -> list:
+    """Whatever the owner set, mapped onto this brain's own flags.
+
+    Rundesk hands it over without reading it, so this is the only place it means
+    anything. Two shapes, both obvious: `flags` is a list handed straight to the CLI, and
+    `config` is Codex's own dotted overrides. Anything else is ignored rather than
+    guessed at, and said on stderr so an owner who mistyped hears about it.
+    """
+    try:
+        said = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
+    except ValueError:
+        sys.stderr.write("RUNDESK_SETTINGS was not readable as JSON; ignoring it\n")
+        return []
+    if not isinstance(said, dict):
+        return []
+    extra = []
+    for flag in said.get("flags") or []:
+        extra.append(str(flag))
+    for key, value in sorted((said.get("config") or {}).items()):
+        extra += ["-c", f"{key}={json.dumps(value)}"]
+    for unknown in sorted(set(said) - {"flags", "config"}):
+        sys.stderr.write(f"'{unknown}' is not a setting this adapter understands\n")
+    return extra
+
+
+def billed(home: Path) -> dict:
+    """What this thread had cost by the end of the last turn."""
+    try:
+        with open(home / BILLED) as kept:
+            said = json.load(kept)
+    except (OSError, ValueError):
+        return {}
+    return said if isinstance(said, dict) else {}
+
+
+def remember(home: Path, thread: str, total: dict) -> None:
+    """Keep this thread's running total, so the next turn can subtract it.
+
+    Whole-file and per thread. Losing it costs one turn an overstatement and nothing
+    worse, which is why it is a small file and not anything larger.
+    """
+    keeping = billed(home)
+    keeping[thread] = total
+    home.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(home / BILLED, "w") as writing:
+            json.dump(keeping, writing)
+    except OSError as why:
+        sys.stderr.write(f"could not keep what this thread has cost: {why}\n")
+
+
+def share(total: dict, before: dict) -> dict:
+    """This turn's own tokens, out of the thread's running total.
+
+    Two corrections, and both are this vendor's alone. The counts climb across a thread,
+    so what this turn cost is the difference from the last one — and `input_tokens`
+    already contains `cached_input_tokens`, so the cache is taken back out of it and
+    reported beside it, because the two are billed at different rates.
+
+    Never below nothing. A thread reported lower than last time has been restarted
+    underneath us rather than gone backwards, and a negative cost is not an answer.
+    """
+    fresh = _n(total, "input_tokens") - _n(total, "cached_input_tokens")
+    was_fresh = _n(before, "input_tokens") - _n(before, "cached_input_tokens")
+    return {
+        "input": max(0, fresh - was_fresh),
+        "output": max(0, _n(total, "output_tokens") - _n(before, "output_tokens")),
+        "cached": max(0, _n(total, "cached_input_tokens")
+                      - _n(before, "cached_input_tokens")),
+    }
+
+
+def _n(said: dict, what: str) -> int:
+    value = said.get(what)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _went_wrong(said: str, home: Path) -> None:
+    """What Codex said went wrong, and — when it is the one thing an owner can fix — how.
+
+    **Nothing here reads, writes, copies or links a credential.** Codex keeps its sign-in
+    inside the home it is given rather than in a keychain, so the private home this agent
+    was given starts out logged out. Whether to sign that home in on its own, or to point
+    it at one the owner already has, is theirs to decide: an adapter that quietly arranged
+    either would be making a decision about somebody's credentials on their behalf, and it
+    would be sharing them between agents without anyone having said so.
+    """
+    sys.stderr.write(said + "\n")
+    # Once per turn. Codex retries a failed request several times and every attempt says
+    # the same thing, so the advice would arrive five times for one fixable problem.
+    if LOGGED_OUT in said and not _went_wrong.said_it:
+        _went_wrong.said_it = True
+        sys.stderr.write(
+            f"this agent's Codex home has no sign-in of its own — sign it in with:\n"
+            f"    CODEX_HOME={home} codex login\n"
+            f"or, to share the one you already have, put a link to your own auth there.\n")
+
+
+_went_wrong.said_it = False
+
+
+def _findable() -> str | None:
+    """Codex, if this machine can find it — said plainly rather than discovered at runtime.
+
+    A gateway is started by the machine's own supervisor with a bare environment, so a
+    name that resolves in an owner's shell may resolve to nothing there. This is checked
+    rather than guessed at: no list of the places Codex might have been installed, because
+    such a list is wrong on the first machine that did something else.
+    """
+    from shutil import which
+    return CODEX if os.path.isabs(CODEX) else which(CODEX)
+
+
+def carry() -> int:
+    """One turn: run Codex, and report what it did in words no brain owns."""
+    prompt = sys.stdin.read()
+    home = Path(os.environ.get("RUNDESK_PROVIDER_HOME") or ".")
+    where = os.environ.get("RUNDESK_CWD") or "."
+
+    if _findable() is None:
+        sys.stderr.write(
+            f"'{CODEX}' is not on this machine's path as this agent runs — install the "
+            f"Codex CLI, or point RUNDESK_CODEX_BIN at where it stands.\n")
+        say(type="done", ok=False)
+        return 1
+
+    running = subprocess.Popen(
+        argv(),
+        cwd=where,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=None,          # straight through: Rundesk keeps it, apart, as ours
+        # Its own sign-in, configuration and session files, for this agent and no other.
+        # The one lever there is: pointed at an empty directory Codex is not logged in,
+        # which is measured rather than assumed.
+        env={**os.environ, "CODEX_HOME": str(home)},
+        text=True,
+    )
+    running.stdin.write(prompt)
+    running.stdin.close()
+
+    thread, ok, total, tools = None, None, None, {}
+    for line in running.stdout:
+        try:
+            said = json.loads(line)
+        except ValueError:
+            continue  # not everything on its stdout is a record; what is not is not ours
+        kind = said.get("type")
+        if kind == "thread.started":
+            thread = said.get("thread_id")
+        elif kind == "item.started":
+            _began(said.get("item") or {}, tools)
+        elif kind == "item.completed":
+            ok = _finished(said.get("item") or {}, tools, ok)
+        elif kind == "turn.completed":
+            total = said.get("usage") or {}
+            ok = True if ok is None else ok
+        elif kind == "turn.failed":
+            _went_wrong(str((said.get("error") or {}).get("message", "")), home)
+            ok = False
+        elif kind == "error":
+            _went_wrong(str(said.get("message", "")), home)
+
+    running.wait()
+    if total is not None and thread:
+        say(type="usage", **share(total, billed(home).get(thread) or {}))
+        remember(home, thread, total)
+    elif total is not None:
+        say(type="usage", **share(total, {}))
+    # No model: this brain names none in its stream, so none is claimed. Saying the one
+    # that was asked for would be reporting a request as a measurement.
+    say(type="done", ok=bool(ok) and running.returncode == 0, session=thread or "")
+    return 0 if ok else 1
+
+
+def _began(item: dict, tools: dict) -> None:
+    """A tool this brain started, said as what it did rather than what it calls it."""
+    kind = item.get("type")
+    if kind in (None, "agent_message", "reasoning"):
+        return
+    at = str(item.get("id") or len(tools) + 1)
+    tools[at] = kind
+    said = {"type": "tool", "id": at, "name": kind}
+    if kind in DID:
+        say(**said, did=DID[kind])
+    else:
+        say(**said)   # a tool we have no word for is reported without one, never with its
+
+
+def _finished(item: dict, tools: dict, ok):
+    """A tool that finished, or the answer itself."""
+    kind = item.get("type")
+    at = str(item.get("id") or "")
+    if kind == "agent_message":
+        say(type="text", text=item.get("text") or "")
+        return ok
+    if kind == "reasoning":
+        say(type="think", text=item.get("text") or "")
+        return ok
+    if kind == "error":
+        sys.stderr.write(str(item.get("message", "")) + "\n")
+        return ok
+    if at in tools or kind not in (None, "agent_message", "reasoning"):
+        tools.pop(at, None)
+        worked = item.get("exit_code") in (0, None) and item.get("status") != "failed"
+        say(type="result", id=at or "1", ok=bool(worked), summary=_summary(item))
+    return ok
+
+
+def _summary(item: dict) -> str:
+    """What a tool did, short enough to read and never the whole of its output.
+
+    Deliberately not the output itself: it can hold file contents, credentials and
+    private paths, and what a channel shows is not this adapter's to decide.
+    """
+    for what in ("command", "path", "query"):
+        if item.get(what):
+            return str(item[what])[:200]
+    return str(item.get("status") or "done")
+
+
+if __name__ == "__main__":
+    if "--capabilities" in sys.argv:
+        print(json.dumps(CAN))
+        raise SystemExit(0)
+    raise SystemExit(carry())

@@ -48,6 +48,11 @@ PY = sys.executable
 #: what the gate runs and what this file is written against.
 ADAPTER: Path | None = None
 
+#: The private home to hand the adapter under test, when one was named. A brain that
+#: needs a sign-in cannot complete a turn out of an empty directory — pointing this at a
+#: home that already has one is what lets these cases drive a real adapter for real.
+HOME: Path | None = None
+
 #: How long an adapter may say nothing before a case here gives up on it. Not how long a
 #: turn may take: a real brain is entitled to think for as long as it needs, and pointed
 #: at a real adapter these cases really run one. Ten minutes of complete silence is a
@@ -239,6 +244,10 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(shutil.rmtree, self.where, True)
         for what in ("cwd", "provider", "home"):
             (self.where / what).mkdir(parents=True, exist_ok=True)
+        # Scratch, always. `--home` belongs to the adapter under test and to nothing
+        # else: pointed at a real one, the stand-ins below wrote their own bookkeeping
+        # into a brain's actual home and read what a previous run had left there.
+        self.provider_home = self.where / "provider"
 
     def stand_in(self, which: str) -> Path:
         """One of the adapters above, on disk and runnable — which is all an adapter is."""
@@ -251,7 +260,7 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
         said = provider.environment(
             home=self.where / "home",
             cwd=self.where / "cwd",
-            provider_home=self.where / "provider",
+            provider_home=self.provider_home,
             run=extra.pop("run", "1-abcd"),
             **extra,
         )
@@ -299,6 +308,14 @@ class TheContract(DrivesAnAdapter):
     brain's own business, and a suite that checked the words would be a suite only one
     brain could pass.
     """
+
+    def setUp(self):
+        super().setUp()
+        # Only here. A brain with a sign-in cannot complete a turn out of an empty
+        # directory, so an author proving their own adapter points this at the home that
+        # has one — and nothing that drives a stand-in ever sees it.
+        if HOME is not None and ADAPTER is not None:
+            self.provider_home = HOME
 
     def under_test(self) -> Path:
         return ADAPTER if ADAPTER is not None else self.stand_in("plain")
@@ -424,7 +441,7 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
         turn = await self.carry(self.stand_in("nosy"))
         said = json.loads(turn.of("text")[0]["text"])
         self.assertEqual(str(self.where / "cwd"), said["told"]["RUNDESK_CWD"])
-        self.assertEqual(str(self.where / "provider"), said["told"]["RUNDESK_PROVIDER_HOME"])
+        self.assertEqual(str(self.provider_home), said["told"]["RUNDESK_PROVIDER_HOME"])
         # Resolved on both sides: a temporary directory on macOS is reached through a
         # link, so the path a program reports itself standing in is the real one and the
         # path it was handed is the one with the link still in it.
@@ -512,7 +529,7 @@ class WhatATurnCost(DrivesAnAdapter):
         from the last one has to be on disk. The private home is where."""
         counting = self.stand_in("counting")
         await self.carry(counting)
-        self.assertTrue((self.where / "provider" / "billed.json").is_file(),
+        self.assertTrue((self.provider_home / "billed.json").is_file(),
                         "it kept what it must subtract from somewhere that does not last")
 
 
@@ -640,25 +657,27 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def _adapter_from(argv: list) -> tuple[Path | None, list]:
-    """`--adapter <path>`, taken out before unittest sees the arguments.
+def _taken(argv: list, flag: str) -> tuple[Path | None, list]:
+    """`--adapter <path>` or `--home <path>`, out before unittest sees the arguments.
 
     Its own parsing rather than argparse's, because unittest owns this command line and
     a parser that took it over would refuse every flag unittest offers.
     """
-    if "--adapter" not in argv:
+    if flag not in argv:
         return None, argv
-    at = argv.index("--adapter")
+    at = argv.index(flag)
     if at + 1 >= len(argv):
-        print("--adapter needs the path of an adapter to run", file=sys.stderr)
+        print(f"{flag} needs a path after it", file=sys.stderr)
         raise SystemExit(2)
-    named = Path(argv[at + 1]).expanduser().resolve()
-    return named, argv[:at] + argv[at + 2:]
+    return Path(argv[at + 1]).expanduser().resolve(), argv[:at] + argv[at + 2:]
 
 
 if __name__ == "__main__":
-    ADAPTER, rest = _adapter_from(sys.argv[1:])
+    ADAPTER, rest = _taken(sys.argv[1:], "--adapter")
+    HOME, rest = _taken(rest, "--home")
     if ADAPTER is not None:
         print(f"conformance: driving {ADAPTER}", file=sys.stderr)
         provider.program(str(ADAPTER))   # said here rather than in every case
+    if HOME is not None:
+        print(f"conformance: with the private home {HOME}", file=sys.stderr)
     unittest.main(argv=[sys.argv[0]] + rest, verbosity=2)

@@ -34,8 +34,11 @@ Every field is `false` when you leave it out, so `{}` is a valid answer and a co
 adapter. **Rundesk asks rather than assuming**, and it never guesses from your name — so say
 `false` and the work is simply absent, rather than expected and missing.
 
-This must not need an account, a network or a login. It is asked by `rundesk doctor`, before
-any turn, and it must be the same answer every time.
+This must not need an account, a network or a login, and it must be the same answer every
+time. It is asked when a turn is admitted, and the answer is written into that run's
+record — so a turn that reported no tools and a brain that has none can be told apart
+afterwards. `rundesk doctor` does not ask it: diagnosing an agent starts nothing at all,
+and it only checks that your program is there and can be run.
 
 ## Question two: carry one turn
 
@@ -109,6 +112,18 @@ as JSON exactly as they wrote it. Map it onto your own flags however you like, i
 you do not recognise, and fail loudly on stderr if something is wrong — that way a new flag
 on your CLI is something an owner can reach today, not after a Rundesk release.
 
+**Never a credential — not in settings, and not on a command line.** What an owner set is
+written into the run's record, so a token put there is a token in a file that outlives the
+turn. Anything on a command line is readable through the process list and kept in a shell's
+history. Read a secret from your own `RUNDESK_PROVIDER_HOME`, or from an environment
+variable that never reaches an argument.
+
+**Do not go looking for the owner's own configuration.** `RUNDESK_PROVIDER_HOME` is yours
+and it starts out empty, which for most brains means not signed in. Say so, and say what to
+run — do not quietly copy or link somebody's credentials into it. Sharing one sign-in
+between agents may well be what they want, and it is theirs to decide rather than yours to
+arrange on their behalf.
+
 **A record we do not recognise is kept, not refused.** Emit something new and it lands in the
 run's record verbatim. It will not be shown and it will not break the turn — so you can be
 ahead of us without waiting for us.
@@ -168,10 +183,13 @@ Run it against yours:
 
 ```sh
 python3 tests/test_provider.py --adapter /opt/my-brain
+python3 tests/test_provider.py --adapter /opt/my-brain --home ~/.my-brain   # if it signs in
 ```
 
-Nothing in it needs an account, a token or a network: the suite drives adapters that are
-themselves small programs, which is the same thing your adapter is.
+Run bare it needs no account, no token and no network — the adapters it drives are then
+small programs, which is the same thing yours is. Pointed at yours it really runs your
+brain, which is what you want it to do; and if your brain needs a sign-in, `--home` is the
+private home to hand it, because it will not find one in an empty directory.
 
 **If your adapter follows this page and the suite still fails it, this page is wrong** — it
 is the contract, and the code is what has to move.

@@ -1,0 +1,125 @@
+# Research: The Codex CLI as an agent's brain
+
+**Last updated:** 2026-07-26
+**Question it answers:** What does the installed Codex CLI actually do when it is driven headlessly, and which of it has to be absorbed by an adapter?
+
+## What they do
+
+| Need | What `codex-cli 0.145.0` does |
+|---|---|
+| Run one turn without a person | `codex exec --json` streams JSONL on stdout and takes the prompt as a positional or, with `-`, on stdin.[1] Measured: a whole turn is `thread.started`, `turn.started`, `item.completed`, `turn.completed`.[4] |
+| Say which conversation this was | `thread.started` carries `thread_id`, on the first line and nowhere else. It is minted by the provider, so it does not exist until a turn has started.[4] |
+| Carry a conversation on | `codex exec … resume <id>` — but **every global flag is rejected after `resume`**, measured: `--sandbox` placed after it is `error: unexpected argument '--sandbox' found`.[2][4] |
+| Say what a turn cost | `turn.completed.usage`, and it is the **thread's running total rather than the turn's**. Measured: three one-word replies reported `output_tokens` of 5, 10 and 15.[4] |
+| Keep one agent's sign-in from another's | `CODEX_HOME`. Measured: pointed at an empty directory, every request is `401 Unauthorized … Missing bearer or basic authentication`.[4] |
+| Choose how much of the machine it may touch | `--sandbox` with `read-only`, `workspace-write` or `danger-full-access`; a process-level sandbox rather than a tool list.[1] |
+| Say which model answered | Nothing in the stream names one.[4] |
+
+**Usage is cumulative, and this is the finding that matters most.** Three turns on one
+thread, each asking for a single word:
+
+```text
+turn 1: {"input_tokens": 17401, "cached_input_tokens": 13056, "output_tokens":  5}
+turn 2: {"input_tokens": 34821, "cached_input_tokens": 30208, "output_tokens": 10}
+turn 3: {"input_tokens": 52260, "cached_input_tokens": 47360, "output_tokens": 15}
+```
+
+Three one-word replies cannot legitimately grow, so the field is the thread's running
+total. Reported as a turn's cost it overstates every turn after the first, and a spend
+limit reading it would fire on how long a conversation is rather than on what it cost.
+This reproduces the same finding the previous build recorded against an earlier version,
+down to the same three numbers, so it is behaviour rather than a bug that happened to be
+present once.[3]
+
+**The cache is folded inside the input count.** `input_tokens` contains
+`cached_input_tokens`, so reporting it whole prices most of the volume at the fresh rate.
+0.145.0 also reports `cache_write_input_tokens` separately, which is the tokens written
+*into* the cache and billed above the standard rate — so it belongs with fresh input and
+never with cache reads.
+
+**A private home isolates the sign-in, and sharing it is one file.** Codex keeps its
+credentials in `auth.json` inside the home it is given — a plain file, not a keychain — so
+a fresh home is logged out. Measured: a home holding nothing gets `401 Unauthorized` on
+every request; a home holding a *copy* of the owner's `auth.json` completes a turn; and a
+home holding a *symlink* to it completes a turn and stays a symlink, so a refreshed token
+goes on being shared rather than going stale.
+
+That answers an open question on `agent-home`, and the answer is "either, and it is the
+owner's call". Everything else — sessions, caches, skills, state and configuration — is
+made fresh in the new home, so the isolation that was wanted is real whichever way the
+sign-in goes.
+
+**Rundesk does not make that call and does not touch the file.** An adapter that copied or
+linked somebody's credentials would be sharing them between agents without anyone having
+said so, and copying one in particular goes stale the moment the token refreshes. The
+adapter recognises what Codex says when a home is logged out, and says what to run.
+
+## What we can borrow
+
+- Everything above belongs in the adapter and nowhere else. Rundesk's own modules must not
+  learn any of it: the flags, the ordering, the stream shape, the arithmetic and the
+  environment variable are all one file's business.
+- The subtraction that turns a running total into a turn's share is the **adapter's**, and
+  what it subtracts from belongs in the adapter's own private home. The previous build kept
+  it in a gateway's memory and lost it on every restart, over-reporting the first turn of
+  every existing thread afterwards.
+- Give the prompt on stdin with `-` rather than as a positional. What somebody asks their
+  agent is readable through the process list and kept in a shell's history otherwise.
+- `--skip-git-repo-check` is needed: an agent's workspace is a directory, not necessarily a
+  repository, and Codex otherwise refuses to start outside one.
+- Claim no model. Nothing in the stream names one, and a model that was merely asked for is
+  a request rather than a measurement.
+
+## What to avoid
+
+- Do not append global flags to a resume command line. Build the whole line in one place, in
+  one order, and let nothing add to it afterwards.
+- Do not treat everything on stdout as a record. `Reading additional input from stdin…` and
+  other prose arrive there too; what does not parse is not ours.
+- Do not report a negative cost. A thread reporting less than last time has been restarted
+  underneath us rather than gone backwards.
+- Do not publish a tool's output. `command_execution` carries `aggregated_output`, which can
+  hold file contents, credentials and private paths — what a channel shows is not the
+  adapter's decision to make.
+- Do not make any of this a test dependency. It needs an account and a network, and a suite
+  that reached for either would fail on somebody else's uptime rather than on this code.
+- Do not copy, link or read a credential on an owner's behalf, and never carry one in what
+  an owner set — that is written into the run's record, so a token put there outlives the
+  turn in a file.
+- Do not assume `codex` is on the path. A gateway is started by the machine's supervisor
+  with a bare environment, so a name that resolves in a shell may resolve to nothing there.
+  Check for it and say what to do, rather than keeping a list of the places it might be
+  installed — such a list is wrong on the first machine that did something else.
+
+## Verdict for us
+
+Codex is a sound first shipped adapter, and it was chosen because it is the **hardest** of
+the three installed CLIs on the two things the seam most needs to get right: its usage is
+cumulative, and its session handle is minted by the provider rather than by us and appears
+on the first line only. An adapter that absorbs both proves the seam can absorb them, which
+one whose brain reports per-turn usage and accepts a pre-minted handle would not have.
+
+Its fidelity ceiling is worth stating: `codex exec` chooses its permissions before the run
+and cannot answer an approval or a question mid-turn, so it suits work whose posture is
+settled before it begins. That is exactly what a turn asked for from a terminal or a
+schedule is, and it is a limit to revisit when a channel wants to approve something.
+
+Rerun `.knowledge/scripts/probe-codex` when the version moves, and write what changed here.
+
+## Open questions
+
+- Whether `cache_write_input_tokens` is inside `input_tokens` or beside it — it was nothing
+  in every turn measured, so nothing here depends on the answer yet.
+- Whether an owner sharing one sign-in across agents wants that arranged for them, and by
+  what — nothing does it today, deliberately.
+- Whether a thread whose total went backwards has really been restarted, or whether the
+  count can legitimately fall for a reason not yet seen.
+- Which of its item kinds carry an id that is stable between `item.started` and
+  `item.completed`, since a tool and its result are correlated by one.
+
+## Sources
+
+1. OpenAI, Codex non-interactive mode — https://developers.openai.com/codex/noninteractive/
+2. OpenAI, Codex App Server — https://developers.openai.com/codex/app-server/
+3. The build this replaces, `probes/codex-usage.ts` — (internal)
+4. `.knowledge/scripts/probe-codex` against `codex-cli 0.145.0` on macOS, 2026-07-26 — (internal)

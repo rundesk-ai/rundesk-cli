@@ -37,6 +37,19 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   into the owner's real `~/.rundesk/schedules` — `RUNDESK_RUN_DIR` and `RUNDESK_LOG_DIR` alone are not
   enough, because the schedule checkpoint lives beside the schedules, not with the run state.
 
+- **A test flag that points at a real directory points *every* case at it.** `test_provider.py
+  --home ~/.codex` was meant for the adapter under test and reached the stand-ins too, so they
+  wrote their own bookkeeping into the owner's real Codex home and read what an earlier run had
+  left there — one case failed and the rest passed while quietly polluting it. Anything that
+  redirects a case at something real must be scoped to the one class that needs it, and
+  everything else left on scratch.
+- **`codex exec` will not sign in from a home it was not given.** `CODEX_HOME` isolates
+  credentials as well as configuration — the sign-in is `auth.json` inside it, a plain file
+  rather than a keychain — so a scratch home means `401 Unauthorized` on every request and a
+  conformance run against the real adapter that proves nothing. Point `--home` at a home that
+  has one. A symlink to the owner's own works and stays a link; a copy works and goes stale on
+  the next token refresh. Rundesk makes neither for them.
+
 - `asyncio`'s `Process.wait()` resolves when **every pipe closes**, not when the process exits. Anything
   the program left running inherited the far end and holds it open, so waiting on the exit lands hours
   late or never. Watch `proc.returncode` in short spells instead — it is set promptly. This cost a

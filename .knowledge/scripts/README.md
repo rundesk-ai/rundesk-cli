@@ -19,6 +19,7 @@ by version bump. Everything else you drop in here is yours.
 | [`check-evidence`](./check-evidence) | Every ✅ in a contract names a test the suite actually declares. `doc-lint` cannot see that. |
 | [`cli-reference`](./cli-reference) | Writes `CLI.md` from the parser, so the reference cannot drift from the command. `--check` fails when it has. |
 | [`gate`](./gate) | Everything that has to be true before work here is finished, in one command. Finds the suites rather than listing them. |
+| [`probe-codex`](./probe-codex) | What the installed Codex CLI really does, asked of it rather than assumed. Evidence for `research/`, never a test dependency — the live half reaches a real account. |
 
 ## Usage
 

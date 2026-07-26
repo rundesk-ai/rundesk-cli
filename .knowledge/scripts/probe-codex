@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Probe the installed Codex CLI against the minimum a brain has to do.
+
+Evidence, never a CI dependency: this reaches a real account and costs real money, so
+nothing in the suite runs it. Rerun it when the CLI version moves and write what changed
+into `.knowledge/research/`.
+
+    python3 .knowledge/scripts/probe-codex            # everything, including live turns
+    python3 .knowledge/scripts/probe-codex --offline  # only what costs nothing
+
+The live half is three one-word turns on one thread, which is the smallest thing that can
+answer the question that matters: is the usage it reports this turn's, or the whole
+thread's running total? Three tiny replies cannot legitimately grow, so if the numbers
+climb, the field is cumulative and every turn after the first would be overstated.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+CODEX = os.environ.get("RUNDESK_CODEX_BIN", "codex")
+
+
+def ran(argv, **extra) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True, **extra)
+
+
+def says(what: str, said: str) -> None:
+    print(f"\n{'=' * 78}\n{what}\n{'=' * 78}\n{said.rstrip()}")
+
+
+def offline() -> None:
+    """What can be asked without an account, a network or a penny."""
+    says("version", ran([CODEX, "--version"]).stdout)
+
+    # The trap the build this replaces recorded: global flags are rejected *after* the
+    # subcommand, so an adapter that appends them builds a command line that cannot run.
+    after = ran([CODEX, "exec", "resume", "--sandbox", "read-only", "--json"])
+    says("a global flag placed after `resume`", after.stderr or after.stdout)
+
+    home = tempfile.mkdtemp(prefix="codex-probe-home-")
+    apart = ran([CODEX, "exec", "--json", "--skip-git-repo-check", "say hi"],
+                env={**os.environ, "CODEX_HOME": home}, timeout=90)
+    says(f"CODEX_HOME pointed at an empty {home}",
+         (apart.stdout or "") + (apart.stderr or "") or "(nothing at all)")
+
+
+def live() -> None:
+    """Three one-word turns on one thread, and what each of them reported it cost."""
+    where = tempfile.mkdtemp(prefix="codex-probe-work-")
+    thread, counted = None, []
+    for n, word in enumerate(("one", "two", "three"), start=1):
+        argv = [CODEX, "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--json"]
+        if thread:
+            argv += ["resume", thread]
+        argv += [f"Reply with the single word: {word}."]
+        said = ran(argv, cwd=where, timeout=300)
+        for line in said.stdout.splitlines():
+            try:
+                one = json.loads(line)
+            except ValueError:
+                continue
+            if one.get("type") == "thread.started":
+                thread = one.get("thread_id")
+            if one.get("type") == "turn.completed":
+                counted.append(one.get("usage") or {})
+        if n == 1:
+            says("what one whole turn looks like", said.stdout)
+
+    says("thread id", str(thread))
+    says("what each turn reported it cost",
+         "\n".join(f"turn {n}: {json.dumps(one, sort_keys=True)}"
+                   for n, one in enumerate(counted, start=1)))
+    out = [int(one.get("output_tokens") or 0) for one in counted]
+    climbing = len(out) == 3 and out[0] < out[1] < out[2]
+    says("verdict", (
+        "CUMULATIVE — output rose on every turn, which three one-word replies cannot do.\n"
+        "The field is the thread's running total, not this turn's, and an adapter has to\n"
+        "subtract what it reported last time." if climbing else
+        f"PER TURN — the counts did not climb ({out}). Reporting the field as a turn's\n"
+        "cost is honest, and the subtraction is not needed."))
+
+
+if __name__ == "__main__":
+    offline()
+    if "--offline" not in sys.argv:
+        live()
