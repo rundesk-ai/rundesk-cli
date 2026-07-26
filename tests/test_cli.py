@@ -1743,6 +1743,17 @@ settings = {rest[i].lstrip("-"): rest[i + 1] for i in range(0, len(rest) - 1, 2)
 print(json.dumps({"ok": True, "settings": settings, "describes": "#operations in Acme",
                   "secret": {"env": "A_CHANNEL_TOKEN"}}))
 '''
+    #: Reports two kinds of place, the way a real platform with rooms and private
+    #: messages does — each with settings narrowed to it, and its own starting wording.
+    TWO_PLACES = '''
+import json, sys
+print(json.dumps({"ok": True, "secret": {"env": "A_CHANNEL_TOKEN"}, "shapes": [
+    {"suffix": "dms", "describes": "private messages", "settings": {"dm": True},
+     "fills": [], "instructions": "A private conversation with {called}."},
+    {"suffix": "rooms", "describes": "#operations in Acme", "settings": {"room": "1180"},
+     "fills": ["channel", "server"],
+     "instructions": "You are in {where.channel} on {where.server}."}]}))
+'''
     #: Cannot, and says why.
     CANNOT = '''
 import json, sys
@@ -1764,6 +1775,41 @@ raise SystemExit(1)
         self.assertIn("that room does not exist", said, "the adapter's reason was swallowed")
         self.assertFalse((self.at / "ava" / "channels.json").exists(),
                          "a channel that proved nothing was written down anyway")
+
+    def test_one_add_makes_a_channel_for_each_kind_of_place(self):
+        """R-CAD-15 — a platform is rarely one place, and the two are not the same thing
+        to talk in. Each is its own channel because a channel carries who may reach the
+        agent through it, and each starts from wording the adapter wrote for it."""
+        code, said = drive(["channels", "ava", "add", "acme",
+                            "--kind", self._adapter(self.TWO_PLACES), "--allow", "2207"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        kept = json.loads((self.at / "ava" / "channels.json").read_text())
+        self.assertEqual(["acme-dms", "acme-rooms"], sorted(kept))
+        self.assertEqual({"dm": True}, kept["acme-dms"]["settings"],
+                         "one kind of place was told about another")
+        self.assertEqual({"room": "1180"}, kept["acme-rooms"]["settings"])
+        self.assertEqual("You are in {where.channel} on {where.server}.",
+                         kept["acme-rooms"][channel.INSTRUCTIONS])
+        self.assertEqual(["channel", "server"], kept["acme-rooms"][channel.FILLS])
+        self.assertNotIn(channel.FILLS, kept["acme-dms"], "a place with no parts kept one")
+        self.assertIn("acme-dms", said)
+        self.assertIn("acme-rooms", said)
+
+    def test_a_kind_of_place_whose_name_is_already_taken_adds_none_of_them(self):
+        """R-CAD-15 — every name is checked before any is written, so a second kind
+        colliding does not leave the first half-added under a command that then failed."""
+        drive(["channels", "ava", "add", "acme-rooms", "--kind", self._adapter(self.WORKS),
+               "--allow", "9999"], self._gateways(), agents=self.agents)
+        code, said = drive(["channels", "ava", "add", "acme",
+                            "--kind", self._adapter(self.TWO_PLACES), "--allow", "2207"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("EXISTS", said)
+        kept = json.loads((self.at / "ava" / "channels.json").read_text())
+        self.assertEqual(["acme-rooms"], sorted(kept), "half of them were written anyway")
+        self.assertEqual(["9999"], kept["acme-rooms"]["allow"],
+                         "who may use the one that was there was overwritten")
 
     def test_adding_a_channel_with_nobody_allowed_is_refused(self):
         """R-CAD-10 — refused by the grammar, like the time a schedule runs at: an agent
@@ -1830,14 +1876,14 @@ raise SystemExit(1)
         proving it all over again."""
         drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
                "--allow", "2207"], self._gateways(), agents=self.agents)
-        code, said = drive(["channels", "ava", "says", "ops",
+        code, said = drive(["channels", "ava", "instructions", "ops",
                             "You are in {where}. Others read this."],
                            self._gateways(), agents=self.agents)
         self.assertEqual(0, code)
-        self.assertIn("TOLD", said)
+        self.assertIn("INSTRUCTED", said)
         kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
-        self.assertEqual("You are in {where}. Others read this.", kept[channel.SAYS])
-        _, back = drive(["channels", "ava", "says", "ops"], self._gateways(),
+        self.assertEqual("You are in {where}. Others read this.", kept[channel.INSTRUCTIONS])
+        _, back = drive(["channels", "ava", "instructions", "ops"], self._gateways(),
                         agents=self.agents)
         self.assertIn("Others read this", back)
 
@@ -1847,13 +1893,13 @@ raise SystemExit(1)
         drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
                "--allow", "2207"], self._gateways(), agents=self.agents)
         for said in ("Public.", "Actually, be brief."):
-            drive(["channels", "ava", "says", "ops", said],
+            drive(["channels", "ava", "instructions", "ops", said],
                   self._gateways(), agents=self.agents)
         kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
-        self.assertEqual("Actually, be brief.", kept[channel.SAYS])
-        drive(["channels", "ava", "says", "ops", ""], self._gateways(), agents=self.agents)
+        self.assertEqual("Actually, be brief.", kept[channel.INSTRUCTIONS])
+        drive(["channels", "ava", "instructions", "ops", ""], self._gateways(), agents=self.agents)
         kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
-        self.assertNotIn(channel.SAYS, kept)
+        self.assertNotIn(channel.INSTRUCTIONS, kept)
 
     def test_a_name_that_cannot_be_filled_in_is_refused_before_it_is_written(self):
         """R-CH-22 — checked when it is written, which is the whole reason this is a
@@ -1861,18 +1907,18 @@ raise SystemExit(1)
         turn from then on and never say so."""
         drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
                "--allow", "2207"], self._gateways(), agents=self.agents)
-        code, said = drive(["channels", "ava", "says", "ops", "Hello {wheree}."],
+        code, said = drive(["channels", "ava", "instructions", "ops", "Hello {wheree}."],
                            self._gateways(), agents=self.agents)
         self.assertEqual(1, code)
         self.assertIn("NOT CHANGED", said)
         self.assertIn("wheree", said)
         kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
-        self.assertNotIn(channel.SAYS, kept)
+        self.assertNotIn(channel.INSTRUCTIONS, kept)
 
     def test_telling_a_channel_that_is_not_there_says_so(self):
         """R-CH-22 — told apart from a record that could not be written, because one is
         the owner's typo and the other is a disk to look at."""
-        code, said = drive(["channels", "ava", "says", "nowhere", "Hello."],
+        code, said = drive(["channels", "ava", "instructions", "nowhere", "Hello."],
                            self._gateways(), agents=self.agents)
         self.assertEqual(1, code)
         self.assertIn("NOT FOUND", said)

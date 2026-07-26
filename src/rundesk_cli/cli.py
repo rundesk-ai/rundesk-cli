@@ -368,7 +368,8 @@ def build_parser() -> argparse.ArgumentParser:
     # flags on `add`, because these are the part an owner rewrites — a wording that reads
     # well in a room is found by trying it, and finding it should not mean taking the
     # agent off the channel and proving it again.
-    telling = on.add_parser("says", help="what this agent is told about where it is")
+    telling = on.add_parser("instructions",
+                            help="what this agent is told about where it is")
     telling.add_argument("channel", metavar="<channel>",
                          help="which channel, by the name it was added under")
     # One piece of text, because a channel is already one place. An owner who wants an
@@ -1339,8 +1340,8 @@ def cmd_channels(args: argparse.Namespace, gateways, agents) -> int:
         return _remove_channel(args, gateways, agents, whose)
     if act == "show":
         return _show_channel(args, gateways, agents, whose)
-    if act == "says":
-        return _channel_says(args, gateways, agents, whose)
+    if act == "instructions":
+        return _channel_instructions(args, gateways, agents, whose)
     return _list_channels(args, gateways, agents, whose)
 
 
@@ -1367,10 +1368,7 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     except channel.NotRunnable as why:
         print(f"{args.name}/{args.channel}: NOT ADDED — {why}", file=sys.stderr)
         return 1
-    if channel.of(whose, args.channel) is not None:
-        print(f"{args.name}/{args.channel}: EXISTS — remove it first, or use a different name",
-              file=sys.stderr)
-        return 1
+
     home = agents.channel_home(args.name, args.channel)
     home.mkdir(parents=True, exist_ok=True)
     # What follows `--` is taken off before the parser sees it, for the same reason a
@@ -1386,16 +1384,47 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         print(f"{args.name}/{args.channel}: NOT ADDED — {said['why'] or 'it could not be reached'}",
               file=sys.stderr)
         return 1
-    if not channel.remember(whose, args.channel, args.kind, args.allow,
-                            settings=said["settings"], secret=said["secret"],
-                            describes=said["describes"]):
-        print(f"{args.name}/{args.channel}: NOT ADDED — the record could not be written",
-              file=sys.stderr)
-        return 1
-    unlogged = _note(gateways, args.name,
-                     f"channel '{args.channel}' added ({args.kind})",
-                     agents.resolved(args.name))
-    print(f"{args.name}/{args.channel}: ADDED — {said['describes'] or args.kind}")
+    # **What one `add` makes is the adapter's to say** (R-CAD-15). A platform is rarely
+    # one place — Discord has private messages and rooms full of people, and they are not
+    # the same thing to talk in — so an adapter reports the kinds of place its options
+    # actually reached and each becomes a channel of its own. One that reports none gets
+    # exactly one channel, under the name that was typed, as every adapter did before.
+    making = said[channel.SHAPES] or [{
+        channel.SHAPE_AT: "", "settings": said["settings"],
+        "describes": said["describes"], channel.FILLS: [], channel.INSTRUCTIONS: ""}]
+    named = []
+    for shape in making:
+        one = args.channel + (f"-{shape[channel.SHAPE_AT]}" if shape[channel.SHAPE_AT] else "")
+        try:
+            gateways.checked(one)
+        except gateways.NotAName as why:
+            print(f"{args.name}/{one}: NOT ADDED — {why}", file=sys.stderr)
+            return 1
+        if channel.of(whose, one) is not None:
+            # Checked for every one of them *before* any is written, so a second shape
+            # colliding does not leave the first half-added.
+            print(f"{args.name}/{one}: EXISTS — remove it first, or use a different name",
+                  file=sys.stderr)
+            return 1
+        named.append((one, shape))
+    unlogged = 0
+    for one, shape in named:
+        if not channel.remember(whose, one, args.kind, args.allow,
+                                settings=shape["settings"], secret=said["secret"],
+                                describes=shape["describes"], says=shape[channel.INSTRUCTIONS],
+                                fills=shape[channel.FILLS]):
+            print(f"{args.name}/{one}: NOT ADDED — the record could not be written",
+                  file=sys.stderr)
+            return 1
+        unlogged |= _note(gateways, args.name, f"channel '{one}' added ({args.kind})",
+                          agents.resolved(args.name))
+        print(f"{args.name}/{one}: ADDED — {shape['describes'] or args.kind}")
+    if len(named) > 1:
+        # Said out loud, because they were made together and share the one allow-list that
+        # was typed — and the whole reason they are separate channels is that a room and a
+        # private conversation usually should not.
+        print(f"        {len(named)} channels, one for each kind of place — "
+              f"each has its own allowed list and its own instructions")
     if not gateways.standing(args.name, agents.resolved(args.name).run).running:
         # An agent that is not running is not reachable, and saying so here is the
         # difference between a channel that is quiet and one that is deaf (R-CAD-8).
@@ -1414,7 +1443,7 @@ def _remove_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     return unlogged
 
 
-def _channel_says(args: argparse.Namespace, gateways, agents, whose) -> int:
+def _channel_instructions(args: argparse.Namespace, gateways, agents, whose) -> int:
     """What this agent is told about the situation it is answering in (R-CH-22).
 
     Checked before it is written, and that is the point of writing it here rather than by
@@ -1429,16 +1458,16 @@ def _channel_says(args: argparse.Namespace, gateways, agents, whose) -> int:
               file=sys.stderr)
         return 1
     if args.said is None:
-        standing = it.get(channel.SAYS)
+        standing = it.get(channel.INSTRUCTIONS)
         if not standing:
-            print(f"{args.name}/{args.channel}: SAYS NOTHING — rundesk says where it is "
-                  f"and no more")
-            print(f"        write your own:  rundesk channels {args.name} says "
+            print(f"{args.name}/{args.channel}: NO INSTRUCTIONS — rundesk says where it "
+                  f"is and no more")
+            print(f"        write your own:  rundesk channels {args.name} instructions "
                   f"{args.channel} \"<text>\"")
             return 0
         print(standing)
         return 0
-    wrong = channel.wrong_with_says(args.said) if args.said else ""
+    wrong = channel.wrong_with_instructions(args.said, it.get(channel.FILLS)) if args.said else ""
     if wrong:
         print(f"{args.name}/{args.channel}: NOT CHANGED — {wrong}", file=sys.stderr)
         return 1
@@ -1452,10 +1481,11 @@ def _channel_says(args: argparse.Namespace, gateways, agents, whose) -> int:
               file=sys.stderr)
         return 1
     unlogged = _note(gateways, args.name,
-                     f"channel '{args.channel}' was told what to say"
-                     if args.said else f"channel '{args.channel}' was told nothing",
+                     f"channel '{args.channel}' was given instructions"
+                     if args.said else f"channel '{args.channel}' had its instructions taken off",
                      agents.resolved(args.name))
-    print(f"{args.name}/{args.channel}: " + ("TOLD" if args.said else "TOLD NOTHING"))
+    print(f"{args.name}/{args.channel}: "
+          + ("INSTRUCTED" if args.said else "INSTRUCTIONS TAKEN OFF"))
     # **New conversations, not the next turn.** A brain is told this where its conversation
     # is *opened*, which is the only place a brain of this shape reads it — measured against
     # a real one, where the same instruction was obeyed at the start of a thread and ignored
@@ -1491,7 +1521,7 @@ def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
             f"{one} — {'present' if os.environ.get(one) else 'not set'}" for one in named)
             or "none needed"),
         ("added", str(it.get("added") or "-")),
-        ("says", str(it.get(channel.SAYS)
+        ("instructions", str(it.get(channel.INSTRUCTIONS)
                      or "nothing of its own — rundesk says where it is")),
         ("reachable", "yes" if gateways.standing(
             args.name, agents.resolved(args.name).run).running

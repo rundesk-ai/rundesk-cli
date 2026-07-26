@@ -35,6 +35,7 @@ is the first one and is first-class; a second is one more program rather than a 
 | ✅ | R-CAD-12 | What shows a channel says a credential is present rather than what it is | `what is kept is the name of a credential and never one`, `a credential is named as present rather than shown`, `no option takes a secret as a value` |
 | ✅ | R-CAD-13 | No word belonging to one platform appears outside the adapter that speaks it | `an adapter is told which channel and whose it is`, `what a platform needs is handed back unread`, `what the owner typed reaches the adapter exactly as typed`, `what a platform needs is never read by the command`, `a platforms options survive looking like rundesks own` |
 | ✅ | R-CAD-14 | An adapter decides the shape of what Rundesk keeps for it, and Rundesk reads none of it | `an adapter decides the shape of what is kept for it`, `what an adapter keeps for itself is its own business`, `a platforms own words are kept exactly as it gave them` |
+| ✅ | R-CAD-15 | An adapter says which kinds of place it reached, and each becomes a channel of its own | `a surface reports the kinds of place it comes in`, `a surface that reports no kinds of place is a whole adapter`, `a kind of place that could not be a channel is dropped`, `a starting wording that names something unfillable is not kept`, `one add makes a channel for each kind of place`, `a kind of place whose name is already taken adds none of them` |
 
 ## Open questions
 

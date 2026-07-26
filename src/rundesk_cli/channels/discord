@@ -65,6 +65,35 @@ TOKEN_FROM = "DISCORD_TOKEN"
 #: what rundesk keeps is still only the *name* of where to look.
 TOKEN_FILE = "token"
 
+#: The kinds of place Discord is, each of which becomes a channel of its own (R-CAD-15). A
+#: private message and a room full of people are not the same thing to talk in, and a
+#: channel carries who may reach the agent through it — so an owner pointed at both gets an
+#: allowed list and a set of instructions for each.
+DMS, ROOMS = "dms", "rooms"
+
+#: What an agent is told about each, to start from. **A starting point and not a rule**: it
+#: is written into the channel record where an owner can read it and rewrite it, with
+#: `rundesk channels <agent> instructions <channel>`. Written here rather than in the core because
+#: what is true about a Discord room is a Discord-shaped fact, and the core does not know
+#: this platform has rooms.
+INSTRUCTIONS = {
+    DMS: """
+You are {agent}, reached over {kind} in a private conversation with {called}.
+Nobody else can read it, so answer directly and at whatever length the question needs.
+""",
+    ROOMS: """
+You are {agent}, reached over {kind} in {where.channel} on the {where.server} server,
+and {called} is asking. Anyone in that room can read what you write. Keep replies short
+enough to read on a phone, and never paste a credential, a private path, or anything
+said to you in confidence somewhere else.
+""",
+}
+
+#: The pieces of a place, which an owner writes as `{where.channel}` and `{where.server}`.
+#: Declared here so a misspelt one is refused when it is written; `where` on its own is
+#: still the whole phrase, for anyone who wants it in one go.
+FILLS = {DMS: (), ROOMS: ("channel", "server", "thread")}
+
 #: Discord caps a message at two thousand characters. Left short of it on purpose: a
 #: reply is split at a line break where there is one, and the room to do that has to come
 #: from somewhere (R-DIS-13).
@@ -264,12 +293,18 @@ def within(direct: bool, belongs_to, listens_in, dms: bool, a_server=None) -> bo
     owner confining an agent to one channel means the conversations under it too, and a
     thread is where those conversations happen.
 
-    **Naming nowhere means anywhere it has been invited**, and that is deliberate. It
-    was briefly the other way — a channel that named only direct messages refused to
-    answer in a server — on the reasoning that an agent should not speak somewhere its
-    owner had not named. That reasoning was wrong: who may be answered is already
-    decided, by name, before a single word reaches a brain. Refusing a mention from the
-    one person allowed to make it protects nobody and only makes them say where twice.
+    **A channel that named only direct messages takes only direct messages** (R-CAD-15).
+    This went back and forth, and the reason it settled here is that the ground moved
+    under it. It was briefly the other way, then briefly this way, then back: while one
+    `add` made one channel, a channel pointed at direct messages was the *only* channel,
+    and refusing a mention from the one person allowed to make it protected nobody and
+    only made them say where twice.
+
+    Now one `add` makes one channel per kind of place, so the direct-message channel is no
+    longer the only one — the room has a channel of its own, with its own allowed list.
+    Left as it was, both would match a message in a room and the agent would answer it
+    twice, from two processes, neither aware of the other. Measured, not feared: with
+    `--dm` and `--channel` both given, `within` returned true for the same message on both.
 
     What naming a place *does* mean is narrowing: `--server` confines to that server and
     `--channel` to that channel, for an owner who wants an agent in one room and not the
@@ -277,9 +312,11 @@ def within(direct: bool, belongs_to, listens_in, dms: bool, a_server=None) -> bo
     """
     if direct:
         return bool(dms)
-    if not listens_in:
-        return True          # anywhere it has been invited, or the one server it named
-    return str(belongs_to) == str(listens_in)
+    if listens_in:
+        return str(belongs_to) == str(listens_in)
+    # It named a place, because `--check` refuses a channel that named none — so having
+    # named no room, it named direct messages, and this is not one.
+    return not dms
 
 
 class Live:
@@ -447,7 +484,8 @@ class Agent(discord.Client):
             self.seen.pop(next(iter(self.seen)))
         say(type="arrived", conversation=str(conversation), user=str(message.author.id),
             text=text, ref=str(message.id), direct=direct, attachments=brought,
-            where=_place(message, direct, in_thread), called=_who(message))
+            where=_place(message, direct, in_thread), called=_who(message),
+            parts=_parts(message, direct, in_thread))
 
     async def _fetch(self, message: discord.Message) -> list:
         """Put whatever somebody attached where the agent can read it (R-CH-17).
@@ -777,6 +815,28 @@ def _place(message, direct: bool, in_thread: bool) -> str:
     return f"{said} on the {server} server" if server else said
 
 
+def _parts(message, direct: bool, in_thread: bool) -> dict:
+    """The place, in pieces, so an owner can name one without dragging the rest along.
+
+    `where` is a phrase this file composed, and a phrase is all it could ever be used as —
+    there was no way to say "you are in #ops" without also saying which server. These are
+    the same facts, separately, and the names are declared by `--check` so one written
+    wrongly is refused rather than left quietly blank.
+    """
+    if direct:
+        return {}
+    where = message.channel
+    under = getattr(where, "parent", None) if in_thread else None
+    named = getattr(under or where, "name", None)
+    return {what: value for what, value in (
+        # With the hash, because that is how Discord writes a channel and how anyone
+        # reading the agent's reply would expect to see it named.
+        ("channel", f"#{named}" if named else None),
+        ("server", getattr(getattr(message, "guild", None), "name", None)),
+        ("thread", getattr(where, "name", None) if in_thread else None),
+    ) if value}
+
+
 def _who(message) -> str:
     """What Discord shows for the person who spoke, rather than their number."""
     author = message.author
@@ -874,31 +934,54 @@ async def check(chose) -> int:
         say(ok=False, why=f"this channel does not understand {' '.join(chose.unknown)}")
         return 1
     client = Agent(chose)
-    describes = None
+    shapes = []
     try:
         await client.login(token)
+        # **Discord is two places, so it is two channels.** A private message and a room
+        # full of people are not the same thing to talk in, and a channel carries who may
+        # reach the agent through it — so an owner who pointed this at both gets one of
+        # each, with an allowed list and a set of instructions for each. Checked
+        # separately too: being able to see a room proves nothing about direct messages.
         if chose.dm:
             me = await client.application_info()
-            describes = f"direct messages to {me.name}"
-        else:
+            shapes.append(_shape(chose, DMS, f"direct messages to {me.name}", dm=True))
+        if chose.channel:
             found = await client.fetch_channel(int(chose.channel))
             guild = getattr(found, "guild", None)
             if chose.server and guild is not None and str(guild.id) != str(chose.server):
                 say(ok=False, why=f"channel {chose.channel} is not in server {chose.server}")
                 return 1
-            describes = f"#{found.name}" + (f" in {guild.name}" if guild is not None else "")
+            where = f"#{found.name}" + (f" in {guild.name}" if guild is not None else "")
+            shapes.append(_shape(chose, ROOMS, where, channel=str(chose.channel),
+                                 server=chose.server))
     except Exception as why:  # noqa: BLE001 — a platform boundary, and the diagnosis
         say(ok=False, why=f"could not reach Discord: {why}")
         return 1
     finally:
         with contextlib.suppress(Exception):
             await client.close()
-    say(ok=True, describes=describes, secret={"env": chose.token_from},
+    say(ok=True, secret={"env": chose.token_from}, shapes=shapes,
+        describes=" and ".join(one["describes"] for one in shapes),
+        # What one channel would have been given, for anything that reads the old shape.
         settings={what: value for what, value in (
             ("bot", chose.bot), ("server", chose.server), ("channel", chose.channel),
             ("dm", chose.dm), ("token_from", chose.token_from),
             ("activity", chose.activity)) if value})
     return 0
+
+
+def _shape(chose, suffix: str, describes: str, **where) -> dict:
+    """One kind of place this bot was pointed at, as its own channel.
+
+    The settings are narrowed to that place and nothing else: the direct-message channel
+    is told nothing about a room, so it cannot drift into answering in one, and neither
+    can be widened by editing the other.
+    """
+    settings = {what: value for what, value in (
+        ("bot", chose.bot), ("token_from", chose.token_from),
+        ("activity", chose.activity), *where.items()) if value}
+    return {"suffix": suffix, "describes": describes, "settings": settings,
+            "fills": list(FILLS[suffix]), "instructions": INSTRUCTIONS[suffix].strip()}
 
 
 async def carry(chose) -> int:

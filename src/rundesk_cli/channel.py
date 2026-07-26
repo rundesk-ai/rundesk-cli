@@ -88,17 +88,46 @@ WHERE, CALLED = "where", "called"
 #: the people who may speak to it in private. With one channel per surface there is no
 #: branch left to write, and nothing here has to explain, get right, and keep right the
 #: rules for composing one.
-SAYS = "says"
+INSTRUCTIONS = "instructions"
 
 #: What an owner may write `{like this}` and have filled in. Closed, because a name that is
 #: not here is a typo, and a typo that silently becomes empty is an instruction that quietly
 #: stopped saying what it said. Refused when it is written, not when a turn runs.
-FILLED = ("agent", "channel", "surface", "where", "called", "user", "conversation")
+FILLED = ("agent", "kind", "channel", "where", "called", "user", "conversation")
+
+#: The pieces `where` was made of, each written `{where.channel}`. `where` on its own is the
+#: whole phrase the surface would show a person — "#ops on the Acme server" — and a phrase
+#: is all an owner could use it as: there was no way to name the room without dragging the
+#: server along with it.
+#:
+#: **Which pieces exist is the adapter's to say, never this file's.** They are declared by
+#: `--check` and kept in the channel's record, so a misspelt one is still refused the moment
+#: it is written — the core never learns that Discord has servers, and a surface with a
+#: different shape of place declares a different shape of parts.
+PARTS = "parts"
+WHERE_IN = "where."
+FILLS = "fills"
+
+#: The kinds of place a surface comes in, as the adapter itself names them (R-CAD-15).
+#: A platform is rarely one place: Discord has private messages and rooms full of people,
+#: and they are not the same thing to talk in. **Each is its own channel**, because a
+#: channel carries who may reach the agent through it — and the people who may speak to an
+#: agent in a public room are not the people who may speak to it in private.
+#:
+#: Reported by `--check`, so the core never learns what kinds of place any platform has. An
+#: adapter that reports none is a whole adapter and gets exactly one channel, which is what
+#: every adapter did before this existed.
+SHAPES = "shapes"
+SHAPE_AT = "suffix"
+
+#: How many one `add` may make. A bound rather than a belief: an adapter that reported a
+#: thousand shapes would otherwise write a thousand records under one command.
+SHAPES_MOST = 8
 
 #: How much of a preface is carried. Standing instructions are the owner's own words and
 #: nobody is trying to defend against them — but a turn whose preface is longer than the
 #: conversation is one nobody meant to write, and a record is not somewhere to put a book.
-SAYS_MOST = 4000
+INSTRUCTIONS_MOST = 4000
 
 #: How much of either is carried. These are a stranger's words on their way into a prompt,
 #: so they are clipped and flattened to one line — a display name is a place somebody can
@@ -373,21 +402,22 @@ def surface(kind: str) -> str:
 def preface(record: dict, agent: str, name: str, it: dict) -> str:
     """What this agent is told about its situation, for this arrival (R-CH-22).
 
-    One piece of text, because a channel is already one place — see `SAYS`. An owner who
+    One piece of text, because a channel is already one place — see `INSTRUCTIONS`. An owner who
     has written nothing gets the sentence rundesk would have said anyway, which is the only
     default worth having: something that says where it is beats something that says
     nothing, and an owner who disagrees says so by writing their own.
     """
-    said = record.get(SAYS)
+    said = record.get(INSTRUCTIONS)
     said = said.strip() if isinstance(said, str) else ""
     if not said:
         said = _by_default(record, it)
     filling = {
-        "agent": agent, "channel": name, "surface": surface(record.get("kind")),
+        "agent": agent, "channel": name, "kind": surface(record.get("kind")),
         "where": plainly(it.get(WHERE)), "called": plainly(it.get(CALLED)),
         "user": str(it.get("user") or ""), "conversation": str(it.get("conversation") or ""),
+        **parts_of(it),
     }
-    return _fill(said, filling)[:SAYS_MOST]
+    return _fill(said, filling)[:INSTRUCTIONS_MOST]
 
 
 def _by_default(record: dict, it: dict) -> str:
@@ -418,13 +448,27 @@ def _fill(said: str, filling: dict) -> str:
     recognise, and raise in the middle of a turn. What is here is filled in; anything else
     is characters, and stays characters.
     """
-    for name in FILLED:
+    for name, value in filling.items():
         if "{" + name + "}" in said:
-            said = said.replace("{" + name + "}", filling.get(name, ""))
+            said = said.replace("{" + name + "}", value)
     return said
 
 
-def wrong_with_says(said) -> str:
+def parts_of(it: dict) -> dict:
+    """The pieces of `where`, as the surface reported them, safe to put in a sentence.
+
+    Same treatment as everything else that came off a platform: one line each and bounded,
+    because a room's name is whoever-named-it's text and it is on its way into a prompt.
+    """
+    said = it.get(PARTS)
+    if not isinstance(said, dict):
+        return {}
+    return {WHERE_IN + str(one): plainly(value)
+            for one, value in list(said.items())[:SHAPES_MOST]
+            if re.fullmatch(r"[a-z][a-z0-9_]{0,23}", str(one))}
+
+
+def wrong_with_instructions(said, fills=()) -> str:
     """Why these standing instructions cannot be stored, or empty if they can (R-CH-22).
 
     Said when an owner writes them, never when a turn runs. A name misspelled here is an
@@ -434,12 +478,16 @@ def wrong_with_says(said) -> str:
     """
     if not isinstance(said, str):
         return "what an agent is told has to be written as words"
-    if len(said) > SAYS_MOST:
-        return f"what an agent is told is longer than {SAYS_MOST} characters"
-    for found in re.findall(r"\{([a-z_]+)\}", said):
-        if found not in FILLED:
+    if len(said) > INSTRUCTIONS_MOST:
+        return f"what an agent is told is longer than {INSTRUCTIONS_MOST} characters"
+    # What the surface itself supplies, as the adapter declared it when the channel was
+    # added. The core never learns that any platform has servers or workspaces; it only
+    # holds an adapter to what it said it would fill in.
+    known = list(FILLED) + [WHERE_IN + one for one in fills or ()]
+    for found in re.findall(r"\{([a-z_][a-z0-9_.]*)\}", said):
+        if found not in known:
             return (f"there is nothing called '{found}' to fill in — there is "
-                    + ", ".join(FILLED))
+                    + ", ".join(known))
     return ""
 
 
@@ -483,7 +531,50 @@ def answered(said: object) -> dict:
         "secret": named(secret),
         "describes": given.get("describes") if isinstance(given.get("describes"), str) else None,
         "why": given.get("why") if isinstance(given.get("why"), str) else None,
+        SHAPES: shaped(given.get(SHAPES)),
     }
+
+
+def shaped(said) -> list:
+    """The kinds of place this surface comes in, as things that can be written down.
+
+    Read from whatever came back rather than trusted, like everything else here. A shape
+    that does not name itself, or names itself something that could not be a channel, is
+    dropped rather than repaired — a record written under a name nobody can type again is
+    worse than one that was never written.
+
+    An adapter reporting none is not a failure. It gets one channel, under the name the
+    owner typed, exactly as every adapter did before this existed.
+    """
+    if not isinstance(said, list):
+        return []
+    shapes, seen = [], set()
+    for one in said[:SHAPES_MOST]:
+        if not isinstance(one, dict):
+            continue
+        at = one.get(SHAPE_AT)
+        if not isinstance(at, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,23}", at):
+            continue
+        if at in seen:
+            # Two shapes of one name are one channel written twice, and the second would
+            # silently replace the first — including who it said was allowed.
+            continue
+        seen.add(at)
+        settings = one.get("settings")
+        # What this shape of place promises to supply, so a `{where.something}` an owner
+        # writes can be refused when they write it rather than going quietly blank at
+        # every turn after.
+        fills = [str(name) for name in (one.get(FILLS) or [])
+                 if re.fullmatch(r"[a-z][a-z0-9_]{0,23}", str(name))][:SHAPES_MOST]
+        shapes.append({
+            SHAPE_AT: at,
+            "settings": settings if isinstance(settings, dict) else {},
+            "describes": one["describes"] if isinstance(one.get("describes"), str) else None,
+            FILLS: fills,
+            INSTRUCTIONS: one[INSTRUCTIONS] if isinstance(one.get(INSTRUCTIONS), str) and not wrong_with_instructions(
+                one.get(INSTRUCTIONS), fills) else "",
+        })
+    return shapes
 
 
 async def checked(at: Path, options, env: dict[str, str] | None = None) -> dict:
@@ -561,7 +652,7 @@ def of(directory: Path, name: str) -> dict | None:
 
 
 def remember(directory: Path, name: str, kind: str, allow, settings=None,
-             secret=None, describes=None, now=None) -> bool:
+             secret=None, describes=None, says=None, fills=None, now=None) -> bool:
     """Write down a channel that has already proved it works (R-CAD-9).
 
     Read, decided and written under one hold, because two channels being added together
@@ -590,6 +681,15 @@ def remember(directory: Path, name: str, kind: str, allow, settings=None,
                 "describes": describes,
                 "added": (now or _stamped)(),
             }
+            if fills:
+                # What this surface said it can fill in, kept so a `{where.something}` an
+                # owner writes later is checked against what will actually be there.
+                kept[name][FILLS] = list(fills)
+            if says:
+                # What the adapter said this kind of place is like, so an owner starts
+                # from something that reads well rather than from a blank line — and
+                # rewrites it the moment they disagree.
+                kept[name][INSTRUCTIONS] = says
     except (gateway.Unreadable, OSError):
         return False
     return True
@@ -613,9 +713,9 @@ def tell(directory: Path, name: str, said: str) -> bool | None:
             if it is None:
                 return None
             if said.strip():
-                it[SAYS] = said.strip()
+                it[INSTRUCTIONS] = said.strip()
             else:
-                it.pop(SAYS, None)
+                it.pop(INSTRUCTIONS, None)
             kept[name] = it
     except (gateway.Unreadable, OSError):
         return False

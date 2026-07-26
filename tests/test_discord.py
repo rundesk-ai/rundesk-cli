@@ -106,13 +106,15 @@ class WhereItListens(unittest.TestCase):
         self.assertTrue(discord.within(False, belongs_to="9999", listens_in=None,
                                        dms=False, a_server="9930"))
 
-    def test_an_agent_that_named_nowhere_answers_anywhere_it_was_invited(self):
-        """R-DIS-2 — who may be answered is already decided, by name, before a word
-        reaches a brain. Refusing a mention from the one person allowed to make it
-        protects nobody and only makes them say where twice."""
-        self.assertTrue(discord.within(False, belongs_to="9999", listens_in=None,
-                                       dms=True, a_server=None),
-                        "it refused a mention nobody had told it to refuse")
+    def test_an_agent_pointed_at_direct_messages_answers_only_those(self):
+        """R-DIS-2, R-CAD-15 — this was the other way while one `add` made one channel:
+        a channel pointed at direct messages was then the *only* channel, and refusing a
+        mention from the one person allowed to make it protected nobody. Now one `add`
+        makes one channel per kind of place, the room has a channel of its own, and both
+        matching means the agent answers the same message twice from two processes."""
+        self.assertFalse(discord.within(False, belongs_to="9999", listens_in=None,
+                                        dms=True, a_server=None),
+                         "the direct-message channel also took a message in a room")
         self.assertTrue(discord.within(True, belongs_to=None, listens_in=None,
                                        dms=True, a_server=None))
 
@@ -176,6 +178,32 @@ class WhatAThreadIsCalled(unittest.TestCase):
     def test_a_question_with_nothing_in_it_still_gets_a_name(self):
         """A thread with no name is one Discord refuses outright."""
         self.assertTrue(discord.thread_name("   \n  "))
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class WhichChannelTakesAMessage(unittest.TestCase):
+    """R-CAD-15 — one `add` makes one channel per kind of place, so exactly one of them
+    may take any given message."""
+
+    def test_one_message_in_a_room_is_taken_by_exactly_one_channel(self):
+        """Both took it, so the agent answered twice from two processes, neither aware of
+        the other. The direct-message channel used to answer anywhere it was invited,
+        which was right while it was the only channel there was."""
+        for_dms = discord.within(direct=False, belongs_to=1180, listens_in=None, dms=True)
+        for_rooms = discord.within(direct=False, belongs_to=1180, listens_in=1180, dms=False)
+        self.assertEqual([False, True], [for_dms, for_rooms])
+
+    def test_a_direct_message_is_taken_by_the_direct_message_channel_only(self):
+        self.assertTrue(discord.within(direct=True, belongs_to=None, listens_in=None,
+                                       dms=True))
+        self.assertFalse(discord.within(direct=True, belongs_to=None, listens_in=1180,
+                                        dms=False))
+
+    def test_a_room_channel_still_answers_only_in_the_room_it_names(self):
+        """R-DIS-2 — narrowing is what naming a place means, and a thread is asked about
+        by the channel it was opened in."""
+        self.assertFalse(discord.within(direct=False, belongs_to=9999, listens_in=1180,
+                                        dms=False))
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")

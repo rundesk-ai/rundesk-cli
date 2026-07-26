@@ -111,7 +111,7 @@ That is the whole of what you say. Four kinds of record, and only `arrived` real
 | | must have | may have |
 |---|---|---|
 | `ready` | | |
-| `arrived` | `conversation`, `user` | `text` · `ref` · `direct` · `attachments` · `where` · `called` |
+| `arrived` | `conversation`, `user` | `text` · `ref` · `direct` · `attachments` · `where` · `called` · `parts` |
 | `control` | `conversation`, `user`, `control` | `ref` |
 | `gone` | | `why` |
 
@@ -139,18 +139,53 @@ something this vocabulary has no word for yet, and its identifier is not a trans
 of that. A `did` you do not recognise cannot happen today
 and would mean this list had grown, so treat it the way you treat an absent one.
 
-**One channel is one place, so scope yourself and say so.** An owner names a channel and
-points it at somewhere: your `--check` decides what "somewhere" means on your platform and
-reports it in `describes`. Two kinds of place — private messages and rooms full of people —
-are **two channels**, not one channel that branches. That is not a style preference: a
-channel carries the list of who may reach the agent through it, and the people who may
-speak to an agent in a public room are not the people who may speak to it in private. One
-channel spanning both means one allow-list spanning both.
+**One channel is one place, and one `add` may make several.** Two kinds of place — private
+messages and rooms full of people — are **two channels**, not one channel that branches.
+That is not a style preference: a channel carries the list of who may reach the agent
+through it, and the people who may speak to an agent in a public room are not the people
+who may speak to it in private. One channel spanning both means one allow-list spanning
+both.
+
+So your `--check` reports the kinds of place the options it was given actually reached, and
+rundesk writes one channel for each:
+
+```json
+{"ok": true, "secret": {"env": "MY_TOKEN"},
+ "shapes": [
+   {"suffix": "dms",   "describes": "direct messages to acme-bot",
+    "settings": {"dm": true},
+    "fills": [],
+    "instructions": "You are {agent}, in a private conversation with {called}."},
+   {"suffix": "rooms", "describes": "#ops in Acme",
+    "settings": {"room": "1180"},
+    "fills": ["channel", "server"],
+    "instructions": "You are {agent} in {where.channel} on the {where.server} server. Others read this."}
+ ]}
+```
+
+An owner who typed `channels ava add acme …` gets `acme-dms` and `acme-rooms`. **Reporting
+no shapes at all is a whole adapter** — it gets exactly one channel, under the name that was
+typed, which is what every adapter did before this existed.
+
+Three things belong to a shape and not to the whole:
+
+- **`settings`** — narrowed to that place and nothing else, so the direct-message channel
+  is told nothing about a room and cannot drift into answering in one.
+- **`instructions`** — what the agent is told about that kind of place, to start from. **A starting
+  point, never a rule**: it is written into the record where an owner reads it and rewrites
+  it. Write it as if you were explaining the room to somebody who has never seen your
+  platform.
+- **`fills`** — the pieces of a place you promise to supply, which an owner writes as
+  `{where.channel}`. Declare them and they are checked when an owner writes them; leave them
+  out and `{where}` on its own is all anybody can use.
 
 **Say where it was said, and who said it — in the words your surface shows.** `where` is
 what a person reading your platform would call the place (`#ops on the Rundesk server`, `a
 direct message`, `the thread 'what changed today?' under #ops`), and `called` is the name
-your platform shows for the person, not their identifier. Both are optional and separately
+your platform shows for the person, not their identifier. `parts` is that same place broken
+up — `{"channel": "#ops", "server": "Acme"}` — under the names you declared in `fills`, so
+an owner can say "you are in {where.channel}" without dragging the server along with it. A
+phrase is all `where` can ever be; the parts are what makes it writable. Both are optional and separately
 so; say neither and everything works exactly as before.
 
 Say them anyway. Without them a brain is handed the words and nothing else, so it answers a

@@ -127,17 +127,42 @@ that platform needs goes after `--` and is carried to it unread.
 
 ```sh
 rundesk channels <agent>                                        # what it is reachable on
-rundesk channels <agent> add ops --kind discord --allow <user> \
-    -- --bot <id> --server <id> --channel <id>                  # put it on one
-rundesk channels <agent> show ops                               # what it is, and who may use it
-rundesk channels <agent> remove ops                             # take it off
+rundesk channels <agent> add acme --kind discord --allow <user> \
+    -- --bot <id> --server <id> --channel <id> --dm             # put it on one
+rundesk channels <agent> show acme-rooms                        # what it is, and who may use it
+rundesk channels <agent> instructions acme-rooms "<text>"       # what it is told about where it is
+rundesk channels <agent> remove acme-rooms                      # take it off
 ```
 
 ```
-CHANNEL  KIND     POINTS AT            ALLOWED  REACHABLE
-ops      discord  #operations in Acme  1        yes
-dms      discord  a direct message     1        yes
+CHANNEL     KIND     POINTS AT            ALLOWED  REACHABLE
+acme-dms    discord  direct messages      1        yes
+acme-rooms  discord  #operations in Acme  1        yes
 ```
+
+- **A platform is rarely one place, so one `add` can make several.** Discord has private
+  messages and rooms full of people; pointed at both, the command above writes `acme-dms`
+  and `acme-rooms`. The adapter decides what kinds of place it has — rundesk has no list.
+  **The point is that each carries its own allowed list**: the people who may speak to an
+  agent in a public room are not the people who may speak to it in private.
+- **Each is told where it is, and you write that.** An agent handed only the words answers
+  a room of forty people in the voice it uses for a direct message. Each channel starts
+  with something the adapter wrote for that kind of place, and you rewrite it:
+
+  ```sh
+  rundesk channels ava instructions acme-rooms \
+      "You are {agent} in {where.channel} on the {where.server} server, and {called} is
+       asking. Anyone there can read what you write, so keep it short."
+  ```
+
+  `{agent}` `{kind}` `{channel}` `{where}` `{called}` `{user}` `{conversation}` are always
+  there; `{where.…}` is whatever that adapter said it supplies. A name that is not one of
+  them is refused when you write it, rather than going quietly blank at every turn after.
+  With nothing written, rundesk says where the agent is and no more.
+- **It reaches the brain apart from the prompt**, so a brain can tell your standing
+  instructions from what somebody typed — through whatever its own adapter has for adding
+  to its instructions, and never through anything that replaces them. It is read where a
+  conversation is opened, so rewording reaches new conversations rather than open ones.
 
 - **Adding one proves it works.** It connects, signs in and checks it can see what it was
   pointed at. If it cannot, nothing is written down and the reason is said — a channel
