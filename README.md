@@ -64,9 +64,19 @@ rundesk channels ava add discord --kind discord --allow <your-id>  # and message
 curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash
 ```
 
-Everything lands in **`~/.rundesk`** — one directory under your home. Your shell profile is left
-alone; if the command isn't on your `PATH`, the installer shows you the line to add rather than
-editing a file you own.
+Everything lands in **`~/.rundesk`** — one directory under your home, with the program in
+`app/` and everything you make beside it:
+
+```text
+~/.rundesk/
+  app/          rundesk itself — what an update replaces and an uninstall removes, whole
+  agents/       your agents: what each is, what it knows, and everything it has done
+```
+
+That split is the point: removing rundesk takes `app/` and is structurally incapable of
+reaching the rest, rather than remembering a list of things to spare. Your shell profile is
+left alone too; if the command isn't on your `PATH`, the installer shows you the line to add
+rather than editing a file you own.
 
 ### Make an agent
 

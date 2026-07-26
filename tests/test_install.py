@@ -654,8 +654,13 @@ class WhatItWillNotDeleteTests(Sandbox):
                          "the installer replaced a command it did not place")
 
 
-class ReleaseLookupTests(Sandbox):
-    """A remote install changes nothing until it knows which release it is installing."""
+class FakesTheFetch:
+    """A download that answers from this machine, for the cases that drive the whole path.
+
+    A mixin rather than a base case, so the classes that use it do not re-run each other's cases
+    — and so the fake lives once. Nothing in this suite reaches the network (AGENTS.md), and for
+    a shell script PATH is the seam a network call is passed through.
+    """
 
     def fake_curl(self) -> Path:
         """A curl whose release reply and archive are local, with every request recorded."""
@@ -728,6 +733,10 @@ class ReleaseLookupTests(Sandbox):
         )
         return done, marker, command, requests.read_text().splitlines()
 
+
+class ReleaseLookupTests(FakesTheFetch, Sandbox):
+    """A remote install changes nothing until it knows which release it is installing."""
+
     def test_release_lookup_failures_leave_the_existing_install_alone(self):
         """R-INS-15 — uncertainty is not permission to install unreleased work."""
         tarball = self.release_archive()
@@ -758,6 +767,66 @@ class ReleaseLookupTests(Sandbox):
             requests[-1],
         )
         self.assertFalse(any("refs/heads/main" in request for request in requests))
+
+
+class WhereADownloadedProgramLands(FakesTheFetch, Sandbox):
+    """R-INS-13, R-RM-12 — the layout every removal guarantee rests on.
+
+    Driven through the whole download path with the fetch faked on PATH, because the alternative
+    — leaving it to CI's real published install — cannot cover a change to the installer until a
+    release already carries it, which is the wrong way round.
+    """
+
+    def test_a_downloaded_install_puts_the_program_in_its_own_directory(self):
+        """R-INS-13 — what an uninstall removes is one directory, and nothing of the owner's is
+        inside it. Beside the data, removal had to be told a list of names to spare."""
+        done, marker, command, _ = self.attempt("valid", self.release_archive())
+        self.assertEqual(done.returncode, 0, f"{done.stdout}\n{done.stderr}")
+        install = marker.parent
+        self.assertTrue((install / "app" / "rundesk").is_file(),
+                        f"the program is not where an uninstall will look: {done.stdout}")
+        self.assertFalse((install / "rundesk").exists(),
+                         "the program was laid down beside the data again")
+        self.assertEqual(str(install / "app" / "rundesk"), os.readlink(command),
+                         "the command on PATH points at the older place")
+
+    def test_installing_over_the_layout_from_before_leaves_what_the_owner_keeps(self):
+        """R-INS-13 — the older program is taken out rather than left as a second rundesk beside
+        the data, and what the owner keeps is not touched on the way. A stale `src/` there is the
+        one a bare `python3 -` in the installer would find first."""
+        case = self.root / "carried-forward"
+        home, bindir, loose = case / "home", case / "bin", case / "loose"
+        home.mkdir(parents=True)
+        bindir.mkdir()
+        loose.mkdir()
+        shutil.copy2(INSTALLER, loose / "install.sh")
+        install = home / ".rundesk"
+        # The layout from before: the program directly in the install directory, with the
+        # owner's things beside it.
+        (install / "src" / "rundesk").mkdir(parents=True)
+        (install / "rundesk").write_text("#!/bin/sh\necho old\n")
+        (install / "rundesk").chmod(0o755)
+        (install / "agents" / "ava").mkdir(parents=True)
+        (install / "agents" / "ava" / "state.db").write_text("records\n")
+        (install / "logs").mkdir()
+        (install / "logs" / "ava.log").write_text("what happened\n")
+
+        done = installer(
+            home=home, bindir=bindir, cwd=loose, script=loose / "install.sh",
+            extra_env={
+                "PATH": f"{self.fake_curl()}{os.pathsep}{os.environ['PATH']}",
+                "RUNDESK_LOOKUP_REPLY": "valid",
+                "RUNDESK_REQUEST_LOG": str(case / "requests.txt"),
+                "RUNDESK_RELEASE_ARCHIVE": str(self.release_archive()),
+            },
+        )
+
+        self.assertEqual(done.returncode, 0, f"{done.stdout}\n{done.stderr}")
+        self.assertTrue((install / "app" / "rundesk").is_file())
+        self.assertFalse((install / "src").exists(), "the older program was left beside the data")
+        for what, at in (("an agent's records", install / "agents" / "ava" / "state.db"),
+                         ("what a gateway wrote", install / "logs" / "ava.log")):
+            self.assertTrue(at.exists(), f"moving the program took {what}")
 
 
 class OneInstructionTests(unittest.TestCase):

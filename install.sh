@@ -13,6 +13,12 @@
 #   curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash -s -- --uninstall
 #
 # Env overrides: RUNDESK_INSTALL_DIR (default ~/.rundesk), RUNDESK_BIN_DIR.
+#
+# **The program and the data are two directories, not one.** `$RUNDESK_INSTALL_DIR/app` is
+# the program — what this script lays down and what uninstall takes away, whole. Everything
+# beside it is the owner's: their agents, and what their gateways wrote. Removal is then
+# structurally incapable of touching data, rather than remembering not to: there was a list
+# of names to spare, and a list is a thing that stops being true the day something is added.
 set -euo pipefail
 
 # Not overridable, and deliberately so. An install pointed at one repository updates itself
@@ -21,6 +27,9 @@ set -euo pipefail
 # silently drifts onto somebody else's releases. Kept in step by a test.
 REPO_SLUG="rundesk-ai/rundesk-cli"
 INSTALL_DIR="${RUNDESK_INSTALL_DIR:-$HOME/.rundesk}"
+# The program, inside what rundesk owns. Nothing of the owner's is ever in here, which is the
+# whole point of it having a name of its own (R-INS-13, R-RM-8).
+APP_DIR="$INSTALL_DIR/app"
 MIN_PYTHON_MINOR=9
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -88,7 +97,7 @@ require_python() {
 # every few seconds and at every login, against a path that is no longer there.
 stop_gateways() {
   local root="" candidate
-  for candidate in "$INSTALL_DIR" "${SCRIPT_DIR:-}"; do
+  for candidate in "$APP_DIR" "$INSTALL_DIR" "${SCRIPT_DIR:-}"; do
     if [[ -n "$candidate" && -f "$candidate/src/rundesk/supervisor.py" ]]; then
       root="$candidate"; break
     fi
@@ -121,6 +130,26 @@ STOP
   fi
 }
 
+# An install from before the program had a directory of its own put it directly in
+# $INSTALL_DIR, beside the data. Take those entries away rather than leaving two rundesks in
+# one place — a stale `src/` there is what `python3 -` below would find first.
+#
+# The names spared are the ones that were data in that layout, and this is the only place such
+# a list is left: it describes a shape that no longer exists, so it cannot go out of date.
+tidy_the_old_layout() {
+  [[ -f "$INSTALL_DIR/rundesk" && ! -e "$INSTALL_DIR/.git" ]] || return 0
+  local entry base
+  for entry in "$INSTALL_DIR"/* "$INSTALL_DIR"/.[!.]*; do
+    [[ -e "$entry" ]] || continue
+    base="${entry##*/}"
+    case "$base" in
+      app|agents|logs|run|schedules) continue ;;
+    esac
+    rm -rf "$entry"
+  done
+  echo "took the program out of $INSTALL_DIR; your agents and what your gateways wrote stayed put"
+}
+
 # ---------------------------------------------------------------- uninstall
 if [[ "${1:-}" == "--uninstall" ]]; then
   check_install_dir
@@ -128,14 +157,6 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   removed=0
   purge=0
   [[ "${2:-}" == "--purge" ]] && purge=1
-  #: What an ordinary uninstall keeps: what the owner decided, what their gateways wrote,
-  #: and every agent they made. These sit under the install directory only because that is
-  #: where rundesk keeps things — they are not part of the program (R-RM-4, R-RM-10,
-  #: R-GW-18, R-AGT-3). A reinstall after trouble is exactly the moment the account of what
-  #: went wrong matters most, and it was being deleted by the command someone runs to fix
-  #: the trouble. An agent's home is stronger still: it is what its owner wrote, and
-  #: removing the program is not asking for it to go.
-  KEPT_FROM_INSTALL_DIR=(logs agents)
   # Refused rather than continued: deleting the command while a gateway is still running
   # leaves an agent nobody can reach and takes away the very thing that could stop it.
   if ! stop_gateways; then
@@ -147,7 +168,8 @@ Stop it and try again, or see what is running with: rundesk status"
     target="$(readlink "$dir/rundesk")"
     # Only ours: a `rundesk` on PATH that points somewhere else is not this install's
     # to remove, and removing it would be the installer breaking someone else's tool.
-    if [[ "$target" == "$INSTALL_DIR/rundesk" || ( -n "$SCRIPT_DIR" && "$target" == "$SCRIPT_DIR/rundesk" ) ]]; then
+    if [[ "$target" == "$APP_DIR/rundesk" || "$target" == "$INSTALL_DIR/rundesk" \
+          || ( -n "$SCRIPT_DIR" && "$target" == "$SCRIPT_DIR/rundesk" ) ]]; then
       rm -f "$dir/rundesk"; echo "removed $dir/rundesk"; removed=1
     fi
   done
@@ -161,35 +183,55 @@ Stop it and try again, or see what is running with: rundesk status"
   fi
 
   # The virtualenv is the installer's, wherever it put it — a checkout does not come with one.
-  for venv in "$INSTALL_DIR/.venv" "${SCRIPT_DIR:-/nonexistent}/.venv"; do
+  for venv in "$APP_DIR/.venv" "$INSTALL_DIR/.venv" "${SCRIPT_DIR:-/nonexistent}/.venv"; do
     [[ -d "$venv" ]] && { rm -rf "$venv"; echo "removed what rundesk installed for itself: $venv"; removed=1; }
   done
 
   # Only a directory this installer laid down is its to delete. A clone carries history and
   # is somebody's work, wherever it happens to sit.
   #
-  # And inside it, the program is taken entry by entry rather than the whole directory at
-  # once, because the directory is not all program: `rm -rf "$INSTALL_DIR"` also took every
-  # gateway log, every schedule and every account of what a schedule had done. The directory
-  # itself goes only once nothing of the owner's is left in it (R-RM-8).
-  if [[ -d "$INSTALL_DIR" ]]; then
-    if is_someones_work "$INSTALL_DIR"; then
-      echo "left $INSTALL_DIR alone — it is a checkout, not something this installer created."
-    else
-      kept=""
-      for entry in "$INSTALL_DIR"/* "$INSTALL_DIR"/.[!.]*; do
-        [[ -e "$entry" ]] || continue
-        base="${entry##*/}"
-        if [[ "$purge" == 0 ]] && printf '%s\n' "${KEPT_FROM_INSTALL_DIR[@]}" | grep -qx "$base"; then
-          kept="${kept:+$kept, }$base"
-          continue
-        fi
-        rm -rf "$entry"
-      done
+  # **The program goes whole, and nothing else is looked at.** It used to be taken entry by
+  # entry out of a directory that was part program and part data, spared by a list of names —
+  # so `rm -rf "$INSTALL_DIR"` once took every gateway log and every schedule, and the fix was
+  # a list that would stop being true the day anything was added beside it. The program has a
+  # directory of its own now, so removal cannot reach data even by mistake (R-RM-8).
+  if is_someones_work "$INSTALL_DIR"; then
+    echo "left $INSTALL_DIR alone — it is a checkout, not something this installer created."
+  else
+    # An install from before the program had a directory of its own is removed too, or
+    # somebody updating and then removing would be left with the older rundesk still there
+    # and still on their PATH.
+    # Asked here rather than trusted to the function's own guard: it returns success when
+    # there is nothing to do, and `&& removed=1` on that reported having removed rundesk from
+    # a machine that had none of it.
+    if [[ -f "$INSTALL_DIR/rundesk" ]]; then
+      tidy_the_old_layout >/dev/null
+      echo "removed the older rundesk from $INSTALL_DIR"
       removed=1
-      if [[ -n "$kept" ]]; then
-        echo "removed rundesk from $INSTALL_DIR"
-        echo "kept what your gateways wrote and what you scheduled ($kept) — add --purge to delete them."
+    fi
+    if [[ -d "$APP_DIR" ]]; then
+      if is_someones_work "$APP_DIR"; then
+        echo "left $APP_DIR alone — it is a checkout, not something this installer created."
+      else
+        rm -rf "$APP_DIR"; echo "removed rundesk from $APP_DIR"; removed=1
+      fi
+    fi
+  fi
+  # Everything beside the program is the owner's: their agents, and what their gateways wrote
+  # (R-RM-4, R-RM-10, R-GW-18, R-AGT-3). A reinstall after trouble is exactly the moment the
+  # account of what went wrong matters most, and it was being deleted by the command somebody
+  # runs to fix the trouble.
+  if [[ -d "$INSTALL_DIR" ]] && ! is_someones_work "$INSTALL_DIR"; then
+    if [[ "$purge" == 1 ]]; then
+      rm -rf "$INSTALL_DIR"; echo "removed everything rundesk kept: $INSTALL_DIR"; removed=1
+    else
+      theirs=""
+      for entry in "$INSTALL_DIR"/* "$INSTALL_DIR"/.[!.]*; do
+        [[ -e "$entry" && "${entry##*/}" != "app" ]] || continue
+        theirs="${theirs:+$theirs, }${entry##*/}"
+      done
+      if [[ -n "$theirs" ]]; then
+        echo "kept your agents and what your gateways wrote ($theirs) — add --purge to delete them."
       else
         rmdir "$INSTALL_DIR" 2>/dev/null && echo "removed $INSTALL_DIR"
       fi
@@ -213,14 +255,18 @@ if is_local_checkout; then
   REPO_ROOT="$SCRIPT_DIR"
   echo "installing from this checkout: $REPO_ROOT"
 else
-  echo "installing into $INSTALL_DIR"
+  echo "installing into $APP_DIR"
   command -v curl >/dev/null 2>&1 || die "curl is required to download rundesk."
   command -v tar  >/dev/null 2>&1 || die "tar is required to unpack rundesk."
-  # Before anything is fetched: what is already there may not be ours to replace.
-  if is_someones_work "$INSTALL_DIR"; then
-    die "$INSTALL_DIR is a checkout, and replacing it would take its history and any
+  # Before anything is fetched: what is already there may not be ours to replace. Both
+  # places, because an install from before the program had a directory of its own is at
+  # $INSTALL_DIR and a clone could be sitting at either.
+  for standing in "$APP_DIR" "$INSTALL_DIR"; do
+    if is_someones_work "$standing"; then
+      die "$standing is a checkout, and replacing it would take its history and any
 uncommitted work with it. Move it aside, or set RUNDESK_INSTALL_DIR somewhere else."
-  fi
+    fi
+  done
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' EXIT
   # The newest *published release*, not whatever is on the branch (R-INS-15).
@@ -281,10 +327,11 @@ Retrying in a few minutes usually settles it."
   tar -xzf "$work/rundesk.tar.gz" -C "$work"
   extracted="$(find "$work" -maxdepth 1 -type d -name 'rundesk-cli-*' | head -1)"
   [[ -n "$extracted" ]] || die "the downloaded archive did not look like a rundesk release."
-  rm -rf "$INSTALL_DIR"
-  mkdir -p "$(dirname "$INSTALL_DIR")"
-  mv "$extracted" "$INSTALL_DIR"
-  REPO_ROOT="$INSTALL_DIR"
+  tidy_the_old_layout
+  rm -rf "$APP_DIR"
+  mkdir -p "$INSTALL_DIR"
+  mv "$extracted" "$APP_DIR"
+  REPO_ROOT="$APP_DIR"
 fi
 
 # Anything beyond the standard library goes into the install's own virtualenv. The machine's
