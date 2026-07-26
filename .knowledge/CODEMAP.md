@@ -76,7 +76,7 @@ rewrites it; a retention policy takes whole files.
 - `src/rundesk_cli/agent.py` — the named identity work is run for: its name, its home, and where
   everything of its own stands. Above the gateway and never beside it — it resolves an agent's three
   directories and hands them to a `Gateway`, which is why a gateway goes on knowing nothing of whose work it
-  holds. A new agent's home is copied from `templates/agent/`, and what a home holds is read off that
+  holds. A new agent's home is copied from `src/templates/agent/` — stubs an owner reads and edits, kept beside the package rather than inside it, and what a home holds is read off that
   directory rather than listed in code. What a name may be is stricter here than for a gateway: one path
   component, standing where agents are kept, and never a word a gateway writes beside some other name.
 - `src/rundesk_cli/provider.py` — the seam a brain is reached through, and nothing about any
@@ -84,7 +84,7 @@ rewrites it; a retention policy takes whole files.
   something runnable, builds the environment it is told everything through, asks what it can do, and reads
   one of its records. **Enumerates nothing**: no list of providers and no list of models, so one rundesk
   has never heard of is the ordinary case. A vendor name appearing in this file is the seam already failing.
-- `src/rundesk_cli/adapters/` — the brains that ship, one program each. Not modules: nothing imports them
+- `src/providers/` — the brains that ship, one program each. Not modules: nothing imports them
   and they import nothing of ours, so a vendor's flags, stream shape, session file and usage arithmetic
   live in one file and reach no further. `adapters/codex` is the first.
 - `src/rundesk_cli/channel.py` — the seam a surface is reached through, and nothing about any
@@ -95,7 +95,7 @@ rewrites it; a retention policy takes whole files.
   surface calls its places arrives as options this file hands straight back unread. It also holds the two
   decisions a surface does not get to make — what state a turn is in, and that what a brain *says* is
   handed over once and whole. A platform's word appearing in this file is the seam already failing.
-- `src/rundesk_cli/channels/` — the surfaces that ship, one program each. Not modules: nothing imports
+- `src/channels/` — the surfaces that ship, one program each. Not modules: nothing imports
   them and they import nothing of ours, so a platform's ids, intents and limits live in one file and
   reach no further.
 - `src/rundesk_cli/answering.py` — what arrives on a channel, carried through to an answer: the mirror of

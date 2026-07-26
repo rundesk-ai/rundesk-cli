@@ -33,7 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-AT = ROOT / "src" / "rundesk_cli" / "adapters" / "codex"
+AT = ROOT / "src" / "providers" / "codex"
 
 
 def _adapter():

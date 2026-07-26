@@ -35,7 +35,7 @@ from rundesk_cli import process
 #: Where the adapters that ship with rundesk stand. Read by looking rather than listed,
 #: so one added later is reachable the day it lands and no second copy of the list can
 #: come to disagree with the directory.
-ADAPTERS = Path(__file__).resolve().parent / "adapters"
+ADAPTERS = Path(__file__).resolve().parent.parent / "providers"
 
 #: What an adapter reports, and the whole of it (R-PRV-4). An eighth is a change to the
 #: contract, deliberately.

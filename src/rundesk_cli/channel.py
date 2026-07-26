@@ -38,7 +38,7 @@ from rundesk_cli import gateway, process, provider
 #: Where the adapters that ship with rundesk stand. Read by looking rather than listed, so
 #: one added later is reachable the day it lands and no second copy of the list can come to
 #: disagree with the directory.
-ADAPTERS = Path(__file__).resolve().parent / "channels"
+ADAPTERS = Path(__file__).resolve().parent.parent / "channels"
 
 #: What an adapter reports, and the whole of it (R-CAD-1). Four, because there are four
 #: things a surface has to say: it is connected, somebody spoke, somebody made a gesture at

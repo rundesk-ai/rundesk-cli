@@ -30,7 +30,7 @@ from rundesk_cli import gateway
 #: What a new agent's home is copied from. Ordinary Markdown files rather than text built
 #: in code, because they are what an owner reads first and edits next, and a rule about how
 #: an agent is reached is worth keeping where it can be read.
-TEMPLATES = Path(__file__).resolve().parent / "templates" / "agent"
+TEMPLATES = Path(__file__).resolve().parent.parent / "templates" / "agent"
 
 #: The one thing substituted on the way in. Everything else is copied as it stands.
 NAMED = "{{name}}"
