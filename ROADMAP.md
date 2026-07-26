@@ -512,30 +512,55 @@ from every remaining reader to the call that replaces it, and the traps already 
 
 ### Where it stands
 
-**Done.** Every JSON file an *agent* kept is gone and is rows: `agent.json`, `channels.json`, `sessions.json`
-(and `session.py` with it), `runs/<run>.jsonl`, `.raw` and `allocating.json`. A run is numbered inside the
-transaction that writes it. `transcript.py` is down to the two things that cannot be rows — what the brain
-printed and what it said went wrong — and both stand under `logs/`, so deleting that directory costs an owner
-nothing an account needed. `runs`, `usage` and `search` are built. The migration runner is wired into the
-update, in the window `R-UPD-21` already opens. R-MIG-1, R-MIG-6, R-MIG-17 and R-MIG-18 are green; R-AGW-5 is
-reversed, and removing an agent takes everything of its own.
+**Done.** Every JSON file an *agent* kept is gone and is rows: `agent.json`, `channels.json`,
+`sessions.json` (and `session.py` with it), `runs/<run>.jsonl`, `.raw` and `allocating.json`. A run is
+numbered inside the transaction that writes it. `transcript.py` is down to the two things that cannot be
+rows — what the brain printed and what it said went wrong — and both stand under `logs/`, so deleting that
+directory costs an owner nothing an account needed. `runs`, `usage` and `search` are built. The migration
+runner is wired into the update, in the window `R-UPD-21` already opens. R-MIG-1, R-MIG-6, R-MIG-17 and
+R-MIG-18 are green; R-AGW-5 is reversed, and removing an agent takes everything of its own.
 
-**Not done — one move, not four.** The gateway still keeps what it is doing, what it wrote and what it is
-scheduled to do in `run/`, `logs/` and `schedules/`. `gateway.py:162`, `:264` and `:354` each fall back to
-`~/.rundesk/{logs,run,schedules}`, and `agent.resolved()` returns `Where(None, None, None)` for a name that is
-not an agent (`agent.py:240-241`) — which is what silently sends every unknown name there. A gateway reading
-its schedules from one place and its record from another is half-moved, so the four go together or not at all.
+**And the schedules third is done, taken in Phase 6** because the clock could not start a turn without it.
+What a gateway is scheduled to do, what each schedule last did and when it was last up are rows;
+`~/.rundesk/schedules`, `RUNDESK_SCHEDULES_DIR` and four path helpers are gone; a `Gateway` is handed its
+records rather than a directory, and does not import `store` to use them. It also settled the shape the
+rest of this follows: **a gateway with no records is a whole gateway** — schedules belong to an agent, so a
+name that is not one has none, and the clock simply has nothing to start for it.
 
-### What is left, in the order it is forced into
+**Not done — two directories, and they go together.** The gateway still keeps what it is *doing* in `run/`
+and what it *wrote* in `logs/`. `gateway.py:166` and `:268` fall back to `~/.rundesk/{logs,run}`, and
+`agent.resolved()` returns `Where(None, None)` for a name that is not an agent (`agent.py:239`) — which is
+what silently sends every unknown name there. The owner's ruling on Phase 6 stands and is why these were
+left: they are in active use, so they move deliberately rather than as a side effect.
 
-1. **`migrations/002.py`, written as a step.** `001.py` was edited freely while nothing was released; `v0.5.0`
-   ended that, and an installed agent claims version 1. The gateway move is the first change to the shape that
-   needs a step after it — and the first real customer of a runner that has so far only carried steps a test
-   wrote.
-2. **Move the gateway's three readers over**, together, with a regression check each.
-3. **Delete the old layout and the code that defaulted to it**, including `agent.resolved()`'s empty answer.
-4. **Prove it against a scratch install built for the purpose**, not the owner's own — by hand as well as by
-   the suite. Driving it by hand is what found the two defects a green suite did not.
+### What Phase 6 left on this phase's doorstep
+
+Both are recorded in [`SUGGESTIONS.md`](SUGGESTIONS.md) with reproductions, and the first is the reason to
+start here rather than with the directories:
+
+- **Finding 39 — a read-only command cannot open records whose `-shm` is absent.** `Store._reading` opens
+  `mode=ro`, and a read-only SQLite connection cannot open a WAL database when the shared-memory file is
+  not there: it has to create it and cannot. That is the state a clean close leaves behind, so `runs`,
+  `usage`, `search` and `schedules` traceback on records the product put into that state itself. It is the
+  store's own boundary, it is reachable today, and no case catches it because every case writes before it
+  reads in the same process.
+- **Finding 40 — nothing ends a turn's brain when its gateway goes.** The reporting is fixed: a gateway
+  counts an in-flight turn, exits non-zero and writes an interruption naming it. The ending is not, and the
+  same hole sits under a channel turn — `turn.carry` has no cleanup that ends its `process.Program` — so it
+  is one fix there rather than two here.
+
+### `001.py` was edited after `v0.5.0`, and that has to be settled first
+
+Phase 6 added `schedule.channel` by editing the schema step rather than adding one, on the owner's
+instruction and knowing the cost. **An agent made before that commit claims version 1 and does not have the
+column**, and nothing detects it: `_refused` compares versions, the version is unchanged, and the shape is
+accepted. `schedules add` on such an agent fails on a column that is not there.
+
+Nothing is released with the new schema, so the cheap answer is to re-make those agents — which is what the
+owner chose. What this phase has to decide is whether the *next* shape change gets a step, and whether
+`made()` should check that the shape it expects is actually present rather than trusting a number. The
+version was never meant to be the only evidence: `_refused` already asks whether the `agent` table is there,
+for exactly this reason, and it asks about one table out of ten.
 
 ### The decision this phase still carries out
 
