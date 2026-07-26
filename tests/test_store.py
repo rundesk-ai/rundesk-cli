@@ -1164,16 +1164,32 @@ class TheOnlyWayIn(unittest.TestCase):
                 if isinstance(getattr(kept, name), (sqlite3.Connection, sqlite3.Cursor))]
         self.assertEqual([], held, "the store kept a connection where a caller could reach it")
 
-    def test_the_product_does_not_reach_the_new_store_yet(self):
-        """Deleting this module must leave the product exactly as it was.
+    #: How a module in this package actually reaches another one. The case this replaced
+    #: looked for `from store import` and a line beginning `import`, and nothing here is
+    #: written either way — so it passed for a phase after the thing it guarded was over.
+    IMPORTS = re.compile(r"^\s*(?:from\s+rundesk\s+import\s+[^\n]*\bstore\b"
+                         r"|from\s+rundesk\.store\s+import\b"
+                         r"|import\s+rundesk\.store\b)", re.MULTILINE)
 
-        The whole safety of building it before anything moves onto it. One reader changed to
-        use it and that is no longer true — which is the next phase, not this one.
+    def test_the_product_reaches_what_an_agent_keeps(self):
+        """The opposite of what this case used to assert, and deliberately.
+
+        While nothing read the store, deleting it left the product exactly as it was — which
+        is what made building it before moving onto it safe. That is over: an agent is made
+        with its records and taken away with them, so a store nothing reached would now be an
+        agent with nowhere to keep anything.
         """
-        importing = [path.name for path in self.elsewhere()
-                     if re.search(r"^\s*(from\s+\.?\s*store\s+import|import\s+.*\bstore\b)",
-                                  path.read_text(), re.MULTILINE)]
-        self.assertEqual([], importing, "something already reads the store — that is the next phase")
+        reaching = [path.name for path in self.elsewhere()
+                    if self.IMPORTS.search(path.read_text())]
+        self.assertIn("agent.py", reaching, "an agent is made with nowhere to keep anything")
+
+    def test_only_the_seam_is_reached_for_a_connection(self):
+        """Reaching the store is not the same as reaching a database. Everything above asks
+        for what it wants by name, and the two files that may open one are named."""
+        opening = [path.name for path in self.elsewhere()
+                   if re.search(r"^\s*(?:import\s+sqlite3|from\s+sqlite3\s+import)",
+                                path.read_text(), re.MULTILINE)]
+        self.assertEqual([], opening)
 
 
 if __name__ == "__main__":

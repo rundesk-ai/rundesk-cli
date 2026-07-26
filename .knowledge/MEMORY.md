@@ -167,6 +167,13 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   errored — a generated image was simply never reported. Read a real item out of a run's
   `.brain` file before writing the name of a field.
 
+- **A guard written as a regex over source must be written against how this package
+  actually imports.** `test_the_product_does_not_reach_the_new_store_yet` looked for
+  `from store import` and for a line starting `import …store…`. Every module here writes
+  `from rundesk import gateway, store`, which is neither — so the case that was supposed to
+  hold the whole "deleting the store leaves the product as it was" safety passed green
+  through the commit that broke it. Any case that greps `src/` for an import must be probed
+  by *adding* the thing it forbids, not only by removing it.
 - **Never assert that `state.db-wal` and `state.db-shm` exist.** They are there only while a
   connection is open or after one closed badly — a clean close checkpoints and removes them. A case
   asserting all three files are present passed on `/usr/bin/python3` and failed the gate on 3.14,
