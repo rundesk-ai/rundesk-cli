@@ -6,15 +6,15 @@ drifted in four places.
 **Released:** `v0.5.1`. **Status:** direction, not a ratified product contract — the contracts are.
 
 **Starting implementation? Read this file's Direction, then [What Remains, In Order](#what-remains-in-order),
-then the phase at the top of that table.** Phases 0–4 and 7 are done and compressed into
+then the phase at the top of that table.** Phases 0–5 are done and compressed into
 [What Is Already Built](#what-is-already-built); their contracts are ratified and are the truth about them,
 not the summaries here. Then [`CLI.md`](CLI.md) for every operation as it is typed, and
 [`.knowledge/guides/the-command-surface.md`](.knowledge/guides/the-command-surface.md) for why the surface is
 shaped that way.
 
-**Phase numbers are labels; the table is the order.** Seven landed before six on purpose, and thirteen runs
-next while carrying a high number. Nothing renumbers, because a number that moves is a number every commit
-message, contract note and review already got wrong.
+**The numbers ascend in the order the work happens**, and there are no gaps in them. They were labels once,
+with seven landing before six and thirteen running next; that cost every reader the same reconciliation, so
+they were renumbered in one pass. Phase 6 is where work stands today.
 
 This roadmap gets Rundesk from a proven process/gateway/schedule substrate to named agents reached through
 Discord, Slack, schedules and the terminal. It deliberately advances one testable concept at a time. The Node
@@ -107,7 +107,7 @@ authorized local invocation can.
   environment variable, from a file the owner already controls, or asked for on a terminal — and what shows a
   channel says a secret is present rather than what it is.
 - **What an owner wrote is the owner's.** An update replaces what rundesk is made of and never what a person
-  authored. Phase 14 is where that stops being true only by accident.
+  authored. Phase 9 is where that stops being true only by accident.
 
 ## How Every Phase Is Proved
 
@@ -260,7 +260,7 @@ catalogued [below](#what-those-phases-left--on-purpose).
 
 **Left open, deliberately:** the gateway announces itself once *per channel*, so two channels mean two notices
 to the same person — the notice is about the gateway and wants deciding where it belongs. A second platform is
-Phase 12, and reviewing for it surfaced four owner questions: what `direct` means where there is no such
+Phase 14, and reviewing for it surfaced four owner questions: what `direct` means where there is no such
 thing, whether an adapter filters un-addressed messages in a busy room, how a conversation maps to a Slack
 thread, and what dialect prose is in. Hermes ships a per-platform hint describing the medium itself; ours makes
 the owner write both that and their own instructions.
@@ -303,11 +303,11 @@ old reader to its replacement is [`moving-onto-the-store`](.knowledge/guides/mov
 than refused, and building a database released the lock between reading the version and acting on it, so two
 commands arriving together told one that a healthy database had failed. Both only appear once something runs.
 
-### 7 · Two more brains behind the seam — **done, and out of numeric order on purpose**
+### 5 · Two more brains behind the seam — **done**
 
 Claude Code and Grok each carry a whole turn, and **nothing in `src/rundesk/` changed to accommodate either**.
 That was the point: a brain is a program, so adding one touches `src/providers/`, `tests/` and `.knowledge/`,
-reads no durable state, and could run beside Phase 5 without waiting on Phase 6.
+reads no durable state, and ran beside the storage move without waiting on it.
 
 The closed vocabularies were enough — seven records, six verbs, five capabilities, two postures — and the two
 brains land at opposite ends of the contract: claude answers `true` to four capabilities, grok to three, and a
@@ -333,13 +333,13 @@ is also the list of what the phases below have to pick up:
 | Why it is ❌ | Rows | Earned by |
 |---|---|---|
 | Only a person watching a real platform can settle it | R-DIS-5, -6, -11, -12, -14, -15, -16, -18, -19; R-CH-16 | `.knowledge/scripts/probe-discord` says what to do and what to look for on each. Not ticked on a script's say-so |
-| Needs a real connection held open and dropped at a chosen moment | R-AGW-3, R-CAD-6, R-CAD-7, R-CH-11 | Phase 9 |
+| Needs a real connection held open and dropped at a chosen moment | R-AGW-3, R-CAD-6, R-CAD-7, R-CH-11 | Phase 11 |
 | Nothing can prove what cannot be written | R-CH-2, R-RUN-13, R-RUN-15, R-USE-11, R-STO-19 | A case that *adds* the forbidden thing and watches it fail — see `MEMORY.md` on the guard that passed green through the commit that broke it |
 | Waits on money, which nothing computes | R-USE-5, R-USE-8 | Nothing works a cost out from prices yet |
-| Waits on a brain making a file, which nobody has captured | R-PRV-20 | Phase 8 |
-| Waits on recovery, which is not built | R-GW-22, R-GW-24, R-SCH-20 | Phase 11 |
-| Waits on a provider and a credential the suite has neither of | R-AGT-10 | Phase 10's canary |
-| Inherited from what runs a program at all; no test of its own | R-PRV-13 | Phase 8 |
+| Waits on a brain making a file, which nobody has captured | R-PRV-20 | Phase 10 |
+| Waits on recovery, which is not built | R-GW-22, R-GW-24, R-SCH-20 | Phase 13 |
+| Waits on a provider and a credential the suite has neither of | R-AGT-10 | Phase 12's canary |
+| Inherited from what runs a program at all; no test of its own | R-PRV-13 | Phase 10 |
 | **Possibly earnable today, and worth checking first** | R-AGW-9 | Channels are rows in `state.db` now and removing an agent takes its directory, so the behaviour may already be there with no row turned. Both `agent-gateway` rows carry no evidence at all |
 
 ---
@@ -348,35 +348,37 @@ is also the list of what the phases below have to pick up:
 
 | | Phase | What lands |
 |---|---|---|
-| **5** | Move everything onto it | The gateway's own three directories — the last readers of `~/.rundesk/{run,logs,schedules}` |
 | **6** | Let the clock start work | The end-to-end proof: a schedule fires a *turn*, not just a program, and its outcome reaches a channel |
-| **13** | Updates an owner can trust | Dependencies move with the records, `update --check` says what it would do, and where every agent stands is a question with an answer |
-| **14** | Templates an owner can make their own | The files a new agent is copied from become the owner's to override, one at a time, and survive an update |
-| **8** | Provider adapters — audit the seam | A generic endpoint adapter, the decoupling test, and the contradictions settled |
-| **9** | Channel adapters — audit the seam | The same, on the surfaces side |
-| **10** | Skills and tool discovery | Additive: a skill an agent loads, and an inventory of what it was granted |
-| **11** | Questions, approvals, recovery | A brain pausing mid-turn for an answer, and surviving a restart while it waits |
-| **12** | Channel breadth | Slack, needing no provider or agent change |
+| **7** | Move everything onto it | The gateway's own three directories — the last readers of `~/.rundesk/{run,logs,schedules}` — carried by `002.py` |
+| **8** | Updates an owner can trust | Dependencies move with the records, `update --check` says what it would do, and where every agent stands is a question with an answer |
+| **9** | Templates an owner can make their own | The files a new agent is copied from become the owner's to override, one at a time, and survive an update |
+| **10** | Provider adapters — audit the seam | A generic endpoint adapter, the decoupling test, and the contradictions settled |
+| **11** | Channel adapters — audit the seam | The same, on the surfaces side |
+| **12** | Skills and tool discovery | Additive: a skill an agent loads, and an inventory of what it was granted |
+| **13** | Questions, approvals, recovery | A brain pausing mid-turn for an answer, and surviving a restart while it waits |
+| **14** | Channel breadth | Slack, needing no provider or agent change |
 
 **Why this order.**
 
-**Six proves the chain.** Fixing the clock exercises everything in one line — clock, gateway, turn, brain,
-account, channel — so anything Phase 5 broke shows up there rather than later and further from its cause.
+**Six proves the chain, so it goes first.** Fixing the clock exercises everything in one line — clock,
+gateway, turn, brain, account, channel — so anything the storage move broke shows up there rather than later
+and further from its cause.
 
-**Thirteen comes straight after six.** `v0.5.0` and `v0.5.1` are released, so there are installed agents now
-and every later change to the shape is a migration step rather than a free edit — and an update still replaces
-the source without touching what the source is made of. Until that is fixed, every phase after it ships
-changes an owner cannot safely take.
+**Seven finishes the oldest debt, and needs nothing built first.** The gateway move is the one change to the
+on-disk shape that arrives *after* a release, so it is `002.py` rather than a free edit — but the machinery
+that carries a step is already built and wired into the update (`cli.py:489`, R-MIG-1, R-MIG-6). It does not
+wait on Phase 8: what Phase 8 adds is *dependency* movement, and moving the gateway's three directories adds
+no dependency. It goes before everything after it because two coexisting layouts is the condition every later
+phase would otherwise be built on top of.
 
-**Fourteen comes straight after thirteen**, because its whole promise is that what an owner wrote survives an
-update. Proving that before thirteen would be proving it against the mechanism thirteen is changing.
+**Eight comes next because releases are real now.** `v0.5.0` and `v0.5.1` are out, so there are installed
+agents — and an update still replaces the source without touching what the source is made of. Until that is
+fixed, every phase after it ships changes an owner cannot safely take.
 
-**Five's remainder is scheduled where it is, not first**, even though it is the oldest unfinished work: the
-gateway move is the first change to the on-disk shape that arrives *after* a release, so it now needs
-`002.py` and a trustworthy update to carry it. Doing it before thirteen would ship a shape change through an
-updater that cannot bring forward what the install is made of.
+**Nine comes straight after eight**, because its whole promise is that what an owner wrote survives an update.
+Proving that before eight would be proving it against the mechanism eight is changing.
 
-**Eight and nine are audits, and they are phases** because three shipped adapters plus a stranger's is the
+**Ten and eleven are audits, and they are phases** because three shipped adapters plus a stranger's is the
 first point either seam can be judged rather than described. Their shared claim decides whether anybody else
 can build here: **a feature is written against the contract, never against the adapter that shipped first.**
 The test is the poorest possible adapter — declaring nothing, doing nothing — still getting every feature that
@@ -388,74 +390,6 @@ cannot be built before a provider has reported a session handle. Its two real pa
 proved: what a turn resolves is Phase 2, and four entry points reaching one agent is Phase 3.
 
 ---
-
-## Phase 5 — Move Everything Onto It
-
-**Outcome:** what Phase 4 designed is what is on disk, and everything reads it through one seam.
-
-This phase writes no new design and builds no new seam. Where the design turns out to be wrong, that is a
-finding and the drafts move first, because the whole point of the phase before was that this one does not
-improvise. Read [`moving-onto-the-store`](.knowledge/guides/moving-onto-the-store.md) first: it holds the map
-from every remaining reader to the call that replaces it, and the traps already paid for.
-
-### Where it stands
-
-**Done.** Every JSON file an *agent* kept is gone and is rows: `agent.json`, `channels.json`, `sessions.json`
-(and `session.py` with it), `runs/<run>.jsonl`, `.raw` and `allocating.json`. A run is numbered inside the
-transaction that writes it. `transcript.py` is down to the two things that cannot be rows — what the brain
-printed and what it said went wrong — and both stand under `logs/`, so deleting that directory costs an owner
-nothing an account needed. `runs`, `usage` and `search` are built. The migration runner is wired into the
-update, in the window `R-UPD-21` already opens. R-MIG-1, R-MIG-6, R-MIG-17 and R-MIG-18 are green; R-AGW-5 is
-reversed, and removing an agent takes everything of its own.
-
-**Not done — one move, not four.** The gateway still keeps what it is doing, what it wrote and what it is
-scheduled to do in `run/`, `logs/` and `schedules/`. `gateway.py:162`, `:264` and `:354` each fall back to
-`~/.rundesk/{logs,run,schedules}`, and `agent.resolved()` returns `Where(None, None, None)` for a name that is
-not an agent (`agent.py:240-241`) — which is what silently sends every unknown name there. A gateway reading
-its schedules from one place and its record from another is half-moved, so the four go together or not at all.
-
-### What is left, in the order it is forced into
-
-1. **`migrations/002.py`, written as a step.** `001.py` was edited freely while nothing was released; `v0.5.0`
-   ended that, and an installed agent claims version 1. The gateway move is the first change to the shape that
-   needs a step after it, and it is the reason 13 comes first.
-2. **Move the gateway's three readers over**, together, with a regression check each.
-3. **Delete the old layout and the code that defaulted to it**, including `agent.resolved()`'s empty answer.
-4. **Prove it against a scratch install built for the purpose**, not the owner's own — by hand as well as by
-   the suite. Driving it by hand is what found the two defects a green suite did not.
-
-### The decision this phase still carries out
-
-**Cross-agent stray sweeping is already dead, and this makes it permanent.** `_sweep_strays()` globs a
-directory that holds exactly one record (`gateway.py:781`), so the loop body never runs for a per-agent
-gateway. `R-GW-21` and `R-GW-23` are ✅ only because their tests share one `where`. Narrow both rows and stop
-the tests sharing it, in the commit that deletes the shared directory. The cost is real and is accepted: work
-left by an agent removed mid-run is never ended by anything.
-
-### Tests
-
-- Stopping an agent takes `gateway.json` and `gateway.lock` and touches nothing in `home/`, `logs/` or
-  `state.db`.
-- Nothing reads or writes `~/.rundesk/run`, `logs` or `schedules` any more, and a name that is not an agent
-  gets an error rather than the old layout.
-- No lock file sits anywhere a record does, and the ones a transaction replaced are gone rather than unused.
-- A gateway's own log and what the machine caught before its logger existed are one file, and rotating it
-  never leaves the machine writing into the rotated copy.
-- Two agents' gateways writing at once never wait on each other.
-- One kind of thing has exactly one home; the older layout is gone rather than merely unused.
-- Data written by `v0.5.1` is readable by this one after an update, and says the new version.
-- A migration runs once; an update that stopped halfway does not run it again; one that fails leaves every
-  gateway down, the reason said, and the data as it was.
-- No SQL appears outside the one module that owns it.
-
-### Exit proof
-
-`~/.rundesk/{run,logs,schedules}` is gone rather than merely unused, and one agent's log tells the whole story
-of that agent. A phase that has moved the data but left one reader on the old layout has not moved the data.
-
-**Retention is still unanswered**, and it is the other thing between this and done — how long an account is
-kept, and whether an owner or a size decides. Phase 13 is where it is answered, because a copy kept until a
-move is proved is the same question.
 
 ## Phase 6 — Let the Clock Start Work
 
@@ -477,7 +411,7 @@ migrate. `ask --says` already exists so a scheduled turn can be given its own st
 program it starts resolves the same root it does (`R-SCH-27`, `process.py:1136-1149`). The narrowing is
 deliberate and worth recording — **only `RUNDESK_AGENTS_DIR` is passed, not the run, log and schedule
 directories**, because everything of an agent's derives from that one root and the other three are on their
-way out with Phase 5. Schedules are also examined as soon as a gateway has its name rather than an interval
+way out with Phase 7. Schedules are also examined as soon as a gateway has its name rather than an interval
 later (`R-SCH-26`), and the ways work is admitted are a closed set of three — `terminal`, `channel`,
 `schedule` — refused rather than written as free text (`store.py:85`).
 
@@ -523,13 +457,82 @@ channel configured still runs, still records, and is still reported through `sch
 One scheduled run passes through the same resolver, run record and provider adapter that Discord and the
 terminal already used — and its outcome is readable the next morning without a terminal having been open.
 
-## Phase 13 — Updates an Owner Can Trust
+## Phase 7 — Move Everything Onto It
+
+**Outcome:** what Phase 4 designed is what is on disk, and everything reads it through one seam.
+
+This phase writes no new design and builds no new seam. Where the design turns out to be wrong, that is a
+finding and the drafts move first, because the whole point of the phase before was that this one does not
+improvise. Read [`moving-onto-the-store`](.knowledge/guides/moving-onto-the-store.md) first: it holds the map
+from every remaining reader to the call that replaces it, and the traps already paid for.
+
+### Where it stands
+
+**Done.** Every JSON file an *agent* kept is gone and is rows: `agent.json`, `channels.json`, `sessions.json`
+(and `session.py` with it), `runs/<run>.jsonl`, `.raw` and `allocating.json`. A run is numbered inside the
+transaction that writes it. `transcript.py` is down to the two things that cannot be rows — what the brain
+printed and what it said went wrong — and both stand under `logs/`, so deleting that directory costs an owner
+nothing an account needed. `runs`, `usage` and `search` are built. The migration runner is wired into the
+update, in the window `R-UPD-21` already opens. R-MIG-1, R-MIG-6, R-MIG-17 and R-MIG-18 are green; R-AGW-5 is
+reversed, and removing an agent takes everything of its own.
+
+**Not done — one move, not four.** The gateway still keeps what it is doing, what it wrote and what it is
+scheduled to do in `run/`, `logs/` and `schedules/`. `gateway.py:162`, `:264` and `:354` each fall back to
+`~/.rundesk/{logs,run,schedules}`, and `agent.resolved()` returns `Where(None, None, None)` for a name that is
+not an agent (`agent.py:240-241`) — which is what silently sends every unknown name there. A gateway reading
+its schedules from one place and its record from another is half-moved, so the four go together or not at all.
+
+### What is left, in the order it is forced into
+
+1. **`migrations/002.py`, written as a step.** `001.py` was edited freely while nothing was released; `v0.5.0`
+   ended that, and an installed agent claims version 1. The gateway move is the first change to the shape that
+   needs a step after it — and the first real customer of a runner that has so far only carried steps a test
+   wrote.
+2. **Move the gateway's three readers over**, together, with a regression check each.
+3. **Delete the old layout and the code that defaulted to it**, including `agent.resolved()`'s empty answer.
+4. **Prove it against a scratch install built for the purpose**, not the owner's own — by hand as well as by
+   the suite. Driving it by hand is what found the two defects a green suite did not.
+
+### The decision this phase still carries out
+
+**Cross-agent stray sweeping is already dead, and this makes it permanent.** `_sweep_strays()` globs a
+directory that holds exactly one record (`gateway.py:781`), so the loop body never runs for a per-agent
+gateway. `R-GW-21` and `R-GW-23` are ✅ only because their tests share one `where`. Narrow both rows and stop
+the tests sharing it, in the commit that deletes the shared directory. The cost is real and is accepted: work
+left by an agent removed mid-run is never ended by anything.
+
+### Tests
+
+- Stopping an agent takes `gateway.json` and `gateway.lock` and touches nothing in `home/`, `logs/` or
+  `state.db`.
+- Nothing reads or writes `~/.rundesk/run`, `logs` or `schedules` any more, and a name that is not an agent
+  gets an error rather than the old layout.
+- No lock file sits anywhere a record does, and the ones a transaction replaced are gone rather than unused.
+- A gateway's own log and what the machine caught before its logger existed are one file, and rotating it
+  never leaves the machine writing into the rotated copy.
+- Two agents' gateways writing at once never wait on each other.
+- One kind of thing has exactly one home; the older layout is gone rather than merely unused.
+- Data written by `v0.5.1` is readable by this one after an update, and says the new version.
+- A migration runs once; an update that stopped halfway does not run it again; one that fails leaves every
+  gateway down, the reason said, and the data as it was.
+- No SQL appears outside the one module that owns it.
+
+### Exit proof
+
+`~/.rundesk/{run,logs,schedules}` is gone rather than merely unused, and one agent's log tells the whole story
+of that agent. A phase that has moved the data but left one reader on the old layout has not moved the data.
+
+**Retention is still unanswered**, and it is the other thing between this and done — how long an account is
+kept, and whether an owner or a size decides. Phase 8 is where it is answered, because a copy kept until a
+move is proved is the same question.
+
+## Phase 8 — Updates an Owner Can Trust
 
 **Outcome:** an owner on any released version can reach any later one and know, before they start, what it
 will change and what it will move — and afterwards, that it moved. What an install is *made of* and what an
 agent *keeps* both come forward, or neither does and nothing comes back up.
 
-**Why it is a phase.** Phase 5 built one half and proved it: records move in the window an update already
+**Why it is a phase.** Phase 7 built one half and proved it: records move in the window an update already
 stands every gateway down for, and a step that fails leaves them down and says which and why (R-MIG-1,
 R-MIG-6). The other half is missing entirely, and the same window is where it belongs — `updater.py` contains
 no mention of `pip`, `.venv` or `requirements`, so **an update replaces the source and never touches what it
@@ -588,7 +591,7 @@ both of those would be. The same update run twice changes nothing the second tim
 each of its three points — the download, the dependencies, a step — leaves the agents down, the data as it
 was, and a sentence naming which point and why.
 
-## Phase 14 — Templates an Owner Can Make Their Own
+## Phase 9 — Templates an Owner Can Make Their Own
 
 **Outcome:** the files a new agent's home is copied from are the owner's to override — one at a time, any or
 all — and what they wrote survives an update.
@@ -680,7 +683,7 @@ An owner overrides one of the five files, makes an agent, and finds their words 
 home. They update to a later release; their file is untouched and the other four are the new release's.
 `doctor` says which is which without being asked twice.
 
-## Phase 8 — Provider Adapters: Audit the Seam
+## Phase 10 — Provider Adapters: Audit the Seam
 
 **Outcome:** somebody who has never seen this code can write a brain — or point at an endpoint — and have it
 work with every feature, and what rundesk keeps about a brain is stable enough to build on.
@@ -714,7 +717,7 @@ what shipped.
    their accounts inspected — runs, records, usage, session handles and resume all correct — but the suite
    proves the seam-to-store path with stand-ins only.
 
-## Phase 9 — Channel Adapters: Audit the Seam
+## Phase 11 — Channel Adapters: Audit the Seam
 
 **Outcome:** the same, on the other edge — a new surface hooks into every existing feature without touching
 one of them.
@@ -734,7 +737,7 @@ one of them.
 6. **The gateway's announcement decided.** It fires once per channel, so two channels mean two notices to the
    same person. The notice is about the gateway; it wants a home rather than papering over.
 
-## Phase 10 — Bootstrap Knowledge, Skills and Tool Discovery
+## Phase 12 — Bootstrap Knowledge, Skills and Tool Discovery
 
 **Outcome:** every provider can be given the same agent's knowledge and a basic skill without Rundesk becoming
 a second skills or tools engine.
@@ -765,7 +768,7 @@ provider-native file/shell tools, dynamically load plugins or execute arbitrary 
 Each supported provider has a current capability row marked proven, unsupported or unknown. Rundesk does not
 claim that a provider loaded a rule or skill based only on file presence.
 
-## Phase 11 — Questions, Approvals and Recovery
+## Phase 13 — Questions, Approvals and Recovery
 
 **Outcome:** a supported provider can pause for remote input without weakening its native permission model,
 and Rundesk can recover truthfully after a gateway/channel restart.
@@ -799,12 +802,12 @@ supported restart boundary. The public always-online claim waits until interrupt
 restart and repeated crashes stop looping — `R-GW-22` and `R-GW-24`, both ❌ today because nothing records
 where a piece of work had got to.
 
-## Phase 12 — Add Channel Breadth One Adapter at a Time
+## Phase 14 — Add Channel Breadth One Adapter at a Time
 
 **Outcome:** a second real surface — Slack — reuses the channel contract without changing the agent, the seam
 or any provider.
 
-The brains were done in Phase 7. This is the other edge, and the same claim: adding a surface is writing a
+The brains were done in Phase 5. This is the other edge, and the same claim: adding a surface is writing a
 program against a published contract rather than extending a core. A Slack channel selects its provider and
 model exactly as Discord and a schedule do; it does not add Slack fields to the agent.
 

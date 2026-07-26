@@ -1,4 +1,4 @@
-# Moving onto the store — what Phase 5 did, and what is left
+# Moving onto the store — what Phase 7 did, and what is left
 
 Phase 4 built [`store.py`](../../src/rundesk/store.py) and
 [`migration.py`](../../src/rundesk/migration.py) and pointed nothing at them. This is the
@@ -8,7 +8,7 @@ page that says how everything is pointed at them without improvising.
 before was that this one does not discover its design while building it. A surprise is a finding
 against [`agent-store`](../prd/agent-store.md) or
 [`lifecycle-migration`](../prd/lifecycle-migration.md), not a special case in the code. Several
-were found, each recorded in the roadmap's Phase 5 with what was decided about it.
+were found, each recorded in the roadmap's Phase 7 with what was decided about it.
 
 **There is no migration `002`.** Nothing is released, so there is no data on any machine to
 carry: `001.py` is the whole shape, and everything the move proved missing went into it —
@@ -68,7 +68,7 @@ migration step that ran or failed. An ordinary read or write writes nothing, del
 
 **Nothing else does yet.** As each reader moves onto the store, whatever it used to report has
 to keep being reported — a schedule that could not fire, a channel that could not connect, a
-turn whose account could not be written. The rule to hold: after Phase 5, one agent's log tells
+turn whose account could not be written. The rule to hold: after Phase 7, one agent's log tells
 the whole story of that agent, and no part of that story is only in a caller's return value.
 
 ## Every place that touches durable state today
