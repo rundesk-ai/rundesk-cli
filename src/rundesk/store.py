@@ -72,7 +72,7 @@ MARK_FROM = "abcdefghijklmnopqrstuvwxyz0123456789"
 MARK_LENGTH = 4
 
 RECORD_KINDS = ("think", "tool", "result", "usage", "file", "done", "lost", "unknown")
-AUTHORS = ("person", "agent", "rundesk")
+AUTHORS = ("user", "agent", "rundesk")
 
 #: Every way work is admitted for an agent, and the whole of it. Three, because there are
 #: three things that start one: somebody at a terminal, somebody on a surface the agent is
@@ -841,7 +841,7 @@ class Store:
 
     # ── what was said: the searchable history ─────────────────────────────────────────────
 
-    def arrived(self, conversation_id, at, text, author="person", who=None,
+    def arrived(self, conversation_id, at, text, author="user", who=None,
                 external_id=None):
         """Something a person said. Returns what it is known by, so a run can name its cause.
 
@@ -879,7 +879,7 @@ class Store:
         return [_plain(row) for row in rows]
 
     def latest(self, limit: int = 50, since=None, channel=None, author=None,
-               source=None) -> list:
+               source=None, conversation=None) -> list:
         """The newest things said, across every conversation this agent has had.
 
         **The question `search` cannot answer.** Searching needs a word, and the case this
@@ -910,6 +910,11 @@ class Store:
         if channel is not None:
             where.append("c.channel = ?")
             values.append(channel)
+        if conversation is not None:
+            # The platform's own word for one place, never parsed here — which is how an
+            # agent in one of two DMs narrows to the one it is actually in.
+            where.append("c.space = ?")
+            values.append(conversation)
         if author is not None:
             where.append("m.author = ?")
             values.append(author)

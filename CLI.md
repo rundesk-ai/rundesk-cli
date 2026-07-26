@@ -48,7 +48,7 @@ rundesk update [--check]                                                        
 rundesk uninstall [--purge]                                                                                                                                                            remove rundesk from this machine
 
 # not yet grouped
-rundesk messages [--most <n>] [--since <id>] [--channel <channel>] [--author <who>] [--source <how>] <agent>                                                                           what was said, newest first
+rundesk messages [--most <n>] [--since <id>] [--channel <channel>] [--conversation <where>] [--author <who>] [--source <how>] <agent>                                                  what was said, newest first
 rundesk resume <agent>                                                                                                                                                                 carry one run on from where it stopped   [planned]
 rundesk search [--most <n>] <agent> <words>                                                                                                                                            what was said, by the words in it
 ```
@@ -105,10 +105,11 @@ rundesk schedules ava off nightly
 --all                           every agent on this machine
 --allow <user>                  who may reach this agent through it — at least one, always; repeatable
 --ask <prompt>                  what to ask this agent when it is due, in quotes — a turn rather than a program
---author <who>                  only what this kind of author said — one of agent | person | rundesk
+--author <who>                  only what this kind of author said — one of agent | rundesk | user
 --channel <channel>             only what was said on this channel, by the name it was added under
 --check                         say whether a newer release exists
 --conversation <conversation>   which conversation to carry on — this terminal's, when left out
+--conversation <where>          only what was said in one place on it — the direct message or room, in the platform's own word for it
 --fresh                         start the conversation again rather than carrying it on
 --here                          run it in this terminal instead of handing it to the machine
 --instructions <text>           what every turn for this agent is told before it reads a prompt, where neither the schedule nor the surface said — empty takes it off

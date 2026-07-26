@@ -2972,5 +2972,38 @@ class MovingEveryAgentForwardWhenAnUpdateLands(unittest.TestCase):
                       (broken / "logs" / "gateway.log").read_text())
 
 
+class WhoSaidIt(unittest.TestCase):
+    """R-STO-25 — the column an agent reads to know who it is talking to."""
+
+    def test_a_person_is_named_by_what_their_surface_calls_them(self):
+        """Discord hands over a display name rather than a number, and it is kept."""
+        self.assertEqual("tim", cli._said_by({"who": "tim", "author": "user"}, "ava"))
+
+    def test_two_people_are_two_names_rather_than_two_rows_saying_user(self):
+        """The whole point: one channel, two direct messages, two people."""
+        said = [cli._said_by({"who": one, "author": "user"}, "ava") for one in ("tim", "sam")]
+        self.assertEqual(["tim", "sam"], said)
+
+    def test_the_agent_is_named_rather_than_called_agent(self):
+        """A listing asked for by name that answers `agent` spends a column saying the one
+        thing its reader already knew."""
+        self.assertEqual("ava", cli._said_by({"who": None, "author": "agent"}, "ava"))
+
+    def test_somebody_a_surface_gave_no_name_for_is_still_told_from_the_agent(self):
+        """The terminal reports nobody, and `user` versus the agent's name is still the
+        distinction that matters."""
+        self.assertEqual("user", cli._said_by({"who": None, "author": "user"}, "ava"))
+
+    def test_rundesk_is_never_renamed_to_the_agent(self):
+        """What rundesk added to a turn is not the agent speaking, and a listing that said it
+        was would attribute rundesk's words to somebody who did not write them (R-PRV-5)."""
+        self.assertEqual("rundesk", cli._said_by({"who": None, "author": "rundesk"}, "ava"))
+
+    def test_a_name_a_surface_gave_wins_over_the_kind_of_author(self):
+        """Both present is the ordinary case for a channel message, and the name is the more
+        specific of the two."""
+        self.assertEqual("sam", cli._said_by({"who": "sam", "author": "user"}, "ava"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -773,7 +773,7 @@ class WhatAnUpdateMustNotCost(WithStepsOfThisCasesOwn):
         self.assertEqual("codex", kept.agent()["provider"])
         self.assertEqual(["ops"], [one["name"] for one in kept.channels()])
         self.assertEqual(LATER, kept.schedule("nightly")["last_auto_run_at"])
-        self.assertEqual([("person", "what about the parser"),
+        self.assertEqual([("user", "what about the parser"),
                           ("agent", "the parser was rewritten")],
                          [(one["author"], one["text"]) for one in kept.messages("c1")])
         one = kept.run(named)

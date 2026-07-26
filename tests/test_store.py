@@ -914,7 +914,7 @@ class WhatWasSaid(WithAnAgentsOwnRecords):
         said = self.kept.messages("c1")
         self.assertEqual(["how are we", "we are well", "good"],
                          [one["text"] for one in said])
-        self.assertEqual(["person", "agent", "person"], [one["author"] for one in said])
+        self.assertEqual(["user", "agent", "user"], [one["author"] for one in said])
         self.assertEqual("u-1", said[0]["who"])
         self.assertEqual(named, said[1]["run_id"])
         self.assertEqual(LATER, self.kept.conversation("discord", "general")["last_at"])
@@ -971,7 +971,7 @@ class FindingWhatWasSaidAboutSomething(WithAnAgentsOwnRecords):
         self.assertEqual(2, len(found))
         self.assertEqual({"discord", "terminal"}, {one["channel"] for one in found})
         self.assertEqual({"general", "here"}, {one["space"] for one in found})
-        self.assertEqual({"person", "agent"}, {one["author"] for one in found})
+        self.assertEqual({"user", "agent"}, {one["author"] for one in found})
         self.assertEqual([], kept.search("constellation"))
 
     def test_a_machine_that_cannot_search_says_so_rather_than_answering_nothing(self):
@@ -1127,7 +1127,7 @@ class WhatSurvivesLosingEverythingElse(WithAnAgentsOwnRecords):
         self.assertEqual("sess-abc", back.session("c1", "codex"))
         self.assertEqual("c1", back.conversation("ops", "99123", "4456")["id"])
         # everything it was told and said
-        self.assertEqual([("person", "what about the parser"),
+        self.assertEqual([("user", "what about the parser"),
                           ("agent", "the parser was rewritten")],
                          [(one["author"], one["text"]) for one in back.messages("c1")])
         self.assertEqual(["finished"], [one["outcome"] for one in back.runs()])
@@ -1412,7 +1412,7 @@ class ReadingBackWhatWasSaid(WithAnAgentsOwnRecords):
 
     def test_what_a_listing_shows_can_be_narrowed_to_one_kind_of_author(self):
         kept, said = self.furnished()
-        found = kept.latest(author="person")
+        found = kept.latest(author="user")
         self.assertEqual([said["nightly"], said["asked"]], [one["id"] for one in found])
 
     def test_what_a_listing_shows_can_be_narrowed_to_how_the_work_was_admitted(self):
@@ -1423,6 +1423,48 @@ class ReadingBackWhatWasSaid(WithAnAgentsOwnRecords):
         self.assertEqual([said["clock"]], [one["id"] for one in kept.latest(source="schedule")])
         self.assertEqual([said["answered"], said["asked"]],
                          [one["id"] for one in kept.latest(source="terminal")])
+
+    def test_what_a_listing_shows_can_be_narrowed_to_one_place_on_a_surface(self):
+        """Two direct messages are two conversations on one channel, and an agent standing in
+        one of them wants that one. Narrowing by the channel would hand it both."""
+        kept = self.built()
+        kept.opened("dm-tim", "dms", "dms", "482910337", AT)
+        kept.opened("dm-sam", "dms", "dms", "913774028", AT)
+        tim = kept.arrived("dm-tim", AT, "nice work!", who="tim")
+        kept.arrived("dm-sam", LATER, "did you finish?", who="sam")
+        found = kept.latest(conversation="482910337")
+        self.assertEqual([tim], [one["id"] for one in found])
+        self.assertEqual(["tim"], [one["who"] for one in found])
+
+    def test_two_people_on_one_channel_are_kept_apart_by_where_they_said_it(self):
+        """The column an agent reads to know who it is talking to. Both are `user`, and what
+        tells them apart is the place and the name their surface gave."""
+        kept = self.built()
+        kept.opened("dm-tim", "dms", "dms", "482910337", AT)
+        kept.opened("dm-sam", "dms", "dms", "913774028", AT)
+        kept.arrived("dm-tim", AT, "nice work!", who="tim")
+        kept.arrived("dm-sam", LATER, "did you finish?", who="sam")
+        found = kept.latest(channel="dms")
+        self.assertEqual({"tim", "sam"}, {one["who"] for one in found})
+        self.assertEqual({"user"}, {one["author"] for one in found})
+        self.assertEqual(2, len({one["space"] for one in found}))
+
+    def test_a_narrowing_that_matches_nothing_is_empty_rather_than_everything(self):
+        """The edge that turns a filter into a lie. A place nobody has spoken in must not
+        fall back to the whole listing, which is how a scoped question answers a broad one."""
+        kept, _ = self.furnished()
+        self.assertEqual([], kept.latest(conversation="no-such-place"))
+        self.assertEqual([], kept.latest(channel="no-such-channel"))
+        self.assertEqual([], kept.latest(since=10_000))
+
+    def test_narrowings_asked_together_all_hold_rather_than_the_last_one_winning(self):
+        """Four filters at once, and each one still applies — a listing that quietly dropped
+        all but the last would answer a question nobody asked."""
+        kept, said = self.furnished()
+        self.assertEqual(
+            [said["asked"]],
+            [one["id"] for one in kept.latest(channel="terminal", author="user",
+                                              source="terminal", conversation="terminal")])
 
     def test_a_narrowing_by_an_author_nobody_could_be_is_refused(self):
         """Refused rather than ignored. A filter nobody can spell that is quietly dropped is

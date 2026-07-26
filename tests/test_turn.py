@@ -573,7 +573,7 @@ class BeingSentToMidTurn(WithAnAgentToRunTurnsFor):
         the account a lie, and this is the one thing that adds words after it starts."""
         said = await turn.carry("ava", "first", self.brain("steerable"), where=self.where,
                                 steering=self.words("second"))
-        sent = [one["text"] for one in self.talk(said.run) if one["author"] == "person"]
+        sent = [one["text"] for one in self.talk(said.run) if one["author"] == "user"]
         self.assertEqual(["first", "second"], sent,
                          "a word said mid-turn is not in the account of the turn it reached")
 
@@ -583,7 +583,7 @@ class BeingSentToMidTurn(WithAnAgentToRunTurnsFor):
         said = await turn.carry("ava", "hello", self.brain("plain"), where=self.where,
                                 steering=self.words("never arrives"))
         self.assertTrue(said.ok, "a brain that reads to the end of its input never finished")
-        sent = [one for one in self.talk(said.run) if one["author"] == "person"]
+        sent = [one for one in self.talk(said.run) if one["author"] == "user"]
         self.assertEqual(["hello"], [one["text"] for one in sent])
 
 
@@ -637,7 +637,7 @@ class WhatAReviewFound(WithAnAgentToRunTurnsFor):
         account to show for it."""
         said = await self.ask("steerable", prompt="hello")
         self.assertTrue(said.ok)
-        sent = [one for one in self.talk(said.run) if one["author"] == "person"]
+        sent = [one for one in self.talk(said.run) if one["author"] == "user"]
         self.assertEqual(["hello"], [one["text"] for one in sent],
                          "a turn reached a brain and its account does not show it")
 

@@ -446,6 +446,9 @@ def build_parser() -> argparse.ArgumentParser:
     recent.add_argument("--channel", metavar="<channel>",
                         help="only what was said on this channel, by the name it was added "
                              "under")
+    recent.add_argument("--conversation", metavar="<where>",
+                        help="only what was said in one place on it — the direct message or "
+                             "room, in the platform's own word for it")
     # The choices are read off the store's own closed sets rather than restated, and the
     # reference prints them, so neither says the list twice.
     recent.add_argument("--author", choices=list(store.AUTHORS), metavar="<who>",
@@ -2339,7 +2342,8 @@ def cmd_messages(args: argparse.Namespace, gateways, agents) -> int:
         return 1
     try:
         found = kept.latest(limit=max(1, args.most), since=args.since,
-                            channel=args.channel, author=args.author, source=args.source)
+                            channel=args.channel, author=args.author, source=args.source,
+                            conversation=args.conversation)
     except ValueError as why:
         # The closed sets say what they are rather than being quietly ignored, so a filter
         # nobody can spell is refused instead of answering a different question (R-STO-26).
@@ -2351,10 +2355,30 @@ def cmd_messages(args: argparse.Namespace, gateways, agents) -> int:
         return 0
     _as_table(("ID", "WHEN", "WHERE", "WHO", "MESSAGE"), [
         (str(one["id"]), str(one["at"]), f"{one['channel']}/{one['space']}",
-         str(one["author"]), " ".join(str(one["text"]).split())[:_MESSAGE_CHARS])
+         _said_by(one, args.name), " ".join(str(one["text"]).split())[:_MESSAGE_CHARS])
         for one in found
     ])
     return 0
+
+
+def _said_by(one: dict, named: str) -> str:
+    """Who said it: a person by their name, and the agent by its own.
+
+    Two people in two direct messages are two conversations and would otherwise both read
+    as `user`, which is the one thing this column exists to tell apart. A surface reports
+    the name it shows a human — Discord hands over a display name rather than a number —
+    and it is kept on the message, so it is shown wherever there is one.
+
+    **The agent is named too**, because a listing that was asked for by name and answers
+    `agent` spends a column saying the one thing its reader already knew. Said here rather
+    than kept on the row: these are one agent's records, so the name is already the
+    directory they stand in, and a copy on every message is a second place for it to be
+    wrong. What stays generic is `rundesk` itself, which is not the agent and never a
+    person.
+    """
+    if one.get("who"):
+        return str(one["who"])
+    return named if one["author"] == "agent" else str(one["author"])
 
 
 #: How much of one message is shown. Far more than a search result shows, because these are
