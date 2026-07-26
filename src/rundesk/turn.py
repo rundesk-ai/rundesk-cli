@@ -297,8 +297,13 @@ class _Account:
         return False
 
     def add(self, event: dict | None = None, raw: bytes | None = None) -> int:
-        """One thing that happened, added and never rewritten (R-RUN-5)."""
-        self._seq += 1
+        """One thing that happened, added and never rewritten (R-RUN-5).
+
+        What was *said* is not a record: it is a message, in the conversation it was said
+        in, and writing it both ways would make the answer two things that could disagree.
+        Only what happened claims a place in the order, so the order has no holes in it
+        where something that was not a record went by.
+        """
         at = _stamped(self._now)
         kind = (event or {}).get("type")
         if kind == SENT:
@@ -310,6 +315,11 @@ class _Account:
             if event.get("mid"):
                 self._kept.arrived(self._conversation, at, str(event.get("text") or ""))
             return self._seq
+        if kind == self.SAID:
+            # Gathered, not recorded. A reply arrives a fragment at a time and is one
+            # thing said; it is written whole when the turn ends.
+            return self._seq
+        self._seq += 1
         self._kept.recorded(
             self.run, self._seq, at,
             kind if kind in store.RECORD_KINDS else "unknown",

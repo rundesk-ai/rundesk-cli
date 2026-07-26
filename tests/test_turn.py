@@ -319,6 +319,26 @@ class WhatReachesABrain(WithAnAgentToRunTurnsFor):
 
 
 class WhatATurnRecords(WithAnAgentToRunTurnsFor):
+    async def test_what_the_agent_said_is_written_in_one_place_and_not_two(self):
+        """The rule the whole shape rests on: nothing is written twice where the two
+        copies could come to disagree. What was *said* is a message — it is what a person
+        reads back and what a search matches — and a record of it beside that would be a
+        second answer to the same question, with nothing keeping them in step.
+
+        The order has no hole in it either: only what happened claims a place, so a run
+        whose brain said something does not skip a number where the saying went by."""
+        said = await self.ask("plain")
+        records = self.kept().records(said.run)
+        self.assertEqual(["usage", "done"], [one["kind"] for one in records])
+        self.assertEqual([1, 2], [one["seq"] for one in records],
+                         "the order skips a place where something that is not a record went by")
+        self.assertEqual([], [one for one in records
+                              if "the parser" in (one["raw"] or "")
+                              or "heard" in (one["raw"] or "")],
+                         "what the agent said was kept as a record as well as a message")
+        self.assertEqual(1, len([one for one in self.talk(said.run)
+                                 if one["author"] == "agent"]))
+
     async def test_a_record_rundesk_did_not_understand_is_kept_and_shown_to_nobody(self):
         """R-PRV-5 — the turn finishes, its place in the order is kept, and what it
         actually said is there to be read afterwards."""
