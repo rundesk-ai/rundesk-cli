@@ -1393,11 +1393,17 @@ recorded as findings 24–26 and 31.
 One scheduled run passes through the same resolver, run record and provider adapter that Discord and the
 terminal already used — and its outcome is readable the next morning without a terminal having been open.
 
-## Phase 7 — Two More Brains Behind the Seam
+## Phase 7 — Two More Brains Behind the Seam — **done**
 
 **Outcome:** Claude Code and Grok each carry a whole turn for an agent, and **nothing inside
 rundesk changes to accommodate either.** If one of them needs a change in the core, that is the
 finding: the seam was not open, and the change belongs in the contract.
+
+**The seam held.** Two unrelated vendors went behind it and not one line of `src/rundesk/`
+moved — no special case, no new record kind, no capability invented for a vendor. The closed
+vocabularies were enough: seven records, six verbs, five capabilities, two postures. The two
+brains land at opposite ends of the contract and both are whole — claude answers `true` to
+four capabilities, grok to three, and a turn on either is a complete turn.
 
 **It runs beside Phase 5 and does not wait for Phase 6.** A brain is a program; adding one touches
 `src/providers/`, `tests/` and `.knowledge/` and reads no durable state at all, so it cannot collide
@@ -1437,10 +1443,39 @@ all three CLIs and kept what it found, locked to `claude 2.1.219` and `grok 0.2.
 6. `R-PRV-20` and `R-PRV-22` turned ✅ — Claude streams fragments and reports files, which is
    exactly what no test has driven a real brain to do.
 
-### Exit proof
+### Exit proof — met, with one deliverable short and one left open
 
-Both brains answer for one agent, and `git diff --stat` for the phase touches nothing outside
-`src/providers/`, `tests/`, `.knowledge/` and `build.yml`.
+`git diff --stat` for the phase touches `src/providers/`, `tests/`, `.knowledge/` and
+`build.yml`, and nothing else. **Nothing in `src/rundesk/` changed.**
+
+| Deliverable | |
+|---|---|
+| 1 · evidence carried in | done — the streams, the mapping decisions and both research notes |
+| 2 · probes for the gaps only | done — `probe-claude`, `probe-grok`, four gaps answered and a fifth found |
+| 3 · the two adapters | done — declaring only what was measured |
+| 4 · offline suites + `build.yml` | done — 64 cases, driven against captured output, no account |
+| 5 · `test_provider.py --adapter …` | grok passes unchanged, 34 cases. **Claude cannot be run** — see below |
+| 6 · `R-PRV-20` and `R-PRV-22` ✅ | R-PRV-22 green from both sides. **R-PRV-20 stays ❌** |
+
+**R-PRV-20 could not be earned, and the reason is the finding.** Grok reports no tool events at
+all, and the 184 captured lines of claude contain no file-making tool — its 13 calls are
+`ToolSearch`, `TaskCreate`, `TaskUpdate`, `Bash` and `Read`. So the field a `Write` names its path
+in is unmeasured, and guessing a vendor's field name is already in `MEMORY.md` as costing a whole
+feature silently. What this row needs is a capture of a brain making a file, which is a live turn
+nobody has bought yet.
+
+**Claude's conformance run needs a sign-in that only the owner can create.** Measured while
+attempting it: `CLAUDE_CONFIG_DIR` does not redirect the login, it removes one — the sign-in is in
+the macOS login keychain, and pointing the variable at the directory the CLI defaults to is enough
+to be told to run `/login`. So an agent's private home cannot borrow the machine's login and there
+is nothing to copy into it. `CLAUDE_CONFIG_DIR=<dir> claude /login`, once per agent, needs a
+browser. The adapter says exactly that when it happens.
+
+### What this closes, and what it does not
+
+The seam's claim is now tested by somebody other than the vendor it was designed against, which is
+what it was for. What is *not* closed: whether a brain can say it made a file (R-PRV-20), and
+whether `--rules` on grok lands at all — the last row in that note still reading `Assumed`.
 
 ## Phase 8 — Provider Adapters: Audit the Seam
 

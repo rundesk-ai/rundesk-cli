@@ -66,7 +66,9 @@ file with it.
   has never heard of is the ordinary case. A vendor name appearing in this file is the seam already failing.
 - `src/providers/` — the brains that ship, one program each. Not modules: nothing imports them
   and they import nothing of ours, so a vendor's flags, stream shape, session file and usage arithmetic
-  live in one file and reach no further. `adapters/codex` is the first.
+  live in one file and reach no further. Three so far — `codex`, `claude` and `grok` — and adding the
+  last two changed nothing above this line, which is the claim the seam was built to make. Each is
+  driven offline by a suite of its own against real captured output in `tests/samples/`.
 - `src/rundesk/channel.py` — the seam a surface is reached through, and nothing about any
   particular platform. The mirror of `provider.py`: resolves a channel — a shipped adapter, or a path to
   a program somebody wrote — builds the environment it is told everything through, asks whether it can
@@ -153,7 +155,9 @@ provider. One file per contract, named for it:
 | `test_install.py` | 41 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
 | `test_supervisor.py` | 38 | the launchd job — a fake `launchctl`, so it runs where there is none |
 | `test_schedule.py` | 28 | `platform-schedule` — pure time arithmetic, the clock passed in |
-| `test_provider.py` | 31 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
+| `test_provider.py` | 34 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
+| `test_claude.py` | 32 | `provider-adapter` — the arithmetic and the postures one shipped brain decides on its own, driven against 184 captured lines rather than an account |
+| `test_grok.py` | 32 | `provider-adapter` — a brain that reports no tools, and the two flags of its that are accepted and enforce nothing |
 | `test_turn.py` | 39 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_transcript.py` | 19 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
 | `test_store.py` | 57 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
