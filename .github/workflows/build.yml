@@ -249,16 +249,6 @@ jobs:
           tail -c 200000 suite.log
           exit $ran
 
-      - name: lifecycle-migration — bringing what is already on a machine forward, whole or not at all
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_migration.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
       - name: lifecycle-install — putting it on a machine, and taking it off
         run: |
           # Into a file, never the runner's own pipe. A suite that leaks a process

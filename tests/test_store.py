@@ -906,8 +906,14 @@ class WhatSurvivesLosingEverythingElse(WithAnAgentsOwnRecords):
     def test_an_agent_is_whole_again_from_its_records_alone(self):
         named = self.furnished()
         self.cleared()
-        self.assertEqual(sorted(one.name for one in self.where.iterdir()),
-                         sorted(one.name for one in store.removes(self.where)))
+        # Nothing but the database's own files is left. Which of the three are actually there
+        # is not ours to say: the two beside it exist only while a connection is open or after
+        # one closed badly, so a case demanding all three passes on one Python and fails on
+        # the next. What matters is that nothing else survived.
+        left = sorted(one.name for one in self.where.iterdir())
+        self.assertEqual([], [one for one in left
+                              if one not in {x.name for x in store.removes(self.where)}])
+        self.assertIn(store.NAME, left)
 
         back = store.Store(self.at)
         back.made()

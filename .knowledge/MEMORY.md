@@ -167,6 +167,10 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   errored — a generated image was simply never reported. Read a real item out of a run's
   `.brain` file before writing the name of a field.
 
+- **Never assert that `state.db-wal` and `state.db-shm` exist.** They are there only while a
+  connection is open or after one closed badly — a clean close checkpoints and removes them. A case
+  asserting all three files are present passed on `/usr/bin/python3` and failed the gate on 3.14,
+  which is the worst way round to find it. Assert that nothing *other* than the three is left.
 - **`Connection.executescript()` issues an implicit COMMIT before it runs**, so a `BEGIN IMMEDIATE`
   opened just above it is silently ended and everything the script does happens in the open. The
   build of a fresh `state.db` looked atomic and was not, and the failure surfaced two steps later
