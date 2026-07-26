@@ -2103,6 +2103,25 @@ raise SystemExit(1)
                         self._gateways(), agents=self.agents)
         self.assertIn("only the answer", said)
 
+    def test_a_channel_that_could_not_be_written_down_is_refused_rather_than_raised(self):
+        """R-CAD-9 — what this replaced answered `False` when the record could not be
+        written, and the command said so and failed. Asking what the agent keeps means the
+        failure arrives as an exception, and one that reached the top would tell an owner
+        adding a channel to read a stack trace."""
+        self.addCleanup(setattr, store.Store, "remember_channel",
+                        store.Store.remember_channel)
+
+        def cannot(one, *said, **held):
+            raise OSError("the disk is full")
+
+        store.Store.remember_channel = cannot
+        code, said = drive(["channels", "ava", "add", "ops", "--kind",
+                            self._adapter(self.WORKS), "--allow", "2207"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code, "it reported a channel it had not written down")
+        self.assertIn("NOT CHANGED", said)
+        self.assertIn("the disk is full", said, "it never said what went wrong")
+
     def test_taking_one_channel_off_leaves_every_other_one_on(self):
         """R-CAD-9, R-AGW-4 — an agent reachable in three places and taken off one is
         still reachable in two. Taking the lot would put it out of reach of people who

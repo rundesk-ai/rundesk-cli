@@ -1499,15 +1499,21 @@ def cmd_channels(args: argparse.Namespace, gateways, agents) -> int:
         print(f"{args.name}: RECORDS UNREADABLE — {why}", file=sys.stderr)
         return 1
     act = getattr(args, "act", None)
-    if act == "add":
-        return _add_channel(args, gateways, agents, whose)
-    if act == "remove":
-        return _remove_channel(args, gateways, agents, whose)
-    if act == "show":
-        return _show_channel(args, gateways, agents, whose)
-    if act == "instructions":
-        return _channel_instructions(args, gateways, agents, whose)
-    return _list_channels(args, gateways, agents, whose)
+    doing = {"add": _add_channel, "remove": _remove_channel, "show": _show_channel,
+             "instructions": _channel_instructions}.get(act, _list_channels)
+    try:
+        return doing(args, gateways, agents, whose)
+    except Exception as why:   # noqa: BLE001 — a command boundary, reporting truthfully
+        # **A write that could not happen is a refusal, not a traceback.** What this
+        # replaced answered `False` when the record could not be written, and the command
+        # said so and failed; asking the store instead means the failure arrives as an
+        # exception, and one that reached here uncaught would tell an owner adding a
+        # channel to read a stack trace. Caught broadly because *what* went wrong with
+        # somebody else's disk matters far less than the channel not having been added.
+        print(f"{args.name}: NOT CHANGED — {why}", file=sys.stderr)
+        print(f"        what stands in the way:  rundesk doctor {args.name}",
+              file=sys.stderr)
+        return 1
 
 
 def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
