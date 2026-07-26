@@ -3,9 +3,10 @@
 **Planning baseline:** `1046f3f` on 2026-07-25  
 **Status:** Direction, not a ratified product contract
 
-**Starting implementation? Read in this order:** this file's Direction and **Phase 4**, which is next;
-then walk what is actually on disk before believing any description of it — `agents/<name>/` and
-`~/.rundesk/`, because two layouts currently coexist and that is the first thing Phase 4 ends. Then
+**Starting implementation? Read in this order:** this file's Direction and **Phase 4**, which is next and
+is **research and planning rather than code** — Phase 5 builds what it decides. Then walk what is actually
+on disk before believing any description of it: `agents/<name>/` and `~/.rundesk/`, because two layouts
+currently coexist and ending that is the first thing Phase 5 does. Then
 [`CLI.md`](CLI.md) for every operation as it is typed, and
 [`.knowledge/guides/the-command-surface.md`](.knowledge/guides/the-command-surface.md) for why the surface
 is shaped that way. Phases 0 to 3 are done and their contracts are ratified in
@@ -575,7 +576,7 @@ gained — and **one file changed**. Nothing outside `adapters/codex` knew eithe
   - **`runs` and `usage` as verbs.** The contracts graduated on module-level evidence; reading a run
     back from the command line is a listing, and listings are cheap to add once a channel wants one.
   - **Approvals and questions.** `codex exec` cannot answer one mid-turn and `app-server` can; nothing
-    here uses that yet, and Phase 7 — questions and approvals — is where it belongs.
+    here uses that yet, and Phase 8 — questions and approvals — is where it belongs.
   - **A gateway you can ask for something.** `ask` runs in the terminal that typed it, exactly as a
     schedule run by hand does. Phase 3 is what forces the question.
 
@@ -733,7 +734,7 @@ The first slice needs:
 - local retention of the final run outcome when Discord is unavailable.
 
 **Stopping and forgetting are not approvals.** They are gestures aimed at the conversation, not at the
-provider's permission model, so they belong here while questions and approvals wait for Phase 7. What a
+provider's permission model, so they belong here while questions and approvals wait for Phase 8. What a
 control *did* arrives as the turn's own outcome, never as the command's answer — acknowledging a control
 with a lifecycle signal is what made resetting mid-turn publish the running turn's half-written output in
 the Node build (R-DIS-12).
@@ -792,57 +793,25 @@ guide by someone who has not read this codebase, carries a whole conversation wi
 the same bar Phase 2 set for a brain, and the same reason. Until that has happened, "channels are
 swappable" is a hope.
 
-## Phase 4 — Settle the Shape of What Is Kept, and How It Moves Between Versions
+## Phase 4 — Design the Shape of What Is Kept, and How It Moves — **research and planning, no code**
 
-**Outcome:** every durable thing has one home and one stated shape, and an update carries what a previous
-version left into the shape the new one expects — before any agent comes back up.
+**Outcome:** a settled, written design for how everything durable is organised, queried and carried
+between versions — agreed with the owner before a line of it is built.
 
-**Why now and not later.** Nobody has installed this yet, so nothing is on anyone's disk but the owner's.
-That ends at the first release, and it ends permanently: a record written without a version can only ever
-be identified afterwards by guessing at its shape, in code that can then never be deleted. Every day this
-waits, it gets more expensive, and it is the only work on this roadmap with that property.
+**Why this is its own phase.** Every other phase here could discover its design while building it, because
+a wrong turn cost a rewrite of code nobody had yet. This one cannot: the moment a release lands, the shape
+is on somebody's disk and every mistake becomes a migration. Discovering the design while implementing it
+means discovering it in the one place where mistakes are permanent. So the design is finished, argued over
+and written down first, and the phase after does exactly what was written.
 
-**And it has to come before `runs` and `usage`.** Both are still registered and unbuilt. They are the
-first things that will *read* what a turn wrote — every run an agent has, what each cost, what became of
-it. Written against the layout as it stands, they are directory walks over four files per run, and they
-get rewritten the moment the shape changes. Written after, they are queries. Building them first means
-building them twice.
+**Nothing is implemented here.** No schema is created, no file is moved, no query is written. What this
+phase produces is a decision, in the places this repository keeps decisions.
 
-This is two halves, and the first has to finish before the second can be written: there is no point
-migrating *to* a shape nobody has settled.
+### What it must settle
 
-### 4A. One home, one shape, one name for each kind of thing
-
-**What is written down today, found by writing it:**
-
-```text
-agents/ava/agent.json          what the agent is
-agents/ava/sessions.json       which conversation continues which brain session
-agents/ava/schedules/ava.json  what it runs on its own
-agents/ava/runs/allocating.json   the next run id
-agents/ava/runs/<run>.jsonl    the account of one run
-agents/ava/runs/<run>.raw      what the brain itself said
-agents/ava/runs/<run>.err      what the brain said went wrong
-agents/ava/runs/<run>.brain    the brain's own notes
-agents/ava/logs/ava.log        what the gateway said
-agents/ava/*.changing          four lock files, sitting among the data
-~/.rundesk/{run,logs,schedules}/   the older layout, still the default in `gateway.py`
-```
-
-**Two layouts coexist**, which is the whole complaint: `agent.py` keeps everything under the agent, while
-`gateway.py` still defaults to `~/.rundesk/run`, `~/.rundesk/logs` and `~/.rundesk/schedules`. The same
-kind of thing has two homes depending on which code path wrote it. That is the first thing to end.
-
-What else this half settles, none of it cosmetic:
-
-- **A name is said once.** `agents/ava/schedules/ava.json` says `ava` twice; so does `logs/ava.log`. Both
-  are leftovers from when these were per-gateway in one shared directory.
-- **Locks are not data.** Four `.changing` files sit among the records they guard, indistinguishable at a
-  glance from something worth keeping.
-- **A run is one thing, not four files.** Four files per run means four thousand files after a thousand
-  turns, in one directory, with nothing tying them together but a name.
-- **A counter is not a record.** `runs/allocating.json` allocates ids and lives among the runs it numbers.
-- **Every durable thing carries a version**, and that is what makes 4B possible at all.
+Everything below is the current proposal, arrived at by walking what is actually on disk. It is where this
+phase starts, not where it is obliged to end — and every part of it is the owner's to confirm, because all
+of it is persisted state.
 
 **Group by lifetime, not by kind.** That is the whole answer to the scatter. Today things are grouped by
 what they *are* — logs here, schedules there, runs somewhere else — which is why the same agent's things
@@ -1001,6 +970,82 @@ How it behaves, which is the part worth arguing about now rather than during an 
 - **A fresh install runs no migrations** and is stamped with the current version, so first use and
   upgrade converge on the same shape.
 
+### What it produces
+
+Four things, and the phase is not finished until all four exist:
+
+1. **A research note** in `.knowledge/research/`, following `guides/docs-research.md`, on how the world
+   already solves this — how migration systems are ordered and recorded elsewhere, what they do about a
+   failure halfway and about going backwards, what practice says about SQLite for this shape, and what a
+   query seam usually looks like. Reporting, sourced, and separate from what we decide.
+2. **A draft contract for the shape**, in `.knowledge/prd-drafts/` — what is kept, where, under which
+   lifetime, what carries a version, and what may be destroyed.
+3. **A draft contract for moving between versions** — how a migration is found, ordered, recorded, and
+   what happens when one fails or when data is newer than the rundesk reading it.
+4. **The owner's decisions, recorded rather than assumed.** Each of these is a hard gate under `AGENTS.md`
+   and none may be settled by an agent alone:
+   - the layout, and that `~/.rundesk/{run,logs,schedules}` stops existing;
+   - SQLite at all, and one database per agent named `state.db`;
+   - which things become rows and which stay files;
+   - that the raw stream a brain produced may be destroyed;
+   - the retention of everything else — the open question `agent-run` already carries;
+   - how a conversation is keyed, given one history now spans every surface.
+
+### How it is proved
+
+A design phase cannot be proved by tests, so it is proved by three things instead, and dishonesty here is
+the only real risk:
+
+- **Every decision above is written down where decisions live**, not in a conversation that scrolls away.
+- **The design accounts for what is on disk today**, item by item — including the two coexisting layouts,
+  the four lock files, the four files per run, and the counter among the runs. A design that does not
+  mention something that exists has not been checked against reality.
+- **The migration is walked through against the owner's own install** on paper, naming what moves where.
+  If that walk cannot be written, the design is not finished — and it is far cheaper to find that out here.
+
+### Exit proof
+
+The owner has agreed the layout, the database, the split between rows and files, retention, and the
+migration mechanism — and each is written where the next phase can build from it without asking again.
+A second person could implement it from what is written.
+
+## Phase 5 — Move Everything Onto It
+
+**Outcome:** what Phase 4 designed is what is on disk, everything reads it through one seam, and an update
+carries a previous version's data into the new shape before any agent comes back up.
+
+This phase writes no new design. Where the design turns out to be wrong, that is a finding and the drafts
+move first — because the whole point of the phase before was that this one does not improvise.
+
+### One way in, and no SQL anywhere else
+
+**A reusable query seam is part of this phase, not a tidy-up afterwards.** Raw SQL at eight call sites is
+`~/.rundesk/{run,logs,schedules}` again one level up: the same question asked three slightly different ways,
+and every migration having to find them all. This codebase already has the pattern to follow — one reader
+and one writer serve every file today, and `gateway.changing()` holds a read, a decision and a write under
+one lock.
+
+So: one module opens `state.db`, one place begins and commits, and **a caller asks for what it wants rather
+than saying how to get it**. What that must give, whatever its shape ends up being:
+
+- **Named questions, not strings at call sites.** `runs`, `usage`, `agents`, `schedules` and searching all
+  ask the same seam. A question asked in two places is asked through one name.
+- **A migration can find every question.** When a column moves, what breaks is one module, and it breaks
+  visibly rather than at the one call site nobody grepped for.
+- **Nothing outside it knows SQL exists.** The same rule the provider and channel seams already hold to:
+  no vendor concept crosses the line, and here the vendor is the database.
+- **Read and write are told apart**, so a reader can never quietly begin a transaction that blocks a turn.
+- **It is testable without a gateway**, like everything else here — a database in a temporary directory,
+  and no process anywhere near it.
+
+### Order of work
+
+1. The query seam and the schema, with nothing yet reading them.
+2. The migration runner, with one migration: the one that brings today's layout to the new one.
+3. Move readers and writers over, one at a time, each with its own regression check.
+4. Delete the old layout, and the code that defaulted to it.
+5. Migrate the owner's own install, with a copy kept until it is proved.
+
 ### Tests
 
 - Stopping an agent empties `running/` and touches nothing in `home/`, `history/` or `state.db`.
@@ -1029,15 +1074,18 @@ How it behaves, which is the part worth arguing about now rather than during an 
 - A machine whose SQLite cannot search still lists, reads and queries every run.
 - `doctor` says when searching is unavailable rather than searching returning nothing.
 - Nothing an update touches loses a transcript, a log, or what a schedule last did.
+- No SQL appears outside the one module that owns it.
 
 ### Exit proof
 
-An install of the previous release, with agents, schedules, channels, sessions and transcripts on disk, is
+An install of the previous release, with agents, schedules, channels, sessions and history on disk, is
 updated to this one: the migration runs in the window where nothing is up, every agent comes back, and
 everything that was there is readable in the new shape. The same update run twice migrates once. A
-migration made to fail leaves the agents down and says which one and why.
+migration made to fail leaves the agents down and says which one and why. And the owner's own install —
+the one with real history in it — is carried across, with what it looked like before kept until it is
+proved.
 
-## Phase 5 — Let the Clock Start Work
+## Phase 6 — Let the Clock Start Work
 
 **Outcome:** an agent does work because the time came, through the same resolver, run record and
 provider adapter that Discord and the terminal already use.
@@ -1100,7 +1148,7 @@ recorded as findings 24–26 and 31.
 One scheduled run passes through the same resolver, run record and provider adapter that Discord and the
 terminal already used — and its outcome is readable the next morning without a terminal having been open.
 
-## Phase 6 — Bootstrap Knowledge, Skills and Tool Discovery
+## Phase 7 — Bootstrap Knowledge, Skills and Tool Discovery
 
 **Outcome:** every provider can be given the same agent's knowledge and a basic skill without Rundesk
 becoming a second skills or tools engine.
@@ -1133,7 +1181,7 @@ Tool execution and richer grants wait until one provider turn is proven — whic
 Each supported provider has a current capability row marked proven, unsupported or unknown. Rundesk does
 not claim that a provider loaded a rule or skill based only on file presence.
 
-## Phase 7 — Questions, Approvals and Recovery
+## Phase 8 — Questions, Approvals and Recovery
 
 **Outcome:** a supported provider can pause for remote input without weakening its native permission
 model, and Rundesk can recover truthfully after a gateway/channel restart.
@@ -1162,7 +1210,7 @@ A manual canary completes one question and one approval through Discord, then re
 supported restart boundary. The public always-online claim waits until interrupted work can resume rather
 than restart and repeated crashes stop looping (the currently unproven R-GW-22 and R-GW-24).
 
-## Phase 8 — Add Provider and Channel Breadth One Adapter at a Time
+## Phase 9 — Add Provider and Channel Breadth One Adapter at a Time
 
 **Outcome:** Claude, Codex and Grok can each be selected where an entry point is made, and a second
 channel can reuse the same channel contract without changing the agent.
@@ -1215,9 +1263,16 @@ The next implementation sequence should be:
 3. ~~Open the provider seam and put one brain behind it — the contract first, a shipped adapter as its
    first customer, a stranger's adapter as the proof, and the transcript that makes any of it worth
    having.~~ **Done.**
-4. **Reach that agent through Discord**, so the product is tested where it is actually used.
-5. Let the clock start work, which is the trigger nobody is watching.
-6. Add skills and tool discovery, which are additive and change nothing already proven.
+4. ~~Reach that agent through Discord.~~ **Done** — the channel seam, with Discord as its first adapter
+   and a stranger's channel adapter proving it open.
+5. **Design the shape of what is kept, and how it moves between versions.** Research and planning only:
+   one home per kind, a version on everything, a query seam, and a migration that runs inside the window
+   an update already stands agents down for. **This is next, and it is next because it is the only work
+   here with a deadline** — the shape stops being cheap to change the day somebody installs.
+6. **Move everything onto it**, exactly as designed: the schema, the one seam every reader goes through,
+   the migration runner, and the owner's own install carried across.
+7. Let the clock start work, which is the trigger nobody is watching.
+8. Add skills and tool discovery, which are additive and change nothing already proven.
 
 **A resolver phase used to sit at step 3 and no longer does.** With no `bindings` verb there was no
 object anyone creates, and its one durable artefact — the ledger that says which conversation is
