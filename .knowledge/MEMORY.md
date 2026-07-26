@@ -182,6 +182,12 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   hold the whole "deleting the store leaves the product as it was" safety passed green
   through the commit that broke it. Any case that greps `src/` for an import must be probed
   by *adding* the thing it forbids, not only by removing it.
+- **Changing a `store.py` signature means running `test_migration.py`, not only `test_store.py`.**
+  `test_migration`'s fixtures build a furnished agent through the real store, so a new required
+  argument on `schedule_fired` broke it while every suite anyone thought to re-run stayed green —
+  and the gate caught it, which is the one place it is expensive to find. The suites that drive
+  the store are `test_store`, `test_migration`, `test_turn`, `test_transcript`, `test_answering`,
+  `test_channel`, `test_agent` and `test_cli`; run all eight.
 - **Never assert that `state.db-wal` and `state.db-shm` exist.** They are there only while a
   connection is open or after one closed badly — a clean close checkpoints and removes them. A case
   asserting all three files are present passed on `/usr/bin/python3` and failed the gate on 3.14,
