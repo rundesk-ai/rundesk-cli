@@ -145,7 +145,9 @@ FORMS: dict[str, list[tuple[str, str]]] = {
                ("<agent>", "what one agent is, and where it keeps things")],
     "doctor": [("", "what stands between every agent and a working turn"),
                ("<agent>", "what stands between one agent and a working turn")],
-    "ask": [('<agent> "<prompt>"', "one turn, streamed to this terminal")],
+    "ask": [('<agent> "<prompt>"', "one turn, streamed to this terminal"),
+            ('<agent> "<prompt>" --says "<text>"',
+             "with standing instructions, told apart from the prompt")],
     "usage": [("", "what every agent has cost"),
               ("<agent>", "what one agent has cost"),
               ("<agent> <run>", "what one run cost")],
@@ -242,6 +244,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="let this turn look at the machine without changing it")
     asked.add_argument("--steer", action="store_true",
                        help="keep saying more to it while it works — a line at a time, until you stop")
+    # How a schedule gives a turn standing instructions. A schedule names a command and
+    # rundesk carries it without reading it (R-SCH-3), so a schedule that carried its own
+    # instructions would have to be read on the way past — and the seam that keeps every
+    # kind of work the same would be the thing that broke. Said here instead, it belongs
+    # to the command the schedule names, and every kind of work keeps one way of saying it.
+    asked.add_argument("--says", metavar="<text>", default="",
+                       help="standing instructions for this turn, told to the brain apart "
+                            "from the prompt — what a schedule running unattended says")
 
     looked = sub.add_parser("doctor", help="what stands between an agent and a working turn")
     looked.add_argument("name", nargs="?", metavar="<agent>",
@@ -870,6 +880,7 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
             fresh=args.fresh,
             watching=said,
             steering=_typed() if args.steer else None,
+            preface=args.says,
         ))
     except provider.NotRunnable as why:
         print(f"{name}: NO BRAIN THERE — {why}", file=sys.stderr)
@@ -1449,11 +1460,13 @@ def _channel_says(args: argparse.Namespace, gateways, agents, whose) -> int:
                      + ", ".join(sorted(says)),
                      agents.resolved(args.name))
     print(f"{args.name}/{args.channel}: TOLD — {', '.join(sorted(says))}")
-    if gateways.standing(args.name, agents.resolved(args.name).run).running:
-        # Read when a turn starts, from the record, so nothing has to be cycled — and
-        # saying so is the difference between an owner trusting this and an owner
-        # restarting an agent every time they reword a sentence.
-        print("        in effect from the next turn — nothing to restart")
+    # **New conversations, not the next turn.** A brain is told this where its conversation
+    # is *opened*, which is the only place a brain of this shape reads it — measured against
+    # a real one, where the same instruction was obeyed at the start of a thread and ignored
+    # on every resume after. So an owner rewording something must be told which
+    # conversations it reaches, or they will reword it, watch the open one carry on exactly
+    # as before, and have nothing to tell them why.
+    print("        in effect for new conversations — say /new to start one")
     return unlogged
 
 

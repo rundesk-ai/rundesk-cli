@@ -60,7 +60,7 @@ if "--capabilities" in sys.argv:
 prompt = sys.stdin.read()
 told = {what: os.environ.get(what) for what in (
     "RUNDESK_CWD", "RUNDESK_PROVIDER_HOME", "RUNDESK_MODEL", "RUNDESK_RUN",
-    "RUNDESK_RESUME", "RUNDESK_POSTURE", "RUNDESK_SETTINGS")}
+    "RUNDESK_RESUME", "RUNDESK_POSTURE", "RUNDESK_SETTINGS", "RUNDESK_PREFACE")}
 say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
 say(type="text", text=json.dumps({"told": told, "prompt": prompt}))
 say(type="done", ok=True, session="a-handle")
@@ -578,6 +578,28 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
         code, said, why = self.ask("ask", "ava", "what changed?")
         self.assertEqual(0, code, why)
         self.assertEqual("heard what changed?", said.strip())
+
+    def test_a_turn_can_be_given_standing_instructions_from_the_command(self):
+        """R-PRV-23, R-SCH-3 — how a schedule gives a turn standing instructions. A
+        schedule names a command and rundesk carries it without reading it, so a schedule
+        holding its own instructions would have to be read on the way past — and the seam
+        that keeps every kind of work the same would be the thing that broke. It belongs
+        to the command the schedule names."""
+        self.ask("add", "ava", "--provider", self.brain("nosy"))
+        code, said, why = self.ask("ask", "ava", "what changed?",
+                                   "--says", "You are running unattended overnight.")
+        self.assertEqual(0, code, why)
+        told = json.loads(said)["told"]
+        self.assertEqual("You are running unattended overnight.", told["RUNDESK_PREFACE"])
+        self.assertEqual("what changed?", json.loads(said)["prompt"].strip(),
+                         "standing instructions were folded into what was asked")
+
+    def test_a_turn_asked_for_with_no_standing_instructions_is_given_none(self):
+        """R-PRV-3, R-PRV-23 — unset rather than empty, so an adapter reading it can
+        trust that there is something to act on."""
+        self.ask("add", "ava", "--provider", self.brain("nosy"))
+        _, said, _ = self.ask("ask", "ava", "what changed?")
+        self.assertIsNone(json.loads(said)["told"]["RUNDESK_PREFACE"])
 
     def test_the_answer_goes_where_it_can_be_piped_and_the_rest_does_not(self):
         """R-CMD-4 — what comes out of `rundesk ask … > answer.txt` has to be the answer
