@@ -314,9 +314,27 @@ class _Shown:
     cost — each of which is whole the moment it exists (R-CH-7).
     """
 
-    #: What a surface is shown as it happens. `text` is deliberately absent, and `done`
-    #: is rundesk's to translate into a state rather than the adapter's to read.
-    AS_IT_HAPPENS = ("think", "tool", "result", "usage")
+    #: What a surface is shown as it happens, and exactly which of each record's fields
+    #: leave this machine (R-CH-13).
+    #:
+    #: **Named rather than filtered**, so the default for anything new is that it stays.
+    #: A brain is free to add fields nobody here knows and they are kept in the account —
+    #: which is the whole reason a record of an unknown shape is not refused — but a
+    #: tool's own arguments, a file it read, a command's whole output and whatever a
+    #: vendor decides to attach next year are exactly the things that must not be posted
+    #: into a chat room because somebody added a key. `text` is absent for a different
+    #: reason: prose is handed over whole at the end (R-CH-7).
+    AS_IT_HAPPENS = {
+        "think": ("text",),
+        "tool": ("id", "name", "did"),
+        "result": ("id", "ok", "summary"),
+        "usage": ("input", "output", "cached", "model"),
+    }
+
+    #: How much of a summary a surface is shown. A brain is entitled to hand back the
+    #: whole of what a command printed, and that is worth keeping in the account and
+    #: worth not pasting into a room somebody else can read.
+    SUMMARY_CHARS = 200
 
     def __init__(self, answering: "Answering", held: Exchange):
         self._answering, self._held = answering, held
@@ -330,7 +348,9 @@ class _Shown:
             return
         if kind not in self.AS_IT_HAPPENS:
             return
-        it = {what: value for what, value in said.items() if what != "type"}
+        it = {what: said[what] for what in self.AS_IT_HAPPENS[kind] if what in said}
+        if isinstance(it.get("summary"), str) and len(it["summary"]) > self.SUMMARY_CHARS:
+            it["summary"] = it["summary"][: self.SUMMARY_CHARS] + "…"
         self._answering._tell(
             type=kind, conversation=self._held.conversation, run=self._held.run, **it)
 

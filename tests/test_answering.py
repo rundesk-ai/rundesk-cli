@@ -404,6 +404,91 @@ class WhenTheConnectionComesAndGoes(CarriesAConversation):
                          [one["conversation"] for one in brain.asked])
 
 
+class WhatDoesNotLeaveTheMachine(CarriesAConversation):
+    """R-CH-13, R-CH-6, R-CH-7 — what is shown while a turn runs, and what is not."""
+
+    async def test_raw_tool_arguments_and_results_do_not_leave_the_machine(self):
+        """R-CH-13 — a tool's own arguments, the file it read, the whole of what a command
+        printed. All of it is kept in the account and none of it is posted into a room
+        somebody else can read."""
+        brain = Brain(showing=[{
+            "type": "tool", "id": "1", "name": "Bash", "did": "run",
+            "arguments": {"command": "cat ~/.ssh/id_rsa"}, "cwd": "/home/someone"}])
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        shown = surface.of("tool")[0]
+        self.assertEqual("Bash", shown["name"])
+        self.assertNotIn("arguments", shown, "a tool's own arguments were published")
+        self.assertNotIn("id_rsa", json.dumps(surface.shown))
+
+    async def test_a_field_nobody_here_knows_stays_here(self):
+        """R-CH-13 — named rather than filtered, so the default for whatever a vendor
+        attaches next year is that it does not leave."""
+        brain = Brain(showing=[{"type": "result", "id": "1", "ok": True,
+                                "summary": "3 files changed",
+                                "invented_next_year": "a private path"}])
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual({"type", "conversation", "run", "id", "ok", "summary"},
+                         set(surface.of("result")[0]))
+
+    async def test_a_summary_too_long_to_show_is_bounded_rather_than_dropped(self):
+        """R-CH-13 — a brain may hand back everything a command printed. The first of it
+        is worth showing and the rest is worth not pasting anywhere."""
+        brain = Brain(showing=[{"type": "result", "id": "1", "ok": False,
+                                "summary": "x" * 5000}])
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        shown = surface.of("result")[0]["summary"]
+        self.assertLess(len(shown), 5000)
+        self.assertTrue(shown.startswith("x"), "it dropped the summary instead of bounding it")
+
+    async def test_what_the_agent_did_is_shown_while_the_turn_is_still_running(self):
+        """R-CH-6 — a tool it ran, a thought it closed. Worth watching as it happens, and
+        whole the moment it exists."""
+        brain = Brain(showing=[{"type": "think", "text": "the error is in the parser"},
+                               {"type": "tool", "id": "1", "did": "run"}])
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        kinds = [one["type"] for one in surface.shown]
+        self.assertLess(kinds.index("think"), kinds.index("answer"),
+                        "what it did was shown after what it said")
+
+    async def test_the_answer_arrives_whole_and_once(self):
+        """R-CH-8 — however it was written, it is handed over in one piece at the end."""
+        brain = Brain(showing=[{"type": "text", "text": "three "},
+                               {"type": "text", "text": "files changed"}],
+                      outcome=Outcome(text="three files changed"))
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual(["three files changed"],
+                         [one["text"] for one in surface.of("answer")])
+
+    async def test_an_answer_too_long_for_any_one_message_crosses_whole(self):
+        """R-CH-8, R-DIS-13 — splitting it is the surface's, because the limit is the
+        surface's. What crosses here is all of it, or the surface is splitting something
+        that was already cut."""
+        whole = "word " * 4000
+        brain = Brain(outcome=Outcome(text=whole))
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual(whole.strip(), surface.of("answer")[0]["text"])
+
+    async def test_a_turn_that_said_nothing_hands_over_no_empty_answer(self):
+        """R-CH-8 — an empty message is a thing a surface would have to post."""
+        brain, surface = Brain(outcome=Outcome(text="   ")), Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual([], surface.of("answer"))
+        self.assertIn(channel.FINISHED, surface.states)
+
+
 class WhatAChannelDoesNotWriteDown(CarriesAConversation):
     """R-CH-15 — delivery on top of the account, never a second record."""
 
