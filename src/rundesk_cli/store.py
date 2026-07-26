@@ -35,10 +35,20 @@ import sqlite3
 import time
 from pathlib import Path
 
-# The shape this code understands. A database saying anything else is refused rather than
-# read: old code reading a newer shape is the dangerous direction, because it does not know
-# what it is missing.
-VERSION = 1
+from rundesk_cli import migration
+
+
+def version_wanted() -> int:
+    """The shape this code understands: how many steps forward there are to have taken.
+
+    Read off the steps rather than written down beside them, so the number and the steps
+    cannot disagree. Adding a migration is the whole of raising it.
+    """
+    steps = migration.found()
+    return steps[-1].version if steps else 0
+
+
+VERSION = version_wanted()
 
 NAME = "state.db"
 
@@ -95,165 +105,6 @@ class Behind(Exception):
 
 class Unsearchable(Exception):
     """This machine's SQLite was built without FTS5. Said out loud, never returned as none."""
-
-
-# ── the schema ────────────────────────────────────────────────────────────────────────────
-#
-# Two things live here and every table is unmistakably one of them: what is CONFIGURED —
-# the agent's defaults, its channels, its schedules, which is what a gateway reads to know
-# what to watch — and what HAPPENED, which is when, where and what, and is searchable.
-#
-# `STRICT` on every table so a column's type is enforced rather than suggested. Times are
-# ISO-8601 `Z` strings, matching what an account already writes.
-
-SCHEMA = """
-CREATE TABLE agent (
-    id            INTEGER PRIMARY KEY CHECK (id = 1),
-    provider      TEXT,
-    model         TEXT,
-    instructions  TEXT,
-    settings      TEXT NOT NULL DEFAULT '{}'
-) STRICT;
-
-CREATE TABLE gateway (
-    id            INTEGER PRIMARY KEY CHECK (id = 1),
-    last_seen_at  TEXT
-) STRICT;
-
-CREATE TABLE channel (
-    name          TEXT PRIMARY KEY,
-    kind          TEXT NOT NULL,
-    enabled       INTEGER NOT NULL DEFAULT 1,
-    provider      TEXT,
-    model         TEXT,
-    instructions  TEXT,
-    allow         TEXT NOT NULL,
-    secret        TEXT,
-    settings      TEXT NOT NULL DEFAULT '{}',
-    created_at    TEXT NOT NULL
-) STRICT;
-
-CREATE TABLE schedule (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    name              TEXT NOT NULL UNIQUE,
-    enabled           INTEGER NOT NULL DEFAULT 1,
-    cron              TEXT NOT NULL,
-    command           TEXT,
-    prompt            TEXT,
-    provider          TEXT,
-    model             TEXT,
-    instructions      TEXT,
-    last_auto_run_at  TEXT,
-    next_auto_run_at  TEXT,
-    created_at        TEXT NOT NULL,
-    CHECK ((command IS NULL) <> (prompt IS NULL))
-) STRICT;
-
-CREATE TABLE conversation (
-    id         TEXT PRIMARY KEY,
-    channel    TEXT NOT NULL,
-    kind       TEXT NOT NULL,
-    space      TEXT NOT NULL,
-    thread     TEXT NOT NULL DEFAULT '',
-    parent_id  TEXT REFERENCES conversation(id),
-    title      TEXT,
-    opened_at  TEXT NOT NULL,
-    last_at    TEXT NOT NULL,
-    UNIQUE (channel, space, thread)
-) STRICT;
-
-CREATE INDEX conversation_in_space ON conversation(channel, space, last_at);
-
-CREATE TABLE session (
-    conversation_id  TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
-    brain            TEXT NOT NULL,
-    handle           TEXT NOT NULL,
-    PRIMARY KEY (conversation_id, brain)
-) STRICT;
-
-CREATE TABLE run (
-    n                   INTEGER PRIMARY KEY AUTOINCREMENT,
-    id                  TEXT NOT NULL UNIQUE,
-    conversation_id     TEXT REFERENCES conversation(id),
-    schedule_id         INTEGER REFERENCES schedule(id),
-    source              TEXT NOT NULL,
-    trigger_message_id  INTEGER,
-    provider            TEXT NOT NULL,
-    brain               TEXT NOT NULL,
-    model               TEXT,
-    posture             TEXT NOT NULL,
-    can                 TEXT NOT NULL DEFAULT '{}',
-    resumed             INTEGER NOT NULL DEFAULT 0,
-    started_at          TEXT NOT NULL,
-    ended_at            TEXT,
-    outcome             TEXT,
-    exit_code           INTEGER,
-    tokens_in           INTEGER,
-    tokens_out          INTEGER,
-    tokens_cached       INTEGER,
-    tokens_written      INTEGER,
-    tokens_reported     INTEGER NOT NULL DEFAULT 0
-) STRICT;
-
-CREATE INDEX run_in_conversation ON run(conversation_id, n);
-CREATE INDEX run_by_schedule     ON run(schedule_id, n);
-
-CREATE TABLE message (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id  TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
-    run_id           TEXT REFERENCES run(id),
-    external_id      TEXT,
-    reply_to_id      INTEGER REFERENCES message(id),
-    at               TEXT NOT NULL,
-    author           TEXT NOT NULL,
-    who              TEXT,
-    who_label        TEXT,
-    text             TEXT NOT NULL
-) STRICT;
-
-CREATE INDEX message_in_conversation ON message(conversation_id, id);
-CREATE INDEX message_by_time         ON message(at);
-
-CREATE UNIQUE INDEX message_once ON message(conversation_id, external_id)
-    WHERE external_id IS NOT NULL;
-
-CREATE TABLE record (
-    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id  TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
-    seq     INTEGER NOT NULL,
-    at      TEXT NOT NULL,
-    kind    TEXT NOT NULL,
-    event   TEXT,
-    raw     TEXT,
-    UNIQUE (run_id, seq)
-) STRICT;
-"""
-
-# Asked for, never assumed. FTS5 is a compile-time option rather than a guarantee, so a
-# machine without it still lists, reads and queries every run — only searching by the words
-# in something is missing, and `doctor` is what says so.
-#
-# External content: the index holds no copy of the text, only what is needed to find it. The
-# three triggers keep it in step, including when a conversation goes and takes its messages
-# with it — firing a delete for a row the index never held is the canonical way to corrupt an
-# FTS5 index, which is why these are created with the table and never after rows exist.
-SEARCH = """
-CREATE VIRTUAL TABLE message_fts USING fts5(
-    text, content='message', content_rowid='id', tokenize='unicode61');
-
-CREATE TRIGGER message_fts_insert AFTER INSERT ON message BEGIN
-    INSERT INTO message_fts(rowid, text) VALUES (new.id, new.text);
-END;
-
-CREATE TRIGGER message_fts_delete AFTER DELETE ON message BEGIN
-    INSERT INTO message_fts(message_fts, rowid, text) VALUES ('delete', old.id, old.text);
-END;
-
-CREATE TRIGGER message_fts_update AFTER UPDATE ON message BEGIN
-    INSERT INTO message_fts(message_fts, rowid, text) VALUES ('delete', old.id, old.text);
-    INSERT INTO message_fts(rowid, text) VALUES (new.id, new.text);
-END;
-"""
 
 
 def path_for(directory) -> Path:
@@ -417,41 +268,20 @@ class Store:
                     raise Unreadable(
                         f"{self.at} holds tables but says no version — it was written partway"
                     )
-                self._build(conn)
+                conn.close()
+                conn = None
+                # Built by walking the same steps an update walks, rather than by a second
+                # description of the shape kept beside them. A step that has rotted is then
+                # found by whoever next makes an agent, and a fresh install cannot drift from
+                # an upgraded one, because there is only one way to arrive.
+                migration.carry(self.at, self.at.parent, want=VERSION)
+                conn = self._open(writing=True)
             elif found < VERSION:
                 raise Behind(found, VERSION)
             self._searchable = self._has_search(conn)
         finally:
-            conn.close()
-
-    @staticmethod
-    def _build(conn) -> None:
-        """Everything, in one transaction — including the stamp that says it happened.
-
-        SQLite keeps DDL inside a transaction, so the tables, the first rows and the version
-        roll back together and a database half-built is not a state that can exist. A future
-        migration is one step of exactly this shape, which is why there is no separate record
-        of what has run: the version moving *is* the record.
-        """
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            # One statement at a time, never `executescript`: that issues an implicit COMMIT
-            # before it runs, which would end the transaction opened just above and leave the
-            # build to happen in the open. The atomicity here is the whole reason a migration
-            # can carry its own version stamp.
-            for statement in _statements(SCHEMA):
-                conn.execute(statement)
-            if _fts5(conn):
-                for statement in _statements(SEARCH):
-                    conn.execute(statement)
-            conn.execute("INSERT INTO agent (id) VALUES (1)")
-            conn.execute("INSERT INTO gateway (id) VALUES (1)")
-            conn.execute(f"PRAGMA user_version = {VERSION}")
-        except BaseException:
-            with contextlib.suppress(sqlite3.OperationalError):
-                conn.execute("ROLLBACK")
-            raise
-        conn.execute("COMMIT")
+            if conn is not None:
+                conn.close()
 
     @staticmethod
     def _anything(conn) -> bool:

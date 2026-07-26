@@ -118,6 +118,16 @@ rewrites it; a retention policy takes whole files.
   wait — refused by the database rather than by convention. No statement is written anywhere else and no
   connection ever leaves the module, both proved by looking. **Nothing reads it yet**; it is built and
   proved before anything moves onto it, so deleting it would leave the product exactly as it is.
+- `src/rundesk_cli/migration.py` — moving what is already on a machine into the shape a newer rundesk
+  expects. **A step is found, not listed**: each is `migrations/<version>.py`, ordered by that number, and
+  what runs is whatever sits between the version on disk and the version installed. There is no table of
+  what has run because **the version is the record** — SQLite keeps DDL inside a transaction, so a step's
+  schema change, its data change and its version stamp commit together. A step may copy a file and never
+  delete one; the runner removes what it hands back only once the version has committed, so a step that
+  died halfway leaves both copies rather than neither. Going backwards is refusing to go forwards.
+- `src/rundesk_cli/migrations/001.py` — **the schema, and the only description of it there is.** Making an
+  agent runs the migration path from nothing rather than building tables directly, so the path is exercised
+  every time anybody adds an agent and a fresh install cannot drift from an upgraded one.
 - `src/rundesk_cli/updater.py` — where this install stands against what is published, and moving between
   them. Every network call is behind an argument, so the whole module is exercised offline.
 - `src/rundesk_cli/process.py` — a program rundesk runs, and how it keeps hold of it: its own session so

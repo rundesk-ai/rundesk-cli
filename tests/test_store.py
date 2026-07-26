@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk_cli import store  # noqa: E402
+from rundesk_cli import migration, store  # noqa: E402
 
 AT = "2026-07-26T09:00:00Z"
 LATER = "2026-07-26T10:00:00Z"
@@ -164,11 +164,21 @@ class WhenTheShapeOnDiskIsNotThisOne(WithAnAgentsOwnRecords):
         broken = Path(tempfile.mkdtemp(prefix="rundesk-store-"))
         self.addCleanup(shutil.rmtree, broken, True)
         at = store.path_for(broken)
-        self.addCleanup(setattr, store, "SEARCH", store.SEARCH)
-        # A whole, parseable statement that fails when it runs — which is what a real
-        # failure partway through a build looks like, rather than one nobody can read.
-        store.SEARCH = "CREATE VIRTUAL TABLE message_fts USING no_such_module(text);"
-        with self.assertRaises(sqlite3.OperationalError):
+        # A step that does real work and then fails — what a build dying partway actually
+        # looks like, rather than one nobody could parse in the first place.
+        steps = Path(tempfile.mkdtemp(prefix="rundesk-steps-"))
+        self.addCleanup(shutil.rmtree, steps, True)
+        (steps / "001.py").write_text(
+            "def up(conn, home):\n"
+            "    conn.execute('CREATE TABLE agent (id INTEGER PRIMARY KEY)')\n"
+            "    conn.execute('INSERT INTO agent (id) VALUES (1)')\n"
+            "    raise RuntimeError('the machine went away')\n"
+        )
+        self.addCleanup(setattr, migration, "STEPS", migration.STEPS)
+        migration.STEPS = steps
+        self.addCleanup(setattr, store, "VERSION", store.VERSION)
+        store.VERSION = 1
+        with self.assertRaises(migration.Failed):
             store.Store(at).made()
         arranged = sqlite3.connect(str(at))
         self.addCleanup(arranged.close)
@@ -770,9 +780,17 @@ class FindingWhatWasSaidAboutSomething(WithAnAgentsOwnRecords):
         """FTS5 is a compile-time option and not a guarantee. An empty answer and an
         impossible question must not look the same — everything else still answers, so
         what is lost is searching and never the records."""
-        self.addCleanup(setattr, store, "_fts5", store._fts5)
-        store._fts5 = lambda conn: False
         kept = self.built()
+        # A machine whose SQLite has no FTS5 builds everything except the index and its
+        # triggers, which is exactly this state. Reached by taking them away rather than by
+        # patching the step that builds them, so the case is about what a caller then sees.
+        arranged = self.raw()
+        arranged.execute("DROP TRIGGER message_fts_insert")
+        arranged.execute("DROP TRIGGER message_fts_delete")
+        arranged.execute("DROP TRIGGER message_fts_update")
+        arranged.execute("DROP TABLE message_fts")
+        arranged.close()
+        kept._searchable = None
         self.assertFalse(kept.searchable())
         self.assertFalse(store.Store(self.at).searchable(),
                          "a fresh Store believed a search index that is not there")
@@ -856,10 +874,18 @@ class TheOnlyWayIn(unittest.TestCase):
 
     SOURCE = Path(__file__).resolve().parent.parent / "src" / "rundesk_cli"
 
+    # The seam, named rather than assumed. `store.py` is every question a caller may ask;
+    # `migration.py` opens a database only to move it forward; a step under `migrations/` IS a
+    # description of a schema, which is its whole job. Nothing else may know a database exists,
+    # and this list is what would have to grow before that stopped being true.
+    SEAM = ("store.py", "migration.py")
+
     def elsewhere(self):
-        """Every source file that is not the one allowed to know."""
+        """Every source file that is not part of the seam."""
         return [path for path in sorted(self.SOURCE.rglob("*.py"))
-                if path.name != "store.py" and "__pycache__" not in path.parts]
+                if path.name not in self.SEAM
+                and "__pycache__" not in path.parts
+                and "migrations" not in path.parts]
 
     def test_no_statement_is_written_anywhere_but_the_one_module(self):
         said = re.compile(r"\b(SELECT\s|INSERT\s+INTO\b|UPDATE\s+\w+\s+SET\b|DELETE\s+FROM\b"
