@@ -743,7 +743,12 @@ class ReleaseLookupTests(Sandbox):
                                  "the failed lookup replaced the existing command")
                 self.assertFalse(any("refs/heads/main" in request for request in requests),
                                  "the failed lookup requested unreleased work")
-                self.assertEqual(1, len(requests), "the failed lookup requested an archive")
+                # What this means, rather than how many calls it takes to mean it: nothing
+                # was *downloaded*. Asked as a count of requests, it broke the day the
+                # lookup learned to ask the website before the API — two ways of finding
+                # the newest release, neither of which is fetching anything.
+                self.assertFalse(any("archive/" in request for request in requests),
+                                 "the failed lookup went on to download an archive")
 
     def test_a_valid_release_response_installs_only_its_exact_tag(self):
         """R-INS-15 — the tag returned by the release lookup is the archive installed."""

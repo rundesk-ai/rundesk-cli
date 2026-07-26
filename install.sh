@@ -228,12 +228,31 @@ uncommitted work with it. Move it aside, or set RUNDESK_INSTALL_DIR somewhere el
   # reporting a number no release carries — and then `rundesk update` would offer
   # to move them backwards onto it.
   echo "looking up the newest rundesk release"
-  release="$work/release.json"
-  if ! curl -fsSL "https://api.github.com/repos/$REPO_SLUG/releases/latest" \
-       -o "$release" 2>/dev/null; then
-    die "could not determine the newest release; check the connection and retry."
-  fi
-  if ! tag="$(python3 - "$release" <<'TAG'
+  # **Asked of the website, not the API.** `api.github.com` allows sixty calls an
+  # hour *per IP* to anyone without a token — and an IP is shared by everyone behind
+  # one office router, one VPN, or one CI provider's runners. Installing rundesk is
+  # exactly the moment somebody has no token and no patience, and "could not
+  # determine the newest release; check the connection" sends them to look at a
+  # connection that is fine.
+  #
+  # `releases/latest` on github.com redirects to `releases/tag/<tag>`, so following
+  # it and reading where it landed gives the same answer off an ordinary web request.
+  # The API is kept as a second try, because a redirect is a shape that could change
+  # and being wrong in two ways at once is unlikely.
+  #
+  # No token is read from the environment on purpose: a machine that happens to have
+  # one exported must not have it spent on a lookup nobody asked to authenticate.
+  tag=""
+  landed="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+            "https://github.com/$REPO_SLUG/releases/latest" 2>/dev/null || true)"
+  case "$landed" in
+    */releases/tag/*) tag="${landed##*/releases/tag/}" ;;
+  esac
+  if [ -z "$tag" ]; then
+    release="$work/release.json"
+    if curl -fsSL "https://api.github.com/repos/$REPO_SLUG/releases/latest" \
+         -o "$release" 2>/dev/null; then
+      tag="$(python3 - "$release" <<'TAG' || true
 import json
 import sys
 
@@ -246,8 +265,13 @@ if not isinstance(tag, str) or not tag:
     raise SystemExit(1)
 print(tag)
 TAG
-)"; then
-    die "could not determine the newest release; check the connection and retry."
+)"
+    fi
+  fi
+  if [ -z "$tag" ]; then
+    die "could not determine the newest release. GitHub may be rate-limiting this
+network, or there may be nothing published yet — both look the same from here.
+Retrying in a few minutes usually settles it."
   fi
   echo "downloading ${tag}"
   source_url="https://github.com/$REPO_SLUG/archive/refs/tags/$tag.tar.gz"
