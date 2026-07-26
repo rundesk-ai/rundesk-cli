@@ -322,7 +322,11 @@ def build_parser() -> argparse.ArgumentParser:
     said = sub.add_parser("logs", help="what an agent has been saying")
     said.add_argument("name", metavar="<agent>", help="whose log")
     said.add_argument("-n", "--lines", type=int, metavar="<lines>", default=LOG_LINES,
-                      help="how many of the last lines to show")
+                      help="how many of the last lines to show, from each source")
+    said.add_argument("--source", choices=list(_gateway.LOG_SOURCES),
+                      default=_gateway.EVERY_LOG, metavar="<source>",
+                      help="whose lines to show — what the gateway wrote, or what the "
+                           "machine caught that never reached it")
     return parser
 
 
@@ -345,13 +349,18 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
 def _every_name(gateways, machine, agents) -> list[str]:
     """Every gateway there is: one per agent, and any that has no agent yet.
 
-    Three places, because there are three ways one can exist. An agent has a gateway
+    Four places, because there are four ways one can exist. An agent has a gateway
     whether or not it has ever run; a gateway from before there were agents left its record
-    where gateways used to keep them; and a job the machine holds names one that may have
-    left nothing anywhere. Asked of the agent module rather than of the gateway module for
-    the first, so that a gateway still knows nothing of whose work it holds.
+    where gateways used to keep them; a job the machine holds names one that may have
+    left nothing anywhere; and a name whose record was cleared and whose agent was taken
+    away survives in what it was scheduled to do and what it never finished (R-GW-38).
+    That last one is the name an owner wants after a crash, and it was the one they had
+    to know already before any command would tell them anything about it. Asked of the
+    agent module rather than of the gateway module for the first, so that a gateway still
+    knows nothing of whose work it holds.
     """
-    return sorted({*agents.known(), *(it.name for it in gateways.every()), *machine.described()})
+    return sorted({*agents.known(), *(it.name for it in gateways.every()),
+                   *machine.described(), *gateways.remembered()})
 
 
 def _standing(name: str, gateways, agents):
@@ -1142,8 +1151,14 @@ def cmd_agents(args: argparse.Namespace, gateways, machine, agents) -> int:
             job,
             _version_of(it),
             (f"{len(doing)} ({', '.join(sorted(doing))})" if doing else "idle") if it.running else "-",
+            # What never finished, counted where somebody looks (R-GW-39). The store
+            # answering that question has existed since work could be interrupted at
+            # all, and nothing in the product ever read it back: "what did not finish"
+            # meant reading JSON out of a directory by hand, during an incident.
+            str(len(gateways.what_was_interrupted(name, agents.resolved(name).schedules)) or "-"),
         ))
-    _as_table(("AGENT", "STATE", "PID", "UPTIME", "LAUNCHD JOB", "VERSION", "WORK"), rows)
+    _as_table(("AGENT", "STATE", "PID", "UPTIME", "LAUNCHD JOB", "VERSION", "WORK", "UNFINISHED"),
+              rows)
     if orphaned:
         print()
         print(f"no agent yet — running since before there were any: {', '.join(orphaned)}")
@@ -1172,6 +1187,18 @@ def _one_agent(name: str, gateways, machine, agents) -> int:
                          if it.running else "STOPPED"))
     _as_table(("WHAT", "WHERE"),
               [(what, str(at)) for what, at in sorted(where_it_is.items())])
+    # What never finished, with the time and the reason for each (R-GW-39). Told apart by
+    # whether rundesk could show the work was definitely gone: one of them is over, and
+    # the other may still be running with nobody owning it, which is a different problem
+    # and a different thing to do about it.
+    unfinished = gateways.what_was_interrupted(name, agents.resolved(name).schedules)
+    if unfinished:
+        print()
+        _as_table(("UNFINISHED", "AT", "ENDED", "WHY"), [
+            (work, str(how.get("at", "-")),
+             "yes" if how.get("ended") else "unproven", str(how.get("why", "-")))
+            for work, how in sorted(unfinished.items())
+        ])
     return 0
 
 
@@ -1256,13 +1283,27 @@ def cmd_schedules(args: argparse.Namespace, gateways, agents) -> int:
         return 1
 
 
-def _note(gateways, name: str, said: str, whose=None) -> None:
-    """Say what was changed, in the log of the agent it was changed for.
+def _note(gateways, name: str, said: str, whose=None) -> int:
+    """Say what was changed, in the log of the agent it was changed for, and say so out
+    loud when it could not be written (R-GW-37).
 
     A schedule that appears or vanishes is as much a part of what happened to an agent
-    as anything it ran, and the log is the only account that outlives the gateway.
+    as anything it ran, and the log is the only account that outlives the gateway. The
+    change itself stands either way — it is already on disk by the time this is called,
+    and unwinding a good mutation because its audit line failed would be the worse of
+    the two outcomes. What must not happen is the command reporting a plain success:
+    that is a mutation and its history disagreeing, with nobody told.
+
+    The code it returns is what the command exits with, so a caller adds it to nothing
+    and simply returns it.
     """
-    gateways.note(name, said, whose.logs if whose else None)
+    logs = whose.logs if whose else None
+    why = gateways.note(name, said, logs)
+    if why is None:
+        return 0
+    print(f"{name}: WARNING — change applied, but not logged: "
+          f"{gateways.log_path(name, logs)}: {why}", file=sys.stderr)
+    return 1
 
 
 def _add_schedule(args: argparse.Namespace, gateways, whose) -> int:
@@ -1290,11 +1331,11 @@ def _add_schedule(args: argparse.Namespace, gateways, whose) -> int:
                   file=sys.stderr)
             return 1
         keeping.append({"name": args.schedule, "when": args.when, "run": list(args.run)})
-    _note(gateways, args.name, f"schedule '{args.schedule}' added ({args.when})", whose)
+    unlogged = _note(gateways, args.name, f"schedule '{args.schedule}' added ({args.when})", whose)
     # Both named, because a schedule belongs to one agent and the success line saying only
     # its own name could not tell you it had landed on the wrong one.
     print(f"{args.name}/{args.schedule}: ADDED — next {schedule.describe(made, datetime.now())}")
-    return 0
+    return unlogged
 
 
 def _change_schedule(args: argparse.Namespace, gateways, whose, act: str) -> int:
@@ -1312,9 +1353,9 @@ def _change_schedule(args: argparse.Namespace, gateways, whose, act: str) -> int
             found[0]["enabled"] = act == "on"
             said = "ON" if act == "on" else "OFF"
             told = f"schedule '{args.schedule}' turned {said.lower()}"
-    _note(gateways, args.name, told, whose)
+    unlogged = _note(gateways, args.name, told, whose)
     print(f"{args.name}/{args.schedule}: {said}")
-    return 0
+    return unlogged
 
 
 def _run_schedule(args: argparse.Namespace, gateways, whose) -> int:
@@ -1363,6 +1404,17 @@ def _run_schedule(args: argparse.Namespace, gateways, whose) -> int:
     return 0 if said.ok else 1
 
 
+def _became(outcome: str, up: bool) -> str:
+    """What a schedule's last firing really came to, given whether its gateway is running.
+
+    The one place the durable word and what is running are put together. `started` is
+    written before the run begins and nothing rewrites it if the gateway dies, so read
+    on its own it is indistinguishable from work happening right now — while the answer
+    was already on disk, in the record saying no gateway of that name is up (R-SCH-24).
+    """
+    return _gateway.INTERRUPTED if outcome == _gateway.STARTED and not up else outcome
+
+
 def _list_schedules(args: argparse.Namespace, gateways, whose) -> int:
     """What this gateway runs on its own, when each next runs, and what became of it.
 
@@ -1377,13 +1429,19 @@ def _list_schedules(args: argparse.Namespace, gateways, whose) -> int:
         return 0
     now = datetime.now()
     ran = gateways.what_was_scheduled(args.name, whose.schedules)
+    # A firing is written down before the run begins, so `started` on its own means only
+    # that — and if no gateway of this name is up, nothing it started is still going. The
+    # store is reconciled by the next gateway to claim the name (R-SCH-23); until one
+    # does, showing the word as written presents dead work as in flight, which is the
+    # first question asked after a crash answered wrongly (R-SCH-24).
+    up = gateways.standing(args.name, whose.run).running
     rows = [(
         one.name,
         "OFF" if not one.enabled else "ON",
         one.when,
         schedule.describe(one, now),
         ran.get(one.name, {}).get("at", "-"),
-        ran.get(one.name, {}).get("outcome", "-"),
+        _became(ran.get(one.name, {}).get("outcome", "-"), up),
     ) for one in wanted]
     _as_table(("SCHEDULE", "STATE", "WHEN", "NEXT", "LAST RUN", "OUTCOME"), rows)
     for name, why in refused:
@@ -1392,21 +1450,43 @@ def _list_schedules(args: argparse.Namespace, gateways, whose) -> int:
 
 
 def cmd_logs(args: argparse.Namespace, gateways, agents) -> int:
-    """What a gateway has been saying. Reads the file, so a gateway that has gone can
-    still be asked what happened (R-GW-18)."""
-    path = gateways.log_path(args.name, agents.resolved(args.name).logs)
-    if not path.exists():
-        print(f"{args.name}: NO LOG — nothing written yet ({path})", file=sys.stderr)
+    """What a gateway has been saying. Reads the files, so a gateway that has gone can
+    still be asked what happened (R-GW-18, R-GW-36).
+
+    Every source, not one file. A failed start tells the owner to run this, and the line
+    explaining it is as likely to be in the rotation behind the current log, or in what
+    the machine captured before there was a logger at all, as in the tail of `.log` —
+    so reading only the last file answered the question this command exists for with
+    NO LOG while the answer sat beside it.
+    """
+    logs = agents.resolved(args.name).logs
+    found = gateways.log_sources(args.name, logs, args.source)
+    if not found:
+        print(f"{args.name}: NO LOG — nothing written yet ({gateways.log_path(args.name, logs)})",
+              file=sys.stderr)
         return 1
-    try:
-        lines = path.read_text(errors="replace").splitlines()
-    except OSError as why:
-        # Every other verb answers in our words when it cannot do the thing. A log that
-        # cannot be read is a thing to be told about, not a traceback.
-        print(f"{args.name}: FAILED — could not read the log: {why}", file=sys.stderr)
-        return 1
-    for line in lines[-args.lines:] if args.lines > 0 else []:
-        print(line)
+    # One gateway's own account is one stream that rotation happens to have cut up, so
+    # it is put back together before the tail is taken; what the machine captured is a
+    # different account of the same gateway, and each of those is tailed on its own.
+    streams: list[tuple[str, list[str]]] = []
+    for whose, path in found:
+        try:
+            lines = path.read_text(errors="replace").splitlines()
+        except OSError as why:
+            # Every other verb answers in our words when it cannot do the thing. A log
+            # that cannot be read is a thing to be told about, not a traceback.
+            print(f"{args.name}: FAILED — could not read the log: {why}", file=sys.stderr)
+            return 1
+        if streams and streams[-1][0] == whose == gateways.GATEWAY_LOG:
+            streams[-1][1].extend(lines)
+        else:
+            streams.append((whose, lines))
+    shown = [(whose, lines[-args.lines:] if args.lines > 0 else []) for whose, lines in streams]
+    shown = [(whose, lines) for whose, lines in shown if lines]
+    labelled = len({whose for whose, _ in shown}) > 1
+    for whose, lines in shown:
+        for line in lines:
+            print(f"{whose:<8}{line}" if labelled else line)
     return 0
 
 

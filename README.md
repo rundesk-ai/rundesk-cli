@@ -50,7 +50,7 @@ rundesk stop <agent> | --all        # stand one or every agent down
 rundesk remove <agent> [--purge]    # take a stopped agent away for good
 rundesk restart <agent> | --all     # cycle one or every agent
 rundesk agents [<agent>]            # what every agent is doing, or where one keeps things
-rundesk logs <agent> [-n]           # what one has been saying
+rundesk logs <agent> [-n]           # everything one has said, across rotation and both writers
 rundesk schedules <agent> [...]     # work that starts itself — see below
 ```
 

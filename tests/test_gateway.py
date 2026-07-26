@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import faulthandler
 import fcntl
+import io
 import json
 import logging
 import os
@@ -28,7 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk_cli import gateway, process  # noqa: E402
+from rundesk_cli import gateway, process, schedule  # noqa: E402
 
 PY = sys.executable
 
@@ -2419,6 +2420,210 @@ class WhatCannotBeReadIsNotEmpty(WithARunDirectory):
         swept = gateway._sweep_strays(self.where, "mine", self.made("mine").log, self.schedules)
         self.assertEqual([], swept, "it claimed to have swept a record it could not read")
         self.assertTrue(record.exists(), "it deleted the only record naming abandoned work")
+
+
+class WhatAGatewaySaysAndWhereItLands(WithARunDirectory):
+    """R-GW-35, R-GW-36 — one bounded account of a gateway, and all of it readable.
+
+    Every line went to a rotated file *and* to stderr, which under the machine that keeps
+    a gateway up is a file nothing rotates, nothing reads and no requirement mentions. So
+    the log that exists to be bounded had an unbounded shadow — while the one thing that
+    file is genuinely good for, a crash that never reached the logger at all, was
+    unreachable through the command that a failed start tells the owner to run.
+    """
+
+    def test_what_a_gateway_writes_is_bounded_wherever_it_lands(self):
+        """R-GW-35 — a gateway the machine is running writes its account once. `isatty`
+        is what tells a person watching from a file collecting, and a captured stream is
+        never a terminal."""
+        gone = io.StringIO()          # a captured stream, which is what launchd hands it
+        with contextlib.redirect_stderr(gone):
+            log = gateway._recorder("gateway", self.logs)
+            log.info("something happened")
+        self.assertEqual("", gone.getvalue(),
+                         "every line was copied into a second store nothing bounds")
+        self.assertIn("something happened", (self.logs / "gateway.log").read_text(),
+                      "it stopped saying it out loud and stopped writing it down too")
+
+    def test_a_gateway_a_person_is_watching_still_shows_its_working(self):
+        """R-GW-35 — bounding the copy must not silence `rundesk serve` in a terminal,
+        which is the one place the second handler was ever for."""
+
+        class Watched(io.StringIO):
+            def isatty(self):
+                return True
+
+        watching = Watched()
+        with contextlib.redirect_stderr(watching):
+            gateway._recorder("gateway", self.logs).info("up")
+        self.assertIn("up", watching.getvalue(),
+                      "a gateway run by hand went quiet")
+
+    def test_a_stream_that_cannot_say_whether_it_is_a_terminal_is_not_one(self):
+        """R-GW-35 — anything may be standing in for stderr, including something that
+        raises when asked. The unbounded copy is the thing being prevented, so the answer
+        it cannot give must be the one that does not make one."""
+
+        class Refuses(io.StringIO):
+            def isatty(self):
+                raise ValueError("I/O operation on closed file")
+
+        with contextlib.redirect_stderr(Refuses()):
+            log = gateway._recorder("gateway", self.logs)
+        self.assertEqual(1, len(log.handlers),
+                         "a stream that would not answer was treated as a terminal")
+
+    def test_a_gateways_whole_account_is_readable_however_it_was_rotated(self):
+        """R-GW-36 — the line explaining the tail is as often in the rotation behind it,
+        and reading only the last file is how the answer sat one filename away."""
+        (self.logs / "gateway.log.2").write_text("oldest\n")
+        (self.logs / "gateway.log.1").write_text("older\n")
+        (self.logs / "gateway.log").write_text("newest\n")
+        found = gateway.log_sources("gateway", self.logs, gateway.GATEWAY_LOG)
+        self.assertEqual(["gateway.log.2", "gateway.log.1", "gateway.log"],
+                         [path.name for _whose, path in found],
+                         "one account cut up by rotation was not put back in order")
+
+    def test_what_never_reached_the_logger_is_readable_too(self):
+        """R-GW-36 — a traceback, a task nobody awaited, a refusal printed before there
+        was a logger. None of it is in the gateway's own log, and it is the whole of the
+        answer to why a gateway would not start."""
+        (self.logs / "gateway.err").write_text("Traceback (most recent call last):\n")
+        found = gateway.log_sources("gateway", self.logs)
+        self.assertIn((gateway.MACHINE_LOG, self.logs / "gateway.err"), found,
+                      "what the machine captured was unreachable")
+        self.assertEqual([], gateway.log_sources("gateway", self.logs, gateway.GATEWAY_LOG),
+                         "asking for one source answered with the other")
+
+    def test_a_change_that_could_not_be_written_down_says_so(self):
+        """R-GW-37 — it swallowed the error, so the first schedule added in a clean home
+        printed ADDED, kept the change, and left no audit line anywhere."""
+        nowhere = self.logs / "taken" / "gateway.log"
+        nowhere.parent.write_text("this is a file, so nothing can be made inside it")
+        self.assertIsNotNone(gateway.note("gateway", "a change", nowhere.parent),
+                             "a log line that could not be written reported nothing")
+
+    def test_the_first_line_written_in_a_clean_home_makes_somewhere_to_put_it(self):
+        """R-GW-37 — the ordinary case, and the one that failed: nothing had written to
+        this agent's logs before, so there was no directory yet."""
+        fresh = self.logs / "never-written-in"
+        self.assertIsNone(gateway.note("gateway", "a change", fresh),
+                          "the first line in a clean home was refused")
+        self.assertIn("a change", (fresh / "gateway.log").read_text())
+
+
+class FindingAGatewayByWhatItLeftBehind(WithARunDirectory):
+    """R-GW-38, R-GW-39, R-GW-40 — the store saying what never finished, made answerable.
+
+    It had no reader anywhere in the product: "what did not finish" meant reading JSON
+    out of a directory by hand, during an incident, having already guessed the name.
+    """
+
+    def test_a_gateway_that_survives_only_in_what_it_left_is_still_found(self):
+        """R-GW-38 — its record was cleared when it stopped and its agent was taken away,
+        so the one place it exists is beside its schedules. That is the name an owner
+        wants after a crash, and every listing left it out."""
+        (self.schedules / "vanished.interrupted.json").write_text('{"turn": {"ended": false}}')
+        (self.schedules / "also-here.ran.json").write_text("{}")
+        self.assertEqual(["also-here", "vanished"], gateway.remembered(self.schedules),
+                         "a gateway with nothing left but its history was invisible")
+
+    def test_a_name_nothing_of_ours_wrote_is_passed_over(self):
+        """R-GW-38 — the directory may be overridden onto somewhere shared, and a name
+        that could never be a gateway's is somebody else's file rather than a gateway."""
+        (self.schedules / "not a gateway name.json").write_text("{}")
+        self.assertEqual([], gateway.remembered(self.schedules),
+                         "it read somebody else's file as a gateway")
+
+    async def test_work_that_is_running_again_is_no_longer_unfinished(self):
+        """R-GW-40 — entries were keyed by work and never cleared, so work interrupted
+        once in March was still listed in July beside work interrupted a minute ago."""
+        gateway._note_interrupted("gateway", self.schedules, "schedule:nightly",
+                                  "the gateway it was running under is gone", ended=True)
+        gw = self.made()
+        gw.claim()
+        await gw.start([PY, "-c", "pass"], as_name="schedule:nightly")
+        self.assertEqual({}, gateway.what_was_interrupted("gateway", self.schedules),
+                         "work that is running again was still reported as unfinished")
+
+    async def test_other_work_that_never_finished_is_left_standing(self):
+        """R-GW-40 — resolving one entry must not tidy away the rest, which is the whole
+        of what anybody is asking this store."""
+        for work in ("schedule:nightly", "schedule:weekly"):
+            gateway._note_interrupted("gateway", self.schedules, work, "gone", ended=True)
+        gw = self.made()
+        gw.claim()
+        await gw.start([PY, "-c", "pass"], as_name="schedule:nightly")
+        self.assertEqual(["schedule:weekly"],
+                         sorted(gateway.what_was_interrupted("gateway", self.schedules)),
+                         "resolving one entry took another with it")
+
+
+class ASchedulesOutcomeAfterACrash(WithARunDirectory):
+    """R-SCH-23 — a firing is written down before the run begins, and nothing rewrote it.
+
+    Two durable stores then described one event and disagreed: the outcome said `started`,
+    indistinguishable from running right now, while the interruption beside it said the
+    same work had ended.
+    """
+
+    def _died_mid_run(self, name="gateway", schedule_name="nightly", work=None):
+        (self.schedules / f"{name}.ran.json").write_text(json.dumps(
+            {schedule_name: {"at": "2026-07-25 03:00", "outcome": gateway.STARTED}}))
+        (self.where / f"{name}.json").write_text(json.dumps(
+            {"name": name, "pid": 1,
+             "working": {work or f"schedule:{schedule_name}": {"pgid": 999999, "since": "then"}}}))
+
+    def test_a_schedule_left_saying_started_by_a_gone_gateway_is_reconciled(self):
+        """R-SCH-23 — the first question asked after a crash, answered wrongly, while the
+        right answer was already on disk one file away."""
+        self._died_mid_run()
+        self.made().claim()
+        did = gateway.what_was_scheduled("gateway", self.schedules)["nightly"]
+        self.assertEqual(gateway.INTERRUPTED, did["outcome"],
+                         "dead work was still presented as in flight")
+
+    def test_reconciling_does_not_move_the_minute_it_fell_due(self):
+        """R-SCH-23 — R-SCH-9 rests on that minute. Putting the moment of reconciling
+        there reads as a later firing, and everything due in between is passed over."""
+        self._died_mid_run()
+        self.made().claim()
+        self.assertEqual("2026-07-25 03:00",
+                         gateway.what_was_scheduled("gateway", self.schedules)["nightly"]["at"],
+                         "the minute a schedule fell due was moved")
+
+    def test_work_the_sweep_found_still_running_is_left_alone(self):
+        """R-SCH-23 — it is genuinely in flight, and calling it interrupted is the same
+        lie the other way up. What the sweep handed over is what says so.
+
+        The reconciliation is asked directly rather than through a real process group:
+        naming one in a test is how this suite once killed its own runner, and what is
+        being proved here is the decision, not the signalling that feeds it.
+        """
+        self._died_mid_run()
+        gw = self.made()
+        gw._outcomes = gateway.what_was_scheduled("gateway", self.schedules)
+        gw._inherited = {"schedule:nightly": {"pgid": 4242, "since": "then"}}
+        gw._reconcile_what_never_finished()
+        self.assertEqual(gateway.STARTED, gw._outcomes["nightly"]["outcome"],
+                         "work that is genuinely running was written off as interrupted")
+
+    def test_a_schedule_refused_by_a_shutdown_leaves_no_stale_start(self):
+        """R-SCH-23 — the form no reconciliation on the way back up can reach: the firing
+        is written, then shutdown refuses the wrapper, so no process ever exists for a
+        sweep to find and reckon with."""
+
+        async def refused():
+            gw = self.made()
+            gw.claim()
+            gw._stopping = True
+            one = schedule.Schedule("nightly", "0 3 * * *", ["true"])
+            await gw._run_scheduled(one, datetime(2026, 7, 25, 3, 0))
+
+        asyncio.run(refused())
+        self.assertEqual(gateway.INTERRUPTED,
+                         gateway.what_was_scheduled("gateway", self.schedules)["nightly"]["outcome"],
+                         "a schedule that never started was left saying it had")
 
 
 if __name__ == "__main__":

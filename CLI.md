@@ -23,7 +23,7 @@ rundesk doctor <agent>                                                          
 rundesk start [--here] <agent>                                                                                                                                 have the machine keep an agent running
 rundesk stop [--all] <agent>                                                                                                                                   stand an agent down
 rundesk restart [--all] <agent>                                                                                                                                cycle an agent, leaving the others alone
-rundesk logs [-n <lines>] <agent>                                                                                                                              what an agent has been saying
+rundesk logs [-n <lines>] [--source <source>] <agent>                                                                                                          what an agent has been saying
 
 # reaching it
 rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] <agent> <prompt>   one turn, streamed to this terminal
@@ -65,9 +65,10 @@ rundesk uninstall [--purge]                                                     
 --purge                         also take every agent's home, log and history
 --read-only                     let this turn look at the machine without changing it
 --set <key=value>               anything that brain takes, carried to it unread; repeatable
+--source <source>               whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine
 --steer                         keep saying more to it while it works — a line at a time, until you stop
 --when <cron>                   when it runs, as five cron fields — minute, hour, day, month, weekday
--n, --lines <lines>             how many of the last lines to show
+-n, --lines <lines>             how many of the last lines to show, from each source
 <agent>                         which agent — the name it was made under
 <channel>                       what to call this channel, and what to name it by later
 <program>                       after `--`, the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH

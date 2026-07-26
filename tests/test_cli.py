@@ -479,6 +479,15 @@ class FakeGateways:
     checked = staticmethod(real_gateway.checked)
     NotAName = real_gateway.NotAName
     Unreadable = real_gateway.Unreadable
+    # The words a reader is shown are the module's own, not a second copy: a stand-in
+    # spelling an outcome differently would let the surface and the store disagree with
+    # nothing to catch it.
+    STARTED = real_gateway.STARTED
+    INTERRUPTED = real_gateway.INTERRUPTED
+    GATEWAY_LOG = real_gateway.GATEWAY_LOG
+    MACHINE_LOG = real_gateway.MACHINE_LOG
+    EVERY_LOG = real_gateway.EVERY_LOG
+    LOG_SOURCES = real_gateway.LOG_SOURCES
 
     class AlreadyRunning(Exception):
         pass
@@ -494,7 +503,14 @@ class FakeGateways:
 
     def __init__(self, standing=(), working=None, refuses=None, written=None,
                  stops_after=None, starts_after=None, becomes=None,
-                 schedules=None, ran_schedules=None, unreadable=()):
+                 schedules=None, ran_schedules=None, unreadable=(),
+                 interrupted=None, unloggable=None):
+        #: What each gateway never got to finish. The store has existed since work could
+        #: be interrupted and had no reader at all, so a stand-in for it is new here.
+        self._interrupted = dict(interrupted or {})
+        #: Why a log line could not be written, for the case that proves a mutation whose
+        #: history failed does not report a plain success.
+        self._unloggable = unloggable
         #: Gateways whose schedules file is there and cannot be read. Every way in refuses
         #: alike, because the command surface turned that into "there is nothing there" on
         #: all three of them.
@@ -573,12 +589,27 @@ class FakeGateways:
     def what_was_scheduled(self, name, where=None):
         return self._ran_schedules.get(name, {})
 
+    def what_was_interrupted(self, name, where=None):
+        return dict(self._interrupted.get(name, {}))
+
+    def remembered(self, where=None):
+        return sorted(self._interrupted)
+
     def note(self, name, said, logs=None):
         # Never the real home: without somewhere of its own to write, a stand-in that
         # fell back to the default would put test lines in the owner's own logs.
         assert self._written is not None, "this case writes a log line and was given nowhere to put it"
+        if self._unloggable is not None:
+            return self._unloggable
         from rundesk_cli import gateway as real
-        real.note(name, said, self._written.parent)
+        return real.note(name, said, self._written.parent)
+
+    def log_sources(self, name, logs=None, source=real_gateway.EVERY_LOG):
+        """Which files hold what this gateway said — the real rule, over the scratch
+        directory this stand-in was given, so a case cannot reach the owner's own."""
+        if self._written is None:
+            return []
+        return real_gateway.log_sources(name, self._written.parent, source)
 
     def fitness(self, root=None):
         return None
@@ -1431,6 +1462,40 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("NOT FOUND", said)
 
+    def test_a_schedule_whose_gateway_is_gone_is_not_shown_as_still_running(self):
+        """R-SCH-24 — a firing is written down before the run begins, so `started` on its
+        own says only that. With no gateway of that name up, nothing it started is going,
+        and the command presented dead work as in flight until the schedule next fell due
+        — a day, for a daily one, and the first question anybody asks after a crash."""
+        gateways = self._gateways(
+            schedules={"ava": [{"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]},
+            ran_schedules={"ava": {"tidy": {"at": "2026-07-25 03:00", "outcome": "started"}}})
+        _, said = drive(["schedules", "ava"], gateways)
+        self.assertIn("interrupted", said)
+        self.assertNotIn("started", said, "dead work was still presented as in flight")
+
+    def test_a_schedule_running_right_now_is_shown_as_started(self):
+        """R-SCH-24 — the other half. Work genuinely in flight reads as in flight, or the
+        reconciliation is just the same lie the other way up."""
+        gateways = self._gateways(
+            standing=[FakeGateways.Standing("ava", running=True, pid=7)],
+            schedules={"ava": [{"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]},
+            ran_schedules={"ava": {"tidy": {"at": "2026-07-25 03:00", "outcome": "started"}}})
+        _, said = drive(["schedules", "ava"], gateways)
+        self.assertIn("started", said, "work that is running was written off as interrupted")
+
+    def test_a_change_that_could_not_be_logged_is_not_reported_as_a_plain_success(self):
+        """R-GW-37 — the change stands; it is already on disk. What must not happen is the
+        command saying ADDED and nothing else, with the one account that outlives the
+        gateway silently missing it."""
+        gateways = self._gateways(unloggable="Read-only file system")
+        code, said = drive(
+            ["schedules", "ava", "add", "tidy", "--when", "0 3 * * *", "/bin/echo"], gateways)
+        self.assertIn("ADDED", said, "a good change was unwound because its audit line failed")
+        self.assertIn("WARNING", said)
+        self.assertIn("Read-only file system", said, "it did not say why")
+        self.assertEqual(1, code, "it reported a plain success it had not earned")
+
     def test_the_agent_is_the_word_after_the_verb(self):
         """R-SCH-14 — as an option it sat in the one place `--run`'s remainder swallowed,
         so `--gateway beta` typed after the program became an argument to the program and
@@ -1627,6 +1692,63 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         self.assertEqual(["theirs"], [one["name"] for one in gateways.written_schedules("agent-two")])
 
 
+class WhatNeverFinished(unittest.TestCase):
+    """R-GW-38, R-GW-39 — the store saying what never finished, given a reader.
+
+    It had none: "what did not finish" meant reading JSON out of a directory by hand,
+    during an incident, having already guessed the gateway's name.
+    """
+
+    def _gateways(self, **kw):
+        written = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-unfinished-")) / "gateway.log"
+        self.addCleanup(shutil.rmtree, written.parent, True)
+        return FakeGateways(written=written, **kw)
+
+    def test_what_never_finished_is_readable_without_opening_a_file(self):
+        """R-GW-39 — the count itself, in the table an owner looks at first. Asserting on
+        the column heading would pass against a column that is always empty."""
+        gateways = self._gateways(
+            standing=[FakeGateways.Standing("ava", running=True, pid=7)],
+            interrupted={"ava": {
+                "schedule:nightly": {"at": "2026-07-25 03:00", "ended": True, "why": "gone"},
+                "schedule:weekly": {"at": "2026-07-24 03:00", "ended": True, "why": "gone"}}})
+        code, said = drive(["agents"], gateways, agents=FakeAgents(made=["ava"]))
+        self.assertEqual(0, code, said)
+        self.assertIn("UNFINISHED", said)
+        rows = [line for line in said.splitlines() if line.startswith("ava")]
+        self.assertTrue(rows and rows[0].rstrip().endswith("2"),
+                        f"two things never finished and the table did not say so: {rows}")
+
+    def test_an_agent_with_nothing_unfinished_says_nothing_about_it(self):
+        """R-GW-39 — the ordinary case must not read as an incident."""
+        gateways = self._gateways(standing=[FakeGateways.Standing("ava", running=True, pid=7)])
+        _, said = drive(["agents"], gateways, agents=FakeAgents(made=["ava"]))
+        rows = [line for line in said.splitlines() if line.startswith("ava")]
+        self.assertTrue(rows and rows[0].rstrip().endswith("-"),
+                        f"an agent with nothing unfinished was given a count: {rows}")
+
+    def test_each_thing_that_never_finished_is_shown_with_its_time_and_reason(self):
+        """R-GW-39 — and told apart by whether it is definitely gone: one of them is over,
+        the other may still be running with nobody owning it, and they are different
+        problems with different things to do about them."""
+        gateways = self._gateways(interrupted={"ava": {
+            "schedule:nightly": {"at": "2026-07-25 03:00", "ended": True, "why": "gateway gone"},
+            "schedule:weekly": {"at": "2026-07-24 03:00", "ended": False, "why": "would not go"},
+        }})
+        _, said = drive(["agents", "ava"], gateways, agents=FakeAgents(made=["ava"]))
+        self.assertIn("2026-07-25 03:00", said)
+        self.assertIn("gateway gone", said)
+        self.assertIn("unproven", said, "work that may still be running read as definitely gone")
+
+    def test_a_gateway_that_survives_only_as_history_is_still_listed(self):
+        """R-GW-38 — its record was cleared and its agent taken away, so the one place it
+        exists is what it never finished. That is the name an owner wants after a crash,
+        and it was the one they had to know already before anything would tell them."""
+        gateways = self._gateways(interrupted={"vanished": {"turn": {"ended": False}}})
+        _, said = drive(["agents"], gateways, agents=FakeAgents())
+        self.assertIn("vanished", said, "a gateway with nothing left but its history was invisible")
+
+
 class WhatAGatewayHasBeenSaying(unittest.TestCase):
     def setUp(self):
         self.written = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-log-")) / "gateway.log"
@@ -1673,6 +1795,44 @@ class WhatAGatewayHasBeenSaying(unittest.TestCase):
         _, said = drive(["logs", "gateway"], FakeGateways(written=self.written))
         self.assertIn("something went wrong", said)
 
+    def test_a_startup_failure_that_never_reached_the_logger_is_still_shown(self):
+        """R-GW-36 — a failed start tells the owner to run this command, and the whole of
+        the answer is in what the machine captured: a traceback, or a refusal printed
+        before there was a logger to print it. Reading only `.log` answered the one
+        question this command exists for with NO LOG."""
+        (self.written.parent / "gateway.err").write_text("Traceback (most recent call last):\n")
+        code, said = drive(["logs", "gateway"], FakeGateways(written=self.written))
+        self.assertEqual(0, code, "the answer was there and the command said there was none")
+        self.assertIn("Traceback", said)
+
+    def test_the_lines_that_explain_the_tail_are_shown_with_it(self):
+        """R-GW-36 — rotation cuts one account into four files, and the part explaining
+        the current tail is as often in the one behind it."""
+        (self.written.parent / "gateway.log.1").write_text("what actually went wrong\n")
+        self.written.write_text("and then this\n")
+        _, said = drive(["logs", "gateway"], FakeGateways(written=self.written))
+        self.assertIn("what actually went wrong", said)
+        self.assertLess(said.index("what actually went wrong"), said.index("and then this"),
+                        "one account was put back together out of order")
+
+    def test_who_wrote_a_line_is_said_when_more_than_one_did(self):
+        """R-GW-36 — two writers say different kinds of thing about one gateway, and a
+        reader deciding which is which by eye is a reader who gets it wrong."""
+        self.written.write_text("up\n")
+        (self.written.parent / "gateway.err").write_text("Traceback\n")
+        _, said = drive(["logs", "gateway"], FakeGateways(written=self.written))
+        self.assertRegex(said, r"gateway\s+up")
+        self.assertRegex(said, r"machine\s+Traceback")
+
+    def test_one_source_can_be_asked_for_on_its_own(self):
+        """R-GW-36 — labelled by default, narrowed on request."""
+        self.written.write_text("up\n")
+        (self.written.parent / "gateway.err").write_text("Traceback\n")
+        _, said = drive(["logs", "gateway", "--source", "machine"],
+                        FakeGateways(written=self.written))
+        self.assertIn("Traceback", said)
+        self.assertNotIn("up", said, "it showed a source it was told not to")
+
 
 class WhatIsInFlightWhenAnUpdateAsks(unittest.TestCase):
     def test_what_is_in_flight_is_asked_of_every_gateway_that_is_running(self):
@@ -1685,6 +1845,9 @@ class WhatIsInFlightWhenAnUpdateAsks(unittest.TestCase):
                 self.name, self.running = name, running
 
         class Gateways:
+            def remembered(self, where=None):
+                return []   # nothing here is a name that survives only as history
+
             def every(self):
                 return [Standing("alpha", True), Standing("beta", True),
                         Standing("gamma", False)]
@@ -1705,6 +1868,9 @@ class WhatIsInFlightWhenAnUpdateAsks(unittest.TestCase):
         """R-UPD-23 — the ordinary case, and the one that must never refuse an update."""
 
         class Gateways:
+            def remembered(self, where=None):
+                return []   # nothing here is a name that survives only as history
+
             def every(self):
                 return []
 
@@ -1760,6 +1926,9 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
         asked = {}
 
         class Gateways:
+            def remembered(self, where=None):
+                return []   # nothing here is a name that survives only as history
+
             def every(self):
                 return standing
 
