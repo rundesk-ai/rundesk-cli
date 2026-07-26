@@ -12,7 +12,7 @@ file and the command disagree. *Why* the surface is shaped this way is
 
 ```sh
 # an agent, and its life
-rundesk add [--provider <provider>] [--model <model>] [--set <key=value>] <agent>                                                                                                      make an agent, and the gateway that runs it
+rundesk add [--provider <provider>] [--model <model>] [--set <key=value>] [--instructions <text>] <agent>                                                                              make an agent, and the gateway that runs it
 rundesk remove <agent>                                                                                                                                                                 take an agent away for good
 rundesk agents                                                                                                                                                                         every agent this install has, and what each is doing
 rundesk agents <agent>                                                                                                                                                                 what one agent is, and where it keeps things
@@ -108,7 +108,7 @@ rundesk schedules ava off nightly
 --conversation <conversation>   which conversation to carry on — this terminal's, when left out
 --fresh                         start the conversation again rather than carrying it on
 --here                          run it in this terminal instead of handing it to the machine
---instructions <text>           standing instructions for this turn, told to the brain apart from the prompt — what a schedule running unattended says
+--instructions <text>           what every turn for this agent is told before it reads a prompt, where neither the schedule nor the surface said — empty takes it off
 --kind <kind>                   which kind of surface — one that ships, or the path of a program that speaks yours
 --model <model>                 which model, in that brain's own words
 --most <n>                      how many to show, newest first (default: 20)

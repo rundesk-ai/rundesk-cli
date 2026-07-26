@@ -319,6 +319,26 @@ def _skip(fields: tuple, found: datetime, anything: tuple) -> datetime:
 A_MINUTE = "%Y-%m-%d %H:%M"
 
 
+def by_default(named: str) -> str:
+    """The one line rundesk says to a turn the clock started, when nobody said anything.
+
+    The same rule a surface's default sentence follows (`channel.by_default`): something that
+    says what the situation is beats something that says nothing, and an owner who disagrees
+    says so by writing their own — theirs then stands alone rather than being added to.
+
+    **What a brain actually needs to know, and nothing else.** That nothing asked, so there is
+    no question behind this to read between the lines of; that nobody is there, so asking one
+    back is a turn that ends waiting; and where what it says will go, so it can write for
+    somebody reading it later rather than for a person watching now. Three facts, because a
+    brain given a paragraph about being autonomous starts performing autonomy.
+    """
+    named = str(named or "").strip()
+    return (f"Nothing asked you this: the schedule '{named}' came due and started you. "
+            if named else "Nothing asked you this: a schedule came due and started you. ") + (
+        "Nobody is watching, so a question will not be answered — say what you found "
+        "instead. What you say is recorded, and posted where this agent is reached.")
+
+
 def describe(one: Schedule, moment: datetime) -> str:
     """When this next runs, said the way a person would ask it."""
     following = one.next_after(moment)

@@ -163,9 +163,17 @@ class Answering:
 
     def _from(self, it: dict) -> str:
         """What this agent is told about the situation, before it reads the words
-        (R-CH-21, R-CH-22) — the owner's own, or rundesk's one line when they wrote none.
+        (R-CH-21, R-CH-22, R-AGT-16).
+
+        Three things could say it and what is nearest wins: this channel's own, then the
+        agent's, then the one line rundesk says when nobody has said anything. The order lives
+        in `agent.told`, so nothing here decides it — this only says which two it is choosing
+        between and what the last resort is.
         """
-        return channel.preface(self.record, self.name, self.channel, it)
+        return channel.preface(
+            self.record, self.name, self.channel, it,
+            otherwise=agents.told(self.name, self._where,
+                                  otherwise=channel.by_default(self.record, it)))
 
     def _make_room(self) -> None:
         """Drop the oldest conversations that have nothing running in them.

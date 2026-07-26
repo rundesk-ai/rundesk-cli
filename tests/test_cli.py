@@ -786,12 +786,25 @@ class FakeAgents:
     def chosen(self, name):
         return self._chosen.get(name, {})
 
-    def remember(self, name, provider=None, model=None, settings=None):
+    def remember(self, name, provider=None, model=None, settings=None, instructions=None):
         keeping = self._chosen.setdefault(name, {})
-        for what, value in (("provider", provider), ("model", model), ("settings", settings)):
+        for what, value in (("provider", provider), ("model", model), ("settings", settings),
+                            ("instructions", instructions)):
             if value is not None:
                 keeping[what] = value
         return keeping
+
+    def told(self, name, where=None, said="", otherwise=""):
+        """The same three tiers the real one has, over what this stand-in keeps.
+
+        Written out rather than borrowed because the real one reads a store and this keeps a
+        dict — and kept to three lines, so the order is visible here rather than buried. A
+        stand-in that answered differently would let a case pass against an agent told the
+        wrong thing (see `agent.told`)."""
+        if said and said.strip():
+            return said
+        mine = self._chosen.get(name, {}).get("instructions")
+        return mine if mine and mine.strip() else otherwise
 
 
 class FakeMachine:

@@ -179,6 +179,27 @@ class WhereABrainIsAnswering(CarriesAConversation):
     forty people in exactly the voice it used for a direct message, and the person it was
     talking to was a number it never saw."""
 
+    async def test_a_channel_that_says_nothing_falls_to_what_the_agent_says(self):
+        """R-AGT-16, R-CH-22 — the composition, rather than either half of it. `channel.py`
+        has no idea what an agent keeps and `agent.py` has no idea what a surface is, so this
+        is the only place the order between them is actually exercised."""
+        agents.remember("ava", self.where, instructions="You are {agent}, and you are brief.")
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual("You are ava, and you are brief.", brain.asked[0]["preface"],
+                         "the agent's own was passed over for rundesk's default sentence")
+
+    async def test_what_this_channel_says_still_wins_over_the_agents(self):
+        """R-AGT-16, R-CH-22 — nearest first. An owner who wrote something for one surface
+        meant it for that surface."""
+        agents.remember("ava", self.where, instructions="what the agent says")
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain,
+                              record=dict(self.record, instructions="Keep it short here."))
+        await self.carry(held, self.arrived())
+        self.assertEqual("Keep it short here.", brain.asked[0]["preface"])
+
     async def test_a_brain_is_told_which_surface_and_conversation_it_is_answering_in(self):
         """R-CH-21 — the surface, the channel the owner named, the place as that surface
         shows it, and who is asking."""

@@ -571,14 +571,34 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
         self.assertFalse(channel.allowed(alone, "9999"),
                          "one allow-list reached across two surfaces")
 
-    def test_an_owner_who_wrote_nothing_is_still_told_where_the_agent_is(self):
+    def test_an_owner_who_wrote_nothing_anywhere_is_still_told_where_the_agent_is(self):
         """R-CH-21, R-CH-22 — something that says where it is beats something that says
-        nothing, and an owner who disagrees says so by writing their own."""
+        nothing, and an owner who disagrees says so by writing their own.
+
+        Nothing *anywhere*: this is the last of the tiers, so it is what is said when the
+        channel is silent and so is the agent (R-AGT-16)."""
         said = channel.preface({"kind": "discord"}, "ava", "dms",
                                {"direct": False, "where": "#ops", "called": "Tim"})
         self.assertIn("over discord", said)
         self.assertIn("in #ops", said)
         self.assertNotIn("'dms'", said)
+
+    def test_a_channel_that_says_nothing_falls_to_what_the_agent_says(self):
+        """R-CH-22, R-AGT-16 — the tier between the two that existed. Handed in rather than
+        looked up: what an agent keeps is not this module's to know."""
+        said = channel.preface({"kind": "discord"}, "ava", "dms",
+                               {"where": "#ops", "called": "Tim"},
+                               otherwise="You are {agent}, and you are always brief.")
+        self.assertEqual("You are ava, and you are always brief.", said,
+                         "the agent's own was passed over, or was not filled in")
+
+    def test_what_this_channel_says_still_wins(self):
+        """R-CH-22, R-AGT-16 — nearest first. An owner who wrote something for one surface
+        meant it for that surface."""
+        said = channel.preface({"kind": "discord", "instructions": "Keep it short in {where}."},
+                               "ava", "dms", {"where": "#ops"},
+                               otherwise="what the agent says")
+        self.assertEqual("Keep it short in #ops.", said)
 
     def test_a_surface_reports_the_kinds_of_place_it_comes_in(self):
         """R-CAD-15 — a platform is rarely one place, and the core has no list of what

@@ -398,18 +398,24 @@ def surface(kind: str) -> str:
     return kind
 
 
-def preface(record: dict, agent: str, name: str, it: dict) -> str:
+def preface(record: dict, agent: str, name: str, it: dict, otherwise: str = "") -> str:
     """What this agent is told about its situation, for this arrival (R-CH-22).
 
     One piece of text, because a channel is already one place — see `INSTRUCTIONS`. An owner who
     has written nothing gets the sentence rundesk would have said anyway, which is the only
     default worth having: something that says where it is beats something that says
     nothing, and an owner who disagrees says so by writing their own.
+
+    `otherwise` is what to say when this channel says nothing — the agent's own standing
+    instructions, where it has any, and `by_default` below where it has none. Handed in rather
+    than looked up, because what an agent keeps is not this module's to know: this file is the
+    seam a *surface* is reached through and nothing else (R-AGT-16).
     """
     said = record.get(INSTRUCTIONS)
     said = said.strip() if isinstance(said, str) else ""
     if not said:
-        said = _by_default(record, it)
+        said = otherwise.strip() if isinstance(otherwise, str) and otherwise.strip() \
+            else by_default(record, it)
     filling = {
         "agent": agent, "channel": name, "kind": surface(record.get("kind")),
         "where": plainly(it.get(WHERE)), "called": plainly(it.get(CALLED)),
@@ -419,8 +425,8 @@ def preface(record: dict, agent: str, name: str, it: dict) -> str:
     return _fill(said, filling)[:INSTRUCTIONS_MOST]
 
 
-def _by_default(record: dict, it: dict) -> str:
-    """The one line rundesk says when an owner has said nothing (R-CH-21).
+def by_default(record: dict, it: dict) -> str:
+    """The one line rundesk says when nobody has said anything (R-CH-21).
 
     **Not the channel's name.** That is the label an owner gave this connection when they
     set it up — `dms`, `ops`, `the-loud-one` — and it means nothing to a brain except that

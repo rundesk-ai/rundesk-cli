@@ -468,8 +468,30 @@ def chosen(name: str, where: Path | None = None) -> dict:
     return reading(name, where).agent()
 
 
+def told(name: str, where: Path | None = None, said: str = "", otherwise: str = "") -> str:
+    """What a turn for this agent is told about its situation, before it reads a prompt.
+
+    **The whole fallback, in one place** (R-AGT-16). What is nearest wins: the schedule's or
+    the turn's own, then the surface it arrived on, then the agent's, then whatever rundesk
+    would have said about that situation. `said` is whatever the nearer two came to and
+    `otherwise` is rundesk's own sentence, so every caller hands in what it knows and none of
+    them has to know the order.
+
+    Written once because the order is the guarantee. Each caller working it out would be four
+    orders that agree until one of them does not, and the way that fails is silent: an agent
+    told the wrong thing about where it is answers perfectly well, and wrongly.
+    """
+    if said and said.strip():
+        return said
+    mine = chosen(name, where).get("instructions")
+    if isinstance(mine, str) and mine.strip():
+        return mine
+    return otherwise
+
+
 def remember(name: str, where: Path | None = None, provider: str | None = None,
-             model: str | None = None, settings: dict | None = None) -> dict:
+             model: str | None = None, settings: dict | None = None,
+             instructions: str | None = None) -> dict:
     """Keep what this agent should reach for when a turn does not say.
 
     What is not given is left exactly as it was, so naming a model later does not quietly
@@ -479,7 +501,8 @@ def remember(name: str, where: Path | None = None, provider: str | None = None,
     the write are one transaction rather than one lock file.
     """
     kept = records(name, where)
-    kept.remember_agent(provider=provider, model=model, settings=settings)
+    kept.remember_agent(provider=provider, model=model, settings=settings,
+                        instructions=instructions)
     return kept.agent()
 
 
@@ -633,6 +656,7 @@ def asking(name: str, where: Path | None = None, carry=None):
     Which brain answers is the schedule's, then the agent's, and a schedule that reaches for
     neither cannot run — said as an outcome rather than passed over in silence.
     """
+    from rundesk import schedule as schedules
     from rundesk import turn as turns
 
     carrying = carry if carry is not None else turns.carry
@@ -650,7 +674,10 @@ def asking(name: str, where: Path | None = None, carry=None):
             settings=kept.get("settings"),
             conversation=one.name, on=turns.SCHEDULE, kind=turns.SCHEDULE,
             fresh=True,
-            preface=one.instructions or "",
+            # This schedule's own, then the agent's, then the one line rundesk says to a
+            # turn nobody is waiting for (R-AGT-16).
+            preface=told(name, where, said=one.instructions or "",
+                         otherwise=schedules.by_default(one.name)),
             source=turns.SCHEDULE,
             # What correlates this run with the schedule that started it, so what ran at
             # three in the morning is found by the name an owner already knows.

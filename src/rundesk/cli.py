@@ -35,6 +35,7 @@ from rundesk import gateway as _gateway  # noqa: E402
 from rundesk import migration  # noqa: E402
 from rundesk import process  # noqa: E402
 from rundesk import provider  # noqa: E402
+from rundesk import schedule as schedules  # noqa: E402
 from rundesk import store  # noqa: E402
 from rundesk import supervisor as _supervisor  # noqa: E402
 from rundesk import turn  # noqa: E402
@@ -289,6 +290,12 @@ def build_parser() -> argparse.ArgumentParser:
     born.add_argument("name", nargs="?", metavar="<agent>",
                       help="what to call it, and what to name it by later")
     _brain(born, "which brain answers for it when a turn does not say")
+    # Where an agent's own standing instructions are written, for the same reason its brain
+    # is written here: `add` is what an owner types to say what an agent *is*, and running it
+    # again on one that exists is how they change their mind (R-AGT-4). Empty takes them off.
+    born.add_argument("--instructions", dest="says", metavar="<text>",
+                      help="what every turn for this agent is told before it reads a prompt, "
+                           "where neither the schedule nor the surface said — empty takes it off")
 
     # One turn, here, in this terminal. It runs here rather than inside the agent's
     # gateway because there is nothing to ask a gateway with — the same reason a schedule
@@ -981,10 +988,15 @@ def _chose(args: argparse.Namespace, agents, name: str) -> str:
     not quietly forget the brain.
     """
     settings = _given(getattr(args, "settings", None))
-    if not (args.provider or args.model or settings):
+    # `None` is "not named" and `""` is "take it off", which is why this asks whether it was
+    # given rather than whether it is truthy: an owner clearing what an agent is told has
+    # said something, and reading that as silence would leave the old text in place.
+    says = getattr(args, "says", None)
+    if not (args.provider or args.model or settings or says is not None):
         return ""
     keeping = agents.remember(name, provider=args.provider, model=args.model,
-                              settings=settings or None)
+                              settings=settings or None,
+                              instructions=says)
     said = keeping.get("provider") or "no brain yet"
     return f"{said} ({keeping['model']})" if keeping.get("model") else said
 
@@ -1084,7 +1096,11 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
             fresh=args.fresh or by_the_clock,
             watching=said,
             steering=_typed() if args.steer else None,
-            preface=args.says,
+            # What it is told before it reads a word: this turn's own, then the agent's,
+            # then what rundesk says about the situation — which for a person at a terminal
+            # is nothing, because they are here (R-AGT-16).
+            preface=agents.told(name, said=args.says,
+                                otherwise=schedules.by_default(clock) if clock else ""),
             source=turn.SCHEDULE if clock else None,
         ))
     except provider.NotRunnable as why:

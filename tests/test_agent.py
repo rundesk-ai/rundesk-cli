@@ -544,6 +544,82 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
         self.assertFalse(agent.directory("ava", self.where).exists())
 
 
+class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
+    """R-AGT-16 — the fallback, and the fact that it is one place.
+
+    Four things could say what a turn is told about its situation, and what is nearest wins:
+    the schedule's or the turn's own, then the surface it arrived on, then the agent's, then
+    the one line rundesk says about that situation. Each caller working the order out for
+    itself would be four orders that agree until one of them does not — and the way that
+    fails is silent, because an agent told the wrong thing about where it is answers perfectly
+    well and wrongly.
+    """
+
+    def test_what_a_turn_was_told_itself_wins(self):
+        """R-AGT-16 — nearest first, so a schedule or a command can always override."""
+        self.made()
+        agent.remember("ava", self.where, instructions="what the agent says")
+        self.assertEqual("what this turn says",
+                         agent.told("ava", self.where, said="what this turn says",
+                                    otherwise="what rundesk would say"))
+
+    def test_the_agents_own_is_next(self):
+        """R-AGT-16 — the tier that had a column, a writer and no reader at all."""
+        self.made()
+        agent.remember("ava", self.where, instructions="what the agent says")
+        self.assertEqual("what the agent says",
+                         agent.told("ava", self.where, otherwise="what rundesk would say"))
+
+    def test_rundesks_own_line_is_last(self):
+        """R-AGT-16 — something that says what the situation is beats something that says
+        nothing, and an owner who disagrees says so by writing their own."""
+        self.made()
+        self.assertEqual("what rundesk would say",
+                         agent.told("ava", self.where, otherwise="what rundesk would say"))
+
+    def test_nothing_anywhere_is_nothing_rather_than_a_guess(self):
+        """R-AGT-16 — a person at a terminal is watching, so there is nothing to tell them
+        about the situation and nothing is what they get."""
+        self.made()
+        self.assertEqual("", agent.told("ava", self.where))
+
+    def test_what_an_agent_is_told_is_kept_and_read_back(self):
+        """R-AGT-16 — written where an agent's brain is written, because `add` is what an
+        owner types to say what an agent *is* (R-AGT-4)."""
+        self.made()
+        agent.remember("ava", self.where, instructions="be brief")
+        self.assertEqual("be brief", agent.chosen("ava", self.where)["instructions"])
+        agent.remember("ava", self.where, model="fast-1")
+        self.assertEqual("be brief", agent.chosen("ava", self.where)["instructions"],
+                         "naming a model quietly forgot what the agent is told")
+
+    def test_taking_what_an_agent_is_told_off_leaves_nothing_behind(self):
+        """R-AGT-16 — an owner clearing it has said something, and reading that as silence
+        would leave the old text in place for ever."""
+        self.made()
+        agent.remember("ava", self.where, instructions="be brief")
+        agent.remember("ava", self.where, instructions="")
+        self.assertEqual("what rundesk would say",
+                         agent.told("ava", self.where, otherwise="what rundesk would say"))
+
+    def test_a_turn_the_clock_started_is_told_nobody_is_watching(self):
+        """R-SCH-30 — the first trigger with no person at the other end. Three facts, and the
+        one that matters most is that a question will not be answered: a brain that asks one
+        into an empty room is a turn that ends waiting."""
+        from rundesk import schedule
+        said = schedule.by_default("nightly")
+        self.assertIn("nightly", said, "it never said which schedule started this")
+        self.assertIn("Nothing asked you", said)
+        self.assertIn("will not be answered", said)
+        self.assertIn("recorded", said, "it never said what becomes of what it says")
+
+    def test_a_turn_the_clock_started_with_no_schedule_named_still_says_the_situation(self):
+        """R-SCH-30 — the sentence is about the situation, not about the name, so it still
+        says the thing that matters when there is no name to give."""
+        from rundesk import schedule
+        self.assertIn("will not be answered", schedule.by_default(""))
+
+
 class AGatewayThatHasNoAgentYet(WithSomewhereToKeepAgents):
     def wrote(self, name: str = "gateway") -> None:
         """A gateway of this name, with a log and an account of what it never finished, kept
