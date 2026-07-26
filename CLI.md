@@ -29,6 +29,7 @@ rundesk logs [-n <lines>] [--source <source>] <agent>                           
 rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] <agent> <prompt>   one turn, streamed to this terminal
 rundesk channels <agent> add --kind <kind> --allow <user> <channel> -- <option> [<arg> ...]                                                                    put this agent on a channel
 rundesk channels <agent> remove <channel>                                                                                                                      take this agent off a channel
+rundesk channels <agent> says [--any <text>] [--direct <text>] [--room <text>] <channel>                                                                       what this agent is told about where it is
 rundesk channels <agent> show <channel>                                                                                                                        one channel, and who may reach this agent through it
 rundesk schedules <agent> add --when <cron> <schedule> -- <program> [<arg> ...]                                                                                add a schedule
 rundesk schedules <agent> off <schedule>                                                                                                                       keep a schedule but stop it running
@@ -55,8 +56,10 @@ rundesk uninstall [--purge]                                                     
 ```sh
 --all                           every agent on this machine
 --allow <user>                  who may reach this agent through it — at least one, always; repeatable
+--any <text>                    said every time, whatever the conversation is — empty takes it back off
 --check                         say whether a newer release exists
 --conversation <conversation>   which conversation to carry on — this terminal's, when left out
+--direct <text>                 said as well when it is a direct message — empty takes it back off
 --fresh                         start the conversation again rather than carrying it on
 --here                          run it in this terminal instead of handing it to the machine
 --kind <kind>                   which kind of surface — one that ships, or the path of a program that speaks yours
@@ -64,6 +67,7 @@ rundesk uninstall [--purge]                                                     
 --provider <provider>           which brain answers for it when a turn does not say
 --purge                         also take every agent's home, log and history
 --read-only                     let this turn look at the machine without changing it
+--room <text>                   said as well when others can read along — empty takes it back off
 --set <key=value>               anything that brain takes, carried to it unread; repeatable
 --source <source>               whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine
 --steer                         keep saying more to it while it works — a line at a time, until you stop

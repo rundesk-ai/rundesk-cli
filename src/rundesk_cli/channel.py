@@ -581,6 +581,40 @@ def remember(directory: Path, name: str, kind: str, allow, settings=None,
     return True
 
 
+def tell(directory: Path, name: str, says: dict) -> bool | None:
+    """Change what this agent is told about a situation, leaving the rest of it alone
+    (R-CH-22).
+
+    Under the same one hold everything else here writes under, and merged rather than
+    replaced: an owner setting what is said in a room must not silently drop what they
+    wrote for a direct message a week ago. A situation set to nothing is removed, which is
+    how one is taken back off.
+
+    `None` when there is no channel by that name, so the difference between "changed
+    nothing because it is not there" and "changed nothing because it could not be written"
+    survives all the way out to what the owner is told.
+    """
+    try:
+        with gateway.changing(book(directory), {}, "the channels this agent is on") as kept:
+            it = kept.get(name)
+            if it is None:
+                return None
+            standing = dict(it.get(SAYS) or {})
+            for situation, said in says.items():
+                if said:
+                    standing[situation] = said
+                else:
+                    standing.pop(situation, None)
+            if standing:
+                it[SAYS] = standing
+            else:
+                it.pop(SAYS, None)
+            kept[name] = it
+    except (gateway.Unreadable, OSError):
+        return False
+    return True
+
+
 def forget(directory: Path, name: str) -> bool:
     """Take this agent off one channel, leaving every other one alone."""
     try:

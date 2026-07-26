@@ -72,6 +72,7 @@ def tearDownModule():
     cli._remove_this_install = _REAL_REMOVAL
     cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS = _REAL_PATIENCE
 from rundesk_cli import agent as real_agent  # noqa: E402
+from rundesk_cli import channel  # noqa: E402
 from rundesk_cli import gateway as real_gateway  # noqa: E402
 
 
@@ -1822,6 +1823,62 @@ raise SystemExit(1)
         self.assertIn("A_CHANNEL_TOKEN", said)
         self.assertIn("present", said)
         self.assertNotIn("not for printing", said, "a channel's secret was printed")
+
+    def test_what_an_agent_is_told_is_written_and_read_back(self):
+        """R-CH-22 — a wording that reads well in a room is found by trying it, so it is
+        its own action: rewording must not mean taking the agent off the channel and
+        proving it all over again."""
+        drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
+               "--allow", "2207"], self._gateways(), agents=self.agents)
+        code, said = drive(["channels", "ava", "says", "ops",
+                            "--room", "You are in {where}. Others read this."],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code)
+        self.assertIn("TOLD", said)
+        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        self.assertEqual({"room": "You are in {where}. Others read this."},
+                         kept[channel.SAYS])
+        _, back = drive(["channels", "ava", "says", "ops"], self._gateways(),
+                        agents=self.agents)
+        self.assertIn("Others read this", back)
+
+    def test_one_situation_being_written_does_not_drop_another(self):
+        """R-CH-22 — merged rather than replaced. An owner setting what is said in a room
+        must not silently lose what they wrote for a direct message a week ago."""
+        drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
+               "--allow", "2207"], self._gateways(), agents=self.agents)
+        for flag, said in (("--direct", "Private."), ("--room", "Public.")):
+            drive(["channels", "ava", "says", "ops", flag, said],
+                  self._gateways(), agents=self.agents)
+        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        self.assertEqual({"direct": "Private.", "room": "Public."}, kept[channel.SAYS])
+        drive(["channels", "ava", "says", "ops", "--room", ""],
+              self._gateways(), agents=self.agents)
+        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        self.assertEqual({"direct": "Private."}, kept[channel.SAYS],
+                         "taking one situation back off took another with it")
+
+    def test_a_name_that_cannot_be_filled_in_is_refused_before_it_is_written(self):
+        """R-CH-22 — checked when it is written, which is the whole reason this is a
+        command rather than a file to edit. Written, it would go quietly blank at every
+        turn from then on and never say so."""
+        drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
+               "--allow", "2207"], self._gateways(), agents=self.agents)
+        code, said = drive(["channels", "ava", "says", "ops", "--room", "Hello {wheree}."],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT CHANGED", said)
+        self.assertIn("wheree", said)
+        kept = json.loads((self.at / "ava" / "channels.json").read_text())["ops"]
+        self.assertNotIn(channel.SAYS, kept)
+
+    def test_telling_a_channel_that_is_not_there_says_so(self):
+        """R-CH-22 — told apart from a record that could not be written, because one is
+        the owner's typo and the other is a disk to look at."""
+        code, said = drive(["channels", "ava", "says", "nowhere", "--any", "Hello."],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT FOUND", said)
 
     def test_a_channel_that_is_added_twice_is_refused(self):
         """R-CAD-9 — the second one would silently replace the first, including who was

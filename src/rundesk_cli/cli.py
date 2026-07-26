@@ -354,6 +354,19 @@ def build_parser() -> argparse.ArgumentParser:
         one = on.add_parser(act, help=what)
         one.add_argument("channel", metavar="<channel>",
                          help="which channel, by the name it was added under")
+    # Standing instructions, by the situation they hold in. A separate action rather than
+    # flags on `add`, because these are the part an owner rewrites — a wording that reads
+    # well in a room is found by trying it, and finding it should not mean taking the
+    # agent off the channel and proving it again.
+    telling = on.add_parser("says", help="what this agent is told about where it is")
+    telling.add_argument("channel", metavar="<channel>",
+                         help="which channel, by the name it was added under")
+    for situation, what in (
+            (channel.ANY, "said every time, whatever the conversation is"),
+            (channel.DIRECT, "said as well when it is a direct message"),
+            (channel.ROOM, "said as well when others can read along")):
+        telling.add_argument(f"--{situation}", metavar="<text>", default=None,
+                             help=what + " — empty takes it back off")
     return parser
 
 
@@ -1314,6 +1327,8 @@ def cmd_channels(args: argparse.Namespace, gateways, agents) -> int:
         return _remove_channel(args, gateways, agents, whose)
     if act == "show":
         return _show_channel(args, gateways, agents, whose)
+    if act == "says":
+        return _channel_says(args, gateways, agents, whose)
     return _list_channels(args, gateways, agents, whose)
 
 
@@ -1387,6 +1402,61 @@ def _remove_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     return unlogged
 
 
+def _channel_says(args: argparse.Namespace, gateways, agents, whose) -> int:
+    """What this agent is told about the situation it is answering in (R-CH-22).
+
+    Checked before it is written, and that is the point of writing it here rather than by
+    hand: a name misspelled in a template is an instruction that goes quietly blank at
+    every turn from then on, and says nothing about having done so. With nothing to set,
+    this shows what is already there — so an owner can read back exactly what their agent
+    will be told before anyone says anything to it.
+    """
+    says = {one: getattr(args, one) for one in channel.SITUATIONS
+            if getattr(args, one, None) is not None}
+    it = channel.of(whose, args.channel)
+    if it is None:
+        print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
+              file=sys.stderr)
+        return 1
+    if not says:
+        standing = it.get(channel.SAYS) or {}
+        if not standing:
+            print(f"{args.name}/{args.channel}: SAYS NOTHING — rundesk says where it is "
+                  f"and no more")
+            print(f"        write your own:  rundesk channels {args.name} says "
+                  f"{args.channel} --room \"<text>\"")
+            return 0
+        _as_table(("WHEN", "SAID"), [(one, standing[one])
+                                     for one in channel.SITUATIONS if standing.get(one)])
+        return 0
+    wrong = ""
+    for situation, said in says.items():
+        wrong = channel.wrong_with_says({situation: said}) if said else ""
+        if wrong:
+            print(f"{args.name}/{args.channel}: NOT CHANGED — {wrong}", file=sys.stderr)
+            return 1
+    written = channel.tell(whose, args.channel, says)
+    if written is None:
+        print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
+              file=sys.stderr)
+        return 1
+    if not written:
+        print(f"{args.name}/{args.channel}: NOT CHANGED — the record could not be written",
+              file=sys.stderr)
+        return 1
+    unlogged = _note(gateways, args.name,
+                     f"channel '{args.channel}' was told what to say in "
+                     + ", ".join(sorted(says)),
+                     agents.resolved(args.name))
+    print(f"{args.name}/{args.channel}: TOLD — {', '.join(sorted(says))}")
+    if gateways.standing(args.name, agents.resolved(args.name).run).running:
+        # Read when a turn starts, from the record, so nothing has to be cycled — and
+        # saying so is the difference between an owner trusting this and an owner
+        # restarting an agent every time they reword a sentence.
+        print("        in effect from the next turn — nothing to restart")
+    return unlogged
+
+
 def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     """One channel, and who may reach the agent through it.
 
@@ -1412,6 +1482,9 @@ def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
             f"{one} — {'present' if os.environ.get(one) else 'not set'}" for one in named)
             or "none needed"),
         ("added", str(it.get("added") or "-")),
+        ("says", ", ".join(one for one in channel.SITUATIONS
+                           if (it.get(channel.SAYS) or {}).get(one))
+            or "nothing of its own — rundesk says where it is"),
         ("reachable", "yes" if gateways.standing(
             args.name, agents.resolved(args.name).run).running
             else "no — the agent is not running"),
