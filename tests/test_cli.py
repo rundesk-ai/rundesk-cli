@@ -1862,6 +1862,35 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         self.assertEqual(["other"], [row["name"] for row in self.schedules_of("gateway")])
         self.assertIn("removed", self.written.read_text())
 
+    def test_a_schedule_says_what_it_starts_and_where_it_reports(self):
+        """R-SCH-28, R-SCH-31 — a prompt and a program read back differently and an owner
+        cannot tell them apart from a name and a cron. Where it reports is the thing they ask
+        next, and a schedule that names nowhere says so by saying nothing."""
+        kept = self.agents.records("gateway")
+        kept.remember_channel("ops", "somewhere", ["2207"], store.stamped())
+        kept.remember_schedule("nightly", "0 3 * * *", store.stamped(),
+                               prompt="what changed?", channel="ops")
+        kept.remember_schedule("quiet", "0 4 * * *", store.stamped(), prompt="anything?")
+        kept.remember_schedule("tidy", "0 5 * * *", store.stamped(), command=["/bin/tidy"])
+        code, said = drive(["schedules", "gateway"], self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("asks → ops", said, "it never said where the outcome goes")
+        rows = {line.split()[0]: line for line in said.splitlines() if line[:1].isalnum()}
+        self.assertIn("asks", rows["quiet"])
+        self.assertNotIn("→", rows["quiet"], "a schedule naming nowhere claimed somewhere")
+        self.assertIn("runs", rows["tidy"])
+
+    def test_a_schedule_reporting_to_a_channel_this_agent_has_not_got_is_refused(self):
+        """R-SCH-31 — refused where it is written rather than found at three in the morning,
+        the same way a program named rather than located is: a schedule reporting to a surface
+        that is not there says nothing, and looks exactly like one nobody asked about."""
+        code, said = drive(["schedules", "gateway", "add", "nightly", "--when", "0 3 * * *",
+                            "--ask", "what changed?", "--to", "nowhere"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("no channel called", said)
+        self.assertEqual([], self.schedules_of("gateway"))
+
     def test_a_schedule_is_turned_off_and_on_again_without_being_lost(self):
         """R-SCH-11"""
         gateways = self._gateways(schedules={"gateway": [

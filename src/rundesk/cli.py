@@ -2128,7 +2128,11 @@ def _list_schedules(args: argparse.Namespace, gateways, kept, whose) -> int:
         # What it starts, said in one word rather than in full: a prompt is a sentence and a
         # program is a path, and neither fits a column beside four others. Which of the two it
         # is decides everything about how it runs, so it is the part worth showing.
-        "asks" if one.prompt else "runs",
+        # What it starts, and where what that came to is said — one column, because a prompt
+        # is a sentence and a program is a path and neither fits beside five others. Which of
+        # the two it is decides everything about how it runs, and where it reports is the
+        # thing an owner asks next.
+        ("asks" if one.prompt else "runs") + (f" → {one.channel}" if one.channel else ""),
         one.when,
         schedule.describe(one, now),
         ran.get(one.name, {}).get("last_auto_run_at") or "-",
@@ -2187,12 +2191,29 @@ def cmd_runs(args: argparse.Namespace, gateways, agents) -> int:
         print(f"{args.name}: NOTHING RUN YET")
         print(f'        ask it something:  rundesk ask {args.name} "…"')
         return 0
+    # Which schedule, where there was one. `source` alone says the clock started it and
+    # leaves an owner to work out which of their schedules that was — and the whole reason to
+    # read this at all is that something happened while nobody was watching.
+    named = {row["id"]: row["name"] for row in kept.schedules()}
     _as_table(("RUN", "WHEN", "SOURCE", "ANSWERED BY", "OUTCOME", "COST"), [
-        (one["id"], str(one["started_at"]), str(one["source"]), _answered_by(one["provider"]),
-         str(one["outcome"] or "running"), _spent(one))
+        (one["id"], str(one["started_at"]), _admitted_by(one, named),
+         _answered_by(one["provider"]), str(one["outcome"] or "running"), _spent(one))
         for one in found
     ])
     return 0
+
+
+def _admitted_by(one: dict, named: dict) -> str:
+    """What started this run, said the way an owner would ask about it (R-RUN-16).
+
+    A schedule is named rather than merely reported as one: a listing of six runs that all
+    say `schedule` is a listing that answers "was this me?" and not "which of mine was it?".
+    A schedule that has since been removed leaves the run saying what kind it was, because
+    the run outlives it.
+    """
+    said = str(one["source"])
+    which = named.get(one.get("schedule_id"))
+    return f"{said} '{which}'" if which else said
 
 
 def _answered_by(named: str) -> str:
