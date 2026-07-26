@@ -22,7 +22,9 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
 
 ### What is written down, and where (5 directories)
 
-No database. Everything persisted is a small JSON file written whole and renamed into place, so a reader
+**What the product runs on today is below; what it is moving to is `store.py`, and nothing reads that
+yet.** Everything the shipped code persists is a small JSON file written whole and renamed into place,
+so a reader
 arriving mid-write finds the old one rather than half of the new one. Each directory is overridable by an
 environment variable, and every one of them is carried in the launchd job — a gateway reading somewhere
 other than the command that configured it is the fault that makes a schedule silently never run.
@@ -62,7 +64,7 @@ A run's account is the one thing here that is **appended** rather than written w
 written while the thing it accounts for is still happening and has to be readable throughout. Nothing
 rewrites it; a retention policy takes whole files.
 
-## Backend / Services (src/rundesk_cli/ — 13 modules)
+## Backend / Services (src/rundesk_cli/ — 16 modules)
 
 - `src/rundesk_cli/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -173,7 +175,7 @@ provider. One file per contract, named for it:
 | `test_turn.py` | 39 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_transcript.py` | 20 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
 | `test_session.py` | 9 | `agent-run` — a handle kept for a conversation and a brain together |
-| `test_store.py` | 57 | `platform-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
+| `test_store.py` | 57 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
 | `test_channel.py` | 42 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
 | `test_answering.py` | 36 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
 | `test_discord.py` | 37 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up |

@@ -8,5 +8,4 @@ Add a row when you add a draft; `doc-lint` fails the build if one is missing.
 
 | Draft | Proposes | Reserved namespace |
 |---|---|---|
-| [platform-store](./platform-store.md) | Everything one agent keeps that outlives the moment — what it is configured to do, and what it has done — held apart from every other agent's. | `STO` |
-| [lifecycle-migration](./lifecycle-migration.md) | Bringing what is already on a machine into the shape a newer rundesk expects, in the window an update already stands every gateway down for. | `MIG` |
+| _(none — `agent-store` and `lifecycle-migration` graduated into `../prd/` on 2026-07-26)_ | | |

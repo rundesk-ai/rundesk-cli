@@ -48,6 +48,7 @@ high-level map.
   - [agent-home](./agent-home.md) — the named identity work is run for, the home it loads from, and how far apart two of them are kept.
   - [agent-gateway](./agent-gateway.md) — the one gateway an agent runs in, made with it and taken away with it.
   - [agent-run](./agent-run.md) — one occurrence of work, the account it leaves behind, and what a conversation is continued from.
+  - [agent-store](./agent-store.md) — everything one agent keeps that outlives the moment: what it is configured to do, what it has done, and how it is whole again from that alone.
 - **Channel**
   - [channel-adapter](./channel-adapter.md) — the seam a surface is reached through: a program rundesk runs rather than code it loads, and what any channel adapter must do.
   - [channel-messaging](./channel-messaging.md) — what any channel does with what arrives on it, whatever its platform can and cannot show.
@@ -56,4 +57,5 @@ high-level map.
 - **Lifecycle**
   - [lifecycle-install](./lifecycle-install.md) — getting rundesk onto a machine, and knowing it worked.
   - [lifecycle-update](./lifecycle-update.md) — which version this is, which has been published, and moving between them.
+  - [lifecycle-migration](./lifecycle-migration.md) — bringing what is already on a machine into the shape a newer rundesk expects, in the window an update already stands every gateway down for.
   - [lifecycle-removal](./lifecycle-removal.md) — taking rundesk off a machine, and what is left when it goes.

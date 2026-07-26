@@ -6,8 +6,8 @@ page that says how to point everything at them without improvising.
 
 **If the design turns out to be wrong, the drafts move first.** The whole point of the phase
 before was that this one does not discover its design while building it. A surprise is a finding
-against [`platform-store`](../prd-drafts/platform-store.md) or
-[`lifecycle-migration`](../prd-drafts/lifecycle-migration.md), not a special case in the code.
+against [`agent-store`](../prd/agent-store.md) or
+[`lifecycle-migration`](../prd/lifecycle-migration.md), not a special case in the code.
 
 ## Order of work
 

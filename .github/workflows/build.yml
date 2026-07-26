@@ -120,7 +120,7 @@ jobs:
           tail -c 200000 suite.log
           exit $ran
 
-      - name: platform-store — everything one agent keeps, and the only way in to it
+      - name: agent-store — everything one agent keeps, and the only way in to it
         run: |
           # Into a file, never the runner's own pipe. A suite that leaks a process
           # leaks the step's stdout with it, and the runner then waits for a stream
