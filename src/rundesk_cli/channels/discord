@@ -433,8 +433,19 @@ class Agent(discord.Client):
     # -- what rundesk says -----------------------------------------------------------
 
     async def told(self, it: dict) -> None:
-        """One record from rundesk, shown the way this platform shows things."""
+        """One record from rundesk, shown the way this platform shows things.
+
+        What arrived, and what came of it, both said. A record that is received and then
+        does nothing is indistinguishable from one that never arrived, and the two need
+        entirely different fixes — so neither is left to be inferred.
+        """
         kind = it.get("type")
+        if kind in ("state", "answer"):
+            note(f"told {kind}"
+                 f"{'/' + str(it.get('state')) if kind == 'state' else ''}"
+                 f" for {it.get('conversation')}"
+                 f" ({len(str(it.get('text') or ''))} chars,"
+                 f" {len(it.get('attachments') or [])} files)")
         held = self.live.setdefault(str(it.get("conversation")), Live())
         if kind == "state":
             await self._state(it, held)
@@ -571,8 +582,9 @@ class Agent(discord.Client):
                 mention_author=False,
                 files=sending or None,
             )
+            note(f"wrote {len(content)} chars and {len(sending)} files")
         except Exception as why:  # noqa: BLE001 — a platform boundary
-            note(f"could not write: {why}")
+            note(f"could not write: {type(why).__name__}: {why}")
 
 
 def _without_mentions(text: str) -> str:
