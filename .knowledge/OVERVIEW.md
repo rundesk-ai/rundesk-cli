@@ -9,10 +9,11 @@ the parts are and how something moves through them. Follow a link to learn what 
 ## What this is
 
 `rundesk` is the command a person uses to run a small team of AI assistants on their own computer and
-reach them from a chat app. Today it does the two parts that come before everything else: putting itself on your machine and keeping itself current, and running the long-lived
-process the assistants will work inside — starting it, keeping it up, telling you what it is doing, and
-ending everything it started when it goes. The assistants themselves are not here yet. It is a
-self-hosted tool, not something sold; there is no revenue model.
+reach them from a chat app. Today it puts itself on your machine and keeps itself current, runs the
+long-lived process an assistant works inside, and **reaches an assistant's brain and gets an answer
+back** — you can ask one a question and read what it did afterwards. What is not here yet is the chat
+apps: reaching an assistant from somewhere other than your own terminal. It is a self-hosted tool, not
+something sold; there is no revenue model.
 
 ## The platform
 
@@ -49,6 +50,21 @@ flowchart TB
   Own --> End
 
   classDef soon stroke-dasharray:5 5
+```
+
+**Asking an assistant something.** The brain is a *program rundesk runs*, not code inside rundesk — which
+is what lets you put your own behind an assistant, and why one rundesk has never heard of works exactly
+like one that ships with it.
+
+```mermaid
+flowchart TB
+  You(["You"]) -->|"rundesk ask ava &quot;what changed today?&quot;"| Turn["rundesk works out what this turn needs<br/>and writes it down before starting anything"]
+  Turn --> Ad["The adapter — a program, in any language.<br/>One ships; yours is a path to a file"]
+  Ad <-->|"the question, and anything else<br/>you say while it is still working"| Brain(["The assistant's brain"])
+  Ad -->|"what it said · what it thought · what tools it ran<br/>what it cost · that it is done"| Acc[("The account of this run:<br/>added to, never rewritten")]
+  Ad --> Screen["Streamed to your screen<br/>as it happens"]
+  Acc --> Later(["Read back tomorrow,<br/>with nothing running"])
+  Turn -.->|"remembers where this conversation got to,<br/>for this brain and no other"| Next(["The next question<br/>carries on from here"])
 ```
 
 **Asking it what is happening.** `status` and `logs` ask the gateways themselves rather than the
@@ -97,8 +113,22 @@ flowchart LR
   it, rather than deleting it to stop it.
 - **Status and logs** — what is running, what each one is working on, which version each is on, and what
   it has been saying. One that is up but stuck is shown as stuck, which the machine cannot tell you.
-- **Agents, new, doctor, run, replay** — the assistants themselves. Registered and answering "coming soon"
-  until each is built.
+- **An assistant's brain** — reached through a seam that is a *program rundesk runs*, never code loaded
+  inside it. One ships; anything else you point it at works the same way, in any language, and rundesk
+  keeps no list of which brains exist. Each says for itself what it can do — run tools, carry a
+  conversation on, say what a turn cost, take a word mid-turn — and one that can do none of those is a
+  whole assistant with that work simply absent.
+- **Asking one something** — one question, one answer, streamed to your screen as it happens. Ask again
+  and it carries on where it left off; say more while it is still working and it takes that in without
+  being stopped and started again.
+- **The account of a run** — what an assistant did, written while it does it and never rewritten, so a
+  night's work can be read back in the morning with nothing running. Beside it, word for word, is
+  everything the brain itself said — kept separately, so it can be thrown away later without taking the
+  account with it.
+- **What it cost** — in tokens, as the brain reported them. A run whose cost never arrived says so rather
+  than claiming it cost nothing.
+- **Channels, runs, usage** — reaching an assistant from a chat app, and listing what it has done.
+  Registered and answering "coming soon" until each is built.
 - **GitHub Releases** — where a published version comes from.
 
 ## What you use
@@ -133,6 +163,16 @@ flowchart LR
 - **What happened is written down** — every gateway keeps its own log, and it outlives the gateway, so
   something that went wrong overnight can still be explained in the morning. What each schedule last did
   outlives it too, and survives stopping and starting the gateway.
+- **Nothing reaches an assistant that its account does not show** — including anything rundesk itself
+  adds, and anything you say to it mid-question. Text put into a turn and left out of the record would
+  make the record a lie, and it would be invisible precisely because it *is* the record.
+- **A brain's own words are kept, not just ours** — an assistant's answer is written down twice: once in
+  rundesk's words, which no brand owns, and once exactly as the brain said it. So when a brain changes
+  how it speaks, that shows up as something you can read rather than as answers quietly going missing.
+- **Nothing is claimed that was not measured** — a brain that does not say which model answered has none
+  recorded against it, and a cost that was never reported is never written down as nothing.
+- **One assistant's things are its own** — where it works, what it remembers, and the private home its
+  brain is given. Two assistants never share any of them, and neither do two brains.
 
 ---
 *Editing this file? Follow the standard first: [`guides/docs-overview.md`](./guides/docs-overview.md).*

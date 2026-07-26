@@ -120,7 +120,7 @@ rewrites it; a retention policy takes whole files.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 12 files, ~600 cases)
+## Tests (tests/ — 12 files, ~640 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
@@ -135,8 +135,8 @@ provider. One file per contract, named for it:
 | `test_install.py` | 41 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
 | `test_supervisor.py` | 38 | the launchd job — a fake `launchctl`, so it runs where there is none |
 | `test_schedule.py` | 28 | `platform-schedule` — pure time arithmetic, the clock passed in |
-| `test_provider.py` | 29 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account |
-| `test_turn.py` | 36 | `agent-run` — one whole turn, and `rundesk ask` end to end |
+| `test_provider.py` | 31 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
+| `test_turn.py` | 39 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_transcript.py` | 20 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
 | `test_session.py` | 9 | `agent-run` — a handle kept for a conversation and a brain together |
 

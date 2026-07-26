@@ -379,7 +379,7 @@ what the phases after this are for.
 - Running a schedule by hand happens in the terminal, not inside the agent's gateway. There is nothing to
   ask a running gateway with, and inventing one was not this phase's work.
 
-## Phase 2 — Open the Provider Seam, and Put One Brain Behind It
+## Phase 2 — Open the Provider Seam, and Put One Brain Behind It — **done**
 
 **Outcome:** one agent completes and resumes a turn through an adapter — and a second adapter, written
 by somebody who has never seen this code, does the same with nothing here changed.
@@ -539,15 +539,44 @@ network call, and could not be proved by an offline gate.
 - One adapter cannot reach another agent's workspace or provider home.
 - No vendor's flag, session file or permission mode appears outside its own adapter.
 
-### Exit proof
+### Exit proof — met
 
-A manual canary completes one local turn, resumes it, and correlates its native stream, transcript,
-session and outcome by one run ID. The same sanitized stream passes offline replay.
+A manual canary completed one local turn, resumed it, and correlated its native stream, transcript,
+session and outcome by one run ID. `rundesk ask ava "…"` answered, a second `ask` on the same
+conversation remembered what the first had said, and the same question after `--fresh` did not.
 
-**And the seam is proved open, not just designed open:** a second adapter, written from
-[the guide](.knowledge/guides/write-a-provider-adapter.md) by someone who has not read this codebase,
-runs a whole turn with nothing in Rundesk changed to accommodate it — and passes the same conformance
-suite the shipped one does. Until that has happened, the seam is a hope.
+**And the seam is proved open, not just designed open.** `tests/strangers/driftwood-adapter` was written
+from [the guide](.knowledge/guides/write-a-provider-adapter.md) by an agent given the guide's text and
+nothing else — no repository, no source, no tests — and is committed exactly as it was handed over. It
+passes the same conformance suite the shipped adapter passes, unchanged, and nothing in Rundesk was
+changed to accommodate it. That is `R-PRV-2`, and it is the one row here that could not have been ticked
+from the inside.
+
+The claim was tested a second way by accident. The shipped adapter was written against `codex exec`,
+then rewritten against `codex app-server` — a different surface, a different protocol, and a capability
+gained — and **one file changed**. Nothing outside `adapters/codex` knew either surface existed.
+
+### What this closes
+
+  - the contract, written before any adapter and rewritten twice by what strangers found missing in it;
+  - `provider.py` — a seam with no vendor name and no list of providers or models in it;
+  - `tests/test_provider.py --adapter <anything>`, which is what makes the seam a claim rather than a hope;
+  - one shipped adapter, on the hardest of the three installed CLIs;
+  - the transcript: one account per run, appended and never rewritten, ordered without a clock, beside
+    verbatim files holding everything the brain itself said;
+  - the resume ledger, keyed so that handing one brain's session to another is not expressible;
+  - `rundesk ask <agent> "…"`, streamed to the terminal — and `--steer`, which was not planned and is
+    now proved against a real brain mid-turn.
+
+### Left open, deliberately
+
+  - **Money.** Nothing works a cost out from prices, so `R-USE-5` has nothing yet to be honest about.
+  - **`runs` and `usage` as verbs.** The contracts graduated on module-level evidence; reading a run
+    back from the command line is a listing, and listings are cheap to add once a channel wants one.
+  - **Approvals and questions.** `codex exec` cannot answer one mid-turn and `app-server` can; nothing
+    here uses that yet, and Phase 6 is where it belongs.
+  - **A gateway you can ask for something.** `ask` runs in the terminal that typed it, exactly as a
+    schedule run by hand does. Phase 3 is what forces the question.
 
 ## Phase 3 — Add Basic Discord Communication
 
@@ -795,17 +824,18 @@ agent.
 
 ## Ready-for-Next-Phase Verdict
 
-Phases 0 and 1 are done. Agents exist, are operated by name, and are proved offline. **Next is the
-provider seam and the first brain behind it.**
+Phases 0, 1 and 2 are done. Agents exist, are operated by name, and now have a brain behind them: a
+turn is asked for, carried, steered, resumed and written down. **Next is reaching that agent from
+somewhere other than the terminal it was typed in.**
 
 The next implementation sequence should be:
 
 1. ~~Make the dependency/test gate truthful and declare the approved product/CLI surface.~~ **Done.**
 2. ~~Build the agent and its home, and refactor the command surface so agents are what a person operates
    and gateways are how they run.~~ **Done.**
-3. **Open the provider seam and put one brain behind it** — the contract first, a shipped adapter as its
+3. ~~Open the provider seam and put one brain behind it — the contract first, a shipped adapter as its
    first customer, a stranger's adapter as the proof, and the transcript that makes any of it worth
-   having.
+   having.~~ **Done.**
 4. **Reach that agent through Discord**, so the product is tested where it is actually used.
 5. Let the clock start work, which is the trigger nobody is watching.
 6. Add skills and tool discovery, which are additive and change nothing already proven.
@@ -818,7 +848,18 @@ a turn resolves is decided in Phase 2, and the claim that four entry points reac
 different providers is proved in Phase 3, where the entry points exist.
 
 That sequence exposes agent and routing mistakes locally, keeps the provider CLIs native, and reaches a
-real remote turn in **two** moves — while leaving the additive work until after the risky part is proved.
+real remote turn in **one** move from here — while leaving the additive work until after the risky part
+is proved.
+
+**What Phase 2 settled that Phase 3 can now lean on.** A channel does not need to know what a brain is:
+it hands a turn a prompt and a conversation name, and reads the account afterwards. Which brain answers,
+what it cost, whether it can be steered and where the conversation got to are all decided and recorded
+below the channel. So Discord's work is delivery and presentation, and none of it is provider work.
+
+**What Phase 2 leaves for Phase 3 to force.** `ask` runs the turn in the terminal that typed it, because
+there is still nothing to ask a running gateway with. A channel is held open *by* the gateway, so Phase 3
+is the first thing that cannot avoid the question — and it should answer it as a gateway surface rather
+than by having a channel start turns of its own outside the thing that owns them.
 
 ## Evidence Used
 
