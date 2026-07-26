@@ -38,7 +38,13 @@ from pathlib import Path
 # a program run with a built environment and almost no PATH, so nothing has put this on
 # the path for us — and being honest about not finding it beats an import error nobody
 # can act on.
-_ROOT = Path(__file__).resolve().parents[3]
+#
+# **Counted from where this file stands, not written as a number.** This said `parents[3]`
+# from `src/rundesk/channels/`, and went on saying it after the adapters moved up to
+# `src/channels/` — so it looked for the virtualenv one directory *above* the install, found
+# nothing, and told an owner to run the installer that had already put `discord.py` exactly
+# where it belonged. Nothing failed until somebody added a channel.
+_ROOT = Path(__file__).resolve().parents[2]
 for _packages in sorted((_ROOT / ".venv" / "lib").glob("python3.*/site-packages")):
     sys.path.insert(0, str(_packages))
 

@@ -857,5 +857,61 @@ class DownloadedInstallTests(Sandbox):
         self.assertFalse(made.exists(), "uninstalling left behind the directory the installer created")
 
 
+class WhatAShippedProgramLooksForTheVirtualenvIn(unittest.TestCase):
+    """R-INS-3, R-INS-4 — a program that ships with rundesk finds the install's own.
+
+    An adapter is run with a built environment and almost no PATH, so nothing has put the
+    virtualenv on its path: each one counts up from where it stands to find it. **That count
+    is the thing that rots.** It was written for a tree in which the adapters lived one
+    directory deeper, went on being written after they moved, and then looked *above* the
+    install — so an owner adding a channel was told to run the installer that had already
+    put the dependency exactly where it belonged, and nothing failed until they did.
+
+    Read off the source rather than by running one, so an adapter that cannot run on this
+    machine is still checked, and a new one is covered the day it lands.
+    """
+
+    #: `Path(__file__).resolve().parents[N]` — the count that has to match how deep the
+    #: file actually stands, and the one thing a restructure silently invalidates.
+    COUNTS = re.compile(r"parents\[(\d+)\]")
+
+    def shipped(self) -> list:
+        """Every program rundesk ships, whichever directory beside the core it stands in."""
+        found = [one for where in ("providers", "channels")
+                 for one in sorted((CHECKOUT / "src" / where).iterdir())
+                 if one.is_file() and not one.name.startswith(".")]
+        self.assertTrue(found, "this checkout ships no programs at all")
+        return found
+
+    def test_a_shipped_program_reaches_for_the_installs_own_virtualenv(self):
+        for at in self.shipped():
+            # Code, not prose. The comment beside one of these explains the count that was
+            # wrong, and a check that read commentary would fail on the explanation.
+            said = "\n".join(line for line in at.read_text(
+                encoding="utf-8", errors="replace").splitlines()
+                if not line.lstrip().startswith("#"))
+            for count in self.COUNTS.findall(said):
+                with self.subTest(program=at.name, count=count):
+                    reached = at.resolve().parents[int(count)]
+                    self.assertEqual(
+                        CHECKOUT, reached,
+                        f"{at.name} counts {count} directories up and lands on {reached}, "
+                        f"which is not the install — it would look for the virtualenv, or "
+                        f"anything else of the install's, outside it")
+
+    def test_a_program_that_needs_a_dependency_says_where_it_looked(self):
+        """R-INS-4 — nothing is ever left for a person to `pip install` by hand, so the one
+        thing a refusal must carry is where it looked: an owner told only "not installed",
+        by an install that installed it, has nowhere to go."""
+        needing = [at for at in self.shipped()
+                   if ".venv" in at.read_text(encoding="utf-8", errors="replace")]
+        self.assertTrue(needing, "no shipped program reaches for the virtualenv at all")
+        for at in needing:
+            said = at.read_text(encoding="utf-8", errors="replace")
+            with self.subTest(program=at.name):
+                self.assertIn("looked in", said,
+                              f"{at.name} refuses without saying where it looked")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
