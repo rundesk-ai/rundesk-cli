@@ -1,0 +1,545 @@
+"""The seam a surface is reached through — every row of channel-adapter.
+
+**This suite takes the adapter as an argument.** It is what a shipped channel passes and
+what a stranger's passes, which is the whole of what makes "a surface rundesk has never
+heard of" a claim rather than a hope:
+
+    python3 tests/test_channel.py                              # the stand-in, in the gate
+    python3 tests/test_channel.py --adapter /opt/my-channel    # yours
+
+The cases come in two kinds, and the difference matters.
+
+**What holds of any adapter** — `TheContract` below — is run against whatever `--adapter`
+names, and against a stand-in when nothing does. These assert the shape of a conversation
+and never its content, because what a platform shows is the platform's business.
+
+**What holds of the seam** — everything after it — is run against stand-ins this file
+writes, because the cases are about behaviour no real platform can be asked to produce on
+demand: a connection dropped at a chosen moment, a delivery that refuses every time, a
+record of a kind nobody knows.
+
+Nothing here reaches the network or needs a token **ever**. A channel adapter pointed at a
+real platform is a canary, run by hand against a server the owner owns — the fake is the
+floor, and it is what the gate stands on.
+
+Run: python3 tests/test_channel.py
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import shutil
+import stat
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from rundesk_cli import channel, process  # noqa: E402
+
+PY = sys.executable
+
+#: The adapter under test, when one was named. `None` means the stand-in below, which is
+#: what the gate runs and what this file is written against.
+ADAPTER: Path | None = None
+
+#: What to hand the adapter under test after `--`, when it needs anything. A real one is
+#: pointed at a real place, and a place is what its own options name.
+OPTIONS: list = []
+
+#: How long an adapter may say nothing before a case here gives up on it. Not how long a
+#: channel may be quiet: a channel held open says nothing for hours by design, and these
+#: cases only ever wait on an adapter that has been asked something.
+PATIENCE_SECONDS = 60.0
+
+# ------------------------------------------------------------------------------------
+# The stand-ins. Each is a whole channel adapter, written to disk and run, because that
+# is all an adapter is — and because a stand-in that was imported rather than run would
+# be proving something about this process instead of about the seam.
+# ------------------------------------------------------------------------------------
+
+#: The reference. Reports everything, shows everything, and is what an author reads next
+#: to the guide. Its "platform" is a file it is told to watch.
+PLAIN = '''
+import json, os, sys, time
+
+def say(**it):
+    sys.stdout.write(json.dumps(it) + "\\n")
+    sys.stdout.flush()
+
+if "--check" in sys.argv:
+    rest = sys.argv[sys.argv.index("--check") + 1:]
+    settings = {}
+    for i in range(0, len(rest) - 1, 2):
+        settings[rest[i].lstrip("-")] = rest[i + 1]
+    say(ok=True, settings=settings, describes="a file on this machine",
+        secret={"env": "MY_CHANNEL_TOKEN"} if os.environ.get("MY_CHANNEL_TOKEN") else None)
+    raise SystemExit(0)
+
+shown = open(os.path.join(os.environ["RUNDESK_CHANNEL_HOME"], "shown"), "a")
+say(type="ready")
+inbox = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}").get("inbox")
+if inbox:
+    for line in open(inbox):
+        line = line.strip()
+        if line:
+            say(type="arrived", conversation="one", user="somebody", text=line, ref="1")
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    shown.write(line + "\\n")
+    shown.flush()
+'''
+
+#: The poorest surface there is: no marks, no typing, no edits, no threads. It ignores
+#: everything it is told except the answer, and still carries a turn from arrival to
+#: answer — which is the claim R-CAD-5 makes.
+BARE = '''
+import json, os, sys
+
+def say(**it):
+    sys.stdout.write(json.dumps(it) + "\\n")
+    sys.stdout.flush()
+
+if "--check" in sys.argv:
+    say(ok=True)
+    raise SystemExit(0)
+
+answers = open(os.path.join(os.environ["RUNDESK_CHANNEL_HOME"], "answers"), "a")
+say(type="arrived", conversation="one", user="somebody", text="what changed?")
+for line in sys.stdin:
+    try:
+        it = json.loads(line)
+    except ValueError:
+        continue
+    if it.get("type") == "answer":
+        answers.write(it["text"] + "\\n")
+        answers.flush()
+'''
+
+#: Says things nobody knows: a kind that does not exist, a line that is not JSON, a bare
+#: list, an `arrived` with nothing to arrive from, and a control naming a gesture that is
+#: not one. None of it may break anything, and none of it may be acted on.
+STRANGE = '''
+import json, sys
+
+def raw(text):
+    sys.stdout.write(text + "\\n")
+    sys.stdout.flush()
+
+if "--check" in sys.argv:
+    raw(json.dumps({"ok": True}))
+    raise SystemExit(0)
+
+raw(json.dumps({"type": "constellation", "shape": "orion"}))
+raw("this line is not json at all")
+raw(json.dumps(["a", "list"]))
+raw(json.dumps({"type": "arrived", "user": "somebody", "text": "no conversation"}))
+raw(json.dumps({"type": "arrived", "conversation": "one", "user": "u", "text": ""}))
+raw(json.dumps({"type": "control", "conversation": "one", "user": "u", "control": "detonate"}))
+raw(json.dumps({"type": "arrived", "conversation": "one", "user": "u", "text": "this one counts"}))
+'''
+
+#: Refuses its check, and says why. Nothing may be written down for it.
+REFUSING = '''
+import json, sys
+if "--check" in sys.argv:
+    sys.stdout.write(json.dumps({"ok": False, "why": "that room does not exist"}) + "\\n")
+    raise SystemExit(1)
+'''
+
+#: Answers its check with something that is not an answer. An adapter that cannot say
+#: whether it worked has not proved that it did.
+GIBBERISH = '''
+import sys
+if "--check" in sys.argv:
+    sys.stdout.write("almost certainly fine\\n")
+    raise SystemExit(0)
+'''
+
+#: Says nothing at all and leaves. There is nothing to read, so what became of the
+#: program is the only thing anybody could act on.
+MUTE = '''
+import sys
+if "--check" in sys.argv:
+    sys.stderr.write("could not sign in\\n")
+    raise SystemExit(2)
+'''
+
+#: Echoes every variable it was given back as one arrival, so a case can assert on what
+#: an adapter is actually told — including what it is *not*.
+NOSY = '''
+import json, os, sys
+
+def say(**it):
+    sys.stdout.write(json.dumps(it) + "\\n")
+    sys.stdout.flush()
+
+if "--check" in sys.argv:
+    say(ok=True, secret={"env": "MY_CHANNEL_TOKEN"})
+    raise SystemExit(0)
+
+told = {k: v for k, v in os.environ.items() if k.startswith(("RUNDESK_", "MY_CHANNEL_"))}
+say(type="arrived", conversation="one", user="somebody", text=json.dumps(told, sort_keys=True))
+'''
+
+STAND_INS = {"plain": PLAIN, "bare": BARE, "strange": STRANGE, "refusing": REFUSING,
+             "gibberish": GIBBERISH, "mute": MUTE, "nosy": NOSY}
+
+
+class Held:
+    """What one run of an adapter came to."""
+
+    def __init__(self, records, errors, outcome):
+        self.records, self.errors, self.outcome = records, errors, outcome
+
+    def of(self, kind: str) -> list:
+        return [one for one in self.records if one.get("type") == kind]
+
+
+class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
+    """A machine of its own for each case, and nothing of the owner's anywhere near it."""
+
+    def setUp(self):
+        self.where = Path(tempfile.mkdtemp(prefix="rundesk-channel-"))
+        self.addCleanup(shutil.rmtree, self.where, True)
+        self.home = self.where / "home"
+        self.channel_home = self.where / "channel"
+        for at in (self.home, self.channel_home):
+            at.mkdir(parents=True, exist_ok=True)
+
+    def stand_in(self, which: str) -> Path:
+        """One of the adapters above, on disk and runnable — which is all an adapter is."""
+        at = self.where / which
+        at.write_text("#!%s\n%s" % (PY, STAND_INS[which]), encoding="utf-8")
+        at.chmod(at.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        return at
+
+    def under_test(self) -> Path:
+        return ADAPTER if ADAPTER is not None else self.stand_in("plain")
+
+    def told(self, **extra) -> dict:
+        said = channel.environment(
+            home=self.home, channel="ops", agent="ava", channel_home=self.channel_home,
+            path=os.environ.get("PATH", ""), **extra)
+        return said
+
+    async def hold(self, adapter: Path, saying=(), env=None, patience=None) -> Held:
+        """Run an adapter as the gateway does — held open, records both ways."""
+        program = process.Program(
+            [str(adapter)], env=env if env is not None else self.told(),
+            takes_input=True, errors_apart=True,
+            silence=patience if patience is not None else PATIENCE_SECONDS, ceiling=None)
+        await program.start()
+        heard: list = []
+
+        async def feed():
+            for it in saying:
+                await program.send(channel.spoken(**it))
+            await program.close_input()
+
+        said = asyncio.ensure_future(feed())
+        outcome = await program.wait(sink=heard.append)
+        await said
+        records = [one for one in (channel.understood(line) for line in heard
+                                   if isinstance(line, bytes)) if one is not None]
+        return Held(records, program.errors, outcome)
+
+
+# ------------------------------------------------------------------------------------
+# What holds of ANY adapter — the part `--adapter` swaps.
+# ------------------------------------------------------------------------------------
+
+
+class TheContract(DrivesAnAdapter):
+    """R-CAD-1, R-CAD-9 — what every channel adapter answers, whoever wrote it."""
+
+    async def test_an_adapter_says_whether_it_can_reach_what_it_was_pointed_at(self):
+        """R-CAD-9 — the first of the two questions. An owner adding a channel finds out
+        now, at a terminal, rather than at three in the morning."""
+        said = await channel.checked(self.under_test(), OPTIONS, self.told())
+        self.assertIsInstance(said["ok"], bool)
+        if not said["ok"]:
+            self.assertTrue(said["why"], "it refused without saying what was wrong")
+
+    async def test_what_an_adapter_wants_kept_comes_back_as_an_object(self):
+        """R-CAD-9 — whatever it returns is what it will be running on in a year, so it
+        has to be something that can be written down and handed back."""
+        said = await channel.checked(self.under_test(), OPTIONS, self.told())
+        self.assertIsInstance(said["settings"], dict)
+
+    async def test_an_adapter_names_a_credential_rather_than_giving_one(self):
+        """R-CAD-11, R-CAD-12 — where it found the secret, never what it is. A token in
+        the answer would be a token in a file that outlives the channel."""
+        said = await channel.checked(self.under_test(), OPTIONS, self.told())
+        if said["secret"] is not None:
+            self.assertEqual(["env"], list(said["secret"]),
+                             "it handed back more than the name of a variable")
+            self.assertIsInstance(said["secret"]["env"], str)
+
+    async def test_an_adapter_is_a_program_this_machine_can_run(self):
+        """R-CAD-1 — the whole of what an adapter is. Not a module, not a class, not
+        something imported into the gateway that runs every other agent."""
+        at = channel.program(str(self.under_test()))
+        self.assertTrue(at.is_file())
+        self.assertTrue(os.access(at, os.X_OK))
+
+
+# ------------------------------------------------------------------------------------
+# What holds of the seam — always the stand-ins, because no real platform does these
+# to order.
+# ------------------------------------------------------------------------------------
+
+
+class AKindNobodyHereHasHeardOf(DrivesAnAdapter):
+    """R-CAD-1 — a channel is a name carried through, never a name from a list."""
+
+    def test_a_channel_this_rundesk_has_never_heard_of_is_the_ordinary_case(self):
+        """R-CAD-1 — a path is a channel exactly as a shipped name is."""
+        mine = self.stand_in("bare")
+        self.assertEqual(mine, channel.program(str(mine)))
+
+    def test_a_shipped_channel_is_found_by_looking_rather_than_by_being_listed(self):
+        """R-CAD-1 — the directory is the list, so one added later works the day it
+        lands and no second copy of the list can disagree with it."""
+        (self.where / "invented").write_text("#!/bin/sh\nexit 0\n")
+        (self.where / "invented").chmod(0o755)
+        self.assertEqual(self.where / "invented",
+                         channel.program("invented", adapters=self.where))
+
+    def test_a_channel_that_is_not_there_is_the_only_way_resolving_fails(self):
+        """R-CAD-1 — not recognising a kind is never the failure."""
+        with self.assertRaises(channel.NotRunnable):
+            channel.program("nothing-here", adapters=self.where)
+
+    def test_a_channel_that_cannot_be_run_is_told_from_one_that_is_missing(self):
+        """R-CAD-1 — a file that is there and not executable is a different thing to fix."""
+        (self.where / "unreadable").write_text("#!/bin/sh\nexit 0\n")
+        (self.where / "unreadable").chmod(0o644)
+        with self.assertRaises(channel.NotRunnable) as refused:
+            channel.program("unreadable", adapters=self.where)
+        self.assertIn("not something this machine can run", str(refused.exception))
+        self.assertNotIn("there is no channel", str(refused.exception),
+                         "a file that is there was reported as missing")
+
+    def test_naming_no_channel_at_all_is_refused(self):
+        """R-CAD-1 — the empty name resolves to the adapters directory itself otherwise."""
+        with self.assertRaises(channel.NotRunnable):
+            channel.program("", adapters=self.where)
+
+
+class WhatAnAdapterIsTold(DrivesAnAdapter):
+    """R-CAD-11, R-CAD-13 — everything it is given, and everything it is not."""
+
+    async def test_an_adapter_is_told_which_channel_and_whose_it_is(self):
+        """R-CAD-13 — its own name and its agent's, so what it writes and what it says
+        can be traced back to one channel rather than to rundesk in general."""
+        held = await self.hold(self.stand_in("nosy"))
+        told = json.loads(held.of("arrived")[0]["text"])
+        self.assertEqual("ops", told["RUNDESK_CHANNEL"])
+        self.assertEqual("ava", told["RUNDESK_AGENT"])
+
+    async def test_an_adapter_is_given_somewhere_of_its_own_that_lasts(self):
+        """R-CAD-13 — a channel held open for weeks has things to remember between
+        restarts, and nowhere to put them otherwise."""
+        held = await self.hold(self.stand_in("nosy"))
+        told = json.loads(held.of("arrived")[0]["text"])
+        self.assertEqual(str(self.channel_home), told["RUNDESK_CHANNEL_HOME"])
+
+    async def test_what_a_platform_needs_is_handed_back_unread(self):
+        """R-CAD-13 — the settings an adapter returned when it was checked come back to
+        it exactly as it wrote them, so no word of any platform's is ever in the core."""
+        held = await self.hold(self.stand_in("nosy"),
+                               env=self.told(settings={"room": "1180", "space": "9930"}))
+        told = json.loads(held.of("arrived")[0]["text"])
+        self.assertEqual({"room": "1180", "space": "9930"},
+                         json.loads(told["RUNDESK_SETTINGS"]))
+
+    async def test_settings_reach_an_adapter_as_the_same_bytes_every_time(self):
+        """R-CAD-13 — sorted, so what crossed the seam can be compared with what was
+        shown, and two runs of one channel differ only where they really differ."""
+        first = channel.environment(self.home, "ops", "ava", self.channel_home,
+                                    settings={"b": 2, "a": 1})
+        second = channel.environment(self.home, "ops", "ava", self.channel_home,
+                                     settings={"a": 1, "b": 2})
+        self.assertEqual(first["RUNDESK_SETTINGS"], second["RUNDESK_SETTINGS"])
+
+    async def test_the_one_credential_an_adapter_named_is_the_only_one_it_gets(self):
+        """R-CAD-11 — everything a program rundesk runs is built rather than inherited,
+        so a secret has to be named to arrive, and naming it is the adapter's own doing."""
+        held = await self.hold(self.stand_in("nosy"), env=self.told(
+            secret={"env": "MY_CHANNEL_TOKEN"},
+            environ={"MY_CHANNEL_TOKEN": "sh!", "SOMETHING_ELSE": "also secret"}))
+        told = json.loads(held.of("arrived")[0]["text"])
+        self.assertEqual("sh!", told["MY_CHANNEL_TOKEN"])
+        self.assertNotIn("SOMETHING_ELSE", told,
+                         "the owner's whole environment reached a channel adapter")
+
+    async def test_a_credential_that_is_not_set_is_not_invented(self):
+        """R-CAD-11 — an adapter told its variable is present and empty would sign in
+        with nothing, which fails somewhere much further from the cause."""
+        said = channel.environment(self.home, "ops", "ava", self.channel_home,
+                                   secret={"env": "MY_CHANNEL_TOKEN"}, environ={})
+        self.assertNotIn("MY_CHANNEL_TOKEN", said)
+
+
+class ARecordNobodyHereKnows(DrivesAnAdapter):
+    """R-CAD-1 — an adapter may be ahead of us, and may also be wrong."""
+
+    async def test_a_record_of_a_kind_nobody_knows_breaks_nothing(self):
+        """R-CAD-1 — kept, acted on by nothing. An adapter can grow without waiting for
+        a release here, and the records around it still arrive."""
+        held = await self.hold(self.stand_in("strange"))
+        self.assertEqual(["this one counts"], [one["text"] for one in held.of("arrived")])
+
+    def test_a_line_that_is_not_json_is_not_a_record(self):
+        """R-CAD-1 — nothing raises, and nothing is acted on."""
+        self.assertIsNone(channel.understood("this line is not json at all"))
+
+    def test_a_record_missing_what_its_kind_means_is_not_acted_on(self):
+        """R-CAD-1 — an arrival with no conversation is not a partial arrival to be
+        patched up here: it is one nothing can be done with, and guessing what it meant
+        would put the decision further from the adapter that knows."""
+        self.assertIsNone(channel.understood(
+            json.dumps({"type": "arrived", "user": "u", "text": "hello"})))
+
+    def test_a_gesture_that_is_not_one_is_refused(self):
+        """R-CAD-1 — acting on it means guessing which of two things somebody meant, and
+        one of them ends a turn."""
+        self.assertIsNone(channel.understood(json.dumps(
+            {"type": "control", "conversation": "one", "user": "u", "control": "detonate"})))
+        self.assertIsNotNone(channel.understood(json.dumps(
+            {"type": "control", "conversation": "one", "user": "u", "control": "stop"})))
+
+
+class AddingAChannelProvesItself(DrivesAnAdapter):
+    """R-CAD-9 — it connects, signs in and looks, before anything is written down."""
+
+    async def test_an_adapter_that_cannot_reach_its_platform_says_why(self):
+        """R-CAD-9 — the reason is the whole of the owner's diagnosis."""
+        said = await channel.checked(self.stand_in("refusing"), [], self.told())
+        self.assertFalse(said["ok"])
+        self.assertIn("does not exist", said["why"])
+
+    async def test_an_adapter_that_answers_with_nonsense_has_proved_nothing(self):
+        """R-CAD-9 — the one thing this question establishes is that the adapter can be
+        relied on, and one that cannot say whether it worked has not established it."""
+        said = await channel.checked(self.stand_in("gibberish"), [], self.told())
+        self.assertFalse(said["ok"])
+
+    async def test_an_adapter_that_says_nothing_is_reported_by_what_it_said_went_wrong(self):
+        """R-CAD-9 — there is nothing to read, so what it complained about is the only
+        thing anybody could act on."""
+        said = await channel.checked(self.stand_in("mute"), [], self.told())
+        self.assertFalse(said["ok"])
+        self.assertIn("could not sign in", said["why"])
+
+    async def test_what_the_owner_typed_reaches_the_adapter_exactly_as_typed(self):
+        """R-CAD-13 — the core parses none of it, so a platform's own words for its own
+        places live in one file and a second platform needs no change here."""
+        said = await channel.checked(self.stand_in("plain"),
+                                     ["--space", "9930", "--room", "1180"], self.told())
+        self.assertTrue(said["ok"])
+        self.assertEqual({"space": "9930", "room": "1180"}, said["settings"])
+
+    async def test_a_channel_that_cannot_be_run_is_not_checked_into_existence(self):
+        """R-CAD-9 — resolving comes first, and says so in its own words."""
+        with self.assertRaises(channel.NotRunnable):
+            channel.program("no-such-kind", adapters=self.where)
+
+
+class WhatTheSurfaceIsNeverGiven(DrivesAnAdapter):
+    """R-CH-7, R-CH-8 — the rule the seam enforces rather than asks for."""
+
+    def test_what_a_brain_says_is_not_something_an_adapter_can_be_shown_early(self):
+        """R-CH-7 — `text` is not a kind an adapter is ever told. A reply that rewrites
+        itself in place is unreadable, and the way to prevent it is to make showing one
+        impossible rather than merely discouraged."""
+        self.assertNotIn("text", channel.TELLING)
+        self.assertIn("answer", channel.TELLING)
+
+    def test_what_the_agent_did_is_shown_while_it_is_happening(self):
+        """R-CH-6 — a tool it ran, a thought it closed. These are worth watching, and
+        they are whole the moment they exist."""
+        for kind in ("think", "tool", "result", "usage"):
+            self.assertIn(kind, channel.TELLING)
+
+    async def test_a_surface_with_nothing_at_all_still_carries_a_turn(self):
+        """R-CAD-5 — no marks, no typing, no edits, no threads. It ignores every state
+        it is told and still gets the answer to whoever asked, because correctness never
+        degrades and only fidelity does."""
+        held = await self.hold(self.stand_in("bare"), saying=[
+            {"type": "state", "conversation": "one", "run": "1-aaaa", "state": channel.TAKEN},
+            {"type": "tool", "conversation": "one", "run": "1-aaaa", "id": "1", "did": "run"},
+            {"type": "answer", "conversation": "one", "run": "1-aaaa", "text": "three files"},
+            {"type": "state", "conversation": "one", "run": "1-aaaa", "state": channel.FINISHED},
+        ])
+        self.assertEqual(["what changed?"], [one["text"] for one in held.of("arrived")])
+        self.assertEqual("three files\n", (self.channel_home / "answers").read_text())
+
+
+class TheStateOfATurnIsNotTheSurfacesToDecide(DrivesAnAdapter):
+    """R-CAD-3, R-CAD-4 — five states, decided once, shown five ways."""
+
+    def test_every_state_a_turn_can_be_in_is_named_here(self):
+        """R-CAD-3 — an adapter working one of these out for itself would be
+        re-implementing the turn, and two surfaces would eventually disagree about what
+        happened to the same run, with the run's own account matching neither."""
+        self.assertEqual(("taken", "running", "finished", "stopped", "failed"), channel.STATES)
+
+    async def test_an_adapter_is_told_how_a_turn_stands_rather_than_asked(self):
+        """R-CAD-4 — it is handed the state and decides only how its platform shows it."""
+        held = await self.hold(self.stand_in("plain"), saying=[
+            {"type": "state", "conversation": "one", "run": "1-aaaa", "state": channel.TAKEN},
+            {"type": "state", "conversation": "one", "run": "1-aaaa", "state": channel.FAILED,
+             "why": "the brain would not answer"},
+        ])
+        shown = [json.loads(line) for line in
+                 (self.channel_home / "shown").read_text().splitlines()]
+        self.assertEqual([channel.TAKEN, channel.FAILED], [one["state"] for one in shown])
+        self.assertEqual("the brain would not answer", shown[1]["why"])
+
+    async def test_what_a_brain_can_do_reaches_the_surface_that_would_offer_it(self):
+        """R-CAD-4 — offering to interrupt a brain that declared it cannot be steered is
+        offering something that cannot happen. Ask, never assume."""
+        held = await self.hold(self.stand_in("plain"), saying=[
+            {"type": "state", "conversation": "one", "run": "1-aaaa", "state": channel.TAKEN,
+             "can": {"steer": False, "resume": True}},
+        ])
+        shown = json.loads((self.channel_home / "shown").read_text().splitlines()[0])
+        self.assertIs(False, shown["can"]["steer"])
+
+
+def _taken(argv: list, flag: str) -> tuple[Path | None, list]:
+    """`--adapter <path>`, out before unittest sees the arguments."""
+    if flag not in argv:
+        return None, argv
+    at = argv.index(flag)
+    if at + 1 >= len(argv):
+        print(f"{flag} needs a path after it", file=sys.stderr)
+        raise SystemExit(2)
+    return Path(argv[at + 1]).expanduser().resolve(), argv[:at] + argv[at + 2:]
+
+
+def _after(argv: list) -> tuple[list, list]:
+    """Everything after `--` is the adapter's own, exactly as an owner would type it."""
+    if "--" not in argv:
+        return [], argv
+    at = argv.index("--")
+    return argv[at + 1:], argv[:at]
+
+
+if __name__ == "__main__":
+    ADAPTER, rest = _taken(sys.argv[1:], "--adapter")
+    OPTIONS, rest = _after(rest)
+    if ADAPTER is not None:
+        print(f"conformance: driving {ADAPTER}", file=sys.stderr)
+        channel.program(str(ADAPTER))   # said here rather than in every case
+    if OPTIONS:
+        print(f"conformance: pointed at {' '.join(OPTIONS)}", file=sys.stderr)
+    unittest.main(argv=[sys.argv[0]] + rest, verbosity=2)

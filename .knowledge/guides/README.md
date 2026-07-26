@@ -24,6 +24,7 @@ Add a row when you add a guide; `doc-lint` fails the build if one is missing.
 |---|---|
 | [the-command-surface.md](./the-command-surface.md) | Read the command's shape, and check a new verb against it |
 | [write-a-provider-adapter.md](./write-a-provider-adapter.md) | Put your own brain, or your own loop, behind an agent |
+| [write-a-channel-adapter.md](./write-a-channel-adapter.md) | Reach an agent from your own messaging platform |
 
 ## Rules for a project how-to
 

@@ -171,6 +171,15 @@ jobs:
           tail -c 200000 suite.log
           exit $ran
 
+      - name: channel-adapter — the contract any surface is reached by, shipped or a stranger's
+        run: |
+          # The mirror of the one above, and bare for the same reason: the fake channel is
+          # the floor. Nothing here reaches a platform or needs a token — a real surface
+          # is a canary against a server the owner owns, run by hand.
+          set +e; python -u tests/test_channel.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
+
       # -- the surface, and this copy of rundesk on a machine ------------------------
       - name: command-surface — every verb, and what it honestly refuses
         run: |
