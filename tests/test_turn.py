@@ -8,6 +8,8 @@ Run: python3 tests/test_turn.py
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -339,6 +341,117 @@ class WhatATurnCost(WithAnAgentToRunTurnsFor):
         found = [one for one in transcript.events(self.runs(), said.run)
                  if one["type"] == turn.OUTCOME]
         self.assertEqual(1, len(found))
+
+
+class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
+    """`rundesk ask` — the whole slice, from a typed command to an account on disk."""
+
+    def ask(self, *argv):
+        from rundesk_cli import cli
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_asking_an_agent_carries_a_turn_and_prints_the_answer(self):
+        """R-PRV-2, R-RUN-1 — one agent, one adapter, one turn, this terminal."""
+        code, said, why = self.ask("add", "ava", "--provider", self.brain("plain"))
+        self.assertEqual(0, code, why)
+        code, said, why = self.ask("ask", "ava", "what changed?")
+        self.assertEqual(0, code, why)
+        self.assertEqual("heard what changed?", said.strip())
+
+    def test_the_answer_goes_where_it_can_be_piped_and_the_rest_does_not(self):
+        """R-CMD-4 — what comes out of `rundesk ask … > answer.txt` has to be the answer
+        and not a commentary around it."""
+        self.ask("add", "ava", "--provider", self.brain("plain"))
+        _, said, why = self.ask("ask", "ava", "what changed?")
+        self.assertNotIn("in,", said, "what it cost was printed among the answer")
+        self.assertIn("in,", why, "what it cost was not said at all")
+
+    def test_a_turn_is_written_down_whether_or_not_anyone_is_watching(self):
+        """R-RUN-4, R-RUN-10 — the terminal is a view of the turn and the account is the
+        turn, and only one of the two is still there in the morning."""
+        self.ask("add", "ava", "--provider", self.brain("plain"))
+        _, _, why = self.ask("ask", "ava", "what changed?")
+        run = transcript.known(self.runs())[0]
+        self.assertIn(run, why, "it never said which run this was")
+        self.assertEqual("what changed?", self.only(run, turn.SENT)["text"])
+
+    def test_an_agent_that_reaches_for_no_brain_says_so_rather_than_guessing(self):
+        """R-PRV-12 — there is no list of brains to fall back to, and picking one would
+        be rundesk deciding whose model somebody pays for."""
+        self.ask("add", "ava")
+        code, _, why = self.ask("ask", "ava", "what changed?")
+        self.assertEqual(1, code)
+        self.assertIn("NO BRAIN", why)
+        self.assertEqual([], transcript.known(self.runs()), "it wrote a run down anyway")
+
+    def test_a_brain_named_for_one_turn_is_used_for_that_turn_only(self):
+        """R-RUN-3 — what a turn resolved is the turn's, and an agent's default is a
+        convenience rather than an identity."""
+        self.ask("add", "ava", "--provider", self.brain("quiet"))
+        self.ask("ask", "ava", "one", "--provider", self.brain("plain"))
+        first, second = transcript.known(self.runs())[0], None
+        self.assertIn("plain", self.only(first, turn.ADMITTED)["provider"])
+        self.ask("ask", "ava", "two")
+        second = transcript.known(self.runs())[1]
+        self.assertIn("quiet", self.only(second, turn.ADMITTED)["provider"])
+
+    def test_what_an_owner_set_reaches_the_brain_and_is_written_down(self):
+        """R-PRV-16, R-RUN-9 — carried unread, and never carried without being recorded."""
+        self.ask("add", "ava", "--provider", self.brain("nosy"))
+        self.ask("ask", "ava", "hi", "--set", "effort=high", "--set", '{"flags":["-q"]}')
+        run = transcript.known(self.runs())[0]
+        self.assertEqual({"effort": "high", "flags": ["-q"]},
+                         self.only(run, turn.ADMITTED)["settings"])
+        told = json.loads(self.only(run, "text")["text"])["told"]
+        self.assertEqual({"effort": "high", "flags": ["-q"]},
+                         json.loads(told["RUNDESK_SETTINGS"]))
+
+    def test_a_setting_that_is_not_a_setting_is_refused_before_a_brain_is_started(self):
+        """R-CMD-4 — refused in our words, and refused before anything runs."""
+        self.ask("add", "ava", "--provider", self.brain("plain"))
+        code, _, why = self.ask("ask", "ava", "hi", "--set", "nonsense")
+        self.assertEqual(1, code)
+        self.assertIn("nonsense", why)
+        self.assertEqual([], transcript.known(self.runs()))
+
+    def test_asking_the_same_agent_again_carries_the_conversation_on(self):
+        """R-RUN-11 — what a person at a terminal means by asking again."""
+        self.ask("add", "ava", "--provider", self.brain("plain"))
+        self.ask("ask", "ava", "one")
+        self.ask("ask", "ava", "two")
+        second = transcript.known(self.runs())[1]
+        self.assertTrue(self.only(second, turn.ADMITTED)["resumed"])
+
+    def test_asking_for_a_fresh_start_carries_nothing_on(self):
+        """R-RUN-14"""
+        self.ask("add", "ava", "--provider", self.brain("plain"))
+        self.ask("ask", "ava", "one")
+        self.ask("ask", "ava", "two", "--fresh")
+        second = transcript.known(self.runs())[1]
+        self.assertFalse(self.only(second, turn.ADMITTED)["resumed"])
+
+    def test_a_turn_asked_to_only_look_says_so_to_the_brain(self):
+        """R-PRV-18 — a posture in rundesk's words, carried to the brain to act on."""
+        self.ask("add", "ava", "--provider", self.brain("nosy"))
+        self.ask("ask", "ava", "hi", "--read-only")
+        run = transcript.known(self.runs())[0]
+        self.assertEqual("read", self.only(run, turn.ADMITTED)["posture"])
+
+    def test_asking_an_agent_that_was_never_made_says_so(self):
+        """R-AGT-13 — and says what to type next, rather than what went wrong inside."""
+        code, _, why = self.ask("ask", "nobody", "hi")
+        self.assertEqual(1, code)
+        self.assertIn("NO SUCH AGENT", why)
+        self.assertIn("rundesk add nobody", why)
+
+    def test_a_turn_whose_cost_was_never_reported_says_that_rather_than_nothing(self):
+        """R-USE-7 — zero and unknown are different answers."""
+        self.ask("add", "ava", "--provider", self.brain("quiet"))
+        _, _, why = self.ask("ask", "ava", "hi")
+        self.assertIn("never reported", why)
 
 
 if __name__ == "__main__":

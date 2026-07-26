@@ -300,7 +300,7 @@ class SurfaceTests(unittest.TestCase):
     def test_a_command_that_is_not_there_is_told_apart_from_one_typed_wrong(self):
         """R-CMD-5, R-CMD-8 — two situations that shared one exit code, and want opposite
         things done about them: wait for the release, or read the help."""
-        planned_code, _, _ = run(["ask"])
+        planned_code, _, _ = run(["usage"])
         with self.assertRaises(SystemExit) as usage:
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 cli.main(["definitely-not-a-command"])
@@ -404,7 +404,7 @@ class BuiltCommandTests(unittest.TestCase):
     def test_the_planned_list_and_the_built_commands_do_not_overlap(self):
         # A command that is both "coming soon" and handled would answer twice, and
         # which answer wins would depend on the order of the checks in `main`.
-        built = {"version", "update", "uninstall", "add", "doctor", "agents",
+        built = {"version", "update", "uninstall", "add", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
@@ -624,6 +624,8 @@ class FakeAgents:
         #: What a gateway of this name wrote before there were agents to own it.
         self._wrote = list(wrote)
         self._complaints = dict(complaints or {})
+        self._chosen: dict = {}
+        self.asked_runnable = None
         #: What was made, adopted and taken away, in the order it was asked for.
         self.added, self.adopted, self.forgotten = [], [], []
 
@@ -670,8 +672,21 @@ class FakeAgents:
         return {"agent": at, "home": at / "home", "workspace": at / "home" / "workspace",
                 "run": at / "run", "logs": at / "logs", "schedules": at / "schedules"}
 
-    def diagnosed(self, name):
+    def diagnosed(self, name, runnable=None):
+        # Asked exactly as the real one is, so a check that is passed in is a check this
+        # fake can be given — and one that stopped being passed would show up here.
+        self.asked_runnable = runnable
         return self._complaints.get(name, [])
+
+    def chosen(self, name):
+        return self._chosen.get(name, {})
+
+    def remember(self, name, provider=None, model=None, settings=None):
+        keeping = self._chosen.setdefault(name, {})
+        for what, value in (("provider", provider), ("model", model), ("settings", settings)):
+            if value is not None:
+                keeping[what] = value
+        return keeping
 
 
 class FakeMachine:

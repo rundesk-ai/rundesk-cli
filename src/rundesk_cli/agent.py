@@ -19,6 +19,7 @@ and a gateway that reached back for an agent would end it.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from dataclasses import dataclass
@@ -405,6 +406,48 @@ def forget(name: str, where: Path | None = None, history: bool = False) -> list[
     return sorted(taken)
 
 
+#: What an agent was made with, kept beside its home rather than inside it. Outside on
+#: purpose: which brain answers for an agent is rundesk's record about it, not knowledge
+#: the agent loads — a provider reading the agent's rules must not find our configuration
+#: sitting among them.
+CHOSEN = "agent.json"
+
+
+def chosen(name: str, where: Path | None = None) -> dict:
+    """Which brain answers for this agent, and with what — or nothing decided yet.
+
+    A convenience, never an identity: provider and model are what a turn resolved, and
+    this is only what the agent supplies for whatever a turn left out. Unreadable is read
+    as undecided, because a turn that could be asked for explicitly should not be refused
+    over a file nobody has to have.
+    """
+    try:
+        said = json.loads((directory(name, where) / CHOSEN).read_text(encoding="utf-8"))
+    except (OSError, ValueError, NotAnAgentName):
+        return {}
+    return said if isinstance(said, dict) else {}
+
+
+def remember(name: str, where: Path | None = None, provider: str | None = None,
+             model: str | None = None, settings: dict | None = None) -> dict:
+    """Keep what this agent should reach for when a turn does not say.
+
+    What is not given is left exactly as it was, so naming a model later does not quietly
+    forget the brain. Written whole and renamed into place, so a reader arriving mid-write
+    sees one or the other and never half of each.
+    """
+    keeping = chosen(name, where)
+    for what, value in (("provider", provider), ("model", model), ("settings", settings)):
+        if value is not None:
+            keeping[what] = value
+    at = directory(name, where) / CHOSEN
+    at.parent.mkdir(parents=True, exist_ok=True)
+    beside = at.with_suffix(".writing")
+    beside.write_text(json.dumps(keeping, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    beside.replace(at)
+    return keeping
+
+
 @dataclass(frozen=True)
 class Complaint:
     """One thing standing between an agent and a working turn."""
@@ -413,12 +456,19 @@ class Complaint:
     said: str
 
 
-def diagnosed(name: str, where: Path | None = None, root: Path | None = None) -> list[Complaint]:
+def diagnosed(name: str, where: Path | None = None, root: Path | None = None,
+              runnable=None) -> list[Complaint]:
     """What stands between this agent and a working turn, without starting anything.
 
     Nothing here starts a provider (R-AGT-11) and nothing here writes (R-AGT-12): an owner
     asking what is wrong is often asking because something is already wrong, and a check
     that repaired what it found would make the next answer a different question's.
+
+    `runnable` is asked whether the brain this agent reaches for is there, and is passed
+    in rather than imported: the seam sits above this module, and a diagnosis that reached
+    up for it would invert the one dependency rule that matters. It is asked to *find* the
+    program and never to run it — what a brain can do is a question for a turn, not for a
+    check that promises to start nothing (R-PRV-12).
     """
     found = []
     where_it_is = paths(name, where)
@@ -443,6 +493,14 @@ def diagnosed(name: str, where: Path | None = None, root: Path | None = None) ->
     unfit = gateway.fitness(root)
     if unfit:
         found.append(Complaint("this install", unfit))
+    named = chosen(name, where).get("provider")
+    if runnable is not None and named:
+        try:
+            runnable(named)
+        except Exception as why:
+            # The detail is what is *about* the complaint and the sentence is what is
+            # said, because a diagnosis reads "<what is wrong>: <where>" everywhere else.
+            found.append(Complaint(str(why), "the brain this agent reaches for"))
     return found
 
 

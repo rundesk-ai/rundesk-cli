@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import subprocess
 import sys
 import time
@@ -27,7 +28,9 @@ from rundesk_cli import __version__  # noqa: E402
 from rundesk_cli import agent as _agent  # noqa: E402
 from rundesk_cli import gateway as _gateway  # noqa: E402
 from rundesk_cli import process  # noqa: E402
+from rundesk_cli import provider  # noqa: E402
 from rundesk_cli import supervisor as _supervisor  # noqa: E402
+from rundesk_cli import turn  # noqa: E402
 from rundesk_cli import updater  # noqa: E402
 
 #: The installer as published, for the one case where this install has lost its own:
@@ -90,7 +93,6 @@ NOT_AVAILABLE = 69
 #: supplies what was left out — so reaching an agent from Discord is one command and not
 #: two, and a binding stays what a run resolved rather than a thing anyone maintains.
 PLANNED: dict[str, tuple[str, dict[str, tuple[str, str]]]] = {
-    "ask": ("one turn, streamed to this terminal", {}),
     "channels": ("the channels an agent is reachable on, and who may use them", {
         "add": ("<channel> --kind <kind>", "put this agent on a channel, named as a schedule is"),
         "remove": ("<channel>", "take this agent off a channel"),
@@ -129,6 +131,9 @@ MEANS: dict[str, str] = {
     "--kind <kind>": "which kind of channel it is — `discord`, and others as they land",
     "<channel>": "what to call this channel, and what to name it by later",
     "<run>": "which run — the id listed against each by `runs`",
+    "--provider <provider>": "which brain — one that ships, or the path to a program you wrote",
+    "--model <model>": "which model, in that brain's own words — rundesk never reads it",
+    "--set <key=value>": "anything that brain takes, carried to it unread; repeatable",
 }
 
 #: A verb that can be typed bare *and* given a name is two operations, not one, and a
@@ -140,11 +145,28 @@ FORMS: dict[str, list[tuple[str, str]]] = {
                ("<agent>", "what one agent is, and where it keeps things")],
     "doctor": [("", "what stands between every agent and a working turn"),
                ("<agent>", "what stands between one agent and a working turn")],
-    "ask": [('<agent> "<prompt>"', "")],
+    "ask": [('<agent> "<prompt>"', "one turn, streamed to this terminal")],
     "usage": [("", "what every agent has cost"),
               ("<agent>", "what one agent has cost"),
               ("<agent> <run>", "what one run cost")],
 }
+
+
+def _brain(parser: argparse.ArgumentParser, whose: str) -> None:
+    """The three options that say which brain, said once for every verb that takes them.
+
+    Written twice they would drift, and the drift would be silent: `add` recording a model
+    under one spelling and `ask` reading another is a turn that quietly uses the default.
+
+    **Nothing here enumerates anything.** A provider is a name carried through and a model
+    is a word its brain understands; rundesk reads neither, so there are no choices to
+    offer and a brain nobody here has heard of is typed exactly like one that ships.
+    """
+    parser.add_argument("--provider", metavar="<provider>", help=whose)
+    parser.add_argument("--model", metavar="<model>",
+                        help="which model, in that brain's own words")
+    parser.add_argument("--set", dest="settings", action="append", metavar="<key=value>",
+                        help="anything that brain takes, carried to it unread; repeatable")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -203,6 +225,21 @@ def build_parser() -> argparse.ArgumentParser:
     # it wrong is answered in our words rather than by an argparse usage dump.
     born.add_argument("name", nargs="?", metavar="<agent>",
                       help="what to call it, and what to name it by later")
+    _brain(born, "which brain answers for it when a turn does not say")
+
+    # One turn, here, in this terminal. It runs here rather than inside the agent's
+    # gateway because there is nothing to ask a gateway with — the same reason a schedule
+    # run by hand runs here, and the same honest place for it.
+    asked = sub.add_parser("ask", help="one turn, streamed to this terminal")
+    asked.add_argument("name", nargs="?", metavar="<agent>", help="which agent")
+    asked.add_argument("prompt", nargs="?", metavar="<prompt>", help="what to ask it, in quotes")
+    _brain(asked, "which brain answers this turn, whatever the agent reaches for otherwise")
+    asked.add_argument("--conversation", metavar="<conversation>",
+                       help="which conversation to carry on — this terminal's, when left out")
+    asked.add_argument("--fresh", action="store_true",
+                       help="start the conversation again rather than carrying it on")
+    asked.add_argument("--read-only", action="store_true",
+                       help="let this turn look at the machine without changing it")
 
     looked = sub.add_parser("doctor", help="what stands between an agent and a working turn")
     looked.add_argument("name", nargs="?", metavar="<agent>",
@@ -654,7 +691,12 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
         print(f"        stop it and ask again: rundesk stop {name} && rundesk add {name}",
               file=sys.stderr)
         return 1
-    if knew and not made and not moved:
+    try:
+        chose = _chose(args, agents, name)
+    except ValueError as why:
+        print(f"{name}: NOT SET — {why}", file=sys.stderr)
+        return 1
+    if knew and not made and not moved and not chose:
         print(f"{name}: ALREADY MADE — its home is as you left it")
         return 0
     print(f"{name}: MADE" if not knew else f"{name}: REPAIRED")
@@ -663,7 +705,153 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
         print(f"        put there: {', '.join(made)}")
     if moved:
         print(f"        brought in what it wrote before it was an agent: {', '.join(moved)}")
+    if chose:
+        print(f"        reaches for: {chose}")
     return 0
+
+
+def _chose(args: argparse.Namespace, agents, name: str) -> str:
+    """Keep whichever of provider, model and settings was named, and say what it is now.
+
+    Nothing named changes nothing, so `add` on an existing agent stays the repair it has
+    always been. What was not named is left as it was, because naming a model later must
+    not quietly forget the brain.
+    """
+    settings = _given(getattr(args, "settings", None))
+    if not (args.provider or args.model or settings):
+        return ""
+    keeping = agents.remember(name, provider=args.provider, model=args.model,
+                              settings=settings or None)
+    said = keeping.get("provider") or "no brain yet"
+    return f"{said} ({keeping['model']})" if keeping.get("model") else said
+
+
+def _given(pairs) -> dict:
+    """What an owner set, in either of the two ways it is worth being able to type.
+
+    `--set effort=high` for one thing, and `--set '{"flags": ["--no-color"]}'` for a shape
+    that is not one thing. **Nothing here reads what it means**: a value is taken as JSON
+    when it parses as JSON and as the text that was typed when it does not, and that is
+    the whole of the interpretation. Which of it a brain understands is between the owner
+    and their brain, and rundesk being wrong about it is not a failure worth inventing.
+    """
+    given: dict = {}
+    for one in pairs or []:
+        said = one.strip()
+        if said.startswith("{"):
+            try:
+                whole = json.loads(said)
+            except ValueError:
+                raise ValueError(f"'{said}' starts like an object and is not one")
+            if not isinstance(whole, dict):
+                raise ValueError(f"'{said}' is not a set of settings")
+            given.update(whole)
+            continue
+        key, sep, value = said.partition("=")
+        if not sep or not key.strip():
+            raise ValueError(f"'{said}' is not <key>=<value>, nor an object")
+        try:
+            given[key.strip()] = json.loads(value)
+        except ValueError:
+            given[key.strip()] = value
+    return given
+
+
+def cmd_ask(args: argparse.Namespace, agents) -> int:
+    """One turn for this agent, streamed to this terminal.
+
+    It runs **here**, in the terminal that asked, rather than inside the agent's gateway —
+    for the same reason a schedule run by hand does: there is nothing to ask a gateway
+    with yet, and inventing one is not what this is for. Ending this command ends the
+    brain and everything it started, because the whole tree is its own process group.
+
+    What is shown and what is written down are not the same thing. The account keeps every
+    record, whole; the terminal gets the answer, with what the brain was doing beside it —
+    and never a tool's output, which can be a file's contents, a private path or a
+    credential, and is not this command's to put on somebody's screen.
+    """
+    name, prompt = args.name, args.prompt
+    if not name or not prompt:
+        print("ask: WHO AND WHAT — say which agent, and what to ask it", file=sys.stderr)
+        print('        for example: rundesk ask ava "what changed today?"', file=sys.stderr)
+        return 1
+    if not agents.exists(name):
+        print(f"{name}: NO SUCH AGENT — nothing of that name has been made", file=sys.stderr)
+        print(f"        make it: rundesk add {name} --provider <provider>", file=sys.stderr)
+        return 1
+    reaches = agents.chosen(name)
+    named = args.provider or reaches.get("provider")
+    if not named:
+        print(f"{name}: NO BRAIN — nothing says which one answers for this agent",
+              file=sys.stderr)
+        print(f"        say which: rundesk add {name} --provider <provider>", file=sys.stderr)
+        print(f"        or just this turn: rundesk ask {name} \"…\" --provider <provider>",
+              file=sys.stderr)
+        return 1
+    try:
+        settings = _given(getattr(args, "settings", None)) or reaches.get("settings")
+    except ValueError as why:
+        print(f"{name}: NOT ASKED — {why}", file=sys.stderr)
+        return 1
+
+    said = _Shown()
+    try:
+        outcome = asyncio.run(turn.carry(
+            name, prompt, named,
+            model=args.model or reaches.get("model"),
+            settings=settings,
+            posture=provider.READ if args.read_only else provider.WORK,
+            conversation=args.conversation or turn.TERMINAL,
+            fresh=args.fresh,
+            watching=said,
+        ))
+    except provider.NotRunnable as why:
+        print(f"{name}: NO BRAIN THERE — {why}", file=sys.stderr)
+        print(f"        what stands in the way: rundesk doctor {name}", file=sys.stderr)
+        return 1
+    said.done()
+    print(f"        {name}/{outcome.run} — {_cost(outcome.tokens)}", file=sys.stderr)
+    if not outcome.ok:
+        print(f"{name}: TURN FAILED — {outcome.reason}", file=sys.stderr)
+    return 0 if outcome.ok else 1
+
+
+class _Shown:
+    """A turn as it happens, on a terminal.
+
+    The answer goes to stdout so it can be piped; everything else goes to stderr, so what
+    comes out of `rundesk ask ava "…" > answer.txt` is the answer and not a commentary
+    around it.
+    """
+
+    def __init__(self):
+        self._answered = False
+
+    def __call__(self, said: dict) -> None:
+        kind = said.get("type")
+        if kind == "text":
+            self._answered = True
+            sys.stdout.write(said.get("text") or "")
+            sys.stdout.flush()
+        elif kind == "tool":
+            did = said.get("did") or "using"
+            print(f"        · {did} {said.get('name') or ''}".rstrip(), file=sys.stderr)
+        elif kind == "result" and not said.get("ok"):
+            print("        · that did not work", file=sys.stderr)
+
+    def done(self) -> None:
+        if self._answered:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+
+def _cost(tokens: dict) -> str:
+    """What a turn cost, or that nobody said — never a cost of nothing (R-USE-7)."""
+    if not tokens.get("reported"):
+        return "what it cost was never reported"
+    said = (f"{tokens.get('input', 0)} in, {tokens.get('output', 0)} out, "
+            f"{tokens.get('cached', 0)} cached")
+    return f"{said}, {tokens['model']}" if tokens.get("model") else said
 
 
 def cmd_doctor(args: argparse.Namespace, gateways, agents) -> int:
@@ -680,7 +868,7 @@ def cmd_doctor(args: argparse.Namespace, gateways, agents) -> int:
     worst = 0
     for name in names:
         try:
-            said = agents.diagnosed(name)
+            said = agents.diagnosed(name, runnable=provider.program)
         except agents.NotAnAgentName as why:
             print(f"{name}: INVALID NAME — {why}", file=sys.stderr)
             worst = 1
@@ -1225,6 +1413,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
         return cmd_add(args, gateways, agents)
     if args.command == "doctor":
         return cmd_doctor(args, gateways, agents)
+    if args.command == "ask":
+        return cmd_ask(args, agents)
     if args.command == "serve":
         return cmd_serve(args, gateways, agents)
     if args.command == "start":
