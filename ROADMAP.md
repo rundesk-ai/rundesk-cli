@@ -4,7 +4,8 @@
 **Status:** Direction, not a ratified product contract
 
 **Starting implementation? Read in this order:** this file's Direction and **Phase 4**, which is next and
-is **research and planning rather than code** — Phase 5 builds what it decides. Then walk what is actually
+settles the design **and builds the seam it is all reached through**, while touching nothing anybody owns —
+Phase 5 is what moves real data. Then walk what is actually
 on disk before believing any description of it: `agents/<name>/` and `~/.rundesk/`, because two layouts
 currently coexist and ending that is the first thing Phase 5 does. Then
 [`CLI.md`](CLI.md) for every operation as it is typed, and
@@ -1289,12 +1290,12 @@ The next implementation sequence should be:
    having.~~ **Done.**
 4. ~~Reach that agent through Discord.~~ **Done** — the channel seam, with Discord as its first adapter
    and a stranger's channel adapter proving it open.
-5. **Design the shape of what is kept, and how it moves between versions.** Research and planning only:
-   one home per kind, a version on everything, a query seam, and a migration that runs inside the window
-   an update already stands agents down for. **This is next, and it is next because it is the only work
+5. **Design the shape of what is kept, and build the way in.** The design settled and agreed — one home
+   per kind, a version on everything, what may be destroyed — and the schema and query seam built and
+   exercised against nothing that matters yet. **This is next, and it is next because it is the only work
    here with a deadline** — the shape stops being cheap to change the day somebody installs.
-6. **Move everything onto it**, exactly as designed: the schema, the one seam every reader goes through,
-   the migration runner, and the owner's own install carried across.
+6. **Move everything onto it**, exactly as designed: the migration runner, every reader moved across to
+   that seam, the old layout deleted, and the owner's own install carried over.
 7. Let the clock start work, which is the trigger nobody is watching.
 8. Add skills and tool discovery, which are additive and change nothing already proven.
 
