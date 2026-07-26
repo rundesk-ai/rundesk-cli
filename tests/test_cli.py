@@ -549,6 +549,9 @@ class FakeGateways:
         self._refuses = refuses
         self._written = written
         self.served = []
+        #: What each gateway was built with. A gateway resolves none of this for itself, so
+        #: whether it was told is a fact about the command rather than about the gateway.
+        self.made_with = []
         #: What `remove` asked to be taken away, and whether it asked for the history too.
         self.forgotten = []
         #: Which directory each question about a gateway named. An agent's gateway keeps
@@ -643,8 +646,14 @@ class FakeGateways:
     def log_path(self, name, logs=None):
         return self._written if self._written is not None else pathlib.Path("/nowhere/x.log")
 
-    def Gateway(self, name, where=None, logs=None, schedules=None, reachable=()):
+    def Gateway(self, name, where=None, logs=None, schedules=None, reachable=(),
+                agents=None):
         gateways = self
+        # Kept, because what the command hands a gateway is the command's to get right:
+        # a gateway told nothing about where agents are starts programs that cannot find
+        # one (R-SCH-27), and only this side of the seam can be asked whether it was told.
+        self.made_with.append({"name": name, "where": where, "logs": logs,
+                               "schedules": schedules, "agents": agents})
 
         class One:
             async def serve(inner):
@@ -922,6 +931,18 @@ class ServingAGateway(unittest.TestCase):
         code, _ = drive(["serve", "agent-one"], gateways)
         self.assertEqual(0, code)
         self.assertEqual(["agent-one"], gateways.served)
+
+    def test_a_gateway_is_told_where_agents_are_kept(self):
+        """R-SCH-27 — a gateway resolves nothing about agents for itself, so this is the
+        one place the answer can be got wrong. Untold, every program it starts that is
+        itself rundesk looks somewhere else, and a scheduled `rundesk ask ava` answers NO
+        SUCH AGENT while the gateway running ava started it."""
+        gateways = FakeGateways()
+        agents = FakeAgents(made=["ava"])
+        code, _ = drive(["serve", "ava"], gateways, agents=agents)
+        self.assertEqual(0, code)
+        self.assertEqual([agents.agents_home()],
+                         [one["agents"] for one in gateways.made_with])
 
     def test_serving_without_a_name_is_a_usage_error(self):
         """R-CMD-5 — a verb says what and the next word says whose. There is no longer one
@@ -1533,6 +1554,21 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         self.assertEqual(0, code, said)
         self.assertIn("swept", said, "it reported running it without running it")
         self.assertIn("RAN", said)
+
+    def test_a_schedule_run_by_hand_is_told_where_agents_are_kept(self):
+        """R-SCH-27 — running one by hand is an operator doing what the clock does, so the
+        environment has to be the one the clock would have given it. Told nothing, a
+        schedule that is itself `rundesk ask ava` answers NO SUCH AGENT by hand and at
+        three in the morning alike."""
+        gateways = self._gateways(schedules={"ava": [
+            {"name": "look", "when": "0 3 * * *",
+             "run": [sys.executable, "-c",
+                     "import os; print(os.environ.get('RUNDESK_AGENTS_DIR', 'told nothing'))"]}]})
+        agents = FakeAgents(made=["ava"])
+        code, said = drive(["schedules", "ava", "run", "look"], gateways, agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertIn(str(agents.agents_home()), said,
+                      "a schedule run by hand was not told where agents are kept")
 
     def test_running_a_schedule_by_hand_leaves_the_time_it_next_falls_due_alone(self):
         """R-SCH-22 — what is due is decided from when each last fired, so a run by hand

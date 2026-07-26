@@ -1111,14 +1111,17 @@ async def end_all(programs: Iterable[Program]) -> bool:
     return all(went is True for went in each)
 
 
-def environment(home: Path, path: str | None = None) -> dict[str, str]:
+def environment(home: Path, path: str | None = None,
+                agents: Path | None = None) -> dict[str, str]:
     """The environment a program rundesk runs is given (R-PROC-1).
 
     Built rather than inherited. The supervisor hands a job almost nothing, so anything
     a program needs has to be put here deliberately — and anything not put here is a
-    thing rundesk has decided its programs do not see.
+    thing rundesk has decided its programs do not see. That is the rule, and every
+    addition here is a decision rather than a convenience: a gateway must not hand every
+    secret it holds to every program it runs.
     """
-    return {
+    said = {
         "HOME": str(Path.home()),
         "PATH": path if path is not None else os.environ.get("PATH", ""),
         "RUNDESK_HOME": str(home),
@@ -1130,3 +1133,18 @@ def environment(home: Path, path: str | None = None) -> dict[str, str]:
         # accented character in a transcript into a crash rather than a character.
         "LANG": "en_US.UTF-8",
     }
+    # **Where agents are kept, because a program rundesk starts may itself be rundesk.**
+    # Left out, `rundesk schedules ava run nightly` started `rundesk ask ava` and the child
+    # answered NO SUCH AGENT while the gateway that started it was running ava — the same
+    # split `supervisor.describe()` records having "silently split the machine in two", one
+    # level further down. Everything of an agent's is derived from this one root, so it is
+    # the whole of what a program has to agree with the gateway about; the pre-agent run,
+    # log and schedule directories are deliberately not passed, and are on their way out.
+    #
+    # Forwarded when nothing was passed rather than defaulted here. A default written a
+    # third time is a third thing to keep true, and it is not needed: with the variable
+    # unset, this program and the gateway resolve the same root through the same code.
+    known = str(agents) if agents is not None else os.environ.get("RUNDESK_AGENTS_DIR")
+    if known:
+        said["RUNDESK_AGENTS_DIR"] = known
+    return said

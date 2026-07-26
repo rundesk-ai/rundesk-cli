@@ -746,7 +746,12 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
     try:
         return asyncio.run(gateways.Gateway(args.name, where=whose.run, logs=whose.logs,
                                             schedules=whose.schedules,
-                                            reachable=reachable).serve())
+                                            reachable=reachable,
+                                            # Carried in, the same value the machine's job
+                                            # is given, so a program the gateway starts
+                                            # finds the agents the gateway is running
+                                            # (R-SCH-27).
+                                            agents=agents.agents_home()).serve())
     except (gateways.AlreadyRunning, gateways.Unfit, gateways.NotAName) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         return 0
@@ -1819,7 +1824,7 @@ def cmd_schedules(args: argparse.Namespace, gateways, agents) -> int:
         if act == "add":
             return _add_schedule(args, gateways, whose)
         if act == "run":
-            return _run_schedule(args, gateways, whose)
+            return _run_schedule(args, gateways, agents, whose)
         if act in ("remove", "on", "off"):
             return _change_schedule(args, gateways, whose, act)
         return _list_schedules(args, gateways, whose)
@@ -1909,7 +1914,7 @@ def _change_schedule(args: argparse.Namespace, gateways, whose, act: str) -> int
     return unlogged
 
 
-def _run_schedule(args: argparse.Namespace, gateways, whose) -> int:
+def _run_schedule(args: argparse.Namespace, gateways, agents, whose) -> int:
     """Run what a schedule names, now, whether or not it is due (R-SCH-21).
 
     Here, in this terminal, and **nothing is written down** (R-SCH-22). What is due is
@@ -1943,7 +1948,8 @@ def _run_schedule(args: argparse.Namespace, gateways, whose) -> int:
         # Through what was passed in, never the module. Reaching for the real one here
         # read the machine's own directories from inside a suite that had redirected
         # nothing, which is the isolation every other line in this file keeps.
-        env=process.environment(whose.run or gateways.home()),
+        env=process.environment(whose.run or gateways.home(),
+                                agents=agents.agents_home()),
         on_line=print,
     ))
     print(f"{args.name}/{args.schedule}: "

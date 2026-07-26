@@ -47,6 +47,7 @@ gateway each, which is how one agent's schedules stay that agent's alone.
 | ✅ | R-SCH-24 | A schedule is never shown as running when no gateway of its name is up | `a schedule whose gateway is gone is not shown as still running`, `a schedule running right now is shown as started` |
 | ✅ | R-SCH-25 | What is due, when it next runs and what was passed over agree on a schedule naming both a day and a weekday | `the next time is a weekday match the day of the month would have skipped`, `a weekday match is counted among what was passed over`, `what is due and what is next agree on every minute of a week` |
 | ✅ | R-SCH-26 | Schedules are examined as soon as a gateway has its name, not an interval later | `a gateway looks at the clock as soon as it has its name`, `the first look and the ordinary tick do not start one minute twice`, `a stop asked for while it takes hold starts nothing`, `the beat still waits before saying anything` |
+| ✅ | R-SCH-27 | A program a schedule starts reads the same agents the gateway starting it reads | `a program the gateway starts finds the agents the gateway is running`, `a gateway told nothing hands on what it was told itself`, `the environment says where agents are kept`, `where agents are kept is carried on when it was not passed`, `a gateway is told where agents are kept`, `a schedule run by hand is told where agents are kept` |
 
 ## Open questions
 

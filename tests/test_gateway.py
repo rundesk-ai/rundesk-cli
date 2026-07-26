@@ -1341,6 +1341,62 @@ class WorkThatStartsItself(WithARunDirectory):
         self.assertFalse(self.told.exists(), "a gateway on its way out started new work")
 
 
+class AProgramTheGatewayStartsReadsWhatTheGatewayReads(WithARunDirectory):
+    """R-SCH-27 — the regression check that keeps one split from coming back. A gateway is
+    told where agents are kept and its children were not, so `rundesk schedules ava run
+    nightly` started `rundesk ask ava` and the child answered NO SUCH AGENT while the
+    gateway that started it was running ava. The environment a gateway builds for a program
+    is deliberately bare — a gateway must not hand every secret it holds to everything it
+    runs — so the fix is to put this there on purpose, not to start inheriting.
+
+    Proved with the repository's own command rather than a stand-in that prints a variable:
+    what has to hold is that a real `rundesk` resolves a real agent, and a stand-in cannot
+    be wrong about the thing this exists to catch.
+    """
+
+    #: The command an installed rundesk is, by where it actually is. A schedule may name it
+    #: and `CLI.md` says to; nothing else here would notice if it stopped working.
+    RUNDESK = Path(__file__).resolve().parent.parent / "rundesk"
+
+    def setUp(self):
+        super().setUp()
+        from rundesk import agent
+        # Two roots, and the ambient one is *not* the gateway's. Pointed at the same place
+        # the case proves nothing: the child would find the agent by falling back, which is
+        # exactly the accident this guards against.
+        self.elsewhere = Path(tempfile.mkdtemp(prefix="rundesk-elsewhere-"))
+        self.addCleanup(shutil.rmtree, self.elsewhere, True)
+        self.addCleanup(os.environ.pop, "RUNDESK_AGENTS_DIR", None)
+        os.environ["RUNDESK_AGENTS_DIR"] = str(self.elsewhere)
+        self.agents = Path(tempfile.mkdtemp(prefix="rundesk-agents-"))
+        self.addCleanup(shutil.rmtree, self.agents, True)
+        agent.add("probe", self.agents)
+
+    def served(self, name: str = gateway.DEFAULT_NAME) -> gateway.Gateway:
+        gw = gateway.Gateway(name, where=self.where, logs=self.logs,
+                             schedules=self.schedules, root=self.root, agents=self.agents)
+        self.addCleanup(gw.release)
+        return gw
+
+    async def test_a_program_the_gateway_starts_finds_the_agents_the_gateway_is_running(self):
+        """R-SCH-27 — the whole of finding 22, in the one command that reproduced it."""
+        gw = self.served()
+        gw.claim()
+        outcome = await gw.start([str(self.RUNDESK), "agents"])
+        self.assertTrue(outcome.ok, f"the command failed: {outcome.reason}: {outcome.output}")
+        self.assertIn("probe", outcome.output,
+                      "a program the gateway started looked somewhere else for agents")
+
+    async def test_a_gateway_told_nothing_hands_on_what_it_was_told_itself(self):
+        """R-SCH-27 — a gateway built without one is not a gateway whose children guess:
+        it passes on the root this process was given, which is the same answer."""
+        os.environ["RUNDESK_AGENTS_DIR"] = str(self.agents)
+        gw = self.made()
+        gw.claim()
+        outcome = await gw.start([str(self.RUNDESK), "agents"])
+        self.assertIn("probe", outcome.output, f"{outcome.reason}: {outcome.output}")
+
+
 class TheClockIsLookedAtAsSoonAsThereIsAGatewayToLookAtIt(WithARunDirectory):
     """R-SCH-26 — the tick slept before its first look, so a gateway examined nothing for
     twenty seconds after claiming its name. A schedule is due only in its stated minute, so

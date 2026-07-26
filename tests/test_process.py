@@ -110,6 +110,33 @@ class TheEnvironmentAProgramIsGiven(Quickened):
         self.assertEqual("dumb", built["TERM"])
         self.assertIn("UTF-8", built["LANG"])
 
+    def test_the_environment_says_where_agents_are_kept(self):
+        """R-SCH-27 — a program rundesk starts may itself be rundesk, and everything of an
+        agent's is derived from this one root. Left out, a scheduled `rundesk ask ava`
+        answered NO SUCH AGENT while the gateway that started it was running ava."""
+        built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin",
+                                    agents=Path("/tmp/somewhere/agents"))
+        self.assertEqual("/tmp/somewhere/agents", built["RUNDESK_AGENTS_DIR"])
+
+    def test_where_agents_are_kept_is_carried_on_when_it_was_not_passed(self):
+        """R-SCH-27 — forwarded rather than defaulted, so the default lives in one place.
+        A caller that knows where agents are says so; one that does not passes on what it
+        was itself given."""
+        os.environ["RUNDESK_AGENTS_DIR"] = "/tmp/handed-down/agents"
+        self.addCleanup(os.environ.pop, "RUNDESK_AGENTS_DIR", None)
+        built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
+        self.assertEqual("/tmp/handed-down/agents", built["RUNDESK_AGENTS_DIR"])
+
+    def test_nothing_is_said_about_agents_when_nothing_knows_where_they_are(self):
+        """R-PROC-1 — with the variable unset, a program and whatever started it resolve
+        the same root through the same code, so inventing a third copy of that default
+        here would be one more thing to keep true rather than an answer."""
+        was = os.environ.pop("RUNDESK_AGENTS_DIR", None)
+        if was is not None:
+            self.addCleanup(os.environ.__setitem__, "RUNDESK_AGENTS_DIR", was)
+        built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
+        self.assertNotIn("RUNDESK_AGENTS_DIR", built)
+
 
 class FindingTheProgram(Quickened):
     async def test_a_program_named_rather_than_located_is_refused(self):

@@ -1141,11 +1141,18 @@ class Gateway:
         logs: Path | None = None,
         schedules: Path | None = None,
         reachable=(),
+        agents: Path | None = None,
     ):
         self.name = checked(name)
         self.where = where or home()
         self.logs = logs or logs_home()
         self.schedules = schedules or schedules_home()
+        #: Where agents are kept, carried so that a program this gateway starts reads the
+        #: same root it does. A path it was handed and never looks inside: a gateway goes
+        #: on knowing nothing of agents, and this is not knowledge of whose work it holds
+        #: (R-AGT-9). Left unset, `process.environment` forwards whatever this process was
+        #: given, which is the same answer by a shorter route.
+        self.agents = agents
         self.log = _recorder(name, self.logs)
         self.root = root or ROOT
         #: What this gateway is running, by the name each was started under. Keyed
@@ -1507,7 +1514,9 @@ class Gateway:
             self.log.warning("refused '%s': it is already running", held)
             raise AlreadyStarted(f"'{held}' is already running under gateway '{self.name}'")
         program = process.Program(
-            argv, env=env if env is not None else process.environment(self.where),
+            argv,
+            env=env if env is not None
+            else process.environment(self.where, agents=self.agents),
             silence=silence, ceiling=ceiling,
             takes_input=takes_input,
             # Kept apart exactly when what it says is going somewhere to be parsed, since

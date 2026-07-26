@@ -1,7 +1,7 @@
 ---
 id: PROC
 name: A program rundesk runs
-last_verified: 2026-07-25
+last_verified: 2026-07-26
 ---
 
 ## What this is
@@ -19,7 +19,7 @@ drive what such a program does — it decides that one runs, watches it, and end
 
 |  | ID | Requirement | Evidence |
 |:--:|---|---|---|
-| ✅ | R-PROC-1 | rundesk chooses the environment a program it runs is given | `what it is given is what it sees`, `what it is not given it does not see`, `a program is given nothing unless rundesk says otherwise`, `the environment carries what a program needs to find itself` |
+| ✅ | R-PROC-1 | rundesk chooses the environment a program it runs is given | `what it is given is what it sees`, `what it is not given it does not see`, `a program is given nothing unless rundesk says otherwise`, `the environment carries what a program needs to find itself`, `nothing is said about agents when nothing knows where they are` |
 | ✅ | R-PROC-2 | rundesk finds a program it runs without depending on where a shell would look | `a program named rather than located is refused`, `naming no program at all is refused`, `a schedule naming a program rather than locating it is never added` |
 | ✅ | R-PROC-3 | Everything a program rundesk runs writes out is passed on as it is written | `everything it writes out is passed on`, `what it says arrives while it is still running`, `one enormous line is passed on whole`, `what it says survives being split mid character`, `the last thing it says is not lost for want of a newline`, `the last character is not lost for being half written`, `what went wrong still arrives in the order it was said` |
 | ✅ | R-PROC-4 | rundesk ends a program it runs at any point, without waiting for that program to agree | `a program is ended whenever rundesk decides`, `a program that will not leave is ended anyway`, `a first signal that does not land is not the end of it`, `giving up on ending a program still ends it`, `ending waits for the whole tree not just the one we started`, `a group that vanishes while being ended is not chased`, `giving up on a program does not leave it running`, `ending a program that already finished does nothing`, `ending a program that never started does nothing`, `reading a program that was never started is refused` |
