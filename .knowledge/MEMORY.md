@@ -27,6 +27,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   and absent after `thread/resume`, while the resume itself reported success. So a reworded
   instruction reaches new conversations only. **Do not read a codex field's behaviour off its schema
   — both of these facts are invisible there**, and the probes are in `.knowledge/scripts/`.
+- **Grok reads its other sessions, so a resume probe passes without resuming anything.** A
+  control turn in a *fresh* session answered a question only the previous conversation could
+  have set up, and said why: "No prior context in this session — checking recent sessions for
+  what 'the second one' refers to." So the naive round-trip probe reports `CARRIES CONTEXT`
+  when what carried it was cross-session recall, and an adapter would claim `resume` on it.
+  Pass **`--no-memory`** on every turn of a probe *and* make the candidate words unguessable
+  per run (a uuid suffix), or a re-run reads the previous run's sessions. The same finding is
+  why the shipped adapter passes `--no-memory`: one agent's conversation is not another's.
 - **Do not test a model instruction with a question the conversation can already answer.** A first
   attempt at the above asked for a codename the thread had been asked for before, so the model
   answered from its own earlier reply and the resume looked like it worked. Use a rule the history

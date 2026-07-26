@@ -6,3 +6,13 @@ grok=0.2.111
 node=v22.23.1
 captured=2026-07-24
 platform=darwin 25.5.0
+
+# What the probes under .knowledge/scripts/ were last run against, which is not the same
+# thing and must not be conflated with it: the streams above are a capture and cannot be
+# re-derived, while a probe answers a question and is meant to be re-run. Claude has moved
+# one patch since the capture; nothing in the golden was contradicted by probing 2.1.220.
+probed_claude=2.1.220
+probed_codex=codex-cli 0.145.0
+probed_grok=0.2.111
+probed=2026-07-26
+probed_platform=darwin 25.5.0

@@ -5,12 +5,15 @@
 
 ## What they do
 
-Everything here is true of `claude 2.1.219` on macOS 25.5.0 — the build every capture below was
-driven against, recorded in `cli-versions.lock`.[10] Two labels are used and never blurred.
-**Measured** means a probe ran against a real account and its output was kept; the golden stream
-in `tests/samples/` is 184 lines of that output.[1] **Assumed** means it was read off a flag
-surface, a help string or a vendor write-up and never exercised. Where a doc-derived claim was
-later contradicted by a probe, it is marked **Refuted** and both halves are given.
+Everything here is true of `claude 2.1.219` on macOS 25.5.0 unless a line says otherwise — the
+build every capture below was driven against, recorded in `cli-versions.lock`.[10] Two rows were
+measured later against **2.1.220**, which is what the machine now has; both say so, and neither
+contradicted the capture. Two labels are used and never blurred. **Measured** means a probe ran
+against a real account and its output was kept; the golden stream in `tests/samples/` is 184 lines
+of that output,[1] and `.knowledge/scripts/probe-claude` is a re-runnable probe beside it.[12]
+**Assumed** means it was read off a flag surface, a help string or a vendor write-up and never
+exercised. Where a doc-derived claim was later contradicted by a probe, it is marked **Refuted**
+and both halves are given.
 
 | Need | What `claude 2.1.219` does |
 |---|---|
@@ -162,9 +165,36 @@ and whether a Keychain-write race appears under load.[4]
 
 ### The system prompt, and which flag does what
 
-Assumed, from the flag surface and the Node build's own choice, never exercised: `--append-system-prompt`
-**adds to** the instructions the brain was built with, and `--system-prompt` **replaces** them.
-The shipped adapter passes the append form only.[3] `probes/overhead.ts` was written to measure
+**Measured, and the answer has a shape nobody predicted.**[12] Three runs of one ask — *run
+`echo ZEPHYR` and tell me what it printed* — with a rule the conversation cannot supply
+(*end every reply with the word PINEAPPLE*), and the whole of it settled on what happened rather
+than on how a reply read. Reproduced twice:
+
+```text
+                        prompt tokens        the rule landed   it still used Bash
+no flag (the control)          48,268                     NO                  YES
+--append-system-prompt         48,333  (+65)             YES                  YES
+--system-prompt                42,139  (−6,129)          YES                  YES
+```
+
+**`--system-prompt` replaces, and the size of the prompt is what says so.** A flag that only added
+words could not make a turn *smaller*; this one takes about 6,100 tokens of the default system
+prompt away with it — 6,489 on the first run, 6,129 on the second — against 65 for the append form,
+which is the rule itself and nothing more.
+
+**And the tool instructions survive it.** The same ask reached for a shell under all three forms,
+so what `--system-prompt` substitutes is the prose above the tools rather than everything the CLI
+was built with. That is a *narrower* replacement than codex's `baseInstructions`, which takes the
+tool instructions too — and it is still the flag never to map standing instructions onto, because
+6,100 tokens of a brain's own instructions going missing is not something an owner asked for when
+they typed a paragraph.
+
+The control is what makes any of this readable. The no-flag run proves the ask itself works and
+the rule is genuinely absent without one, so "it ignored the rule" and "it ignores that kind of
+rule" cannot be confused — the mistake this repo already made once and wrote down.[8]
+
+The claim being replaced was assumed, from the flag surface and the Node build's own choice, and
+never exercised. The shipped adapter passes the append form only.[3] `probes/overhead.ts` was written to measure
 exactly what appending costs — a four-row ladder from `--bare` up to the allowlist plus the
 appended prompt — but no run of it was ever recorded, so its numbers do not exist.[11] Measured
 about that probe, and the reason the first row could never work: `claude --bare` reads
@@ -220,7 +250,9 @@ user-level skills* alongside it — in the always-on index, every turn.[7]
 ### Every flag trap, all of them measured
 
 - `--output-format stream-json` **requires `--verbose`** under `-p`; without it the process exits
-  1 and the error names only the format, not the missing flag.[4][8]
+  1.[4][8] Measured at 2.1.220, and a drift worth recording because it is the good kind: the error
+  now names the missing flag — `When using --print, --output-format=stream-json requires --verbose`
+  — where at 2.1.219 it named only the format and sent a reader looking at the wrong argument.[12]
 - `--allowedTools` is **variadic and swallows a trailing positional prompt**, and the error it
   produces — `Input must be provided either through stdin or as a prompt argument` — points at the
   wrong thing entirely. The prompt goes on **stdin**.[4][8]
@@ -261,6 +293,9 @@ at all, and without it the reply would arrive only whole on the `assistant` line
   that is 320,020 tokens priced as one thing when 302,567 of them cost a fraction of the rest.
 - Do not treat `--permission-mode` as containment. It is a prompting policy; under `plan` with no
   allowlist this CLI wrote a file outside the repository.
+- Do not send standing instructions through `--system-prompt`. Measured: it takes about 6,100
+  tokens of the brain's own instructions with it. Nothing reports that, the tools keep working, and
+  the turn merely behaves differently — which is the failure mode that gets blamed on the model.
 - Do not touch plan mode from anything that has to finish. It never returned.
 - Do not build a question or approval flow on `AskUserQuestion` or `ExitPlanMode`. Neither is
   offered headless, allowlisting does not change that, and a design that assumed otherwise is
@@ -312,9 +347,9 @@ not say what it is true of is not a fixture.
 
 ## Open questions
 
-- **`--system-prompt` replace-mode has never been exercised.** Only the append form has ever been
-  passed, so "it replaces" is a reading of the flag surface and not a measurement — and the guide
-  tells adapter authors never to reach for it on the strength of that reading.
+- **What the 6,100 tokens `--system-prompt` removes actually were.** It is measured that they go
+  and that the tool instructions are not among them; what *is* in them was never enumerated, so
+  "it replaces the prose above the tools" is a reading of one number and not an inventory.
 - **Whether `--append-system-prompt` is read every turn or bound when a conversation is created.**
   Codex was measured to be the second kind and silently ignores it on resume; Claude was never
   asked, and an argument accepted and then dropped is worse than one never sent.
@@ -351,3 +386,4 @@ not say what it is true of is not a fixture.
 9. `../rundesk/docs/design/harness-loop-and-steering.md` — the doc-derived capability table the probes refuted — (internal)
 10. `tests/samples/cli-versions.lock` — the CLI versions every capture here is true of — (internal)
 11. `../rundesk/probes/overhead.ts` — the prompt-overhead ladder, written and never recorded — (internal)
+12. `.knowledge/scripts/probe-claude` against `claude 2.1.220` on macOS 25.5.0, 2026-07-26 — (internal)
