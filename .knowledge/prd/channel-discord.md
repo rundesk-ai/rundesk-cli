@@ -7,9 +7,10 @@ last_verified: 2026-07-25
 ## What this is
 
 What a turn looks like on Discord, and how it is shown there. Being named in a server channel opens a
-thread and the turn happens inside it, so one thread is one conversation and one session (R-CH-3). A turn arrives as
-one message, at the end, with what it cost above the answer — because a phone that buzzes eleven times
-to say an agent read a file is worse than one that buzzes once with the reply.
+thread and the turn happens inside it, so one thread is one conversation and one session (R-CH-3). The answer
+arrives as one message at the end, with what it cost above it, and what the agent is doing is shown
+while it works only if the owner asked for it — a reply that rewrites itself in place is unreadable,
+so only a running commentary may grow.
 
 ## Why it exists
 
@@ -37,9 +38,10 @@ to say an agent read a file is worse than one that buzzes once with the reply.
 | ❌ | R-DIS-14 | Writes are paced so that Discord does not refuse them | src/rundesk_cli/channels/discord:69 — whether the pacing is enough is what a real server answers |
 | ❌ | R-DIS-15 | The owner is told when their agent comes up and when it goes down | src/rundesk_cli/channels/discord:279 — proved by hand, both coming up and going down |
 | ❌ | R-DIS-16 | An agent shows as online for as long as the gateway running it is up | src/rundesk_cli/channels/discord:271 — presence is a thing only the platform shows |
-| ✅ | R-DIS-17 | A turn arrives as one message, with what it cost above the answer | `what a turn cost is shown as one line`, `a turn that reported no cost says nothing about it`, `a tool that worked is not a message of its own`, `a small count is not rounded into a zero` |
+| ✅ | R-DIS-17 | An answer arrives as one message, with what it cost above it | `what a turn cost is shown as one line`, `a turn that reported no cost says nothing about it`, `a tool that worked is not a message of its own`, `a small count is not rounded into a zero` |
 | ❌ | R-DIS-18 | An answer too long to read as messages is attached as a file instead | src/rundesk_cli/channels/discord:447 — the splitting is proved offline; uploading is the platform's |
 
+| ✅ | R-DIS-20 | What an agent is doing is shown while it works only if the owner asked for it | `showing the work is off unless the owner asks`, `the commentary may grow but the answer may never`, `a long commentary is kept to what one message holds` |
 | ❌ | R-DIS-19 | A file the agent made is uploaded rather than described | src/rundesk_cli/channels/discord:470 — the upload is the platform's, and proved by hand |
 
 ## Open questions

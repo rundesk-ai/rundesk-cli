@@ -75,10 +75,26 @@ LIMIT = 1900
 #: (R-DIS-6).
 TYPING_SECONDS = 8.0
 
-#: How long to leave between writes of the running commentary. Discord rate-limits posting
-#: harder than editing, and a turn that runs a dozen tools in a second must not spend the
+#: How long to leave between writes of the running commentary. Discord rate-limits
+#: posting harder than editing, so a message that grows is written more often than one
+#: that is posted again — and a turn running a dozen tools in a second must not spend the
 #: budget the answer needs (R-DIS-14).
 POST_SECONDS = 2.5
+GROW_SECONDS = 1.2
+
+#: How the running commentary is shown, and the default (R-DIS-20).
+#:
+#: `grows` is one message that is edited as the turn goes, which reads as a single thing
+#: happening. `posts` is a message per batch, which survives a surface that cannot edit
+#: and buries a busy channel. `off` shows none of it, and is the default: a phone that
+#: buzzes eleven times to say an agent read a file is worse than one that buzzes once
+#: with the reply, and an owner who wants to watch can say so.
+GROWS, POSTS, OFF = "grows", "posts", "off"
+
+#: How much of the running commentary is kept in one growing message. Discord refuses a
+#: message past its own limit, and a turn that ran fifty tools would otherwise write one
+#: that cannot be sent at all — so the oldest lines go and a mark says they did.
+ACTIVITY_CHARS = 1500
 
 #: What a thread opened by being named is called. Discord allows a hundred; this is short
 #: enough to read in a sidebar.
@@ -150,6 +166,8 @@ def options(argv) -> argparse.Namespace:
     said.add_argument("--server", metavar="<id>")
     said.add_argument("--channel", metavar="<id>")
     said.add_argument("--dm", action="store_true")
+    said.add_argument("--activity", choices=("grows", "posts", "off"), default=None,
+                      metavar="<how>")
     said.add_argument("--token-from", default=TOKEN_FROM, metavar="<variable>")
     known, rest = said.parse_known_args(list(argv))
     known.unknown = rest
@@ -245,7 +263,8 @@ class Live:
 
     def __init__(self):
         self.anchor = None          # the message that asked, for the mark to attach to
-        self.activity = ""          # the running commentary, not yet posted
+        self.activity = ""          # the running commentary, as it stands
+        self.pending = ""           # what has happened since it was last written
         self.posted = None          # the message it is being written into, if any
         self.typing = None
         self.pacing = None
@@ -510,23 +529,54 @@ class Agent(discord.Client):
                 await message.remove_reaction(instead_of, self.user)
 
     async def _doing(self, it: dict, held: Live) -> None:
-        """What the agent did, kept rather than posted.
+        """What the agent did, shown as the owner asked for it to be (R-DIS-20).
 
-        **One message per turn on this surface, deliberately.** A running commentary of
-        every tool is a dozen notifications for one answer, and a phone buzzing eleven
-        times to say an agent read a file is worse than silence. That the agent is
-        working is already shown — 👀 the moment it was heard, and typing for as long as
-        it runs — so what it did is kept and only its cost is worth a line (R-DIS-17).
-
-        Another surface may well decide the opposite. Which of these is shown is the
-        adapter's to choose; that the turn is carried is not (R-CAD-4, R-CAD-5).
+        What it cost is kept either way, because it goes above the answer whatever else
+        is shown. The rest is only worth a message if somebody asked to watch: a phone
+        that buzzes eleven times to say an agent read a file is worse than one that
+        buzzes once with the reply.
         """
         if it.get("type") == "usage":
             held.cost = _as_a_line(it) or held.cost
+            return
+        if self.chose.activity == OFF:
+            return
+        line = _as_a_line(it)
+        if not line:
+            return
+        held.pending = (held.pending + "\n" + line).strip()
+        if held.pacing is None or held.pacing.done():
+            held.pacing = asyncio.ensure_future(self._paced(it, held))
+
+    async def _paced(self, it: dict, held: Live) -> None:
+        """A burst of tools is one write rather than ten (R-DIS-14)."""
+        await asyncio.sleep(GROW_SECONDS if self.chose.activity == GROWS else POST_SECONDS)
+        await self._flush(it, held)
 
     async def _flush(self, it: dict, held: Live) -> None:
-        """Nothing to flush: this surface holds everything until the answer."""
-        return
+        """Write whatever has happened since the last time, the way this owner asked.
+
+        `grows` edits one message, so a turn reads as a single thing happening. `posts`
+        starts a new one each time, which is what a surface that cannot edit would have
+        to do — and which is why the message being edited is *never* the answer: a reply
+        that rewrites itself in place is unreadable, and only the commentary may.
+        """
+        said, held.pending = held.pending, ""
+        if not said:
+            return
+        if self.chose.activity == POSTS:
+            await self._post(it, said)
+            return
+        held.activity = (held.activity + "\n" + said).strip()
+        if len(held.activity) > ACTIVITY_CHARS:
+            held.activity = "-# …\n" + held.activity[-ACTIVITY_CHARS:]
+        if held.posted is None:
+            held.posted = await self._post(it, held.activity)
+            return
+        try:
+            await held.posted.edit(content=held.activity)
+        except Exception as why:  # noqa: BLE001 — a platform boundary
+            note(f"could not grow the commentary: {why}")
 
     async def _answer(self, it: dict, held: Live) -> None:
         """The answer, whole, at the end — split across messages rather than cut.
@@ -556,7 +606,7 @@ class Agent(discord.Client):
                              files=files if not rest else [])
             anchor = None
 
-    async def _post(self, it: dict, content: str, anchor=None, files=(), text_as=None) -> None:
+    async def _post(self, it: dict, content: str, anchor=None, files=(), text_as=None):
         """One message, and never at the turn's expense: a delivery that fails is written
         to our own stderr and the turn goes on (R-CH-12)."""
         channel = self.get_channel(int(it["conversation"]))
@@ -576,15 +626,17 @@ class Agent(discord.Client):
             sending.append(discord.File(io.BytesIO(text_as.encode("utf-8")),
                                         filename="answer.md"))
         try:
-            await channel.send(
+            said = await channel.send(
                 content,
                 reference=anchor if anchor is not None else None,
                 mention_author=False,
                 files=sending or None,
             )
             note(f"wrote {len(content)} chars and {len(sending)} files")
+            return said
         except Exception as why:  # noqa: BLE001 — a platform boundary
             note(f"could not write: {type(why).__name__}: {why}")
+        return None
 
 
 def _without_mentions(text: str) -> str:
@@ -679,7 +731,8 @@ async def check(chose) -> int:
     say(ok=True, describes=describes, secret={"env": chose.token_from},
         settings={what: value for what, value in (
             ("bot", chose.bot), ("server", chose.server), ("channel", chose.channel),
-            ("dm", chose.dm), ("token_from", chose.token_from)) if value})
+            ("dm", chose.dm), ("token_from", chose.token_from),
+            ("activity", chose.activity)) if value})
     return 0
 
 
@@ -749,9 +802,10 @@ def main(argv) -> int:
     # and a goodbye go to, so the adapter is told who they are.
     chose.allow = [one for one in (os.environ.get("RUNDESK_ALLOW") or "").split(",") if one]
     settings = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
-    for what in ("bot", "server", "channel", "token_from"):
+    for what in ("bot", "server", "channel", "token_from", "activity"):
         if not getattr(chose, what, None) and settings.get(what):
             setattr(chose, what, settings[what])
+    chose.activity = chose.activity or OFF
     chose.dm = chose.dm or bool(settings.get("dm"))
     return asyncio.run(check(chose) if asking else carry(chose))
 

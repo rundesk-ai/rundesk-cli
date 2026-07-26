@@ -228,6 +228,23 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         self.assertEqual("", discord._as_a_line(
             {"type": "result", "id": "1", "ok": True, "summary": "3 files changed"}))
 
+    def test_showing_the_work_is_off_unless_the_owner_asks(self):
+        """R-DIS-20 — an owner who wants to watch says so, and one who does not gets one
+        message per turn rather than a running commentary."""
+        self.assertIsNone(discord.options([]).activity)
+        self.assertEqual("grows", discord.options(["--activity", "grows"]).activity)
+
+    def test_the_commentary_may_grow_but_the_answer_may_never(self):
+        """R-CH-7, R-DIS-20 — a reply that rewrites itself in place is unreadable, so
+        the message that is edited is the commentary and never the answer."""
+        self.assertEqual({"grows", "posts", "off"},
+                         {discord.GROWS, discord.POSTS, discord.OFF})
+
+    def test_a_long_commentary_is_kept_to_what_one_message_holds(self):
+        """R-DIS-13, R-DIS-20 — Discord refuses a message past its limit, so a turn that
+        ran fifty tools would grow one that cannot be sent at all."""
+        self.assertLess(discord.ACTIVITY_CHARS, discord.LIMIT)
+
     def test_a_tool_that_failed_still_says_so(self):
         """R-DIS-9 — what somebody watching wants is the thing that did not work."""
         said = discord._as_a_line(
@@ -330,8 +347,8 @@ class WhatItOffersAndWhatItIsTold(unittest.TestCase):
         the owner may say is *which variable* holds it, never what is in it."""
         said = discord.options(["--token-from", "SOMETHING_ELSE"])
         self.assertEqual("SOMETHING_ELSE", said.token_from)
-        self.assertEqual({"bot", "server", "channel", "dm", "token_from", "unknown"},
-                         set(vars(said)),
+        self.assertEqual({"bot", "server", "channel", "dm", "token_from", "activity",
+                          "unknown"}, set(vars(said)),
                          "an option appeared that could carry a secret as its value")
 
 
