@@ -927,8 +927,10 @@ async def check(chose) -> int:
                           f"running this from, or put it in a file called '{TOKEN_FILE}' "
                           f"in this channel's own directory; never as an argument")
         return 1
-    if not chose.dm and not chose.channel:
-        say(ok=False, why="say where it listens: --server <id> --channel <id>, or --dm")
+    if not chose.dm and not chose.server and not chose.channel:
+        say(ok=False, why="say where it listens: --dm for direct messages, --server <id> "
+                          "for every room in a server, and --channel <id> as well to "
+                          "confine it to one room")
         return 1
     if chose.unknown:
         say(ok=False, why=f"this channel does not understand {' '.join(chose.unknown)}")
@@ -945,20 +947,16 @@ async def check(chose) -> int:
         if chose.dm:
             me = await client.application_info()
             shapes.append(_shape(chose, DMS, f"direct messages to {me.name}", dm=True))
-        if chose.channel:
-            found = await client.fetch_channel(int(chose.channel))
-            guild = getattr(found, "guild", None)
-            if chose.server and guild is not None and str(guild.id) != str(chose.server):
-                say(ok=False, why=f"channel {chose.channel} is not in server {chose.server}")
-                return 1
-            # On the *name*, not on the guild existing. Fetched by id, a channel can come
-            # back attached to a guild that has not been resolved to a name yet — so this
-            # said "#development in " with nothing after it, which reads like something
-            # went missing rather than like there was nothing to say.
-            named = getattr(guild, "name", None)
-            where = f"#{found.name}" + (f" in {named}" if named else "")
-            shapes.append(_shape(chose, ROOMS, where, channel=str(chose.channel),
-                                 server=chose.server))
+        if chose.server or chose.channel:
+            # **A server is the room channel's ordinary scope, and one room is the
+            # narrowing.** `--server` on its own means every room in it — which is what an
+            # agent in a server is for, and what "rooms" says. `--channel` as well confines
+            # it to one, for an owner who wants it in one room and not the next along.
+            where = await _room(client, chose)
+            if where is None:
+                return 1        # `_room` has already said why
+            shapes.append(_shape(chose, ROOMS, where, server=chose.server,
+                                 channel=str(chose.channel) if chose.channel else None))
     except Exception as why:  # noqa: BLE001 — a platform boundary, and the diagnosis
         say(ok=False, why=f"could not reach Discord: {why}")
         return 1
@@ -973,6 +971,30 @@ async def check(chose) -> int:
             ("dm", chose.dm), ("token_from", chose.token_from),
             ("activity", chose.activity)) if value})
     return 0
+
+
+async def _room(client, chose):
+    """What the room channel is pointed at, said the way a person would — or `None`, said.
+
+    Checked rather than assumed, which is the whole of what `--check` is for: an owner
+    finds out that a room is not in the server they named while they are standing at the
+    terminal, rather than at three in the morning when somebody asks the agent something.
+    """
+    if not chose.channel:
+        guild = await client.fetch_guild(int(chose.server))
+        named = getattr(guild, "name", None)
+        return f"every room in {named}" if named else "every room in that server"
+    found = await client.fetch_channel(int(chose.channel))
+    guild = getattr(found, "guild", None)
+    if chose.server and guild is not None and str(guild.id) != str(chose.server):
+        say(ok=False, why=f"channel {chose.channel} is not in server {chose.server}")
+        return None
+    # On the *name*, not on the guild existing. Fetched by id, a channel can come back
+    # attached to a guild that has not been resolved to a name yet — so this said
+    # "#development in " with nothing after it, which reads like something went missing
+    # rather than like there was nothing to say.
+    named = getattr(guild, "name", None)
+    return f"#{found.name}" + (f" in {named}" if named else "")
 
 
 def _shape(chose, suffix: str, describes: str, **where) -> dict:

@@ -199,6 +199,16 @@ class WhichChannelTakesAMessage(unittest.TestCase):
         self.assertFalse(discord.within(direct=True, belongs_to=None, listens_in=1180,
                                         dms=False))
 
+    def test_a_room_channel_given_a_server_answers_in_every_room_of_it(self):
+        """R-DIS-2, R-CAD-15 — a server is what a room channel is ordinarily pointed at,
+        and 'rooms' means the rooms. Naming one is the narrowing, not the ordinary case:
+        an agent in a server that answered in exactly one room of it would be an agent
+        nobody could reach from the room they were already in."""
+        for room in (1180, 9999, 4242):
+            self.assertTrue(discord.within(direct=False, belongs_to=room, listens_in=None,
+                                           dms=False, a_server="9930"),
+                            f"it refused room {room} in the server it was given")
+
     def test_a_room_channel_still_answers_only_in_the_room_it_names(self):
         """R-DIS-2 — narrowing is what naming a place means, and a thread is asked about
         by the channel it was opened in."""
