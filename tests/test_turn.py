@@ -222,14 +222,23 @@ class WhatReachesABrain(WithAnAgentToRunTurnsFor):
         self.assertNotIn("/bo/", told["RUNDESK_CWD"])
         self.assertNotIn("/bo/", told["RUNDESK_PROVIDER_HOME"])
 
-    async def test_a_brain_is_given_a_private_home_of_its_own_under_this_agent(self):
-        """R-AGT-8 — a brain's configuration and sign-in are about an agent and a brain
-        together, and stand outside what the agent loads."""
+    async def test_a_brain_is_told_where_its_own_things_would_go_but_given_no_home(self):
+        """R-AGT-8, R-PRV-3 — an adapter is *told* where a place of its own is, and rundesk
+        does not make one.
+
+        Made eagerly, a real brain does not merely keep a sign-in there: pointed at a
+        directory it builds its whole state tree, tens of megabytes an agent, and starts
+        out signed out so every agent needs its own login. A brain is reached as the
+        machine has it installed; what an adapter wants to keep between turns it makes for
+        itself."""
         said = await self.ask("nosy")
         told = json.loads(self.only(said.run, "text")["text"])["told"]
         home = Path(told["RUNDESK_PROVIDER_HOME"])
-        self.assertTrue(home.is_dir(), "the brain was pointed at a home nobody made")
-        self.assertNotIn(str(agent.home("ava", self.where)), str(home))
+        self.assertFalse(home.exists(), "rundesk built a home no brain asked for")
+        self.assertNotIn(str(agent.home("ava", self.where)), str(home),
+                         "what a brain keeps stands outside what the agent loads")
+        self.assertNotEqual(agent.provider_home("bo", "nosy", self.where), home,
+                            "two agents would keep a brain's things in one place")
 
 
 class WhatATurnRecords(WithAnAgentToRunTurnsFor):

@@ -44,6 +44,10 @@ TERMINAL = "terminal"
 #: Rundesk's own records in an account. Kept apart from the six a brain may report — not
 #: by convention but by construction, since the seam understands only those six and would
 #: keep one of these from an adapter as a record it does not know.
+#: How many lines of what a brain said went wrong are carried back with the outcome. The
+#: whole of it is in the run's own file; this is the tail worth putting in front of a person.
+TROUBLE_KEPT = 20
+
 ADMITTED = "admitted"
 SENT = "sent"
 OUTCOME = "outcome"
@@ -63,6 +67,11 @@ class Outcome:
     tokens: dict = field(default_factory=lambda: {"reported": False})
     #: Where the conversation got to, when the brain reported one and could carry on.
     handle: str | None = None
+    #: Why it failed, in the brain's own words — and the tail of what it said went wrong.
+    #: Carried on the outcome rather than left in a file, because a turn that failed with
+    #: its one actionable line filed where nobody looks is a turn somebody is stuck on.
+    why: str | None = None
+    trouble: list = field(default_factory=list)
 
     @property
     def text(self) -> str:
@@ -97,8 +106,13 @@ async def carry(
     at = provider.program(named)          # raises NotRunnable, before anything is written
     whose = agents.paths(name, where)
     brain = provider.key(named)
+    # **Named, never made.** An adapter is told where a home of its own *would* be and is
+    # free to use it for its own small bookkeeping — but rundesk does not create it, and no
+    # brain is pointed at it. Pointed at one, a real brain does not merely keep a sign-in
+    # there: it builds its whole state tree, to tens of megabytes an agent, and starts out
+    # signed out so every agent needs its own login. An adapter's job is to reach the brain
+    # the machine already has.
     home = agents.provider_home(name, brain, where)
-    home.mkdir(parents=True, exist_ok=True)
     whose["runs"].mkdir(parents=True, exist_ok=True)
 
     can = await provider.capabilities(at, provider.environment(
@@ -131,6 +145,8 @@ async def carry(
             writing.add(event={"type": SENT, "text": prompt})
 
         said: list = []
+        # Kept as well as written down, so what went wrong can be shown to whoever asked.
+        trouble: list = []
         program = process.Program(
             [str(at)],
             env=provider.environment(
@@ -141,7 +157,7 @@ async def carry(
             cwd=whose["workspace"],
             takes_input=True,
             errors_apart=True,
-            on_error=writing.went_wrong,
+            on_error=_noting(writing, trouble),
         )
         result = await _run(program, prompt, writing, said, watching,
                             steer=can["steer"], steering=steering)
@@ -160,7 +176,20 @@ async def carry(
             "lost": result.undelivered, "why": _why(said),
         })
     return Outcome(run=run, ok=ok, reason=result.reason, said=said, tokens=tokens,
-                   handle=handle if kept else None)
+                   handle=handle if kept else None, why=_why(said),
+                   trouble=[one for one in trouble if one.strip()][-TROUBLE_KEPT:])
+
+
+def _noting(writing, trouble: list):
+    """Write down what the brain said went wrong, and keep it to hand as well.
+
+    Written down because it is part of the account of the run; kept because a person who
+    just watched a turn fail should not have to know which file to open to find out why.
+    """
+    def noted(line: str) -> None:
+        trouble.append(line)
+        writing.went_wrong(line)
+    return noted
 
 
 async def _run(program, prompt: str, writing, said: list, watching,

@@ -17,6 +17,12 @@ be told anything once it has started, and its only usage figure is the whole thr
 running total. `app-server` is a conversation over stdin and stdout, and it gives three
 things `exec` cannot:
 
+**It uses the Codex this machine already has.** It does not give Codex a directory of its
+own: pointed at one, Codex materialises its entire state tree there — sqlite databases,
+caches, shell snapshots, sessions — at eighty megabytes an agent, and starts out logged out
+so every agent needs its own `codex login`. Reaching the brain the machine already has is
+the whole job. One sign-in, one copy of it.
+
 1. **A turn can be steered.** `turn/steer` adds words to a turn that is *already running*,
    with the running turn's id as a precondition so a word cannot land in a turn nobody
    meant. Measured: a turn counting to twenty took a change of plan mid-count and finished
@@ -48,12 +54,10 @@ from pathlib import Path
 #: can point at it without this file being edited.
 CODEX = os.environ.get("RUNDESK_CODEX_BIN", "codex")
 
-#: What Codex says when the home it was given holds no sign-in. Recognised so this adapter
-#: can say what to do about it, and for no other reason: **nothing here ever reads, writes,
-#: copies or links a credential.** Codex keeps its sign-in in the home it is given rather
-#: than in a keychain, so a private home starts out logged out, and whether to sign that
-#: home in on its own or to point it at one the owner already has is the owner's decision
-#: and not an adapter's to make quietly on their behalf.
+#: What Codex says when it is not signed in. Recognised so this adapter can say what to do
+#: about it, and for no other reason: **nothing here ever reads, writes, copies or links a
+#: credential.** It uses the Codex this machine already has, signed in the way its owner
+#: signed it in — `codex login`, once, for the machine rather than once per agent.
 LOGGED_OUT = "401 Unauthorized"
 
 #: How much of the machine a turn may touch, in this brain's words. Rundesk says `read` or
@@ -99,7 +103,7 @@ class Codex:
     answer arrives later, notifications arrive whenever they like, and both share one pipe.
     """
 
-    def __init__(self, home: Path, where: str, raw):
+    def __init__(self, where: str, raw):
         self._raw = raw
         self._asked = 0
         self._answers: dict = {}
@@ -116,10 +120,13 @@ class Codex:
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=None,          # straight through: rundesk keeps it, apart, as ours
             text=True, bufsize=1,
-            # Its own sign-in, configuration and session files, for this agent and no
-            # other. Pointed at an empty directory Codex is not logged in, which is
-            # measured rather than assumed.
-            env={**os.environ, "CODEX_HOME": str(home)},
+            # **The Codex that is installed, as it is installed.** Pointed at a directory
+            # of its own, Codex does not merely keep a sign-in there — it materialises its
+            # whole state tree, sqlite databases and caches and shell snapshots included,
+            # to eighty megabytes per agent, and starts out logged out so nothing works
+            # until somebody signs each one in separately. An adapter's job is to reach the
+            # brain the machine already has, not to build it a second one.
+            env=dict(os.environ),
         )
         threading.Thread(target=self._listen, daemon=True).start()
 
@@ -275,11 +282,7 @@ def _went_wrong(said: str) -> None:
     # same thing, so the advice would arrive five times for one fixable problem.
     if LOGGED_OUT in said and not _went_wrong.said_it:
         _went_wrong.said_it = True
-        where = os.environ.get("RUNDESK_PROVIDER_HOME", "")
-        sys.stderr.write(
-            f"this agent's Codex home has no sign-in of its own — sign it in with:\n"
-            f"    CODEX_HOME={where} codex login\n"
-            f"or, to share the one you already have, put a link to your own auth there.\n")
+        sys.stderr.write("this machine's Codex is not signed in — run:  codex login\n")
 
 
 _went_wrong.said_it = False
@@ -319,7 +322,6 @@ def _settings() -> dict:
 
 def carry() -> int:
     """One turn: run Codex, report what it does, and steer anything said into it."""
-    home = Path(os.environ.get("RUNDESK_PROVIDER_HOME") or ".")
     where = os.environ.get("RUNDESK_CWD") or "."
 
     if _findable() is None:
@@ -329,7 +331,6 @@ def carry() -> int:
         say(type="done", ok=False, why="the Codex CLI is not on this machine's path")
         return 1
 
-    home.mkdir(parents=True, exist_ok=True)
     keeping = None
     at = os.environ.get("RUNDESK_RAW")
     if at:
@@ -338,7 +339,7 @@ def carry() -> int:
         except OSError as why:
             sys.stderr.write(f"could not keep what the brain said: {why}\n")
 
-    codex = Codex(home, where, keeping)
+    codex = Codex(where, keeping)
     try:
         return _turn(codex, where)
     finally:

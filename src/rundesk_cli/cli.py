@@ -41,6 +41,11 @@ PUBLISHED_INSTALLER = ("https://github.com/rundesk-ai/rundesk-cli/releases/lates
 #: Where this checkout lives — the thing an update replaces in place.
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
+#: How many lines of what a brain said went wrong a failed turn puts on the screen. A tail
+#: rather than all of it: a brain that failed noisily can say a great deal, and what is
+#: worth reading is almost always the last of it.
+_TROUBLE_LINES = 6
+
 #: How many of a gateway's last lines `logs` shows when not told otherwise.
 LOG_LINES = 40
 
@@ -815,7 +820,15 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
     said.done()
     print(f"        {name}/{outcome.run} — {_cost(outcome.tokens)}", file=sys.stderr)
     if not outcome.ok:
-        print(f"{name}: TURN FAILED — {outcome.reason}", file=sys.stderr)
+        print(f"{name}: TURN FAILED — {outcome.why or outcome.reason}", file=sys.stderr)
+        # What the brain said went wrong, on the screen rather than only in a file. It is
+        # kept apart from what the brain *reported* — that is the whole point of the two
+        # streams — but keeping it apart is not the same as keeping it secret, and a turn
+        # that failed with its one actionable line filed somewhere nobody looks is a turn
+        # somebody is stuck on.
+        for line in outcome.trouble[-_TROUBLE_LINES:]:
+            print(f"        {line}", file=sys.stderr)
+        print(f"        the whole of it: rundesk agents {name}", file=sys.stderr)
     return 0 if outcome.ok else 1
 
 
