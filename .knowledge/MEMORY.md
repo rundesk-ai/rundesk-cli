@@ -38,8 +38,8 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 - **`RUNDESK_HOME` does not redirect where agents live — `RUNDESK_AGENTS_DIR` does.** The name
   reads like the root of everything and is not: `agent.py` resolves the agents root from
   `RUNDESK_AGENTS_DIR` alone, falling back to `~/.rundesk/agents`. So a scratch run that sets
-  `RUNDESK_HOME`, `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR`, `RUNDESK_SCHEDULES_DIR` and
-  `RUNDESK_JOBS_DIR` — which looks exhaustive — still writes real agents into the owner's own
+  `RUNDESK_HOME`, `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR` and `RUNDESK_JOBS_DIR` — which looks
+  exhaustive — still writes real agents into the owner's own
   `~/.rundesk/agents`, and `rundesk add` reports success while doing it. Three were created that
   way and had to be removed with `rundesk remove`. Set `RUNDESK_AGENTS_DIR` too, and check
   `find $SCRATCH` actually has something in it before believing a command was isolated.
@@ -81,7 +81,7 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   directory the installer was told to create.
 - A supposedly isolated install/uninstall gate with only `RUNDESK_INSTALL_DIR` and `RUNDESK_BIN_DIR`
   redirected still discovers and stops **live gateways** through the ambient state directories. Point
-  `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR`, `RUNDESK_SCHEDULES_DIR` and `RUNDESK_JOBS_DIR` at scratch too
+  `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR`, `RUNDESK_AGENTS_DIR` and `RUNDESK_JOBS_DIR` at scratch too
   before running the destructive half of the gate.
 - **A `Gateway` built without `root=` asks whether the *developer's checkout* fits**, so with anything in
   `requirements.txt` every case that claims a name refuses on a machine that has run the installer, and
@@ -96,9 +96,6 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 - **`gateway.note()` makes no directory and swallows its `OSError`**, so arranging a log in a scratch
   directory that does not exist yet leaves you with silence and a `FileNotFoundError` two assertions
   later, in the reader. Make the log directory in `setUp`; do not assume the first write makes it.
-- Running `tests/test_gateway.py` without `RUNDESK_SCHEDULES_DIR` redirected writes stray `<name>.seen.json`
-  into the owner's real `~/.rundesk/schedules` — `RUNDESK_RUN_DIR` and `RUNDESK_LOG_DIR` alone are not
-  enough, because the schedule checkpoint lives beside the schedules, not with the run state.
 
 - **A capability gate and a caller-supplied-object gate look interchangeable right up until
   the caller has nothing to supply.** What a brain said it can do decided one half of how a

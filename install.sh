@@ -135,7 +135,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   #: went wrong matters most, and it was being deleted by the command someone runs to fix
   #: the trouble. An agent's home is stronger still: it is what its owner wrote, and
   #: removing the program is not asking for it to go.
-  KEPT_FROM_INSTALL_DIR=(logs schedules agents)
+  KEPT_FROM_INSTALL_DIR=(logs agents)
   # Refused rather than continued: deleting the command while a gateway is still running
   # leaves an agent nobody can reach and takes away the very thing that could stop it.
   if ! stop_gateways; then

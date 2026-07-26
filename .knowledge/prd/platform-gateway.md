@@ -1,7 +1,7 @@
 ---
 id: GW
 name: The gateway
-last_verified: 2026-07-25
+last_verified: 2026-07-26
 ---
 
 ## What this is
@@ -51,13 +51,13 @@ cycled without disturbing the rest.
 | ✅ | R-GW-29 | A gateway that takes its name while another is sweeping keeps its work and its record | `a gateway that holds its name keeps its work and its record`, `a gateway cannot claim its name while a sweep is reckoning with it`, `a name that cannot be asked about is left alone` |
 | ✅ | R-GW-31 | A gateway is taken away completely, its job included, through the command line | `removing a gateway takes its job and what was kept for it`, `removing a gateway that was never there says so rather than failing`, `forgetting a gateway that was never there takes nothing and says so`, `forgetting a gateway leaves every other gateway alone`, `remove without a name answers in our words`, `there is one way to remove and stop is not it` |
 | ✅ | R-GW-32 | Removing a gateway that anything still holds takes nothing at all | `removing a gateway that is running removes nothing`, `removing a gateway the machine will not let go of removes nothing`, `forgetting a gateway never unlinks a lock something else is holding`, `removing a gateway belonging to another install is refused` |
-| ✅ | R-GW-33 | Taking a gateway away takes what it was doing, and what it wrote only when that is asked for | `forgetting a gateway keeps what it wrote and what was scheduled`, `forgetting a gateway with its history takes all of it` |
+| ✅ | R-GW-33 | Taking a gateway away takes what it was doing, and what it wrote only when that is asked for | `forgetting a gateway keeps what it wrote`, `forgetting a gateway with its history takes all of it` |
 | ✅ | R-GW-18 | What a gateway wrote about what happened outlives the gateway | `what a gateway wrote outlives the gateway`, `a gateway records coming up and going down`, `work that ended badly is recorded with its last words`, `a gateway that refused to start says why in writing`, `what it writes goes beside the run directory by default`, `a log that cannot be read is reported rather than crashing`, `what was swept from a dead gateway is recorded`, `work that was refused as a duplicate is recorded`, `a gateway that cannot say it is alive writes that down and carries on` |
 | ✅ | R-GW-34 | A supervisor job's state is reported separately from gateway process state | `a loaded job with no process reports both facts`, `a running process with no loaded job reports both facts`, `an unanswered job query is reported as unknown`, `a loaded same name job does not claim the gateway process` |
 | ✅ | R-GW-35 | What a gateway writes about itself is bounded wherever it lands | `what a gateway writes is bounded wherever it lands`, `a gateway a person is watching still shows its working`, `a stream that cannot say whether it is a terminal is not one` |
 | ✅ | R-GW-36 | Everything a gateway said is readable through the command, whatever rotated it or wrote it down | `a gateways whole account is readable however it was rotated`, `what never reached the logger is readable too`, `a startup failure that never reached the logger is still shown`, `the lines that explain the tail are shown with it`, `who wrote a line is said when more than one did`, `one source can be asked for on its own` |
 | ✅ | R-GW-37 | A change whose record could not be written is not reported as a plain success | `a change that could not be written down says so`, `the first line written in a clean home makes somewhere to put it`, `a change that could not be logged is not reported as a plain success` |
-| ✅ | R-GW-38 | A gateway that survives only in what it left behind is still discoverable | `a gateway that survives only in what it left is still found`, `a name nothing of ours wrote is passed over`, `a gateway that survives only as history is still listed` |
+| ✅ | R-GW-38 | A gateway that survives only in the account of what it never finished is still discoverable | `a gateway that survives only in what it left is still found`, `a name nothing of ours wrote is passed over`, `a gateway that survives only as history is still listed` |
 | ✅ | R-GW-39 | Work that never finished is readable without opening a file by hand | `what never finished is readable without opening a file`, `an agent with nothing unfinished says nothing about it`, `each thing that never finished is shown with its time and reason` |
 | ✅ | R-GW-40 | Work that is running again is no longer reported as never having finished | `work that is running again is no longer unfinished`, `other work that never finished is left standing` |
 

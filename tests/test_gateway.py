@@ -57,10 +57,6 @@ class WithARunDirectory(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(shutil.rmtree, self.logs, True)
         self.addCleanup(os.environ.pop, "RUNDESK_LOG_DIR", None)
         os.environ["RUNDESK_LOG_DIR"] = str(self.logs)
-        self.schedules = Path(tempfile.mkdtemp(prefix="rundesk-sched-"))
-        self.addCleanup(shutil.rmtree, self.schedules, True)
-        self.addCleanup(os.environ.pop, "RUNDESK_SCHEDULES_DIR", None)
-        os.environ["RUNDESK_SCHEDULES_DIR"] = str(self.schedules)
         # An install of its own, and an empty one: claiming a name asks whether this
         # install fits the Python running it, and a gateway built without a root asks
         # that of the developer's real checkout. With dependencies declared, they live
@@ -89,8 +85,7 @@ class WithARunDirectory(unittest.IsolatedAsyncioTestCase):
         return kept
 
     def made(self, name: str = gateway.DEFAULT_NAME, records=False) -> gateway.Gateway:
-        gw = gateway.Gateway(name, where=self.where, logs=self.logs, schedules=self.schedules,
-                             root=self.root,
+        gw = gateway.Gateway(name, where=self.where, logs=self.logs, root=self.root,
                              records=self.records if records is False else records)
         self.addCleanup(gw.release)
         return gw
@@ -1410,8 +1405,8 @@ class AProgramTheGatewayStartsReadsWhatTheGatewayReads(WithARunDirectory):
         agent.add("probe", self.agents)
 
     def served(self, name: str = gateway.DEFAULT_NAME) -> gateway.Gateway:
-        gw = gateway.Gateway(name, where=self.where, logs=self.logs,
-                             schedules=self.schedules, root=self.root, agents=self.agents)
+        gw = gateway.Gateway(name, where=self.where, logs=self.logs, root=self.root,
+                             agents=self.agents)
         self.addCleanup(gw.release)
         return gw
 
@@ -1890,7 +1885,7 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
         self._left_behind()
         gw = self.made()
         gw.claim()
-        said = gateway.what_was_interrupted("gateway", self.schedules)
+        said = gateway.what_was_interrupted("gateway", self.logs)
         self.assertIn("turn", said, "work that never finished was dropped in silence")
         self.assertTrue(said["turn"]["ended"], "it is gone, and was not said to be")
         self.assertIn("gone", said["turn"]["why"])
@@ -1904,7 +1899,7 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
         self._left_behind(pgid=os.getpgrp(), since=None)
         gw = self.made()
         gw.claim()
-        said = gateway.what_was_interrupted("gateway", self.schedules)
+        said = gateway.what_was_interrupted("gateway", self.logs)
         self.assertFalse(said["turn"]["ended"], "something still running was called gone")
         self.assertIn("ours", said["turn"]["why"])
 
@@ -1914,7 +1909,7 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
             {"name": "gateway", "working": {"turn": {"since": "x"}}}))
         gw = self.made()
         gw.claim()
-        said = gateway.what_was_interrupted("gateway", self.schedules)
+        said = gateway.what_was_interrupted("gateway", self.logs)
         self.assertIn("turn", said)
         self.assertIsNone(said["turn"]["pgid"])
 
@@ -1924,8 +1919,8 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
         self._left_behind(name="abandoned", work="its-turn")
         gw = self.made("mine")
         gw.claim()
-        self.assertIn("its-turn", gateway.what_was_interrupted("abandoned", self.schedules))
-        self.assertEqual({}, gateway.what_was_interrupted("mine", self.schedules),
+        self.assertIn("its-turn", gateway.what_was_interrupted("abandoned", self.logs))
+        self.assertEqual({}, gateway.what_was_interrupted("mine", self.logs),
                          "another gateway's interruption was filed under ours")
 
     async def test_work_a_shutdown_could_not_end_is_answered_for(self):
@@ -1944,7 +1939,7 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
         self.addCleanup(setattr, process, "end_all", stubborn)
         process.end_all = would_not_go
         self.assertFalse(await asyncio.wait_for(gw._go(), 15))
-        said = gateway.what_was_interrupted(gw.name, self.schedules)
+        said = gateway.what_was_interrupted(gw.name, self.logs)
         self.assertIn("stubborn", said, "it went with work running and told nothing")
         self.assertFalse(said["stubborn"]["ended"])
         process.end_all = stubborn
@@ -1959,7 +1954,7 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
         gw.claim()
         gw.release()
         self.assertFalse((self.where / "gateway.json").exists())
-        self.assertIn("turn", gateway.what_was_interrupted("gateway", self.schedules))
+        self.assertIn("turn", gateway.what_was_interrupted("gateway", self.logs))
 
     async def test_work_a_successor_could_not_end_is_still_named_in_its_record(self):
         """R-GW-16, R-GW-23 — refusing to *claim* it was ended is only half of it.
@@ -1994,17 +1989,17 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
         self.addCleanup(setattr, gateway, "KEPT_INTERRUPTIONS", gateway.KEPT_INTERRUPTIONS)
         gateway.KEPT_INTERRUPTIONS = 3
         for n in range(10):
-            gateway._note_interrupted("gateway", self.schedules, f"turn-{n}", "because")
-        said = gateway.what_was_interrupted("gateway", self.schedules)
+            gateway._note_interrupted("gateway", self.logs, f"turn-{n}", "because")
+        said = gateway.what_was_interrupted("gateway", self.logs)
         self.assertEqual(3, len(said), "it kept every interruption there had ever been")
         self.assertIn("turn-9", said, "it kept the oldest and threw away the newest")
 
     async def test_one_gateway_noting_an_interruption_does_not_erase_anothers(self):
         """R-GW-23 — a gateway sweeping an abandoned name writes into *that* name's file,
         so two writers working from their own snapshots is a real shape here."""
-        gateway._note_interrupted("shared", self.schedules, "first", "because")
-        gateway._note_interrupted("shared", self.schedules, "second", "because")
-        said = gateway.what_was_interrupted("shared", self.schedules)
+        gateway._note_interrupted("shared", self.logs, "first", "because")
+        gateway._note_interrupted("shared", self.logs, "second", "because")
+        said = gateway.what_was_interrupted("shared", self.logs)
         self.assertEqual({"first", "second"}, set(said), "one write erased the other")
 
 
@@ -2032,8 +2027,7 @@ sys.path.insert(0, sys.argv[1])
 from rundesk import gateway
 
 where, name, ready, stop = Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]), Path(sys.argv[5])
-mine = gateway.Gateway(name, where=where, logs=Path(sys.argv[6]), schedules=Path(sys.argv[7]),
-                       root=Path(sys.argv[8]))
+mine = gateway.Gateway(name, where=where, logs=Path(sys.argv[6]), root=Path(sys.argv[7]))
 mine.claim()
 work = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"],
                         start_new_session=True)
@@ -2276,7 +2270,7 @@ class ANameIsTakenNotAskedAbout(WithARunDirectory):
         stop, told = ready / "stop", ready / "ready"
         child = subprocess.Popen(
             [PY, "-c", HOLDS_ITS_NAME, str(ROOT / "src"), str(self.where), name,
-             str(told), str(stop), str(self.logs), str(self.schedules), str(self.root)],
+             str(told), str(stop), str(self.logs), str(self.root)],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
         )
         self.addCleanup(ended, child)
@@ -2294,7 +2288,7 @@ class ANameIsTakenNotAskedAbout(WithARunDirectory):
         whole process tree, and the agent went on holding its name throughout."""
         working = self.running_gateway("busy")
 
-        swept = gateway._sweep_strays(self.where, "mine", self.made("mine").log, self.schedules)
+        swept = gateway._sweep_strays(self.where, "mine", self.made("mine").log, self.logs)
 
         self.assertEqual([], swept, "an ordinary start swept a gateway that is up")
         self.assertTrue((self.where / "busy.json").exists(),
@@ -2326,7 +2320,7 @@ class ANameIsTakenNotAskedAbout(WithARunDirectory):
         gateway._sweep_predecessor = waits_while_holding_the_name
         sweeping = threading.Thread(
             target=gateway._sweep_strays,
-            args=(self.where, "mine", self.made("mine").log, self.schedules), daemon=True)
+            args=(self.where, "mine", self.made("mine").log, self.logs), daemon=True)
         sweeping.start()
         self.addCleanup(sweeping.join, 30)
         self.addCleanup(carry_on.touch)
@@ -2336,7 +2330,7 @@ class ANameIsTakenNotAskedAbout(WithARunDirectory):
         self.assertTrue(inside.exists(), "the sweep never got as far as reckoning")
 
         claiming = gateway.Gateway("target", where=self.where, logs=self.logs,
-                                   schedules=self.schedules, root=self.root)
+                                   root=self.root)
         self.addCleanup(claiming.release)
         with self.assertRaises(gateway.AlreadyRunning):
             claiming.claim()
@@ -2352,7 +2346,7 @@ class ANameIsTakenNotAskedAbout(WithARunDirectory):
         lock.chmod(0o000)
         self.addCleanup(lock.chmod, 0o600)
 
-        swept = gateway._sweep_strays(self.where, "mine", self.made("mine").log, self.schedules)
+        swept = gateway._sweep_strays(self.where, "mine", self.made("mine").log, self.logs)
 
         self.assertEqual([], swept, "it acted on a name it could not ask about")
         self.assertTrue((self.where / "guarded.json").exists(),
@@ -2394,7 +2388,7 @@ class WhatTwoWritersDoToOneFile(WithARunDirectory):
         start = self.scratch() / "go"
         running = [
             subprocess.Popen(
-                [PY, "-c", NOTES_INTERRUPTIONS, str(ROOT / "src"), str(self.schedules),
+                [PY, "-c", NOTES_INTERRUPTIONS, str(ROOT / "src"), str(self.logs),
                  f"writer{n}", str(self.EACH), str(start)],
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
             )
@@ -2410,7 +2404,7 @@ class WhatTwoWritersDoToOneFile(WithARunDirectory):
             _, went_wrong = one.communicate(timeout=60)
             self.assertEqual(0, one.returncode, went_wrong)
 
-        said = gateway.what_was_interrupted("shared", self.schedules)
+        said = gateway.what_was_interrupted("shared", self.logs)
         wanted = {f"writer{n}-{m}" for n in range(self.WRITERS) for m in range(self.EACH)}
         self.assertLessEqual(len(wanted), gateway.KEPT_INTERRUPTIONS,
                              "the case is only about lost writes, so it stays under the cap")
@@ -2420,10 +2414,10 @@ class WhatTwoWritersDoToOneFile(WithARunDirectory):
     def test_a_writer_that_cannot_read_the_file_changes_nothing_and_does_not_stop_a_start(self):
         """R-GW-27, R-SCH-17 — the history is worth less than the gateway. It is not worth
         so little that a file nobody can read is replaced with one entry."""
-        target = gateway.interrupted_path("shared", self.schedules)
+        target = gateway.interrupted_path("shared", self.logs)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text('{"turn": {"at": "2026-07-25 09:00",,}}')
-        gateway._note_interrupted("shared", self.schedules, "new", "because")
+        gateway._note_interrupted("shared", self.logs, "new", "because")
         self.assertEqual('{"turn": {"at": "2026-07-25 09:00",,}}', target.read_text(),
                          "it wrote one entry over a file it could not read")
 
@@ -2436,7 +2430,7 @@ class WhatTwoWritersDoToOneFile(WithARunDirectory):
         real_fsync = os.fsync
         os.fsync = lambda fd: (asked.append(fd), real_fsync(fd))[1]
 
-        gateway._note_interrupted("shared", self.schedules, "turn", "because")
+        gateway._note_interrupted("shared", self.logs, "turn", "because")
         self.assertTrue(asked, "what has already happened was written without waiting for it")
 
         asked.clear()
@@ -2453,31 +2447,30 @@ class TakingAGatewayAway(WithARunDirectory):
             "record": self.where / f"{name}.json",
             "lock": self.where / f"{name}.lock",
             "log": self.logs / f"{name}.log",
-            "seen": self.schedules / f"{name}.seen.json",
-            "interrupted": self.schedules / f"{name}.interrupted.json",
+            "interrupted": self.logs / f"{name}.interrupted.json",
         }
         for path in made.values():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("{}")
         return made
 
-    def test_forgetting_a_gateway_keeps_what_it_wrote_and_what_was_scheduled(self):
+    def test_forgetting_a_gateway_keeps_what_it_wrote(self):
         """R-GW-31, R-GW-18 — an owner tidying a name out of their machine's background
-        items has not asked to lose the account of what it did."""
+        items has not asked to lose the account of what it did.
+
+        What it was scheduled to do is not here to keep or take: that is a row its agent
+        keeps, and removing the agent is what takes it (R-AGW-4)."""
         made = self.kept_for("test2")
-        gateway.forget("test2", self.where, self.schedules, self.logs)
+        gateway.forget("test2", self.where, self.logs)
         for still in ("log", "interrupted"):
             self.assertTrue(made[still].exists(), f"removing a gateway took its {still}")
         self.assertFalse(made["record"].exists(), "it left behind what the gateway was doing")
         self.assertFalse(made["lock"].exists(), "it left the name looking as though it exists")
-        self.assertFalse(made["seen"].exists(),
-                         "it left a checkpoint that would report schedules missed while "
-                         "the gateway did not exist")
 
     def test_forgetting_a_gateway_with_its_history_takes_all_of_it(self):
         """R-GW-31 — the other half, so "keeps it" cannot pass by never removing anything."""
         made = self.kept_for("test2")
-        gateway.forget("test2", self.where, self.schedules, self.logs, history=True)
+        gateway.forget("test2", self.where, self.logs, history=True)
         for path in made.values():
             self.assertFalse(path.exists(), f"--purge left {path.name} behind")
 
@@ -2491,18 +2484,18 @@ class TakingAGatewayAway(WithARunDirectory):
         self.addCleanup(os.close, holding)
         fcntl.flock(holding, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
-        gateway.forget("busy", self.where, self.schedules, self.logs)
+        gateway.forget("busy", self.where, self.logs)
 
         self.assertTrue(made["lock"].exists(), "it took a name another process was holding")
 
     def test_forgetting_a_gateway_that_was_never_there_takes_nothing_and_says_so(self):
         """R-GW-31 — asked twice, or for a name that never existed, is not an error."""
-        self.assertEqual([], gateway.forget("never-was", self.where, self.schedules, self.logs))
+        self.assertEqual([], gateway.forget("never-was", self.where, self.logs))
 
     def test_forgetting_a_gateway_leaves_every_other_gateway_alone(self):
         """R-GW-31 — one name's removal is one name's."""
         mine, theirs = self.kept_for("mine"), self.kept_for("theirs")
-        gateway.forget("mine", self.where, self.schedules, self.logs, history=True)
+        gateway.forget("mine", self.where, self.logs, history=True)
         for path in theirs.values():
             self.assertTrue(path.exists(), f"removing one gateway took another's {path.name}")
         self.assertFalse(mine["record"].exists())
@@ -2585,7 +2578,7 @@ class WhatCannotBeReadIsNotEmpty(WithARunDirectory):
         record = self.where / "abandoned.json"
         record.write_text('{"working": {"turn": {"pgid": 4242,,}}}')
         (self.where / "abandoned.lock").touch()
-        swept = gateway._sweep_strays(self.where, "mine", self.made("mine").log, self.schedules)
+        swept = gateway._sweep_strays(self.where, "mine", self.made("mine").log, self.logs)
         self.assertEqual([], swept, "it claimed to have swept a record it could not read")
         self.assertTrue(record.exists(), "it deleted the only record naming abandoned work")
 
@@ -2689,41 +2682,44 @@ class FindingAGatewayByWhatItLeftBehind(WithARunDirectory):
 
     def test_a_gateway_that_survives_only_in_what_it_left_is_still_found(self):
         """R-GW-38 — its record was cleared when it stopped and its agent was taken away,
-        so the one place it exists is beside its schedules. That is the name an owner
-        wants after a crash, and every listing left it out."""
-        (self.schedules / "vanished.interrupted.json").write_text('{"turn": {"ended": false}}')
-        (self.schedules / "also-here.ran.json").write_text("{}")
-        self.assertEqual(["also-here", "vanished"], gateway.remembered(self.schedules),
+        so the one place it exists is the account of what it never finished. That is the name
+        an owner wants after a crash, and every listing left it out.
+
+        What it was *scheduled* to do no longer survives losing its agent: schedules are rows
+        an agent keeps, so an agent that is gone takes them with it."""
+        (self.logs / "vanished.interrupted.json").write_text('{"turn": {"ended": false}}')
+        (self.logs / "also-here.interrupted.json").write_text("{}")
+        self.assertEqual(["also-here", "vanished"], gateway.remembered(self.logs),
                          "a gateway with nothing left but its history was invisible")
 
     def test_a_name_nothing_of_ours_wrote_is_passed_over(self):
         """R-GW-38 — the directory may be overridden onto somewhere shared, and a name
         that could never be a gateway's is somebody else's file rather than a gateway."""
-        (self.schedules / "not a gateway name.json").write_text("{}")
-        self.assertEqual([], gateway.remembered(self.schedules),
+        (self.logs / "not a gateway name.json").write_text("{}")
+        self.assertEqual([], gateway.remembered(self.logs),
                          "it read somebody else's file as a gateway")
 
     async def test_work_that_is_running_again_is_no_longer_unfinished(self):
         """R-GW-40 — entries were keyed by work and never cleared, so work interrupted
         once in March was still listed in July beside work interrupted a minute ago."""
-        gateway._note_interrupted("gateway", self.schedules, "schedule:nightly",
+        gateway._note_interrupted("gateway", self.logs, "schedule:nightly",
                                   "the gateway it was running under is gone", ended=True)
         gw = self.made()
         gw.claim()
         await gw.start([PY, "-c", "pass"], as_name="schedule:nightly")
-        self.assertEqual({}, gateway.what_was_interrupted("gateway", self.schedules),
+        self.assertEqual({}, gateway.what_was_interrupted("gateway", self.logs),
                          "work that is running again was still reported as unfinished")
 
     async def test_other_work_that_never_finished_is_left_standing(self):
         """R-GW-40 — resolving one entry must not tidy away the rest, which is the whole
         of what anybody is asking this store."""
         for work in ("schedule:nightly", "schedule:weekly"):
-            gateway._note_interrupted("gateway", self.schedules, work, "gone", ended=True)
+            gateway._note_interrupted("gateway", self.logs, work, "gone", ended=True)
         gw = self.made()
         gw.claim()
         await gw.start([PY, "-c", "pass"], as_name="schedule:nightly")
         self.assertEqual(["schedule:weekly"],
-                         sorted(gateway.what_was_interrupted("gateway", self.schedules)),
+                         sorted(gateway.what_was_interrupted("gateway", self.logs)),
                          "resolving one entry took another with it")
 
 

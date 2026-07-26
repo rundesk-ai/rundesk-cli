@@ -381,15 +381,17 @@ class TheJobCarriesWhereThingsAre(WithAJobDirectory):
         which reads as a gateway that will not start, however many times you try."""
         import os
         # Every place rundesk can be pointed at. Asserted as a set rather than one by
-        # one, because the fault this catches is one being *left out*: schedules was, and
-        # a supervised gateway then read the default while `rundesk schedules add` wrote
-        # where it was pointed — a schedule added, listed and shown as due by the command
-        # line, and unknown to the gateway that would have run it.
+        # one, because the fault this catches is one being *left out*: where schedules were
+        # kept was, and a supervised gateway then read the default while `rundesk schedules
+        # add` wrote where it was pointed — a schedule added, listed and shown as due by the
+        # command line, and unknown to the gateway that would have run it. That one is gone
+        # rather than fixed: a schedule is a row an agent keeps, so where agents are is the
+        # whole of what has to agree.
         where = {
             "RUNDESK_RUN_DIR": "/tmp/rd-test-run",
             "RUNDESK_LOG_DIR": "/tmp/rd-test-logs",
             "RUNDESK_JOBS_DIR": "/tmp/rd-test-jobs",
-            "RUNDESK_SCHEDULES_DIR": "/tmp/rd-test-schedules",
+            "RUNDESK_AGENTS_DIR": "/tmp/rd-test-agents",
         }
         for name, value in where.items():
             self.addCleanup(os.environ.pop, name, None)
@@ -430,12 +432,10 @@ class TheJobCarriesWhereThingsAre(WithAJobDirectory):
             "ava", self.root,
             logs=pathlib.Path("/nowhere/agents/ava/logs"),
             run=pathlib.Path("/nowhere/agents/ava/run"),
-            schedules=pathlib.Path("/nowhere/agents/ava/schedules"),
             agents=pathlib.Path("/nowhere/agents"),
         )["EnvironmentVariables"]
         self.assertEqual("/nowhere/agents/ava/run", said["RUNDESK_RUN_DIR"])
         self.assertEqual("/nowhere/agents/ava/logs", said["RUNDESK_LOG_DIR"])
-        self.assertEqual("/nowhere/agents/ava/schedules", said["RUNDESK_SCHEDULES_DIR"])
         self.assertEqual("/nowhere/agents", said["RUNDESK_AGENTS_DIR"])
 
 

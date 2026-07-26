@@ -751,7 +751,6 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
         print(f"{args.name}/{one}: CHANNEL UNAVAILABLE — {why}", file=sys.stderr)
     try:
         return asyncio.run(gateways.Gateway(args.name, where=whose.run, logs=whose.logs,
-                                            schedules=whose.schedules,
                                             reachable=reachable,
                                             # Carried in, the same value the machine's job
                                             # is given, so a program the gateway starts
@@ -805,7 +804,7 @@ def cmd_start(args: argparse.Namespace, gateways, machine, agents) -> int:
         # that resolved anywhere other than where the command that started it wrote is the
         # split that has a schedule silently never run (R-AGT-9).
         said = machine.install(name, run=whose.run, logs=whose.logs,
-                               schedules=whose.schedules, agents=agents.agents_home())
+                               agents=agents.agents_home())
     except machine.NotOurs as why:
         print(f"{name}: FAILED — {why}", file=sys.stderr)
         return 1
@@ -1209,8 +1208,7 @@ def cmd_remove(args: argparse.Namespace, gateways, machine, agents) -> int:
         except machine.NotOurs as why:
             print(f"{name}: FAILED — {why}", file=sys.stderr)
             return 1
-    taken = gateways.forget(name, where=whose.run, schedules=whose.schedules,
-                            logs=whose.logs, history=True)
+    taken = gateways.forget(name, where=whose.run, logs=whose.logs, history=True)
     if agents.exists(name):
         taken += agents.forget(name)
     if not had_job and not taken:
@@ -1394,7 +1392,7 @@ def cmd_agents(args: argparse.Namespace, gateways, machine, agents) -> int:
             # answering that question has existed since work could be interrupted at
             # all, and nothing in the product ever read it back: "what did not finish"
             # meant reading JSON out of a directory by hand, during an incident.
-            str(len(gateways.what_was_interrupted(name, agents.resolved(name).schedules)) or "-"),
+            str(len(gateways.what_was_interrupted(name, agents.resolved(name).logs)) or "-"),
         ))
     _as_table(("AGENT", "STATE", "PID", "UPTIME", "LAUNCHD JOB", "VERSION", "WORK", "UNFINISHED"),
               rows)
@@ -1430,7 +1428,7 @@ def _one_agent(name: str, gateways, machine, agents) -> int:
     # whether rundesk could show the work was definitely gone: one of them is over, and
     # the other may still be running with nobody owning it, which is a different problem
     # and a different thing to do about it.
-    unfinished = gateways.what_was_interrupted(name, agents.resolved(name).schedules)
+    unfinished = gateways.what_was_interrupted(name, agents.resolved(name).logs)
     if unfinished:
         print()
         _as_table(("UNFINISHED", "AT", "ENDED", "WHY"), [

@@ -259,12 +259,11 @@ class RemovalTests(Sandbox):
         trouble. The command someone runs to fix the trouble was deleting the account of
         what the trouble was (R-GW-18)."""
         wrote = self.home / ".rundesk" / "logs"
-        scheduled = self.home / ".rundesk" / "schedules"
-        for made in (wrote, scheduled):
-            made.mkdir(parents=True)
+        wrote.mkdir(parents=True)
         (wrote / "gateway.log").write_text("what happened\n")
-        (scheduled / "gateway.json").write_text('[{"name": "nightly"}]\n')
-        (scheduled / "gateway.ran.json").write_text('{"nightly": {"outcome": "finished"}}\n')
+        # The account of what a gateway never finished stands with its log, and is the one
+        # thing beside it that is still a file rather than a row.
+        (wrote / "gateway.interrupted.json").write_text('{"turn": {"ended": false}}\n')
 
         self.install()
         kept = self.uninstall()
@@ -272,9 +271,8 @@ class RemovalTests(Sandbox):
         self.assertEqual(kept.returncode, 0, kept.stderr)
         self.assertEqual("what happened\n", (wrote / "gateway.log").read_text(),
                          "an ordinary uninstall took the gateway's log")
-        self.assertTrue((scheduled / "gateway.json").exists(), "it took the owner's schedules")
-        self.assertTrue((scheduled / "gateway.ran.json").exists(),
-                        "it took the account of what the schedules did")
+        self.assertTrue((wrote / "gateway.interrupted.json").exists(),
+                        "it took the account of what never finished")
         self.assertIn("--purge", kept.stdout, "it never said how to take them")
 
     def test_removing_rundesk_keeps_every_agents_home(self):
@@ -284,7 +282,7 @@ class RemovalTests(Sandbox):
         home = self.home / ".rundesk" / "agents" / "ava" / "home"
         (home / "workspace").mkdir(parents=True)
         (home / "SOUL.md").write_text("what ava is for, in my own words\n")
-        (self.home / ".rundesk" / "agents" / "ava" / "schedules").mkdir(parents=True)
+        (self.home / ".rundesk" / "agents" / "ava" / "logs").mkdir(parents=True)
 
         self.install()
         kept = self.uninstall()

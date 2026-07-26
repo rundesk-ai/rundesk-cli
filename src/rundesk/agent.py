@@ -240,14 +240,13 @@ def resolved(name: str, where: Path | None = None) -> Where:
     return Where(run_home(name, where), logs_home(name, where))
 
 
-def standing_before(name: str, logs: Path | None = None,
-                    schedules: Path | None = None) -> list[Path]:
+def standing_before(name: str, logs: Path | None = None) -> list[Path]:
     """What a gateway of this name wrote before there were agents to own it.
 
     Read rather than moved, so a command can say what adopting would take on before it
     takes it on, and say nothing at all when there is nothing there.
     """
-    return sorted(path for was, _ in _wrote_before(name, logs, schedules)
+    return sorted(path for was, _ in _wrote_before(name, logs)
                   for path in _the_file_and_what_it_rotated_into(was))
 
 
@@ -310,23 +309,22 @@ def add(name: str, where: Path | None = None) -> list[str]:
 
 
 def adopt(name: str, where: Path | None = None, logs: Path | None = None,
-          schedules: Path | None = None, run: Path | None = None) -> list[str]:
+          run: Path | None = None) -> list[str]:
     """Move what a gateway of this name wrote before it had an agent into the agent's own.
 
     Only ever asked for: nothing here runs on its own, and nothing moves until an owner
     types the name.
 
     **The name is held for as long as the moving takes**, and nothing moves if it cannot be.
-    A gateway binds the directory it reads schedules from once, when it starts, and never
-    looks again — so moving those files out from under a live one leaves it reading an empty
-    directory for the rest of its life while every command reads the new one, and a schedule
-    it was going to run silently never runs. Asking whether it is running and then moving is
-    two decisions with a gap between them, and a gateway can claim the name inside that gap;
-    holding the name is what makes them one (R-AGT-9).
+    A gateway binds the directory it writes in once, when it starts, and never looks again —
+    so moving those files out from under a live one leaves it writing where nothing reads for
+    the rest of its life. Asking whether it is running and then moving is two decisions with a
+    gap between them, and a gateway can claim the name inside that gap; holding the name is
+    what makes them one (R-AGT-9).
 
-    The log and the schedules move; what the gateway was *doing* does not, because a
-    stopped gateway is not doing anything and its lock is an empty file whose name the next
-    claim makes again.
+    The log moves, and the account of what the gateway never finished with it; what the
+    gateway was *doing* does not, because a stopped gateway is not doing anything and its
+    lock is an empty file whose name the next claim makes again.
     """
     goes = {"logs": logs_home(name, where)}
     moved = []
@@ -334,7 +332,7 @@ def adopt(name: str, where: Path | None = None, logs: Path | None = None,
         if not held:
             raise InUse(
                 f"a gateway named '{name}' is still running, so nothing of its was moved")
-        for was, into in _wrote_before(name, logs, schedules):
+        for was, into in _wrote_before(name, logs):
             for path in _the_file_and_what_it_rotated_into(was):
                 goes[into].mkdir(parents=True, exist_ok=True)
                 shutil.move(str(path), str(goes[into] / path.name))
@@ -342,7 +340,7 @@ def adopt(name: str, where: Path | None = None, logs: Path | None = None,
     return sorted(moved)
 
 
-def _wrote_before(name: str, logs: Path | None, schedules: Path | None):
+def _wrote_before(name: str, logs: Path | None):
     """Each thing a gateway of this name wrote before it had an agent, and which of an
     agent's own directories it belongs in.
 
@@ -367,7 +365,7 @@ def _the_file_and_what_it_rotated_into(path: Path):
 def forget(name: str, where: Path | None = None) -> list[str]:
     """Take this agent away, and everything of its own with it (R-AGW-2).
 
-    The home goes with the agent, and so do the schedules and the private homes providers
+    The home goes with the agent, and so do its records and the private homes providers
     were given: adding the name back otherwise inherits work nobody asked for, from an
     agent that no longer exists (R-AGW-4).
 
@@ -409,7 +407,7 @@ def forget(name: str, where: Path | None = None) -> list[str]:
         if path.exists():
             path.unlink()
             taken.append(path.name)
-    for path in (logs_home(name, where), schedules_home(name, where)):
+    for path in (logs_home(name, where),):
         if path.exists():
             shutil.rmtree(path)
             taken.append(path.name + "/")

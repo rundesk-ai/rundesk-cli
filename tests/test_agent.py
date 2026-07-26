@@ -65,7 +65,6 @@ class WithSomewhereToKeepAgents(unittest.TestCase):
         for said, at in (("RUNDESK_AGENTS_DIR", self.where),
                          ("RUNDESK_RUN_DIR", self.before / "run"),
                          ("RUNDESK_LOG_DIR", self.before / "logs"),
-                         ("RUNDESK_SCHEDULES_DIR", self.before / "schedules"),
                          ("RUNDESK_JOBS_DIR", self.before / "jobs")):
             self.addCleanup(os.environ.pop, said, None)
             os.environ[said] = str(at)
@@ -283,9 +282,10 @@ class ANameThatCannotBeAnAgents(WithSomewhereToKeepAgents):
     def test_a_name_a_gateway_would_take_for_something_it_wrote_is_refused(self):
         """R-AGT-6 — a gateway named `foo` writes `foo.log`, which is the file an agent
         called `foo.log` would want for itself. The list is what the path helpers actually
-        write today: `foo.ran.json` is not among them any more, because what a schedule last
-        did is a row, so `foo.ran` is an ordinary name again."""
-        for said in ("ava.seen", "ava.interrupted", "ava.log", "ava.lock",
+        write today, and it has shrunk: `foo.ran.json` and `foo.seen.json` are not among them
+        any more, because what a schedule last did and when a gateway was last up are rows.
+        So `foo.ran` and `foo.seen` are ordinary names again."""
+        for said in ("ava.interrupted", "ava.log", "ava.lock",
                      "ava.json", "ava.out", "ava.err", "ava.changing", "ava.writing"):
             with self.assertRaises(agent.NotAnAgentName, msg=f"'{said}' was accepted"):
                 agent.checked(said)
@@ -297,8 +297,7 @@ class ANameThatCannotBeAnAgents(WithSomewhereToKeepAgents):
     def test_what_a_gateway_writes_is_asked_of_it_rather_than_listed(self):
         """R-AGT-6 — the teeth. A sidecar added later is covered the day it lands, because
         this fails when a path helper writes a suffix nothing declared."""
-        writes = (gateway.log_path, gateway.schedules_path,
-                  gateway.seen_path, gateway.interrupted_path)
+        writes = (gateway.log_path, gateway.interrupted_path)
         for helper in writes:
             added = helper(gateway._PROBE, Path(os.sep)).name[len(gateway._PROBE):]
             self.assertIn(added, gateway.reserved_suffixes(),
@@ -411,18 +410,19 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
     def gateway_for(self, name: str) -> gateway.Gateway:
         made = gateway.Gateway(name, where=agent.run_home(name, self.where),
                                logs=agent.logs_home(name, self.where),
-                               schedules=agent.schedules_home(name, self.where),
                                root=self.root)
         self.addCleanup(made.release)
         return made
 
     def test_making_an_agent_makes_the_gateway_that_runs_it(self):
-        """R-AGW-1 — the gateway is the three directories beside the home, so there is no
-        second step and no way to end up with one and not the other."""
+        """R-AGW-1 — the gateway is the two directories beside the home and the records
+        beside those, so there is no second step and no way to end up with one and not the
+        other."""
         self.made()
-        for at in (agent.run_home("ava", self.where), agent.logs_home("ava", self.where),
-                   agent.schedules_home("ava", self.where)):
+        for at in (agent.run_home("ava", self.where), agent.logs_home("ava", self.where)):
             self.assertTrue(at.is_dir(), f"{at} was not made with the agent")
+        self.assertTrue(store.path_for(agent.directory("ava", self.where)).exists(),
+                        "the agent was made with nowhere to keep its schedules")
 
         running = self.gateway_for("ava")
         running.claim()
@@ -525,13 +525,12 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
         said = agent.resolved("ava", self.where)
         self.assertEqual(said.run, agent.run_home("ava", self.where))
         self.assertEqual(said.logs, agent.logs_home("ava", self.where))
-        self.assertEqual(said.schedules, agent.schedules_home("ava", self.where))
 
     def test_a_name_with_no_agent_keeps_things_where_it_always_did(self):
         """R-AGT-9 — a gateway that has no agent yet goes on being reached exactly as it
         was, so nothing already running has to be adopted before it works."""
         said = agent.resolved("gateway", self.where)
-        self.assertEqual((said.run, said.logs, said.schedules), (None, None, None))
+        self.assertEqual((said.run, said.logs), (None, None))
 
     def test_taking_an_agent_away_takes_the_account_of_what_it_did(self):
         """R-AGW-5 — one outcome, not two. What was kept behind a second flag was left for
@@ -547,16 +546,14 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
 
 class AGatewayThatHasNoAgentYet(WithSomewhereToKeepAgents):
     def wrote(self, name: str = "gateway") -> None:
-        """A gateway of this name, with a log and schedules, kept the way they were kept
-        before there were agents to own them."""
+        """A gateway of this name, with a log and an account of what it never finished, kept
+        the way they were kept before there were agents to own them.
+
+        There is no schedules file here any more, and that is the point: a schedule is a row
+        an agent keeps, so a legacy one has nothing to adopt and nothing reads one."""
         gateway.note(name, "before there were agents", self.before / "logs")
-        # Written as the file it was, on purpose: this is the shape from before a schedule
-        # was a row, and adoption is the one thing that still has to know it existed.
-        where = self.before / "schedules"
-        where.mkdir(parents=True, exist_ok=True)
-        (where / f"{name}.json").write_text(
-            json.dumps([{"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo", "hi"]}]),
-            encoding="utf-8")
+        gateway.interrupted_path(name, self.before / "logs").write_text(
+            json.dumps({"turn": {"ended": False}}), encoding="utf-8")
 
     def test_adopting_a_gateway_moves_what_it_wrote_into_the_agents_own(self):
         """R-AGW-1 — nothing moves on its own, and this is what an owner typing the name
@@ -564,15 +561,12 @@ class AGatewayThatHasNoAgentYet(WithSomewhereToKeepAgents):
         self.wrote()
         agent.add("gateway", self.where)
 
-        agent.adopt("gateway", self.where, logs=self.before / "logs",
-                    schedules=self.before / "schedules")
+        agent.adopt("gateway", self.where, logs=self.before / "logs")
 
-        self.assertIn("before there were agents",
-                      gateway.log_path("gateway", agent.logs_home("gateway", self.where)).read_text())
-        kept = json.loads((agent.schedules_home("gateway", self.where) / "gateway.json")
-                          .read_text(encoding="utf-8"))
-        self.assertEqual([one["name"] for one in kept], ["tidy"])
-        self.assertFalse((self.before / "schedules" / "gateway.json").exists(),
+        into = agent.logs_home("gateway", self.where)
+        self.assertIn("before there were agents", gateway.log_path("gateway", into).read_text())
+        self.assertTrue(gateway.interrupted_path("gateway", into).exists())
+        self.assertFalse(gateway.interrupted_path("gateway", self.before / "logs").exists(),
                          "what was adopted is still where it was, so two places now disagree")
 
     def test_adopting_a_gateway_brings_what_its_log_rotated_into_along(self):
@@ -582,17 +576,15 @@ class AGatewayThatHasNoAgentYet(WithSomewhereToKeepAgents):
         (self.before / "logs" / "gateway.log.1").write_text("older still", encoding="utf-8")
         agent.add("gateway", self.where)
 
-        agent.adopt("gateway", self.where, logs=self.before / "logs",
-                    schedules=self.before / "schedules")
+        agent.adopt("gateway", self.where, logs=self.before / "logs")
 
         self.assertEqual((agent.logs_home("gateway", self.where) / "gateway.log.1").read_text(),
                          "older still")
 
     def test_nothing_is_adopted_while_a_gateway_of_that_name_is_running(self):
-        """R-AGT-9 — a gateway binds the directory it reads schedules from once, when it
-        starts, and never looks again. Moving those files out from under a live one leaves
-        it reading an empty directory for the rest of its life while every command reads
-        the new one, and a schedule it was going to run silently never runs.
+        """R-AGT-9 — a gateway binds the directory it writes in once, when it starts, and
+        never looks again. Moving those files out from under a live one leaves it writing
+        where nothing reads for the rest of its life.
 
         The name is held across the move rather than asked about before it, because asking
         and then moving is two decisions with a gap, and a gateway can claim the name
@@ -600,37 +592,34 @@ class AGatewayThatHasNoAgentYet(WithSomewhereToKeepAgents):
         self.wrote()
         agent.add("gateway", self.where)
         running = gateway.Gateway("gateway", where=self.before / "run",
-                                  logs=self.before / "logs",
-                                  schedules=self.before / "schedules", root=self.root)
+                                  logs=self.before / "logs", root=self.root)
         running.claim()
         self.addCleanup(running.release)
 
         with self.assertRaises(agent.InUse):
             agent.adopt("gateway", self.where, logs=self.before / "logs",
-                        schedules=self.before / "schedules", run=self.before / "run")
+                        run=self.before / "run")
 
-        self.assertTrue(gateway.schedules_path("gateway", self.before / "schedules").exists(),
-                        "it moved what a running gateway is reading")
+        self.assertTrue(gateway.interrupted_path("gateway", self.before / "logs").exists(),
+                        "it moved what a running gateway is writing")
 
     def test_what_a_stopped_gateway_wrote_is_adopted_once_it_lets_the_name_go(self):
         """R-AGT-9 — the other half, so refusing cannot pass by never adopting anything."""
         self.wrote()
         agent.add("gateway", self.where)
         running = gateway.Gateway("gateway", where=self.before / "run",
-                                  logs=self.before / "logs",
-                                  schedules=self.before / "schedules", root=self.root)
+                                  logs=self.before / "logs", root=self.root)
         running.claim()
         running.release()
 
-        agent.adopt("gateway", self.where, logs=self.before / "logs",
-                    schedules=self.before / "schedules", run=self.before / "run")
-        self.assertFalse(gateway.schedules_path("gateway", self.before / "schedules").exists())
+        agent.adopt("gateway", self.where, logs=self.before / "logs", run=self.before / "run")
+        self.assertFalse(gateway.interrupted_path("gateway", self.before / "logs").exists(),
+                         "nothing moved once the name was free")
 
     def test_adopting_a_gateway_that_wrote_nothing_moves_nothing(self):
         """R-AGW-1"""
         agent.add("fresh", self.where)
-        self.assertEqual(agent.adopt("fresh", self.where, logs=self.before / "logs",
-                                     schedules=self.before / "schedules"), [])
+        self.assertEqual([], agent.adopt("fresh", self.where, logs=self.before / "logs"))
 
 
 if __name__ == "__main__":

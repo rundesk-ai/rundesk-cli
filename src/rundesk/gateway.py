@@ -144,7 +144,7 @@ def _understood(target: Path, empty, what: str):
 
     The one place that tells "never written" from "written and unreadable" (R-SCH-17).
     `empty` is what a file nobody has written yet means, and its type is what this file is
-    supposed to be — a schedules file holding an object is as unreadable as one holding a
+    supposed to be — an interruption file holding a list is as unreadable as one holding a
     stray character, and replacing either with nothing loses the same thing.
     """
     state, said = _read(target)
@@ -342,34 +342,6 @@ def _read_json(path: Path, missing):
     return said if state == WRITTEN else missing
 
 
-def schedules_home() -> Path:
-    """Where each gateway's schedules are kept — one file per gateway (R-SCH-13).
-
-    Apart from the run directory because a schedule is something a person decided and
-    not something a gateway is doing, and one file each because that is the whole of the
-    isolation: a gateway reads its own and has no way to name another's. When a gateway
-    is an agent, that is exactly one agent's schedules, its own to change and nobody
-    else's to run (R-SCH-14).
-    """
-    return Path(os.environ.get("RUNDESK_SCHEDULES_DIR") or Path.home() / ".rundesk" / "schedules")
-
-
-def schedules_path(name: str, where: Path | None = None) -> Path:
-    return (where or schedules_home()) / f"{checked(name)}.json"
-
-
-def seen_path(name: str, where: Path | None = None) -> Path:
-    """Where the last moment a gateway of this name was up is kept.
-
-    Beside the schedules, where what outlives a gateway lives. Taken off the run record,
-    which a clean stop deletes (R-GW-12), this checkpoint survived a crash and not an
-    ordinary restart — so what fell due while a gateway was *deliberately* stopped, which
-    is the gap an owner is most likely to have caused and least likely to expect, was the
-    one nobody was ever told about (R-SCH-5).
-    """
-    return (where or schedules_home()) / f"{checked(name)}.seen.json"
-
-
 def _lock_path(name: str, where: Path) -> Path:
     return where / f"{checked(name)}.lock"
 
@@ -403,7 +375,6 @@ def reserved_suffixes() -> frozenset[str]:
     where = Path(os.sep)
     made = (
         _lock_path(_PROBE, where), _record_path(_PROBE, where), log_path(_PROBE, where),
-        schedules_path(_PROBE, where), seen_path(_PROBE, where),
         interrupted_path(_PROBE, where),
     )
     return frozenset({path.name[len(_PROBE):] for path in made} | ALSO_WRITTEN)
@@ -525,44 +496,52 @@ def started_at(pid: int) -> str | None:
 KEPT_INTERRUPTIONS = 50
 
 
-def interrupted_path(name: str, where: Path | None = None) -> Path:
+def interrupted_path(name: str, logs: Path | None = None) -> Path:
     """Where work that never got to finish is written down (R-GW-23).
 
-    Beside the schedules, where history lives rather than with the run state: stopping
-    a gateway clears what it is *doing* (R-GW-12), and this is the account of what it
-    never finished — which is worth least at the moment it is written and most much later.
+    With the log, which is the tier that outlives a gateway: stopping one clears what it is
+    *doing* (R-GW-12), and this is the account of what it never finished — worth least at
+    the moment it is written and most much later.
+
+    It stood beside the schedules until those became rows. It is a file rather than a row
+    because it describes work that has no run of its own — a channel held open, a program a
+    predecessor left behind — and because the gateway that answers for it may be one whose
+    agent no longer exists.
     """
-    return (where or schedules_home()) / f"{checked(name)}.interrupted.json"
+    return (logs or logs_home()) / f"{checked(name)}.interrupted.json"
 
 
-def what_was_interrupted(name: str = DEFAULT_NAME, where: Path | None = None) -> dict:
+def what_was_interrupted(name: str = DEFAULT_NAME, logs: Path | None = None) -> dict:
     """What this gateway never got to finish, and why (R-GW-23).
 
     Read from a file rather than asked of anything, because whatever wants to know is a
     different process — and usually a later one, since the gateway that could have
     answered is the one that went.
     """
-    said = _read_json(interrupted_path(name, where), {})
+    said = _read_json(interrupted_path(name, logs), {})
     return {work: how for work, how in said.items() if isinstance(how, dict)} \
         if isinstance(said, dict) else {}
 
 
-def remembered(where: Path | None = None) -> list[str]:
-    """Every gateway name that left anything beside the schedules (R-GW-38).
+def remembered(logs: Path | None = None) -> list[str]:
+    """Every gateway name that left an account of work it never finished (R-GW-38).
 
     A gateway is discoverable from its run record, from an agent, or from a job the
     machine holds — and a name whose record has been cleared, whose agent has been taken
-    away and whose job was never written survives only here, in what it was scheduled to
-    do and what it never finished. That is precisely the name an owner needs after a
-    crash, and the one every listing left out: they had to already know it before they
-    could ask about it.
+    away and whose job was never written survives only here. That is precisely the name an
+    owner needs after a crash, and the one every listing left out: they had to already know
+    it before they could ask about it.
+
+    Read from where the logs are, because that is where the account now stands. What it was
+    *scheduled* to do no longer survives a name losing its agent at all — schedules are rows
+    an agent keeps, so an agent that is gone takes them with it.
     """
-    if not (where or schedules_home()).is_dir():
+    where = logs or logs_home()
+    if not where.is_dir():
         return []
     found = set()
-    for beside in (where or schedules_home()).glob("*.json"):
-        # `ava.ran.json` and `ava.interrupted.json` are one gateway's, not three.
-        plain = beside.name[: -len(".json")].split(".", 1)[0]
+    for beside in where.glob("*.interrupted.json"):
+        plain = beside.name[: -len(".interrupted.json")]
         try:
             found.add(checked(plain))
         except NotAName:
@@ -570,7 +549,7 @@ def remembered(where: Path | None = None) -> list[str]:
     return sorted(found)
 
 
-def _resolve_interruption(name: str, where: Path | None, work: str) -> None:
+def _resolve_interruption(name: str, logs: Path | None, work: str) -> None:
     """Work that is running again is no longer work that never finished (R-GW-40).
 
     Entries were keyed by work name and never cleared, so a schedule interrupted once in
@@ -580,13 +559,13 @@ def _resolve_interruption(name: str, where: Path | None, work: str) -> None:
     interrupted a second time, that is a new entry rather than an unresolved old one.
     """
     try:
-        with changing(interrupted_path(name, where), {}, "interruptions", durable=True) as said:
+        with changing(interrupted_path(name, logs), {}, "interruptions", durable=True) as said:
             said.pop(work, None)
     except (OSError, Unreadable):
         pass  # tidying history is never worth refusing to start work over
 
 
-def _note_interrupted(name: str, where: Path | None, work: str, why: str,
+def _note_interrupted(name: str, logs: Path | None, work: str, why: str,
                       pgid: int | None = None, ended: bool = False) -> None:
     """Write down that a piece of work was interrupted (R-GW-23).
 
@@ -604,7 +583,7 @@ def _note_interrupted(name: str, where: Path | None, work: str, why: str,
     from rundesk import schedule
 
     try:
-        with changing(interrupted_path(name, where), {}, "interruptions", durable=True) as said:
+        with changing(interrupted_path(name, logs), {}, "interruptions", durable=True) as said:
             said[work] = {
                 "at": datetime.now().strftime(schedule.A_MINUTE), "why": why,
                 "pgid": pgid, "ended": ended,
@@ -757,7 +736,7 @@ def _sweep_predecessor(record: Path, log: logging.Logger, noting=None,
 
 
 def _sweep_strays(where: Path, mine: str, log: logging.Logger,
-                  schedules: Path | None = None) -> list[str]:
+                  logs: Path | None = None) -> list[str]:
     """End work left by *any* gateway that is gone, not only this one's predecessor.
 
     A gateway ends what the last holder of its own name left behind — but a name that is
@@ -783,7 +762,7 @@ def _sweep_strays(where: Path, mine: str, log: logging.Logger,
             left = _sweep_predecessor(
                 record, log,
                 lambda work, why, pgid, ended, whose=name: _note_interrupted(
-                    whose, schedules, work, why, pgid, ended),
+                    whose, logs, work, why, pgid, ended),
             )
             if left:
                 log.warning("ended work left by '%s', a gateway nobody has started since: %s",
@@ -1004,8 +983,8 @@ def holding(name: str, where: Path | None = None):
         yield held
 
 
-def forget(name: str, where: Path | None = None, schedules: Path | None = None,
-           logs: Path | None = None, history: bool = False) -> list[str]:
+def forget(name: str, where: Path | None = None, logs: Path | None = None,
+           history: bool = False) -> list[str]:
     """Take away what rundesk keeps for a gateway of this name (R-GW-31).
 
     Called only once the gateway is proven stopped and its job is gone. This deletes, and
@@ -1018,20 +997,20 @@ def forget(name: str, where: Path | None = None, schedules: Path | None = None,
     the whole of what makes removing it safe, and a name that cannot be held belongs to
     something that is using it.
 
-    `history` also takes what the gateway wrote and what was scheduled for it. Kept
-    otherwise, for the reason an uninstall keeps them: they are the owner's, and they are
-    worth most long after the gateway that wrote them is gone (R-GW-18, R-RM-10).
+    `history` also takes what the gateway wrote. Kept otherwise, for the reason an uninstall
+    keeps it: it is the owner's, and it is worth most long after the gateway that wrote it is
+    gone (R-GW-18, R-RM-10).
+
+    What a schedule is, what it last did and when a gateway of this name was last up are all
+    rows an agent keeps, and go with that agent's records rather than from here.
     """
     where = where or home()
     taken = []
-    # The record is what it was doing, and the checkpoint is only ever read to work out
-    # how long a gateway of this name was down (R-SCH-5). Neither is an account of
-    # anything, and left behind, the checkpoint would have a gateway that happens to
-    # reuse the name reporting schedules it missed while it did not exist.
-    for path in (_record_path(name, where), seen_path(name, schedules)):
-        if path.exists():
-            path.unlink(missing_ok=True)
-            taken.append(path.name)
+    # The record is what it was doing, which is not an account of anything.
+    record = _record_path(name, where)
+    if record.exists():
+        record.unlink(missing_ok=True)
+        taken.append(record.name)
     lock = _lock_path(name, where)
     if lock.exists():
         with _holding_name(name, where) as held:
@@ -1042,8 +1021,8 @@ def forget(name: str, where: Path | None = None, schedules: Path | None = None,
         # What a schedule is and what it last did are rows, and go with the agent's own
         # records rather than from here. What is left is the log, and the account of what
         # never finished, which is the one thing beside a schedule that is still a file.
-        kept = (log_path(name, logs), interrupted_path(name, schedules),
-                interrupted_path(name, schedules).with_suffix(".changing"))
+        kept = (log_path(name, logs), interrupted_path(name, logs),
+                interrupted_path(name, logs).with_suffix(".changing"))
         for path in kept:
             if path.exists():
                 path.unlink(missing_ok=True)
@@ -1082,7 +1061,6 @@ class Gateway:
         where: Path | None = None,
         root: Path | None = None,
         logs: Path | None = None,
-        schedules: Path | None = None,
         reachable=(),
         agents: Path | None = None,
         records=None,
@@ -1090,7 +1068,6 @@ class Gateway:
         self.name = checked(name)
         self.where = where or home()
         self.logs = logs or logs_home()
-        self.schedules = schedules or schedules_home()
         #: Where agents are kept, carried so that a program this gateway starts reads the
         #: same root it does. A path it was handed and never looks inside: a gateway goes
         #: on knowing nothing of agents, and this is not knowledge of whose work it holds
@@ -1185,10 +1162,10 @@ class Gateway:
         self.swept = _sweep_predecessor(
             _record_path(self.name, self.where), self.log,
             lambda work, why, pgid, ended: _note_interrupted(
-                self.name, self.schedules, work, why, pgid, ended),
+                self.name, self.logs, work, why, pgid, ended),
             self._inherited,
         )
-        self.swept += _sweep_strays(self.where, self.name, self.log, self.schedules)
+        self.swept += _sweep_strays(self.where, self.name, self.log, self.logs)
         if self.swept:
             self.log.warning(
                 "ended work left running by a gateway that is gone: %s", ", ".join(self.swept)
@@ -1534,7 +1511,7 @@ class Gateway:
         self.running[held] = program
         # Work under this name is going again, so whatever the last gateway wrote about
         # it never finishing has been answered (R-GW-40).
-        _resolve_interruption(self.name, self.schedules, held)
+        _resolve_interruption(self.name, self.logs, held)
         try:
             await program.start()
             # Asked once, before the record is written, and never asked again (R-GW-30).
@@ -1708,7 +1685,7 @@ class Gateway:
                 # log already carries this, which answers the owner and nothing else.
                 for held, program in self.running.items():
                     _note_interrupted(
-                        self.name, self.schedules, held,
+                        self.name, self.logs, held,
                         "the gateway went while it was still running", program.pid, False)
             self.running.clear()
             self.release(keep_record=not drained)

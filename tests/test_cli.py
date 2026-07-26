@@ -692,9 +692,9 @@ class FakeAgents:
 
     def resolved(self, name):
         if name not in self._made:
-            return self.Where(None, None, None)
+            return self.Where(None, None)
         at = self._at / name
-        return self.Where(at / "run", at / "logs", at / "schedules")
+        return self.Where(at / "run", at / "logs")
 
     def channel_home(self, name, channel):
         # The real one runs the name past `gateway.checked` before building a path from
@@ -765,7 +765,7 @@ class FakeAgents:
     def paths(self, name):
         at = self._at / name
         return {"agent": at, "home": at / "home", "workspace": at / "home" / "workspace",
-                "run": at / "run", "logs": at / "logs", "schedules": at / "schedules"}
+                "run": at / "run", "logs": at / "logs"}
 
     def diagnosed(self, name, runnable=None):
         # Asked exactly as the real one is, so a check that is passed in is a check this
@@ -1290,11 +1290,14 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
         self.assertIn("rundesk add gateway", said, "it marked one and never said what to do")
 
     def test_one_agent_says_every_place_it_resolves(self):
-        """R-AGT-9 — which run state, which schedules and which log are authoritative is
-        otherwise something an owner works out by reading the source."""
-        code, said = drive(["agents", "ava"], agents=FakeAgents(made=["ava"]))
+        """R-AGT-9 — which run state, which records and which log are authoritative is
+        otherwise something an owner works out by reading the source. Read off what an agent
+        says it is made of rather than listed here, so a directory added later is asked about
+        the day it lands and one taken away stops being asked about."""
+        agents = FakeAgents(made=["ava"])
+        code, said = drive(["agents", "ava"], agents=agents)
         self.assertEqual(0, code, said)
-        for what in ("home", "workspace", "run", "logs", "schedules"):
+        for what in agents.paths("ava"):
             self.assertIn(what, said, f"it never said where {what} is")
 
     def test_asking_after_an_agent_that_is_not_there_says_so(self):
