@@ -347,6 +347,13 @@ class Store:
         (R-AGT-12), and it is also the one an owner runs when something is already wrong.
         """
         want = version_wanted() if self._version is None else self._version
+        if not self.at.exists():
+            # Records that have never been made are the seam's own answer, not the
+            # database driver's: a caller that already handles a shape it will not read
+            # would otherwise meet a raw `unable to open database file` from here and let
+            # it out. **Nothing of the database's leaves this module, exceptions included.**
+            self._noted("these records have not been made yet", "ERROR")
+            raise Unreadable(f"{self.at} is not there — this agent has no records yet")
         with self._reading() as conn:
             found = int(conn.execute("PRAGMA user_version").fetchone()[0])
             self._refused(conn, found, want)

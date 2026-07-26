@@ -648,6 +648,20 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
                 list(sqlite3.connect(str(store.path_for(self.where / called)))
                      .execute("SELECT step FROM ran")))
 
+    def test_an_agent_from_before_there_were_records_is_given_them(self):
+        """R-MIG-1 — the agents that most need moving forward are exactly the ones with no
+        records at all: a release before there were any wrote `agent.json` and a home and
+        nothing else. Passed over, an update reports success having moved nothing, and every
+        one of those agents is then unable to start."""
+        was = self.where / "ava"
+        (was / "home").mkdir(parents=True)
+        (was / "agent.json").write_text('{"provider": "codex"}')
+        self.wrote(2, NOTHING)
+
+        self.assertEqual({"ava": 2}, migration.carry_every(self.where, 2, where=self.steps))
+        self.assertTrue(store.path_for(was).is_file(), "it was walked past")
+        self.assertEqual(2, self.stamped_at(was))
+
     def test_a_directory_that_is_not_an_agent_is_walked_past(self):
         self.agent("ava")
         (self.where / "not-an-agent").mkdir()

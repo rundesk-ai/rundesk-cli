@@ -102,6 +102,15 @@ class TheShapeOnDisk(WithAnAgentsOwnRecords):
         self.assertEqual(store.VERSION + 1, refused.exception.found)
         self.assertEqual(store.VERSION, refused.exception.understood)
 
+    def test_records_that_are_not_there_are_the_seams_own_answer(self):
+        """R-STO-16 — nothing of the database's leaves this module, exceptions included. A
+        caller that handles a shape this rundesk will not read would otherwise meet a raw
+        `unable to open database file` and let it out — which, at the one caller the machine
+        invokes, is a gateway restarted every ten seconds for as long as the machine is up."""
+        with self.assertRaises(store.Unreadable) as refused:
+            store.Store(self.at).understood()
+        self.assertIn("has no records yet", str(refused.exception))
+
     def test_a_database_holding_tables_and_no_version_is_unreadable_rather_than_rebuilt(self):
         """It is one that died partway through being made. Building over it is writing an
         empty agent on top of whatever it did manage to keep."""

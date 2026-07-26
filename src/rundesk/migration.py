@@ -222,9 +222,12 @@ def carry_every(agents, want: int, where=None, note=None, clock=None) -> dict:
     for home in sorted(Path(agents).iterdir()):
         if not home.is_dir():
             continue
-        database = home / RECORDS
-        if not database.exists():
+        if not _an_agent(home):
             continue
+        # Made where it is not there, rather than skipped. An agent from a release before
+        # there were records has none, and passing over it would leave an update reporting
+        # success having moved nothing — and every one of those agents unable to start.
+        database = home / RECORDS
         try:
             reached[home.name] = carry(database, home, want, where=where, note=say, clock=clock)
         except Failed as stopped:
@@ -241,6 +244,17 @@ def carry_every(agents, want: int, where=None, note=None, clock=None) -> dict:
             say(f"{home.name} could not be moved: {trouble}")
             raise Failed("(opening)", None, trouble, agent=home.name) from trouble
     return reached
+
+
+#: What tells an agent's directory from anything else that happens to stand where agents
+#: are kept. Any one of the three is enough: its records, the home it loads from, or what a
+#: release before there were records wrote about it. Asked here rather than "has records",
+#: because the agents that most need moving forward are exactly the ones that have none yet.
+OF_AN_AGENT = (RECORDS, "home", "agent.json")
+
+
+def _an_agent(home: Path) -> bool:
+    return any((home / one).exists() for one in OF_AN_AGENT)
 
 
 def _one(conn, step: Step, home: Path) -> list:
