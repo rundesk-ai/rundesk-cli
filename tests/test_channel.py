@@ -229,8 +229,17 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
             path=os.environ.get("PATH", ""), **extra)
         return said
 
-    async def hold(self, adapter: Path, saying=(), env=None, patience=None) -> Held:
-        """Run an adapter as the gateway does — held open, records both ways."""
+    async def hold(self, adapter: Path, saying=(), env=None, patience=None,
+                   holding=0.0) -> Held:
+        """Run an adapter as the gateway does — held open, records both ways.
+
+        `holding` is how long to keep its input open after the last thing is said. The
+        guide promises an adapter that its stdin stays open for the whole life of the
+        channel, so closing it is a shutdown — and a suite that closed it the instant it
+        had finished talking was telling well-behaved adapters to leave before their own
+        platform had said anything. The gateway holds it open for weeks; this holds it
+        open for as long as a case needs.
+        """
         program = process.Program(
             [str(adapter)], env=env if env is not None else self.told(),
             takes_input=True, errors_apart=True,
@@ -241,6 +250,8 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
         async def feed():
             for it in saying:
                 await program.send(channel.spoken(**it))
+            if holding:
+                await asyncio.sleep(holding)
             await program.close_input()
 
         said = asyncio.ensure_future(feed())
@@ -645,6 +656,68 @@ class WhoMayReachTheAgent(DrivesAnAdapter):
     def test_nobody_in_particular_is_not_somebody(self):
         """R-CH-4 — an adapter reporting an empty speaker must not match an empty entry."""
         self.assertFalse(channel.allowed({"allow": [""]}, ""))
+
+
+STRANGERS = Path(__file__).resolve().parent / "strangers"
+
+
+class TheClaimTheWholeSeamRestsOn(DrivesAnAdapter):
+    """R-CAD-2 — the one thing that cannot be proved from the inside.
+
+    Every other case here drives an adapter written beside the code it talks to. This one
+    drives an adapter written by somebody who was given the guide and nothing else — no
+    repository, no source, no tests — and committed exactly as it was handed over. If it
+    fails, the guide is what moves; nothing in `tests/strangers/` is ever tidied to make
+    it pass.
+    """
+
+    def _nothing_of_ours_is_on(self, path: str, adapter: Path) -> None:
+        """Refuse to run an adapter that could find itself on the path it is given.
+
+        An adapter resolves its platform by name. If the adapter itself is reachable
+        under that name, it runs itself, and that copy runs itself, without end. This is
+        the one check worth failing loudly rather than discovering by watching a machine
+        die — it took this one to eight thousand processes before anybody noticed.
+        """
+        for where in path.split(os.pathsep):
+            found = Path(where or ".") / adapter.name
+            if found.is_file() and found.samefile(adapter):
+                self.fail(f"{adapter.name} is on the path it is given ({where}) — an "
+                          f"adapter that can find itself will run itself, without end")
+
+    async def test_a_channel_adapter_this_code_has_never_seen_carries_a_whole_conversation(self):
+        """R-CAD-2 — a surface nobody here wrote, reached by exactly the seam a shipped
+        one is. Until this passes, "channels are swappable" is a hope."""
+        adapter = STRANGERS / "semaphore-channel"
+        if not adapter.is_file():
+            self.skipTest("no stranger's channel adapter is committed")
+        # Only the fake platform ever goes on the path, and never the adapter's own
+        # directory.
+        path = f"{STRANGERS / 'platforms'}{os.pathsep}{os.environ.get('PATH', '')}"
+        self._nothing_of_ours_is_on(path, adapter)
+
+        told = self.told(settings={"station": "1180"})
+        told["PATH"] = path
+        told["SEMAPHORE_TOKEN"] = "not a real one, and never needed to be"
+
+        said = await channel.checked(adapter, ["--station", "1180"], told)
+        self.assertTrue(said["ok"], f"it could not reach what it was pointed at: {said['why']}")
+        self.assertEqual({"env": "SEMAPHORE_TOKEN"}, said["secret"],
+                         "it handed over a credential rather than naming one")
+
+        held = await self.hold(adapter, env=dict(told, FAKE_SAYS="what changed today?",
+                                                 FAKE_FOR="2"), saying=[
+            {"type": "state", "conversation": "one", "run": "1-aaaa", "state": channel.TAKEN,
+             "ref": "8841", "can": {"steer": False}},
+            {"type": "tool", "conversation": "one", "run": "1-aaaa", "id": "1", "did": "run"},
+            {"type": "answer", "conversation": "one", "run": "1-aaaa", "text": "three files"},
+            {"type": "state", "conversation": "one", "run": "1-aaaa", "state": channel.FINISHED,
+             "ref": "8841"},
+        ], patience=30.0, holding=3.0)
+        arrived = held.of("arrived")
+        self.assertTrue(arrived, f"nothing arrived from it: {held.errors[-400:]}")
+        self.assertEqual("what changed today?", arrived[0]["text"])
+        self.assertEqual("2207", arrived[0]["user"])
 
 
 def _taken(argv: list, flag: str) -> tuple[Path | None, list]:

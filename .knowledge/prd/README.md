@@ -48,6 +48,10 @@ high-level map.
   - [agent-home](./agent-home.md) — the named identity work is run for, the home it loads from, and how far apart two of them are kept.
   - [agent-gateway](./agent-gateway.md) — the one gateway an agent runs in, made with it and taken away with it.
   - [agent-run](./agent-run.md) — one occurrence of work, the account it leaves behind, and what a conversation is continued from.
+- **Channel**
+  - [channel-adapter](./channel-adapter.md) — the seam a surface is reached through: a program rundesk runs rather than code it loads, and what any channel adapter must do.
+  - [channel-messaging](./channel-messaging.md) — what any channel does with what arrives on it, whatever its platform can and cannot show.
+  - [channel-discord](./channel-discord.md) — what a turn looks like on Discord: threads, marks, its own commands, and what it costs.
   - [agent-usage](./agent-usage.md) — what every run cost in tokens, and how sure anything derived from them is.
 - **Lifecycle**
   - [lifecycle-install](./lifecycle-install.md) — getting rundesk onto a machine, and knowing it worked.
