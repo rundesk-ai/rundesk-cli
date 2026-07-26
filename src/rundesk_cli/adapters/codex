@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -243,7 +244,7 @@ class Codex:
         worked = item.get("exit_code") in (0, None) and item.get("status") != "failed"
         say(type="result", id=at, ok=bool(worked), summary=_summary(item))
         if worked:
-            for made in _files(item):
+            for made in _files(item, os.environ.get("RUNDESK_CWD") or "."):
                 # Said, so a surface can actually send it. Codex names what it wrote in
                 # the item that finished; without this a brain that generates a picture
                 # can only mention it in a sentence, and the picture never arrives.
@@ -261,27 +262,35 @@ class Codex:
             self._proc.terminate()
 
 
-def _files(item: dict) -> list:
-    """Anything this item says it wrote, as absolute paths on this machine.
+#: Where this brain puts a thing it made, and the field it says so in. **Measured, not
+#: guessed** — an earlier version of this looked for `changes`, `files`, `artifacts` and
+#: `outputs`, none of which Codex has ever emitted, so a generated picture was reported
+#: by nobody and quietly never sent. The name below came from reading a real
+#: `imageGeneration` item; `.knowledge/scripts/probe-codex` asks the next version.
+MADE_AT = "savedPath"
 
-    Codex spells it several ways depending on the item, so the shapes it uses are read
-    here — where every other Codex-shaped thing lives — and nothing outside this file has
-    to know any of them. A relative path is left alone rather than guessed at: resolving
-    it against the wrong directory is how a brain comes to name somebody else's file.
+
+def _files(item: dict, workspace: str) -> list:
+    """Anything this item says it made, brought to where the agent actually works.
+
+    Codex writes a generated image under its own home — beside a sign-in, among files
+    that are the owner's and not this agent's. Rundesk will only send what is inside the
+    agent's own directories, and rightly: "the brain made it" is not a reason to reach
+    into everything the brain can see. So it is copied in, which is this file's job,
+    because where this vendor puts things is a Codex-shaped fact.
     """
-    found = []
-    for what in ("changes", "files", "artifacts", "outputs"):
-        said = item.get(what)
-        if isinstance(said, dict):
-            said = list(said)
-        if not isinstance(said, list):
-            continue
-        for one in said:
-            at = one if isinstance(one, str) else (
-                one.get("path") or one.get("file") or "" if isinstance(one, dict) else "")
-            if isinstance(at, str) and at.startswith("/") and os.path.isfile(at):
-                found.append(at)
-    return found
+    at = item.get(MADE_AT)
+    if not isinstance(at, str) or not at or not os.path.isfile(at):
+        return []
+    where = os.path.join(workspace, "made")
+    try:
+        os.makedirs(where, exist_ok=True)
+        landed = os.path.join(where, os.path.basename(at))
+        shutil.copyfile(at, landed)
+    except OSError as why:
+        sys.stderr.write(f"could not bring {at} into the workspace: {why}\n")
+        return []
+    return [landed]
 
 
 def _summary(item: dict) -> str:
