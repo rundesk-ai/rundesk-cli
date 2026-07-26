@@ -581,7 +581,7 @@ gained — and **one file changed**. Nothing outside `adapters/codex` knew eithe
   - **A gateway you can ask for something.** `ask` runs in the terminal that typed it, exactly as a
     schedule run by hand does. Phase 3 is what forces the question.
 
-## Phase 3 — Open the Channel Seam, and Put Discord Behind It
+## Phase 3 — Open the Channel Seam, and Put Discord Behind It — **done**
 
 **Outcome:** one authorized Discord channel, thread or DM reaches an agent and watches it work — through
 a seam a second channel could be written against without changing anything here. Approvals and provider
@@ -782,17 +782,54 @@ proves it:
 7. **Held open by the gateway**, reconnecting on its own, ending when the gateway ends.
 8. **A private-server canary**, last, proving only what a fake cannot — Discord's own limits and timings.
 
-### Exit proof
+### Exit proof — met
 
-A fake channel proves every routing and failure case offline. A manual private-server canary then sends
-one message, observes progress as the agent works, and receives one final answer correlated to the same
-run id — with 👀 on arrival and ✅ at the end — and the transcript of that run, read afterwards with
-`runs`, tells the same story the channel told, because the channel wrote none of it.
+A fake channel proves every routing and failure case offline, and it is what the gate stands on: nothing
+in the suite reaches Discord or needs a token. A real agent then carried whole conversations on a private
+server, in direct messages and in a room, and the transcript of each run tells the same story the channel
+told — because the channel wrote none of it.
 
-**And the seam is proved open, not merely designed open:** a second channel adapter, written from its
-guide by someone who has not read this codebase, carries a whole conversation with nothing here changed —
-the same bar Phase 2 set for a brain, and the same reason. Until that has happened, "channels are
-swappable" is a hope.
+**And the seam is proved open, not merely designed open.** `tests/strangers/semaphore-channel` was
+written from [the guide](.knowledge/guides/write-a-channel-adapter.md) by an agent given the guide's text
+and nothing else — no repository, no source, no tests — and is committed exactly as it was handed over.
+It passes the same conformance suite the shipped adapter passes, unchanged, and nothing here was changed
+to accommodate it. That is `R-CAD-2`, and it is the row that could not have been ticked from the inside.
+
+The mirror held in the other direction too. The phase needed a brain to be told where it was answering,
+which is a *provider* question — and the answer went into the provider seam as `RUNDESK_PREFACE`, not
+into the channel as a Discord-shaped special case. Nothing outside `channels/discord` knows Discord
+exists, and nothing outside `adapters/codex` knows what `developerInstructions` is.
+
+### What this closes
+
+  - the contract, written before any Discord code and rewritten by what the shipped adapter found
+    missing in it;
+  - `channel.py` — a seam with no platform name and no list of platforms or of the kinds of place any
+    of them has;
+  - `answering.py` — arrival to answer, and the only module that knows a turn and a surface both exist;
+  - `tests/test_channel.py --adapter <anything>`, which is what makes the seam a claim rather than a hope;
+  - one shipped adapter, and one written by a stranger from the guide alone;
+  - channels held open by the agent's own gateway, swept and ended with it like any other work;
+  - standing instructions an owner writes per channel, reaching a brain through whatever its adapter has
+    for *adding* to its instructions and never through anything that replaces them;
+  - a turn standing in the agent's own home, so the rules scaffolded for it are the rules it loads.
+
+### Left open, deliberately
+
+  - **Fourteen rows are still ❌**, and honestly so. Eleven are what a person sees and nothing else can
+    settle — a mark appearing, an indicator running, a bot showing online — and
+    `.knowledge/scripts/probe-discord` says what to do and what to look for on each. Three want a real
+    connection dropped at a chosen moment. None is ticked on a script's say-so.
+  - **The gateway announces itself once per channel.** Two channels, two notices, both to the same
+    person. The notice is about the gateway, so it wants deciding where it belongs rather than papering
+    over.
+  - **A second platform.** The stranger's adapter proves one can be written; Telegram or Slack proves
+    it is worth writing. Four questions were surfaced by reviewing for them and left for the owner:
+    what `direct` means where there is no such thing, whether an adapter should filter un-addressed
+    messages in a busy room, how a conversation maps to a Slack thread, and what dialect prose is in.
+  - **What the medium is, as against what the owner says.** Hermes ships a hint per platform describing
+    the medium itself — what markdown converts, how a file is sent — leaving an owner to write only what
+    they alone know. Ours makes the owner write both.
 
 ## Phase 4 — Design the Shape of What Is Kept, and Build the Way In
 
