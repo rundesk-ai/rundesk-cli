@@ -78,7 +78,14 @@ def latest_version_online() -> tuple[str | None, str | None]:
         # 404 answers plainly: either nothing is published, or this repository is not visible
         # without credentials. Reporting that as "could not reach" sends someone to check
         # their network when the answer is that there is nothing to find.
-        return None, (NOTHING_PUBLISHED if err.code in (403, 404) else UNREACHABLE)
+        #
+        # 403 is the opposite and was lumped in with it. It means the question was refused,
+        # almost always the anonymous rate limit — sixty an hour per address, which a shared
+        # or NAT'd one reaches on somebody else's traffic. Answering "nothing is published"
+        # there is a confident falsehood about a release that exists, and it is the same
+        # mistake as reading "could not ask" as "you are current" (R-UPD-19), pointed the
+        # other way. Not knowing is its own answer.
+        return None, (NOTHING_PUBLISHED if err.code == 404 else UNREACHABLE)
     except (urllib.error.URLError, TimeoutError, ValueError, OSError):
         return None, UNREACHABLE
     # A shape we did not expect — an array, a rate-limit page parsed as JSON — reads as

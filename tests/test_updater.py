@@ -695,6 +695,16 @@ class WhyItCouldNotSayTests(unittest.TestCase):
         self.assertIsNone(missing)
         self.assertEqual(why, updater.NOTHING_PUBLISHED)
 
+        # Refused, not empty. The anonymous limit is sixty an hour per address and a shared
+        # one reaches it on somebody else's traffic, so this is the ordinary way a perfectly
+        # healthy install is told no — and answering "nothing is published" would be a
+        # confident falsehood about a release that is right there.
+        (refused, why), _ = _with_json(urllib.error.HTTPError("u", 403, "rate limited", {}, None),
+                                       updater.latest_version_online)
+        self.assertIsNone(refused)
+        self.assertEqual(why, updater.UNREACHABLE)
+        self.assertIn("could not reach", updater.describe("0.4.0", None, why))
+
         (offline, why), _ = _with_json(urllib.error.URLError("no route"),
                                        updater.latest_version_online)
         self.assertIsNone(offline)
