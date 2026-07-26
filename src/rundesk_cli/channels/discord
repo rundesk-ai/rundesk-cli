@@ -1,0 +1,590 @@
+#!/usr/bin/env python3
+"""Discord, as an agent is reached on it.
+
+Everything about this platform is in this file and nowhere else (R-CAD-13). A snowflake,
+an intent, a gateway opcode, the two-thousand-character limit and the three seconds an
+interaction has to be acknowledged in are all Discord's, and none of them appears outside
+this program. Nothing here is imported by Rundesk, and nothing here imports Rundesk.
+
+What it does, in the order somebody experiences it:
+
+    named in a channel -> a thread opens and the turn happens there (R-DIS-1)
+    inside that thread -> it answers without being named again      (R-DIS-3)
+    in a direct message -> it answers where it was spoken to        (R-DIS-4)
+    taken up -> 👀 and typing        finished -> ✅ and the answer, whole
+    stopped  -> ✋                   failed   -> ⚠️ and what failed
+
+The contract this implements is `.knowledge/guides/write-a-channel-adapter.md`. Where the
+two disagree, the guide is right.
+
+The cost of the choice: `discord.py` is a dependency, pinned in `requirements.txt` and
+installed by `install.sh` into the install's own virtualenv. Python's standard library has
+no websocket client, and a gateway connection cannot be held open without one.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import contextlib
+import json
+import os
+import sys
+from pathlib import Path
+
+# The install's own virtualenv, found the way the launcher finds it. A channel adapter is
+# a program run with a built environment and almost no PATH, so nothing has put this on
+# the path for us — and being honest about not finding it beats an import error nobody
+# can act on.
+_ROOT = Path(__file__).resolve().parents[3]
+for _packages in sorted((_ROOT / ".venv" / "lib").glob("python3.*/site-packages")):
+    sys.path.insert(0, str(_packages))
+
+try:
+    import discord
+except ImportError:  # pragma: no cover - proved by the install, not by the suite
+    print(json.dumps({"ok": False, "why": (
+        "discord.py is not installed — run ./install.sh, which puts it in rundesk's own "
+        f"virtualenv (looked in {_ROOT / '.venv'})")}), flush=True)
+    raise SystemExit(1)
+
+#: Where the token is read from unless the owner names another variable. Never an
+#: argument: a command line is readable through the process list and lands in shell
+#: history. Never written down either — what is kept is this name (R-CAD-11, R-CAD-12).
+TOKEN_FROM = "DISCORD_TOKEN"
+
+#: Discord caps a message at two thousand characters. Left short of it on purpose: a
+#: reply is split at a line break where there is one, and the room to do that has to come
+#: from somewhere (R-DIS-13).
+LIMIT = 1900
+
+#: How long Discord's typing indicator lasts before it lapses. Renewed inside it while a
+#: turn is running, because an indicator that stops is a turn that looks finished
+#: (R-DIS-6).
+TYPING_SECONDS = 8.0
+
+#: How long to leave between writes of the running commentary. Discord rate-limits posting
+#: harder than editing, and a turn that runs a dozen tools in a second must not spend the
+#: budget the answer needs (R-DIS-14).
+POST_SECONDS = 2.5
+
+#: What a thread opened by being named is called. Discord allows a hundred; this is short
+#: enough to read in a sidebar.
+THREAD_CHARS = 80
+
+#: How many recent messages to keep hold of, so a mark can be put on one without asking
+#: Discord for it again. Bounded because this process runs for weeks.
+SEEN_KEPT = 200
+
+#: What each state looks like here (R-CAD-4). The system decides which one a turn is in;
+#: this is the whole of what this file decides about it.
+MARKS = {"finished": "✅", "stopped": "✋", "failed": "⚠️"}
+SEEN = "👀"
+
+#: What this agent offers as Discord's own commands, described where they are offered
+#: (R-DIS-10). Slash commands rather than words typed in chat, because they are
+#: discoverable, are described where they are offered, and cannot be said by accident.
+#:
+#: Each is Discord's own name for one of the gestures the seam defines — the platform
+#: picks the word its people will recognise, and the seam keeps the meaning. `/new` is
+#: what forgetting a conversation is called to somebody using it: they are not clearing
+#: state, they are starting again.
+COMMANDS = (
+    ("stop", "Stop the turn running here", "stop", "✋ stopping this turn."),
+    ("new", "Start a new session — the next message begins fresh", "forget",
+     "🧹 this conversation starts fresh."),
+    ("restart", "Restart this agent's gateway", "restart",
+     "♻️ restarting the agent — it will be back in a moment."),
+)
+
+#: What a tool did, in a mark. Keyed on the closed list the seam defines, never on a
+#: brain's own name for a tool — recognising those would carry one vendor's vocabulary
+#: into this file forever.
+DID = {"read": "📖", "search": "🔎", "run": "💻", "edit": "✏️", "list": "📁"}
+
+
+def say(**it) -> None:
+    """One record, one line, flushed — because rundesk is watching this as it happens."""
+    sys.stdout.write(json.dumps(it) + "\n")
+    sys.stdout.flush()
+
+
+def note(said: str) -> None:
+    """Ours, kept apart from what we report, and never mistaken for it."""
+    sys.stderr.write(said + "\n")
+    sys.stderr.flush()
+
+
+def options(argv) -> argparse.Namespace:
+    """What this platform needs, parsed here and nowhere else (R-CAD-13)."""
+    said = argparse.ArgumentParser(prog="discord", add_help=False)
+    said.add_argument("--bot", metavar="<application id>")
+    said.add_argument("--server", metavar="<id>")
+    said.add_argument("--channel", metavar="<id>")
+    said.add_argument("--dm", action="store_true")
+    said.add_argument("--token-from", default=TOKEN_FROM, metavar="<variable>")
+    known, rest = said.parse_known_args(list(argv))
+    known.unknown = rest
+    return known
+
+
+def clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def split_at(text: str, limit: int):
+    """The first message's worth, and the rest — broken at a line where there is one.
+
+    Never cut in silence (R-DIS-13). A break at a newline keeps a code block or a list
+    readable; past that a hard cut is the honest answer, because a word that does not fit
+    is still a word that has to go somewhere.
+    """
+    if len(text) <= limit:
+        return text, ""
+    at = text.rfind("\n", 0, limit)
+    if at <= 0:
+        return text[:limit], text[limit:]
+    return text[:at], text[at + 1:]
+
+
+def thread_name(text: str) -> str:
+    """What a thread opened by being named is called: the first line of what was asked."""
+    first = (text.strip().splitlines() or ["rundesk"])[0].strip()
+    return clip(first, THREAD_CHARS) or "rundesk"
+
+
+def where_to_answer(direct: bool, in_thread: bool, ours: bool, mentioned: bool):
+    """Whether this message is for us, and where the answer goes.
+
+    Five cases, and the two that are easy to get wrong are the ones this exists for: an
+    agent answering inside somebody else's thread, and an agent opening a thread just to
+    say that it stopped.
+    """
+    if direct:
+        return "here"          # nobody else is here, and nowhere to put a thread (R-DIS-4)
+    if ours:
+        return "here"          # a thread this agent opened is its conversation (R-DIS-3)
+    if not mentioned:
+        return "ignore"        # silence in a shared channel until named (R-DIS-2)
+    if in_thread:
+        return "here"          # threads do not nest, so a named message stays put
+    return "open-thread"       # named in a channel: the turn happens in a thread (R-DIS-1)
+
+
+class Live:
+    """One conversation, and what this agent is showing in it right now."""
+
+    def __init__(self):
+        self.anchor = None          # the message that asked, for the mark to attach to
+        self.activity = ""          # the running commentary, not yet posted
+        self.posted = None          # the message it is being written into, if any
+        self.typing = None
+        self.pacing = None
+        self.marked = False
+        self.cost = ""           # what the turn cost, shown with the answer
+
+
+class Agent(discord.Client):
+    """The gateway connection, held open for as long as this program runs."""
+
+    def __init__(self, chose, **kw):
+        intents = discord.Intents.none()
+        intents.guilds = True
+        intents.guild_messages = True
+        intents.dm_messages = True
+        # The one intent Discord makes you turn on in the developer portal. Without it
+        # every message arrives with empty content and the agent looks deaf.
+        intents.message_content = True
+        super().__init__(intents=intents, **kw)
+        self.chose = chose
+        self.live: dict = {}
+        #: Recent messages by id, so a mark can be put on one without fetching it back.
+        #: Bounded, because this process runs for weeks.
+        self.seen: dict = {}
+        self.tree = discord.app_commands.CommandTree(self)
+
+    # -- coming up and going down ----------------------------------------------------
+
+    async def setup_hook(self) -> None:
+        for name, describes, _control, _said in COMMANDS:
+            self.tree.add_command(discord.app_commands.Command(
+                name=name, description=describes,
+                callback=self._made(name), nsfw=False))
+        # Offered globally *and* to the server it was pointed at: a guild's copy appears
+        # at once, where a global one can take an hour to propagate (R-DIS-10).
+        with contextlib.suppress(Exception):
+            await self.tree.sync()
+        if self.chose.server:
+            with contextlib.suppress(Exception):
+                await self.tree.sync(guild=discord.Object(id=int(self.chose.server)))
+
+    def _made(self, control: str):
+        async def ran(interaction: discord.Interaction) -> None:
+            # Answered inside the three seconds Discord allows, and answered *only* that
+            # it was heard (R-DIS-11, R-DIS-12). What the control did comes back as the
+            # turn's own outcome — acknowledging it with the running turn's half-written
+            # output is how a half-finished sentence gets published as the reply.
+            gesture, said = next((c, s) for n, _d, c, s in COMMANDS if n == control)
+            with contextlib.suppress(Exception):
+                await interaction.response.send_message(said, ephemeral=True)
+            say(type="control", conversation=str(interaction.channel_id),
+                user=str(interaction.user.id), control=gesture)
+        return ran
+
+    async def on_ready(self) -> None:
+        # Online for as long as the gateway running this agent is up (R-DIS-16). This
+        # program's own lifetime is the signal: rundesk starts it with the agent and ends
+        # it with the agent, so tying presence to anything else would say an agent is up
+        # when the thing behind it has gone.
+        with contextlib.suppress(Exception):
+            await self.change_presence(status=discord.Status.online)
+        say(type="ready")
+        await self._tell_the_owner("🟢 **Gateway online** — rundesk is up and listening.")
+
+    async def _tell_the_owner(self, said: str) -> None:
+        """R-DIS-15 — the owner hears about coming up and going down, wherever they are."""
+        for who in self.chose.allow:
+            with contextlib.suppress(Exception):
+                person = await self.fetch_user(int(who))
+                await person.send(said)
+            return   # the first allowed user is the owner; the rest are guests
+
+    async def going(self) -> None:
+        await self._tell_the_owner("🔴 **Gateway offline** — rundesk has shut down.")
+        for held in self.live.values():
+            for task in (held.typing, held.pacing):
+                if task is not None:
+                    task.cancel()
+        # Deliberately not marked invisible first: announcing it races a replacement
+        # instance and leaves a working gateway looking dead.
+        with contextlib.suppress(Exception):
+            await self.close()
+
+    # -- what arrives ----------------------------------------------------------------
+
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot:
+            return
+        direct = message.guild is None
+        if not direct and self.chose.server and str(message.guild.id) != str(self.chose.server):
+            return
+        in_thread = isinstance(message.channel, discord.Thread)
+        ours = in_thread and message.channel.owner_id == (self.user.id if self.user else None)
+        mentioned = bool(self.user and self.user in message.mentions)
+        where = where_to_answer(direct, in_thread, ours, mentioned)
+        if where == "ignore":
+            return
+        if not direct and not in_thread and self.chose.channel \
+                and str(message.channel.id) != str(self.chose.channel):
+            return
+        if direct and not self.chose.dm:
+            return
+        text = _without_mentions(message.content)
+        if not text:
+            return
+        conversation = message.channel.id
+        if where == "open-thread":
+            opened = await self._open(message, text)
+            conversation = opened if opened is not None else message.channel.id
+        # **Not the anchor.** Every message was made the anchor here, so a second one
+        # sent while a turn was still running took the ✅ that belonged to the message
+        # that asked for it. Which message a turn is *for* is rundesk's to say, and it
+        # says so with the `ref` on the state — all this has to do is be able to find it.
+        self.live.setdefault(str(conversation), Live())
+        self.seen[str(message.id)] = message
+        while len(self.seen) > SEEN_KEPT:
+            self.seen.pop(next(iter(self.seen)))
+        say(type="arrived", conversation=str(conversation), user=str(message.author.id),
+            text=text, ref=str(message.id), direct=direct)
+
+    async def _open(self, message: discord.Message, text: str):
+        """A thread for this turn, or None if the platform would not give us one.
+
+        Degrades rather than refuses: answering in the channel is worse than answering in
+        a thread and far better than not answering (R-CAD-5).
+        """
+        try:
+            made = await message.create_thread(name=thread_name(text))
+            return made.id
+        except Exception as why:  # noqa: BLE001 — a platform boundary
+            note(f"could not open a thread: {why}")
+            return None
+
+    # -- what rundesk says -----------------------------------------------------------
+
+    async def told(self, it: dict) -> None:
+        """One record from rundesk, shown the way this platform shows things."""
+        kind = it.get("type")
+        held = self.live.setdefault(str(it.get("conversation")), Live())
+        if kind == "state":
+            await self._state(it, held)
+        elif kind == "answer":
+            await self._answer(it, held)
+        elif kind in ("think", "tool", "result", "usage"):
+            await self._doing(it, held)
+
+    async def _state(self, it: dict, held: Live) -> None:
+        state = it.get("state")
+        if state == "taken":
+            # 👀 the moment it is heard, and typing straight after. This is the mark that
+            # matters most: everything else can be late, and this one is the difference
+            # between an agent that is working and one that is broken (R-DIS-5).
+            await self._react(it, held, SEEN)
+            held.typing = held.typing or asyncio.ensure_future(self._typing(it))
+            return
+        if state == "running":
+            held.typing = held.typing or asyncio.ensure_future(self._typing(it))
+            return
+        if state in MARKS:
+            for task in (held.typing, held.pacing):
+                if task is not None:
+                    task.cancel()
+            held.typing = held.pacing = None
+            await self._flush(it, held)
+            if state == "failed" and it.get("why"):
+                await self._post(it, f"-# ⚠ {clip(str(it['why']), 400)}")
+            await self._react(it, held, MARKS[state], instead_of=SEEN)
+            self.live.pop(str(it.get("conversation")), None)
+
+    async def _typing(self, it: dict) -> None:
+        """Kept alive for as long as the turn runs (R-DIS-6). Discord's indicator lapses
+        in about ten seconds, so it is renewed inside that rather than set once."""
+        channel = self.get_channel(int(it["conversation"]))
+        while channel is not None:
+            with contextlib.suppress(Exception):
+                await channel.typing()
+            await asyncio.sleep(TYPING_SECONDS)
+
+    async def _react(self, it: dict, held: Live, mark: str, instead_of=None) -> None:
+        """One mark at a time (R-DIS-8). 👀 means "working on it", and leaving it up
+        beside ✅ says the opposite of what happened."""
+        # The ref rundesk gave, first and always: it names the message that asked for
+        # this turn, whatever has been said since.
+        ref = it.get("ref")
+        message = self.seen.get(str(ref)) if ref else None
+        if message is None and ref:
+            with contextlib.suppress(Exception):
+                channel = self.get_channel(int(it["conversation"])) \
+                    or await self.fetch_channel(int(it["conversation"]))
+                message = await channel.fetch_message(int(ref))
+        if message is None:
+            message = held.anchor
+        if message is None:
+            return
+        held.anchor = message
+        with contextlib.suppress(Exception):
+            await message.add_reaction(mark)
+        if instead_of:
+            with contextlib.suppress(Exception):
+                await message.remove_reaction(instead_of, self.user)
+
+    async def _doing(self, it: dict, held: Live) -> None:
+        """What the agent did, kept rather than posted.
+
+        **One message per turn on this surface, deliberately.** A running commentary of
+        every tool is a dozen notifications for one answer, and a phone buzzing eleven
+        times to say an agent read a file is worse than silence. That the agent is
+        working is already shown — 👀 the moment it was heard, and typing for as long as
+        it runs — so what it did is kept and only its cost is worth a line (R-DIS-17).
+
+        Another surface may well decide the opposite. Which of these is shown is the
+        adapter's to choose; that the turn is carried is not (R-CAD-4, R-CAD-5).
+        """
+        if it.get("type") == "usage":
+            held.cost = _as_a_line(it) or held.cost
+
+    async def _flush(self, it: dict, held: Live) -> None:
+        """Nothing to flush: this surface holds everything until the answer."""
+        return
+
+    async def _answer(self, it: dict, held: Live) -> None:
+        """The answer, whole, at the end — split across messages rather than cut.
+
+        Anchored to the message that asked, so it is findable in a busy channel; only the
+        first piece carries the anchor, because a quote on every piece buries what it is
+        quoting.
+        """
+        # The cost first, then the answer, in one message (R-DIS-17). At the top rather
+        # than the bottom because a long answer pushes anything after it off a phone
+        # screen, and what a turn cost is worth seeing without scrolling.
+        whole = str(it.get("text") or "")
+        if held.cost:
+            whole = f"{held.cost}\n{whole}"
+        rest, anchor = whole, held.anchor
+        while rest:
+            piece, rest = split_at(rest, LIMIT)
+            await self._post(it, piece, anchor=anchor)
+            anchor = None
+
+    async def _post(self, it: dict, content: str, anchor=None) -> None:
+        """One message, and never at the turn's expense: a delivery that fails is written
+        to our own stderr and the turn goes on (R-CH-12)."""
+        channel = self.get_channel(int(it["conversation"]))
+        if channel is None:
+            with contextlib.suppress(Exception):
+                channel = await self.fetch_channel(int(it["conversation"]))
+        if channel is None:
+            note(f"nowhere to write in {it.get('conversation')}")
+            return
+        try:
+            await channel.send(
+                content,
+                reference=anchor if anchor is not None else None,
+                mention_author=False,
+            )
+        except Exception as why:  # noqa: BLE001 — a platform boundary
+            note(f"could not write: {why}")
+
+
+def _without_mentions(text: str) -> str:
+    """What was said, with the naming taken out — it addressed us, it is not the ask."""
+    out, keep = [], True
+    for part in text.replace("<@!", "<@").split("<@"):
+        if keep:
+            out.append(part)
+            keep = False
+            continue
+        at = part.find(">")
+        out.append(part[at + 1:] if at >= 0 else part)
+    return "".join(out).strip()
+
+
+def _as_a_line(it: dict) -> str:
+    """One record of what the agent did, as one line of Discord subtext."""
+    kind = it.get("type")
+    if kind == "think":
+        return "\n".join(f"-# 💭 {clip(line, 300)}"
+                         for line in str(it.get("text") or "").splitlines() if line.strip())
+    if kind == "tool":
+        mark = DID.get(it.get("did"), "⚙")
+        return f"-# {mark} {clip(str(it.get('name') or it.get('did') or 'working'), 120)}"
+    if kind == "result":
+        # Only when it went wrong. A running commentary of everything that worked is
+        # noise, and what somebody watching wants is the thing that did not.
+        if it.get("ok") is False:
+            return f"-# ⚠ {clip(str(it.get('summary') or 'that did not work'), 200)}"
+        return ""
+    if kind == "usage":
+        parts = [f"{_amount(it[what])} {what}" for what in ("input", "output", "cached")
+                 if isinstance(it.get(what), int)]
+        return f"-# · {' · '.join(parts)}" if parts else ""
+    return ""
+
+
+def _amount(tokens: int) -> str:
+    """A count somebody can read, without rounding it into a lie.
+
+    Everything was shown in thousands, so a turn that answered in thirteen tokens
+    reported `0k output` — which is a measurement, stated plainly, and wrong. Small
+    numbers are shown as themselves, and only what is genuinely in thousands is
+    abbreviated.
+    """
+    if tokens < 1000:
+        return str(tokens)
+    if tokens < 10000:
+        return f"{tokens / 1000:.1f}k".replace(".0k", "k")
+    return f"{round(tokens / 1000)}k"
+
+
+async def check(chose) -> int:
+    """Connect, sign in, and see whether what we were pointed at is really there.
+
+    Nothing about this channel is written down unless this says yes (R-CAD-9). The whole
+    of the owner's diagnosis is what comes back from here, so it says what was wrong
+    rather than that something was.
+    """
+    token = os.environ.get(chose.token_from)
+    if not token:
+        say(ok=False, why=f"{chose.token_from} is not set — export the bot token in the "
+                          f"shell you are running this from, never as an argument")
+        return 1
+    if not chose.dm and not chose.channel:
+        say(ok=False, why="say where it listens: --server <id> --channel <id>, or --dm")
+        return 1
+    if chose.unknown:
+        say(ok=False, why=f"this channel does not understand {' '.join(chose.unknown)}")
+        return 1
+    client = Agent(chose)
+    describes = None
+    try:
+        await client.login(token)
+        if chose.dm:
+            me = await client.application_info()
+            describes = f"direct messages to {me.name}"
+        else:
+            found = await client.fetch_channel(int(chose.channel))
+            guild = getattr(found, "guild", None)
+            if chose.server and guild is not None and str(guild.id) != str(chose.server):
+                say(ok=False, why=f"channel {chose.channel} is not in server {chose.server}")
+                return 1
+            describes = f"#{found.name}" + (f" in {guild.name}" if guild is not None else "")
+    except Exception as why:  # noqa: BLE001 — a platform boundary, and the diagnosis
+        say(ok=False, why=f"could not reach Discord: {why}")
+        return 1
+    finally:
+        with contextlib.suppress(Exception):
+            await client.close()
+    say(ok=True, describes=describes, secret={"env": chose.token_from},
+        settings={what: value for what, value in (
+            ("bot", chose.bot), ("server", chose.server), ("channel", chose.channel),
+            ("dm", chose.dm), ("token_from", chose.token_from)) if value})
+    return 0
+
+
+async def carry(chose) -> int:
+    """Hold the connection open, and carry conversations until rundesk ends us."""
+    token = os.environ.get(chose.token_from)
+    if not token:
+        note(f"{chose.token_from} is not set")
+        return 1
+    client = Agent(chose)
+    reading = asyncio.ensure_future(_read(client))
+    connected = asyncio.ensure_future(client.start(token))
+    try:
+        await asyncio.wait({reading, connected}, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        say(type="gone", why="the connection is closing")
+        await client.going()
+        for task in (reading, connected):
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+    return 0
+
+
+async def _read(client: Agent) -> None:
+    """Everything rundesk says, a record at a time, for as long as it is saying it."""
+    loop = asyncio.get_event_loop()
+    reader = asyncio.StreamReader()
+    await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
+    while True:
+        line = await reader.readline()
+        if not line:
+            return   # rundesk has stopped speaking, which means the turn of this is over
+        try:
+            it = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(it, dict):
+            with contextlib.suppress(Exception):
+                await client.told(it)
+
+
+def main(argv) -> int:
+    asking = "--check" in argv
+    chose = options([one for one in argv if one != "--check"])
+    # Who may use this is rundesk's, and it enforces it — but the owner is who a hello
+    # and a goodbye go to, so the adapter is told who they are.
+    chose.allow = [one for one in (os.environ.get("RUNDESK_ALLOW") or "").split(",") if one]
+    settings = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
+    for what in ("bot", "server", "channel", "token_from"):
+        if not getattr(chose, what, None) and settings.get(what):
+            setattr(chose, what, settings[what])
+    chose.dm = chose.dm or bool(settings.get("dm"))
+    return asyncio.run(check(chose) if asking else carry(chose))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

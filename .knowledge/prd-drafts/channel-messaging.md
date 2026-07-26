@@ -35,10 +35,10 @@ it has not — what never differs is that the work runs and is answered.
 | ❌ | R-CH-13 | Raw tool arguments and results do not leave the machine unless a rule allows them | — |
 | ❌ | R-CH-14 | A conversation's session is found again after the gateway holding it restarted | — |
 | ❌ | R-CH-15 | Work a channel dispatched is findable afterwards by the run it became | — |
+| ❌ | R-CH-16 | A person can restart the agent answering them, from the channel they are on | — |
 
 ## Open questions
 
-- Whether a conversation key must be its own across channels, or only within one.
 - What a channel does with an attachment, which no provider consumes yet.
 - Whether a channel may carry a clarifying question before any provider work that raises one exists.
 - Whether showing work as it happens is the same decision on every surface, or each one's to make.

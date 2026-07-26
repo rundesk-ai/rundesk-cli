@@ -110,10 +110,12 @@ async def carry(
     into the admitted record and never read here, so the turn goes on knowing nothing
     about surfaces (R-CH-15).
 
-    `admitted` is told the run's id the moment there is one, before the brain is started.
-    Anything showing a turn as it happens needs to name the run from its first mark, and
-    the id only exists once the account does — waiting for the outcome to learn it means
-    everything shown before the end is uncorrelated.
+    `admitted` is told the run's id and what the brain can do, the moment there is a run
+    and before the brain is started. Anything showing a turn as it happens needs both:
+    the id to name the run from its first mark, since waiting for the outcome to learn it
+    leaves everything shown while somebody is waiting uncorrelated — and the capabilities
+    to know what to offer, since offering to interrupt a brain that cannot be steered
+    offers something that cannot happen (R-PRV-15).
     """
     at = provider.program(named)          # raises NotRunnable, before anything is written
     whose = agents.paths(name, where)
@@ -137,7 +139,7 @@ async def carry(
 
     run = transcript.allocate(whose["runs"], pick=pick)
     if admitted is not None:
-        admitted(run)
+        admitted(run, dict(can))
     with transcript.Writer(whose["runs"], run, name, now=now) as writing:
         writing.add(event={
             "type": ADMITTED, "provider": named, "brain": brain, "posture": posture,

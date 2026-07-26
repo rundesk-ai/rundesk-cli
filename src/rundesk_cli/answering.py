@@ -71,7 +71,7 @@ class Answering:
     """
 
     def __init__(self, name: str, channel_name: str, record: dict, sending,
-                 where=None, carry=None, note=None):
+                 where=None, carry=None, note=None, restarting=None):
         self.name = name
         self.channel = channel_name
         self.record = record
@@ -79,6 +79,10 @@ class Answering:
         self._where = where
         self._carry = carry if carry is not None else turn.carry
         self._note = note if note is not None else (lambda said: None)
+        #: How to ask for the agent to be cycled. An argument, because what
+        #: keeps a gateway up is the machine's and this file has never heard
+        #: of a gateway (R-CH-16).
+        self._restarting = restarting
         self.exchanges: dict = {}
         self.connected = False
         #: Everything on its way to the adapter, in the order it was decided. One queue
@@ -140,6 +144,11 @@ class Answering:
         if held.can.get("steer") and held.saying is not None:
             held.saying.put_nowait(it["text"])
             return
+        # Whether the brain can be steered is not known until the turn is admitted, and a
+        # burst arrives faster than that. So it waits here and is drained into the running
+        # turn the moment the answer comes back — otherwise the first message of every
+        # burst is steered and the rest become turns of their own, which is the same
+        # conversation answered twice over.
         held.waiting.append((it["text"], it["user"], it.get("ref")))
         if len(held.waiting) > WAITING:
             # Bounded, and said. One person typing faster than an agent can answer must
@@ -157,6 +166,15 @@ class Answering:
         if not channel.allowed(self.record, it["user"]):
             return
         held = self.exchanges.get(it["conversation"])
+        if it["control"] == channel.RESTART:
+            # Aimed at the agent rather than at this conversation, so every turn on every
+            # conversation ends with it. Said before it happens, because the thing that
+            # would report it afterwards is the thing going away.
+            self._note(f"channel '{self.channel}': a restart was asked for")
+            if self._restarting is None:
+                return
+            self._restarting()
+            return
         if it["control"] == channel.STOP:
             if held is None or held.task is None or held.task.done():
                 return
@@ -191,7 +209,7 @@ class Answering:
                 watching=shown,
                 steering=_saying(held.saying),
                 asked_by={"channel": self.channel, "on": held.conversation, "user": user},
-                admitted=lambda run: self._took(held, run),
+                admitted=lambda run, can: self._took(held, run, can),
             )
         except asyncio.CancelledError:
             # Asked for, or the gateway going. Either way the turn is over and the
@@ -222,9 +240,23 @@ class Answering:
         held.stopped = False
         held.task = asyncio.ensure_future(self._one(held, text, user))
 
-    def _took(self, held: Exchange, run: str) -> None:
-        """The run this conversation became, the moment there is one (R-CH-15)."""
+    def _took(self, held: Exchange, run: str, can: dict) -> None:
+        """The run this conversation became and what its brain can do, the moment both
+        are known (R-CH-15, R-CAD-4).
+
+        Together, because they arrive together and a surface needs both before it shows
+        anything: the run to correlate the marks it is about to make, and the
+        capabilities to avoid offering what cannot happen.
+        """
         held.run = run
+        held.can = dict(can)
+        # Anything said while this turn was being admitted goes into it rather than
+        # queueing behind it (R-CH-9).
+        if held.can.get("steer") and held.saying is not None:
+            while held.waiting:
+                text, _user, _ref = held.waiting.pop(0)
+                held.saying.put_nowait(text)
+        self._say(channel.RUNNING, held)
 
     def _answer(self, held: Exchange, outcome) -> None:
         """What the agent said, handed over once and whole (R-CH-8).
@@ -312,6 +344,9 @@ class _Shown:
     fragment at a time; it is collected by the turn and handed over whole at the end. What
     is passed on is what the agent *did* — a tool it ran, a thought it closed, what it
     cost — each of which is whole the moment it exists (R-CH-7).
+
+    Only ever the brain's own records: what rundesk makes of a turn does not come through
+    here, and a watcher waiting for one of rundesk's own kinds would wait for ever.
     """
 
     #: What a surface is shown as it happens, and exactly which of each record's fields
@@ -341,11 +376,6 @@ class _Shown:
 
     def __call__(self, said: dict) -> None:
         kind = said.get("type")
-        if kind == "admitted":
-            # What the brain can do, which the surface needs before it offers anything.
-            self._held.can = dict(said.get("can") or {})
-            self._answering._say(channel.RUNNING, self._held)
-            return
         if kind not in self.AS_IT_HAPPENS:
             return
         it = {what: said[what] for what in self.AS_IT_HAPPENS[kind] if what in said}

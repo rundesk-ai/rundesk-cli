@@ -93,6 +93,14 @@ INTERRUPTED = "interrupted"
 #: the start did, and two spellings would silently match nothing.
 SCHEDULED_AS = "schedule:"
 
+#: What a channel's work is called while a gateway holds it. Named like a schedule's, so
+#: what `status` shows and what a sweep ends read the same way for both.
+CHANNEL_AS = "channel:"
+
+#: How long to leave a channel that stopped before starting it again. Long enough not to
+#: hammer a platform that is refusing us, short enough that an owner does not notice.
+CHANNEL_AGAIN_SECONDS = 10.0
+
 
 @contextlib.contextmanager
 def changing(target: Path, empty, what: str, durable: bool = False):
@@ -1132,6 +1140,7 @@ class Gateway:
         root: Path | None = None,
         logs: Path | None = None,
         schedules: Path | None = None,
+        reachable=(),
     ):
         self.name = checked(name)
         self.where = where or home()
@@ -1168,6 +1177,13 @@ class Gateway:
         #: and waiting on it inside `asyncio.run` fails outright. Every in-process test
         #: happened to build its gateway inside a running loop and so never saw this.
         self._stopped: asyncio.Event | None = None
+        #: The surfaces this agent is reachable on, resolved by whoever knows what an
+        #: agent is and handed over already made (R-CAD-6). Handed over rather than
+        #: looked up, for the reason every other directory is: a gateway that reached
+        #: back for an agent would end the one rule this file is built on.
+        self.reachable = list(reachable)
+        #: Whether this gateway was asked to come back rather than merely to stop.
+        self._come_back = False
 
     # -- what it is made of -------------------------------------------------------
 
@@ -1244,6 +1260,75 @@ class Gateway:
                 self._ran[name] = datetime.strptime(did["at"], schedule.A_MINUTE)
             except (KeyError, TypeError, ValueError):
                 continue
+
+    async def _hold_channels(self) -> None:
+        """Hold every surface this agent is reachable on open, for as long as it is up.
+
+        One task per channel, each started through `start` — so ending it when the gateway
+        goes, sweeping it if the gateway does not, and naming it in the record are all
+        already done and none of it is written twice (R-CAD-6).
+        """
+        if not self.reachable:
+            return
+        await asyncio.gather(*(self._hold_one(one) for one in self.reachable))
+
+    async def _hold_one(self, one) -> None:
+        """One channel, held open, and started again when it stops.
+
+        An adapter that exits is started again after a pause. That is the coarser of the
+        two recoveries: an adapter reconnects to its own platform far better than this
+        can, because it knows what its platform's backoff wants (R-CAD-7). This is what
+        catches the case where it did not come back at all.
+        """
+        held = f"{CHANNEL_AS}{one.name}"
+        while not self._stopping:
+            answering = one.answering(
+                lambda record: self._write_to(held, record),
+                lambda: self.ask_to_stop(come_back=True),
+                # Its own log, which is the one account that outlives the gateway. Left
+                # to default it said nothing at all: a channel that connects, drops,
+                # refuses somebody and comes back, in complete silence, is a channel
+                # nobody can tell from one that never started (R-GW-18).
+                self.log.info)
+            try:
+                # No silence window and no ceiling: an idle channel says nothing for
+                # hours by design, and a clock that ends one is a clock that ends the
+                # thing a held-open surface exists for (R-PROC-6).
+                outcome = await self.start(
+                    [str(one.program)], as_name=held, env=dict(one.env),
+                    silence=None, ceiling=None, takes_input=True,
+                    sink=answering.heard,
+                    # As it is said, not when the program ends. A channel is held open
+                    # for weeks, so waiting for it to end before showing what it
+                    # complained about is never showing it: every failure to post, every
+                    # refusal, every reconnection is invisible for as long as the thing
+                    # doing it is working (R-GW-18).
+                    on_error=lambda said, name=one.name: self.log.warning(
+                        "channel '%s': %s", name, said.rstrip()))
+            except (AlreadyStarted, Stopping):
+                return
+            except asyncio.CancelledError:
+                with contextlib.suppress(BaseException):
+                    await answering.stop()
+                raise
+            except BaseException as would_not_start:  # noqa: BLE001 — a task nobody awaits
+                self.log.error("channel '%s' could not be started: %s",
+                               one.name, would_not_start)
+                return
+            with contextlib.suppress(BaseException):
+                await answering.stop()
+            if self._stopping:
+                return
+            self.log.warning("channel '%s' stopped (%s) — starting it again in %ss",
+                             one.name, outcome.reason, int(CHANNEL_AGAIN_SECONDS))
+            await asyncio.sleep(CHANNEL_AGAIN_SECONDS)
+
+    async def _write_to(self, held: str, record: bytes) -> None:
+        """Say something to a channel that is running, or say why it could not be said."""
+        program = self.running.get(held)
+        if program is None:
+            raise process.NotListening(f"'{held}' is not running")
+        await program.send(record)
 
     def _reconcile_what_never_finished(self) -> None:
         """Stop a schedule the last gateway died mid-run from reading as still going
@@ -1396,6 +1481,7 @@ class Gateway:
         sink: Callable[[object], object] | None = None,
         takes_input: bool = False,
         cwd: str | Path | None = None,
+        on_error: Callable[[str], None] | None = None,
     ) -> process.Result:
         """Run a program as this gateway, and keep hold of it while it runs.
 
@@ -1432,6 +1518,11 @@ class Gateway:
             # a project rather than in the abstract, and the gateway is started by the
             # machine in a directory nobody chose.
             cwd=cwd,
+            # What it says went wrong, as it says it. Kept for the end by default, which
+            # is the right answer for work that ends — and no answer at all for work held
+            # open for weeks, where everything it complained about would be invisible for
+            # exactly as long as it was running.
+            on_error=on_error,
         )
         # Registered before it is started, so two of the same name racing cannot both get
         # past the check above and into a subprocess.
@@ -1525,11 +1616,19 @@ class Gateway:
             self._stopped.set()  # asked to stop before it got going, or while taking hold
         beating = asyncio.ensure_future(self._beat())
         ticking = asyncio.ensure_future(self._tick())
+        # The surfaces this agent is reachable on, held open for as long as it is up
+        # (R-CAD-6). Not started per message and never polled: a reply that lands after
+        # somebody has asked again is a reply that failed. Everything it starts goes
+        # through `start`, so ending it, sweeping it and recording it are already done.
+        holding = asyncio.ensure_future(self._hold_channels())
         try:
             await self._stopped.wait()
         finally:
             beating.cancel()
             ticking.cancel()
+            holding.cancel()
+            with contextlib.suppress(BaseException):
+                await holding
             # The handlers stay installed across `_go()`. Removing them here restores the
             # system default, which for these two signals is *terminate* — so a second
             # signal arriving during the shutdown window would kill the gateway outright,
@@ -1540,18 +1639,31 @@ class Gateway:
                 loop.remove_signal_handler(sig)
         # Not a success if it went with work still running: something is still out there,
         # and a supervisor reading zero would have no way to know (R-GW-7).
+        if self._come_back:
+            # Ending badly on purpose, which is what asks the machine to start it again.
+            # Said in the log first, so an owner reading it later does not find an
+            # unexplained non-zero exit where a restart actually happened.
+            self.log.info("ending so the machine starts this gateway again")
+            return 1
         return 0 if drained else 1
 
-    def ask_to_stop(self) -> None:
+    def ask_to_stop(self, come_back: bool = False) -> None:
         """Take no more work, and begin going away (R-GW-6).
 
         Called from a signal handler, so it does no work itself — a handler that awaited
         anything would be a handler that could be interrupted halfway through.
+
+        `come_back` is how an agent is cycled from a surface it is reached on (R-CH-16).
+        A gateway cannot start itself: what keeps it up brings it back when it ends
+        *badly*, and lets it lie when it ends well (R-GW-25). So asking for a restart is
+        asking to end badly on purpose, which is the one place that is the honest thing
+        to do — the alternative is a gateway that says goodbye and never returns.
         """
         self._stopping = True
+        self._come_back = come_back
         if self._stopped is not None:
             self._stopped.set()
-        self.log.info("asked to stop")
+        self.log.info("asked to restart" if come_back else "asked to stop")
 
     async def _go(self) -> bool:
         """End everything, then leave nothing behind (R-GW-8, R-GW-12).

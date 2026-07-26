@@ -108,8 +108,31 @@ for line in sys.stdin:
 say(type="done", ok=True, session="steered")
 '''
 
+#: Can be steered, and ends when its own work is done rather than when its input closes.
+#: What every real brain is, and what no stand-in here was: the others all read stdin to
+#: the end first, so a caller that never closes it — which is what a surface is — waited
+#: for ever on a brain that had already finished.
+FINISHES = '''
+import json, sys, threading
+if "--capabilities" in sys.argv:
+    print(json.dumps({"steer": True, "resume": True}))
+    sys.exit(0)
+say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
+first = threading.Event()
+
+def listen():
+    for line in sys.stdin:
+        if line.strip():
+            first.set()
+
+threading.Thread(target=listen, daemon=True).start()
+first.wait(15)
+say(type="text", text="all done")
+say(type="done", ok=True, session="finished-on-its-own")
+'''
+
 BRAINS = {"plain": PLAIN, "quiet": QUIET, "nosy": NOSY, "strange": STRANGE,
-          "failing": FAILING, "steerable": STEERABLE}
+          "failing": FAILING, "steerable": STEERABLE, "finishes": FINISHES}
 
 
 class WithAnAgentToRunTurnsFor(unittest.IsolatedAsyncioTestCase):
@@ -287,14 +310,17 @@ class WhatAdmittedThisTurn(WithAnAgentToRunTurnsFor):
         first mark. Waiting for the outcome to learn it leaves everything shown while
         somebody is actually waiting uncorrelated."""
         told: list = []
-        said = await self.ask("plain", admitted=told.append)
-        self.assertEqual([said.run], told, "the run was named late, or twice")
+        said = await self.ask("plain", admitted=lambda run, can: told.append((run, can)))
+        self.assertEqual([said.run], [run for run, _can in told],
+                         "the run was named late, or twice")
+        self.assertEqual({"tools", "resume", "model", "usage", "steer"}, set(told[0][1]),
+                         "what the brain can do did not arrive with the run")
 
     async def test_the_run_is_named_before_anything_is_shown_of_it(self):
         """R-CH-15 — the order is the requirement: the id exists before the first record
         the watcher is handed, or the first mark cannot carry it."""
         order: list = []
-        await self.ask("plain", admitted=lambda run: order.append("admitted"),
+        await self.ask("plain", admitted=lambda run, can: order.append("admitted"),
                        watching=lambda said: order.append(said["type"]))
         self.assertEqual("admitted", order[0], f"something was shown before the run had a name: {order}")
 
@@ -442,6 +468,42 @@ class BeingSentToMidTurn(WithAnAgentToRunTurnsFor):
         self.assertTrue(said.ok, "a brain that reads to the end of its input never finished")
         sent = [one for one in self.account(said.run) if one["type"] == turn.SENT]
         self.assertEqual(["hello"], [one["text"] for one in sent])
+
+
+class ATurnNobodyStopsTyping(WithAnAgentToRunTurnsFor):
+    """R-PRV-19 — a turn whose input is never closed, which is what a surface does.
+
+    Every other case here closes stdin, because that is what a terminal does when the
+    person stops typing. A channel holds a conversation open for weeks and closes nothing,
+    and the first brain driven that way answered, reported its work complete, and then sat
+    waiting for a word that was never coming — so no `done` was written, no answer was
+    ever handed over, and the turn never ended. The guide had always said a turn ends when
+    the brain is finished, whatever the input is doing; nothing had ever checked.
+    """
+
+    async def never_closes(self):
+        """Words, and then silence — held open, exactly as a conversation is."""
+        yield "second"
+        while True:
+            await asyncio.sleep(0.05)
+
+    async def test_a_turn_ends_when_the_brain_is_finished_not_when_its_input_closes(self):
+        """R-PRV-19 — the case that would have caught it, and the one a surface is."""
+        said = await asyncio.wait_for(
+            turn.carry("ava", "first", self.brain("finishes"), where=self.where,
+                       steering=self.never_closes()),
+            timeout=20)
+        self.assertTrue(said.ok, "a turn whose input stayed open never finished")
+        self.assertEqual("done", said.said[-1]["type"])
+
+    async def test_the_answer_is_there_to_hand_over_when_the_turn_ends(self):
+        """R-CH-8 — prose is held until the turn ends, so a turn that never ends is an
+        answer nobody ever sees. This is the same defect from the other side."""
+        said = await asyncio.wait_for(
+            turn.carry("ava", "first", self.brain("finishes"), where=self.where,
+                       steering=self.never_closes()),
+            timeout=20)
+        self.assertEqual("all done", said.text)
 
 
 class WhatAReviewFound(WithAnAgentToRunTurnsFor):

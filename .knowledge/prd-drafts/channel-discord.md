@@ -6,9 +6,9 @@ name: Discord, as an agent is reached on it
 ## What this is
 
 What a turn looks like on Discord, and how it is shown there. Being named in a server channel opens a
-thread and the turn happens inside it, so one thread is one conversation and one session (R-CH-3). A turn
-occupies two messages on purpose: what the agent is doing, posted while it happens, and its answer,
-posted whole at the end — because a reply that rewrites itself in place is unreadable.
+thread and the turn happens inside it, so one thread is one conversation and one session (R-CH-3). A turn arrives as
+one message, at the end, with what it cost above the answer — because a phone that buzzes eleven times
+to say an agent read a file is worse than one that buzzes once with the reply.
 
 ## Why it exists
 
@@ -36,6 +36,7 @@ posted whole at the end — because a reply that rewrites itself in place is unr
 | ❌ | R-DIS-14 | Writes are paced so that Discord does not refuse them | — |
 | ❌ | R-DIS-15 | The owner is told when their agent comes up and when it goes down | — |
 | ❌ | R-DIS-16 | An agent shows as online for as long as the gateway running it is up | — |
+| ❌ | R-DIS-17 | A turn arrives as one message, with what it cost above the answer | — |
 
 ## Open questions
 

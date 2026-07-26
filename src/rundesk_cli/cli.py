@@ -577,9 +577,18 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
     few seconds for as long as the machine is up (R-GW-25).
     """
     whose = agents.resolved(args.name)
+    # The surfaces this agent is reachable on, resolved here and handed over made. A
+    # gateway holds them open for as long as it is up (R-CAD-6) and never works out for
+    # itself what an agent is.
+    reachable = agents.reachable(args.name) if agents.exists(args.name) else []
+    for one, why in (agents.unrunnable_channels(args.name) if agents.exists(args.name) else []):
+        # Said, and the others still held: one surface that cannot be run must not make
+        # an agent deaf on every other one it has.
+        print(f"{args.name}/{one}: CHANNEL UNAVAILABLE — {why}", file=sys.stderr)
     try:
         return asyncio.run(gateways.Gateway(args.name, where=whose.run, logs=whose.logs,
-                                            schedules=whose.schedules).serve())
+                                            schedules=whose.schedules,
+                                            reachable=reachable).serve())
     except (gateways.AlreadyRunning, gateways.Unfit, gateways.NotAName) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         return 0
@@ -1332,7 +1341,7 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     carried = list(args.options) + list(getattr(args, "handed_on", []))
     said = asyncio.run(channel.checked(at, carried, channel.environment(
         home=agents.paths(args.name)["run"], channel=args.channel, agent=args.name,
-        channel_home=home)))
+        channel_home=home, allow=args.allow, checking=True)))
     if not said["ok"]:
         # Nothing is written for a channel that has not proved itself, and the adapter's
         # own words are the whole of the owner's diagnosis.

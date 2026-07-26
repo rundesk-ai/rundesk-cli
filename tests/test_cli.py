@@ -626,7 +626,7 @@ class FakeGateways:
     def log_path(self, name, logs=None):
         return self._written if self._written is not None else pathlib.Path("/nowhere/x.log")
 
-    def Gateway(self, name, where=None, logs=None, schedules=None):
+    def Gateway(self, name, where=None, logs=None, schedules=None, reachable=()):
         gateways = self
 
         class One:
@@ -657,6 +657,9 @@ class FakeAgents:
         #: one every path here is under `/nowhere`, which is what keeps a case that only
         #: reads from ever touching a disk.
         self._at = pathlib.Path(at) if at else pathlib.Path("/nowhere/agents")
+        #: What a gateway would be handed to hold open, and what could not be resolved.
+        self._reachable: list = []
+        self._unrunnable: list = []
         #: The agents that exist, and the directories each resolves.
         self._made = list(made)
         #: What a gateway of this name wrote before there were agents to own it.
@@ -684,6 +687,12 @@ class FakeAgents:
 
     def channel_home(self, name, channel):
         return self._at / name / "channels" / channel
+
+    def reachable(self, name, where=None, carry=None):
+        return list(self._reachable)
+
+    def unrunnable_channels(self, name, where=None):
+        return list(self._unrunnable)
 
     def standing_before(self, name):
         return [pathlib.Path(f"/nowhere/{one}") for one in self._wrote] if name in ("gateway",) else []

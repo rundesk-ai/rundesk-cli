@@ -384,23 +384,46 @@ def _turn(codex, where: str) -> int:
     # Everything rundesk says, for as long as it is saying it. The first record starts the
     # turn and every one after it is steered into the turn already running — the running
     # turn's id is a precondition, so a word cannot land in a turn nobody meant.
-    asked = False
-    for line in sys.stdin:
-        word = _word(line)
-        if word is None:
-            continue
-        if not asked:
-            codex.ask("turn/start", {**beginning, "input": [_text(word)]})
-            asked = True
-            _until(lambda: codex.turn is not None or codex.finished.is_set())
-            continue
-        if codex.finished.is_set():
-            sys.stderr.write("the turn had already finished, so that was not sent\n")
-            continue
-        codex.ask("turn/steer", {"threadId": codex.thread, "expectedTurnId": codex.turn,
-                                 "input": [_text(word)]})
+    #
+    # **Read on a thread, never in the way of the turn ending.** Read inline, this loop
+    # ran until stdin *closed*, and only then looked at whether the brain had finished. A
+    # terminal closes stdin when the person stops typing, so every turn ended and the
+    # fault was invisible — but a surface holding a conversation open never closes it, so
+    # the brain answered, Codex reported the turn complete, and this adapter sat waiting
+    # for a word that was never coming. The guide is explicit: a turn ends when the brain
+    # is finished, whatever the input is doing.
+    started = threading.Event()
 
-    if not asked:
+    def listen() -> None:
+        asked = False
+        for line in sys.stdin:
+            word = _word(line)
+            if word is None:
+                continue
+            if not asked:
+                codex.ask("turn/start", {**beginning, "input": [_text(word)]})
+                asked = True
+                # Said *after* the turn is really under way, never before. Set first, the
+                # waiter woke while the turn id was still on its way and read a turn that
+                # had begun as one that was never asked for.
+                _until(lambda: codex.turn is not None or codex.finished.is_set())
+                started.set()
+                continue
+            if codex.finished.is_set():
+                sys.stderr.write("the turn had already finished, so that was not sent\n")
+                continue
+            codex.ask("turn/steer", {"threadId": codex.thread, "expectedTurnId": codex.turn,
+                                     "input": [_text(word)]})
+        # Nothing more is coming. Said so the wait below ends for a caller that closed
+        # its input without ever asking anything.
+        started.set()
+
+    heard = threading.Thread(target=listen, daemon=True)
+    heard.start()
+    # Wait for the turn to be asked for at all before waiting for it to finish, or an
+    # empty `finished` reads as a turn that ended before it began.
+    started.wait()
+    if codex.turn is None and not codex.finished.is_set():
         say(type="done", ok=False, why="nothing was asked")
         return 1
     # No deadline. A turn takes as long as the work takes, and rundesk ends one that has

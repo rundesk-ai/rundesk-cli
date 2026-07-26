@@ -54,11 +54,15 @@ class Brain:
 
     async def __call__(self, name, prompt, named, **how):
         self.asked.append({"name": name, "prompt": prompt, "provider": named, **how})
+        # Exactly what `turn.carry` does, and no more. It told the watcher what the
+        # brain could do as though that were one of the brain's own records, which the
+        # real turn has never passed on — so the surface never learned it, `running` was
+        # never marked, and steering was dead. A stand-in more generous than the thing it
+        # stands in for proves nothing at all.
         if how.get("admitted"):
-            how["admitted"](self.outcome.run)
+            how["admitted"](self.outcome.run, dict(self.can))
         watching = how.get("watching")
         if watching is not None:
-            watching({"type": "admitted", "can": self.can})
             for one in self.showing:
                 watching(one)
         steering = how.get("steering")
@@ -313,6 +317,42 @@ class ASecondMessageWhileOneIsRunning(CarriesAConversation):
         await asyncio.sleep(0.05)
         await self._settled(held)
         self.assertEqual(["first", "second"], [one["prompt"] for one in brain.asked])
+
+    async def test_a_burst_arriving_before_the_turn_is_admitted_still_steers_it(self):
+        """R-CH-9 — whether a brain can be steered is not known until the turn is
+        admitted, and somebody typing quickly is faster than that. Held until the answer
+        comes back, the first message of every burst steered and the rest became turns of
+        their own — which is one conversation answered twice over."""
+        stop = asyncio.Event()
+        brain = Brain(holds=stop, can={"steer": True})
+        surface = Surface()
+        held = self.answering(surface, brain)
+        # No await between them: the second lands while the first is still being admitted.
+        await held.heard(self.arrived(text="first"))
+        await held.heard(self.arrived(text="and also this"))
+        await held.heard(self.arrived(text="and this"))
+        await asyncio.sleep(0.05)
+        stop.set()
+        await self._settled(held)
+        self.assertEqual(1, len(brain.asked), "a burst became several turns")
+        self.assertEqual(["and also this", "and this"], brain.steered)
+
+    async def test_the_mark_stays_on_the_message_that_asked(self):
+        """R-DIS-8 — a second message sent while a turn runs took the mark that belonged
+        to the message that asked for it, so the wrong one was ticked as answered."""
+        stop = asyncio.Event()
+        brain = Brain(holds=stop, can={"steer": True})
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await held.heard(self.arrived(text="first", ref="8841"))
+        await asyncio.sleep(0.05)
+        await held.heard(self.arrived(text="second", ref="9999"))
+        await asyncio.sleep(0.02)
+        stop.set()
+        await self._settled(held)
+        marked = [one.get("ref") for one in surface.of("state") if one.get("ref")]
+        self.assertEqual({"8841"}, set(marked),
+                         f"a mark landed on a message that did not ask for the turn: {marked}")
 
     async def test_more_than_can_be_kept_waiting_is_bounded_and_said(self):
         """One person typing faster than an agent can answer must not be able to hand

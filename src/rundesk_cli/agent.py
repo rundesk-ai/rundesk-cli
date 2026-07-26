@@ -535,3 +535,77 @@ def _copied(called: str, name: str) -> str:
     version of the same words held in code.
     """
     return (TEMPLATES / called).read_text(encoding="utf-8").replace(NAMED, name)
+
+
+@dataclass(frozen=True)
+class Reachable:
+    """One surface an agent is reachable on, resolved and ready for a gateway to hold.
+
+    Everything a gateway needs and nothing it has to work out: the program to run, what
+    it is told, and how to make the thing that carries what arrives on it. Resolved here
+    because knowing what an agent is belongs above the gateway, and handed over made
+    because a gateway that reached back for an agent would end the direction this whole
+    file rests on (R-AGT-9, R-CAD-6).
+    """
+
+    name: str
+    program: Path
+    env: dict
+    answering: object
+
+
+def reachable(name: str, where: Path | None = None, carry=None) -> list:
+    """Every channel this agent is reachable on, ready to be held open (R-CAD-6).
+
+    A channel whose kind is not on this machine is left out and said, rather than
+    stopping the others: one surface that cannot be run must not make an agent deaf on
+    every other one it has.
+    """
+    from rundesk_cli import answering as answers
+    from rundesk_cli import channel as channels
+
+    whose = directory(name, where)
+    found = []
+    for one, record in sorted(channels.known(whose).items()):
+        try:
+            at = channels.program(str(record.get("kind") or ""))
+        except channels.NotRunnable:
+            continue
+        home = channel_home(name, one, where)
+        found.append(Reachable(
+            name=one, program=at,
+            env=channels.environment(
+                home=run_home(name, where), channel=one, agent=name, channel_home=home,
+                allow=record.get("allow"), settings=record.get("settings"),
+                secret=record.get("secret")),
+            answering=_answering(name, one, record, where, carry, answers),
+        ))
+    return found
+
+
+def _answering(name, one, record, where, carry, answers):
+    """What carries a conversation on this channel, made once the gateway can write back.
+
+    Made rather than passed, because two of the things it needs only exist once the
+    gateway is running: how to write back to the adapter, and how to ask for the agent to
+    be cycled. Both are handed in, so nothing here reaches down into a gateway and
+    nothing there reaches back for an agent.
+    """
+    def made(sending, restarting=None, note=None):
+        return answers.Answering(name, one, record, sending, where=where, carry=carry,
+                                 restarting=restarting, note=note)
+    return made
+
+
+def unrunnable_channels(name: str, where: Path | None = None) -> list:
+    """Which of this agent's channels name a kind that is not on this machine."""
+    from rundesk_cli import channel as channels
+
+    whose = directory(name, where)
+    missing = []
+    for one, record in sorted(channels.known(whose).items()):
+        try:
+            channels.program(str(record.get("kind") or ""))
+        except channels.NotRunnable as why:
+            missing.append((one, str(why)))
+    return missing

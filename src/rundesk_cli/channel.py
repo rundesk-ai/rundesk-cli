@@ -75,12 +75,18 @@ STOPPED = "stopped"
 FAILED = "failed"
 STATES = (TAKEN, RUNNING, FINISHED, STOPPED, FAILED)
 
-#: What a gesture aimed at a conversation may be (R-CH-9, R-CH-10). Two, and neither of
-#: them is an approval: they are about the conversation rather than about a brain's
-#: permission model, which is what lets them exist before approvals do.
+#: What a gesture may be (R-CH-9, R-CH-10, R-CH-16). None of them is an approval: they are
+#: about the conversation, or about the agent, rather than about a brain's permission
+#: model — which is what lets them exist before approvals do.
+#:
+#: `STOP` and `FORGET` are aimed at one conversation and touch nothing else. `RESTART` is
+#: aimed at the agent, so it is the one gesture whose blast radius is larger than the
+#: conversation it was made in — which is why it is spelled out here rather than being
+#: something a surface could arrive at by combining the other two.
 STOP = "stop"
 FORGET = "forget"
-CONTROLS = (STOP, FORGET)
+RESTART = "restart"
+CONTROLS = (STOP, FORGET, RESTART)
 
 #: What is asked of an adapter to find out whether it can reach what it was pointed at.
 #: Unlike asking a brain what it can do, this one really does reach a network — that is the
@@ -133,10 +139,12 @@ def environment(
     channel: str,
     agent: str,
     channel_home: Path,
+    allow=None,
     settings: dict | None = None,
     secret: dict | None = None,
     environ: dict | None = None,
     path: str | None = None,
+    checking: bool = False,
 ) -> dict[str, str]:
     """Everything an adapter is told, and the whole of it (R-CAD-13).
 
@@ -150,11 +158,26 @@ def environment(
     rundesk runs gets is built rather than inherited, so a credential has to be named to
     arrive, and naming one is the adapter's own doing. The value is never written down
     anywhere and never comes back out (R-CAD-12).
+
+    **`checking` is the one exception, and it is the owner's own shell.** An adapter being
+    checked has not yet had the chance to say which variable it reads — that is what it is
+    answering — so there is no name to let through and it would be asked to sign in with
+    nothing. A check is a person at a terminal running a program they just chose to run,
+    once, in their own shell: giving it what they exported is what running any command
+    does. Holding one open unattended for weeks is not, which is why the tight environment
+    is the one that lasts.
     """
-    said = process.environment(home, path=path)
+    said = dict(environ if environ is not None else os.environ) if checking else {}
+    said.update(process.environment(home, path=path))
     said["RUNDESK_CHANNEL"] = channel
     said["RUNDESK_AGENT"] = agent
     said["RUNDESK_CHANNEL_HOME"] = str(channel_home)
+    if allow:
+        # Who may use this channel is rundesk's to *enforce* and never the adapter's
+        # (R-CH-4) — but a surface that greets its owner has to know which of them that
+        # is, and one that showed the list to anybody would be handing out the list.
+        # Told, so it can address them; not trusted, because nothing here reads it back.
+        said["RUNDESK_ALLOW"] = ",".join(str(one) for one in allow if one)
     if settings:
         # Written out sorted, so the same settings are the same bytes every time. Never
         # read on the way past: what a platform needs is between it and its adapter.
