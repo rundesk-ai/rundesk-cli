@@ -172,8 +172,13 @@ class Store:
     gateway, no agent and no process is anywhere near it.
     """
 
-    def __init__(self, at, wait=None):
+    def __init__(self, at, wait=None, version=None):
         self.at = Path(at)
+        # Which shape this is expected to be. Left unresolved here and asked for in the body
+        # of `made`, so it is read off the steps that actually ship at the moment it matters —
+        # rather than frozen when this file was first imported, which would leave every caller
+        # sharing one mutable number and every test having to put it back.
+        self._version = version
         # Resolved in the body rather than bound as a default, so a test can shorten the wait
         # without the value having been fixed when this file was first read.
         self._wait = time.sleep if wait is None else wait
@@ -252,6 +257,7 @@ class Store:
         A fresh one is stamped with the current version and needs no migration, so first use
         and an upgrade converge on the same shape.
         """
+        want = version_wanted() if self._version is None else self._version
         self.at.parent.mkdir(parents=True, exist_ok=True)
         conn = self._open(writing=True)
         try:
@@ -261,8 +267,8 @@ class Store:
             # dangerous because this code assumes something that is not there yet. Neither is
             # a reader's decision — what resolves the second is a migration, run while
             # nothing is up.
-            if found > VERSION:
-                raise TooNew(found, VERSION)
+            if found > want:
+                raise TooNew(found, want)
             if found == 0:
                 if self._anything(conn):
                     raise Unreadable(
@@ -274,10 +280,10 @@ class Store:
                 # description of the shape kept beside them. A step that has rotted is then
                 # found by whoever next makes an agent, and a fresh install cannot drift from
                 # an upgraded one, because there is only one way to arrive.
-                migration.carry(self.at, self.at.parent, want=VERSION)
+                migration.carry(self.at, self.at.parent, want=want)
                 conn = self._open(writing=True)
-            elif found < VERSION:
-                raise Behind(found, VERSION)
+            elif found < want:
+                raise Behind(found, want)
             # A version says which shape this is meant to be, not that the shape is there. A
             # header survives a truncated restore and a dropped table where the pages holding
             # them do not, so a database can claim the current version and hold nothing. Asked
@@ -285,7 +291,7 @@ class Store:
             # guarded and this one was not, and it is the one that reads as healthy.
             if not self._anything(conn):
                 raise Unreadable(
-                    f"{self.at} says it is version {found or VERSION} and holds none of it"
+                    f"{self.at} says it is version {found or want} and holds none of it"
                 )
             self._searchable = self._has_search(conn)
         finally:

@@ -23,6 +23,7 @@ running it again is safe.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import importlib.util
 import os
 import re
@@ -115,7 +116,36 @@ def between(at_version: int, want: int, where=None) -> list:
     return [step for step in found(where) if at_version < step.version <= want]
 
 
-def carry(database, home, want: int, where=None, note=None) -> int:
+# Written the way a gateway writes its own line, so an owner reading one log reads one story.
+WRITTEN_AS = "%(at)s %(level)-7s %(said)s"
+LOG = "logs/gateway.log"
+
+
+def _now() -> str:
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def logged(home, said: str, level: str = "INFO", clock=None) -> None:
+    """Leave a line in the agent's own log, where somebody will actually look for it.
+
+    An update that failed at three in the morning is read afterwards, not watched. A migration
+    that reported only to whoever ran it would leave nothing behind for the person who finds
+    the agent down — and this is the one moment where what happened to an agent's records is
+    not yet in those records.
+    """
+    at = Path(home) / LOG
+    said = WRITTEN_AS % {"at": (clock or _now)(), "level": level, "said": said}
+    try:
+        at.parent.mkdir(parents=True, exist_ok=True)
+        with open(at, "a", encoding="utf-8") as writing:
+            writing.write(said + "\n")
+    except OSError:
+        # A log that cannot be written must not be the thing that stops an update. What is
+        # happening is still reported to the caller, which is what decides.
+        pass
+
+
+def carry(database, home, want: int, where=None, note=None, clock=None) -> int:
     """Bring one agent's records up to date, and say what version they reached.
 
     Each step is one transaction that includes its own version stamp, so an update stopped
@@ -134,10 +164,20 @@ def carry(database, home, want: int, where=None, note=None) -> int:
                 f"(none)", reached,
                 ValueError(f"this data is version {reached} and this rundesk expects {want}"),
             )
-        for step in between(reached, want, where):
+        due = between(reached, want, where)
+        if due:
+            logged(home, f"moving records from version {reached} to {want}: "
+                         + ", ".join(repr(one) for one in due), clock=clock)
+        for step in due:
             say(f"migrating {database.parent.name} to version {step.version}")
-            spent = _one(conn, step, Path(home))
+            try:
+                spent = _one(conn, step, Path(home))
+            except Failed as stopped:
+                logged(home, f"{step} did not finish — records are still at version "
+                             f"{stopped.reached}: {stopped.why}", "ERROR", clock=clock)
+                raise
             reached = step.version
+            logged(home, f"{step} finished — records are at version {reached}", clock=clock)
             # Only now that the version has moved: what a step copied is safe to let go of,
             # and a crash before this point leaves both copies rather than neither.
             for gone in spent:
@@ -146,6 +186,34 @@ def carry(database, home, want: int, where=None, note=None) -> int:
         return reached
     finally:
         conn.close()
+
+
+def carry_every(agents, want: int, where=None, note=None, clock=None) -> dict:
+    """Walk every agent and bring each forward on its own, in the order they are named.
+
+    One database per agent means one migration per agent: each is opened alone, moved from
+    wherever *it* actually is, and closed before the next is touched. Two agents are never at
+    the same version — one was made last week and one this morning — so there is no single
+    "the data" to move.
+
+    **The first agent that cannot be moved stops the walk**, because bringing the rest back up
+    onto data half-moved is worse than leaving them down and saying so. What had already been
+    carried stays carried: each was whole before the next was opened.
+    """
+    say = note if note is not None else (lambda said: None)
+    reached = {}
+    for home in sorted(Path(agents).iterdir()):
+        if not home.is_dir():
+            continue
+        database = home / "state.db"
+        if not database.exists():
+            continue
+        try:
+            reached[home.name] = carry(database, home, want, where=where, note=say, clock=clock)
+        except Failed as stopped:
+            say(f"{home.name} could not be moved: {stopped}")
+            raise Failed(stopped.step, stopped.reached, stopped.why) from stopped
+    return reached
 
 
 def _one(conn, step: Step, home: Path) -> list:

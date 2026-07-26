@@ -163,25 +163,23 @@ class WhenTheShapeOnDiskIsNotThisOne(WithAnAgentsOwnRecords):
         kept.remember_channel("ops", "discord", ["u1"], AT)
         kept.opened("c1", "ops", "thread", "99123", AT, thread="4456")
         kept.arrived("c1", AT, "what about the parser")
-        self.addCleanup(setattr, store, "VERSION", store.VERSION)
-        store.VERSION += 1
         return kept
 
     def test_a_shape_this_rundesk_has_moved_past_is_refused_until_it_is_brought_forward(self):
         self.older()
         with self.assertRaises(store.Behind) as refused:
-            store.Store(self.at).made()
-        self.assertEqual(store.VERSION - 1, refused.exception.found)
-        self.assertEqual(store.VERSION, refused.exception.understood)
+            store.Store(self.at, version=store.VERSION + 1).made()
+        self.assertEqual(store.VERSION, refused.exception.found)
+        self.assertEqual(store.VERSION + 1, refused.exception.understood)
 
     def test_an_older_shape_is_left_exactly_as_it_was_when_it_is_refused(self):
         """Refusing must cost nothing. A reader that repaired what it could not read would
         be the one thing standing between an owner and a migration that still works."""
         self.older()
         with self.assertRaises(store.Behind):
-            store.Store(self.at).made()
+            store.Store(self.at, version=store.VERSION + 1).made()
         arranged = self.raw()
-        self.assertEqual(store.VERSION - 1,
+        self.assertEqual(store.VERSION,
                          arranged.execute("PRAGMA user_version").fetchone()[0])
         self.assertEqual(1, arranged.execute("SELECT count(*) FROM channel").fetchone()[0])
         self.assertEqual("what about the parser",
@@ -228,10 +226,8 @@ class WhenTheShapeOnDiskIsNotThisOne(WithAnAgentsOwnRecords):
         )
         self.addCleanup(setattr, migration, "STEPS", migration.STEPS)
         migration.STEPS = steps
-        self.addCleanup(setattr, store, "VERSION", store.VERSION)
-        store.VERSION = 1
         with self.assertRaises(migration.Failed):
-            store.Store(at).made()
+            store.Store(at, version=1).made()
         arranged = sqlite3.connect(str(at))
         self.addCleanup(arranged.close)
         self.assertEqual(0, arranged.execute("PRAGMA user_version").fetchone()[0])
@@ -863,7 +859,9 @@ class TakingAnAgentsRecordsAway(WithAnAgentsOwnRecords):
         store.gone(self.where)
         for one in store.removes(self.where):
             self.assertFalse(one.exists(), f"{one.name} was left behind")
-        self.assertEqual([], sorted(self.where.iterdir()))
+        # What is left is the log, which is not a record and is not this call's to take —
+        # building the records wrote a line saying so, and that outlives them on purpose.
+        self.assertEqual(["logs"], sorted(one.name for one in self.where.iterdir()))
         store.gone(self.where)  # asking twice is not an error
 
 

@@ -903,7 +903,6 @@ Which gives one shape per agent, and nothing outside it:
 
 ```text
 ~/.rundesk/
-  rundesk.json                  what shape this install's data is in. One number, and nothing else.
   agents/
     ava/
       state.db                  RECORDS — the agent, its channels, schedules and what each last
@@ -950,11 +949,16 @@ to prevent. `usage` across every agent is then several small queries rather than
 has a handful of agents, which is a price worth paying for keeping an agent self-contained enough to copy
 elsewhere.
 
-**One version number, at the top.** `rundesk.json` says what shape the data is in, and a migration is a
-step from one number to the next that may move files, change a schema, or both — because moving
-`logs/ava.log` to `history/gateway.log` is a migration too, and a schema version inside a database cannot
-describe it. Each `state.db` mirrors that number in `PRAGMA user_version` so a database found on its own
-still says what it is.
+**One version per agent, and nothing at the top.** There is no install-wide state at all: the list of
+agents is the directories, found rather than listed, and every durable thing belongs to one agent. So the
+version lives where the data does — `PRAGMA user_version` inside each `state.db` — and a database found on
+its own still says what it is. A step may move that agent's files as well as its rows, because it is handed
+the agent's own directory, so moving `logs/ava.log` to `logs/gateway.log` is inside the same versioned step
+as the schema change beside it.
+
+The consequence, stated rather than discovered: something an earlier rundesk left behind that belongs to no
+agent — the `twice.*` sidecars of a gateway that never had one — has no version to be moved under. It is
+deleted as a one-off, and said out loud, rather than pretended into a migration.
 
 **Where SQLite earns its place, and where it does not.** It is in the standard library, so it costs no
 dependency, and `PRAGMA user_version` is a schema version designed for exactly this. The split worth
@@ -1136,7 +1140,6 @@ update replaces. Every item is named, including the ones that turned out not to 
 | `~/.rundesk/{run,logs}` | — | **do not exist.** The legacy layout is two files, not three directories |
 | `~/.rundesk/.update.lock` | unchanged | install-level, not an agent's |
 | `~/Library/LaunchAgents/ai.rundesk.*` | — | **none present.** A machine with one gains `logs/gateway.log` as both its capture paths |
-| — | `~/.rundesk/rundesk.json` | **new.** The layout version, one number |
 
 **The one row that is not a copy.** `sessions.json` reads:
 

@@ -534,14 +534,190 @@ class TheShapeAnAgentStartsWith(WithStepsOfThisCasesOwn):
         kept = self.records()
         kept.remember_channel("ops", "discord", ["u1"], AT)
         behind = store.VERSION
-        self.addCleanup(setattr, store, "VERSION", store.VERSION)
-        store.VERSION += 1
+        # Which shape is expected is asked for rather than frozen, so a case says it out loud
+        # instead of reaching into a shared global and having to put it back.
         with self.assertRaises(store.Behind) as refused:
-            store.Store(self.at).made()
+            store.Store(self.at, version=behind + 1).made()
         self.assertEqual(behind, refused.exception.found)
-        self.assertEqual(store.VERSION, refused.exception.understood)
+        self.assertEqual(behind + 1, refused.exception.understood)
         self.assertEqual(behind, self.stamped(), "opening a database migrated it")
         self.assertEqual(1, self.raw().execute("SELECT count(*) FROM channel").fetchone()[0])
+
+
+class EachAgentIsCarriedOnItsOwn(WithStepsOfThisCasesOwn):
+    """One database per agent means one migration per agent, and no agent waits on another.
+
+    An update walks every agent in turn. Two of them are never at the same version — one was
+    made last week and one this morning — so each must be brought forward from wherever it
+    actually is, and one that cannot be moved must not take a healthy one with it.
+    """
+
+    SIGNS = """
+        def up(conn, home):
+            conn.execute("INSERT INTO ran (step) VALUES ('%s')")
+            return []
+        """
+
+    def another(self, called: str):
+        """A second agent, with records of its own beside the first."""
+        home = self.where / called
+        home.mkdir()
+        at = store.path_for(home)
+        store.Store(at).made()
+        conn = sqlite3.connect(str(at), isolation_level=None, timeout=5.0)
+        self.addCleanup(conn.close)
+        conn.execute("CREATE TABLE ran (n INTEGER PRIMARY KEY AUTOINCREMENT, step TEXT NOT NULL)")
+        return home, at, conn
+
+    def test_each_agent_is_brought_forward_from_wherever_it_actually_is(self):
+        self.records()
+        self.ledger()
+        theirs_home, theirs_at, theirs = self.another("plans")
+        self.wrote(2, self.SIGNS % "two")
+        self.wrote(3, self.SIGNS % "three")
+
+        # one of them is already part way, as an agent made after a release would be
+        self.raw().execute("PRAGMA user_version = 2")
+
+        self.assertEqual(3, migration.carry(self.at, self.home, 3, where=self.steps))
+        self.assertEqual(3, migration.carry(theirs_at, theirs_home, 3, where=self.steps))
+
+        self.assertEqual(["three"], self.ran(), "a step already taken was taken again")
+        self.assertEqual(
+            [("two",), ("three",)],
+            list(theirs.execute("SELECT step FROM ran ORDER BY n")),
+            "the second agent was not brought forward from its own version")
+
+    def test_an_agent_that_cannot_be_moved_leaves_every_other_agent_as_it_was(self):
+        self.records()
+        self.ledger()
+        theirs_home, theirs_at, theirs = self.another("plans")
+        self.wrote(2, self.SIGNS % "two")
+        self.wrote(3, """
+            def up(conn, home):
+                conn.execute("INSERT INTO ran (step) VALUES ('three')")
+                raise RuntimeError("this one cannot be moved")
+            """)
+
+        with self.assertRaises(migration.Failed) as stopped:
+            migration.carry(theirs_at, theirs_home, 3, where=self.steps)
+        self.assertEqual(2, stopped.exception.reached,
+                         "it stopped somewhere other than where the last good step left it")
+
+        # the one that failed kept what it had, and stopped where it stopped
+        self.assertEqual([("two",)], list(theirs.execute("SELECT step FROM ran ORDER BY n")))
+        self.assertEqual(
+            2, sqlite3.connect(str(theirs_at)).execute("PRAGMA user_version").fetchone()[0])
+        # and the other agent was never opened at all
+        self.assertEqual(store.VERSION, self.stamped(),
+                         "one agent's failure reached another agent's records")
+        self.assertEqual([], self.ran())
+
+
+class WalkingEveryAgent(WithStepsOfThisCasesOwn):
+    """An update moves every agent, one at a time, and writes down what it did to each."""
+
+    def agent(self, called: str, signs: str = "") -> tuple:
+        home = self.where / called
+        home.mkdir(exist_ok=True)
+        at = store.path_for(home)
+        store.Store(at).made()
+        conn = sqlite3.connect(str(at), isolation_level=None, timeout=5.0)
+        self.addCleanup(conn.close)
+        conn.execute("CREATE TABLE ran (n INTEGER PRIMARY KEY AUTOINCREMENT, step TEXT NOT NULL)")
+        return home, at, conn
+
+    def said(self, home) -> str:
+        at = Path(home) / migration.LOG
+        return at.read_text() if at.exists() else ""
+
+    def test_every_agent_is_walked_and_each_reaches_its_own_version(self):
+        for called in ("ava", "john", "plans"):
+            self.agent(called)
+        self.wrote(2, """
+            def up(conn, home):
+                conn.execute("INSERT INTO ran (step) VALUES ('two')")
+                return []
+            """)
+        reached = migration.carry_every(self.where, 2, where=self.steps)
+        self.assertEqual({"ava": 2, "john": 2, "plans": 2}, reached)
+        for called in ("ava", "john", "plans"):
+            self.assertEqual(
+                [("two",)],
+                list(sqlite3.connect(str(store.path_for(self.where / called)))
+                     .execute("SELECT step FROM ran")))
+
+    def test_a_directory_that_is_not_an_agent_is_walked_past(self):
+        self.agent("ava")
+        (self.where / "not-an-agent").mkdir()
+        (self.where / "a-file").write_text("nor this")
+        self.wrote(2, "def up(conn, home):\n    return []\n")
+        self.assertEqual({"ava": 2}, migration.carry_every(self.where, 2, where=self.steps))
+
+    def test_the_first_agent_that_cannot_be_moved_stops_the_walk(self):
+        for called in ("ava", "john", "zeta"):
+            self.agent(called)
+        self.wrote(2, """
+            def up(conn, home):
+                if home.name == "john":
+                    raise RuntimeError("this one cannot be moved")
+                conn.execute("INSERT INTO ran (step) VALUES ('two')")
+                return []
+            """)
+        with self.assertRaises(migration.Failed):
+            migration.carry_every(self.where, 2, where=self.steps)
+        # what was carried before it stays carried; what came after is untouched
+        self.assertEqual(2, self.stamped_at(self.where / "ava"))
+        self.assertEqual(1, self.stamped_at(self.where / "john"))
+        self.assertEqual(1, self.stamped_at(self.where / "zeta"),
+                         "an agent after the failure was moved anyway")
+
+    def stamped_at(self, home) -> int:
+        conn = sqlite3.connect(str(store.path_for(home)))
+        self.addCleanup(conn.close)
+        return int(conn.execute("PRAGMA user_version").fetchone()[0])
+
+    def test_what_a_migration_did_is_left_in_the_agents_own_log(self):
+        """Read afterwards, not watched. An update that failed overnight leaves the person who
+        finds the agent down something to read — and this is the one moment where what happened
+        to an agent's records is not yet in those records."""
+        home, at, _ = self.agent("ava")
+        self.wrote(2, "def up(conn, home):\n    return []\n")
+        migration.carry_every(self.where, 2, where=self.steps,
+                              clock=lambda: "2026-07-26 03:00:00")
+        wrote = self.said(home)
+        self.assertIn("moving records from version 1 to 2", wrote)
+        self.assertIn("002.py finished — records are at version 2", wrote)
+        self.assertIn("2026-07-26 03:00:00", wrote)
+        self.assertIn("INFO", wrote)
+
+    def test_a_migration_that_failed_says_so_in_the_agents_own_log(self):
+        home, at, _ = self.agent("ava")
+        self.wrote(2, """
+            def up(conn, home):
+                raise RuntimeError("the machine went away")
+            """)
+        with self.assertRaises(migration.Failed):
+            migration.carry_every(self.where, 2, where=self.steps,
+                                  clock=lambda: "2026-07-26 03:00:00")
+        wrote = self.said(home)
+        self.assertIn("ERROR", wrote)
+        self.assertIn("did not finish", wrote)
+        self.assertIn("still at version 1", wrote)
+        self.assertIn("the machine went away", wrote)
+
+    def test_a_log_that_cannot_be_written_does_not_stop_the_update(self):
+        """Losing the note is bad. Refusing to move an owner's data because a note could not
+        be written is worse, and the caller is told either way."""
+        home, at, _ = self.agent("ava")
+        self.wrote(2, "def up(conn, home):\n    return []\n")
+        # A directory where the log file goes: appending to it raises, which is the shape of
+        # a log that cannot be written without inventing a permission the suite cannot rely on.
+        at = home / migration.LOG
+        if at.exists():
+            at.unlink()
+        at.mkdir(parents=True)
+        self.assertEqual({"ava": 2}, migration.carry_every(self.where, 2, where=self.steps))
 
 
 if __name__ == "__main__":

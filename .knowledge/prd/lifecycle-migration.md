@@ -37,7 +37,6 @@ update already stands every gateway down for. A step forward exists; a step back
 | ✅ | R-MIG-16 | A number too large to be recorded as a version is refused rather than wrapped | `a number that could not be a version is refused rather than wrapped` |
 | ❌ | R-MIG-17 | Nothing an update moves loses an account, a log, or what a schedule last did | — |
 | ❌ | R-MIG-18 | Data moved forward is never moved back | — |
-| ❌ | R-MIG-19 | Which shape an install's data is in is readable without opening any agent's records | — |
 
 ## Open questions
 
@@ -47,3 +46,5 @@ update already stands every gateway down for. A step forward exists; a step back
 - What happens to an agent whose records cannot be read at all when every other agent's can.
 - Whether a copy of what was there is kept after a move is proved, and for how long.
 - Whether a machine that never updates, only reinstalls, needs any of this.
+- What becomes of something an earlier rundesk left behind that belongs to no agent, given
+  nothing outside an agent carries a version to move it under.
