@@ -75,6 +75,24 @@ class TooNew(Exception):
         self.understood = understood
 
 
+class Behind(Exception):
+    """Written by an earlier rundesk, and not yet brought forward.
+
+    Refused as firmly as a newer one, and for the same reason: reading an older shape as
+    though it were this one is reading a partial truth and then writing over the rest. What
+    resolves this is a migration, which runs while nothing is up — never a reader deciding
+    on its own that the difference probably does not matter.
+    """
+
+    def __init__(self, found: int, understood: int):
+        super().__init__(
+            f"this data is version {found} and this rundesk expects {understood} — "
+            "it has not been brought forward yet"
+        )
+        self.found = found
+        self.understood = understood
+
+
 class Unsearchable(Exception):
     """This machine's SQLite was built without FTS5. Said out loud, never returned as none."""
 
@@ -253,6 +271,25 @@ def _marked(pick=None) -> str:
     return "".join(chose(MARK_FROM) for _ in range(MARK_LENGTH))
 
 
+def _statements(script: str):
+    """Split a script the way SQLite itself would, and never on the semicolons.
+
+    A trigger body holds `BEGIN … END;` with semicolons inside it, so splitting on `;` cuts
+    one statement into three that none of them parse. `complete_statement` is the same test
+    the shell uses to decide a statement has ended, so a trigger survives it intact.
+    """
+    gathered = ""
+    for line in script.splitlines(keepends=True):
+        gathered += line
+        if sqlite3.complete_statement(gathered):
+            said = gathered.strip()
+            if said and not said.startswith("--"):
+                yield said
+            gathered = ""
+    if gathered.strip():
+        raise ValueError(f"a statement was never finished: {gathered.strip()[:60]}…")
+
+
 def _fts5(conn) -> bool:
     """Whether this machine's SQLite can search at all — asked by trying it, not by version."""
     try:
@@ -368,26 +405,53 @@ class Store:
         conn = self._open(writing=True)
         try:
             found = conn.execute("PRAGMA user_version").fetchone()[0]
+            # Both directions are refused, and that symmetry is the point. A newer shape is
+            # dangerous because this code does not know what it is missing; an older one is
+            # dangerous because this code assumes something that is not there yet. Neither is
+            # a reader's decision — what resolves the second is a migration, run while
+            # nothing is up.
             if found > VERSION:
                 raise TooNew(found, VERSION)
-            if found == 0 and not self._anything(conn):
-                # DDL is not transactional here — `CREATE TABLE` commits itself and survives a
-                # rollback on every Python from the floor upward — so the version is stamped
-                # last. A database carrying tables and no version is one that died partway,
-                # and is told apart from an empty one.
-                conn.executescript(SCHEMA)
-                if _fts5(conn):
-                    conn.executescript(SEARCH)
-                conn.execute("INSERT INTO agent (id) VALUES (1)")
-                conn.execute("INSERT INTO gateway (id) VALUES (1)")
-                conn.execute(f"PRAGMA user_version = {VERSION}")
-            elif found == 0:
-                raise Unreadable(
-                    f"{self.at} holds tables but says no version — it was written partway"
-                )
+            if found == 0:
+                if self._anything(conn):
+                    raise Unreadable(
+                        f"{self.at} holds tables but says no version — it was written partway"
+                    )
+                self._build(conn)
+            elif found < VERSION:
+                raise Behind(found, VERSION)
             self._searchable = self._has_search(conn)
         finally:
             conn.close()
+
+    @staticmethod
+    def _build(conn) -> None:
+        """Everything, in one transaction — including the stamp that says it happened.
+
+        SQLite keeps DDL inside a transaction, so the tables, the first rows and the version
+        roll back together and a database half-built is not a state that can exist. A future
+        migration is one step of exactly this shape, which is why there is no separate record
+        of what has run: the version moving *is* the record.
+        """
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # One statement at a time, never `executescript`: that issues an implicit COMMIT
+            # before it runs, which would end the transaction opened just above and leave the
+            # build to happen in the open. The atomicity here is the whole reason a migration
+            # can carry its own version stamp.
+            for statement in _statements(SCHEMA):
+                conn.execute(statement)
+            if _fts5(conn):
+                for statement in _statements(SEARCH):
+                    conn.execute(statement)
+            conn.execute("INSERT INTO agent (id) VALUES (1)")
+            conn.execute("INSERT INTO gateway (id) VALUES (1)")
+            conn.execute(f"PRAGMA user_version = {VERSION}")
+        except BaseException:
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute("ROLLBACK")
+            raise
+        conn.execute("COMMIT")
 
     @staticmethod
     def _anything(conn) -> bool:

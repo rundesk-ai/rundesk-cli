@@ -116,6 +116,70 @@ class TheShapeOnDisk(WithAnAgentsOwnRecords):
                          "an unreadable database was built over rather than left alone")
 
 
+class WhenTheShapeOnDiskIsNotThisOne(WithAnAgentsOwnRecords):
+    """Both directions are refused, and the symmetry is the point.
+
+    A newer shape is dangerous because this code does not know what it is missing. An older
+    one is dangerous because this code assumes something that is not there yet. Guarding only
+    the first leaves the second silently reading a partial truth and writing over the rest.
+    """
+
+    def older(self):
+        """A database this rundesk has moved on from, with something in it worth keeping."""
+        kept = self.built()
+        kept.remember_channel("ops", "discord", ["u1"], AT)
+        kept.opened("c1", "ops", "thread", "99123", AT, thread="4456")
+        kept.arrived("c1", AT, "what about the parser")
+        self.addCleanup(setattr, store, "VERSION", store.VERSION)
+        store.VERSION += 1
+        return kept
+
+    def test_a_shape_this_rundesk_has_moved_past_is_refused_until_it_is_brought_forward(self):
+        self.older()
+        with self.assertRaises(store.Behind) as refused:
+            store.Store(self.at).made()
+        self.assertEqual(store.VERSION - 1, refused.exception.found)
+        self.assertEqual(store.VERSION, refused.exception.understood)
+
+    def test_an_older_shape_is_left_exactly_as_it_was_when_it_is_refused(self):
+        """Refusing must cost nothing. A reader that repaired what it could not read would
+        be the one thing standing between an owner and a migration that still works."""
+        self.older()
+        with self.assertRaises(store.Behind):
+            store.Store(self.at).made()
+        arranged = self.raw()
+        self.assertEqual(store.VERSION - 1,
+                         arranged.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(1, arranged.execute("SELECT count(*) FROM channel").fetchone()[0])
+        self.assertEqual("what about the parser",
+                         arranged.execute("SELECT text FROM message").fetchone()[0])
+
+    def test_a_database_half_built_is_not_a_state_that_can_exist(self):
+        """The tables, the first rows and the stamp all move together.
+
+        SQLite keeps DDL inside a transaction, so a build that dies partway leaves nothing
+        rather than a shape nobody can name — and it is the same property that lets a
+        migration carry its own version stamp instead of inventing a record of what ran.
+        """
+        broken = Path(tempfile.mkdtemp(prefix="rundesk-store-"))
+        self.addCleanup(shutil.rmtree, broken, True)
+        at = store.path_for(broken)
+        self.addCleanup(setattr, store, "SEARCH", store.SEARCH)
+        # A whole, parseable statement that fails when it runs — which is what a real
+        # failure partway through a build looks like, rather than one nobody can read.
+        store.SEARCH = "CREATE VIRTUAL TABLE message_fts USING no_such_module(text);"
+        with self.assertRaises(sqlite3.OperationalError):
+            store.Store(at).made()
+        arranged = sqlite3.connect(str(at))
+        self.addCleanup(arranged.close)
+        self.assertEqual(0, arranged.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(
+            [], arranged.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='agent'"
+            ).fetchall(),
+            "a failed build left tables behind with no version to name them")
+
+
 class TellingReadingAndWritingApart(WithAnAgentsOwnRecords):
     def test_a_reader_cannot_write_because_the_database_refuses_it(self):
         """The claim the whole module rests on: a reader is opened `mode=ro`, so it can
