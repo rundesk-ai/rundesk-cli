@@ -205,6 +205,29 @@ jobs:
           tail -c 200000 suite.log
           exit $ran
 
+      - name: provider-claude — the arithmetic and the postures, against 184 captured lines
+        run: |
+          # Drives `tests/samples/claude-stream.jsonl`, which is real output from a real
+          # account, committed because it cost money and cannot be re-derived by reading.
+          # So this needs no account and no network, and still holds the adapter to what a
+          # brain said: the reply arrives twice and reporting both doubles every answer,
+          # three lines carry a usage block and only one is the turn, and two token fields
+          # are billed differently so summing them is real and misleading.
+          set +e; python -u tests/test_claude.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
+
+      - name: provider-grok — a brain that reports no tools, and the flags that lie
+        run: |
+          # Drives `tests/samples/grok-stream.jsonl`. This brain reports no tool events at
+          # all, and the case that matters most is that none is invented. Two of its flags
+          # are accepted and enforce nothing — one of them shipped a bug where an agent
+          # with full access could write nothing while its turn reported success — so the
+          # argv is asserted on as hard as the arithmetic is.
+          set +e; python -u tests/test_grok.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
+
       - name: channel-discord — what a turn looks like on Discord, decided offline
         run: |
           # The policy, never the wire: which messages are for this agent, what a mark
