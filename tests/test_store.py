@@ -529,7 +529,7 @@ class WhenTheClockStartsWork(WithAnAgentsOwnRecords):
         """Only the clock moves these. A hand-run that moved them would push out the next
         automatic firing, so asking for something now would quietly cancel tonight."""
         self.kept.schedule_fired("nightly", AT, "started")
-        by_hand = self.a_run(self.kept, source="hand",
+        by_hand = self.a_run(self.kept, source="schedule",
                              schedule_id=self.kept.schedule("nightly")["id"])
         self.kept.recorded(by_hand, 1, LATER, "done", event={"ok": True})
         self.kept.ended(by_hand, LATER, "done", exit_code=0)
@@ -641,6 +641,43 @@ class WhichBrainAConversationIsCarriedOnBy(WithAnAgentsOwnRecords):
         self.assertEqual("conv-771", self.kept.session("c1", "claude"))
         self.kept.forget_session("c1")
         self.assertIsNone(self.kept.session("c1", "claude"))
+
+
+class HowWorkCameToBeAdmitted(WithAnAgentsOwnRecords):
+    """R-RUN-16 — the only record of how a run came about. Free text until now: `"hand"`
+    existed in this suite and in nothing else, which is exactly what a fourth word arriving
+    by typo looks like from outside. A word nothing can read back is a run whose origin is
+    lost, and this is the column somebody reads at three in the morning to find out whether
+    they asked for what happened."""
+
+    def test_every_way_work_is_admitted_is_named_here(self):
+        """R-RUN-16 — three, because there are three things that start work: somebody at a
+        terminal, somebody on a surface the agent is reachable on, and the clock."""
+        kept = self.built()
+        for source in store.SOURCES:
+            with self.subTest(source=source):
+                run = self.a_run(kept, source=source)
+                self.assertEqual(source, kept.run(run)["source"])
+
+    def test_work_admitted_from_somewhere_nobody_declared_is_refused(self):
+        """R-RUN-16 — refused where an author and a record kind already are, so the set is
+        one thing to keep true rather than a convention nothing enforces."""
+        kept = self.built()
+        for said in ("hand", "cron", "", None, "Terminal"):
+            with self.subTest(source=said):
+                with self.assertRaises(ValueError, msg=f"admitted {said!r}"):
+                    self.a_run(kept, source=said)
+
+    def test_a_run_refused_for_its_source_is_not_written_at_all(self):
+        """R-RUN-16 — refused before the transaction, so a rejected admission does not
+        consume a run number that then has a hole where it should be."""
+        kept = self.built()
+        first = self.a_run(kept)
+        with self.assertRaises(ValueError):
+            self.a_run(kept, source="nowhere")
+        second = self.a_run(kept)
+        self.assertEqual([1, 2], sorted(one["n"] for one in kept.runs(limit=50)))
+        self.assertNotEqual(first, second)
 
 
 class TheAccountOfARun(WithAnAgentsOwnRecords):

@@ -72,6 +72,18 @@ MARK_LENGTH = 4
 RECORD_KINDS = ("think", "tool", "result", "usage", "file", "done", "lost", "unknown")
 AUTHORS = ("person", "agent", "rundesk")
 
+#: Every way work is admitted for an agent, and the whole of it. Three, because there are
+#: three things that start one: somebody at a terminal, somebody on a surface the agent is
+#: reachable on, and the clock.
+#:
+#: **Declared and refused rather than written as free text.** This is the only record of how
+#: a run came about, and until it was a set the column took whatever a caller passed —
+#: `"hand"` existed in a test and in nothing else, which is what a fourth word arriving by
+#: typo looks like from the outside. A word nobody can read back is a run whose origin is
+#: lost, and this is the column somebody reads at three in the morning to find out whether
+#: they asked for what happened.
+SOURCES = ("terminal", "channel", "schedule")
+
 
 class Unreadable(Exception):
     """There is something there and it could not be understood. Never treated as empty."""
@@ -812,7 +824,13 @@ class Store:
         `provider` is the adapter as the owner named it. Its settled form — what names its
         private directory and what `session` keys on — is `provider.key()` of that, derived,
         so it is not kept here as well.
+
+        `source` is one of `SOURCES` and refused otherwise, the way an author and a record
+        kind already are: it is the only thing that says how this run came about, and a word
+        nothing can read back is a run whose origin is lost rather than one described oddly.
         """
+        if source not in SOURCES:
+            raise ValueError(f"work is admitted from one of {SOURCES}, not {source!r}")
         with self._writing() as conn:
             row = conn.execute("SELECT COALESCE(MAX(n), 0) + 1 FROM run").fetchone()
             number = int(row[0])
