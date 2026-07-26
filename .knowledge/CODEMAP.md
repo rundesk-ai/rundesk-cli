@@ -112,6 +112,12 @@ rewrites it; a retention policy takes whole files.
 - `src/rundesk_cli/turn.py` — the only module that knows the four above exist: resolve, write down what was
   resolved, run the brain, write down what it said, keep where the conversation got to, write down how it
   ended. Nothing reaches a brain that the account does not show.
+- `src/rundesk_cli/store.py` — everything one agent keeps, and **the only way in to it**. One database per
+  agent, never one shared, so a turn's write is never in another agent's way. Reading and writing are told
+  apart at the connection: a reader is opened read-only, so it cannot begin work that would make a turn
+  wait — refused by the database rather than by convention. No statement is written anywhere else and no
+  connection ever leaves the module, both proved by looking. **Nothing reads it yet**; it is built and
+  proved before anything moves onto it, so deleting it would leave the product exactly as it is.
 - `src/rundesk_cli/updater.py` — where this install stands against what is published, and moving between
   them. Every network call is behind an argument, so the whole module is exercised offline.
 - `src/rundesk_cli/process.py` — a program rundesk runs, and how it keeps hold of it: its own session so
@@ -157,6 +163,7 @@ provider. One file per contract, named for it:
 | `test_turn.py` | 39 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_transcript.py` | 20 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
 | `test_session.py` | 9 | `agent-run` — a handle kept for a conversation and a brain together |
+| `test_store.py` | 57 | `platform-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
 | `test_channel.py` | 42 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
 | `test_answering.py` | 36 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
 | `test_discord.py` | 37 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up |

@@ -167,5 +167,20 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   errored — a generated image was simply never reported. Read a real item out of a run's
   `.brain` file before writing the name of a field.
 
+- **`BEGIN IMMEDIATE` on a read-only SQLite connection succeeds.** SQLite defers taking the write
+  lock until something actually writes, so a case proving `store`'s reader "cannot begin a write
+  transaction" by asserting the `BEGIN` raises is asserting on nothing — and fails. The refusal
+  lands on the first write, as `OperationalError: attempt to write a readonly database`. Assert
+  there.
+- **A case about `store`'s boundary retry must shorten `store.BUSY_SECONDS` first.** SQLite's own
+  busy handler waits the connection timeout — five seconds — before `BEGIN IMMEDIATE` ever raises,
+  so holding a write lock from a second connection and expecting the retry costs five seconds an
+  attempt and reads as a hang. It is looked up in the body of `_open`, so setting it to `0.05`
+  (and restoring it in `addCleanup`) reaches it; the fake `wait=` can then release the held lock
+  and the retry resolves at once.
+- **`store.usage()` on an agent that has run nothing reports `None` for the four token totals**, not
+  `0` — `SUM` over no rows is NULL, and only `runs`, `reported` and `unreported` are counted. A case
+  asserting zeros on a fresh database fails.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

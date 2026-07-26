@@ -120,6 +120,16 @@ jobs:
           tail -c 200000 suite.log
           exit $ran
 
+      - name: platform-store — everything one agent keeps, and the only way in to it
+        run: |
+          # Into a file, never the runner's own pipe. A suite that leaks a process
+          # leaks the step's stdout with it, and the runner then waits for a stream
+          # that nothing will close — the step hangs after Python has already exited,
+          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
+          set +e; python -u tests/test_store.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
+
       # -- the agent, above the gateway that runs it ---------------------------------
       - name: agent-home — what an agent is, and the one gateway that runs it
         run: |
