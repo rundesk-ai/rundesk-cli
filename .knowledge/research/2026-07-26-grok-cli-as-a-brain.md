@@ -204,6 +204,22 @@ itself for a Phase-0 probe that was never run.[7][8] It was right.
 Still assumed, from that same write-up: headless runs need a cached subscription token or
 `XAI_API_KEY`, and long-running subscription-token refresh behaviour is undocumented.[8]
 
+### Conversations are filed by the directory a turn was run in
+
+Measured: this brain keeps its sessions at `~/.grok/sessions/<url-encoded working directory>` —
+one directory per place a turn was run, holding that place's conversations and nothing else.[12]
+Claude does the same thing under another name, filing at `~/.claude/projects/<cwd slug>/`, with
+the session id that a resume handle names as a `.jsonl` inside it.[12]
+
+So **standing a turn in the agent's own directory is what separates one agent's conversations
+from another's**, and it happens whether or not anything relocates the brain's home. That is the
+same isolation a person gets by `cd`-ing into a project and running the CLI, and it is already
+what rundesk does for every turn.
+
+What relocating `GROK_HOME` adds on top is a second login to create and nothing else, which is
+why the shipped adapter stopped doing it. What it would still buy, for an owner who wants it, is
+a genuinely *separate account* — and that is a thing to ask for rather than a default to impose.
+
 ### The prompt does not have to be on the command line
 
 Measured: `--prompt-file <path>` is on this build's help, appears in none of the carried-over
@@ -275,6 +291,10 @@ no tool it calls appears in the stream.
 - **Close the cross-session door explicitly.** `--no-memory` on every turn is what makes a resume
   handle mean what it says. Without it this CLI answers from conversations it was never handed,
   and the failure is invisible: the turn is right, and it is right for the wrong reason.
+- **Separate agents by where they stand, not by relocating the brain's home.** Both this CLI and
+  Claude file conversations under the working directory, so standing a turn in its own agent's
+  home already separates them — and it costs nothing, needs no second login, and is what a person
+  does by hand. Moving the home is for a different *account*, which is a thing to be asked for.
 - **Write the prompt to a file.** `--prompt-file` works, so what somebody asked their agent never
   has to appear in the process list.
 - **Omit `cached` rather than guessing it, if the field is ever missing.** An absent value means

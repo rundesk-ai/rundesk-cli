@@ -229,6 +229,17 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
             self.assertIn("--no-memory", self.opening(posture=posture))
         self.assertIn("--no-memory", self.opening(resume="an-old-session"))
 
+    def test_an_agent_is_separated_by_where_it_stands_rather_than_by_a_relocated_home(self):
+        """Measured: this brain files its conversations under the directory a turn was run
+        in — `~/.grok/sessions/%2FUsers%2F…%2F<agent home>` — exactly as Claude files them
+        under `~/.claude/projects/<cwd slug>`. Rundesk already stands each turn in its own
+        agent's home, so relocating `GROK_HOME` on top of that separated nothing further
+        and cost a second login to create. The shipped codex adapter has never set its own
+        either, and on Claude the equivalent variable removes the login outright."""
+        source = AT.read_text(encoding="utf-8")
+        setting = re.findall(r"^[^#\n]*GROK_HOME[^\n]*=", source, re.M)
+        self.assertEqual([], setting, "something in this adapter relocates the brain's home")
+
     def test_a_turn_asked_to_only_look_is_given_a_tool_list_and_nothing_else(self):
         """R-PRV-18. The tool list is the only thing measured to scope this CLI, so it is
         the whole of how a posture is honoured."""

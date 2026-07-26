@@ -301,12 +301,19 @@ def carry() -> int:
                             os.environ.get("RUNDESK_RESUME"), _settings(), session,
                             asked_at)
 
-    # This brain keeps its login where it keeps its configuration, so the agent's private
-    # home is both. Measured: an empty one fails the turn closed and names the command to
-    # fix it. Nothing is copied or linked in — sharing a sign-in is the owner's call.
+    # **`GROK_HOME` is deliberately not set, and the working directory is why.** Measured:
+    # this brain files its conversations under the directory a turn was run in —
+    # `~/.grok/sessions/%2FUsers%2F…%2F<agent home>` — exactly as Claude files them under
+    # `~/.claude/projects/<cwd slug>`. Rundesk already stands each turn in its own agent's
+    # home, so conversations, project state and the files a brain auto-loads are separated
+    # by that alone. Relocating the *home* on top of it adds nothing except a second login
+    # to create, and the shipped codex adapter has never set its own either.
+    #
+    # What a private home is still used for here is the prompt file below, which is this
+    # adapter's own bookkeeping and has nothing to do with credentials. An owner who wants
+    # a genuinely separate identity passes one through `--set`, which reaches this brain
+    # unread like any other flag.
     env = dict(os.environ)
-    if home:
-        env["GROK_HOME"] = home
     try:
         return _turn(argv, where, env, session)
     finally:
@@ -352,9 +359,7 @@ def _turn(argv: list, where: str, env: dict, session: str) -> int:
     if not seen["ended"]:
         said = " ".join(trouble).lower()
         if LOGGED_OUT in said:
-            went_wrong("this agent's private home has no Grok login in it — run:\n"
-                       f"  GROK_HOME={env.get('GROK_HOME', '<home>')} {GROK} login "
-                       f"--device-code")
+            went_wrong(f"this machine has no Grok login — run:\n  {GROK} login --device-code")
         say(type="done", ok=False, why=_why(trouble, code))
         return code or 1
     return code
