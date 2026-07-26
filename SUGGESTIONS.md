@@ -7,7 +7,16 @@ in it is one more thing to read before finding the thing that matters. Numbers a
 reused and gaps are expected: they are cited in commits, in `ROADMAP.md` and in each other.
 
 Three findings are **partly** closed and say in their own status which half is still open —
-4, 6 and 9. Read the status before the body.
+4, 6 and 9. Read the status before the body. **28 is narrowed rather than partly closed** and
+says in its own status what is left of it.
+
+**What the clock closed.** Letting a schedule start a *turn* ran the whole chain in one line —
+the clock fires, a gateway admits a turn, a brain answers, the account records it, the outcome
+reaches a channel — so 22, 24 and 25 are fixed and gone from here: a program the gateway starts
+is told where agents are kept, schedules are examined as soon as a gateway has its name, and a
+day a weekday could still match is no longer skipped over. 26 was already fixed and was
+re-verified across the move of schedules onto the store, where the reconciliation it asked for
+had to be rewritten against rows. 28 is narrowed by that same move and says how.
 
 **What the provider seam closed, and what it deliberately did not.** Opening the seam ran a
 receiver — the run's own transcript — behind a program for the first time, and writing to
@@ -59,9 +68,9 @@ so a later round does not spend the effort again without new reason:
 | Crash recovery and idempotency | findings **9**, **12**, **23** |
 | Concurrency, locks and atomic decisions | findings **12**, **14**, **21**, **30** |
 | Provider protocol boundary | **no change needed** — see "Reviewed, no change needed" below |
-| Scheduling correctness | findings **12**, **21**, **24**, **25** |
-| Install, update and removal safety | findings **4**, **14**, **15**, **28** |
-| Source of truth and auditability | findings **28**, **29**; extensions to **12**, **19** |
+| Scheduling correctness | findings **12**, **21**; **24** and **25** fixed and gone |
+| Install, update and removal safety | findings **4**, **14**, **15**, **28** (narrowed) |
+| Source of truth and auditability | findings **28** (narrowed), **29**; extensions to **12**, **19** |
 | Consumer command surface | findings **32–35**; extensions to **6**, **13**, **28** |
 | Measured performance | finding **9** (second consequence); measurements below |
 | Failure-injection coverage | see "Tests that prove only the easy half" below |
@@ -683,21 +692,6 @@ Relevant implementation: `_in_flight()` and `_stand_all_down()` in
 `src/rundesk/cli.py`; `Gateway._fire()` and `Gateway.start()` in
 `src/rundesk/gateway.py`.
 
-### 22. Tell a program the gateway starts where rundesk's state lives
-
-**Status:** Open
-
-`environment()` (`process.py:973-991`) passes `RUNDESK_HOME` but not `RUNDESK_RUN_DIR`,
-`RUNDESK_LOG_DIR` or `RUNDESK_SCHEDULES_DIR`. `supervisor.describe()` carries all four
-into the gateway, with a comment recording that leaving one out "silently split the
-machine in two" — and the same split is reintroduced one level down for any scheduled
-program that is itself `rundesk`.
-
-Regression criteria: a program the gateway starts reads the same places the gateway
-does.
-
-Relevant implementation: `environment()` in `src/rundesk/process.py`.
-
 # Round three — 2026-07-25
 
 Line numbers are against the working-tree state reviewed on 2026-07-25:
@@ -766,85 +760,6 @@ Regression criteria:
 Relevant implementation: `Gateway.start()`, `Gateway._record()` and `Gateway._say()`
 in `src/rundesk/gateway.py`; `_in_flight()` in `src/rundesk/cli.py`.
 
-## High impact
-
-### 24. Examine schedules immediately after a gateway starts
-
-**Status:** Open
-
-`Gateway._tick()` delegates to `_over_and_over()` (`gateway.py:1087-1101`), whose
-first action is `await asyncio.sleep(every)` (`:1183-1186`). With
-`TICK_SECONDS = 20`, a gateway does not examine schedules until twenty seconds after
-claiming its name.
-
-Observed directly:
-
-```text
-immediately_after_tick_started=0 checks
-after_first_interval=1 check
-```
-
-A schedule is due only in its stated minute. If launchd starts or recovers a gateway
-during that minute's final twenty seconds, the first check lands in the next minute
-and the occurrence is silently lost. `_say_what_was_missed()` cannot account for it:
-that runs during `claim()`, before this new post-start gap exists.
-
-The smallest fix is one synchronous `_fire(schedule, datetime.now())` after claim and
-before the repeating sleep. The existing durable per-minute guard already prevents
-the immediate check and the first interval check from firing the same minute twice.
-
-Regression criteria:
-
-- A gateway examines schedules once immediately after it claims its name.
-- Starting at `09:30:55` with work due at `09:30` starts it before a fake clock
-  advances to `09:31`.
-- The immediate check plus the ordinary tick still starts a due minute exactly once.
-- Shutdown requested during claim still starts nothing.
-
-Relevant implementation: `Gateway.serve()`, `Gateway._tick()` and
-`Gateway._over_and_over()` in `src/rundesk/gateway.py`.
-
-## Medium impact
-
-### 25. Do not skip weekday matches when finding the next cron occurrence
-
-**Status:** Open
-
-The direct matcher correctly implements cron's day-of-month/day-of-week OR rule:
-when both are narrowed, either match is sufficient (`schedule.py:227-247`).
-`Schedule.next_after()` uses `_skip()`, however, and `_skip()` jumps to the next day
-whenever the day of month does not match (`:261-278`) without considering that the
-weekday may already match.
-
-Reproduced with `0 9 15 * 1`, which means 09:00 on every Monday or every fifteenth:
-
-```text
-due_at_2026-07-13_09:00=True
-next_after_2026-07-12_08:00=2026-07-15 09:00
-passed_over_through_2026-07-14=0
-```
-
-Actual gateway firing uses the direct matcher and runs on Monday. The command's
-`NEXT` value and the gateway's missed-run account use `next_after()` and claim that
-Monday never existed. The runtime and its source of truth therefore contradict each
-other.
-
-The smallest fix is to disable the day-of-month jump when both day and weekday are
-narrowed. Other skips that cannot bypass a weekday match remain valid.
-
-Regression criteria:
-
-- From Sunday July 12, 2026, `0 9 15 * 1` reports Monday July 13 at 09:00 as next.
-- The same Monday is counted by `passed_over()`.
-- Day-only, weekday-only and unrestricted schedules keep their existing skip behavior
-  and performance.
-- `due_at()`, `next_after()` and `passed_over()` agree on every combined
-  day/weekday fixture.
-
-Relevant implementation: `Schedule.next_after()`, `_matches()` and `_skip()` in
-`src/rundesk/schedule.py`; schedule listing and missed-run reporting in
-`src/rundesk/gateway.py` and `src/rundesk/cli.py`.
-
 # Round four — 2026-07-25
 
 Line numbers are against `43315ae`. Established by reading the source and by path
@@ -855,10 +770,20 @@ names the store, its writers, and the concrete disagreement or loss.
 
 ### 28. Read a supervised gateway's directories from its own job, not from the ambient environment
 
-**Status:** Open — **this is finding 22 one level up.** Finding 22 is the gateway failing
-to pass the directories *down* to a program it starts; this is a command failing to read
-them *out of* the job that is already carrying them. Same split, opposite direction, and
-the fixes are independent.
+**Status:** Open, and **narrowed to one variable and a half**. This was finding 22 one level
+up: 22 was the gateway failing to pass the directories *down*, and this is a command failing
+to read them *out of* the job already carrying them. 22 is fixed and gone.
+
+What is left of this one is smaller than its body describes, because two things shrank it.
+Everything of an agent's is derived from the agents root, so for an agent the only directory a
+command and its gateway can disagree about is `RUNDESK_AGENTS_DIR` — `RUNDESK_RUN_DIR` and
+`RUNDESK_LOG_DIR` reach only a gateway that is not an agent. And `RUNDESK_SCHEDULES_DIR` is
+gone: a schedule is a row an agent keeps, so the whole class of "a schedule added and shown as
+due by the command line, unknown to the gateway that would have run it" is unreachable now.
+`RUNDESK_JOBS_DIR` is the half — it is in the job and read from the ambient environment.
+
+Not fixed here on purpose: resolving the run and log directories out of the plist would
+entrench the two the remaining store move deletes.
 
 `describe()` bakes all four directories into the job's `EnvironmentVariables`
 (`supervisor.py:148-159`), with a comment recording that omitting one "silently split the
@@ -1098,6 +1023,23 @@ state it is named for.
 | Test | Cited for | What it does not reach |
 |---|---|---|
 | `test_removing_rundesk_refuses_while_a_gateway_is_still_running` (`tests/test_install.py:89`) | R-RM-9 | Writes a plist first, so the no-job case in finding 15 is never exercised |
+
+## Recorded on the way past, and not fixed
+
+Neither meets the threshold — no reproduced consequence — and both would be found again by
+somebody reading the same code, so they are written down rather than left to be re-derived.
+
+- **`conversation.thread` and `conversation.parent_id` are columns nothing writes.** The unique
+  key is `(channel, space, thread)` and `thread` is always `""`, because `turn.carry` never
+  passes one; Discord folds a thread into `space` by reporting the thread's own id as the
+  conversation. `parent_id` says so in `migrations/001.py` itself. R-STO-9 is ✅ on a case that
+  passes `kind="thread"`, which is a different thing. Either a surface reports a branch and both
+  columns start meaning something, or they are two fields a reader will assume are populated.
+- **`ask --instructions` is not filled in or bounded the way every other preface is.**
+  `channel.preface` runs `_fill` over `{agent}`, `{where}` and the rest and clips to
+  `INSTRUCTIONS_MOST`; `--instructions` reaches the brain exactly as typed, so `{agent}` written
+  there arrives as literal braces. Not wrong — a turn's own instructions are typed for that turn
+  — but it is one surface of two behaving differently about the same-looking text.
 
 ## Reviewed, no change needed
 

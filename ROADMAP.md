@@ -402,71 +402,104 @@ proved: what a turn resolves is Phase 2, and four entry points reaching one agen
 
 ---
 
-## Phase 6 — Let the Clock Start Work
+## Phase 6 — Let the Clock Start Work — **done**
 
 **Outcome:** an agent does work because the time came, through the same resolver, run record and provider
 adapter that Discord and the terminal already use.
 
-**This is the end-to-end proof, which is why it comes first.** A schedule already runs a *program*. What it
-cannot do is run a *turn* — and making it work exercises the whole chain in one line: the clock fires, a
-gateway admits a turn, a brain answers, the account records it, and the outcome reaches a channel. Anything
-broken anywhere along that chain shows up here.
+**This was the end-to-end proof, which is why it came first.** A schedule ran a *program* and could not run a
+*turn*, and making that work exercised the whole chain in one line: the clock fires, a gateway admits a turn, a
+brain answers, the account records it, and the outcome reaches a channel. Everything broken anywhere along
+that chain showed up here, and most of it was not what the phase was written to fix.
 
-Most of the mechanism is already here: a schedule carries what it names without reading it (R-SCH-3), so a
-schedule whose program is `rundesk ask ava "…"` is a scheduled turn — no new schema, no binding, nothing to
-migrate. `ask --says` already exists so a scheduled turn can be given its own standing instructions.
+### What it closed
 
-### Where it stands
+**Three findings, each reproduced first rather than read off the code.** A program the gateway starts is told
+where agents are kept, so a scheduled `rundesk ask ava` no longer answers NO SUCH AGENT while the gateway that
+started it is running ava (R-SCH-27). Schedules are examined as soon as a gateway has its name rather than an
+interval later, so a gateway the machine recovers in the last twenty seconds of a due minute no longer loses
+that occurrence (R-SCH-26). And `next_after` stopped skipping a day a weekday could still match, so the `NEXT`
+column and the minute the gateway actually fires on agree (R-SCH-25). Findings 22, 24 and 25 are fixed and gone
+from [`SUGGESTIONS.md`](SUGGESTIONS.md); 26 was already fixed and was re-verified across the move below; 28 is
+narrowed by it and says so in its own status.
 
-**Done.** Finding 22 is closed in the code: a gateway is handed where agents are kept and passes it on, so a
-program it starts resolves the same root it does (`R-SCH-27`, `process.py:1136-1149`). The narrowing is
-deliberate and worth recording — **only `RUNDESK_AGENTS_DIR` is passed, not the run, log and schedule
-directories**, because everything of an agent's derives from that one root and the other three are on their
-way out with Phase 7. Schedules are also examined as soon as a gateway has its name rather than an interval
-later (`R-SCH-26`), and the ways work is admitted are a closed set of three — `terminal`, `channel`,
-`schedule` — refused rather than written as free text (`store.py:85`).
+**The clock starts a turn.** A schedule may name a prompt rather than a program — `--ask`, with `--provider`,
+`--model`, `--instructions` and `--to` beside it — using four columns Phase 4 declared for exactly this and
+left with nothing setting them. Exactly one of a prompt and a program, which the records enforce rather than
+trust. The gateway admits the turn through a collaborator handed to it, so it goes on knowing nothing of
+agents, turns or databases; a gateway given nothing to ask a turn with can start programs and not turns, and
+says so as an outcome rather than passing the minute over in silence.
 
-**Not done.** Nothing can yet record a run as scheduled. `turn.py:187-188` sets a run's source to
-`"channel" if asked_by else "terminal"` and never passes `schedule_id`, so a scheduled turn is
-indistinguishable from one typed by hand, and the `schedule` source the store now declares is written by
-nothing. Until that closes, deliverables 3 and 4 have nothing to assert, and finding 22 cannot honestly be
-marked closed in [`SUGGESTIONS.md`](SUGGESTIONS.md) — it still reads **Open**.
+**A scheduled turn is not in the terminal's conversation, and that was the worst thing found here.** `ask`
+with no `--conversation` means `terminal`, so a run at three in the morning resumed the session its owner
+types into and left its own prompt and answer in the middle of it. It has a conversation of its own now, named
+for the schedule, and starts fresh every firing — because a brain that binds standing instructions when a
+conversation opens is told what its situation is once and never again (R-SCH-29).
 
-### Deliverables
+**What a turn is told is the nearest thing that said anything** (R-AGT-16): the schedule's or the turn's own,
+then the surface it arrived on, then the agent's, then the one line rundesk says about that situation. The
+agent tier had a column, a writer and a comment calling it "the fallback the other two inherit from" since
+Phase 4, and no reader anywhere. The order is one function, because four callers deciding it would be four
+orders that agree until one does not — and an agent told the wrong thing about where it is answers perfectly
+well and wrongly.
 
-1. ~~`process.environment()` passes what a program needs to find the agents the gateway is running.~~ — done.
-2. ~~A regression case: a program the gateway starts reads the same places the gateway does.~~ — done,
-   `R-SCH-27`.
-3. **A scheduled `rundesk ask <agent> "…"` that completes, records a run *as scheduled*, and can be read
-   back** — the run carrying its `source` and its `schedule_id`, so `runs` can answer "what did the clock do
-   last night" without inferring it from a timestamp.
-4. **The outcome of a scheduled turn reaching the agent's channel where it has one.**
-5. `R-SCH` rows for both, and the finding-22 entry closed in `SUGGESTIONS.md`.
+**And the tier with no owner to write it.** A turn nobody is waiting for is told three facts and no more: that
+nothing asked, so there is no question to read between the lines of; that nobody is watching, so asking one
+back is a turn that ends waiting; and where what it says will go (R-SCH-30). Three, because a brain handed a
+paragraph about being autonomous starts performing autonomy.
 
-### Nobody is watching, so the outcome has to go somewhere
+**What a schedule came to is said on the surface it names, and no other** (R-SCH-31). The gateway is the only
+thing that can say it: a channel is held open there, and a scheduled program is a child process that cannot
+reach one. `--to <channel>` rather than every surface the agent has — the first version told all of them,
+which is two notices about work concerning one of them, and rundesk deciding for an owner where a night's work
+is discussed. A schedule naming none is not silent; the account and `schedules` say it either way. A surface
+nobody has ever spoken on has nowhere for this to go, and that is said rather than invented.
 
-This is the first trigger with no person at the other end, and Phase 3 is what makes that survivable: an agent
-now has channels. A scheduled turn that failed at three in the morning should be readable where its owner
-already looks, rather than only in a log nobody opens.
+### What the owner asked for mid-phase, and what it cost
 
-What that must not become is a channel deciding anything about schedules — a schedule that fires with no
-channel configured still runs, still records, and is still reported through `schedules`.
+**Schedules moved onto the store.** This was Phase 7's, and taking it here was roughly half the work: the
+schedules file, the sidecar saying what each last did, and the fifteen-second liveness beat are rows;
+`~/.rundesk/schedules`, `RUNDESK_SCHEDULES_DIR` and four path helpers are gone; `Gateway` lost an argument and
+gained three; `agent.Where` went from three fields to two. It touched five suites and re-worded four ratified
+rows that described a *file*. Two consequences worth keeping:
 
-### Tests
+- **A gateway with no records is a whole gateway.** Schedules belong to an agent, so a name that is not one
+  has none — it still starts, holds its lock, writes its log and ends what it started, and the clock simply
+  has nothing to start for it. R-SCH-13 and R-SCH-14 are true by construction now rather than by guarding.
+- **`run/` and `logs/` were deliberately left alone**, against the guide's advice that the three move
+  together. One file was forced: the account of what a gateway never finished stood *inside* the schedules
+  directory, so it moved to the log — the tier that outlives a gateway.
 
-- `schedule A` and `schedule B` share one agent but resolve different provider/model selections.
-- Existing never-late and never-overlap rules still hold.
-- An interactive request in an autonomous schedule becomes a clear outcome instead of waiting forever.
-- A schedule whose provider fails leaves one durable outcome that `schedules` reports, not silence.
-- A scheduled turn's run says the clock started it, and names the schedule that did.
-- A scheduled turn's outcome reaches the agent's channel where it has one.
-- A scheduled turn on an agent with no channel still runs, records, and is reported by `schedules`.
-- A scheduled turn is never the only thing that knew what happened.
+**Found on the way, and fixed because a ratified row rested on it:** records that are there and are not a
+database at all raised the driver's own error, which every command already handled by tracebacking. Refused in
+the store's own words wherever one is opened, because nothing of the database's leaves that module —
+exceptions included.
 
-### Exit proof
+### Exit proof — met
 
-One scheduled run passes through the same resolver, run record and provider adapter that Discord and the
-terminal already used — and its outcome is readable the next morning without a terminal having been open.
+Driven against a scratch install and never the owner's: an agent made with a brain and its own standing
+instructions, one schedule that asks a turn and one that starts a program, the gateway run in a terminal until
+both fired, and then read back with nothing up. `runs ava` says `schedule 'nightly'`; the conversation is
+`schedule/nightly` and not the terminal's; `search` shows the brain was told what the agent says; `usage`
+has the tokens; `schedules` says what each starts, where it reports, and what it came to. No schedules
+directory exists anywhere, and nothing was written outside the scratch install.
+
+The gate is green — 19 suites, 1,170 cases, both linters and the evidence check.
+
+### Left open, deliberately
+
+- **Channel delivery is proved against a fake surface, not Discord.** Every routing case is covered offline;
+  what a fake cannot prove is that a `said` record posted by the clock reads well in a real room at three in
+  the morning. That wants the canary `.knowledge/scripts/probe-discord` exists for.
+- **A DM nobody has ever used has nowhere to post.** The core cannot build a Discord DM id — it never reads
+  platform words — so a schedule pointed at an unused DM channel records the outcome and says why. Letting an
+  adapter open one is a change to the closed channel vocabulary and is the owner's call.
+- **A turn a schedule started is not ended by the gateway going away.** It is not in `running`, so `_go()`
+  does not reach its brain — the same shape a channel turn already has, since `Answering` calls `turn.carry`
+  directly. The outcome is still recorded as interrupted. Worth its own look rather than a change smuggled in
+  here.
+- **`--set` is not offered on a schedule.** What a brain is told to run with has no column, and an option
+  that could only refuse is worse in the help than one that is absent.
 
 ## Phase 7 — Move Everything Onto It
 

@@ -30,29 +30,49 @@ have data to carry must not be the one that discovers the wiring.
 
 ## What is left, and why it is one move
 
-**The gateway's own three directories.** `run/`, `logs/` and `schedules/` are where they were, and
-`Gateway` still takes them as three arguments. What goes with them:
+**The gateway's own directories — and `schedules/` has gone.** Phase 6 took that third of this
+list, because the clock could not start a turn without it: `changing_schedules`,
+`written_schedules`, `scheduled`, `what_was_scheduled`, `schedules_home`, `schedules_path`,
+`ran_path`, `seen_path` and `RUNDESK_SCHEDULES_DIR` are all gone, `Gateway` is handed a store
+instead, and `agent.Where` is two fields. What never finished moved to `logs/`, because it stood
+*inside* the schedules directory and had to land somewhere.
 
-- `changing_schedules()` · `written_schedules()` · `scheduled()` → `store.schedules()` and the
-  four writers beside it. **`schedule.read()` parses `{name, when, run}` and a row is
-  `{name, cron, command}`** — that mapping is the only real design work left in the phase.
-- `what_was_scheduled()` · `Gateway._remember()` → `store.schedule_fired()` ·
-  `schedule_became()`, which exist and are proved.
-- `last_seen()` · `Gateway._say()` → `store.last_seen()` · `seen()`. **Mind the units:** the file
-  held `time.time()` as a float and the store holds an ISO string, so `_say_what_was_missed`
-  changes with it — and AGENTS.md forbids comparing the two kinds of clock.
+**It was one move rather than four and it was taken as one**, contrary to the note below: `run/`
+and `logs/` were deliberately left where they are on the owner's instruction, and the seam turned
+out not to need `Gateway(name, at=…)` — a store handed in was enough, and it kept the gateway from
+learning what holds its records at all.
+
+What is left is `run/` and `logs/`:
+
 - `what_was_interrupted()` · `_note_interrupted()` → `store.runs()` filtered on outcome ·
-  `store.ended(outcome="interrupted")`. `_sweep_strays()` is deleted; R-GW-21 and R-GW-23 narrow,
-  and their tests stop sharing one `where`.
+  `store.ended(outcome="interrupted")`. **Not done, and now the only file left in `logs/` besides
+  the log**: it describes work with no run of its own — a channel held open, a program a
+  predecessor left behind — and the gateway that answers for it may be one whose agent is gone.
+  `_sweep_strays()` is still there; R-GW-21 and R-GW-23 still share one `where`.
 - `run/<name>.json` and `.lock` → `gateway.json` and `gateway.lock` at the agent root. **No file
-  a gateway writes carries a name any more**, so `reserved_suffixes()` and the whole class of
-  collision R-AGT-6 guards against go away with it.
-- `every()` and `remembered()` walk files to find gateways. The agents directory is that list now,
-  so both move above the gateway rather than being rewritten inside it.
-- Last, and only once every reader above has moved: `gateway.home()`, `logs_home()`,
-  `schedules_home()`, the `RUNDESK_{RUN,LOG,SCHEDULES}_DIR` variables `supervisor.describe()`
-  bakes into the job, `agent.resolved()` returning `Where(None, None, None)`, `agent.adopt()` and
-  `standing_before()` with it, and `logs` and `schedules` off `install.sh`'s keep-list.
+  a gateway writes would carry a name any more**, so `reserved_suffixes()` and the class of
+  collision R-AGT-6 guards against go away with it. Two of its suffixes already have — what a
+  schedule last did and when a gateway was last up are rows — so `foo.ran` and `foo.seen` are
+  ordinary agent names again.
+- `every()` walks files to find gateways. The agents directory is that list now, so it moves above
+  the gateway rather than being rewritten inside it. `remembered()` already reads what a gateway
+  left rather than what it was scheduled to do.
+- Last, and only once every reader above has moved: `gateway.home()`, `logs_home()`, the
+  `RUNDESK_{RUN,LOG}_DIR` variables `supervisor.describe()` bakes into the job,
+  `agent.resolved()` returning `Where(None, None)`, `agent.adopt()` and `standing_before()` with
+  it, and `logs` off `install.sh`'s keep-list.
+
+**Two traps paid for while moving the schedules third**, both worth having before the rest:
+
+- **The units really did change and it is the whole risk.** `last_seen` held `time.time()` as a
+  float and the store holds an ISO string in UTC, while a cron field is local. `store.moment` is
+  the inverse of `store.stamped` and hands back something *aware*, so comparing the two clock
+  faces directly is inexpressible rather than merely discouraged — the conversion happens in one
+  place nothing downstream can forget.
+- **A gateway need not learn what holds its records.** It is handed a store and refuses in its own
+  words (`gateway.Unreadable`), so `gateway.py` imports neither `store` nor `sqlite3`. That is
+  what keeps "no SQL outside the one module that owns it" true for exceptions as well as queries —
+  and a corrupt `state.db` used to raise the driver's error straight through every command.
 
 **It is one move rather than four** because a `Gateway` reading its schedules from one place and
 its record from another is half-moved, and the constructor that decides both would otherwise be
