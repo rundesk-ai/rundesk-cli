@@ -1,7 +1,7 @@
 ---
 id: SCH
 name: Work that starts itself
-last_verified: 2026-07-25
+last_verified: 2026-07-26
 ---
 
 ## What this is
@@ -32,7 +32,7 @@ gateway each, which is how one agent's schedules stay that agent's alone.
 | ✅ | R-SCH-9 | A schedule runs once for the time it is due, however often the time is examined | `a schedule runs once for the minute it is due`, `a clock stepping backwards does not run a schedule again`, `a schedule that already ran this minute does not run again after a restart`, `that a schedule fired is written down before it is run`, `a gateway coming straight back does not run the same minute again` |
 | ✅ | R-SCH-10 | A schedule that cannot be understood leaves every other schedule running | `one schedule nobody can understand leaves the others running`, `something that is not a schedule at all is refused by itself`, `a schedule nobody can understand is reported and the others run`, `nothing written down is no schedules rather than a failure` |
 | ✅ | R-SCH-11 | A schedule that is turned off is kept and reported, and does not run | `a schedule that is off does not run`, `a schedule that is off says so rather than a time`, `a schedule that is off is kept and shown as off`, `a schedule is turned off and on again without being lost`, `on or off has to be said as one or the other` |
-| ✅ | R-SCH-12 | Deciding what is due asks nothing of the machine beyond the time | `deciding what is due asks nothing of the machine`, `a rare schedule is found without examining every minute` |
+| ✅ | R-SCH-12 | Deciding what is due asks nothing of the machine beyond the time | `deciding what is due asks nothing of the machine`, `a rare schedule is found without examining every minute`, `a schedule no weekday could rescue still jumps by the day` |
 | ✅ | R-SCH-13 | A schedule runs only in the gateway whose schedules it is among | `a gateway runs only its own schedules`, `schedules are asked for and changed on one gateway only` |
 | ✅ | R-SCH-14 | A gateway never runs, reports or alters another gateway's schedules | `a gateway runs only its own schedules`, `schedules are asked for and changed on one gateway only` |
 | ✅ | R-SCH-15 | What a schedule last did, and when a gateway of its name was last up, outlive the gateway that wrote them | `what each schedule last did survives a restart`, `what fell due is said after an ordinary stop and not only a crash`, `being up leaves something a later gateway can measure against`, `that a schedule fired is written down before it is run` |
@@ -45,6 +45,7 @@ gateway each, which is how one agent's schedules stay that agent's alone.
 | ✅ | R-SCH-22 | A schedule run by hand does not change when it next falls due on its own | `running a schedule by hand leaves the time it next falls due alone` |
 | ✅ | R-SCH-23 | A schedule left saying it started by a gateway that is gone is reconciled | `a schedule left saying started by a gone gateway is reconciled`, `reconciling does not move the minute it fell due`, `work the sweep found still running is left alone`, `a schedule refused by a shutdown leaves no stale start` |
 | ✅ | R-SCH-24 | A schedule is never shown as running when no gateway of its name is up | `a schedule whose gateway is gone is not shown as still running`, `a schedule running right now is shown as started` |
+| ✅ | R-SCH-25 | What is due, when it next runs and what was passed over agree on a schedule naming both a day and a weekday | `the next time is a weekday match the day of the month would have skipped`, `a weekday match is counted among what was passed over`, `what is due and what is next agree on every minute of a week` |
 
 ## Open questions
 

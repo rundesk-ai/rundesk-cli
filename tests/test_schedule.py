@@ -269,5 +269,80 @@ class ReadingWhatWasWrittenDown(unittest.TestCase):
                 self.assertEqual(([], []), schedule.read(nothing))
 
 
+class ADayAndAWeekdayAgreeWhicheverWayItIsAsked(unittest.TestCase):
+    """R-SCH-25 — `due_at`, `next_after` and `passed_over` are three readers of one rule,
+    and they disagreed. The matcher implemented cron's either/or correctly; the search that
+    finds the *next* occurrence jumped a whole day whenever the day of the month missed,
+    without asking whether the weekday had already matched. So the gateway fired on the
+    Monday and the NEXT column, and the account of what fell due while nothing ran, both
+    said that Monday never existed."""
+
+    #: The 15th at nine, or any Monday at nine. 2026-07-12 is a Sunday, so the 13th is a
+    #: Monday and the 15th is the Wednesday after it — one fixture that separates the two.
+    BOTH = "0 9 15 * 1"
+
+    def _steps(self, one, moment) -> int:
+        """How many jumps the search made. Measured rather than assumed, because the whole
+        point of the jump is that it is not a walk."""
+        counted = []
+        real = schedule._skip
+        self.addCleanup(setattr, schedule, "_skip", real)
+
+        def counting(fields, found, anything):
+            counted.append(found)
+            return real(fields, found, anything)
+
+        schedule._skip = counting
+        one.next_after(moment)
+        return len(counted)
+
+    def test_the_next_time_is_a_weekday_match_the_day_of_the_month_would_have_skipped(self):
+        """R-SCH-25 — the reproduction, as a date a person can check: from the Sunday, the
+        next occurrence is the Monday after it and not the fifteenth."""
+        both = schedule.Schedule("odd", self.BOTH)
+        self.assertTrue(both.due_at(at("2026-07-13 09:00")), "the matcher does fire on the Monday")
+        self.assertEqual(at("2026-07-13 09:00"), both.next_after(at("2026-07-12 08:00")))
+
+    def test_a_weekday_match_is_counted_among_what_was_passed_over(self):
+        """R-SCH-25 — `passed_over` walks `next_after`, so the missed-run account said
+        nothing fell due over a Monday the gateway would have run."""
+        both = schedule.Schedule("odd", self.BOTH)
+        self.assertEqual(
+            1, schedule.passed_over(both, at("2026-07-12 08:00"), at("2026-07-14 00:00")))
+
+    def test_what_is_due_and_what_is_next_agree_on_every_minute_of_a_week(self):
+        """R-SCH-25 — the guarantee itself, rather than one date: whatever the matcher says
+        yes to is exactly what the search hands back, over every minute in a range."""
+        for when in (self.BOTH, "30 9 15 * 1", "0 0 1 * 1", "0 0 1-5 * 0-6", "0 9 15 * *",
+                     "0 9 * * 1", "0 9 * * *"):
+            with self.subTest(when=when):
+                one = schedule.Schedule("x", when)
+                begins, ends = at("2026-07-12 00:00"), at("2026-07-20 00:00")
+                walked, minute = [], begins
+                while minute < ends:
+                    if one.due_at(minute):
+                        walked.append(minute)
+                    minute += timedelta(minutes=1)
+                skipped, found = [], begins - timedelta(minutes=1)
+                while True:
+                    found = one.next_after(found)
+                    if found is None or found >= ends:
+                        break
+                    skipped.append(found)
+                self.assertEqual(walked, skipped)
+
+    def test_a_schedule_no_weekday_could_rescue_still_jumps_by_the_day(self):
+        """R-SCH-12 — the jump is what keeps a rare schedule from costing half a million
+        comparisons, so suppressing it whenever a weekday was written would trade one fault
+        for a slower one. It is suppressed only where a weekday match is actually possible."""
+        yearly = schedule.Schedule("yearly", "0 0 1 1 *")
+        self.assertLess(self._steps(yearly, at("2026-01-02 00:00")), 400,
+                        "a yearly schedule was walked rather than jumped to")
+        # Both narrowed, and the weekday cannot rescue a day in a month that is out anyway.
+        rare = schedule.Schedule("rare", "0 0 1 1 1")
+        self.assertLess(self._steps(rare, at("2026-02-01 00:00")), 3000,
+                        "a combined schedule was walked minute by minute")
+
+
 if __name__ == "__main__":
     unittest.main()

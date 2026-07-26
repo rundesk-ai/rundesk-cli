@@ -81,7 +81,7 @@ class Schedule:
         while found <= limit:
             if _matches(self._fields, found, self._anything):
                 return found
-            found = _skip(self._fields, found)
+            found = _skip(self._fields, found, self._anything)
         return None
 
 
@@ -258,16 +258,28 @@ def _month_after(found: datetime) -> datetime:
     return datetime(year, month, 1)
 
 
-def _skip(fields: tuple, found: datetime) -> datetime:
+def _skip(fields: tuple, found: datetime, anything: tuple) -> datetime:
     """Jump to the next moment worth examining, rather than trying every minute.
 
     A schedule due once a year is otherwise half a million comparisons; this makes the
     search cost the shape of the schedule rather than the size of the calendar.
+
+    **A jump must never step over a minute `_matches` would have said yes to.** When both
+    the day of the month and the day of the week are narrowed, either one is enough — so a
+    day the day-of-month rules out is only a day to skip if the weekday rules it out too.
+    Jumping on the day alone stepped straight over every weekday match: `0 9 15 * 1` fired
+    on Mondays in the gateway and was reported by `next_after` as next due on the
+    fifteenth, so the runtime and the thing an owner reads to predict it disagreed.
     """
-    minute, hour, day, month, _ = fields
+    minute, hour, day, month, weekday = fields
     if found.month not in month:
         return _month_after(found)
-    if found.day not in day and len(day) < 31:
+    ruled_out = found.day not in day
+    # Asked the way `_matches` asks it, off what was written rather than off what a field
+    # adds up to — see the comment there.
+    if ruled_out and not anything[2] and not anything[4]:
+        ruled_out = _weekday(found) not in weekday
+    if ruled_out and len(day) < 31:
         if found.day >= calendar.monthrange(found.year, found.month)[1]:
             return _month_after(found)
         return datetime(found.year, found.month, found.day) + timedelta(days=1)
