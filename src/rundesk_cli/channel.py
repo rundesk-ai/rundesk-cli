@@ -345,6 +345,29 @@ def attached(said) -> list:
     return found
 
 
+def surface(kind: str) -> str:
+    """What to call this kind of surface, in a sentence a brain is going to read.
+
+    `--kind` takes a shipped name *or* the path of a program, which is what makes a surface
+    nobody here has heard of reachable exactly like one that ships. A shipped one is its
+    own name. A path is its last part and nothing else: rendered whole, an owner's
+    stranger-written adapter had a brain told it was "reached over
+    /opt/acme/my-telegram-adapter", which reads badly and hands over a path on this machine
+    that is no part of answering anybody.
+
+    Not `provider.key`, which is next door and does a different job: that one names a
+    *directory* and adds a hash so two adapters of one name stay apart. Here the two are
+    the same surface as far as anybody talking to it is concerned, and a hash in a sentence
+    is noise.
+    """
+    kind = str(kind or "").strip()
+    if not kind:
+        return ""
+    if os.sep in kind or kind.startswith("~"):
+        return Path(kind).expanduser().name or kind
+    return kind
+
+
 def preface(record: dict, agent: str, name: str, it: dict) -> str:
     """What this agent is told about its situation, for this arrival (R-CH-22).
 
@@ -363,7 +386,7 @@ def preface(record: dict, agent: str, name: str, it: dict) -> str:
     if not said:
         said = [_by_default(record, it)]
     filling = {
-        "agent": agent, "channel": name, "surface": str(record.get("kind") or ""),
+        "agent": agent, "channel": name, "surface": surface(record.get("kind")),
         "where": plainly(it.get(WHERE)), "called": plainly(it.get(CALLED)),
         "user": str(it.get("user") or ""), "conversation": str(it.get("conversation") or ""),
     }
@@ -380,7 +403,7 @@ def _by_default(record: dict, it: dict) -> str:
     it reconciled the two the only way the sentence allowed. It is a `{channel}` an owner
     can write if they want it, and not something rundesk volunteers.
     """
-    kind = str(record.get("kind") or "").strip()
+    kind = surface(record.get("kind"))
     if not kind:
         return ""
     said = f"This reached you over {kind}"

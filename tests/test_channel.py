@@ -568,6 +568,29 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
         self.assertIn("in #ops", said)
         self.assertNotIn("'dms'", said)
 
+    def test_a_surface_is_named_rather_than_located(self):
+        """R-CH-22 — `--kind` takes a shipped name or the path of a program, which is what
+        makes a stranger's surface reachable like one that ships. Rendered whole, a brain
+        was told it had been 'reached over /opt/acme/my-telegram-adapter' — which reads
+        badly, and hands over a path on this machine that is no part of answering
+        anybody."""
+        self.assertEqual("discord", channel.surface("discord"))
+        self.assertEqual("my-telegram-adapter",
+                         channel.surface("/opt/acme/my-telegram-adapter"))
+        self.assertEqual("slack", channel.surface("~/adapters/slack"))
+        self.assertEqual("", channel.surface(None))
+        self.assertEqual("", channel.surface("   "))
+        # Both ways a surface can be named in a sentence: rundesk's own default, and an
+        # owner's own `{surface}`. The first covered the second by accident, and a break
+        # in the filling passed unnoticed.
+        for record in ({"kind": "/opt/acme/my-telegram-adapter"},
+                       {"kind": "/opt/acme/my-telegram-adapter",
+                        channel.SAYS: {"any": "You are reached over {surface}."}}):
+            said = channel.preface(record, "ava", "ops",
+                                   {"direct": True, "where": "a direct message"})
+            self.assertIn("over my-telegram-adapter", said)
+            self.assertNotIn("/opt", said, "a path on this machine reached the prompt")
+
     def test_a_situation_that_does_not_exist_is_refused_when_it_is_written(self):
         """R-CH-22 — the moment an owner writes it, not quietly at every turn after."""
         self.assertIn("not a situation", channel.wrong_with_says({"shouting": "hi"}))
