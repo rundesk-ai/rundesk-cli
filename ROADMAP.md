@@ -844,6 +844,74 @@ What else this half settles, none of it cosmetic:
 - **A counter is not a record.** `runs/allocating.json` allocates ids and lives among the runs it numbers.
 - **Every durable thing carries a version**, and that is what makes 4B possible at all.
 
+**Group by lifetime, not by kind.** That is the whole answer to the scatter. Today things are grouped by
+what they *are* — logs here, schedules there, runs somewhere else — which is why the same agent's things
+are in four places and why a name has to be repeated to tell them apart. What actually differs between
+them is **how long each is meant to last and who owns it**, and that is what decides whether stopping an
+agent may delete it, whether an update must migrate it, and whether removing an agent takes it.
+
+Four lifetimes, and everything durable is exactly one of them:
+
+| | Lives until | Who owns it | Cleared when an agent stops? |
+|---|---|---|---|
+| **the person's** | they delete it | the owner | never — `--purge` only |
+| **records** | the agent is removed | rundesk | no — this is what migrates |
+| **history** | retention says otherwise | rundesk | no — it must outlive the gateway |
+| **state** | the agent stops | rundesk | **yes, always** |
+
+Which gives one shape per agent, and nothing outside it:
+
+```text
+~/.rundesk/
+  rundesk.json                  what shape this install's data is in. One number, and nothing else.
+  agents/
+    ava/
+      agent.db                  RECORDS — the agent, its channels, schedules and what each last
+                                did, its sessions, and an index of every run
+      home/                     THE PERSON'S — never touched by anything but --purge
+        AGENTS.md  CLAUDE.md  SOUL.md  USER.md  MEMORY.md
+        workspace/
+        skills/
+      providers/<provider>/     a brain's own home, one per provider. Opaque to us.
+      history/                  HISTORY — append-only, outlives the gateway
+        gateway.log
+        runs/<run>/             one run is one directory, not four files sharing a stem
+          account.jsonl         the account of what happened
+          brain.raw             what the brain itself said
+          brain.err             what it said went wrong
+      state/                    STATE — emptied when the agent stops
+        gateway.lock
+        gateway.json
+        locks/                  every lock, together, and never among the records
+```
+
+What that fixes, item for item:
+
+- **The two layouts become one.** `~/.rundesk/{run,logs,schedules}` stop existing; `gateway.py` reads the
+  agent's own directories like everything else does.
+- **A name is said once.** `history/gateway.log`, not `logs/ava.log` inside `agents/ava/`.
+- **Locks are not data.** They are all in `state/locks/`, so they are never mistaken for records and are
+  cleared by the same sweep that clears everything else a stop clears.
+- **A run is one thing.** One directory, deleted or retained as a unit, with no stem to keep in step.
+- **A counter is not a record.** Allocating a run id is the database's, in a transaction, not a JSON file
+  among the runs it numbers.
+- **Removing an agent is one directory**, and `--purge` versus not is the difference between taking
+  `home/` and leaving it.
+
+**One database per agent, not one for the install.** `gateway.py` already states the principle this rests
+on — *"Nothing is shared between two gateways: that is what makes one restartable without disturbing the
+rest"* — and every agent has its own gateway process. A shared database puts one agent's write lock in
+another's way and makes one corrupt file everybody's problem, which is the coupling that sentence exists
+to prevent. `usage` across every agent is then several small queries rather than one, on a machine that
+has a handful of agents, which is a price worth paying for keeping an agent self-contained enough to copy
+elsewhere.
+
+**One version number, at the top.** `rundesk.json` says what shape the data is in, and a migration is a
+step from one number to the next that may move files, change a schema, or both — because moving
+`logs/ava.log` to `history/gateway.log` is a migration too, and a schema version inside a database cannot
+describe it. Each `agent.db` mirrors that number in `PRAGMA user_version` so a database found on its own
+still says what it is.
+
 **Where SQLite earns its place, and where it does not.** It is in the standard library, so it costs no
 dependency, and `PRAGMA user_version` is a schema version designed for exactly this. The split worth
 making:
@@ -893,6 +961,12 @@ How it behaves, which is the part worth arguing about now rather than during an 
 
 ### Tests
 
+- Stopping an agent empties `state/` and touches nothing in `home/`, `history/` or `agent.db`.
+- Removing an agent takes one directory; `--purge` is the only thing that takes `home/`.
+- No lock file sits anywhere a record does.
+- One run is one directory, and deleting it takes everything of that run and nothing of another's.
+- Nothing reads or writes `~/.rundesk/run`, `logs` or `schedules` any more.
+- Two agents' gateways writing at once never wait on each other.
 - Every durable thing carries a version, and something that does not is refused rather than guessed at.
 - One kind of thing has exactly one home; the older layout is gone rather than merely unused.
 - Data written by the previous release is readable by this one after an update, and says the new version.
