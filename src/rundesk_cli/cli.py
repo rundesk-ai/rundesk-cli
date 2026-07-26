@@ -1295,6 +1295,17 @@ def cmd_channels(args: argparse.Namespace, gateways, agents) -> int:
         print(f"{args.name}: NO SUCH AGENT", file=sys.stderr)
         print("        what there is:  rundesk agents", file=sys.stderr)
         return 1
+    # What a channel may be called is checked here, the way an agent's name is checked
+    # before any verb acts on it. A channel's name becomes a directory, so one that could
+    # climb out of where channels are kept is refused — and refused in our words, because
+    # every other verb answers that way and a traceback is not an answer.
+    named = getattr(args, "channel", None)
+    if named is not None:
+        try:
+            gateways.checked(named)
+        except gateways.NotAName as why:
+            print(f"{args.name}/{named}: INVALID NAME — {why}", file=sys.stderr)
+            return 1
     whose = agents.paths(args.name)["agent"]
     act = getattr(args, "act", None)
     if act == "add":

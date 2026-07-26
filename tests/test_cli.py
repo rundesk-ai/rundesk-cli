@@ -686,7 +686,10 @@ class FakeAgents:
         return self.Where(at / "run", at / "logs", at / "schedules")
 
     def channel_home(self, name, channel):
-        return self._at / name / "channels" / channel
+        # The real one runs the name past `gateway.checked` before building a path from
+        # it. A stand-in that skipped that would let a case prove a safety property the
+        # command does not actually have.
+        return self._at / name / "channels" / real_gateway.checked(channel)
 
     def reachable(self, name, where=None, carry=None):
         return list(self._reachable)
@@ -1857,6 +1860,28 @@ raise SystemExit(1)
         self.assertEqual(0, code)
         self.assertIn("NO CHANNELS", said)
         self.assertIn("rundesk channels ava add", said)
+
+    def test_a_channel_name_that_would_escape_where_channels_are_kept_is_refused(self):
+        """R-CAD-9, R-GW-20 — a channel's name becomes a directory. It was passed to the
+        thing that builds one with nothing checking it, so an unusable name came back as
+        a traceback rather than as an answer — and every other verb answers in our
+        words."""
+        code, said = drive(["channels", "ava", "add", "../../evil",
+                            "--kind", self._adapter(self.WORKS), "--allow", "2207"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("INVALID NAME", said)
+        self.assertNotIn("Traceback", said)
+        self.assertFalse((self.at / "ava" / "channels.json").exists())
+
+    def test_an_unusable_channel_name_is_refused_by_every_action_that_takes_one(self):
+        """R-GW-20 — `show` and `remove` build the same path from the same word, so one
+        of them left unchecked is the whole check missing."""
+        for act in ("show", "remove"):
+            code, said = drive(["channels", "ava", act, "../../evil"],
+                               self._gateways(), agents=self.agents)
+            self.assertEqual(1, code, f"{act} accepted a name that cannot be one")
+            self.assertIn("INVALID NAME", said)
 
     def test_channels_for_an_agent_that_does_not_exist_says_so(self):
         code, said = drive(["channels", "nobody"], self._gateways(), agents=self.agents)
