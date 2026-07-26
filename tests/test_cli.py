@@ -1312,7 +1312,7 @@ class TakingAGatewayAway(unittest.TestCase):
         self.assertEqual(0, code, said)
         self.assertIn("REMOVED", said)
         self.assertIn(("take_back", "test2"), machine.did, "it left the job behind")
-        self.assertEqual([("test2", False)], gateways.forgotten)
+        self.assertEqual([("test2", True)], gateways.forgotten)
 
     def test_removing_a_gateway_that_is_running_removes_nothing(self):
         """R-GW-31 — asked of the gateway, not of the machine: one started by hand has no
@@ -1352,17 +1352,21 @@ class TakingAGatewayAway(unittest.TestCase):
         self.assertEqual(0, code, said)
         self.assertIn("NOTHING TO REMOVE", said)
 
-    def test_removing_a_gateway_keeps_what_it_wrote_unless_purge_is_asked_for(self):
-        """R-GW-31, R-GW-18 — what a gateway wrote outlives it, and an owner tidying up
-        their background items has not asked to lose the account of what it did."""
-        kept, purged = FakeGateways(), FakeGateways()
-        _, said = drive(["remove", "test2"], kept, FakeMachine(jobs=["test2"]))
-        self.assertEqual([("test2", False)], kept.forgotten)
-        self.assertIn("--purge", said, "it never said the history could go too")
+    def test_removing_an_agent_takes_the_account_of_what_it_did(self):
+        """R-AGW-5, R-GW-31 — one outcome, so there is nothing for a second flag to mean.
+        What was kept back was not kept for the owner: it was left where the next agent of
+        that name would find it."""
+        gateways = FakeGateways()
+        _, said = drive(["remove", "test2"], gateways, FakeMachine(jobs=["test2"]))
+        self.assertEqual([("test2", True)], gateways.forgotten)
+        self.assertIn("went with it", said)
 
-        _, told = drive(["remove", "test2", "--purge"], purged, FakeMachine(jobs=["test2"]))
-        self.assertEqual([("test2", True)], purged.forgotten)
-        self.assertIn("went with it", told)
+    def test_removing_an_agent_offers_no_flag_that_would_change_what_goes(self):
+        """R-AGW-5 — a flag that changes nothing is a distinction the command does not
+        make, and `--purge` on `remove` became one the day removal took everything."""
+        offered = {flag for parser in [_offered(cli.build_parser())["remove"]]
+                   for action in parser._actions for flag in action.option_strings}
+        self.assertEqual(set(), offered - {"-h", "--help"})
 
     def test_there_is_one_way_to_remove_and_stop_is_not_it(self):
         """R-GW-31 — two ways to remove were two things to get right. `stop` stands an

@@ -25,7 +25,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from rundesk import gateway
+from rundesk import gateway, store
 
 #: What a new agent's home is copied from. Ordinary Markdown files rather than text built
 #: in code, because they are what an owner reads first and edits next, and a rule about how
@@ -182,9 +182,9 @@ def runs_home(name: str, where: Path | None = None) -> Path:
 
     One letter from `run_home` and the opposite of it: that holds what the gateway is
     doing at this moment and is emptied when it stops, and this holds what was done and
-    is what an owner still has afterwards (R-RUN-10). Kept when the agent is taken away
-    and taken only when a removal asks for its history too (R-AGW-5), because a reinstall
-    after trouble is exactly when the account of the trouble matters most.
+    is what an owner still has afterwards (R-RUN-10) — for as long as the agent does.
+    Taking the agent away takes it (R-AGW-5): an account nobody can name an agent for is
+    an account nobody reads, and a name added back must inherit nothing.
     """
     return directory(name, where) / "runs"
 
@@ -301,6 +301,11 @@ def add(name: str, where: Path | None = None) -> list[str]:
     The gateway is the three directories beside the home. There is no separate step and no
     record naming one from the other: an agent's gateway is its name, so the two cannot
     come apart.
+
+    What it keeps is built by walking the steps from nothing rather than by writing the
+    tables here, so the migration path is exercised every time anybody makes an agent and
+    a fresh install cannot drift from an upgraded one (R-MIG-9). Records already there are
+    checked rather than rebuilt, which is what makes making an agent again a repair.
     """
     made = []
     for path in made_of(name, where).values():
@@ -312,6 +317,11 @@ def add(name: str, where: Path | None = None) -> list[str]:
         if not page.exists():
             page.write_text(_copied(called, name), encoding="utf-8")
             made.append(called)
+    records = store.path_for(directory(name, where))
+    fresh = not records.exists()
+    store.Store(records).made()
+    if fresh:
+        made.append(store.NAME)
     return sorted(made)
 
 
@@ -373,17 +383,22 @@ def _the_file_and_what_it_rotated_into(path: Path):
             yield beside
 
 
-def forget(name: str, where: Path | None = None, history: bool = False) -> list[str]:
-    """Take this agent away (R-AGW-2).
+def forget(name: str, where: Path | None = None) -> list[str]:
+    """Take this agent away, and everything of its own with it (R-AGW-2).
 
     The home goes with the agent, and so do the schedules and the private homes providers
     were given: adding the name back otherwise inherits work nobody asked for, from an
     agent that no longer exists (R-AGW-4).
 
-    What the agent *did* is kept until a removal is asked to take that too (R-AGW-5) —
-    its log, what its schedules did, and the account of every turn it took. A reinstall
-    after trouble is exactly the moment the account of the trouble matters most, and it
-    was being deleted by the command someone runs to fix the trouble.
+    **And so does the account of what it did** (R-AGW-5). It used to be kept behind a
+    second flag, on the argument that a reinstall after trouble is when the account of the
+    trouble matters most — but an account nobody can name an agent for is an account
+    nobody reads, and what it left behind was inherited by whoever took the name next.
+    Taking an agent away takes an agent away.
+
+    `state.db` is named rather than swept up by the glob below, along with the two files
+    SQLite keeps beside it: the glob takes `*.json` and `*.changing`, which is none of
+    them, and leaving those behind leaves a record of what was deleted.
 
     The run directory is emptied by the gateway's own removal, which holds the name's lock
     before unlinking it; anything still standing there belongs to something still using it,
@@ -409,19 +424,15 @@ def forget(name: str, where: Path | None = None, history: bool = False) -> list[
         if path.is_file():
             path.unlink()
             taken.append(path.name)
-    # The schedules go and the account of them stays, and they sit side by side: what is
-    # scheduled is work the name would inherit, and what each schedule last did is the
-    # account. Taking the directory would take both, so the file is named.
-    scheduled = gateway.schedules_path(name, schedules_home(name, where))
-    if scheduled.exists():
-        scheduled.unlink()
-        taken.append(scheduled.name)
-    if history:
-        for path in (logs_home(name, where), schedules_home(name, where),
-                     runs_home(name, where)):
-            if path.exists():
-                shutil.rmtree(path)
-                taken.append(path.name + "/")
+    for path in store.removes(stands):
+        if path.exists():
+            path.unlink()
+            taken.append(path.name)
+    for path in (logs_home(name, where), schedules_home(name, where),
+                 runs_home(name, where)):
+        if path.exists():
+            shutil.rmtree(path)
+            taken.append(path.name + "/")
     for empty in (run_home(name, where), schedules_home(name, where),
                   runs_home(name, where), stands):
         try:

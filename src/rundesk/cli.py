@@ -30,8 +30,10 @@ from rundesk import __version__  # noqa: E402
 from rundesk import agent as _agent  # noqa: E402
 from rundesk import channel  # noqa: E402
 from rundesk import gateway as _gateway  # noqa: E402
+from rundesk import migration  # noqa: E402
 from rundesk import process  # noqa: E402
 from rundesk import provider  # noqa: E402
+from rundesk import store  # noqa: E402
 from rundesk import supervisor as _supervisor  # noqa: E402
 from rundesk import turn  # noqa: E402
 from rundesk import updater  # noqa: E402
@@ -339,8 +341,6 @@ def build_parser() -> argparse.ArgumentParser:
     # verb defaults to one when the name is left out; this one must never guess.
     gone.add_argument("name", nargs="?", metavar="<agent>",
                       help="which agent — required, because this one never guesses")
-    gone.add_argument("--purge", action="store_true",
-                      help="also take its log, schedules and history")
 
     cycled = sub.add_parser("restart", help="cycle an agent, leaving the others alone")
     cycled.add_argument("name", nargs="?", metavar="<agent>", help="which agent")
@@ -816,7 +816,16 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
             print(f"        it has things to move, so stop it first: rundesk stop {name}",
                   file=sys.stderr)
             return 1
-    made = agents.add(name)
+    try:
+        made = agents.add(name)
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
+        # Repairing an agent whose records this rundesk will not read must say so rather
+        # than raise: the one thing an owner does when an agent is broken is make it again,
+        # and a traceback tells them nothing about which of the four this is.
+        print(f"{name}: NOT MADE — {why}", file=sys.stderr)
+        print(f"        its records are at {store.path_for(agents.directory(name))}",
+              file=sys.stderr)
+        return 1
     try:
         moved = agents.adopt(name) if wrote else []
     except agents.InUse as why:
@@ -1055,8 +1064,11 @@ def cmd_remove(args: argparse.Namespace, gateways, machine, agents) -> int:
     every login.
 
     The schedules go with the agent (R-AGW-4), because adding the name back would otherwise
-    inherit work nobody asked for from an agent that no longer exists. What the agent *did*
-    stays until a removal is asked to take that too (R-AGW-5).
+    inherit work nobody asked for from an agent that no longer exists — and so does the
+    account of what it did (R-AGW-5). There is no second flag for that, because there is
+    no longer a second outcome: an account nobody can name an agent for is an account
+    nobody reads, and a flag that changes nothing is a distinction the command does not
+    make.
     """
     name = args.name
     if not name:
@@ -1088,17 +1100,14 @@ def cmd_remove(args: argparse.Namespace, gateways, machine, agents) -> int:
             print(f"{name}: FAILED — {why}", file=sys.stderr)
             return 1
     taken = gateways.forget(name, where=whose.run, schedules=whose.schedules,
-                            logs=whose.logs, history=args.purge)
+                            logs=whose.logs, history=True)
     if agents.exists(name):
-        taken += agents.forget(name, history=args.purge)
+        taken += agents.forget(name)
     if not had_job and not taken:
         print(f"{name}: NOTHING TO REMOVE — no job, and nothing kept under that name")
         return 0
     print(f"{name}: REMOVED")
-    if args.purge:
-        print("        its home, its log and everything it did went with it")
-    else:
-        print("        kept the account of what it did (--purge takes that too)")
+    print("        its home, its log and everything it did went with it")
     return 0
 
 

@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import agent, gateway  # noqa: E402
+from rundesk import agent, gateway, store  # noqa: E402
 
 
 def tree(where: Path) -> dict[str, bytes | None]:
@@ -129,6 +129,30 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
             self.assertEqual([one.about for one in said], [str(at)],
                              f"an agent with no {what} was not reported as missing it")
 
+    def test_an_agent_is_made_with_the_records_it_keeps(self):
+        """R-MIG-9, R-STO-11 — built by walking the steps from nothing rather than by
+        writing the tables here, so the migration path is exercised by every agent anybody
+        makes and a fresh install cannot drift from an upgraded one."""
+        made = agent.add("ava", self.where)
+        self.assertIn(store.NAME, made, "making an agent never said it made its records")
+
+        kept = store.Store(store.path_for(agent.directory("ava", self.where)))
+        kept.made()
+        self.assertEqual(store.VERSION, kept.version())
+        self.assertEqual({"provider": None, "model": None, "instructions": None,
+                          "settings": {}}, kept.agent())
+
+    def test_making_an_agent_again_leaves_the_records_it_already_had(self):
+        """R-AGT-4 — making one that exists is the repair, and a repair that rebuilt the
+        records would be the command an owner runs to fix an agent losing its history."""
+        agent.add("ava", self.where)
+        kept = store.Store(store.path_for(agent.directory("ava", self.where)))
+        kept.made()
+        kept.remember_agent(provider="codex")
+
+        self.assertNotIn(store.NAME, agent.add("ava", self.where))
+        self.assertEqual("codex", kept.agent()["provider"])
+
     def test_what_a_home_holds_is_what_there_is_a_template_for(self):
         """R-AGT-2 — a template added later lands in a new agent's home without anything
         being added to a list kept in code beside it."""
@@ -187,11 +211,12 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         self.assertEqual(agent.add("ava", self.where), ["USER.md", "skills/"])
 
     def test_an_agent_is_only_one_that_has_a_home(self):
-        """R-AGT-2 — a removal keeps the log behind, so a directory still standing is not
-        by itself an agent that still is."""
+        """R-AGT-2 — a directory standing where agents are kept is not by itself an agent.
+        Anything may leave one there; what makes one an agent is the home it loads from."""
         agent.add("ava", self.where)
         agent.forget("ava", self.where)
-        self.assertTrue(agent.logs_home("ava", self.where).is_dir())
+        agent.directory("ava", self.where).mkdir(parents=True, exist_ok=True)
+
         self.assertEqual(agent.known(self.where), [])
         self.assertFalse(agent.exists("ava", self.where))
 
@@ -360,7 +385,7 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
     def test_taking_an_agent_away_takes_the_gateway_that_ran_it(self):
         """R-AGW-2"""
         self.made()
-        agent.forget("ava", self.where, history=True)
+        agent.forget("ava", self.where)
         self.assertFalse(agent.directory("ava", self.where).exists())
 
     def test_taking_an_agent_away_takes_the_schedules_that_were_its_own(self):
@@ -374,10 +399,10 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
         agent.add("ava", self.where)
         self.assertEqual(gateway.written_schedules("ava", agent.schedules_home("ava", self.where)), [])
 
-    def test_taking_an_agent_away_keeps_what_its_schedules_did(self):
-        """R-AGW-5 — what is scheduled and what each schedule last did sit side by side.
-        One is work the name would inherit and the other is the account, so a removal that
-        took the directory would take both."""
+    def test_taking_an_agent_away_takes_what_its_schedules_did(self):
+        """R-AGW-5 — what is scheduled and what each schedule last did sat side by side,
+        and only the first went. The second was then inherited by whoever took the name
+        next, which is a new agent reading an old one's account of itself."""
         self.made()
         kept = agent.schedules_home("ava", self.where)
         gateway.ran_path("ava", kept).write_text('{"tidy": {"outcome": "ok"}}', encoding="utf-8")
@@ -386,7 +411,7 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
 
         agent.forget("ava", self.where)
         self.assertFalse(gateway.schedules_path("ava", kept).exists(), "the work was inherited")
-        self.assertIn("tidy", gateway.ran_path("ava", kept).read_text())
+        self.assertFalse(gateway.ran_path("ava", kept).exists(), "the account was inherited")
 
     def test_taking_an_agent_away_takes_the_channels_it_was_reachable_on(self):
         """R-AGW-4, R-CAD-10 — the worst thing a name can inherit. An agent added back
@@ -421,14 +446,18 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
         self.assertIsNone(session.of(agent.directory("ava", self.where), "codex", "terminal"))
         self.assertEqual({}, agent.chosen("ava", self.where))
 
-    def test_taking_an_agent_away_still_keeps_the_account_of_what_it_did(self):
-        """R-AGW-5 — history is in the directories beside it, and only `--purge` takes
-        that. Taking every file about an agent must not become taking its account."""
+    def test_nothing_of_an_agents_records_is_left_behind(self):
+        """R-AGW-5, R-STO-14 — `state.db` is named rather than swept up: the removal takes
+        `*.json` and `*.changing`, which is none of the three files a database is while it
+        is in WAL, so all three survived every removal and the two beside it are the
+        database's own rather than ours to leave lying about."""
         self.made()
-        kept = agent.schedules_home("ava", self.where)
-        gateway.ran_path("ava", kept).write_text('{"tidy": {"outcome": "ok"}}', encoding="utf-8")
+        stands = agent.directory("ava", self.where)
+        for beside in store.removes(stands):
+            beside.write_bytes(b"")
+
         agent.forget("ava", self.where)
-        self.assertIn("tidy", gateway.ran_path("ava", kept).read_text())
+        self.assertEqual([], [one.name for one in store.removes(stands) if one.exists()])
 
     def test_where_an_agent_keeps_things_is_its_own(self):
         """R-AGT-9 — asked once and handed on, because a command working these out for
@@ -445,23 +474,16 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
         said = agent.resolved("gateway", self.where)
         self.assertEqual((said.run, said.logs, said.schedules), (None, None, None))
 
-    def test_taking_an_agent_away_keeps_the_account_of_what_it_did(self):
-        """R-AGW-5 — a reinstall after trouble is the moment the account of the trouble is
-        worth most, and it was being deleted by the command someone runs to fix it."""
+    def test_taking_an_agent_away_takes_the_account_of_what_it_did(self):
+        """R-AGW-5 — one outcome, not two. What was kept behind a second flag was left for
+        whoever took the name next, and an account nobody can name an agent for is an
+        account nobody reads."""
         self.made()
         gateway.note("ava", "something happened", agent.logs_home("ava", self.where))
 
         agent.forget("ava", self.where)
-        self.assertIn("something happened",
-                      gateway.log_path("ava", agent.logs_home("ava", self.where)).read_text())
-
-    def test_a_removal_asked_for_the_account_too_takes_it(self):
-        """R-AGW-5"""
-        self.made()
-        gateway.note("ava", "something happened", agent.logs_home("ava", self.where))
-
-        agent.forget("ava", self.where, history=True)
         self.assertFalse(agent.logs_home("ava", self.where).exists())
+        self.assertFalse(agent.directory("ava", self.where).exists())
 
 
 class AGatewayThatHasNoAgentYet(WithSomewhereToKeepAgents):

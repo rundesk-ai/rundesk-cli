@@ -235,21 +235,14 @@ class WhatAnAgentKeepsAnAccountIn(unittest.TestCase):
         self.assertNotEqual(agent.run_home("ava", self.where),
                             agent.runs_home("ava", self.where))
 
-    def test_taking_an_agent_away_keeps_the_account_of_what_it_did(self):
-        """R-AGW-5 — a reinstall after trouble is exactly when the account of the trouble
-        matters most, and it was being deleted by the command run to fix the trouble."""
+    def test_taking_an_agent_away_takes_what_a_run_did(self):
+        """R-AGW-5 — the account lasts as long as the agent and no longer. Left behind, it
+        was inherited by whoever took the name next, which is a new agent standing on an
+        old one's history."""
         writing = transcript.Writer(agent.runs_home("ava", self.where), "1-abcd", "ava")
         writing.add(event={"type": "done", "ok": True})
         writing.close()
-        agent.forget("ava", self.where)
-        self.assertEqual(["1-abcd"], transcript.known(agent.runs_home("ava", self.where)))
-
-    def test_a_removal_asked_for_the_account_too_takes_what_a_run_did(self):
-        """R-AGW-5 — asked for out loud, and then everything goes."""
-        writing = transcript.Writer(agent.runs_home("ava", self.where), "1-abcd", "ava")
-        writing.add(event={"type": "done", "ok": True})
-        writing.close()
-        taken = agent.forget("ava", self.where, history=True)
+        taken = agent.forget("ava", self.where)
         self.assertIn("runs/", taken)
         self.assertFalse(agent.runs_home("ava", self.where).exists())
 
