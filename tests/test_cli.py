@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import shlex
 import contextlib
 import json
 import os
@@ -76,7 +77,8 @@ from rundesk_cli import channel  # noqa: E402
 from rundesk_cli import gateway as real_gateway  # noqa: E402
 
 
-def run(argv: list[str], published: str | None = None) -> tuple[int, str, str]:
+def run(argv: list[str], published: str | None = None,
+        written: pathlib.Path | None = None) -> tuple[int, str, str]:
     """One CLI invocation, with everything it printed.
 
     Offline: whatever the command would ask the forge, it is told here instead. A
@@ -95,8 +97,8 @@ def run(argv: list[str], published: str | None = None) -> tuple[int, str, str]:
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
-                code = cli.main(argv, gateways=FakeGateways(), machine=FakeMachine(),
-                                agents=FakeAgents())
+                code = cli.main(argv, gateways=FakeGateways(written=written),
+                                machine=FakeMachine(), agents=FakeAgents())
             except SystemExit as usage:
                 # What a shell sees, which is the subject of several cases here: argparse
                 # refuses a usage error by exiting rather than returning, and a test that
@@ -270,6 +272,11 @@ class SurfaceTests(unittest.TestCase):
                 self.assertEqual(code, cli.NOT_AVAILABLE)
                 self.assertIn("NOT AVAILABLE", err)
 
+    def setUp(self):
+        at = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-surface-"))
+        self.addCleanup(shutil.rmtree, at, True)
+        self.wrote = at / "said.log"
+
     def test_every_operation_the_reference_lists_is_answered_as_it_is_typed(self):
         """R-CMD-7 — read off the reference and typed exactly as written, options and all.
 
@@ -289,12 +296,20 @@ class SurfaceTests(unittest.TestCase):
             # out whole — dropping only the token it starts with leaves the rest of the
             # group behind and types something nobody would.
             bare = re.sub(r"\[[^\]]*\]", " ", form)
+            # Split the way a shell splits, not on whitespace. The reference now carries
+            # worked examples as well as signatures, and an example with a quoted sentence
+            # in it — which is most of them worth writing — came apart into words and was
+            # reported as the *command* being wrong.
             typed = ["an-agent" if word.startswith("<") else word
-                     for word in bare.split()[1:]]
+                     for word in shlex.split(bare)[1:]]
             if "--" in typed:                       # what follows is a program to run
                 typed = typed[:typed.index("--")] + ["--", "/bin/echo"]
             with self.subTest(form=form):
-                code, out, err = run(typed, published=f"v{__version__}")
+                # Somewhere disposable to write. The reference now carries worked
+                # examples, and an example worth writing down is one that *does*
+                # something — which means it writes a line saying it did.
+                code, out, err = run(typed, published=f"v{__version__}",
+                                     written=self.wrote)
                 self.assertNotIn("invalid choice", err, f"'{form}' is listed and not offered")
                 self.assertNotIn("unrecognized arguments", err,
                                  f"'{form}' is listed and refused by argparse rather than by us")
@@ -1743,8 +1758,9 @@ settings = {rest[i].lstrip("-"): rest[i + 1] for i in range(0, len(rest) - 1, 2)
 print(json.dumps({"ok": True, "settings": settings, "describes": "#operations in Acme",
                   "secret": {"env": "A_CHANNEL_TOKEN"}}))
 '''
-    #: Reports two kinds of place, the way a real platform with rooms and private
-    #: messages does — each with settings narrowed to it, and its own starting wording.
+    #: Reports two kinds of place with nothing asked of the owner, the way a real
+    #: platform with rooms and private messages does once it has signed in — each with
+    #: settings narrowed to it, and its own starting wording.
     TWO_PLACES = '''
 import json, sys
 print(json.dumps({"ok": True, "secret": {"env": "A_CHANNEL_TOKEN"}, "shapes": [
@@ -2187,7 +2203,38 @@ class WhatAGatewayHasBeenSaying(unittest.TestCase):
         self.assertNotIn("up", said, "it showed a source it was told not to")
 
 
-class WhatIsInFlightWhenAnUpdateAsks(unittest.TestCase):
+class EveryExampleIsRealCommand(unittest.TestCase):
+    """R-CMD-7 — an example is a promise, and one that no longer parses is a lie told in
+    the place a reader trusts most. Checked against the grammar itself, so a flag that is
+    renamed or a verb that moves takes the docs down with it rather than leaving them
+    quietly wrong."""
+
+    def typed(self):
+        for what, shown in cli.EXAMPLES:
+            for line, means in shown:
+                if line:
+                    yield what, " ".join(line.replace("\\\n", " ").split()), means
+
+    def test_every_example_is_a_command_this_version_accepts(self):
+        for what, line, _means in self.typed():
+            argv = shlex.split(line)
+            self.assertEqual("rundesk", argv[0], f"{what}: not a rundesk command")
+            with self.subTest(line):
+                parser = cli.build_parser()
+                # Through the same door a typed command goes through, tail and all —
+                # otherwise this would pass on an example the command itself refuses.
+                read, _carried = cli._handed_on(argv[1:], cli._carries_a_tail(parser))
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    try:
+                        parser.parse_args(read)
+                    except SystemExit as why:
+                        self.fail(f"{line}\n  -> {err.getvalue().strip() or why}")
+
+    def test_every_example_says_what_it_does(self):
+        """A command with nothing said about it is a line to copy without understanding."""
+        for what, line, means in self.typed():
+            self.assertTrue(means.strip(), f"{what}: '{line}' says nothing about itself")
     def test_what_is_in_flight_is_asked_of_every_gateway_that_is_running(self):
         """R-UPD-23 — every gateway, not the default one, and named so an owner knows
         which of several to wait for. A gateway that is stopped has nothing in flight

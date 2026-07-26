@@ -276,7 +276,19 @@ def reference() -> str:
     width = max(len(sig) for sig, _ in body if sig)
     for sig, what in body[:-1]:
         out.append(f"{sig.ljust(width)}   {what}".rstrip() if what else sig)
-    out += ["```", "", "## What the arguments mean", "", "```sh"]
+    out += ["```", "", "## What it looks like", "",
+            "Signatures say what is *allowed*. These say what it **is** — the three things an",
+            "owner makes, as they are actually typed.", ""]
+    for what, shown in getattr(cli, "EXAMPLES", []):
+        out += [f"**{what.capitalize()}**", "", "```sh"]
+        for typed, means in shown:
+            if typed:
+                out.append(f"# {means}")
+                out.append(typed)
+            else:
+                out.append(f"#   {means.strip()}")
+        out += ["```", ""]
+    out += ["## What the arguments mean", "", "```sh"]
     out += aligned(arguments_seen(verbs), indent="")
     out += [
         "```",

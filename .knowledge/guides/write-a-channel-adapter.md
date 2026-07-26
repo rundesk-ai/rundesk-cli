@@ -146,8 +146,12 @@ through it, and the people who may speak to an agent in a public room are not th
 who may speak to it in private. One channel spanning both means one allow-list spanning
 both.
 
-So your `--check` reports the kinds of place the options it was given actually reached, and
-rundesk writes one channel for each:
+So your `--check` reports the kinds of place it can actually reach, and rundesk writes one
+channel for each. **Work out what those are rather than asking** — you are signed in by the
+time you answer, so anything the platform can tell you is something an owner should not
+have to look up and paste. Ours asks Discord which servers the bot is in; it used to
+require the id, which was asking somebody to go and copy a number out of a URL to answer a
+question the adapter could answer itself.
 
 ```json
 {"ok": true, "secret": {"env": "MY_TOKEN"},

@@ -181,6 +181,28 @@ class WhatAThreadIsCalled(unittest.TestCase):
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class WhatOneAddIsAskedFor(unittest.TestCase):
+    """R-CAD-15 — a bot knows which servers it is in, and is signed in by the time it
+    answers `--check`. Requiring `--server` was asking somebody to copy a number out of a
+    URL to answer a question the adapter could answer itself."""
+
+    def test_naming_no_place_at_all_takes_both_kinds(self):
+        self.assertEqual((True, True), discord.wanted(discord.options([])))
+
+    def test_naming_only_direct_messages_leaves_the_rooms_out(self):
+        self.assertEqual((True, False), discord.wanted(discord.options(["--dm"])))
+
+    def test_naming_only_a_room_leaves_direct_messages_out(self):
+        for narrowed in (["--server", "9930"], ["--channel", "1180"]):
+            self.assertEqual((False, True), discord.wanted(discord.options(narrowed)),
+                             f"{' '.join(narrowed)} took direct messages as well")
+
+    def test_naming_both_takes_both(self):
+        self.assertEqual((True, True),
+                         discord.wanted(discord.options(["--dm", "--server", "9930"])))
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class WhichChannelTakesAMessage(unittest.TestCase):
     """R-CAD-15 — one `add` makes one channel per kind of place, so exactly one of them
     may take any given message."""
@@ -238,7 +260,7 @@ class WhereAMessageCameFrom(unittest.TestCase):
 
     def test_discord_says_which_room_and_which_person_a_message_came_from(self):
         at = self.message(self.Where("ops"), self.Where("Rundesk"), shown="Tim")
-        self.assertEqual("#ops on the Rundesk server", discord._place(at, False, False))
+        self.assertEqual("#ops on the 'Rundesk' server", discord._place(at, False, False))
         self.assertEqual("Tim", discord._who(at))
 
     def test_a_server_with_no_name_to_show_is_not_shown_as_blank(self):
@@ -263,7 +285,8 @@ class WhereAMessageCameFrom(unittest.TestCase):
         thread = self.Thread("what changed today?")
         thread.parent = self.Where("ops")
         at = self.message(thread, self.Where("Rundesk"), shown="Tim")
-        self.assertEqual("the thread 'what changed today?' under #ops on the Rundesk server",
+        self.assertEqual("the thread 'what changed today?' under #ops on the "
+                         "'Rundesk' server",
                          discord._place(at, False, True))
 
 

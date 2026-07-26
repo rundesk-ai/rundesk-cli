@@ -587,7 +587,7 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
         to the command the schedule names."""
         self.ask("add", "ava", "--provider", self.brain("nosy"))
         code, said, why = self.ask("ask", "ava", "what changed?",
-                                   "--says", "You are running unattended overnight.")
+                                   "--instructions", "You are running unattended overnight.")
         self.assertEqual(0, code, why)
         told = json.loads(said)["told"]
         self.assertEqual("You are running unattended overnight.", told["RUNDESK_PREFACE"])

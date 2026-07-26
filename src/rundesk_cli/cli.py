@@ -137,6 +137,46 @@ MEANS: dict[str, str] = {
     "--set <key=value>": "anything that brain takes, carried to it unread; repeatable",
 }
 
+#: What each of the three things an owner makes actually looks like when it is typed.
+#: Signatures say what is *allowed*; these say what it *is*. A reader working out how to
+#: put an agent on Discord from `[--kind <kind>] [--allow <user>] <channel> [<option> ...]`
+#: is reading a grammar and guessing at a command.
+#:
+#: Real values, deliberately: a made-up id that looks like an id says more than `<id>` said
+#: twice, and the shape of a Discord snowflake is itself the answer to a question somebody
+#: would otherwise have to go and ask.
+EXAMPLES: list[tuple[str, list[tuple[str, str]]]] = [
+    ("an agent", [
+        ("rundesk add ava --provider codex",
+         "an agent called ava, answered by the codex this machine already has"),
+        ("rundesk add ava --provider /opt/my-brain --model fast-1 --set effort=high",
+         "one answered by a brain you wrote, told which model and how hard to think"),
+        ("rundesk start ava",
+         "have the machine keep it running, and bring it back when it falls over"),
+    ]),
+    ("a channel", [
+        ("rundesk channels ava add discord --kind discord --allow 279024636254224384",
+         "reachable in direct messages and in every room it has been invited to"),
+        ("", "writes two channels — discord-dms and discord-rooms — each with its own "
+             "allowed list, settings and instructions"),
+        ("rundesk channels ava add discord --kind discord --allow 279024636254224384 -- --dm",
+         "direct messages only; --server <id> or --channel <id> narrows the rooms instead"),
+        ('rundesk channels ava instructions discord-rooms "You are {agent} in {where.channel}. Others read this, so keep it short."',
+         "what it is told about where it is, before it reads a word of the message"),
+        ("rundesk channels ava",
+         "what it is reachable on, and whether it is reachable at all"),
+    ]),
+    ("a schedule", [
+        ('rundesk schedules ava add nightly --when "0 3 * * *" -- rundesk ask ava "summarise what changed today"',
+         "at three every morning, one turn, in this agent's own conversation"),
+        ('rundesk schedules ava add nightly --when "0 3 * * *" -- rundesk ask ava "check the deploy" --instructions "Nobody is watching."',
+         "the same, told it is running unattended before it reads a word"),
+        ("rundesk schedules ava off nightly",
+         "keep it, and stop it running"),
+    ]),
+
+]
+
 #: A verb that can be typed bare *and* given a name is two operations, not one, and a
 #: reference showing a single line would say neither. One bracket style per thing means
 #: `[<agent>]` is not available to say "optional" — so both forms are listed, and what each
@@ -147,12 +187,24 @@ FORMS: dict[str, list[tuple[str, str]]] = {
     "doctor": [("", "what stands between every agent and a working turn"),
                ("<agent>", "what stands between one agent and a working turn")],
     "ask": [('<agent> "<prompt>"', "one turn, streamed to this terminal"),
-            ('<agent> "<prompt>" --says "<text>"',
+            ('<agent> "<prompt>" --instructions "<text>"',
              "with standing instructions, told apart from the prompt")],
     "usage": [("", "what every agent has cost"),
               ("<agent>", "what one agent has cost"),
               ("<agent> <run>", "what one run cost")],
 }
+
+
+def examples() -> str:
+    """The three things an owner makes, as they are actually typed."""
+    said = ["what it looks like:"]
+    for what, shown in EXAMPLES:
+        said.append(f"\n  {what}")
+        for typed, means in shown:
+            if typed:
+                said.append("    " + typed.replace("\n", "\n    "))
+            said.append(f"        {means}" if typed else f"    {means}")
+    return "\n".join(said)
 
 
 def _brain(parser: argparse.ArgumentParser, whose: str) -> None:
@@ -176,6 +228,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rundesk",
         description="A lightweight, provider-agnostic multi-agent gateway.",
+        # Shown under every verb's list, because a signature says what is allowed and an
+        # example says what it *is*. Working out how to put an agent on Discord from
+        # `[--kind <kind>] [--allow <user>] <channel> [<option> ...]` is reading a grammar
+        # and guessing at a command.
+        epilog=examples(),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"rundesk {__version__}")
@@ -250,7 +307,7 @@ def build_parser() -> argparse.ArgumentParser:
     # instructions would have to be read on the way past — and the seam that keeps every
     # kind of work the same would be the thing that broke. Said here instead, it belongs
     # to the command the schedule names, and every kind of work keeps one way of saying it.
-    asked.add_argument("--says", metavar="<text>", default="",
+    asked.add_argument("--instructions", dest="says", metavar="<text>", default="",
                        help="standing instructions for this turn, told to the brain apart "
                             "from the prompt — what a schedule running unattended says")
 

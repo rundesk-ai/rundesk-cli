@@ -127,8 +127,7 @@ that platform needs goes after `--` and is carried to it unread.
 
 ```sh
 rundesk channels <agent>                                        # what it is reachable on
-rundesk channels <agent> add acme --kind discord --allow <user> \
-    -- --dm --server <id>                                       # put it on one
+rundesk channels <agent> add acme --kind discord --allow <user>  # put it on one
 rundesk channels <agent> show acme-rooms                        # what it is, and who may use it
 rundesk channels <agent> instructions acme-rooms "<text>"       # what it is told about where it is
 rundesk channels <agent> remove acme-rooms                      # take it off
@@ -141,9 +140,12 @@ acme-rooms  discord  every room in Acme     1        yes
 ```
 
 - **A platform is rarely one place, so one `add` can make several.** Discord has private
-  messages and rooms full of people; pointed at both, the command above writes `acme-dms`
-  and `acme-rooms`. `--server` means every room in it, and adding `--channel <id>` narrows
-  that to one. The adapter decides what kinds of place it has — rundesk has no list.
+  messages and rooms full of people, so the command above writes `acme-dms` and
+  `acme-rooms` without being told to. **Nothing needs looking up** — the adapter is signed
+  in when it checks itself, so which servers a bot is in is something it asks Discord
+  rather than something you copy out of a URL. Narrow it if you want to: `--dm` on its own
+  leaves the rooms out, `--server <id>` confines them to one server and `--channel <id>` to
+  one room. The adapter decides what kinds of place it has — rundesk has no list.
   **The point is that each carries its own allowed list**: the people who may speak to an
   agent in a public room are not the people who may speak to it in private.
 - **Each is told where it is, and you write that.** An agent handed only the words answers

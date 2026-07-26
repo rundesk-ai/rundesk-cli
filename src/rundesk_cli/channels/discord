@@ -71,6 +71,10 @@ TOKEN_FILE = "token"
 #: allowed list and a set of instructions for each.
 DMS, ROOMS = "dms", "rooms"
 
+#: How many servers to name when saying what a room channel reaches. A bot in forty
+#: servers has a description nobody reads; the count of the rest says the same thing.
+GUILDS_SHOWN = 3
+
 #: What an agent is told about each, to start from. **A starting point and not a rule**: it
 #: is written into the channel record where an owner can read it and rewrite it, with
 #: `rundesk channels <agent> instructions <channel>`. Written here rather than in the core because
@@ -812,7 +816,7 @@ def _place(message, direct: bool, in_thread: bool) -> str:
     else:
         said = f"#{named}" if named else "a channel"
     server = getattr(getattr(message, "guild", None), "name", None)
-    return f"{said} on the {server} server" if server else said
+    return f"{said} on the '{server}' server" if server else said
 
 
 def _parts(message, direct: bool, in_thread: bool) -> dict:
@@ -927,11 +931,6 @@ async def check(chose) -> int:
                           f"running this from, or put it in a file called '{TOKEN_FILE}' "
                           f"in this channel's own directory; never as an argument")
         return 1
-    if not chose.dm and not chose.server and not chose.channel:
-        say(ok=False, why="say where it listens: --dm for direct messages, --server <id> "
-                          "for every room in a server, and --channel <id> as well to "
-                          "confine it to one room")
-        return 1
     if chose.unknown:
         say(ok=False, why=f"this channel does not understand {' '.join(chose.unknown)}")
         return 1
@@ -944,10 +943,11 @@ async def check(chose) -> int:
         # reach the agent through it — so an owner who pointed this at both gets one of
         # each, with an allowed list and a set of instructions for each. Checked
         # separately too: being able to see a room proves nothing about direct messages.
-        if chose.dm:
+        wants_dms, wants_rooms = wanted(chose)
+        if wants_dms:
             me = await client.application_info()
             shapes.append(_shape(chose, DMS, f"direct messages to {me.name}", dm=True))
-        if chose.server or chose.channel:
+        if wants_rooms:
             # **A server is the room channel's ordinary scope, and one room is the
             # narrowing.** `--server` on its own means every room in it — which is what an
             # agent in a server is for, and what "rooms" says. `--channel` as well confines
@@ -980,10 +980,26 @@ async def _room(client, chose):
     finds out that a room is not in the server they named while they are standing at the
     terminal, rather than at three in the morning when somebody asks the agent something.
     """
+    if not chose.channel and not chose.server:
+        # **Asked of Discord, not of the owner.** A bot knows which servers it is in, and
+        # one call at check time says so — `--server` was asking somebody to go and copy
+        # an id for a question this can answer itself. Named here only to be shown; the
+        # channel is left unconfined, and answers wherever it has been invited.
+        found = [one async for one in client.fetch_guilds(limit=GUILDS_SHOWN + 1)]
+        if not found:
+            say(ok=False, why="this bot is not in any server — invite it to one, or use "
+                              "--dm on its own for direct messages only")
+            return None
+        named = ", ".join(f"'{one.name}'" for one in found[:GUILDS_SHOWN])
+        more = f" and {len(found) - GUILDS_SHOWN} more" if len(found) > GUILDS_SHOWN else ""
+        return f"every room in {named}{more}"
     if not chose.channel:
         guild = await client.fetch_guild(int(chose.server))
         named = getattr(guild, "name", None)
-        return f"every room in {named}" if named else "every room in that server"
+        # Said *as a server*, because a server's name is whatever its owner called it and
+        # may be a word that means something else here. One called "rundesk" read as
+        # "every room in rundesk", which says nothing at all.
+        return f"every room in the '{named}' server" if named else "every room in that server"
     found = await client.fetch_channel(int(chose.channel))
     guild = getattr(found, "guild", None)
     if chose.server and guild is not None and str(guild.id) != str(chose.server):
@@ -994,7 +1010,19 @@ async def _room(client, chose):
     # "#development in " with nothing after it, which reads like something went missing
     # rather than like there was nothing to say.
     named = getattr(guild, "name", None)
-    return f"#{found.name}" + (f" in {named}" if named else "")
+    return f"#{found.name}" + (f" in the '{named}' server" if named else "")
+
+
+def wanted(chose) -> tuple[bool, bool]:
+    """Which kinds of place this `add` is for: direct messages, and rooms.
+
+    **Nothing said means both**, because a bot is reachable in both and asking an owner
+    which of them they meant is asking them to say something this can find out for itself.
+    The flags narrow rather than choose: `--dm` on its own leaves the rooms out, `--server`
+    or `--channel` on their own leave direct messages out, and naming neither takes both.
+    """
+    confined = bool(chose.server or chose.channel)
+    return (bool(chose.dm) or not confined, confined or not chose.dm)
 
 
 def _shape(chose, suffix: str, describes: str, **where) -> dict:
