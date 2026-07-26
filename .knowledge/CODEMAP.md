@@ -194,6 +194,14 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
 - `CLI.md` — every operation the command offers, how each is typed, and what each argument means.
   **Generated** by `.knowledge/scripts/cli-reference` from the parser, so it cannot describe a product
   nobody has; the gate fails when it and the command disagree.
+- `USING-RUNDESK.md` — how to operate rundesk, written for **an agent running inside it** rather than
+  for a person or a contributor: where it stands, how to find what it has already done when a
+  conversation refers to work its session cannot see, and what it must never do to its own gateway.
+  **Rundesk's rather than an owner's** — it ships in the install tree and every update replaces it, so
+  it is never copied into a home and can never be forked or overridden. Deliberately names what each
+  command is *for* and not its flags, because nothing in the gate checks this file against the parser:
+  it sends a reader to `rundesk <verb> --help` and `CLI.md`, which cannot go stale. An agent is pointed
+  at it by its home's `AGENTS.md`, scaffolded from `src/templates/agent/`.
 - `.knowledge/scripts/gate` — everything that has to be true before work here is finished, in one
   command. The suites are **found**, not listed, and it fails when the workflow does not name one of
   them, so the local gate and CI cannot come apart. Runs everything rather than stopping at the first

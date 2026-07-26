@@ -13,6 +13,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   too, so the Discord cases silently start skipping, and a gateway you have running would fail on its
   next restart with no obvious cause. Run `./install.sh` again straight afterwards, and check
   `.venv/bin/python -c "import discord"` before believing a green suite.
+- **A brain running `rundesk` picks a different `python3` than you did, and `fitness()` then
+  refuses.** `rundesk` is `#!/usr/bin/env python3`, so what it resolves depends on the PATH of
+  whoever ran it — a developer's shell finds Homebrew's 3.14, and a brain's tool shell finds
+  `/usr/bin/python3`, which is 3.9.6. The `.venv` is built for whichever one ran `install.sh`,
+  so the other reports `NOT READY — what rundesk needs was installed for python3.14, and this
+  is python3.9` and the agent's records read as unavailable. Grok found this by being told to
+  look something up and reporting what it actually got. Reproduce with
+  `env PATH=/usr/bin:/bin ./rundesk doctor <agent>`; it is not a bug in the store.
 - **A backticked anything in an Evidence cell is read as the name of a test.** That is the whole
   mechanism keeping a ✅ honest, and it does not care that the row is ❌ or that the backticks are around
   a filename, a path or a script. Write those plainly in a note — `check-evidence` fails the gate with
