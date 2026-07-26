@@ -573,18 +573,35 @@ class Store:
                 "UPDATE schedule SET enabled = ? WHERE name = ?", (1 if on else 0, name)
             )
 
-    def schedule_fired(self, name: str, at: str, next_at=None) -> None:
+    def schedule_fired(self, name: str, at: str, outcome: str, next_at=None) -> None:
         """That the clock started this, written before it runs.
 
         Only the clock moves this. Running one by hand leaves both times where they were,
         which is what keeps a hand-run from moving when it next falls due on its own.
+
+        **Never backwards.** A long run finishing after a later occurrence was already
+        written would put the earlier minute back, and a gateway reading it on the way up
+        would take the later minute for one that had never fired — and run it again
+        (R-SCH-9). So the minute only ever moves forward, and the outcome follows it.
         """
         with self._writing() as conn:
             conn.execute(
-                "UPDATE schedule SET last_auto_run_at = ?,"
+                "UPDATE schedule SET last_auto_run_at = MAX(COALESCE(last_auto_run_at, ''), ?),"
+                " last_outcome = ?,"
                 " next_auto_run_at = COALESCE(?, next_auto_run_at) WHERE name = ?",
-                (at, next_at, name),
+                (at, outcome, next_at, name),
             )
+
+    def schedule_became(self, name: str, outcome: str) -> None:
+        """What the work a schedule started turned out to be, once it is over.
+
+        The minute is left exactly where it was: it is the minute the schedule *fell due*,
+        and moving it to the moment a run finished is how a gateway restarting comes to
+        read a later minute as the last one to have fired.
+        """
+        with self._writing() as conn:
+            conn.execute("UPDATE schedule SET last_outcome = ? WHERE name = ?",
+                         (outcome, name))
 
     def forget_schedule(self, name: str) -> None:
         with self._writing() as conn:

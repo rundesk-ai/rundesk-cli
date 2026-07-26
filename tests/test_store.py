@@ -513,20 +513,22 @@ class WhenTheClockStartsWork(WithAnAgentsOwnRecords):
                                     next_auto_run_at=LATER)
 
     def test_the_clock_starting_a_schedule_moves_when_it_last_ran_on_its_own(self):
-        self.kept.schedule_fired("nightly", LATER, "2026-07-27T10:00:00Z")
+        self.kept.schedule_fired("nightly", LATER, "started",
+                                 next_at="2026-07-27T10:00:00Z")
         fired = self.kept.schedule("nightly")
         self.assertEqual(LATER, fired["last_auto_run_at"])
+        self.assertEqual("started", fired["last_outcome"])
         self.assertEqual("2026-07-27T10:00:00Z", fired["next_auto_run_at"])
 
     def test_a_firing_that_says_nothing_about_the_next_one_leaves_it_where_it_was(self):
-        self.kept.schedule_fired("nightly", LATER)
+        self.kept.schedule_fired("nightly", LATER, "started")
         self.assertEqual(LATER, self.kept.schedule("nightly")["last_auto_run_at"])
         self.assertEqual(LATER, self.kept.schedule("nightly")["next_auto_run_at"])
 
     def test_running_a_schedule_by_hand_leaves_both_of_its_times_where_they_were(self):
         """Only the clock moves these. A hand-run that moved them would push out the next
         automatic firing, so asking for something now would quietly cancel tonight."""
-        self.kept.schedule_fired("nightly", AT, LATER)
+        self.kept.schedule_fired("nightly", AT, "started", next_at=LATER)
         by_hand = self.a_run(self.kept, source="hand",
                              schedule_id=self.kept.schedule("nightly")["id"])
         self.kept.recorded(by_hand, 1, LATER, "done", event={"ok": True})
@@ -537,10 +539,26 @@ class WhenTheClockStartsWork(WithAnAgentsOwnRecords):
         self.assertEqual([by_hand],
                          [one["id"] for one in self.kept.runs(schedule_id=after["id"])])
 
+    def test_what_a_schedule_last_did_never_moves_backwards(self):
+        """R-SCH-9 — a long run finishing after a later occurrence was already written
+        would put the earlier minute back, and a gateway reading it on the way up would
+        take that later minute for one that had never fired, and run it again."""
+        self.kept.schedule_fired("nightly", LATER, "started")
+        self.kept.schedule_fired("nightly", AT, "started")     # an earlier one, finishing late
+        self.assertEqual(LATER, self.kept.schedule("nightly")["last_auto_run_at"])
+
+    def test_what_the_work_a_schedule_started_became_leaves_the_minute_alone(self):
+        """R-SCH-9 — the minute is the one it *fell due*, and moving it to the moment a
+        run finished is how a gateway restarting reads a later minute as the last."""
+        self.kept.schedule_fired("nightly", AT, "started")
+        self.kept.schedule_became("nightly", "finished")
+        after = self.kept.schedule("nightly")
+        self.assertEqual((AT, "finished"), (after["last_auto_run_at"], after["last_outcome"]))
+
     def test_writing_a_schedule_down_again_does_not_forget_when_it_last_ran(self):
         """Editing a cron is an ordinary thing to do, and it must not make the gateway
         think every firing since the schedule was made has been missed."""
-        self.kept.schedule_fired("nightly", AT, LATER)
+        self.kept.schedule_fired("nightly", AT, "started", next_at=LATER)
         self.kept.remember_schedule("nightly", "0 4 * * *", LATER, command=["ls", "-l"])
         after = self.kept.schedule("nightly")
         self.assertEqual("0 4 * * *", after["cron"])

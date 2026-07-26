@@ -49,6 +49,7 @@ CREATE TABLE schedule (
     model             TEXT,
     instructions      TEXT,
     last_auto_run_at  TEXT,
+    last_outcome      TEXT,
     next_auto_run_at  TEXT,
     created_at        TEXT NOT NULL,
     CHECK ((command IS NULL) <> (prompt IS NULL))
