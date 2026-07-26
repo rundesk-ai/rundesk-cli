@@ -235,13 +235,15 @@ class WhatReachesABrain(WithAnAgentToRunTurnsFor):
         self.assertLess(order.index(turn.SENT), order.index("text"))
         self.assertLess(order.index(turn.ADMITTED), order.index(turn.SENT))
 
-    async def test_a_turn_works_in_its_own_agents_workspace(self):
-        """R-PRV-3, R-PRV-14 — one agent reaching another's workspace is one agent
-        reading another's work."""
+    async def test_a_turn_stands_where_its_own_agents_rules_stand(self):
+        """R-PRV-3, R-PRV-14, R-AGT-15 — one agent reaching another's home is one agent
+        reading another's work; and standing below its own is an agent that cannot read
+        the rules written for it, because a brain loads them by standing beside them."""
         agent.add("bo", self.where)
         said = await self.ask("nosy")
         told = json.loads(self.only(said.run, "text")["text"])["told"]
-        self.assertEqual(str(agent.workspace("ava", self.where)), told["RUNDESK_CWD"])
+        self.assertEqual(str(agent.home("ava", self.where)), told["RUNDESK_CWD"])
+        self.assertTrue((Path(told["RUNDESK_CWD"]) / "AGENTS.md").is_file())
         self.assertNotIn("/bo/", told["RUNDESK_CWD"])
         self.assertNotIn("/bo/", told["RUNDESK_PROVIDER_HOME"])
 

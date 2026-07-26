@@ -34,6 +34,7 @@ provider's own tools still reach whatever their owner reaches.
 | ✅ | R-AGT-11 | An agent is diagnosed without a provider being started | `an agent that has everything is diagnosed with nothing`, `an agent missing what it loads says which file`, `an agent that was never made is said to be missing`, `an agent that cannot be written to says so`, `an install that does not fit stands between an agent and a turn`, `an install with nothing to make an agent from says so`, `an agent with nothing wrong is ready`, `an agent with something wrong says what and fails`, `diagnosing with no name asks after every agent`, `diagnosing where there are no agents says so`, `asking after an agent that is not there says so` |
 | ✅ | R-AGT-12 | Diagnosing an agent changes nothing about it | `diagnosing an agent changes nothing about it`, `diagnosing an agent that is not there changes nothing` |
 | ✅ | R-AGT-13 | A name that has no agent is reached where it always was | `a name with no agent keeps things where it always did`, `a name with no agent is asked after where it always was` |
+| ✅ | R-AGT-15 | A turn stands in the agent's own home, so what stands there is what a brain reaches | `a turn stands where its own agents rules stand` |
 | ✅ | R-AGT-14 | Every place an agent resolves is readable without opening the source | `one agent says every place it resolves` |
 
 ## Open questions
@@ -42,6 +43,13 @@ provider's own tools still reach whatever their owner reaches.
   build this replaces found that only the two named after a provider are picked up where they stand, that
   one of them expands an import and none follows a link, and that a bare skills directory is discovered by
   nobody. None of it is re-proven against the versions installed now, which is what R-AGT-10 waits on.
+  One half of it is now settled and is R-AGT-15: a turn stands in the agent's home, beside the files
+  scaffolded for it. Until this phase it stood one directory *below* them, so an agent asked who it was
+  answered, truthfully, that there was nothing there to tell it — the scaffolding was written, and out of
+  reach of the only thing meant to read it. What R-AGT-10 still waits on is the other half, and it is two
+  questions rather than one: whether a provider standing there actually loads what stands beside it, and
+  what it makes of the owner's own files, which are still reachable because `HOME` is deliberately still
+  the owner's (see the sign-in question below). Neither is rundesk's behaviour to assert.
 - Whether agents share the owner's provider sign-in or each holds its own. Redirecting a provider's home
   isolated its credentials too in that build, so two agents needed two sign-ins — a cost worth stating
   before it is chosen rather than discovered.

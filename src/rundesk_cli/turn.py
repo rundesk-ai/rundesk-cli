@@ -139,7 +139,7 @@ async def carry(
     whose["runs"].mkdir(parents=True, exist_ok=True)
 
     can = await provider.capabilities(at, provider.environment(
-        home=whose["run"], cwd=whose["workspace"], provider_home=home, run="capabilities",
+        home=whose["run"], cwd=whose["home"], provider_home=home, run="capabilities",
         posture=posture, path=None,
     ))
     resume = None
@@ -176,11 +176,18 @@ async def carry(
         program = process.Program(
             [str(at)],
             env=provider.environment(
-                home=whose["run"], cwd=whose["workspace"], provider_home=home, run=run,
+                home=whose["run"], cwd=whose["home"], provider_home=home, run=run,
                 model=model, resume=resume, posture=posture, settings=settings,
                 raw=whose["runs"] / (run + transcript.BRAIN),
             ),
-            cwd=whose["workspace"],
+            # **The agent's home, not its workspace.** A brain loads the rules it is to
+            # follow because they *stand in the directory it stands in* — that is the whole
+            # mechanism, and it is what the scaffolded `AGENTS.md` says out loud. Standing
+            # it one directory lower put every one of those files out of its reach: the
+            # agent was asked who it was and answered, truthfully, that there was nothing
+            # here to tell it. `workspace/` is still where it works, by instruction, which
+            # is what that file also says.
+            cwd=whose["home"],
             takes_input=True,
             errors_apart=True,
             on_error=_noting(writing, trouble),
