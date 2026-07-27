@@ -240,8 +240,8 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   command. The suites are **found**, not listed, and it fails when CI stops delegating to the same
   discovery rule, so the local gate and CI cannot come apart. Runs everything rather than stopping at the first
   failure, and says what it did not cover: the real `./install.sh` and `--uninstall`.
-- `.knowledge/scripts/ci-suites` — discovers every suite, runs six at a time, and keeps one bounded log
-  per suite so a timeout or failure still names what broke.
+- `.knowledge/scripts/ci-suites` — discovers every suite, balances six isolated shards from measured
+  suite costs, and keeps one bounded log per suite so a timeout or failure still names what broke.
 - `.github/workflows/build.yml` — one run per PR, with the full tests across macOS and Ubuntu on Python
   3.9 and 3.13, real checkout installs on both systems, the knowledge gate, retained suite logs, and one
   stable required check. Scheduled, release-tag, and manually requested canaries use separate concurrency.

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import importlib.machinery
 import pathlib
 import re
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -27,9 +29,11 @@ class FastPullRequestFeedback(unittest.TestCase):
 
     def test_every_suite_is_discovered_and_parallelism_is_bounded(self):
         self.assertIn('glob("test_*.py")', self.runner)
-        workers = re.search(r"^WORKERS = (\d+)$", self.runner, re.MULTILINE)
-        self.assertIsNotNone(workers)
-        self.assertLessEqual(int(workers.group(1)), 6)
+        self.assertIn("sharded(found, args.shards)", self.runner)
+        self.assertIn("shard: [0, 1, 2, 3, 4, 5]", self.workflow)
+        parallel = re.search(r"max-parallel: (\d+)", self.workflow)
+        self.assertIsNotNone(parallel)
+        self.assertLessEqual(int(parallel.group(1)), 12)
         timeout = re.search(
             r"^SUITE_TIMEOUT_SECONDS = (\d+)$", self.runner, re.MULTILINE
         )
@@ -43,11 +47,34 @@ class FastPullRequestFeedback(unittest.TestCase):
         self.assertIn("actions/upload-artifact@v4", self.workflow)
         self.assertIn("if: always()", self.workflow)
 
+    def test_timeout_log_contains_thread_diagnostics(self):
+        loader = importlib.machinery.SourceFileLoader("ci_suites", str(RUNNER))
+        runner = loader.load_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            script = root / "test_hangs.py"
+            script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+            runner.LOGS = root / "logs"
+            runner.LOGS.mkdir()
+            runner.ROOT = root
+            runner.SUITE_TIMEOUT_SECONDS = 0.1
+            _name, _code, log, timed_out = runner.run(script)
+            self.assertTrue(timed_out)
+            self.assertIn("Current thread", log.read_text(encoding="utf-8"))
+
+    def test_each_suite_is_assigned_to_exactly_one_shard(self):
+        loader = importlib.machinery.SourceFileLoader("ci_shards", str(RUNNER))
+        runner = loader.load_module()
+        found = sorted((ROOT / "tests").glob("test_*.py"))
+        assigned = [path for group in runner.sharded(found, 6) for path in group]
+        self.assertEqual(sorted(assigned), found)
+        self.assertEqual(len(assigned), len(set(assigned)))
+
     def test_supported_test_and_install_matrix_remains(self):
         for value in (
-            "{ os: ubuntu-latest, python: '3.9' }",
-            "{ os: ubuntu-latest, python: '3.13' }",
-            "{ os: macos-latest, python: '3.13' }",
+            "target: ubuntu-3.9, os: ubuntu-latest, python: '3.9'",
+            "target: ubuntu-3.13, os: ubuntu-latest, python: '3.13'",
+            "target: macos-3.13, os: macos-latest, python: '3.13'",
             "os: [ubuntu-latest, macos-latest]",
         ):
             self.assertIn(value, self.workflow)
@@ -55,6 +82,11 @@ class FastPullRequestFeedback(unittest.TestCase):
     def test_one_stable_check_collects_every_required_pr_job(self):
         self.assertIn("required-pr-gate:", self.workflow)
         self.assertIn("needs: [knowledge, tests, install-this-checkout]", self.workflow)
+
+    def test_published_release_canary_does_not_race_tag_publication(self):
+        condition = self.workflow.split("  install-published-release:", 1)[1]
+        condition = condition.split("    timeout-minutes:", 1)[0]
+        self.assertNotIn("refs/tags/", condition)
 
 
 if __name__ == "__main__":

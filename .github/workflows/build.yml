@@ -51,20 +51,23 @@ jobs:
 
   # ------------------------------------------------------------------ the code
   tests:
-    name: tests — ${{ matrix.os }}, python ${{ matrix.python }}
+    name: tests — ${{ matrix.os }}, python ${{ matrix.python }}, shard ${{ matrix.shard }}
     timeout-minutes: 10
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      max-parallel: 12
       matrix:
+        target: [ubuntu-3.9, ubuntu-3.13, macos-3.13]
+        shard: [0, 1, 2, 3, 4, 5]
         include:
           # The floor: the oldest Python a fresh macOS ships. If this breaks, someone who has
           # installed nothing cannot run rundesk, which is the whole reason it is Python.
-          - { os: ubuntu-latest, python: '3.9' }
+          - { target: ubuntu-3.9, os: ubuntu-latest, python: '3.9' }
           # A current one, because most people have installed something newer.
-          - { os: ubuntu-latest, python: '3.13' }
+          - { target: ubuntu-3.13, os: ubuntu-latest, python: '3.13' }
           # The platform this is actually for.
-          - { os: macos-latest, python: '3.13' }
+          - { target: macos-3.13, os: macos-latest, python: '3.13' }
 
     steps:
       - uses: actions/checkout@v4
@@ -88,13 +91,15 @@ jobs:
 
       - name: Every suite — discovered, bounded, and logged separately
         timeout-minutes: 8
-        run: python -u .knowledge/scripts/ci-suites
+        run: >-
+          python -u .knowledge/scripts/ci-suites
+          --shard ${{ matrix.shard }} --shards 6
 
       - name: Keep every suite log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: suite-logs-${{ matrix.os }}-py${{ matrix.python }}
+          name: suite-logs-${{ matrix.os }}-py${{ matrix.python }}-shard${{ matrix.shard }}
           path: suite-logs/
           if-no-files-found: warn
           retention-days: 14
@@ -236,12 +241,11 @@ jobs:
     # can change — so running it per push tested nothing new and cost two anonymous
     # api.github.com calls each time. Hosted macOS runners share a handful of NAT'd
     # addresses and anonymous callers get sixty an hour *per address*, so a busy afternoon
-    # of pushes exhausted the quota and turned a correct release red. Daily, on a tag, or
-    # when somebody asks.
+    # of pushes exhausted the quota and turned a correct release red. Daily or when somebody
+    # asks also avoids racing the release workflow before a tag has been published.
     if: >-
       github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      startsWith(github.ref, 'refs/tags/v')
+      github.event_name == 'workflow_dispatch'
     timeout-minutes: 10
     runs-on: ${{ matrix.os }}
     strategy:
