@@ -54,14 +54,6 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   nineteen suites are green is this. Use **`.venv/bin/python .knowledge/scripts/gate`**. Through the
   floor check `for f in tests/test_*.py; do /usr/bin/python3 "$f"; done`: run the others on
   `/usr/bin/python3` and **`test_discord` on `.venv/bin/python`**.
-- **Regenerate `CLI.md` with that same interpreter, or the gate fails on a line you did not
-  write.** `argparse` renders `BooleanOptionalAction` differently across versions — 3.9 adds
-  `(default: True)` after the help text and 3.14 does not — so `cli-reference` run on the
-  floor version rewrites the `--activity` line, and `--check` then reports that the reference
-  no longer matches the command. The diff names an option nothing in the task touched, which
-  reads like the generator being broken. `.venv/bin/python .knowledge/scripts/cli-reference`.
-  **CI never catches this**: `build.yml` does not check the reference at all, so the local
-  gate is the only thing that does.
 - **`gate > log; echo "GATE_EXIT=$?" >> log` reports the *echo's* status, not the gate's.** A
   compound command exits with its last member, so a harness or a `&&` chain reads `0` from a gate
   that failed — and the real code is only in the file, which nobody re-reads once they have been
@@ -391,6 +383,12 @@ re-checked since, so treat these as true-when-found rather than as current.*
   `test_supervisor.py`) — and the check before pushing is
   `for f in tests/test_*.py; do /usr/bin/python3 "$f"; done` — macOS ships 3.9.6 at that path, which is
   exactly the floor. `.knowledge/tmp/like-ci` exists for this.
+- **An agent-run gate inherits `RUNDESK_AGENTS_DIR`, and `test_provider` treats it as leaked provider
+  state.** Remove that one variable for the gate:
+  `env -u RUNDESK_AGENTS_DIR python3 .knowledge/scripts/gate`.
+- **macOS's system Python may make `Library/Caches/com.apple.python` under `test_install`'s fake HOME.**
+  That correctly fails the test for undeclared install output even though the installer did not write it;
+  run the gate with `PYTHONDONTWRITEBYTECODE=1` so the interpreter makes no bytecode cache there.
 - A test class appended **after** the `if __name__ == "__main__": unittest.main()` block never runs —
   Python reaches the runner before the class is defined, and the count silently stays where it was.
   Keep that block last in every test file, and check the "Ran N tests" number moved.

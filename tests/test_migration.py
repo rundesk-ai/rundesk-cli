@@ -15,6 +15,7 @@ Run: python3 tests/test_migration.py
 
 from __future__ import annotations
 
+import json
 import shutil
 import sqlite3
 import sys
@@ -627,6 +628,45 @@ class CarryingTheShapeThatShippedForward(WithStepsOfThisCasesOwn):
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
+
+    def test_a_legacy_discord_default_is_removed_without_overriding_the_owners_choice(self):
+        """R-CH-6 — Discord once persisted its old `off` default beside a core record that
+        said activity was on. Upgrading removes that contradiction, while a channel whose
+        owner used `--no-activity` and every unrelated platform choice stay untouched."""
+        self.assertEqual(self.FIRST, migration.carry(
+            self.at, self.home, want=self.FIRST, where=self.only_the_first))
+        conn = sqlite3.connect(str(self.at), isolation_level=None, timeout=5.0)
+        try:
+            channels = (
+                ("legacy-default", "discord", 1, {"activity": "off", "dm": True}),
+                ("owner-turned-off", "discord", 0, {"activity": "off", "dm": True}),
+                ("owner-chose-posts", "discord", 1, {"activity": "posts", "dm": True}),
+                ("another-platform", "somewhere", 1, {"activity": "off", "room": "ops"}),
+            )
+            conn.executemany(
+                "INSERT INTO channel"
+                " (name, kind, activity, settings, allow, created_at)"
+                " VALUES (?, ?, ?, ?, '[\"u1\"]', ?)",
+                [(name, kind, activity, json.dumps(settings, sort_keys=True), AT)
+                 for name, kind, activity, settings in channels],
+            )
+        finally:
+            conn.close()
+
+        rows = self.carried().execute(
+            "SELECT name, activity, settings FROM channel ORDER BY name"
+        ).fetchall()
+        carried = {
+            row["name"]: (bool(row["activity"]), json.loads(row["settings"]))
+            for row in rows
+        }
+        self.assertEqual((True, {"dm": True}), carried["legacy-default"])
+        self.assertEqual(
+            (False, {"activity": "off", "dm": True}), carried["owner-turned-off"])
+        self.assertEqual(
+            (True, {"activity": "posts", "dm": True}), carried["owner-chose-posts"])
+        self.assertEqual(
+            (True, {"activity": "off", "room": "ops"}), carried["another-platform"])
 
     def test_a_schedule_written_at_the_shape_that_shipped_is_carried_forward_untouched(self):
         """Every schedule anybody has is a repeating one, and stays exactly one. A step that

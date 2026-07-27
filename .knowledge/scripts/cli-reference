@@ -85,7 +85,13 @@ def signature(name: str, parser) -> str:
 
 
 def described(action) -> tuple[str, str]:
-    """One argument as a pair: how it is written, and what it does."""
+    """One argument as a pair: how it is written, and what it does.
+
+    Python 3.9's ``BooleanOptionalAction`` mutates its help after formatting by appending
+    the raw default; current Python does not. The reference is one checked-in file for every
+    supported interpreter, so strip that interpreter-added suffix and keep the deliberate
+    product wording from the parser.
+    """
     if action.option_strings:
         name = ", ".join(action.option_strings)
         name += "" if action.nargs == 0 else f" {action.metavar or '<' + action.dest + '>'}"
@@ -95,7 +101,11 @@ def described(action) -> tuple[str, str]:
         name = "<arguments>"
     else:
         name = action.metavar or f"<{action.dest}>"
-    what = said(action.help).replace("[coming soon]", "").strip()
+    what = said(action.help)
+    raw_default = f" (default: {action.default})"
+    if isinstance(action, argparse.BooleanOptionalAction) and what.endswith(raw_default):
+        what = what[:-len(raw_default)]
+    what = what.replace("[coming soon]", "").strip()
     if action.choices and action.dest != "command":
         one_of = " | ".join(sorted(action.choices))
         what = f"{what} — one of {one_of}" if what else f"one of: {one_of}"
