@@ -174,6 +174,7 @@ def environment(
     home: Path,
     cwd: Path,
     provider_home: Path,
+    skills: Path,
     run: str,
     model: str | None = None,
     resume: str | None = None,
@@ -198,6 +199,13 @@ def environment(
         raise ValueError(f"'{posture}' is not how much of a machine a turn may touch")
     said = process.environment(home, path=path)
     said["RUNDESK_CWD"] = str(cwd)
+    # **Where this agent's skills stand, not which brain looks where** (R-PRV-24). Every
+    # brain measured discovers skills by itself, and each reads a directory of its own —
+    # so what is presented, and where, is the adapter's business, exactly as which flag
+    # carries a model is. Named rather than left to be worked out from the working
+    # directory: an adapter that inferred it would be holding a copy of rundesk's layout,
+    # which is the thing telling it `RUNDESK_CWD` exists to prevent.
+    said["RUNDESK_SKILLS"] = str(skills)
     said["RUNDESK_PROVIDER_HOME"] = str(provider_home)
     said["RUNDESK_RUN"] = run
     said["RUNDESK_POSTURE"] = posture

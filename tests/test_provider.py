@@ -174,8 +174,8 @@ if "--capabilities" in sys.argv:
 
 prompt = sys.stdin.read()
 told = {what: os.environ.get(what) for what in (
-    "RUNDESK_CWD", "RUNDESK_PROVIDER_HOME", "RUNDESK_MODEL", "RUNDESK_RUN",
-    "RUNDESK_RESUME", "RUNDESK_POSTURE", "RUNDESK_SETTINGS",
+    "RUNDESK_CWD", "RUNDESK_PROVIDER_HOME", "RUNDESK_SKILLS", "RUNDESK_MODEL",
+    "RUNDESK_RUN", "RUNDESK_RESUME", "RUNDESK_POSTURE", "RUNDESK_SETTINGS",
 )}
 say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
 say(type="text", text=json.dumps({"told": told, "where": os.getcwd(), "prompt": prompt}))
@@ -261,6 +261,7 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
             home=self.where / "home",
             cwd=self.where / "cwd",
             provider_home=self.provider_home,
+            skills=extra.pop("skills", self.where / "cwd" / "skills"),
             run=extra.pop("run", "1-abcd"),
             **extra,
         )
@@ -493,6 +494,15 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
         self.assertEqual((self.where / "cwd").resolve(), Path(said["where"]).resolve(),
                          "it did not start where told")
 
+    async def test_an_adapter_is_told_where_this_agents_skills_stand(self):
+        """R-PRV-24 — every brain measured discovers skills by itself and each reads a
+        directory of its own, so what is presented and where is the adapter's business.
+        What rundesk owes it is the one thing only rundesk knows: which directory holds
+        the skills this agent was given."""
+        turn = await self.carry(self.stand_in("nosy"))
+        said = json.loads(turn.of("text")[0]["text"])
+        self.assertEqual(str(self.where / "cwd" / "skills"), said["told"]["RUNDESK_SKILLS"])
+
     async def test_the_prompt_arrives_on_the_stream_meant_for_it(self):
         """R-PRV-4 — never on a command line, where the process list and the shell's
         history would both keep a copy of whatever was asked."""
@@ -548,8 +558,8 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
         told = self.told(model="whatever", resume="a-handle")
         self.assertEqual(
             sorted(["HOME", "PATH", "RUNDESK_HOME", "TERM", "LANG", "RUNDESK_CWD",
-                    "RUNDESK_PROVIDER_HOME", "RUNDESK_RUN", "RUNDESK_POSTURE",
-                    "RUNDESK_MODEL", "RUNDESK_RESUME"]),
+                    "RUNDESK_PROVIDER_HOME", "RUNDESK_SKILLS", "RUNDESK_RUN",
+                    "RUNDESK_POSTURE", "RUNDESK_MODEL", "RUNDESK_RESUME"]),
             sorted(told))
 
 
