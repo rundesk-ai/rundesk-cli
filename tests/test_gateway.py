@@ -951,8 +951,7 @@ class WhatIsLeftWhenItCouldNotFinish(WithARunDirectory):
         while not gateway.standing(gw.name, self.where).running and time.time() < deadline:
             await asyncio.sleep(0.02)
         running = asyncio.ensure_future(gw.start(FOREVER, as_name="abandoned", silence=None))
-        while not gw.running and time.time() < deadline:
-            await asyncio.sleep(0.02)
+        await self._holding(gw)
         left = next(iter(gw.running.values()))
         gw.ask_to_stop()
         self.assertNotEqual(0, await asyncio.wait_for(serving, 10))
