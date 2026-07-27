@@ -800,12 +800,15 @@ def _in_flight(gateways, agents) -> list:
     well as by work: an owner told only that "something" is running has to go and find
     which of several it was before they can decide to wait.
     """
-    return [
-        f"{name}/{one}"
-        for name in agents.known() + [it.name for it in gateways.every()]
-        if _standing(name, gateways, agents).running
-        for one in gateways.what_is_running(name, agents.resolved(name).run)
-    ]
+    found = []
+    for name in sorted(set(agents.known() + [it.name for it in gateways.every()])):
+        run_home = agents.resolved(name).run
+        if _standing(name, gateways, agents).running:
+            found.extend(f"{name}/{one}"
+                         for one in gateways.what_is_working(name, run_home))
+        found.extend(f"{name}/turn:{row['run']}"
+                     for row in gateways.what_is_turning(name, run_home))
+    return found
 
 
 def cmd_uninstall(args: argparse.Namespace) -> int:
@@ -1952,7 +1955,9 @@ def cmd_agents(args: argparse.Namespace, gateways, machine, agents) -> int:
             kept = has_supervisor and name in described and machine.loaded(name)
         except machine.Unsure:
             kept = None   # asked, and not told — which is not the same as "no"
-        doing = gateways.what_is_running(name, agents.resolved(name).run) if it.running else []
+        run_home = agents.resolved(name).run
+        doing = gateways.what_is_working(name, run_home) if it.running else {}
+        turning = gateways.what_is_turning(name, run_home)
         # A loaded job is one fact; the gateway process and PID are another (R-GW-34).
         # Calling the first "supervised" claimed a relationship the machine never proved:
         # a manually started same-name process can coexist with a loaded dormant job.
@@ -1969,15 +1974,39 @@ def cmd_agents(args: argparse.Namespace, gateways, machine, agents) -> int:
             _how_long(it.started) if it.running else "-",
             job,
             _version_of(it),
-            (f"{len(doing)} ({', '.join(sorted(doing))})" if doing else "idle") if it.running else "-",
+            str(len(doing)) if it.running else "-",
+            str(len(turning)) or "-",
             # What never finished, counted where somebody looks (R-GW-39). The store
             # answering that question has existed since work could be interrupted at
             # all, and nothing in the product ever read it back: "what did not finish"
             # meant reading JSON out of a directory by hand, during an incident.
             str(len(gateways.what_was_interrupted(name, agents.resolved(name).logs)) or "-"),
         ))
-    _as_table(("AGENT", "STATE", "PID", "UPTIME", "LAUNCHD JOB", "VERSION", "WORK", "UNFINISHED"),
+    _as_table(("AGENT", "STATE", "PID", "UPTIME", "LAUNCHD JOB", "VERSION",
+               "PROCESSES", "TURNS", "UNFINISHED"),
               rows)
+    for name in sorted(found):
+        run_home = agents.resolved(name).run
+        it = found[name]
+        working = gateways.what_is_working(name, run_home) if it.running else {}
+        turning = gateways.what_is_turning(name, run_home)
+        if not working and not turning:
+            continue
+        print()
+        print(f"{name}:")
+        details = [
+            ("ADAPTER" if work.startswith("channel:") else "PROCESS",
+             work.removeprefix("channel:"), "-", str(how.get("pgid") or "-"), "-")
+            for work, how in sorted(working.items())
+        ]
+        details.extend((
+            "TURN",
+            f"{row['source']}:{row['surface']}",
+            row["conversation"],
+            str(row["pid"]),
+            _how_long(row.get("since")),
+        ) for row in turning)
+        _as_table(("KIND", "SOURCE", "CONVERSATION", "PID", "ELAPSED"), details)
     if orphaned:
         print()
         print(f"no agent yet — running since before there were any: {', '.join(orphaned)}")
@@ -2022,7 +2051,7 @@ def _one_agent(name: str, gateways, machine, agents) -> int:
 
 
 def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
-    """How rundesk itself is on this machine — not what it is running.
+    """How rundesk itself and its current load stand on this machine.
 
     Two questions, two commands. `agents` answers "what do I have and what is it doing";
     this answers "is the thing that runs them fit". They were one command answering
@@ -2034,12 +2063,24 @@ def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
         supervisor = "yes" if machine.available() else "no — nothing keeps an agent up here"
     except Exception:                                    # pragma: no cover - defensive
         supervisor = "?"
+    names = _every_name(gateways, machine, agents)
+    standing = {name: _standing(name, gateways, agents) for name in names}
+    running = sum(1 for one in standing.values() if one.running)
+    working = 0
+    turning = 0
+    for name in names:
+        run_home = agents.resolved(name).run
+        working += len(gateways.what_is_working(name, run_home)) if standing[name].running else 0
+        turning += len(gateways.what_is_turning(name, run_home))
     _as_table(("WHAT", "IS"), [
         ("version", __version__),
         ("install", str(REPO_ROOT)),
         ("fit to run", "yes" if not unfit else f"no — {unfit}"),
         ("supervisor", supervisor),
-        ("agents", str(len(agents.known()))),
+        ("configured agents", str(len(agents.known()))),
+        ("running gateways", str(running)),
+        ("live processes", str(working + turning)),
+        ("active turns", str(turning)),
         # Said here because "am I backed up" is a question about the install rather than
         # about any agent, and the answer somebody needs is not how many copies there are
         # but whether anything is still making them.

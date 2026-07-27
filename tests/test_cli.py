@@ -21,6 +21,7 @@ import re
 import shutil
 import tempfile
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -534,7 +535,7 @@ class FakeGateways:
             self.name, self.running, self.pid = name, running, pid
             self.version, self.stale, self.started = version, stale, started
 
-    def __init__(self, standing=(), working=None, refuses=None, written=None,
+    def __init__(self, standing=(), working=None, turning=None, refuses=None, written=None,
                  stops_after=None, starts_after=None, becomes=None,
                  interrupted=None, unloggable=None):
         #: What each gateway never got to finish. The store has existed since work could
@@ -552,6 +553,7 @@ class FakeGateways:
         self._becomes = list(becomes) if becomes else None
         self._asked = 0
         self._working = working or {}
+        self._turning = turning or {}
         self._refuses = refuses
         self._written = written
         self.served = []
@@ -588,6 +590,18 @@ class FakeGateways:
     def what_is_running(self, name, where=None):
         self.asked_where.append(where)
         return self._working.get(name, [])
+
+    def what_is_working(self, name, where=None):
+        self.asked_where.append(where)
+        return {
+            one: {"pgid": 1000 + number, "since": None}
+            for number, one in enumerate(self._working.get(name, []))
+            if not one.startswith("turn:")
+        }
+
+    def what_is_turning(self, name, where=None):
+        self.asked_where.append(where)
+        return list(self._turning.get(name, []))
 
     def forget(self, name, where=None, schedules=None, logs=None, history=False):
         self.forgotten.append((name, history))
@@ -1440,6 +1454,45 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
         self.assertIn("ava", said)
         self.assertIn("RUNNING", said)
 
+    def test_status_counts_gateways_processes_and_turns_separately(self):
+        """R-AGW-12 — the compact answer distinguishes configured identity from live load."""
+        agents = FakeAgents(made=["ava"])
+        turns = {"ava": [
+            {"run": "run-1", "source": "channel", "surface": "discord",
+             "conversation": "room-1", "pid": 81, "since": time.time()},
+            {"run": "run-2", "source": "channel", "surface": "discord",
+             "conversation": "room-2", "pid": 82, "since": time.time()},
+        ]}
+        gateways = FakeGateways(
+            standing=[FakeGateways.Standing("ava", running=True, pid=11)],
+            working={"ava": ["channel:discord"]}, turning=turns,
+        )
+        code, said = drive(["status"], gateways, agents=agents)
+        self.assertEqual(0, code, said)
+        for expected in ("configured agents", "running gateways", "live processes",
+                         "active turns", "3", "2"):
+            self.assertIn(expected, said)
+
+    def test_agents_lists_simultaneous_turns_without_prompts_or_arguments(self):
+        """R-AGW-13 — concurrent conversations are distinct and only safe identity is shown."""
+        agents = FakeAgents(made=["ava"])
+        turns = {"ava": [
+            {"run": "run-1", "source": "channel", "surface": "discord",
+             "conversation": "room-1", "pid": 81, "since": time.time() - 4},
+            {"run": "run-2", "source": "channel", "surface": "discord",
+             "conversation": "room-2", "pid": 82, "since": time.time() - 7},
+        ]}
+        gateways = FakeGateways(
+            standing=[FakeGateways.Standing("ava", running=True, pid=11)],
+            working={"ava": ["channel:discord"]}, turning=turns,
+        )
+        code, said = drive(["agents"], gateways, agents=agents)
+        self.assertEqual(0, code, said)
+        for expected in ("ADAPTER", "TURN", "room-1", "room-2", "81", "82", "ELAPSED"):
+            self.assertIn(expected, said)
+        self.assertNotIn("--prompt", said)
+        self.assertNotIn("secret", said)
+
     def test_the_name_column_holds_the_name_and_nothing_else(self):
         """R-AGW-8 — the table is read by things other than people: CI waits for a gateway
         to come up by matching the name at the start of its row. A marker put inside that
@@ -1675,7 +1728,8 @@ class WhatEachAgentIsDoing(unittest.TestCase):
             working={"agent-one": ["a-conversation", "another"]},
         )
         _, said = drive(["agents"], gateways)
-        self.assertIn("2 (", said)
+        self.assertIn("PROCESSES", said)
+        self.assertIn("2", said)
         self.assertIn("a-conversation", said)
 
     def test_status_tells_a_wedged_gateway_from_a_working_one(self):
@@ -2971,9 +3025,12 @@ class EveryExampleIsRealCommand(unittest.TestCase):
             def standing(self, name, where=None):
                 return Standing(name, name in ("alpha", "beta"))
 
-            def what_is_running(self, name, where=None):
+            def what_is_working(self, name, where=None):
                 return {"alpha": ["turn-1", "turn-2"], "beta": ["turn-3"],
                         "gamma": ["stale"]}[name]
+
+            def what_is_turning(self, name, where=None):
+                return []
 
         self.assertEqual(
             ["alpha/turn-1", "alpha/turn-2", "beta/turn-3"],

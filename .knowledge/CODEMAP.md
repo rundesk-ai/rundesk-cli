@@ -98,6 +98,8 @@ file with it.
 - `src/rundesk/turn.py` — the only module that knows the three above exist: resolve, write down what was
   resolved, run the brain, write down what it said, keep where the conversation got to, write down how it
   ended. Nothing reaches a brain that the account does not show.
+- `src/rundesk/activity.py` — atomic, runtime-only provider-turn identities. Keeps only source,
+  conversation, PID, and start time so status and update safety can see work without seeing prompts.
 - `src/rundesk/skill.py` — the library of skills on this machine, and what makes one. Everything
   stands in `data/skills/`: built-ins copied there by the install and brought forward by an update,
   an owner's own beside them and never touched. **A grant is a link in the agent's own `skills/`,
@@ -174,7 +176,7 @@ file with it.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 23 files, ~1500 cases)
+## Tests (tests/ — 24 files, ~1500 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
@@ -194,6 +196,7 @@ provider. One file per contract, named for it:
 | `test_claude.py` | 42 | `provider-adapter` — the arithmetic and the postures one shipped brain decides on its own, driven against 184 captured lines rather than an account |
 | `test_grok.py` | 33 | `provider-adapter` — a brain that reports no tools, and the two flags of its that are accepted and enforce nothing |
 | `test_turn.py` | 54 | `agent-run` — one whole turn, and `rundesk ask` end to end |
+| `test_activity.py` | 3 | live-turn concurrency, safe persisted fields, and update visibility |
 | `test_transcript.py` | 19 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
 | `test_store.py` | 102 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
 | `test_channel.py` | 65 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
