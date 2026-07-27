@@ -42,6 +42,24 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   interpreter reading somebody else's virtualenv. **CI never sees it**: it runs 3.9 with an
   empty `.venv`, which is the whole point. Run the other nineteen on `/usr/bin/python3` and
   `test_discord` on `.venv/bin/python`; confirmed present before any of this phase's work.
+- **Run the gate with `.venv/bin/python`, not with a bare `python3`.** The gate is
+  `PY = sys.executable`, so it runs every suite on whichever interpreter started it — and on
+  a shell whose PATH does not reach Homebrew, `python3` is `/usr/bin/python3`, which is 3.9.
+  It then finds the checkout's `.venv/lib/python3.14/site-packages`, imports a `discord`
+  built for another Python, and dies in `yarl` on a PEP 604 signature: `TypeError:
+  unsupported operand type(s) for |`. `FAIL test_discord` with a traceback naming nothing of
+  ours, on a gate where the other nineteen suites are green, is this and not a real break.
+  `.venv/bin/python .knowledge/scripts/gate` is the whole fix. It is the same fault the floor
+  check below hits, arriving through the documented command rather than through a loop
+  somebody wrote.
+- **Regenerate `CLI.md` with that same interpreter, or the gate fails on a line you did not
+  write.** `argparse` renders `BooleanOptionalAction` differently across versions — 3.9 adds
+  `(default: True)` after the help text and 3.14 does not — so `cli-reference` run on the
+  floor version rewrites the `--activity` line, and `--check` then reports that the reference
+  no longer matches the command. The diff names an option nothing in the task touched, which
+  reads like the generator being broken. `.venv/bin/python .knowledge/scripts/cli-reference`.
+  **CI never catches this**: `build.yml` does not check the reference at all, so the local
+  gate is the only thing that does.
 - **`gate > log; echo "GATE_EXIT=$?" >> log` reports the *echo's* status to whoever is
   watching the command, not the gate's.** A backgrounded compound command exits with its
   last member, so a harness or a `&&` chain reads `0` from a gate that failed — and the real
