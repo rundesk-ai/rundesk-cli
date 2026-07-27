@@ -19,6 +19,7 @@ brain went on reading whatever else it found.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
@@ -189,6 +190,45 @@ def lay_down(where: Path | None = None, force: bool = False) -> list[str]:
             continue
         moved.append(name)
     return moved
+
+
+def take_back(where: Path | None = None) -> list[str]:
+    """Take the skills this release laid down back out of the library, and say which went.
+
+    **The mirror of `lay_down`, and R-RM-7 is why it exists**: removing rundesk takes what
+    the install put there for it. A built-in is rundesk's file — that is the whole of why it
+    can be replaced by an update without asking — so leaving it behind is leaving a piece of
+    the program on a machine somebody has removed the program from. It also left the library,
+    and with it the whole install directory, standing after an uninstall that reported having
+    left nothing.
+
+    **Whatever the owner wrote stays.** The set taken is the set this release ships, read off
+    the same directory `lay_down` reads, so a skill of their own — including one that is a
+    copy of a built-in under another name, which is exactly what the built-ins tell them to
+    make — is not a name this touches.
+
+    An empty library goes too. A directory left holding nothing is not something the owner
+    keeps, and it is the difference between an install directory that can be removed and one
+    that cannot.
+    """
+    where = where or home()
+    if not where.is_dir():
+        return []
+    gone = []
+    for name in shipped():
+        standing = where / name
+        if not standing.is_dir() or standing.is_symlink():
+            continue
+        try:
+            shutil.rmtree(standing)
+        except OSError:
+            # A library that cannot be written to is not a reason to fail a removal that has
+            # already taken the program. What is left is reported by what is left.
+            continue
+        gone.append(name)
+    with contextlib.suppress(OSError):
+        where.rmdir()          # only when nothing of the owner's is in it
+    return gone
 
 
 def granted(skills_dir: Path) -> list[str]:

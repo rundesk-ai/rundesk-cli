@@ -142,6 +142,41 @@ STOP
   fi
 }
 
+# The skills this release laid down, back out of the library — the mirror of the
+# `--lay-down` at the end of an install, and asked of the code for the same reason: which
+# skills a release ships is read off a directory, and that reading lives in one place.
+#
+# **A built-in is the program's, so removal takes it (R-RM-7).** Left behind it is a piece
+# of rundesk on a machine somebody has removed rundesk from — and because the library then
+# still exists, so does the whole install directory, after an uninstall that reported having
+# left nothing of itself. Whatever the owner wrote in that library stays: the set taken is
+# the set this release ships.
+#
+# Run while the program is still here, since it is the program that knows which those are.
+take_back_skills() {
+  local root="" candidate
+  for candidate in "$APP_DIR" "$INSTALL_DIR" "${SCRIPT_DIR:-}"; do
+    if [[ -n "$candidate" && -f "$candidate/src/rundesk/skill.py" ]]; then
+      root="$candidate"; break
+    fi
+  done
+  [[ -n "$root" ]] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  local took
+  # Never allowed to fail the removal: a library that cannot be written to is a thing to
+  # leave behind and say nothing about, not a reason to stop taking rundesk off a machine.
+  took="$(python3 - "$root" <<'SKILLS' 2>/dev/null || true
+import sys
+sys.path.insert(0, sys.argv[1] + "/src")
+from rundesk import skill
+
+print(" ".join(skill.take_back()))
+SKILLS
+)"
+  [[ -n "$took" ]] && echo "took back the skills this release laid down: $took"
+  return 0
+}
+
 # An install from before the program had a directory of its own put it directly in
 # $INSTALL_DIR, beside the data. Take those entries away rather than leaving two rundesks in
 # one place — a stale `src/` there is what `python3 -` below would find first.
@@ -198,6 +233,8 @@ try again. Nothing has been removed." ;;
     die "something rundesk was keeping is still running, so nothing was removed.
 Stop it and try again, or see what is running with: rundesk status"
   fi
+  # Before the program goes, because it is the program that knows which skills are its own.
+  take_back_skills
   for dir in /usr/local/bin "$HOME/.local/bin" "${RUNDESK_BIN_DIR:-}"; do
     [[ -n "$dir" && -L "$dir/rundesk" ]] || continue
     target="$(readlink "$dir/rundesk")"
@@ -297,6 +334,12 @@ Stop it and try again, or see what is running with: rundesk status"
         echo "kept your backups ($BACKUPS_DIR) — those survive a purge too."
       fi
       if [[ -z "$theirs" ]]; then
+        # `rmdir` and never `rm -rf`: it removes a directory only when it is empty, so this
+        # cannot take anything even if the walk above were wrong about there being nothing.
+        # The data directory goes first — once the skills this release laid down have been
+        # taken back, an install nobody kept anything in is left holding an empty `data/`,
+        # and that one empty directory is what stops the install directory going with it.
+        rmdir "$DATA_DIR" 2>/dev/null || true
         rmdir "$INSTALL_DIR" 2>/dev/null && echo "removed $INSTALL_DIR"
       fi
     fi

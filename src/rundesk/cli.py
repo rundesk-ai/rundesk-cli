@@ -520,6 +520,8 @@ def build_parser() -> argparse.ArgumentParser:
     known = sub.add_parser("skills", help="the skills on this machine, and who has which")
     known.add_argument("--lay-down", action="store_true", dest="lay_down",
                        help=argparse.SUPPRESS)   # the installer's; not an owner's verb
+    known.add_argument("--take-back", action="store_true", dest="take_back",
+                       help=argparse.SUPPRESS)   # the same, on the way out
     known.add_argument("--where", action="store_true",
                        help="print the directory they are kept in, and nothing else")
     doing = known.add_subparsers(dest="act", metavar="<action>")
@@ -1623,6 +1625,13 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
         # keeps its skills there too, and a guide naming `~/.rundesk` would be wrong
         # for every one of them.
         print(skills.home())
+        return 0
+    if getattr(args, "take_back", False):
+        # The installer's too, on the way out: what a release laid down is the program's and
+        # goes with it (R-RM-7). Left behind, it is a piece of rundesk on a machine somebody
+        # has removed rundesk from — and it keeps the whole install directory standing after
+        # an uninstall that said it had left nothing.
+        print(" ".join(skills.take_back()))
         return 0
     if getattr(args, "lay_down", False):
         # The installer's, and deliberately not an owner's verb: what a release ships is

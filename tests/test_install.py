@@ -464,6 +464,66 @@ class DependencyTests(Sandbox):
         )
         self.assertIn("True", imported.stdout, imported.stderr)
 
+    def test_removing_rundesk_takes_back_the_skills_the_release_laid_down(self):
+        """R-RM-7 — a built-in is the program's file, which is the whole of why an update may
+        replace it without asking. So removal takes it: left behind it is a piece of rundesk
+        on a machine somebody removed rundesk from."""
+        made = self.home / ".rundesk" / "app"
+        shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        library = self.home / ".rundesk" / "data" / "skills"
+        shipped = sorted(one.name for one in (REPO / "src" / "templates" / "skills").iterdir()
+                         if (one / "SKILL.md").is_file())
+        self.assertTrue(shipped, "the release ships no skills, so this proves nothing")
+        for name in shipped:
+            (library / name).mkdir(parents=True)
+            (library / name / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
+
+        gone = installer("--uninstall", home=self.home, bindir=self.bindir,
+                         cwd=made, script=made / "install.sh")
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertEqual([], [name for name in shipped if (library / name).exists()],
+                         "a skill this release laid down was left on the machine")
+
+    def test_removing_rundesk_leaves_a_skill_the_owner_wrote_themselves(self):
+        """R-RM-7 — the other half, and the line that matters: the set taken back is the set
+        this release ships, so a skill of their own is not a name it touches. The built-ins
+        tell an owner to copy one under another name to make it theirs, and that promise is
+        worth exactly as much as this case."""
+        made = self.home / ".rundesk" / "app"
+        shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        library = self.home / ".rundesk" / "data" / "skills"
+        (library / "mine").mkdir(parents=True)
+        (library / "mine" / "SKILL.md").write_text("---\nname: mine\n---\n")
+
+        gone = installer("--uninstall", home=self.home, bindir=self.bindir,
+                         cwd=made, script=made / "install.sh")
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertTrue((library / "mine" / "SKILL.md").is_file(),
+                        "removing rundesk took a skill the owner wrote")
+
+    def test_removing_rundesk_from_a_machine_that_kept_nothing_leaves_no_directory(self):
+        """R-RM-8 — the assertion the published-release job makes on a bare machine, and the
+        one the library quietly broke: with the shipped skills left in it, `data/` was never
+        empty, so the install directory could never go and an uninstall that said it had
+        left nothing had left the lot."""
+        made = self.home / ".rundesk" / "app"
+        shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        library = self.home / ".rundesk" / "data" / "skills"
+        library.mkdir(parents=True)
+        for name in sorted(one.name for one in (REPO / "src" / "templates" / "skills").iterdir()
+                           if (one / "SKILL.md").is_file()):
+            (library / name).mkdir()
+            (library / name / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
+
+        gone = installer("--uninstall", home=self.home, bindir=self.bindir,
+                         cwd=made, script=made / "install.sh")
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertFalse((self.home / ".rundesk").exists(),
+                         "nothing of the owner's was there, so the directory should have gone")
+
     def test_removing_rundesk_takes_what_was_installed_for_it(self):
         clone = self.checkout()
         venv = clone / ".venv"
