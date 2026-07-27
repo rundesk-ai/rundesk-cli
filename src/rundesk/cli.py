@@ -670,7 +670,7 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
     return updater.run(
         update_root, current_version, check_only=False,
         busy=lambda: _in_flight(gateways, agents),
-        pause=lambda: _stand_all_down(gateways, machine, agents),
+        pause=lambda: _stand_all_down(gateways, machine, agents, update_root),
         resume=lambda names: _bring_all_back(
             names, gateways, machine, agents, update_root
         ),
@@ -889,7 +889,7 @@ def _out_loud(said: str) -> None:
     print(f"        {said}")
 
 
-def _every_name(gateways, machine, agents) -> list[str]:
+def _every_name(gateways, machine, agents, root: Path = REPO_ROOT) -> list[str]:
     """Every gateway there is: one per agent, and any that has no agent yet.
 
     Four places, because there are four ways one can exist. An agent has a gateway
@@ -903,7 +903,7 @@ def _every_name(gateways, machine, agents) -> list[str]:
     knows nothing of whose work it holds.
     """
     return sorted({*agents.known(), *(it.name for it in gateways.every()),
-                   *machine.described(), *gateways.remembered()})
+                   *machine.described(root=root), *gateways.remembered()})
 
 
 def _standing(name: str, gateways, agents):
@@ -916,7 +916,8 @@ def _standing(name: str, gateways, agents):
     return gateways.standing(name, agents.resolved(name).run)
 
 
-def _stand_all_down(gateways, machine, agents) -> tuple:
+def _stand_all_down(gateways, machine, agents,
+                    root: Path = REPO_ROOT) -> tuple:
     """Stop every gateway an update is about to replace the files of (R-UPD-21).
 
     Refuses outright rather than touching one running without a job. `launchctl kill` has
@@ -928,7 +929,7 @@ def _stand_all_down(gateways, machine, agents) -> tuple:
     if not machine.available():
         return [], None
     stopped = []
-    for name in _every_name(gateways, machine, agents):
+    for name in _every_name(gateways, machine, agents, root):
         it = _standing(name, gateways, agents)
         if not it.running:
             continue
@@ -962,7 +963,7 @@ def _stand_all_down(gateways, machine, agents) -> tuple:
                 f"        hand it to the machine:  rundesk start {it.name}\n"
                 f"        or stop it yourself, then update"
             )
-        said = machine.stop(it.name)
+        said = machine.stop(it.name, root=root)
         if not said.ok or not _gone(it.name, gateways, agents):
             return stopped, f"'{it.name}' would not stop, so nothing was replaced under it"
         stopped.append(it.name)
@@ -982,7 +983,7 @@ def _bring_all_back(names: list, gateways, machine, agents,
     down = []
     for name in names:
         try:
-            said = machine.start(name)
+            said = machine.start(name, root=root)
         except (machine.NotOurs, machine.NoSupervisor):
             down.append(name)
             continue

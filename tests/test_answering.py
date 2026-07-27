@@ -1190,6 +1190,28 @@ class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
         await held.told_update_finished("one", "Rundesk update succeeded")
         self.assertEqual("Rundesk update succeeded", surface.of("said")[0]["text"])
 
+    async def test_a_completed_update_resumes_its_originating_work_after_reconnect(self):
+        """R-UPD-41"""
+        where = Path(tempfile.mkdtemp(prefix="rundesk-update-continuation-"))
+        self.addCleanup(shutil.rmtree, where, True)
+        agents.add("ava", where)
+        agents.remember("ava", where, provider="a-brain")
+        agents.records("ava", where).opened(
+            store.conversation_id("ops", "one"), "ops", "somewhere", "one", AT
+        )
+        brain, surface = Brain(), Surface()
+        held = answering.Answering(
+            "ava", "ops", {"kind": "somewhere", "allow": ["2207"]},
+            surface, where=where, carry=brain,
+        )
+        held.connected = True
+
+        await held.told_update_finished("one", "Rundesk update succeeded")
+
+        self.assertEqual(1, len(brain.asked))
+        self.assertEqual(answering.AFTER_UPDATE, brain.asked[0]["prompt"])
+        self.assertEqual("rundesk", brain.asked[0]["prompt_author"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -951,7 +951,7 @@ class FakeMachine:
     def available(self):
         return not self.missing
 
-    def described(self):
+    def described(self, root=None):
         return list(self.jobs)
 
     def known(self, name):
@@ -976,12 +976,12 @@ class FakeMachine:
             self.jobs.append(name)
         return self.Spoke(not self.refuses, "the machine said no")
 
-    def stop(self, name):
+    def stop(self, name, root=None):
         self._check(name)
         self.did.append(("stop", name))
         return self.Spoke(not self.refuse_acts, "the supervisor said no")
 
-    def start(self, name):
+    def start(self, name, root=None):
         self._check(name)
         self.did.append(("start", name))
         return self.Spoke(not self.refuse_acts, "the supervisor said no")
@@ -3081,18 +3081,21 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
             def loaded(self, name):
                 return name in loaded
 
-            def described(self):
+            def described(self, root=None):
                 return []
 
-            def stop(self, name):
+            def stop(self, name, root=None):
                 Machine.asked.append(("stop", name))
+                Machine.roots.append(("stop", name, root))
                 return type("Spoke", (), {"ok": stops})()
 
-            def start(self, name):
+            def start(self, name, root=None):
                 Machine.asked.append(("start", name))
+                Machine.roots.append(("start", name, root))
                 return type("Spoke", (), {"ok": True})()
 
         Machine.asked = []
+        Machine.roots = []
         return Machine()
 
     def _gateways(self, standing, gone_after_stop=True, comes_up=True, working=()):
@@ -3140,6 +3143,23 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
         self.assertEqual(["alpha", "beta"], stopped)
         self.assertEqual([("stop", "alpha"), ("stop", "beta")], machine.asked,
                          "it stopped a gateway that was not running")
+
+    def test_an_external_update_acts_on_jobs_owned_by_the_target_install(self):
+        """R-UPD-21 — the worker runs from the release checkout while the supervised
+        jobs belong to the older install it is replacing."""
+        target = Path("/target-install")
+        machine = self._machine(loaded=("alpha",))
+        stopped, refused = cli._stand_all_down(
+            self._gateways([self.Standing("alpha")]), machine, FakeAgents(), target
+        )
+        self.assertEqual((["alpha"], None), (stopped, refused))
+        self.assertEqual([("stop", "alpha", target)], machine.roots)
+
+        cli._bring_all_back(
+            ["alpha"], self._gateways([self.Standing("alpha")]),
+            machine, FakeAgents(), target,
+        )
+        self.assertIn(("start", "alpha", target), machine.roots)
 
     def test_an_update_refuses_rather_than_taking_down_what_it_cannot_start_again(self):
         """R-UPD-21 — launchctl has no handle on a process it never started, and nothing
