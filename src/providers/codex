@@ -64,8 +64,23 @@ LOGGED_OUT = "401 Unauthorized"
 #: How much of the machine a turn may touch, in this brain's words. Rundesk says `read` or
 #: `work`; what those mean to Codex is this file's business and nobody else's. Named the
 #: way its protocol names them — measured, because the schema calls the same idea three
-#: things and only one of them is what the wire accepts here.
-SANDBOX = {"read": "read-only", "work": "workspace-write"}
+#: things and only one of them is what the wire accepts here (see the research note:
+#: externally tagged and kebab-case, not `{"mode": …}` and not a bare string).
+#:
+#: **`work` is full access, and that is a deliberate widening.** It was `workspace-write`,
+#: which is an operating-system sandbox: no network from the shell, no reaching the
+#: keychain, and no writing outside the workspace. That made this brain the odd one of the
+#: three — `claude` and `grok` apply no sandbox at all and their `work` already grants a
+#: shell, an editor and a writer, so the same word meant two very different things
+#: depending on which brain answered. It also overrode an owner who had set
+#: `sandbox_mode = "danger-full-access"` in their own `~/.codex/config.toml`, silently and
+#: on every turn.
+#:
+#: So `work` now means what it says on every brain: the agent may do the work. What is
+#: given up is real and is worth naming — a `work` turn on Codex can now reach the network
+#: and write anywhere the person running rundesk can. `read` is unchanged and is still the
+#: constrained posture, and it is the one to reach for when that matters.
+SANDBOX = {"read": "read-only", "work": "danger-full-access"}
 
 #: What Codex calls the things it does, said in words no brain owns. Anything not here is
 #: reported without a `did` at all rather than in this vendor's vocabulary.
@@ -477,7 +492,10 @@ def _turn(codex, where: str) -> int:
     """The handshake, the turn, and everything said into it while it is still running."""
     resume = os.environ.get("RUNDESK_RESUME")
     model = os.environ.get("RUNDESK_MODEL")
-    posture = SANDBOX.get(os.environ.get("RUNDESK_POSTURE", "work"), "workspace-write")
+    # Anything unrecognised falls back to what `work` means rather than to a value written
+    # here, which would be a third copy of the mapping and would go stale the first time
+    # what a posture means changes — as it just did.
+    posture = SANDBOX.get(os.environ.get("RUNDESK_POSTURE", "work"), SANDBOX["work"])
     extra = _settings()
 
     if codex.answered(codex.ask("initialize", {

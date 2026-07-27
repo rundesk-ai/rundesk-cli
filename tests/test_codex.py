@@ -47,6 +47,9 @@ def _adapter():
 
 codex = _adapter()
 
+# The seam's own words, to check this adapter answers for every one of them.
+from rundesk import provider  # noqa: E402
+
 
 class Asked:
     """A stand-in codex that remembers what it was asked, and agrees to everything."""
@@ -102,7 +105,7 @@ class WhereStandingInstructionsGo(unittest.TestCase):
 
     def opening(self, said, **how):
         self.told(said)
-        return codex._opening(how.get("where", "/tmp"), how.get("posture", "workspace-write"),
+        return codex._opening(how.get("where", "/tmp"), how.get("posture", codex.SANDBOX["work"]),
                               how.get("model"), how.get("extra") or {})
 
     def test_standing_instructions_are_given_as_developer_instructions(self):
@@ -139,14 +142,14 @@ class WhereStandingInstructionsGo(unittest.TestCase):
         self.assertEqual("/tmp", got["cwd"])
         self.assertEqual("a-model", got["model"])
         self.assertEqual({"a": 1}, got["config"])
-        self.assertEqual({"workspace-write": {}}, got["sandbox"])
+        self.assertEqual({codex.SANDBOX["work"]: {}}, got["sandbox"])
 
 
 class WhichConversationIsToldAndWhichIsNot(unittest.TestCase):
     """R-PRV-23 — a conversation keeps the wording it was opened with."""
 
     def opening(self):
-        return {"cwd": "/tmp", "sandbox": {"workspace-write": {}},
+        return {"cwd": "/tmp", "sandbox": {codex.SANDBOX["work"]: {}},
                 "developerInstructions": "You are in a room."}
 
     def test_a_new_conversation_is_told_when_it_is_opened(self):
@@ -177,6 +180,41 @@ class WhichConversationIsToldAndWhichIsNot(unittest.TestCase):
         codex._opened(fake, self.opening(), "a-thread-that-is-gone")
         self.assertEqual("You are in a room.",
                          fake.sent("thread/start")["developerInstructions"])
+
+
+class HowMuchOfTheMachineATurnMayTouch(unittest.TestCase):
+    """R-PRV-18 — rundesk says `read` or `work`, and what those mean here is this file's."""
+
+    def test_working_means_the_agent_may_do_the_work(self):
+        """It was `workspace-write`, an operating-system sandbox: no network from the shell,
+        no keychain, and no writing outside the workspace. That made this brain the odd one
+        of the three — `claude` and `grok` apply no sandbox at all and their `work` already
+        grants a shell, an editor and a writer — so one word meant two very different things
+        depending on which brain answered. It also overrode an owner who had set full access
+        in their own Codex configuration, silently and on every turn."""
+        self.assertEqual("danger-full-access", codex.SANDBOX["work"])
+
+    def test_reading_is_still_the_constrained_one(self):
+        """The guard on the one above. Widening `work` is only defensible while the posture
+        that exists to be narrow stays narrow — otherwise there is no way left to ask for a
+        turn that cannot change anything."""
+        self.assertEqual("read-only", codex.SANDBOX["read"])
+
+    def test_what_rundesk_can_say_is_what_this_brain_answers_for(self):
+        """A posture the seam offers and this adapter has no answer for would fall through
+        to a default and be honoured as something else entirely, which is the one failure a
+        mapping like this can have."""
+        self.assertEqual(sorted(provider.POSTURES), sorted(codex.SANDBOX))
+
+    def test_the_sandbox_is_named_the_way_the_wire_accepts_it(self):
+        """Measured rather than guessed: the schema calls this idea three things and only
+        one is what `thread/start` takes — externally tagged and kebab-case, never
+        `{"mode": …}` and never a bare string. Guessing a Codex field name has already cost
+        this repository a whole feature, silently."""
+        got = codex._opening("/tmp", codex.SANDBOX["work"], None, {})
+        self.assertEqual({"danger-full-access": {}}, got["sandbox"])
+        for named in codex.SANDBOX.values():
+            self.assertRegex(named, r"^[a-z]+(-[a-z]+)*$")
 
 
 if __name__ == "__main__":
