@@ -627,11 +627,8 @@ or saying you have no access:
   rundesk messages {name} --conversation <id>  this room or direct message alone
   rundesk messages {name} --source schedule    only what the clock started
 
-Narrow before you widen, and say you looked it up rather than implying you remembered. If \
-nothing is there, say that. Do this when you cannot place something, not on every message.
-
-Rundesk is what runs you, and the `rundesk` command is how it is operated — your schedules, \
-your channels, what you have run and what it cost. **Anything else on this machine offering \
+Rundesk is what runs you, and the `rundesk` command is how it is operated — your schedules \
+and your channels. **Anything else on this machine offering \
 "schedules" or "tasks" is not this**, whatever it is called: `rundesk --help` is the authority, \
 and a question about your schedules is answered by `rundesk schedules {name}`.
 
