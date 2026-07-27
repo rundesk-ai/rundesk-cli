@@ -280,9 +280,12 @@ class Codex:
         elif method == "turn/completed":
             became = params.get("turn") or {}
             self.status = became.get("status")
+            if became.get("error"):
+                self.err.append(f"turn error: {json.dumps(became['error'])[:400]}\n")
             self.finished.set()
         elif method == "turn/failed":
             self.status = "failed"
+            self.err.append(f"turn/failed: {json.dumps(params.get('error') or params)[:400]}\n")
             self.finished.set()
         elif method == "item/completed":
             item = params.get("item") or {}
@@ -373,6 +376,120 @@ QUESTION_SCHEMA = json.dumps({
     },
     "required": ["needs_answer", "question", "options"],
 })
+
+
+# A real multiple choice: the brain has to enumerate the alternatives itself, because a
+# surface rendering buttons needs labelled options and not a sentence. The first version of
+# this probe asked about "two reasonable names" without saying what they were, so an empty
+# `options` was the honest answer and proved nothing.
+CHOOSE = ("I want to add caching to this service and I have no preference about how. "
+          "Do not start work and do not pick for me. Ask me one question, and offer me "
+          "the concrete alternatives you would choose between.")
+
+CHOICE_SCHEMA = json.dumps({
+    "type": "object",
+    "properties": {
+        "needs_answer": {"type": "boolean"},
+        "question": {"type": "string"},
+        "options": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"label": {"type": "string"},
+                               "description": {"type": "string"}},
+                "required": ["label", "description"],
+            },
+        },
+    },
+    "required": ["needs_answer", "question", "options"],
+})
+
+
+def _choices(body: str):
+    """The options a brain offered, or None if it did not produce the shape at all."""
+    try:
+        found = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(found, dict) or "options" not in found:
+        return None
+    return found
+
+
+def _choice_verdict(name: str, found, took_a_second_format: bool = False) -> None:
+    """One rule for all three brains: a multiple choice needs two or more labelled options."""
+    if found is None:
+        return verdict(name, "NO-STRUCTURED-QUESTION — the schema did not constrain the reply")
+    options = found.get("options") or []
+    labelled = [o for o in options if isinstance(o, dict) and o.get("label")]
+    verdict(name,
+            f"ASKS-A-MULTIPLE-CHOICE — {len(labelled)} labelled options"
+            + (" (only under a second output format)" if took_a_second_format else "")
+            if len(labelled) >= 2 else
+            f"STRUCTURED-BUT-NOT-A-CHOICE — the shape came back with {len(options)} option(s), "
+            "so a surface has a question to render and no buttons")
+
+
+def claude_ask_choices() -> None:
+    where = scratch("claude-choices")
+    # Straight to the output format the envelope was measured to need on this brain.
+    said = ran([CLAUDE, "-p", "--output-format", "json", "--json-schema", CHOICE_SCHEMA],
+               stdin=CHOOSE, where=where)
+    line(said.summary())
+    whole = said.records[0] if said.records else {}
+    body = whole.get("result")
+    body = body if isinstance(body, str) else json.dumps(body)
+    line(f"said: {str(body)[:400] or '(nothing)'}")
+    _choice_verdict("claude-ask-choices", _choices(str(body)), took_a_second_format=True)
+
+
+def grok_ask_choices() -> None:
+    where = scratch("grok-choices")
+    said = ran(grok_argv("--tools", "read_file", "--json-schema", CHOICE_SCHEMA, "-p", CHOOSE),
+               where=where)
+    line(said.summary())
+    body = grok_said(said) or said.out.strip()
+    line(f"said: {body[:400] or '(nothing)'}")
+    _choice_verdict("grok-ask-choices", _choices(body))
+
+
+def _strict(schema):
+    """The same schema, in the dialect codex's `outputSchema` insists on.
+
+    Measured, and it is not optional: without `additionalProperties: false` on **every**
+    object the turn fails outright with `invalid_json_schema` — a 400 from the model
+    provider, surfaced as a failed turn rather than as a rejected request, so it costs a
+    turn to find out. The other two brains accept the same schema without it.
+    """
+    if isinstance(schema, dict):
+        schema = {one: _strict(it) for one, it in schema.items()}
+        if schema.get("type") == "object":
+            schema["additionalProperties"] = False
+    elif isinstance(schema, list):
+        schema = [_strict(one) for one in schema]
+    return schema
+
+
+def codex_ask_choices() -> None:
+    """`turn/start` carries an `outputSchema` — "constrain the final assistant message"."""
+    where = scratch("codex-choices")
+    codex = Codex(where)
+    try:
+        if codex.start(where) is None:
+            line(codex.trace())
+            return verdict("codex-ask-choices", "COULD NOT START")
+        ended = codex.turn_now(where, CHOOSE,
+                               extra={"outputSchema": _strict(json.loads(CHOICE_SCHEMA))})
+        line(f"turn ended: {ended}  status: {codex.status}")
+        line(f"codex asked us: {[r.get('method') for r in codex.requests] or '(nothing)'}")
+        line(f"said: {codex.said[:400] or '(nothing)'}")
+        line(f"why: {''.join(codex.err)[:500] or '(nothing said)'}")
+        if codex.status == "failed":
+            return verdict("codex-ask-choices",
+                           "REFUSED — the turn failed rather than answering; see `why` above")
+        _choice_verdict("codex-ask-choices", _choices(codex.said))
+    finally:
+        codex.stop()
 
 
 # ══ OFFLINE — every one of these costs nothing ════════════════════════════════════════
@@ -1289,6 +1406,9 @@ SCENARIOS = [
     ("codex-ask", "1. can codex app-server ask, and how?", codex_ask),
     ("grok-ask", "1. can grok ask at all?", grok_ask),
     ("grok-ask-schema", "1. can grok's question be made structured?", grok_ask_schema),
+    ("claude-ask-choices", "1. can claude offer labelled options?", claude_ask_choices),
+    ("codex-ask-choices", "1. can codex offer labelled options?", codex_ask_choices),
+    ("grok-ask-choices", "1. can grok offer labelled options?", grok_ask_choices),
     ("claude-resume", "2. does an answer route back on claude?", claude_resume),
     ("codex-resume", "2. does an answer route back on codex app-server?", codex_resume),
     ("grok-resume", "2. does an answer route back on grok?", grok_resume),

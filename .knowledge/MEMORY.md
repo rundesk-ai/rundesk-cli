@@ -141,6 +141,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   the *item* type as `agentMessage`, not the `agent_message` the old `exec` stream used — the
   wrong spelling leaves every reply looking empty, which reads exactly like a turn that said
   nothing.
+- **Codex's `outputSchema` needs `additionalProperties: false` on every object, and says so as a
+  *failed turn*.** The same JSON Schema that claude's and grok's `--json-schema` accept unchanged
+  is rejected by codex with a provider 400 — `invalid_json_schema`, "'additionalProperties' is
+  required to be supplied and to be false" — delivered inside the turn error rather than as a
+  refused request, so it costs a real turn and reads like the brain failing. Walk the schema and
+  set it before sending. Related: ask a brain for options without giving it anything to enumerate
+  and you get `options: []`, which is honest and looks exactly like a brain that cannot offer a
+  multiple choice.
 - **Allowlisting the very tool whose permission you are testing means nothing ever asks.**
   `--allowedTools Write` plus `--permission-prompt-tool` reported that Claude has no approval
   gate; a permitted tool never prompts, so the broker had nothing to be asked about. Grant

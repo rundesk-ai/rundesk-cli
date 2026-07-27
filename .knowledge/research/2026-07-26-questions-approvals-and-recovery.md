@@ -29,7 +29,9 @@ Verdicts: **works** · **works differently** · **does not exist** · **unmeasur
 |---|---|---|---|
 | Ask a question at all, headless | **works** — prose, and the turn ends | **works** — prose, and the turn ends | **works** — prose, and the turn ends |
 | Ask it as a *tool call* | **does not exist** | **does not exist** | **does not exist** |
-| Ask it as *structured output* | **unmeasured** — `item/tool/requestUserInput` is defined and never fired | **works differently** — only under `--output-format json`, never under the `stream-json` rundesk streams with | **works** — `--json-schema` under `streaming-json` |
+| Ask it as *structured output* | **works** — `outputSchema` on `turn/start`, and the turn still streams | **works differently** — only under `--output-format json`, never under the `stream-json` rundesk streams with | **works** — `--json-schema` under `streaming-json` |
+| Offer a **multiple choice** — labelled options a surface could render as buttons | **works** — 3 labelled options | **works** — 4 labelled options | **works** — 4 labelled options |
+| A *native* multiple-choice request, raised by the brain itself | **unmeasured** — `item/tool/requestUserInput` is defined and never fired | **does not exist** | **does not exist** |
 | End the turn when it asks (not hang) | **works** | **works** | **works** |
 | Route an answer back by resuming | **works** — across a fresh process | **works** — control must stand elsewhere, see below | **works** — with `--no-memory` |
 | Take input **mid-turn** | **works** — `turn/steer`, one turn | **does not exist** — `--input-format stream-json` queues a *second* turn | **unmeasured** — no steering surface found on either shape |
@@ -57,9 +59,40 @@ way.** Grok's `--json-schema` constrains the reply under its ordinary streaming 
 
 — while Claude's `--json-schema` was **silently ignored** under `--output-format stream-json` and
 produced the same object only under `--output-format json`.[1] So on Claude a structured question
-and a streamed turn are mutually exclusive on this version. Codex's protocol defines a far richer
-shape than either — `item/tool/requestUserInput`, carrying `{itemId, threadId, turnId, questions[{header, id, options[{label, description}]}], autoResolutionMs}` — and it never fired in
+and a streamed turn are mutually exclusive on this version. Codex has it too and it was nearly
+missed: `outputSchema` on `turn/start`, *"constrain the final assistant message for this turn"*.
+
+**And all three can be made to ask a genuine multiple choice** — a question plus labelled options,
+which is the shape a surface renders as buttons. Measured with a prompt that forces the brain to
+enumerate its own alternatives:[1]
+
+| | options offered | under |
+|---|:--:|---|
+| codex | 3 labelled | `outputSchema` on `turn/start`, and the turn still streamed normally |
+| claude | 4 labelled | `--output-format json` only |
+| grok | 4 labelled | `--json-schema` under ordinary `streaming-json` |
+
+```json
+{"needs_answer":true,"question":"Which caching approach should I use for this service?",
+ "options":[{"label":"In-process cache","description":"…each instance has separate cache state…"},
+            {"label":"Redis cache","description":"…works across instances, adds infrastructure…"}]}
+```
+
+**The first run of that probe measured nothing, and it is worth saying why.** It asked about "two
+reasonable names" without ever saying what they were, so `options: []` came back — which was the
+honest answer to the question asked, and looked exactly like a brain that cannot offer choices.
+A multiple-choice probe has to give the brain something to enumerate.
+
+**Codex's schema is stricter than the other two, and the difference costs a turn.** `outputSchema`
+is rejected unless every object carries `additionalProperties: false`, and the rejection is not a
+refused request — it is a **failed turn**, carrying a provider 400 (`invalid_json_schema`) inside
+the turn error. The same schema is accepted unchanged by the other two.[1]
+
+What none of them has is the brain *itself* raising a multiple choice as a first-class request.
+Codex defines exactly that — `item/tool/requestUserInput`, carrying `{itemId, threadId, turnId, questions[{header, id, options[{label, description}]}], autoResolutionMs}` — and it never fired in
 anything probed here, so it stays **unmeasured** rather than being written up from its schema.[1]
+The difference matters: a schema-constrained answer is rundesk *asking the brain to ask in a
+shape*, while `requestUserInput` would be the brain deciding on its own that it needs the user.
 
 ### 2. Resuming the session is still the whole of answer routing — but the Claude proof needed a new control
 
@@ -238,6 +271,13 @@ And one from this repo's own notes: the 2026-07-25 note's Claude approval route 
   answer.** Two of three brains would have made a resume probe pass without resuming anything.
 - **Do not promise a structured question on Claude while streaming.** The two flags do not compose
   on this version, and the schema is dropped in silence.
+- **Do not send codex the same schema the other two took.** `outputSchema` needs
+  `additionalProperties: false` on every object, and the rejection arrives as a *failed turn*
+  carrying a provider 400 rather than as a refused request — so getting it wrong costs a turn and
+  looks like the brain failing.
+- **Do not ask a brain to offer options without giving it something to enumerate.** An empty
+  `options` is the honest answer to an under-specified question and is indistinguishable from a
+  brain that cannot offer choices at all.
 
 ## Verdict for us
 
@@ -250,13 +290,17 @@ obeyed.
 
 **What Phase 14 can promise.** A question, on all three brains, as the turn-shaped thing it
 already is — asked in prose, the turn ending, the answer arriving as the next turn on the same
-session. And an approval that genuinely waits, on **codex and claude**, as a declared per-brain
-capability with its own shape behind the seam.
+session. **A multiple choice with labelled options, on all three**, which is what a surface needs
+to render buttons — obtained by constraining the reply, and paid for on Claude by giving up
+streaming for that turn. And an approval that genuinely waits, on **codex and claude**, as a
+declared per-brain capability with its own shape behind the seam.
 
 **What Phase 14 must not promise.** An approval on **grok**, which asks nothing on either surface.
-Mid-turn input on **claude**, which queues a second turn instead. A question captured as a *tool
-call* anywhere. Anything at all built on plan mode. And a structured question on Claude while a
-turn is streaming.
+Mid-turn input on **claude**, which queues a second turn instead. A question or a choice raised as
+a *tool call* by the brain's own decision, anywhere — every structured ask measured here happened
+because rundesk asked for that shape, which means something has to decide a turn *might* need a
+question before it starts. Anything at all built on plan mode. And a structured question on Claude
+while a turn is streaming.
 
 **The pending-ask record shrinks but does not vanish.** Routing an answer needs only the session,
 as prior art said. What still needs a durable record is the **approval** case, because that one has
