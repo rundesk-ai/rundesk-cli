@@ -77,6 +77,32 @@ def named_at(now: datetime.datetime) -> str:
     return now.strftime(NAMED_AS) + SUFFIX
 
 
+def _free_name(into: Path, now: datetime.datetime) -> Path:
+    """A name in this directory that is not already a backup.
+
+    **A name is to the second, and two backups can happen inside one.** Taking one by hand
+    immediately before a restore takes its own is exactly that case, and it is not contrived:
+    it is what the safest path through this module does every time. Without this, the second
+    archive is written and renamed over the first — which silently destroys a backup, and in
+    that particular case destroys the very one being restored, while reporting success.
+
+    **Kept sorting by time, which decides the punctuation.** The stamp is fixed width and is
+    compared first, so a disambiguated name still orders before the next second. What it must
+    also do is order *after* the undisambiguated one it follows — and a hyphen would not:
+    `-` comes before `.` in every byte ordering there is, so `…Z-2.zip` would sort ahead of
+    `…Z.zip` and put the newer copy above the older one. `_` comes after `.`, which is the
+    whole reason it is the separator here and a hyphen everywhere else in the name.
+    """
+    at = into / named_at(now)
+    if not at.exists():
+        return at
+    stem = at.name[: -len(SUFFIX)]
+    nth = 2
+    while (into / f"{stem}_{nth}{SUFFIX}").exists():
+        nth += 1
+    return into / f"{stem}_{nth}{SUFFIX}"
+
+
 def _now() -> datetime.datetime:
     """The wall clock, in UTC. Replaced by an argument everywhere it matters."""
     return datetime.datetime.now(datetime.timezone.utc)
@@ -280,7 +306,7 @@ def take(data: Path, into: Path, now=None, why: str = "asked", note=None) -> Pat
     now = _now() if now is None else now
     leaving = excluded(data)
     into.mkdir(parents=True, exist_ok=True)
-    at = into / named_at(now)
+    at = _free_name(into, now)
     writing = at.with_name(at.name + PARTIAL)
     said = describe(data, now, why)
     held = tempfile.mkdtemp(prefix="rundesk-backup-")
@@ -397,6 +423,202 @@ class Backup:
             return self.at.stat().st_size
         except OSError:
             return None
+
+
+#: What the tree is called while it is being unpacked, and what the old one is called while
+#: the new one is being moved into place. Beside `data/` rather than in a temporary directory,
+#: so the two renames that do the swap never cross a filesystem — a rename that does not cross
+#: one is atomic, and both trees exist for every instant of it.
+INCOMING = "{name}.incoming"
+OUTGOING = "{name}.outgoing"
+
+
+def refusals(said: dict, want: int | None = None, version: str | None = None) -> list:
+    """Every reason this archive may not be put back, decided before anything is moved.
+
+    **Read off what the archive says about itself**, so a restore that must not happen costs
+    nothing and touches nothing. The alternative — unpacking and finding out — is a restore
+    that has already written somewhere by the time it knows it should not have.
+
+    Newer is refused in both of the ways an archive can be newer. Records written by a later
+    rundesk are refused for the reason `store.TooNew` exists: this code cannot know what it
+    is missing, so reading them would be reading a partial truth and writing over the rest.
+    """
+    want = store.VERSION if want is None else want
+    version = __version__ if version is None else version
+    why = []
+    ahead = sorted(name for name, was in (said.get("records") or {}).items()
+                   if isinstance(was, int) and was > want)
+    if ahead:
+        named = ", ".join(f"{name} at version {said['records'][name]}" for name in ahead)
+        why.append(f"these records are newer than this rundesk understands — {named}, "
+                   f"and this rundesk understands {want}")
+    understood = said.get("understands")
+    if isinstance(understood, int) and understood > want:
+        why.append(f"this backup was taken by a rundesk that understands version {understood} "
+                   f"and this one understands {want}")
+    took = said.get("rundesk")
+    if isinstance(took, str) and _is_newer(took, version):
+        why.append(f"this backup was taken by rundesk {took} and this is {version}")
+    return why
+
+
+def _is_newer(there: str, here: str) -> bool:
+    """Whether one release is later than another, asked of the module that already decides it.
+
+    Imported where it is used rather than at the top: `updater` is a decision about releases
+    and importing it for one predicate would tie every backup to it.
+    """
+    from rundesk import updater
+
+    return updater.is_newer(there, here)
+
+
+def what_changes(said: dict, data: Path) -> dict:
+    """Which agents a restore would bring back, take away, and leave standing.
+
+    **Said before it happens rather than discovered afterwards.** Putting a copy back replaces
+    everything the owner keeps, so an agent removed since it was taken comes back and one made
+    since it was taken goes — and neither of those is a thing to find out about later.
+    """
+    was = set((said.get("records") or {}).keys())
+    now = set(_agents_in(data))
+    return {
+        "comes_back": sorted(was - now),
+        "goes_away": sorted(now - was),
+        "stays": sorted(was & now),
+    }
+
+
+def _unpacked(archive: Path, into: Path) -> None:
+    """The tree inside this archive, put where it is told and nowhere else.
+
+    **Every member is checked before any is written.** A zip says where each of its entries
+    goes, and nothing stops one saying `../../../etc`; the standard library only began
+    refusing that by default long after the oldest Python this runs on. A restore is the most
+    privileged thing here, so the check is made rather than inherited.
+    """
+    into.mkdir(parents=True, exist_ok=True)
+    root = into.resolve()
+    with zipfile.ZipFile(archive) as opened:
+        wanted = [one for one in opened.infolist()
+                  if one.filename == INSIDE or one.filename.startswith(INSIDE + "/")]
+        for one in wanted:
+            under = one.filename[len(INSIDE):].lstrip("/")
+            if not under:
+                continue
+            lands = (root / under).resolve()
+            if lands != root and root not in lands.parents:
+                raise Refused(f"{archive.name} holds an entry that would be written outside "
+                              f"the directory it is being put in: {one.filename}")
+        for one in wanted:
+            under = one.filename[len(INSIDE):].lstrip("/")
+            if not under:
+                continue
+            _put(opened, one, root / under)
+
+
+def _put(opened: zipfile.ZipFile, one: zipfile.ZipInfo, at: Path) -> None:
+    """One entry back onto disk, as what it was rather than as a file with its bytes."""
+    mode = one.external_attr >> 16
+    if stat.S_ISLNK(mode):
+        at.parent.mkdir(parents=True, exist_ok=True)
+        if at.is_symlink() or at.exists():
+            os.remove(at)
+        os.symlink(opened.read(one), at)
+        return
+    if one.filename.endswith("/"):
+        at.mkdir(parents=True, exist_ok=True)
+        return
+    at.parent.mkdir(parents=True, exist_ok=True)
+    at.write_bytes(opened.read(one))
+    if mode & 0o777:
+        # Only where the archive actually recorded one. A zip written by something else has
+        # no mode at all, and chmod 0 would make what was restored unreadable.
+        os.chmod(at, mode & 0o777)
+
+
+def restore(archive: Path, data: Path, into: Path, now=None, want: int | None = None,
+            busy=None, pause=None, resume=None, carry=None, note=None,
+            keep_one_first: bool = True) -> str | None:
+    """Put a backup back, or leave everything exactly as it was and say why.
+
+    Says what went wrong rather than raising it, the shape `carry_every_or_put_back` and
+    `dependencies.provision` already use, because the caller is a command and not a place to
+    handle an archive error.
+
+    **Nothing is moved until every refusal has been asked.** What the archive says about
+    itself decides whether it may be put back at all, and that is read without unpacking
+    anything (R-BKP-18).
+
+    **Never in place, and never over live data.** The tree is unpacked *beside* the one it
+    replaces, brought forward there, and only then swapped in by two renames. Everything that
+    could fail — a bad archive, a migration that will not run, records that will not open —
+    fails while the owner's own data is still sitting untouched where it always was. That is
+    a stronger promise than restoring from a copy afterwards, and it is why the order is this
+    way round rather than the obvious one (R-BKP-21).
+
+    **A copy of what is here now is taken first**, because a restore is otherwise the one
+    irreversible thing an owner can do to themselves (R-BKP-17).
+    """
+    say = note if note is not None else (lambda said: None)
+    archive, data, into = Path(archive), Path(data), Path(into)
+    now = _now() if now is None else now
+
+    said = manifest_of(archive)                       # raises Refused / Unreadable, unmoved
+    why = refusals(said, want=want)
+    if why:
+        return "; ".join(why)
+
+    working = (busy or (lambda: []))()
+    if working:
+        return ("work is in flight: " + ", ".join(sorted(working))
+                + " — wait for it to finish, or stop it")
+
+    if keep_one_first and data.is_dir():
+        kept = take(data, into, now=now, why="before-restore", note=say)
+        say(f"what was here is in {kept.name}")
+
+    stopped, refused = (pause or (lambda: ([], None)))()
+    if refused:
+        return refused
+
+    incoming = data.with_name(INCOMING.format(name=data.name))
+    outgoing = data.with_name(OUTGOING.format(name=data.name))
+    _clear(incoming)
+    _clear(outgoing)
+    try:
+        say(f"unpacking {archive.name}")
+        _unpacked(archive, incoming)
+        # **Brought forward before the swap, never after.** A migration that cannot run has
+        # then touched nothing but a directory this call made and is about to delete.
+        stopped_by = (carry or (lambda _at: None))(incoming)
+        if stopped_by:
+            _clear(incoming)
+            (resume or (lambda _names: []))(stopped)
+            return stopped_by
+        if data.exists():
+            os.rename(data, outgoing)
+        os.rename(incoming, data)
+    except BaseException as trouble:
+        _clear(incoming)
+        if outgoing.exists() and not data.exists():
+            os.rename(outgoing, data)
+        (resume or (lambda _names: []))(stopped)
+        if isinstance(trouble, Refused):
+            return str(trouble)
+        raise
+    _clear(outgoing)
+    left_down = (resume or (lambda _names: []))(stopped)
+    if left_down:
+        return (f"the data was put back, but these did not start again: "
+                f"{', '.join(sorted(left_down))}")
+    return None
+
+
+def _clear(at: Path) -> None:
+    """Take a directory away if it is there, and say nothing if it is not."""
+    shutil.rmtree(at, ignore_errors=True)
 
 
 def every(into: Path) -> list:

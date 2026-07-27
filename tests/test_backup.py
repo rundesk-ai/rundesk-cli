@@ -380,6 +380,352 @@ class ReadingTheDirectory(WithSomethingToBackUp):
         self.assertIn("no backup called", str(refused.exception))
 
 
+class TwoInOneSecond(WithSomethingToBackUp):
+    def test_a_second_backup_in_the_same_second_never_writes_over_the_first(self):
+        """R-BKP-8 — a name is to the second and two can happen inside one. That is not
+        contrived: taking a copy immediately before putting one back is what the safest path
+        through this does every time, and without this the second archive is renamed over the
+        first — destroying a backup, reporting success, and in that case destroying the very
+        one being put back."""
+        self.an_agent()
+        first = self.taken(why="asked")
+        second = self.taken(why="before-restore")
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.exists(), "the first backup was written over")
+        self.assertEqual("asked", backup.manifest_of(first)["why"])
+        self.assertEqual("before-restore", backup.manifest_of(second)["why"])
+
+    def test_two_in_one_second_still_sort_by_the_moment_they_were_taken(self):
+        """R-BKP-7 — a disambiguator that broke the ordering would be a cure worse than the
+        problem: the newest copy is the one somebody reaches for."""
+        self.an_agent()
+        first = self.taken()
+        second = self.taken()
+        later = self.taken(now=AT + datetime.timedelta(seconds=1))
+        self.assertEqual([first.name, second.name, later.name],
+                         sorted([later.name, second.name, first.name]))
+
+
+class WhatARestoreRefuses(WithSomethingToBackUp):
+    """Every refusal is decided before anything moves, and proved by what is still there."""
+
+    def unchanged(self, before):
+        return before == sorted(str(one.relative_to(self.data))
+                                for one in self.data.rglob("*"))
+
+    def standing(self):
+        return sorted(str(one.relative_to(self.data)) for one in self.data.rglob("*"))
+
+    def test_records_written_by_a_newer_rundesk_are_refused_and_nothing_is_moved(self):
+        """R-BKP-18 — exactly what `store.TooNew` exists for. This code cannot know what it
+        is missing, so reading them would be reading a partial truth and writing over the
+        rest — and it is said before anything moves rather than after."""
+        self.an_agent()
+        at = self.taken()
+        _rewrite_manifest(at, records={"ava": store.VERSION + 3})
+        before = self.standing()
+        why = backup.restore(at, self.data, self.into, keep_one_first=False)
+        self.assertIn("newer than this rundesk understands", why)
+        self.assertIn(f"version {store.VERSION + 3}", why)
+        self.assertTrue(self.unchanged(before), "something moved after a refusal")
+
+    def test_a_backup_taken_by_a_newer_rundesk_is_refused_and_nothing_is_moved(self):
+        """R-BKP-18 — the release is the other way an archive can be ahead of this code, and
+        an archive can be ahead by it while every version number inside it looks ordinary."""
+        self.an_agent()
+        at = self.taken()
+        _rewrite_manifest(at, rundesk="99.0.0")
+        before = self.standing()
+        why = backup.restore(at, self.data, self.into, keep_one_first=False)
+        self.assertIn("99.0.0", why)
+        self.assertTrue(self.unchanged(before), "something moved after a refusal")
+
+    def test_a_backup_at_the_shape_installed_is_put_back_rather_than_refused(self):
+        """R-BKP-18 — the guard on the two above. A refusal that fired on every archive
+        would pass both of those cases and make the feature useless."""
+        self.an_agent()
+        at = self.taken()
+        self.assertEqual([], backup.refusals(backup.manifest_of(at)))
+
+    def test_putting_one_back_while_work_is_in_flight_is_refused(self):
+        """R-BKP-20 — a turn in progress is work an owner is waiting on, and replacing the
+        records under it loses whatever it was in the middle of writing."""
+        self.an_agent()
+        at = self.taken()
+        before = self.standing()
+        why = backup.restore(at, self.data, self.into, keep_one_first=False,
+                             busy=lambda: ["ava/run-3"])
+        self.assertIn("ava/run-3", why)
+        self.assertTrue(self.unchanged(before), "something moved while work was in flight")
+
+    def test_a_gateway_that_will_not_stand_down_stops_the_restore(self):
+        """R-BKP-20 — restoring under a running gateway is data loss, so the same window an
+        update opens is reused rather than a second one being invented, including its
+        refusal."""
+        self.an_agent()
+        at = self.taken()
+        before = self.standing()
+        why = backup.restore(at, self.data, self.into, keep_one_first=False,
+                             pause=lambda: ([], "'ava' would not stop"))
+        self.assertEqual("'ava' would not stop", why)
+        self.assertTrue(self.unchanged(before), "something moved under a running gateway")
+
+    def test_an_archive_that_would_write_outside_where_it_is_put_is_refused(self):
+        """R-BKP-11 — nothing stops an archive saying its entries go somewhere else, and a
+        restore is the most privileged thing here. The floor version of Python this runs on
+        does not refuse it on our behalf."""
+        self.into.mkdir(parents=True)
+        at = self.into / "rundesk-data-2026-07-27-040000Z.zip"
+        with zipfile.ZipFile(at, "w") as opened:
+            opened.writestr(backup.MANIFEST,
+                            json.dumps({"records": {}, "rundesk": "0.0.1", "taken_at": "x"}))
+            opened.writestr(f"{backup.INSIDE}/../../escaped.txt", b"got out")
+        why = backup.restore(at, self.data, self.into, keep_one_first=False)
+        self.assertIn("outside", why)
+        self.assertFalse((self.where / "escaped.txt").exists(), "an entry escaped")
+
+
+class PuttingOneBack(WithSomethingToBackUp):
+    def test_an_agent_and_its_history_are_whole_again_after_a_restore(self):
+        """R-BKP-16 — the claim the whole feature rests on. A backup nobody has restored is
+        not a backup, so this drives the real thing: records, a home, the shared library, and
+        an agent that reads back everything it was told."""
+        home = self.an_agent(said="remember the sandwich")
+        store.Store(store.path_for(home)).arrived("c1", SAID_AT, "and the pickle")
+        (home / "home" / "SOUL.md").write_text("be useful\n")
+        (self.data / "skills" / "tidying").mkdir(parents=True)
+        (self.data / "skills" / "tidying" / "SKILL.md").write_text("---\nname: tidying\n---\n")
+        at = self.taken()
+
+        shutil.rmtree(home)
+        self.assertIsNone(backup.restore(at, self.data, self.into, keep_one_first=False))
+
+        back = store.Store(store.path_for(self.data / "agents" / "ava"))
+        self.assertEqual(store.VERSION, back.version())
+        self.assertEqual(["remember the sandwich", "and the pickle"],
+                         [one["text"] for one in back.messages("c1")])
+        self.assertEqual("be useful\n",
+                         (self.data / "agents" / "ava" / "home" / "SOUL.md").read_text())
+        self.assertTrue((self.data / "skills" / "tidying" / "SKILL.md").is_file())
+
+    def test_putting_one_back_brings_back_what_was_removed_and_takes_away_what_was_added(self):
+        """R-BKP-16 — a restore replaces everything the owner keeps rather than merging, so
+        an agent removed since it was taken comes back and one made since it goes. Said
+        plainly because it is the half nobody expects."""
+        self.an_agent("ava")
+        at = self.taken()
+        shutil.rmtree(self.data / "agents" / "ava")
+        self.an_agent("scratch")
+        said = backup.manifest_of(at)
+        self.assertEqual({"comes_back": ["ava"], "goes_away": ["scratch"], "stays": []},
+                         backup.what_changes(said, self.data))
+        self.assertIsNone(backup.restore(at, self.data, self.into, keep_one_first=False))
+        self.assertTrue((self.data / "agents" / "ava").is_dir())
+        self.assertFalse((self.data / "agents" / "scratch").exists())
+
+    def test_a_restore_takes_a_copy_of_what_is_there_first(self):
+        """R-BKP-17 — a restore is otherwise the one irreversible thing an owner can do to
+        themselves, and the moment they discover that is the moment it has happened."""
+        self.an_agent("ava")
+        at = self.taken()
+        shutil.rmtree(self.data / "agents" / "ava")
+        self.an_agent("scratch")
+        self.assertIsNone(backup.restore(at, self.data, self.into))
+        kept = [one for one in backup.every(self.into)
+                if (one.said or {}).get("why") == "before-restore"]
+        self.assertEqual(1, len(kept), "nothing was kept before the data was replaced")
+        self.assertEqual(["scratch"], sorted(kept[0].said["records"]),
+                         "what was kept is not what was there")
+
+    def test_what_was_there_survives_a_restore_that_fails_part_way(self):
+        """R-BKP-21 — the guarantee the order exists for. Everything that can fail happens
+        while the owner's own data is still sitting untouched where it always was, so a
+        migration that will not run has touched nothing but a directory about to be deleted."""
+        home = self.an_agent(said="the one that must survive")
+        (home / "home" / "SOUL.md").write_text("still here\n")
+        at = self.taken()
+        before = sorted(str(one.relative_to(self.data)) for one in self.data.rglob("*"))
+
+        why = backup.restore(at, self.data, self.into, keep_one_first=False,
+                             carry=lambda incoming: "002.py did not finish")
+        self.assertEqual("002.py did not finish", why)
+        self.assertEqual(before,
+                         sorted(str(one.relative_to(self.data)) for one in self.data.rglob("*")))
+        self.assertEqual(["the one that must survive"],
+                         [one["text"] for one in
+                          store.Store(store.path_for(home)).messages("c1")])
+        self.assertEqual([], [one for one in self.data.parent.iterdir()
+                              if one.name.endswith((".incoming", ".outgoing"))],
+                         "a half finished restore left its working directories behind")
+
+    def test_what_was_there_survives_the_swap_itself_going_wrong(self):
+        """R-BKP-21 — the other half, and the one a migration failing never reaches. Once the
+        old tree has been moved aside the restore is past every check it can make, so what
+        protects the owner from here is that it was *moved* and not deleted. Nothing caught
+        this until the swap was made to fail: a restore that cleared the old tree instead of
+        renaming it passed every other case in this file."""
+        home = self.an_agent(said="the one that must survive")
+        at = self.taken()
+        before = sorted(str(one.relative_to(self.data)) for one in self.data.rglob("*"))
+
+        real = os.rename
+        fired = []
+
+        def refusing(src, dst):
+            # The move that puts the unpacked tree in place, named rather than counted: by
+            # the time it runs, what was there has already been set aside and nothing but
+            # that guards it. Counting instead would stop firing the moment the number of
+            # moves changed, and would pass while proving nothing.
+            #
+            # **Once, not for ever.** Putting the old tree back is a move to that same name,
+            # so refusing every one of them models a machine where nothing can be renamed at
+            # all — under which no design could recover, and the case would prove nothing
+            # about this one.
+            if Path(dst).name == self.data.name and not fired:
+                fired.append(dst)
+                raise OSError("the disk filled up half way through the swap")
+            return real(src, dst)
+
+        os.rename = refusing
+        self.addCleanup(setattr, os, "rename", real)
+        with self.assertRaises(OSError):
+            backup.restore(at, self.data, self.into, keep_one_first=False)
+        os.rename = real
+
+        self.assertTrue(self.data.is_dir(), "the data directory is gone altogether")
+        self.assertEqual(before,
+                         sorted(str(one.relative_to(self.data)) for one in self.data.rglob("*")))
+        self.assertEqual(["the one that must survive"],
+                         [one["text"] for one in
+                          store.Store(store.path_for(home)).messages("c1")])
+        self.assertEqual([], [one for one in self.data.parent.iterdir()
+                              if one.name.endswith((".incoming", ".outgoing"))],
+                         "a failed swap left its working directories behind")
+
+    def test_a_restore_brings_records_forward_before_it_swaps_anything_in(self):
+        """R-BKP-19 — a copy taken at an older shape is brought forward on the way in, and
+        the bringing-forward happens against the unpacked copy rather than against what the
+        owner is still using."""
+        self.an_agent()
+        at = self.taken()
+        seen = []
+
+        def carrying(incoming):
+            seen.append(incoming)
+            # What it is handed must be a real tree, and must not be the live one.
+            assert (incoming / "agents" / "ava" / store.NAME).is_file()
+            return None
+
+        self.assertIsNone(backup.restore(at, self.data, self.into, keep_one_first=False,
+                                         carry=carrying))
+        self.assertEqual(1, len(seen))
+        self.assertNotEqual(self.data.resolve(), seen[0].resolve(),
+                            "records were brought forward in the live directory")
+
+    def test_a_backup_from_an_older_shape_is_brought_forward_as_it_is_put_back(self):
+        """R-BKP-19 — a backup that has been sitting in a drawer was written by whatever
+        rundesk was installed then, and putting it back onto a later one has to bring it
+        forward or hand back records nothing can open.
+
+        **The older world is built here rather than committed as an archive.** A zip in the
+        repository is a fixture nobody can read, review or regenerate when the shape moves;
+        this takes a real backup at the shape that ships and then moves the *code* on, which
+        is the same arrangement from the records' point of view and stays true as steps land.
+        """
+        home = self.an_agent(said="written before the step existed")
+        at = self.taken()
+        was = backup.manifest_of(at)["records"]["ava"]
+
+        # A world one step ahead of the archive: a step of this suite's own, in a directory
+        # of its own, so nothing that ships is touched and the number cannot collide.
+        steps = self.where / "steps"
+        steps.mkdir()
+        (steps / f"{was + 1:03d}.py").write_text(
+            "def up(conn, home):\n"
+            "    conn.execute('ALTER TABLE agent ADD COLUMN carried TEXT')\n"
+            "    conn.execute(\"UPDATE agent SET carried = 'yes'\")\n"
+            "    return []\n")
+        ahead = was + 1
+
+        shutil.rmtree(home)
+        why = backup.restore(
+            at, self.data, self.into, keep_one_first=False, want=ahead,
+            carry=lambda incoming: migration.carry_every_or_put_back(
+                incoming / "agents", ahead, aside=incoming / ".carrying", where=steps))
+        self.assertIsNone(why, "an older backup would not go back")
+
+        back = store.path_for(self.data / "agents" / "ava")
+        conn = sqlite3.connect(str(back))
+        self.addCleanup(conn.close)
+        self.assertEqual(ahead, conn.execute("PRAGMA user_version").fetchone()[0],
+                         "it went back at the version it was taken at")
+        self.assertEqual("yes", conn.execute("SELECT carried FROM agent").fetchone()[0])
+        self.assertEqual([("written before the step existed",)],
+                         conn.execute("SELECT text FROM message ORDER BY id").fetchall(),
+                         "what it held did not survive being brought forward")
+
+    def test_a_restore_stands_gateways_down_and_starts_them_again(self):
+        """R-BKP-20 — the window an update already opens, reused rather than reinvented,
+        including putting back what it stood down."""
+        self.an_agent()
+        at = self.taken()
+        started = []
+        self.assertIsNone(backup.restore(
+            at, self.data, self.into, keep_one_first=False,
+            pause=lambda: (["ava"], None),
+            resume=lambda names: started.extend(names) or []))
+        self.assertEqual(["ava"], started)
+
+    def test_a_gateway_that_does_not_come_back_is_said_rather_than_passed_over(self):
+        """R-BKP-20 — the data is back and something is still down, which is a different
+        outcome from both success and failure and has to read as its own."""
+        self.an_agent()
+        at = self.taken()
+        why = backup.restore(at, self.data, self.into, keep_one_first=False,
+                             pause=lambda: (["ava"], None),
+                             resume=lambda names: ["ava"])
+        self.assertIn("ava", why)
+        self.assertIn("did not start again", why)
+
+    def test_what_was_runnable_and_what_was_a_link_are_still_that_after_a_restore(self):
+        """R-BKP-6 — the other half of keeping them in the archive. Restored as plain files,
+        a granted skill stops being a grant and a hook stops being runnable."""
+        home = self.an_agent()
+        (self.data / "skills" / "tidying").mkdir(parents=True)
+        (self.data / "skills" / "tidying" / "SKILL.md").write_text("---\nname: tidying\n---\n")
+        (home / "home" / "skills").mkdir()
+        os.symlink("../../../../skills/tidying", home / "home" / "skills" / "tidying")
+        hook = home / "home" / "hook.sh"
+        hook.write_text("#!/bin/sh\necho hi\n")
+        os.chmod(hook, 0o755)
+        at = self.taken()
+        shutil.rmtree(home)
+        self.assertIsNone(backup.restore(at, self.data, self.into, keep_one_first=False))
+
+        link = self.data / "agents" / "ava" / "home" / "skills" / "tidying"
+        self.assertTrue(link.is_symlink(), "a grant came back as a copied directory")
+        self.assertEqual("../../../../skills/tidying", os.readlink(link))
+        self.assertTrue(link.resolve().is_dir(), "the link does not reach the library")
+        self.assertEqual(
+            0o755,
+            (self.data / "agents" / "ava" / "home" / "hook.sh").stat().st_mode & 0o777)
+
+
+def _rewrite_manifest(at: Path, **said) -> None:
+    """The same archive with its manifest changed — an archive from another rundesk.
+
+    Built rather than committed, because a zip in the repository is a fixture nobody can
+    read, review or regenerate when the shape moves.
+    """
+    with zipfile.ZipFile(at) as opened:
+        held = [(one, opened.read(one.filename)) for one in opened.infolist()]
+    was = json.loads(dict((one.filename, body) for one, body in held)[backup.MANIFEST])
+    was.update(said)
+    with zipfile.ZipFile(at, "w") as opened:
+        for one, body in held:
+            opened.writestr(one, json.dumps(was) if one.filename == backup.MANIFEST else body)
+
+
 class HowThisInstallIsConfigured(unittest.TestCase):
     """`config.json` — the first thing kept there is how backups behave."""
 

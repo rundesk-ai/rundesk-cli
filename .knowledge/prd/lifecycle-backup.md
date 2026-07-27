@@ -28,6 +28,7 @@ own act, and the dangerous half.
 | ✅ | R-BKP-6 | What a backup holds is put back with the permissions and links it had | `a file an owner made runnable is still runnable`, `a granted skill is kept as the link it is` |
 | ✅ | R-BKP-7 | Backups sort by the moment they were taken when sorted by name | `a backup is named so that sorting by name sorts by time`, `a backup is named in one clock so an hour that happens twice still sorts` |
 | ✅ | R-BKP-8 | A backup is never under its final name until it is complete | `nothing is under its final name until it is whole`, `a backup that could not be finished leaves nothing behind`, `backing up where there is nothing says so rather than writing an empty one` |
+| ✅ | R-BKP-27 | Taking a backup never writes over one that is already there | `a second backup in the same second never writes over the first`, `two in one second still sort by the moment they were taken` |
 | ✅ | R-BKP-9 | Records in use are copied as of one moment rather than as the file stands | `a backup of a database in use holds what was written to it` |
 | ✅ | R-BKP-10 | Every copy that exists is listed, including one that cannot be read | `every backup there is reads back oldest first`, `a directory with no backups in it is empty rather than an error`, `something that is not a backup is listed rather than passed over` |
 | ✅ | R-BKP-11 | Something that is not a backup is refused rather than read as an empty one | `a zip that says nothing about itself is not a backup`, `asking for a backup that was never there says which one` |
@@ -35,12 +36,12 @@ own act, and the dangerous half.
 | ✅ | R-BKP-13 | How long copies are kept and when one is taken are the owner's to state | `an install that was configured with nothing gets every default`, `how long backups are kept is the owners to state`, `a time of day is read the way a person writes one` |
 | ✅ | R-BKP-14 | Configuration that cannot be understood is refused rather than replaced by a default | `configuration that cannot be understood is refused rather than ignored`, `a length of time that would keep nothing is refused`, `a time of day that is not one is refused` |
 | ✅ | R-BKP-15 | Records too damaged to copy as of one moment are kept as they are and named | `a database too damaged to copy consistently is kept exactly as it is` |
-| ❌ | R-BKP-16 | Putting a copy back replaces everything the owner keeps, and says what it will change first | — |
-| ❌ | R-BKP-17 | Putting a copy back takes a copy of what is there first | — |
-| ❌ | R-BKP-18 | A copy written by a newer rundesk is refused before anything is moved | — |
-| ❌ | R-BKP-19 | A copy behind the shape installed is brought forward as it is put back | — |
-| ❌ | R-BKP-20 | Putting a copy back while anything is running or any work is in flight is refused | — |
-| ❌ | R-BKP-21 | What was there survives a restore that fails part way | — |
+| ✅ | R-BKP-16 | Putting a copy back replaces everything the owner keeps, and says what it will change first | `an agent and its history are whole again after a restore`, `putting one back brings back what was removed and takes away what was added`, `what was runnable and what was a link are still that after a restore` |
+| ✅ | R-BKP-17 | Putting a copy back takes a copy of what is there first | `a restore takes a copy of what is there first` |
+| ✅ | R-BKP-18 | A copy written by a newer rundesk is refused before anything is moved | `records written by a newer rundesk are refused and nothing is moved`, `a backup taken by a newer rundesk is refused and nothing is moved`, `a backup at the shape installed is put back rather than refused` |
+| ✅ | R-BKP-19 | A copy behind the shape installed is brought forward as it is put back | `a backup from an older shape is brought forward as it is put back`, `a restore brings records forward before it swaps anything in` |
+| ✅ | R-BKP-20 | Putting a copy back while anything is running or any work is in flight is refused | `putting one back while work is in flight is refused`, `a gateway that will not stand down stops the restore`, `a restore stands gateways down and starts them again`, `a gateway that does not come back is said rather than passed over` |
+| ✅ | R-BKP-21 | What was there survives a restore that fails part way | `what was there survives a restore that fails part way`, `what was there survives the swap itself going wrong` |
 | ❌ | R-BKP-22 | Copies older than the stated age are taken away once a newer one exists | — |
 | ❌ | R-BKP-23 | The newest copy is never taken away by age | — |
 | ❌ | R-BKP-24 | Deleting a copy is asked for by name and never happens as a side effect | — |

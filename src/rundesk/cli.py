@@ -1401,8 +1401,8 @@ def _provisioned() -> str | None:
     return None
 
 
-def cmd_backups(args: argparse.Namespace) -> int:
-    """Copies of everything this install keeps: what there is, and taking one.
+def cmd_backups(args: argparse.Namespace, gateways, machine, agents) -> int:
+    """Copies of everything this install keeps: what there is, taking one, putting one back.
 
     The listing is deliberately the bare form, because the question somebody asks after
     trouble is "what have I got" and it should cost them no second word.
@@ -1418,7 +1418,73 @@ def cmd_backups(args: argparse.Namespace) -> int:
         return _list_backups()
     if act == "add":
         return _take_a_backup()
+    if act == "restore":
+        return _restore_a_backup(args, gateways, machine, agents)
     return cmd_not_available(f"backups {act}")
+
+
+def _restore_a_backup(args: argparse.Namespace, gateways, machine, agents) -> int:
+    """Put one back, having said what it will change and been told to go ahead.
+
+    **The window an update already opens is reused rather than a second one invented.**
+    Standing every gateway down and refusing while work is in flight is exactly what
+    `rundesk update` does before it replaces the files, it is already proved, and a restore
+    needs the same thing for the same reason (R-UPD-21, R-UPD-23).
+    """
+    at = backups_home() / args.backup
+    try:
+        said = backups.manifest_of(at)
+    except (backups.Refused, backups.Unreadable) as why:
+        print(f"backups restore: FAILED — {why}", file=sys.stderr)
+        return 1
+    why = backups.refusals(said)
+    if why:
+        # Said before anything moves rather than after, which is the whole point of the
+        # manifest being readable without unpacking anything.
+        print(f"backups restore: REFUSED — {'; '.join(why)}", file=sys.stderr)
+        return 1
+
+    data = data_home()
+    changing = backups.what_changes(said, data)
+    print(f"this replaces everything under {data} with what is in {args.backup}")
+    print(f"        taken {said.get('taken_at', 'at an unknown moment')} "
+          f"by rundesk {said.get('rundesk', '?')}")
+    for what, named in (("comes back", changing["comes_back"]),
+                        ("goes away", changing["goes_away"]),
+                        ("replaced", changing["stays"])):
+        if named:
+            print(f"        {what}:  {', '.join(named)}")
+    if not args.yes and not _agreed():
+        print("nothing was changed")
+        return 0
+
+    stopped_by = backups.restore(
+        at, data, backups_home(),
+        busy=lambda: _in_flight(gateways, agents),
+        pause=lambda: _stand_all_down(gateways, machine, agents),
+        resume=lambda names: _bring_all_back(names, gateways, machine, agents),
+        carry=lambda incoming: migration.carry_every_or_put_back(
+            incoming / "agents", store.VERSION, aside=incoming / ".carrying",
+            note=_out_loud),
+        note=_out_loud,
+    )
+    if stopped_by:
+        print(f"backups restore: NOT DONE — {stopped_by}", file=sys.stderr)
+        return 1
+    print(f"put back {args.backup}")
+    return 0
+
+
+def _agreed() -> bool:
+    """Ask, and take anything that is not yes as no.
+
+    Never assumed from a pipe: a restore that went ahead because nothing was attached to
+    answer is the failure this whole command is careful about.
+    """
+    try:
+        return input("continue? [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
 
 
 def _take_a_backup() -> int:
@@ -3012,7 +3078,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None)
     if args.command == "status":
         return cmd_status(args, gateways, machine, agents)
     if args.command == "backups":
-        return cmd_backups(args)
+        return cmd_backups(args, gateways, machine, agents)
     if args.command == "skills":
         return cmd_skills(args, agents, skills)
     if args.command == "channels":
