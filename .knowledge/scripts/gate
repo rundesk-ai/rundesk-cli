@@ -22,11 +22,13 @@ Standard library only, and nothing here reaches the network.
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 import subprocess
 import sys
 import time
+from concurrent import futures
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 KNOWLEDGE = ROOT / ".knowledge"
@@ -90,6 +92,17 @@ def run(what: str, argv: list[str]) -> tuple[bool, str, float]:
     return done.returncode == 0, (done.stdout + done.stderr), time.monotonic() - began
 
 
+def _at_once() -> int:
+    """How many to run together.
+
+    Two cores left alone on purpose. Several of these suites drive real processes, real
+    signals and real waits, and a machine with nothing spare is one where a test measuring
+    how long something took measures how busy the machine was instead — which is how a
+    suite that passes alone starts failing in a crowd.
+    """
+    return max(2, min(8, (os.cpu_count() or 4) - 2))
+
+
 def main() -> int:
     found = suites()
     if not found:
@@ -103,17 +116,34 @@ def main() -> int:
     if drift:
         failed.append("every suite is run by CI too")
 
-    for what, argv in checks():
-        passed, said, took = run(what, argv)
-        print(f"{'ok  ' if passed else 'FAIL'}  {what}  ({took:.1f}s)")
-        if not passed:
-            failed.append(what)
-            # The tail, not the whole of it: a failing suite says far more than fits on a
-            # screen, and the part naming what broke is at the end.
-            for line in said.strip().splitlines()[-25:]:
-                print(f"        {line}")
+    # **At once, because they have nothing to do with each other.** Every suite builds its
+    # own scratch directory and redirects every place rundesk resolves, so no two share
+    # anything — and the machine running them has sixteen cores and was using one. Run one
+    # at a time this took a little over two minutes, of which a single suite was forty
+    # seconds; a gate people wait two minutes for is a gate people stop running, which
+    # costs far more than it saves.
+    #
+    # Threads rather than processes: every one of these is `subprocess.run` waiting on a
+    # child, which holds no lock while it waits.
+    began = time.monotonic()
+    listed = checks()
+    with futures.ThreadPoolExecutor(max_workers=_at_once()) as pool:
+        going = {pool.submit(run, what, argv): what for what, argv in listed}
+        # Reported as each finishes rather than in the order they were listed, so a long
+        # suite cannot hold back the news that a quick one has already failed.
+        for done in futures.as_completed(going):
+            what = going[done]
+            passed, said, took = done.result()
+            print(f"{'ok  ' if passed else 'FAIL'}  {what}  ({took:.1f}s)")
+            if not passed:
+                failed.append(what)
+                # The tail, not the whole of it: a failing suite says far more than fits on
+                # a screen, and the part naming what broke is at the end.
+                for line in said.strip().splitlines()[-25:]:
+                    print(f"        {line}")
 
     print()
+    print(f"      {time.monotonic() - began:.0f}s, {_at_once()} at a time")
     if failed:
         print(f"gate: FAILED — {', '.join(failed)}", file=sys.stderr)
         return 1
