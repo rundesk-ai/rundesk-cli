@@ -423,7 +423,13 @@ jobs:
         run: |
           set -euo pipefail
           test -d "$HOME/.rundesk" || { echo "::error::the install did not land in ~/.rundesk"; exit 1; }
-          test -x "$HOME/.rundesk/rundesk" || { echo "::error::the install has no runnable entry point"; exit 1; }
+          # **The program has a directory of its own, beside what the owner keeps.** This
+          # asked for the entry point one level up, where it stood before `app/` existed —
+          # and the job only runs on a tag, so the layout changed and nothing said so until
+          # the first release after it. Assert the split as well, or the next move is silent
+          # in the same way.
+          test -x "$HOME/.rundesk/app/rundesk" || { echo "::error::the install has no runnable entry point at ~/.rundesk/app/rundesk"; exit 1; }
+          test ! -e "$HOME/.rundesk/rundesk" || { echo "::error::the program is beside the owner's own things rather than in app/"; exit 1; }
 
       - name: The version it reports is the one the newest release carries
         # Ties the install to R-UPD-19 in reality rather than on paper: an install that
