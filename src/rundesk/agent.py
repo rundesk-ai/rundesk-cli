@@ -25,7 +25,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from rundesk import gateway, migration, store
+from rundesk import data_home, gateway, migration, store
 
 #: What a new agent's home is copied from. Ordinary Markdown files rather than text built
 #: in code, because they are what an owner reads first and edits next, and a rule about how
@@ -45,8 +45,8 @@ WORKING = "workspace", "skills"
 #: Derived rather than given a variable of its own, so whatever redirects where agents live
 #: redirects this with it: a second name to set is a second name to forget, and `MEMORY.md`
 #: records what forgetting one cost. But derived *downwards*. Hung off the parent, it
-#: resolved to a sibling of the agents directory — which for an owner is `~/.rundesk` and
-#: is right, and for anything pointed at a scratch directory is whatever that scratch
+#: resolved to a sibling of the agents directory — which for an owner is `~/.rundesk/data`
+#: and is right, and for anything pointed at a scratch directory is whatever that scratch
 #: directory happens to sit in. Every case in a suite then shared one, and one case's
 #: template turned up in another's agent. Anything below the redirected root cannot do that.
 #:
@@ -127,8 +127,13 @@ def agents_home() -> Path:
     Beside the run and log directories rather than inside either: those hold what rundesk
     wrote before there were agents to own it, and this is what an ordinary uninstall
     preserves because it is the owner's rather than rundesk's (R-AGT-3).
+
+    Under `data_home()` rather than beside the program, so that what an owner keeps is one
+    directory an uninstall cannot reach. Its own variable still wins, because a suite
+    pointing one agent's directory somewhere is a narrower thing to ask for than moving
+    everything an install keeps.
     """
-    return Path(os.environ.get("RUNDESK_AGENTS_DIR") or Path.home() / ".rundesk" / "agents")
+    return Path(os.environ.get("RUNDESK_AGENTS_DIR") or data_home() / "agents")
 
 
 def checked(name: str) -> str:

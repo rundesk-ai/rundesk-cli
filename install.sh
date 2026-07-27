@@ -30,6 +30,10 @@ INSTALL_DIR="${RUNDESK_INSTALL_DIR:-$HOME/.rundesk}"
 # The program, inside what rundesk owns. Nothing of the owner's is ever in here, which is the
 # whole point of it having a name of its own (R-INS-13, R-RM-8).
 APP_DIR="$INSTALL_DIR/app"
+# And the other half: everything the owner keeps, in one directory the program is never inside.
+# Two names rather than "app and whatever else is lying about" — removal keeps this by naming
+# it, and what is kept can then be said one level in rather than as the single word "data".
+DATA_DIR="$INSTALL_DIR/data"
 MIN_PYTHON_MINOR=9
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -226,8 +230,12 @@ Stop it and try again, or see what is running with: rundesk status"
       rm -rf "$INSTALL_DIR"; echo "removed everything rundesk kept: $INSTALL_DIR"; removed=1
     else
       theirs=""
-      for entry in "$INSTALL_DIR"/* "$INSTALL_DIR"/.[!.]*; do
-        [[ -e "$entry" && "${entry##*/}" != "app" ]] || continue
+      # Named one level in. With everything of the owner's under `data/`, listing the top
+      # level would say the single word "data" and tell them nothing about what is being
+      # kept. The top level is still walked for anything an older layout left beside it.
+      for entry in "$DATA_DIR"/* "$DATA_DIR"/.[!.]* "$INSTALL_DIR"/* "$INSTALL_DIR"/.[!.]*; do
+        [[ -e "$entry" ]] || continue
+        case "${entry##*/}" in app|data) continue ;; esac
         theirs="${theirs:+$theirs, }${entry##*/}"
       done
       if [[ -n "$theirs" ]]; then
