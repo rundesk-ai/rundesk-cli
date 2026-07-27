@@ -518,6 +518,8 @@ def build_parser() -> argparse.ArgumentParser:
     known = sub.add_parser("skills", help="the skills on this machine, and who has which")
     known.add_argument("--lay-down", action="store_true", dest="lay_down",
                        help=argparse.SUPPRESS)   # the installer's; not an owner's verb
+    known.add_argument("--where", action="store_true",
+                       help="print the directory skills are kept in, and nothing else")
     doing = known.add_subparsers(dest="act", metavar="<action>")
     given = doing.add_parser("grant", help="give an agent one of the skills in the library")
     given.add_argument("name", metavar="<agent>", help="who is being given it")
@@ -1374,17 +1376,24 @@ def _provisioned() -> str | None:
     return None
 
 
-def cmd_skills(args: argparse.Namespace, agents) -> int:
+def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
     """The skills on this machine, who has which, and giving or taking one away.
 
     The catalog is read off the library and the agents rather than from anything written
     down about them: a grant *is* the link standing in an agent's own directory, so there
     is no record that could disagree with what a brain will actually find.
     """
+    if getattr(args, "where", False):
+        # Said by the command rather than written into any prose, because where the
+        # library is depends on where this install is: an install pointed elsewhere
+        # keeps its skills there too, and a guide naming `~/.rundesk` would be wrong
+        # for every one of them.
+        print(skills.home())
+        return 0
     if getattr(args, "lay_down", False):
         # The installer's, and deliberately not an owner's verb: what a release ships is
         # not a thing anybody should have to ask for.
-        print(" ".join(skill.lay_down()))
+        print(" ".join(skills.lay_down()))
         return 0
     act = getattr(args, "act", None)
     if act in ("grant", "revoke"):
@@ -1400,26 +1409,26 @@ def cmd_skills(args: argparse.Namespace, agents) -> int:
             return 1
         try:
             if act == "grant":
-                skill.grant(whose, args.skill)
+                skills.grant(whose, args.skill)
                 print(f"{args.name} was given {args.skill}")
             else:
-                skill.revoke(whose, args.skill)
+                skills.revoke(whose, args.skill)
                 print(f"{args.name} no longer has {args.skill}")
-        except (skill.Unknown, skill.NotASkill, skill.InTheWay) as why:
+        except (skills.Unknown, skills.NotASkill, skills.InTheWay) as why:
             print(f"{args.skill}: {why}", file=sys.stderr)
             return 1
         return 0
 
-    held = skill.library()
+    held = skills.library()
     if not held:
         print("no skills")
-        print(f"        write one:  {skill.home()}/<name>/SKILL.md")
+        print(f"        write one:  {skills.home()}/<name>/SKILL.md")
         return 0
-    ships = set(skill.shipped())
+    ships = set(skills.shipped())
     # Asked of every agent rather than kept anywhere, because "who has this" is otherwise
     # a question only a reverse scan can answer and a stored answer would go stale the
     # first time somebody removed a link by hand.
-    whose: dict = {name: skill.granted(agents.skills(name)) for name in agents.known()}
+    whose: dict = {name: skills.granted(agents.skills(name)) for name in agents.known()}
     rows = [(name, "built-in" if name in ships else "yours",
              ", ".join(sorted(who for who, mine in whose.items() if name in mine)) or "-")
             for name in sorted(held)]
@@ -2843,7 +2852,7 @@ def _handed_on(argv: list[str], carries: set) -> tuple[list[str], list[str]]:
     return list(argv[:at]), list(argv[at + 1:])
 
 
-def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
+def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None) -> int:
     """The command surface.
 
     What the commands act on is passed in rather than imported here, so this file knows
@@ -2853,6 +2862,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
     gateways = gateways if gateways is not None else _gateway
     machine = machine if machine is not None else _supervisor
     agents = agents if agents is not None else _agent
+    skills = skills if skills is not None else skill
     parser = build_parser()
     argv, handed_on = _handed_on(argv, _carries_a_tail(parser))
     args = parser.parse_args(argv)
@@ -2897,7 +2907,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
     if args.command == "status":
         return cmd_status(args, gateways, machine, agents)
     if args.command == "skills":
-        return cmd_skills(args, agents)
+        return cmd_skills(args, agents, skills)
     if args.command == "channels":
         return cmd_channels(args, gateways, agents)
     if args.command == "schedules":

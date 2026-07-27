@@ -32,7 +32,18 @@ def data_home() -> Path:
     source while their agents still belong under their home. Data is resolved from the
     home, and the program from the file it is in, because they genuinely are two questions.
 
+    **An install pointed somewhere else keeps its data there too.** `RUNDESK_INSTALL_DIR`
+    moves the whole install, and data that stayed under the person's home while the program
+    moved would be an install that is not one directory but two — and a scratch install
+    built to test one would quietly read and write what the real one has. That is not
+    hypothetical: it is what this resolver did on its first draft, and the install suite
+    caught it by finding a `~/.rundesk` it had never asked for.
+
     Resolved on every call and never cached: where an owner keeps things is machine state,
     and binding it once at import is how a suite comes to write into the real one.
     """
-    return Path(os.environ.get("RUNDESK_DATA_DIR") or Path.home() / ".rundesk" / "data")
+    said = os.environ.get("RUNDESK_DATA_DIR")
+    if said:
+        return Path(said)
+    install = os.environ.get("RUNDESK_INSTALL_DIR")
+    return Path(install if install else Path.home() / ".rundesk") / "data"

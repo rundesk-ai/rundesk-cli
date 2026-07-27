@@ -138,6 +138,7 @@ rundesk schedules ava off nightly
 --to <channel>                  which channel to say what this came to on, by the name it was added under — the account and `schedules` say it either way
 --token-stdin                   read the credential this channel needs from standard input, one line; asked for at the terminal when left out
 --when <cron>                   when it runs, over and over, as five cron fields — minute, hour, day, month, weekday
+--where                         print the directory skills are kept in, and nothing else
 -n, --lines <lines>             how many of the last lines to show, from each source
 <agent>                         which agent — the name it was made under
 <channel>                       what to call it, and what to name it by later

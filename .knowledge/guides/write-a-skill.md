@@ -17,15 +17,18 @@ turn to appear in that turn's account.
 ## Where a skill lives
 
 ```
-~/.rundesk/data/skills/<name>/SKILL.md      the library — every skill on the machine
-~/.rundesk/data/agents/<agent>/home/skills/ what that agent was given: a link each
+<data>/skills/<name>/SKILL.md              the library — every skill on the machine
+<data>/agents/<agent>/home/skills/         what that agent was given: a link each
 ```
 
-Write it into the library, then give it to an agent:
+`<data>` is `~/.rundesk/data` by default and moves with `RUNDESK_INSTALL_DIR`, so **ask
+rather than assume** — a scratch install keeps its own skills, which is the whole point of
+being able to test one without touching what an owner has:
 
 ```sh
-mkdir -p ~/.rundesk/data/skills/release-notes
-$EDITOR ~/.rundesk/data/skills/release-notes/SKILL.md
+library=$(rundesk skills --where)
+mkdir -p "$library/release-notes"
+$EDITOR "$library/release-notes/SKILL.md"
 rundesk skills grant ava release-notes
 rundesk skills                                # who has what, and where each came from
 ```

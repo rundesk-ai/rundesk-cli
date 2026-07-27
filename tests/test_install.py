@@ -205,7 +205,14 @@ class InstallTests(Sandbox):
         # Development and installed use share one layout, so there is no second copy to drift.
         self.install()
         self.assertEqual((self.bindir / "rundesk").resolve(), (REPO / "rundesk").resolve())
-        self.assertFalse((self.home / ".rundesk").exists(), "it downloaded a second copy beside the checkout")
+        # The *program*, which is what a second copy would be. `data/` is beside it and is
+        # expected: an install has a skills library whether its program is a checkout or a
+        # download, and the whole point of the two names is that one of them is not the
+        # other. Asserting the install directory was empty said "no second copy" and meant
+        # "nothing here at all", which stopped being the same sentence the day data got a
+        # name of its own.
+        self.assertFalse((self.home / ".rundesk" / "app").exists(),
+                         "it downloaded a second copy beside the checkout")
 
 
 class RemovalTests(Sandbox):

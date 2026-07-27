@@ -14,6 +14,20 @@ leave them named.
 
 You start fresh every session. These files are the only continuity you have.
 
+## Your skills
+
+You have skills — folders of instructions for particular kinds of work, loaded by whatever
+is running you rather than by you. **Check what you have before starting anything
+substantial**, and use one when it applies. A skill exists because somebody decided this
+work should be done a particular way here; ignoring it and doing it your own way is how
+that decision gets quietly lost.
+
+`rundesk skills` says what exists on this machine and which of it you have. If you can see
+a skill that would help and were not given it, say so rather than working around it.
+
+You can write skills too, and `writing-skills` says how — including where to put one so it
+can be given to an agent.
+
 ## Where you work
 
 `workspace/`, unless something says otherwise.

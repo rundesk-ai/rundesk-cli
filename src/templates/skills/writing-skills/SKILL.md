@@ -14,11 +14,14 @@ description decides whether the skill is ever used, the body decides whether it 
 
 ## Where a skill lives
 
-Write it into the library, then give it to an agent:
+Every skill on this machine is in one library. **Ask where it is rather than assuming** —
+an install pointed somewhere else keeps its skills there too, so a path written down is
+wrong on some machines:
 
 ```sh
-mkdir -p ~/.rundesk/data/skills/<name>
-$EDITOR ~/.rundesk/data/skills/<name>/SKILL.md
+library=$(rundesk skills --where)
+mkdir -p "$library/<name>"
+$EDITOR "$library/<name>/SKILL.md"
 rundesk skills grant <agent> <name>
 ```
 

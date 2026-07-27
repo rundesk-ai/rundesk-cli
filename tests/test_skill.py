@@ -284,5 +284,96 @@ class BringingTheBuiltInsForward(WithALibrary):
         self.assertEqual([], skill.lay_down(blocked))
 
 
+class WhatEachShippedAdapterPlaces(WithALibrary):
+    """The `_present` every shipped adapter has, driven for real against a scratch home.
+
+    Loaded out of the adapter files rather than reimplemented here, because they are
+    programs rather than modules — nothing imports them, so the only way to hold three
+    near-identical copies to one behaviour is to run each one. Triplicated and untested is
+    where three copies quietly come apart.
+    """
+
+    BRAINS = {"claude": ".claude/skills", "codex": ".agents/skills", "grok": ".grok/skills"}
+
+    def loaded(self, brain: str):
+        import importlib.machinery
+        import importlib.util
+        at = Path(__file__).resolve().parent.parent / "src" / "providers" / brain
+        loader = importlib.machinery.SourceFileLoader(f"rundesk_{brain}_probe", str(at))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        made = importlib.util.module_from_spec(spec)
+        loader.exec_module(made)
+        return made
+
+    def standing(self, brain: str):
+        """One agent home, with the granted skills placed by that brain's own adapter."""
+        home = self.where / "data" / "agents" / "ava" / "home"
+        home.mkdir(parents=True, exist_ok=True)
+        was = os.environ.get("RUNDESK_SKILLS")
+        os.environ["RUNDESK_SKILLS"] = str(self.mine)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_SKILLS", was)
+                        if was is not None else os.environ.pop("RUNDESK_SKILLS", None))
+        self.loaded(brain)._present(str(home))
+        return home / self.BRAINS[brain]
+
+    def test_every_shipped_adapter_places_a_granted_skill_where_its_brain_looks(self):
+        """R-PRV-24 — measured per brain: claude reads only .claude/skills, codex reads
+        .agents/skills, grok its own .grok/skills. A skill placed anywhere else is one no
+        brain ever indexes, and nothing about the turn says so."""
+        a_skill(self.library, "deploy")
+        skill.grant(self.mine, "deploy", self.library)
+        for brain in self.BRAINS:
+            with self.subTest(brain=brain):
+                root = self.standing(brain)
+                self.assertTrue((root / "deploy" / "SKILL.md").is_file(),
+                                f"{brain} would not find the skill its agent was given")
+
+    def test_no_adapter_makes_a_directory_for_an_agent_given_nothing(self):
+        """R-PRV-24 — an agent with no skills should have no vendor directory in its home
+        to explain, and an empty one reads as a brain that was configured and did nothing."""
+        for brain in self.BRAINS:
+            with self.subTest(brain=brain):
+                self.assertFalse(self.standing(brain).exists())
+
+    def test_placing_twice_changes_nothing(self):
+        """R-PRV-24 — it runs before every turn, so it has to be a no-op on the second."""
+        a_skill(self.library, "deploy")
+        skill.grant(self.mine, "deploy", self.library)
+        for brain in self.BRAINS:
+            with self.subTest(brain=brain):
+                first = self.standing(brain)
+                was = os.readlink(first / "deploy")
+                self.standing(brain)
+                self.assertEqual(was, os.readlink(first / "deploy"))
+
+    def test_a_revoked_skill_stops_being_placed(self):
+        """R-PRV-24 — revoking has to reach the brain, or a skill an owner took away goes
+        on being read for as long as the agent lives."""
+        a_skill(self.library, "deploy")
+        skill.grant(self.mine, "deploy", self.library)
+        for brain in self.BRAINS:
+            with self.subTest(brain=brain):
+                root = self.standing(brain)
+                self.assertTrue((root / "deploy").is_symlink())
+                skill.revoke(self.mine, "deploy", self.library)
+                self.standing(brain)
+                self.assertFalse((root / "deploy").exists(),
+                                 f"{brain} still places a skill that was revoked")
+                skill.grant(self.mine, "deploy", self.library)   # for the next brain
+
+    def test_no_adapter_removes_something_it_did_not_place(self):
+        """R-PRV-24 — the pruning is the only line here that can destroy anything. A
+        directory somebody wrote by hand into the brain's own root is theirs."""
+        a_skill(self.library, "deploy")
+        skill.grant(self.mine, "deploy", self.library)
+        for brain in self.BRAINS:
+            with self.subTest(brain=brain):
+                root = self.standing(brain)
+                theirs = a_skill(root, "hand-written")
+                self.standing(brain)
+                self.assertTrue((theirs / "SKILL.md").is_file(),
+                                f"{brain} deleted something it did not place")
+
+
 if __name__ == "__main__":
     unittest.main()
