@@ -4,6 +4,9 @@ The version here is the one source of it: the CLI reports it, the updater compar
 against it, and a release tag is expected to match. So is `ROOT`: where this install
 actually is, worked out once from a file that is always inside it — and `data_home()`,
 which is the other half of the same idea and is deliberately not derived from it.
+
+`backups_home()` is the third of those directories, and the only one an owner may point
+off this machine entirely.
 """
 
 from __future__ import annotations
@@ -47,3 +50,36 @@ def data_home() -> Path:
         return Path(said)
     install = os.environ.get("RUNDESK_INSTALL_DIR")
     return Path(install if install else Path.home() / ".rundesk") / "data"
+
+
+def backups_home() -> Path:
+    """Copies of what the owner keeps — the one directory removal may never reach.
+
+    **The third directory, beside `app/` and `data/`.** An update replaces the first and an
+    uninstall takes it whole; a purge takes the second as well; nothing takes this one. That
+    is the whole point of it: somebody purges because something is wrong, and that is the
+    worst possible moment to delete the only copy. Removal is structurally incapable of
+    reaching it because nothing in removal ever names it — the same trick `data_home()`
+    plays, rather than a list of names to spare.
+
+    **The only one of the three an owner may point off this machine.** `skill.home()` is
+    derived downwards from `data_home()` on purpose, so that a second name is not a second
+    name to forget; this one cannot be, because pointing backups at iCloud Drive or an
+    external disk is the thing it is for. The variable is read here and nowhere else.
+
+    **A directory that syncs changes what can go wrong**, and the two failures are worth
+    naming where somebody will read them. A half-written archive may sync, so one is written
+    under a temporary name in this same directory and renamed into place — never streamed
+    to its final name. And a cloud may evict a file it has uploaded, leaving it present in a
+    listing and unreadable without a download, which is why reading one asks rather than
+    assumes.
+
+    Resolved on every call and never cached, and falling back through `RUNDESK_INSTALL_DIR`
+    exactly as `data_home()` does — so a scratch install redirects its backups with it and a
+    suite cannot write into the owner's.
+    """
+    said = os.environ.get("RUNDESK_BACKUP_DIR")
+    if said:
+        return Path(said)
+    install = os.environ.get("RUNDESK_INSTALL_DIR")
+    return Path(install if install else Path.home() / ".rundesk") / "backups"

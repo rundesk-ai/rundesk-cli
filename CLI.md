@@ -45,6 +45,11 @@ rundesk usage <agent>                                                           
 rundesk status                                                                                                                                                                                                         how rundesk itself is on this machine
 rundesk version [--check]                                                                                                                                                                                              what is installed, and whether that is current
 rundesk update [--check]                                                                                                                                                                                               move to the newest published release
+rundesk backups add                                                                                                                                                                                                    take a backup now
+rundesk backups off                                                                                                                                                                                                    stop the machine taking one every day
+rundesk backups on                                                                                                                                                                                                     have the machine take one every day
+rundesk backups remove [--yes] <backup>                                                                                                                                                                                delete one backup, and only that one
+rundesk backups restore [--yes] <backup>                                                                                                                                                                               put a backup back, replacing everything this install keeps
 rundesk uninstall [--purge]                                                                                                                                                                                            remove rundesk from this machine
 
 # not yet grouped
@@ -138,9 +143,11 @@ rundesk schedules ava off nightly
 --to <channel>                  which channel to say what this came to on, by the name it was added under — the account and `schedules` say it either way
 --token-stdin                   read the credential this channel needs from standard input, one line; asked for at the terminal when left out
 --when <cron>                   when it runs, over and over, as five cron fields — minute, hour, day, month, weekday
---where                         print the directory skills are kept in, and nothing else
+--where                         print the directory they are kept in, and nothing else
+--yes                           do not ask first — for a script, never for a person
 -n, --lines <lines>             how many of the last lines to show, from each source
 <agent>                         which agent — the name it was made under
+<backup>                        which one, by the name it is listed under
 <channel>                       what to call it, and what to name it by later
 <option>                        after `--`, whatever this kind of channel needs — carried to it exactly as typed, and never read here
 <program>                       after `--`, the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH

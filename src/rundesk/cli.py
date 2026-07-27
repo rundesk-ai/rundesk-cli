@@ -28,9 +28,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from rundesk import __version__  # noqa: E402
+from rundesk import __version__, backups_home, data_home  # noqa: E402
 from rundesk import agent as _agent  # noqa: E402
+from rundesk import backup as backups  # noqa: E402
 from rundesk import channel  # noqa: E402
+from rundesk import config  # noqa: E402
 from rundesk import dependencies  # noqa: E402
 from rundesk import gateway as _gateway  # noqa: E402
 from rundesk import migration  # noqa: E402
@@ -519,7 +521,7 @@ def build_parser() -> argparse.ArgumentParser:
     known.add_argument("--lay-down", action="store_true", dest="lay_down",
                        help=argparse.SUPPRESS)   # the installer's; not an owner's verb
     known.add_argument("--where", action="store_true",
-                       help="print the directory skills are kept in, and nothing else")
+                       help="print the directory they are kept in, and nothing else")
     doing = known.add_subparsers(dest="act", metavar="<action>")
     given = doing.add_parser("grant", help="give an agent one of the skills in the library")
     given.add_argument("name", metavar="<agent>", help="who is being given it")
@@ -527,6 +529,29 @@ def build_parser() -> argparse.ArgumentParser:
     taken = doing.add_parser("revoke", help="take a skill away from an agent")
     taken.add_argument("name", metavar="<agent>", help="who is losing it")
     taken.add_argument("skill", metavar="<skill>", help="which skill, by the name it is under")
+
+    # A group named the way `channels` and `schedules` are, with the one difference that
+    # there is no word for *whose*: a backup is the install's and never an agent's. `skills`
+    # above is the same shape for the same reason, and its comment is why there is no
+    # optional positional in front of the actions here either.
+    copies = sub.add_parser("backups", help="copies of everything this install keeps")
+    copies.add_argument("--where", action="store_true",
+                        help="print the directory they are kept in, and nothing else")
+    keeping = copies.add_subparsers(dest="act", metavar="<action>")
+    keeping.add_parser("add", help="take a backup now")
+    put_back = keeping.add_parser(
+        "restore", help="put a backup back, replacing everything this install keeps")
+    put_back.add_argument("backup", metavar="<backup>",
+                          help="which one, by the name it is listed under")
+    put_back.add_argument("--yes", action="store_true",
+                          help="do not ask first — for a script, never for a person")
+    dropped = keeping.add_parser("remove", help="delete one backup, and only that one")
+    dropped.add_argument("backup", metavar="<backup>",
+                         help="which one, by the name it is listed under")
+    dropped.add_argument("--yes", action="store_true",
+                         help="do not ask first — for a script, never for a person")
+    keeping.add_parser("on", help="have the machine take one every day")
+    keeping.add_parser("off", help="stop the machine taking one every day")
 
     # Named the way schedules are: the agent is the word after the verb, the channel is
     # what you call it, and what it *is* comes from `--kind`. Everything a particular
@@ -1374,6 +1399,86 @@ def _provisioned() -> str | None:
         return went_wrong
     skill.lay_down(force=True)
     return None
+
+
+def cmd_backups(args: argparse.Namespace) -> int:
+    """Copies of everything this install keeps: what there is, and taking one.
+
+    The listing is deliberately the bare form, because the question somebody asks after
+    trouble is "what have I got" and it should cost them no second word.
+    """
+    if getattr(args, "where", False):
+        # Said by the command rather than written into any prose: this is the one directory
+        # an owner may point off the machine entirely, so a guide naming a path would be
+        # wrong for exactly the people who moved it.
+        print(backups_home())
+        return 0
+    act = getattr(args, "act", None)
+    if act is None:
+        return _list_backups()
+    if act == "add":
+        return _take_a_backup()
+    return cmd_not_available(f"backups {act}")
+
+
+def _take_a_backup() -> int:
+    """Take one now, and say where it went and what it cost."""
+    try:
+        at = backups.take(data_home(), backups_home(), note=_out_loud)
+    except (backups.Refused, config.Unreadable) as why:
+        print(f"backups add: FAILED — {why}", file=sys.stderr)
+        return 1
+    except OSError as why:
+        # The destination may be a disk that is not plugged in or a cloud directory that
+        # will not answer, which is a different thing from having nothing to back up.
+        print(f"backups add: FAILED — {backups_home()} could not be written to: {why}",
+              file=sys.stderr)
+        return 1
+    said = backups.manifest_of(at)
+    print(f"took a backup: {at}")
+    print(f"        {len(said['records'])} agents, {_held(at.stat().st_size)}")
+    if said.get("copied_whole"):
+        # Never silent. A copy that is not a consistent copy is still worth having and is
+        # not the same thing, and the only moment anybody can act on the difference is now.
+        for one in said["copied_whole"]:
+            print(f"        WARNING: {one} could not be copied consistently and is in the "
+                  f"backup exactly as it is on disk", file=sys.stderr)
+    return 0
+
+
+def _list_backups() -> int:
+    """Every copy there is, oldest first, with what each cost and what it holds."""
+    where = backups_home()
+    found = backups.every(where)
+    if not found:
+        print("no backups")
+        print(f"        take one:  rundesk backups add")
+        return 0
+    rows = []
+    for one in found:
+        said = one.said or {}
+        rows.append((
+            one.at.name,
+            one.taken_at if one.readable else "-",
+            _held(one.held_bytes) if one.held_bytes is not None else "-",
+            str(len(said.get("records", {}))) if one.readable else "-",
+            said.get("why", "-") if one.readable else "UNREADABLE",
+        ))
+    _as_table(("BACKUP", "TAKEN", "SIZE", "AGENTS", "WHY"), rows)
+    print()
+    print(f"kept in {where}")
+    unreadable = [one for one in found if not one.readable]
+    for one in unreadable:
+        print(f"        {one.at.name}: {one.why}", file=sys.stderr)
+    return 0
+
+
+def _held(size) -> str:
+    """A size a person reads, in the one place that decides how one is written."""
+    kb = size / 1024
+    if kb >= 1024:
+        return f"{kb / 1024:.1f} MB"
+    return f"{kb:.0f} KB"
 
 
 def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
@@ -2906,6 +3011,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None)
         return cmd_restart(args, gateways, machine, agents)
     if args.command == "status":
         return cmd_status(args, gateways, machine, agents)
+    if args.command == "backups":
+        return cmd_backups(args)
     if args.command == "skills":
         return cmd_skills(args, agents, skills)
     if args.command == "channels":

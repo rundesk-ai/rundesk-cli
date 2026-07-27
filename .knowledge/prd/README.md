@@ -58,4 +58,5 @@ high-level map.
   - [lifecycle-install](./lifecycle-install.md) — getting rundesk onto a machine, and knowing it worked.
   - [lifecycle-update](./lifecycle-update.md) — which version this is, which has been published, and moving between them.
   - [lifecycle-migration](./lifecycle-migration.md) — bringing what is already on a machine into the shape a newer rundesk expects, in the window an update already stands every gateway down for.
+  - [lifecycle-backup](./lifecycle-backup.md) — copies of everything an owner keeps, kept where neither an update nor a removal can reach them, and putting one back.
   - [lifecycle-removal](./lifecycle-removal.md) — taking rundesk off a machine, and what is left when it goes.

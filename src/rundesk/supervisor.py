@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from rundesk import ROOT, data_home, gateway
+from rundesk import ROOT, backups_home, data_home, gateway
 
 #: Every job rundesk writes is named this way, so what belongs to rundesk is obvious in
 #: a directory full of other people's jobs, and one gateway's job never collides with
@@ -175,6 +175,13 @@ def describe(name: str, root: Path | None = None, logs: Path | None = None,
             # knows only what it is handed (R-AGT-9).
             "RUNDESK_AGENTS_DIR": str(agents) if agents else os.environ.get(
                 "RUNDESK_AGENTS_DIR", str(data_home() / "agents")),
+            # Where copies of what the owner keeps are put. Carried for the same reason as
+            # the rest and for one of its own: this is the directory an owner may point off
+            # the machine entirely, so a job that did not name it would have the daily
+            # backup writing under the install while every backup the owner has ever seen
+            # sits on their external disk — two sets of copies, and the one they would look
+            # for after trouble is the one that stopped being written to.
+            "RUNDESK_BACKUP_DIR": str(backups_home()),
         },
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},

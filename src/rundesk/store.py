@@ -1177,3 +1177,45 @@ def gone(directory) -> None:
     for one in removes(directory):
         with contextlib.suppress(OSError):
             os.remove(one)
+
+
+def snapshot(records: Path, into: Path) -> None:
+    """A consistent copy of these records, taken while they may be being written to.
+
+    **Here rather than beside whatever wants a copy**, because a copy of a database is a
+    database operation: this module is the only one that opens one, and a backup reaching
+    past it with `sqlite3.connect` is exactly the leak `R-STO-15` exists to prevent.
+
+    **Why not a file copy.** `state.db` in WAL mode is three files, and the most recent
+    truth may be in the one beside it rather than in the one somebody thought to copy. So a
+    plain copy taken while a gateway is writing produces a database that opens, reports the
+    right version, and is missing whatever had not been checkpointed — a failure discovered
+    at the moment it is put back, which is the worst moment there is. Two ways to do it
+    honestly, and this uses both.
+
+    `VACUUM INTO` is preferred only because it compacts as it writes, which matters on an
+    agent with a long history. It wants a SQLite newer than the floor this runs on is
+    guaranteed to have, so where it is not there the standard library's own online backup
+    does the same job without the compaction. Neither is `cp`.
+
+    Opened read-only, so taking a copy can never be the thing that makes a turn wait.
+    """
+    conn = sqlite3.connect(f"file:{records}?mode=ro", uri=True, timeout=BUSY_SECONDS)
+    try:
+        try:
+            conn.execute("VACUUM INTO ?", (str(into),))
+            return
+        except sqlite3.Error:
+            # An older SQLite has no `VACUUM INTO`. Not a failure and not worth a word to an
+            # owner: what follows is as consistent, and the only difference is its size. The
+            # part-written file it may have left is removed first, because the backup below
+            # opens its destination rather than replacing it.
+            with contextlib.suppress(OSError):
+                os.remove(into)
+        second = sqlite3.connect(str(into))
+        try:
+            conn.backup(second)
+        finally:
+            second.close()
+    finally:
+        conn.close()

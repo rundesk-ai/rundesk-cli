@@ -105,6 +105,15 @@ file with it.
   standing there before the brain runs, and a rule in a config file would describe what rundesk
   placed while the brain read on. Knows nothing of any brain: where a skill is *presented* is each
   adapter's, told through `RUNDESK_SKILLS`.
+- `src/rundesk/backup.py` — copies of everything the owner keeps, and putting one back. Knows
+  nothing of gateways or of the machine's supervisor: what must be true before a restore may
+  proceed arrives as callables, the way `updater.run` already takes them. What goes into one is
+  `data_home()` and nothing else — the program is what a release publishes, so a copy of it is a
+  copy of something already downloadable. **Never copies a database**; it asks `store` for a
+  consistent one, because a file copied under a live writer opens, looks healthy and is wrong.
+- `src/rundesk/config.py` — how this install is configured, as opposed to how any one agent is.
+  One file under `data_home()`, sections at the top level, written by an owner and never written
+  back by us. Distinct from `settings`, which already means what one agent or channel was told.
 - `src/rundesk/store.py` — everything one agent keeps, and **the only way in to it**. One database per
   agent, never one shared, so a turn's write is never in another agent's way. Reading and writing are told
   apart at the connection: a reader is opened read-only, so it cannot begin work that would make a turn

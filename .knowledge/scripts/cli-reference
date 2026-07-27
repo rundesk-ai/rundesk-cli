@@ -39,7 +39,7 @@ GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
     ("Reaching it", "The ways work arrives for an agent, and what became of each.",
      ("ask", "channels", "schedules", "runs", "usage")),
     ("Rundesk itself", "The copy of rundesk on this machine.",
-     ("status", "version", "update", "uninstall")),
+     ("status", "version", "update", "backups", "uninstall")),
 ]
 
 
