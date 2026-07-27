@@ -46,7 +46,7 @@ own act, and the dangerous half.
 | ✅ | R-BKP-23 | The newest copy is never taken away by age | `the only copy there is is never taken away by age`, `every copy being old still leaves the newest one` |
 | ✅ | R-BKP-24 | Deleting a copy is asked for by name and never happens as a side effect | `one copy is removed by the name it is listed under`, `removing one that is not there says so`, `removing cannot reach outside the directory copies are kept in` |
 | ✅ | R-BKP-25 | The machine takes a copy every day once it is asked to | `the daily job runs at the hour it was given`, `the daily job is never kept alive`, `the daily job carries where backups go`, `the daily job cannot be mistaken for a gateway`, `an agent may be called backup without colliding with the daily job`, `stopping the daily job takes its description away too` |
-| ❌ | R-BKP-26 | Copies survive removing rundesk, with or without its data | — |
+| ✅ | R-BKP-26 | Copies survive removing rundesk, with or without its data (R-RM-14) | `removing rundesk keeps the copies it took`, `purging keeps the copies it took` |
 
 ## Open questions
 
