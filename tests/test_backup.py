@@ -15,6 +15,7 @@ import sqlite3
 import stat
 import sys
 import tempfile
+import threading
 import unittest
 import zipfile
 from pathlib import Path
@@ -724,6 +725,123 @@ def _rewrite_manifest(at: Path, **said) -> None:
     with zipfile.ZipFile(at, "w") as opened:
         for one, body in held:
             opened.writestr(one, json.dumps(was) if one.filename == backup.MANIFEST else body)
+
+
+class WhenSomethingWasInterrupted(WithSomethingToBackUp):
+    """What is on disk after a restore that never finished, and what the next one does with it."""
+
+    def a_swap_that_was_interrupted(self, said: str = "the only copy there is"):
+        """The exact state a machine losing power between the two renames leaves behind.
+
+        Built rather than caused, because the window is one syscall pair wide and no
+        exception can be raised inside it: what a crash leaves is `data/` gone and everything
+        the owner has sitting under the set-aside name.
+        """
+        home = self.an_agent(said=said)
+        at = self.taken()
+        outgoing = self.data.with_name(backup.OUTGOING.format(name=self.data.name))
+        os.rename(self.data, outgoing)
+        self.assertFalse(self.data.exists())
+        return at, outgoing
+
+    def test_a_restore_after_one_that_was_interrupted_puts_back_what_was_set_aside(self):
+        """R-BKP-21 — the retry is the dangerous moment, not the crash. Running the command
+        again is the obvious thing to do and used to be the thing that destroyed the data:
+        both leftovers were cleared before any other check, so the only copy of what the
+        owner had went first, silently, and the restore then reported success."""
+        at, outgoing = self.a_swap_that_was_interrupted()
+        why = backup.restore(at, self.data, self.into, keep_one_first=False)
+        self.assertIsNone(why)
+        self.assertTrue(self.data.is_dir(), "the data directory never came back")
+        self.assertEqual(["the only copy there is"],
+                         [one["text"] for one in store.Store(
+                             store.path_for(self.data / "agents" / "ava")).messages("c1")])
+        self.assertFalse(outgoing.exists(), "what was set aside was left lying about")
+
+    def test_what_was_set_aside_is_put_back_before_anything_else_is_decided(self):
+        """R-BKP-21 — it goes back even when the restore that follows refuses. The data
+        being whole cannot depend on the archive somebody happened to name afterwards."""
+        at, outgoing = self.a_swap_that_was_interrupted()
+        _rewrite_manifest(at, rundesk="99.0.0")
+        why = backup.restore(at, self.data, self.into, keep_one_first=False)
+        self.assertIn("99.0.0", why, "it did not refuse the newer archive")
+        self.assertTrue(self.data.is_dir(),
+                        "a refusal left the owner with no data directory at all")
+        self.assertEqual(["the only copy there is"],
+                         [one["text"] for one in store.Store(
+                             store.path_for(self.data / "agents" / "ava")).messages("c1")])
+
+    def test_what_was_set_aside_by_a_swap_that_did_finish_is_only_cleanup(self):
+        """R-BKP-21 — the other leftover, which is not the same situation. With the data
+        directory there, the rename that mattered already happened and what is set aside is
+        the superseded copy. Treating it as the live data would put yesterday back."""
+        home = self.an_agent(said="what is there now")
+        at = self.taken()
+        outgoing = self.data.with_name(backup.OUTGOING.format(name=self.data.name))
+        shutil.copytree(self.data, outgoing)
+        store.Store(store.path_for(home)).arrived("c1", SAID_AT, "and this, which is newer")
+
+        self.assertIsNone(backup.restore(at, self.data, self.into, keep_one_first=False))
+        self.assertFalse(outgoing.exists())
+        self.assertEqual(["what is there now"],
+                         [one["text"] for one in store.Store(
+                             store.path_for(self.data / "agents" / "ava")).messages("c1")],
+                         "the archive was not what went back")
+
+
+class TwoAtOnce(WithSomethingToBackUp):
+    def test_two_backups_running_at_once_never_write_to_one_anothers_file(self):
+        """R-BKP-27 — the machine's daily job firing while somebody types `backups add` is
+        this, and it is not rare. Both writers used to derive the same part-written name from
+        the same second, so one of them died on a file the other had already moved — reported
+        as a disk that could not be written to, which sends an owner to look at the disk."""
+        self.an_agent()
+        made, trouble = [], []
+        #: One party per worker **and one for this thread**, which waits with them so they
+        #: are all inside `take()` at once. Counting only the workers leaves this one waiting
+        #: for a party that never arrives, and the suite hangs rather than fails.
+        hands = []
+        ready = threading.Barrier(5)
+
+        def taking():
+            ready.wait()
+            try:
+                made.append(self.taken())
+            except BaseException as why:      # noqa: BLE001 — the case is what escapes
+                trouble.append(why)
+
+        hands = [threading.Thread(target=taking) for _ in range(4)]
+        for hand in hands:
+            hand.start()
+        ready.wait()
+        for hand in hands:
+            hand.join()
+
+        self.assertEqual([], [repr(one) for one in trouble],
+                         "a backup failed because another was running")
+        self.assertEqual(4, len(set(made)), "two backups were given one name")
+        self.assertEqual(4, len(backup.every(self.into)), "a backup was written over")
+        for one in backup.every(self.into):
+            self.assertTrue(one.readable, f"{one.at.name} is not a whole archive")
+
+    def test_nothing_part_written_is_left_behind_when_several_run_at_once(self):
+        """R-BKP-8 — a part-written file left in the directory is one a listing shows and a
+        restore could reach for, and several writers is exactly when one gets forgotten."""
+        self.an_agent()
+        ready = threading.Barrier(4)          # three workers, and this thread waiting with them
+
+        def taking():
+            ready.wait()
+            self.taken()
+
+        hands = [threading.Thread(target=taking) for _ in range(3)]
+        for hand in hands:
+            hand.start()
+        ready.wait()
+        for hand in hands:
+            hand.join()
+        self.assertEqual([], [one.name for one in self.into.iterdir()
+                              if one.name.endswith(backup.PARTIAL)])
 
 
 class KeepingOnlySoMany(WithSomethingToBackUp):

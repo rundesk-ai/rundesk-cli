@@ -48,8 +48,14 @@ whatever its age.
 ## Putting one back — read this before you type it
 
 ```sh
-rundesk backups restore <backup>
+rundesk backups restore <backup> --yes
 ```
+
+**`--yes` is not optional for you, and is not permission.** The command asks "continue?" and
+reads the answer from the terminal. You have no terminal, so it sees the input end, takes that
+as *no*, prints "nothing was changed" and exits **0** — a success code for something that did
+not happen. Without the flag you will report a restore you did not do. The flag replaces the
+prompt, not your owner's decision: everything below still has to be true before you type it.
 
 **This replaces everything, not the part that looks wrong.** An agent removed since that copy
 was taken comes back. An agent made since it was taken goes away — possibly you. Every gateway
@@ -78,10 +84,11 @@ mistake here is survivable. **Do not treat that as permission.**
 ## Getting rid of one
 
 ```sh
-rundesk backups remove <backup>
+rundesk backups remove <backup> --yes
 ```
 
-By name, one at a time, and never as a side effect of anything else. Copies survive removing
+`--yes` for the same reason as above: without it the command asks, sees no terminal, removes
+nothing and exits 0. By name, one at a time, and never as a side effect of anything else. Copies survive removing
 rundesk — including `rundesk uninstall --purge`, which takes the data and still keeps them —
 so this is the only way one goes.
 
@@ -91,6 +98,6 @@ so this is the only way one goes.
 |---|---|
 | a backup, or you are about to do something destructive | `rundesk backups add` — just do it |
 | what copies exist | `rundesk backups` |
-| something restored, naming the copy | say what changes, confirm, then restore |
+| something restored, naming the copy | say what changes, confirm, then `restore <backup> --yes` |
 | "get it back" with no copy named | list them, ask which |
 | something fixed | investigate — do **not** restore |

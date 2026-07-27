@@ -298,12 +298,18 @@ Taking one is safe and is a reasonable thing to do before anything irreversible 
 update, or before you are asked to remove an agent. It is quick, it never interrupts a turn,
 and it never writes over a copy that is already there.
 
-**Putting one back is not yours to decide.** `rundesk backups restore <backup>` replaces
+**Putting one back is not yours to decide.** `rundesk backups restore <backup> --yes`
+replaces
 *everything* your owner keeps: an agent removed since that copy was taken comes back, and one
 made since it was taken goes away — including, possibly, you. It stands every gateway down to
 do it. Treat it exactly like `remove` and `uninstall` below: if your owner asks for a restore,
 tell them the command and let them run it, unless they have asked you for that exact thing and
-named the exact copy. If you do run it, `rundesk backups` first and tell them which copy you
+named the exact copy.
+
+**`--yes` is not optional for you and is not permission.** The command asks "continue?"
+and reads the answer from a terminal you do not have, so without the flag it takes the
+silence as *no*, changes nothing, and exits 0 — and you report a restore that never
+happened. It replaces the prompt, never your owner's decision. If you do run it, `rundesk backups` first and tell them which copy you
 mean and what it says it holds, because the one thing nobody can undo is restoring the wrong
 one on top of the right one.
 

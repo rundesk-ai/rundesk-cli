@@ -48,8 +48,15 @@ NAMED_AS = "rundesk-data-%Y-%m-%d-%H%M%SZ"
 SUFFIX = ".zip"
 
 #: What an archive is called while it is still being written. In the destination directory
-#: rather than a temporary one, so the rename into place never crosses a filesystem — and
-#: named so that anything reading the directory can tell it is not a backup yet.
+#: rather than a temporary one, so the move into place never crosses a filesystem — and named
+#: so that anything reading the directory can tell it is not a backup yet.
+#:
+#: **Every writer gets a name of its own.** Derived from the final name alone, two rundesks
+#: backing up in the same second opened the *same* part-written file and one of them died on
+#: it — the machine's daily job firing while somebody types `backups add` is exactly that, and
+#: the loser reported a disk that could not be written to. The name is made rather than
+#: computed now, so no two writers can be holding one path whether they are two processes or
+#: two threads of one.
 PARTIAL = ".part"
 
 #: What the archive says about itself, read without unpacking the rest of it.
@@ -77,14 +84,20 @@ def named_at(now: datetime.datetime) -> str:
     return now.strftime(NAMED_AS) + SUFFIX
 
 
-def _free_name(into: Path, now: datetime.datetime) -> Path:
-    """A name in this directory that is not already a backup.
+def _placed(writing: Path, into: Path, now: datetime.datetime) -> Path:
+    """Put a finished archive under the first name in this directory that is free, atomically.
 
     **A name is to the second, and two backups can happen inside one.** Taking one by hand
     immediately before a restore takes its own is exactly that case, and it is not contrived:
-    it is what the safest path through this module does every time. Without this, the second
-    archive is written and renamed over the first — which silently destroys a backup, and in
-    that particular case destroys the very one being restored, while reporting success.
+    it is what the safest path through this module does every time. The machine's daily job
+    firing while somebody types `backups add` is the other.
+
+    **Asking whether a name is free and then writing to it are two moments, and something can
+    happen in between.** Two processes that both looked before either wrote would both find
+    the same name free, and the second `os.replace` would silently discard the first
+    archive — with both commands reporting success. So the name is not checked and then used;
+    it is *claimed* with a link, which either creates the name or fails because somebody else
+    already has it, with nothing in between. Whoever loses the race simply takes the next one.
 
     **Kept sorting by time, which decides the punctuation.** The stamp is fixed width and is
     compared first, so a disambiguated name still orders before the next second. What it must
@@ -93,14 +106,27 @@ def _free_name(into: Path, now: datetime.datetime) -> Path:
     `…Z.zip` and put the newer copy above the older one. `_` comes after `.`, which is the
     whole reason it is the separator here and a hyphen everywhere else in the name.
     """
-    at = into / named_at(now)
-    if not at.exists():
+    stem = named_at(now)[: -len(SUFFIX)]
+    nth = 1
+    while True:
+        at = into / (f"{stem}{SUFFIX}" if nth == 1 else f"{stem}_{nth}{SUFFIX}")
+        try:
+            os.link(writing, at)
+        except FileExistsError:
+            nth += 1
+            continue
+        except OSError:
+            # A filesystem that cannot link at all — some network and removable ones. There
+            # is no atomic claim to be had there, so this falls back to looking first, which
+            # is what every other backup tool does and is still right on the machine of one
+            # owner. Said nowhere, because it changes nothing an owner can act on.
+            if at.exists():
+                nth += 1
+                continue
+            os.replace(writing, at)
+            return at
+        os.remove(writing)
         return at
-    stem = at.name[: -len(SUFFIX)]
-    nth = 2
-    while (into / f"{stem}_{nth}{SUFFIX}").exists():
-        nth += 1
-    return into / f"{stem}_{nth}{SUFFIX}"
 
 
 def _now() -> datetime.datetime:
@@ -306,8 +332,11 @@ def take(data: Path, into: Path, now=None, why: str = "asked", note=None) -> Pat
     now = _now() if now is None else now
     leaving = excluded(data)
     into.mkdir(parents=True, exist_ok=True)
-    at = _free_name(into, now)
-    writing = at.with_name(at.name + PARTIAL)
+    # Made in the destination directory, so what follows is a move that never crosses a
+    # filesystem, and made rather than named, so it is nobody else's.
+    handle, said_at = tempfile.mkstemp(dir=into, prefix=named_at(now) + ".", suffix=PARTIAL)
+    os.close(handle)
+    writing = Path(said_at)
     said = describe(data, now, why)
     held = tempfile.mkdtemp(prefix="rundesk-backup-")
     try:
@@ -342,7 +371,7 @@ def take(data: Path, into: Path, now=None, why: str = "asked", note=None) -> Pat
             # is read through its index, so asking for one entry by name never unpacks the
             # rest of it wherever that entry happens to be.
             archive.writestr(MANIFEST, json.dumps(said, indent=2, sort_keys=True))
-        os.replace(writing, at)
+        at = _placed(writing, into, now)
     except BaseException:
         # What was part written is this call's own and nobody else's, so it goes.
         with contextlib.suppress(OSError):
@@ -564,6 +593,17 @@ def restore(archive: Path, data: Path, into: Path, now=None, want: int | None = 
     say = note if note is not None else (lambda said: None)
     archive, data, into = Path(archive), Path(data), Path(into)
     now = _now() if now is None else now
+    incoming = data.with_name(INCOMING.format(name=data.name))
+    outgoing = data.with_name(OUTGOING.format(name=data.name))
+
+    # **First, before the archive is even opened.** Whether the owner has a data directory at
+    # all cannot depend on which archive somebody happened to name afterwards — and every step
+    # below this can return early, so recovering further down leaves a refused restore having
+    # walked away from an install with no data in it. That is not hypothetical: it is what the
+    # case for it caught, on the first run, in this exact order.
+    put_back = _finish_an_interrupted_swap(data, outgoing, say)
+    if put_back:
+        return put_back
 
     said = manifest_of(archive)                       # raises Refused / Unreadable, unmoved
     why = refusals(said, want=want)
@@ -583,8 +623,6 @@ def restore(archive: Path, data: Path, into: Path, now=None, want: int | None = 
     if refused:
         return refused
 
-    incoming = data.with_name(INCOMING.format(name=data.name))
-    outgoing = data.with_name(OUTGOING.format(name=data.name))
     _clear(incoming)
     _clear(outgoing)
     try:
@@ -613,6 +651,41 @@ def restore(archive: Path, data: Path, into: Path, now=None, want: int | None = 
     if left_down:
         return (f"the data was put back, but these did not start again: "
                 f"{', '.join(sorted(left_down))}")
+    return None
+
+
+def _finish_an_interrupted_swap(data: Path, outgoing: Path, say) -> str | None:
+    """Put back what an earlier restore had set aside and never came back for.
+
+    **The swap is two renames, and a process can die between them.** No `except` can see that
+    window: the machine loses power, or something takes the process out, and what is left on
+    disk is `data/` gone and the owner's real records sitting in `data.outgoing`. Every
+    guarantee this module makes is about that directory, and it is the only copy of it there
+    is at that instant.
+
+    So the state is *recognised* on the way in rather than swept. Clearing it — which is what
+    a restore did before, unconditionally and before any other check — turned the ordinary act
+    of running the command again after a crash into the one thing that destroys the data. That
+    is the worst shape a bug can have here: it fires on the retry, silently, and reports
+    success. `updater._set_aside` already reads a leftover this way for the release it swaps;
+    this is the same reading for the data.
+
+    Two leftovers are not one situation. With `data/` gone, the set-aside copy *is* the data
+    and goes back. With `data/` there, the rename that matters already happened and what is
+    set aside is the superseded copy, which is only cleanup.
+    """
+    if not outgoing.is_dir():
+        return None
+    if data.exists():
+        return None                 # the swap finished; this is last time's cleanup
+    try:
+        os.rename(outgoing, data)
+    except OSError as trouble:
+        return (f"a restore was interrupted before this one and what was here is still in "
+                f"{outgoing}. It could not be put back automatically ({trouble}) — move it "
+                f"to {data} by hand before trying again.")
+    say(f"an earlier restore was interrupted — what was here has been put back from "
+        f"{outgoing.name}")
     return None
 
 

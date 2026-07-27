@@ -1103,6 +1103,36 @@ class DownloadedInstallTests(Sandbox):
         self.assertIn("rundesk backups remove", gone.stdout,
                       "it kept them and never said how to be rid of one")
 
+    def test_purging_refuses_rather_than_deleting_copies_kept_inside_the_data(self):
+        """R-RM-14 — the one axis along which "backups always survive" could be broken, and
+        it is a documented one: the backup directory is the one place an owner may point
+        anywhere, which includes inside the data a purge deletes. Refused rather than worked
+        around, because quietly keeping half the data would make a purge mean different
+        things on different machines — and refused *before* anything is removed, or the
+        message saying nothing was removed is itself untrue."""
+        made = self.home / ".rundesk" / "app"
+        shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        theirs = self.home / ".rundesk"
+        (theirs / "data" / "agents" / "ava").mkdir(parents=True)
+        (theirs / "data" / "agents" / "ava" / "state.db").write_text("records\n")
+        inside = theirs / "data" / "kept-here"
+        inside.mkdir()
+        (inside / "rundesk-data-2026-07-27-040000Z.zip").write_text("a copy\n")
+
+        gone = installer("--uninstall", "--purge", home=self.home, bindir=self.bindir,
+                         cwd=made, script=made / "install.sh",
+                         extra_env={"RUNDESK_BACKUP_DIR": str(inside)})
+
+        self.assertNotEqual(0, gone.returncode, "it purged anyway")
+        self.assertEqual("a copy\n",
+                         (inside / "rundesk-data-2026-07-27-040000Z.zip").read_text(),
+                         "a purge deleted the copies it promised to keep")
+        self.assertTrue((theirs / "data" / "agents" / "ava").exists(),
+                        "it said nothing was removed and removed something")
+        self.assertTrue(made.exists(), "it said nothing was removed and took the program")
+        self.assertIn("RUNDESK_BACKUP_DIR", gone.stderr + gone.stdout,
+                      "it refused without saying what to change")
+
     def test_taking_the_older_program_away_keeps_copies_standing_beside_it(self):
         """R-RM-14 — an install still on the layout from before `app/` can have copies beside
         it too, and the sweep that tidies that layout spares a fixed list of names. A list is

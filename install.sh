@@ -172,6 +172,26 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   removed=0
   purge=0
   [[ "${2:-}" == "--purge" ]] && purge=1
+  # **Asked before anything at all is removed.** `RUNDESK_BACKUP_DIR` may be pointed anywhere,
+  # which includes underneath one of the directories a purge deletes — and deleting one of
+  # those takes the copies with it, silently, while the message at the end still says they
+  # were kept. Refused rather than worked around: quietly keeping part of the data would make
+  # a purge mean different things on different machines, and quietly deleting the copies is
+  # the one outcome R-RM-14 exists to prevent.
+  #
+  # Here, at the top, rather than beside the deleting: a refusal that fires after the program
+  # has already gone is a command that says "nothing has been removed" untruthfully, which is
+  # the failure this script is most careful about everywhere else.
+  if [[ "$purge" == 1 ]]; then
+    for owned in "$DATA_DIR" "$INSTALL_DIR/agents" "$INSTALL_DIR/logs" \
+                 "$INSTALL_DIR/run" "$INSTALL_DIR/schedules"; do
+      case "$BACKUPS_DIR/" in
+        "$owned"/*) die "your backups are in $BACKUPS_DIR, inside $owned, which --purge
+would delete. Move them somewhere else, or point RUNDESK_BACKUP_DIR outside the data, and
+try again. Nothing has been removed." ;;
+      esac
+    done
+  fi
   # Refused rather than continued: deleting the command while a gateway is still running
   # leaves an agent nobody can reach and takes away the very thing that could stop it.
   if ! stop_gateways; then
