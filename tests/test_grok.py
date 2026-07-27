@@ -255,12 +255,22 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
         would have contained it does not hold."""
         argv = self.opening(posture="read")
         self.assertNotIn("run_terminal_command", argv[argv.index("--tools") + 1])
-        self.assertIn("run_terminal_command", self.opening()[self.opening().index("--tools") + 1])
+
+    def test_a_working_turn_is_given_no_list_at_all(self):
+        """R-PRV-18. Leaving the flag off entirely is this CLI's way of saying every
+        built-in, and a list of six names cannot stay complete — a tool it gains next
+        release would be one a working turn was silently refused.
+
+        Measured 2026-07-27 against 0.2.112: with no `--tools` a turn created a file, and
+        with the read list it could not."""
+        argv = self.opening()
+        self.assertNotIn("--tools", argv)
 
     def test_the_tool_list_is_one_value_rather_than_many_flags(self):
         """`--allow` takes one rule per flag and rejects a space-separated list with
-        `unknown tool prefix: …`. `--tools` takes the comma-separated built-in names."""
-        argv = self.opening()
+        `unknown tool prefix: …`. `--tools` takes the comma-separated built-in names.
+        Asked of `read`, which is the posture that still carries it."""
+        argv = self.opening(posture="read")
         self.assertNotIn("--allow", argv)
         self.assertIn(",", argv[argv.index("--tools") + 1])
 

@@ -94,9 +94,13 @@ DID = {
 ALLOWED = {
     "read": ("Read", "NotebookRead", "Glob", "LS", "Grep", "WebSearch", "WebFetch",
              "ToolSearch", "Task"),
-    "work": ("Read", "NotebookRead", "Glob", "LS", "Grep", "WebSearch", "WebFetch",
-             "ToolSearch", "Task", "Bash", "BashOutput", "Edit", "Write", "NotebookEdit"),
 }
+
+#: The posture that is not a list. `work` grants everything this brain has rather than the
+#: fourteen tools somebody thought of: an allowlist cannot be complete, so every tool the CLI
+#: gains next release — and every tool an MCP server brings — would be one a working turn was
+#: refused, silently and with the model taking the blame.
+FULLY = "work"
 
 #: How much of a tool's own output is passed on. A `tool_result` can hold a whole file,
 #: a command's entire output, a credential or a private path; the account keeps what we
@@ -193,10 +197,21 @@ def opening(posture: str, model, resume, extra: dict, session: str) -> list:
     if model:
         argv += ["--model", model]
 
-    # The posture, as the only thing measured to hold it. Passed as one comma-separated
-    # value rather than as many words: `--allowedTools` is variadic and would otherwise
-    # swallow whatever came next.
-    argv += ["--allowedTools", ",".join(ALLOWED[posture])]
+    # The posture. **`work` is not an allowlist at all** — it is the bypass, because an
+    # allowlist is a list and a list cannot be complete: every tool this CLI gains next
+    # release, and every tool an MCP server brings, is one a working turn would be refused.
+    # Measured 2026-07-27 against 2.1.220: with the work list passed and `TodoWrite` asked
+    # for, the turn was refused it; with the bypass and no list at all, a `Write` that is on
+    # no list succeeded. `read` keeps its list and was measured to still refuse `Write`,
+    # which is the guard that makes widening `work` defensible.
+    #
+    # Passed as one comma-separated value rather than as many words: `--allowedTools` is
+    # variadic and would otherwise swallow whatever came next — measured again while probing
+    # this, where it ate the prompt and the CLI exited saying none had been given.
+    if posture == FULLY:
+        argv += ["--dangerously-skip-permissions"]
+    else:
+        argv += ["--allowedTools", ",".join(ALLOWED[posture])]
 
     preface = (os.environ.get("RUNDESK_PREFACE") or "").strip()
     if preface:
@@ -428,9 +443,13 @@ def carry() -> int:
     """One turn, from what rundesk set to what this brain said about it."""
     where = os.environ.get("RUNDESK_CWD") or os.getcwd()
     home = os.environ.get("RUNDESK_PROVIDER_HOME")
-    posture = os.environ.get("RUNDESK_POSTURE") or "work"
-    if posture not in ALLOWED:
-        posture = "work"
+    # Anything this adapter has no answer for falls back to `work`, which is the seam's own
+    # default. Asked against both of the postures there are rather than against `ALLOWED`,
+    # which no longer holds one of them: reading membership of the list would have sent
+    # `work` down the "unrecognised" branch and quietly given every turn the read tools.
+    posture = os.environ.get("RUNDESK_POSTURE") or FULLY
+    if posture not in ALLOWED and posture != FULLY:
+        posture = FULLY
 
     if shutil.which(CLAUDE) is None and not (os.sep in CLAUDE and os.access(CLAUDE, os.X_OK)):
         went_wrong(f"there is no {CLAUDE} on this machine's path — install the Claude Code "

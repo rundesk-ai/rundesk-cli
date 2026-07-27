@@ -70,9 +70,14 @@ CAN = {"tools": False, "resume": True, "usage": True, "model": True, "steer": Fa
 #: contained it does not hold.
 ALLOWED = {
     "read": ("read_file", "list_dir", "grep"),
-    "work": ("read_file", "list_dir", "grep", "edit_file", "create_file",
-             "run_terminal_command"),
 }
+
+#: The posture that is not a list. `work` passes no `--tools` at all, which is this CLI's
+#: way of saying "every built-in": measured 2026-07-27 against 0.2.112 — with the flag left
+#: off entirely a turn created a file, and with the read list it could not. A list of six
+#: names cannot stay complete, and a tool this CLI gains next release would be one a working
+#: turn was silently refused.
+FULLY = "work"
 
 #: What this CLI says when the home it was given has no login in it. Measured against a
 #: fresh `GROK_HOME`: it exits 1 and names the command to run, which is what an owner needs
@@ -155,7 +160,8 @@ def opening(posture: str, model, resume, extra: dict, session: str, asked_at: st
     # The posture, as the only thing measured to hold it. `--allow` takes one rule per flag
     # and rejects a space-separated list; `--tools` takes the comma-separated built-in
     # names, which is what this is.
-    argv += ["--tools", ",".join(ALLOWED[posture])]
+    if posture != FULLY:
+        argv += ["--tools", ",".join(ALLOWED[posture])]
 
     preface = (os.environ.get("RUNDESK_PREFACE") or "").strip()
     if preface:
@@ -349,9 +355,9 @@ def carry() -> int:
     """One turn, from what rundesk set to what this brain said about it."""
     where = os.environ.get("RUNDESK_CWD") or os.getcwd()
     home = os.environ.get("RUNDESK_PROVIDER_HOME")
-    posture = os.environ.get("RUNDESK_POSTURE") or "work"
-    if posture not in ALLOWED:
-        posture = "work"
+    posture = os.environ.get("RUNDESK_POSTURE") or FULLY
+    if posture not in ALLOWED and posture != FULLY:
+        posture = FULLY
 
     if shutil.which(GROK) is None and not (os.sep in GROK and os.access(GROK, os.X_OK)):
         went_wrong(f"there is no {GROK} on this machine's path — install the Grok CLI, or "

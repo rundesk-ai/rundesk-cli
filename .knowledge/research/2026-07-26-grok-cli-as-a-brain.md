@@ -23,7 +23,7 @@ far more of the second kind than either other brain; after the probe, one row is
 | Say what a turn cost | Measured: on the `end` line, `usage.{input_tokens, cache_read_input_tokens, output_tokens, reasoning_tokens, total_tokens}` plus `total_cost_usd` and a `modelUsage` map — and **per turn, not cumulative**: three one-word replies on one session reported `output_tokens` of 31, 21 and 21.[1][12] |
 | Say which model answered | Measured: the first key of `end.modelUsage` — `grok-4.5-build`, with `modelCalls: 1`.[1] |
 | Keep one agent's sign-in from another's | Measured: `GROK_HOME`. A fresh directory fails the turn closed — exit 1, `Error: Not signed in`, naming `grok login --device-code` — and the CLI fills it with `config.toml`, `sessions/`, `logs/`, `agent_id` and its own lockfiles.[12] |
-| Choose how much of the machine it may touch | Measured: the `--tools` list, and only the `--tools` list. Two flags that look like they would help do not — see below.[4] |
+| Choose how much of the machine it may touch | Measured: the `--tools` list, and only the `--tools` list. Two flags that look like they would help do not — see below.[4] Re-measured 2026-07-27 on 0.2.112: with `--tools read_file,list_dir,grep` a turn could not create a file, with the fuller list it could, and **with the flag left off entirely it could** — so omitting `--tools` is how this CLI says every built-in. Note `-p/--single` is the single-turn form; piping a prompt on stdin fails with `Device not configured (os error 6)`. |
 | Be sent to mid-turn | Nothing measured. No steering surface is known, and there is no tool event to hang one off.[2] |
 
 ### Three line kinds, and one of them is the whole turn

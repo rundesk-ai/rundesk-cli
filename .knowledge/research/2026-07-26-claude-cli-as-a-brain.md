@@ -23,7 +23,7 @@ and both halves are given.
 | Say what a turn cost | Measured: `result.usage` is **per turn, not cumulative** — two one-word replies on one session reported `output` of 3 and 3, against Codex's 5/10/15 on the same shape of test.[8] |
 | Say which model answered | Measured: `system/init.model` is `claude-opus-5[1m]`, and `result.modelUsage` keys name every model that did work in the turn.[1] |
 | Keep one agent's sign-in from another's | Measured: `CLAUDE_CONFIG_DIR`. A fresh directory answers `{"is_error": true, "result": "Not logged in · Please run /login"}` and fills with `.claude.json`, `sessions/`, `projects/<cwd-slug>/` and `backups/`; nothing is inherited from `~/.claude`.[4] |
-| Choose how much of the machine it may touch | Measured: the **allowlist**, and only the allowlist. `--permission-mode` is not a posture — see below.[5] |
+| Choose how much of the machine it may touch | Measured: the **allowlist** holds, and `--dangerously-skip-permissions` lifts it. `--permission-mode` is not a posture — see below.[5] Re-measured 2026-07-27 on 2.1.220: a read-list turn asked to write was refused (`Permission to use Write has been denied because Claude Code is running in don't ask mode`) and no file appeared; with `--dangerously-skip-permissions`, or `--permission-mode bypassPermissions`, the same `Write` succeeded. A permission-free tool such as `TaskCreate` runs whatever the allowlist says, which is why asking for one proves nothing about containment. |
 | Be sent to mid-turn | Measured: no. `claude -p` reads its prompt and runs to the end; the shipped adapter's `interrupt()` is `child.kill('SIGINT')`, after which the session survives on disk and the next `--resume` picks it up.[3] |
 
 ### The stream: sixteen line kinds, and what each is for

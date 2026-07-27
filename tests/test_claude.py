@@ -316,16 +316,35 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
         self.assertNotIn("Write", allowed)
         self.assertIn("Read", allowed)
 
-    def test_a_working_turn_is_given_the_tools_a_working_turn_needs(self):
-        allowed = self.opening()[self.opening().index("--allowedTools") + 1].split(",")
-        self.assertIn("Bash", allowed)
-        self.assertIn("Write", allowed)
+    def test_a_working_turn_is_given_no_list_at_all(self):
+        """R-PRV-18. A working turn gets everything this brain has, because an allowlist is
+        a list and a list cannot stay complete: every tool the CLI gains next release, and
+        every tool an MCP server brings, would be one a working turn was refused — silently,
+        with the model taking the blame.
+
+        Measured 2026-07-27 against 2.1.220: with the old work list passed and a tool off it
+        asked for, the turn was refused it; with the bypass and no list, a `Write` that is on
+        no list succeeded."""
+        argv = self.opening()
+        self.assertIn("--dangerously-skip-permissions", argv)
+        self.assertNotIn("--allowedTools", argv)
+
+    def test_only_looking_still_holds(self):
+        """The guard on the one above. Widening a working turn is defensible only while the
+        posture that exists to be narrow stays narrow — measured against the same CLI, a
+        read turn asked to write was refused with 'Permission to use Write has been denied'
+        and no file appeared."""
+        argv = self.opening(posture="read")
+        self.assertIn("--allowedTools", argv)
+        self.assertNotIn("--dangerously-skip-permissions", argv)
 
     def test_the_allowlist_is_one_value_rather_than_many_words(self):
         """`--allowedTools` is variadic and swallows whatever follows it. Passed as many
         words it eats the next flag, and the error it produces points somewhere else
-        entirely."""
-        argv = self.opening()
+        entirely — measured again while probing this, where it ate the prompt itself and the
+        CLI exited saying none had been given. Asked of `read`, which is the posture that
+        still carries the flag."""
+        argv = self.opening(posture="read")
         after = argv[argv.index("--allowedTools") + 1]
         self.assertNotIn(" ", after, "the allowlist would swallow the flag after it")
         self.assertIn(",", after)
