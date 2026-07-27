@@ -772,6 +772,9 @@ def _run_update_worker(gateways, machine, agents) -> int:
     deadline = time.monotonic() + UPDATE_WAIT_SECONDS
     while True:
         busy = _in_flight(gateways, agents)
+        origin = _origin_still_running(request, agents)
+        if origin and origin not in busy:
+            busy.append(origin)
         if not busy:
             break
         if time.monotonic() >= deadline:
@@ -803,6 +806,22 @@ def _run_update_worker(gateways, machine, agents) -> int:
             _reported_version(target_root, environment),
         )
         return 1
+
+
+def _origin_still_running(request: dict, agents) -> str | None:
+    """The initiating run itself, until its durable account says it ended."""
+    origin = request.get("origin") or {}
+    agent = origin.get("agent")
+    run_id = origin.get("run")
+    if not agent or not run_id:
+        return None
+    try:
+        run = agents.reading(agent).run(run_id)
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed):
+        return f"{agent}/turn:{run_id}"
+    if run is not None and not run.get("ended_at"):
+        return f"{agent}/turn:{run_id}"
+    return None
 
 
 def _reported_version(root: Path, environment: dict) -> str | None:

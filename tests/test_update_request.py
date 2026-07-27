@@ -81,6 +81,40 @@ class DurableRequests(unittest.TestCase):
         self.assertEqual(queued["id"], final["id"])
         self.assertEqual("succeeded", final["state"])
 
+    def test_external_worker_waits_for_the_origin_run_record_to_finish(self):
+        """R-UPD-38"""
+        update_request.queue({"agent": "ava", "run": "one"})
+
+        class Agents:
+            def __init__(self):
+                self.runs = iter([
+                    {"id": "one", "ended_at": None},
+                    {"id": "one", "ended_at": "2026-07-27T23:30:00Z"},
+                ])
+
+            def reading(self, name):
+                self.name = name
+                return self
+
+            def run(self, run_id):
+                self.run_id = run_id
+                return next(self.runs)
+
+        completed = [
+            mock.Mock(returncode=0, stdout="updated safely\n", stderr=""),
+            mock.Mock(returncode=0, stdout="rundesk 0.9.9\n", stderr=""),
+        ]
+        agents = Agents()
+        with mock.patch.object(cli, "_in_flight", side_effect=lambda *_: []), \
+                mock.patch.object(cli.time, "sleep") as slept, \
+                mock.patch.object(cli.subprocess, "run", side_effect=completed):
+            self.assertEqual(0, cli._run_update_worker(
+                mock.Mock(), mock.Mock(), agents
+            ))
+        slept.assert_called_once()
+        self.assertEqual("ava", agents.name)
+        self.assertEqual("one", agents.run_id)
+
     def test_external_worker_can_update_a_separate_installed_root(self):
         update_request.queue({"agent": "ava", "run": "one"})
         target = pathlib.Path(self.temporary.name) / "installed"
