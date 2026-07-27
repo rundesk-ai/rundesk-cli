@@ -51,6 +51,7 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-30 | What an install is made of comes forward before what its agents keep | `what an install is made of comes forward before what it keeps` |
 | ✅ | R-UPD-31 | An update that cannot bring either forward puts the install back on the release it was | `an update that cannot build what a release needs puts the release back`, `a migration that fails puts the install back and says which and why` |
 | ✅ | R-UPD-32 | An install already current but unfit is mended rather than reported as current | `an install already current but unfit is mended rather than called current`, `an install that is current and fits is left entirely alone`, `asking where a broken install stands still changes nothing` |
+| ✅ | R-UPD-33 | Everything after the files are replaced is done by the release that was just installed | `the rest of the window is handed to the release that just landed`, `the release that took over brings every gateway back`, `a release whose entry point will not start is put back` |
 
 ## Open questions
 

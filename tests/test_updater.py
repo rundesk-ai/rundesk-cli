@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import contextlib
 import os
+import shutil
 import sys
 import urllib.error
 import tarfile
@@ -30,6 +31,15 @@ from rundesk import updater  # noqa: E402
 #: to live. Made once and shared, because every case releases it before the next begins.
 _installed = tempfile.TemporaryDirectory(prefix="rundesk-install-")
 INSTALL = Path(_installed.name)
+
+
+def _stays_here(_repo_root, _stopped) -> None:
+    """No handover: this suite has one process, so the window runs where it started.
+
+    None is its own answer and not a pretend success — the real one either replaces this
+    process or says why it could not, and neither is a thing a suite can watch happen.
+    """
+    return None
 
 
 def run(**kwargs) -> tuple[int, str]:
@@ -69,7 +79,7 @@ class OutcomeTests(unittest.TestCase):
             repo_root=INSTALL,
             current_version="1.0.0",
             latest=lambda: ("v1.0.0", None),
-            apply=lambda root, tag: applied.append(tag) or 0,
+            apply=lambda root, tag: applied.append(tag) or 0, relaunch=_stays_here,
         )
         self.assertEqual(code, 0)
         self.assertIn("UP TO DATE", said)
@@ -81,7 +91,7 @@ class OutcomeTests(unittest.TestCase):
             repo_root=INSTALL,
             current_version="0.1.0",
             latest=lambda: ("v0.2.0", None),
-            apply=lambda root, tag: applied.append(tag) or 0,
+            apply=lambda root, tag: applied.append(tag) or 0, relaunch=_stays_here,
         )
         self.assertEqual(code, 0)
         self.assertIn("v0.2.0", said)
@@ -94,7 +104,7 @@ class OutcomeTests(unittest.TestCase):
             current_version="0.1.0",
             latest=lambda: ("v0.2.0", None),
             check_only=True,
-            apply=lambda root, tag: applied.append(tag) or 0,
+            apply=lambda root, tag: applied.append(tag) or 0, relaunch=_stays_here,
         )
         self.assertEqual(code, 0)
         self.assertIn("v0.2.0", said)
@@ -835,7 +845,7 @@ class AnUpdateAndWorkInFlight(unittest.TestCase):
             INSTALL, "0.1.0", check_only=check_only,
             latest=lambda: ("9.9.9", None),
             apply=lambda root, version: applied.append(version) or 0,
-            busy=lambda: busy,
+            busy=lambda: busy, relaunch=_stays_here,
         )
         return code, applied
 
@@ -874,6 +884,81 @@ class AnUpdateAndWorkInFlight(unittest.TestCase):
         self.assertEqual([], asked, "it asked what was running when it was already current")
 
 
+class TheReleaseFinishesItsOwnWindow(unittest.TestCase):
+    """R-UPD-33 — everything after the files land belongs to the release that landed.
+
+    Nothing re-executed before, and the cost was invisible. `migration.found()` reads
+    `src/migrations/` off disk at the moment it is asked, so the *new* step files were run
+    by the *old* runner — every future release quietly depending on that pairing holding.
+    The interpreter was no better off: `rundesk` puts the virtualenv on `sys.path` when the
+    process starts, so anything installed a moment later is invisible to the process that
+    installed it, and a module already imported stays the version it was.
+    """
+
+    def setUp(self):
+        self.install = Path(tempfile.mkdtemp(prefix="rundesk-handover-"))
+        self.addCleanup(shutil.rmtree, self.install, True)
+
+    def _run(self, handover, **kw):
+        self.after = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stderr(io.StringIO()) as said:
+                code = updater.run(
+                    self.install, "0.1.0", latest=lambda: ("9.9.9", None),
+                    apply=lambda root, tag: 0, busy=lambda: [],
+                    pause=lambda: (["alpha"], None),
+                    resume=lambda names: self.after.append("started") or [],
+                    provision=lambda: self.after.append("provisioned") or None,
+                    carry=lambda: self.after.append("carried") or None,
+                    relaunch=handover, **kw,
+                )
+        self.said = said.getvalue()
+        return code
+
+    def test_the_rest_of_the_window_is_handed_to_the_release_that_just_landed(self):
+        asked = []
+
+        def handover(repo_root, stopped):
+            asked.append((repo_root, list(stopped)))
+            raise SystemExit(0)   # stands in for a process that has been replaced
+
+        with self.assertRaises(SystemExit):
+            self._run(handover)
+        self.assertEqual([(self.install, ["alpha"])], asked,
+                         "the window went on in the process that opened it")
+        self.assertEqual([], self.after,
+                         "the old code moved records forward after the new ones landed")
+
+    def test_a_release_whose_entry_point_will_not_start_is_put_back(self):
+        """The one case worth surviving: this process is still the old code, still holds
+        everything it needs, and the release it just laid down cannot be run at all."""
+        (self.install / "src").mkdir()
+        (self.install / ".src.outgoing").mkdir()
+        (self.install / ".src.outgoing" / "kept.py").write_text("# the version it was\n")
+
+        code = self._run(lambda root, stopped: "No such file or directory: rundesk")
+        self.assertEqual(1, code)
+        self.assertIn("would not start", self.said)
+        self.assertIn("back on the version it was", self.said)
+        self.assertTrue((self.install / "src" / "kept.py").is_file(),
+                        "a release that could not be run was left in place")
+        self.assertEqual(["started"], self.after,
+                         "the agents were left down after the install went back")
+
+    def test_the_release_that_took_over_brings_every_gateway_back(self):
+        """The far side of the handover: the window is already open and every gateway
+        named is already down, so this is the second half and never the whole of it."""
+        after = []
+        code = updater.carry_on(
+            self.install, ["alpha", "beta"],
+            provision=lambda: after.append("provisioned") or None,
+            carry=lambda: after.append("carried") or None,
+            resume=lambda names: after.append(("started", list(names))) or [],
+        )
+        self.assertEqual(0, code)
+        self.assertEqual(["provisioned", "carried", ("started", ["alpha", "beta"])], after)
+
+
 class AnInstallThatIsCurrentAndDoesNotFit(unittest.TestCase):
     """R-UPD-32 — being on the newest version is not the same as working.
 
@@ -894,6 +979,7 @@ class AnInstallThatIsCurrentAndDoesNotFit(unittest.TestCase):
             provision=lambda: self.order.append("provisioned") or None,
             carry=lambda: self.order.append("carried") or None,
             resume=lambda names: self.order.append("started") or [],
+            relaunch=_stays_here,
         )
 
     def test_an_install_that_is_current_and_fits_is_left_entirely_alone(self):
@@ -967,7 +1053,7 @@ class AnUpdateAndWhatIsRunning(unittest.TestCase):
         code = updater.run(
             INSTALL, "0.1.0", latest=lambda: ("9.9.9", None),
             apply=apply, busy=lambda: [], pause=pause, resume=resume, carry=carry,
-            provision=provision,
+            provision=provision, relaunch=_stays_here,
         )
         return code
 
@@ -1015,6 +1101,7 @@ class AnUpdateAndWhatIsRunning(unittest.TestCase):
             apply=lambda root, version: order.append("replaced") or 0,
             carry=lambda: order.append("carried") or None,
             resume=lambda names: order.append("started") or [],
+            relaunch=_stays_here,
         )
         self.assertEqual(["stopped", "replaced", "carried", "started"], order)
 

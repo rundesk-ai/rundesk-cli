@@ -133,6 +133,7 @@ def run(
     carry: Callable[[], str | None] | None = None,
     provision: Callable[[], str | None] | None = None,
     unfit: Callable[[], str | None] | None = None,
+    relaunch: Callable[[Path, list], str | None] | None = None,
 ) -> int:
     """Report where this install stands, and move it if asked.
 
@@ -171,7 +172,53 @@ def run(
         with _only_one(repo_root):
             return _replace_this_install(
                 repo_root, published, apply, busy, pause, resume, carry, provision,
+                relaunch,
             )
+    except Busy as err:
+        print(f"update: NOT APPLIED — {err}", file=sys.stderr)
+        return 1
+
+
+#: How the new code is told it is finishing a window somebody else opened, and which
+#: gateways are waiting to come back. Carried in the arguments rather than in a file: it is
+#: true for one handover and nothing should be able to find it afterwards and act on it.
+CONTINUING = "--after-replacing"
+
+
+def _relaunch(repo_root: Path, stopped: list) -> str | None:
+    """Hand the rest of the window to the release that just landed.
+
+    Never returns when it works — this process *becomes* the new one, so its exit code is
+    the update's. Returns why when the handover could not happen at all, which leaves the
+    caller holding an install it can still put back.
+
+    The right to change this install is released here, because the descriptor holding it
+    closes on exec, and taken again immediately by the process that replaces this one. A
+    third update slipping into that gap would be refused by the second, which is the
+    outcome anyway; the alternative is passing an open lock across exec and then teaching
+    the far side not to ask for one, which is more moving parts than the gap is worth.
+    """
+    entry = repo_root / "rundesk"
+    argv = [str(entry), "update", CONTINUING, ",".join(stopped)]
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execv(str(entry), argv)
+    except OSError as err:
+        return str(err)
+    return None   # unreachable: execv either replaces this process or raises
+
+
+def carry_on(repo_root: Path, stopped: list, resume=None, carry=None,
+             provision=None) -> int:
+    """Finish a window the release before this one opened (R-UPD-33).
+
+    The public half of the handover: whoever runs this *is* the new code, so what it does
+    to an owner's records is what the release that shipped it says it should be.
+    """
+    try:
+        with _only_one(repo_root):
+            return _bring_forward(repo_root, stopped, resume, carry, provision)
     except Busy as err:
         print(f"update: NOT APPLIED — {err}", file=sys.stderr)
         return 1
@@ -203,6 +250,10 @@ def _mend(repo_root, current_version, check_only, unfit, busy, pause, resume,
                 # Already here: there is no release to fetch, only what should have
                 # followed one.
                 apply=lambda _root, _tag: 0,
+                # Nothing arrived, so there is nobody to hand over to: this process is
+                # already running the release whose dependencies and steps are about to be
+                # brought forward, which is the whole condition the handover exists for.
+                relaunch=lambda _root, _names: None,
                 busy=busy, pause=pause, resume=resume, carry=carry, provision=provision,
             )
     except Busy as err:
@@ -219,6 +270,7 @@ def _replace_this_install(
     resume=None,
     carry=None,
     provision=None,
+    relaunch=None,
 ) -> int:
     """The window itself: nothing an owner runs is up between the first line and the last.
 
@@ -274,58 +326,95 @@ def _replace_this_install(
         (resume or (lambda _names: []))(stopped)
         raise
     if moved == 0:
-        # The one window where nothing is up and the new files are already down. Asked only
-        # when they actually landed: a replacement that failed leaves the old shape on disk,
-        # and moving records forward for code that is not there is how an install ends up
-        # with data no version of it understands.
+        # **Everything below here belongs to the release that just landed** (R-UPD-33), so
+        # this process hands over to it rather than going on. Nothing re-executed before,
+        # and the cost was invisible: `migration.found()` reads `src/migrations/` off disk
+        # at the moment it is asked, so the *new* step files were being run by the *old*
+        # runner. Every future release quietly depended on that pairing working. The
+        # interpreter is no better off — `rundesk` puts the virtualenv on `sys.path` when
+        # the process starts, so anything installed a moment from now is invisible to this
+        # one, and a module already imported stays the version it was.
         #
-        # **What an install is made of comes forward before what it keeps** (R-UPD-30). Two
-        # reasons, in order of weight. Records are the irreplaceable thing, so the failure
-        # that can happen without touching them should happen first: a build that fails here
-        # leaves every agent's records exactly as they were and running the update again is
-        # the whole of the fix. And a step that one day needs a dependency can only have one
-        # if they are already there — nothing forces that today, and the order that allows
-        # it costs nothing.
-        went_wrong = (provision or (lambda: None))()
-        where = "what rundesk is made of"
-        if not went_wrong:
-            went_wrong = (carry or (lambda: None))()
-            where = "moving records forward"
-        if went_wrong:
-            # **The release is put back and the agents come back onto it** (R-UPD-31).
-            # Migrations are one way, so reverting the program alone would strand an agent
-            # already carried — its records newer than the code that must read them, refused
-            # on open (R-MIG-10). What makes coming back safe is that `carry` puts every
-            # agent's records back as well, so the machine is what it was before the update.
-            print(f"update: NOT APPLIED — {where} could not be brought forward: {went_wrong}",
+        # Does not return when it works. When it cannot — a release whose entry point will
+        # not start is exactly the case worth surviving — this process is still the old
+        # code, still holds everything it needs, and puts the release back itself.
+        went = (relaunch or _relaunch)(repo_root, stopped)
+        if went:
+            print(f"update: NOT APPLIED — the new release would not start: {went}",
                   file=sys.stderr)
-            put_back = _undo(repo_root)
-            if put_back:
-                print(f"        this install is back on the version it was; try again",
-                      file=sys.stderr)
-            else:
-                print("        the release could not be put back — reinstall this install",
-                      file=sys.stderr)
-            print("        why: rundesk logs <name>", file=sys.stderr)
-            left_down = (resume or (lambda _names: []))(stopped)
-            if left_down:
-                print(f"        did not come back: {', '.join(sorted(left_down))}",
-                      file=sys.stderr)
+            _undo(repo_root)
+            print("        this install is back on the version it was; try again",
+                  file=sys.stderr)
+            (resume or (lambda _names: []))(stopped)
             return 1
-        # Nothing is going back now: the release is on disk, what it needs is installed and
-        # every agent's records are in the shape it expects. Only here does the copy of what
-        # was there go, because until this line it is the only way back (R-UPD-31).
-        _keep(repo_root)
+        return _bring_forward(repo_root, stopped, resume, carry, provision)
+    # The release never landed, so there is nothing to bring forward and nothing to put
+    # back — only whatever was stood down, which comes back onto the code it was already on.
     left_down = (resume or (lambda _names: []))(stopped)
     if left_down:
         print(
-            f"update: {'applied' if moved == 0 else 'FAILED'}, but did not come back: "
-            f"{', '.join(sorted(left_down))}",
+            f"update: FAILED, and did not come back: {', '.join(sorted(left_down))}",
             file=sys.stderr,
         )
         print("        why: rundesk logs <name>", file=sys.stderr)
         return 1
     return moved
+
+
+def _bring_forward(repo_root: Path, stopped: list, resume=None, carry=None,
+                   provision=None) -> int:
+    """What an install is made of, then what its agents keep, then everything back up.
+
+    The one window where nothing is up and the new files are already down. Reached twice —
+    straight through when a release lands, and again by the process that release handed
+    over to — so it is written once: two copies would be two orders, and the order is the
+    part that protects the records.
+
+    **What an install is made of comes forward first** (R-UPD-30). Two reasons, in order of
+    weight. Records are the irreplaceable thing, so the failure that can happen without
+    touching them should happen first: a build that fails here leaves every agent's records
+    exactly as they were, and running the update again is the whole of the fix. And a step
+    that one day needs a dependency can only have one if they are already there — nothing
+    forces that today, and the order that allows it costs nothing.
+    """
+    went_wrong = (provision or (lambda: None))()
+    where = "what rundesk is made of"
+    if not went_wrong:
+        went_wrong = (carry or (lambda: None))()
+        where = "moving records forward"
+    if went_wrong:
+        # **The release is put back and the agents come back onto it** (R-UPD-31).
+        # Migrations are one way, so reverting the program alone would strand an agent
+        # already carried — its records newer than the code that must read them, refused
+        # on open (R-MIG-10). What makes coming back safe is that `carry` puts every
+        # agent's records back as well, so the machine is what it was before the update.
+        print(f"update: NOT APPLIED — {where} could not be brought forward: {went_wrong}",
+              file=sys.stderr)
+        if _undo(repo_root):
+            print("        this install is back on the version it was; try again",
+                  file=sys.stderr)
+        else:
+            print("        the release could not be put back — reinstall this install",
+                  file=sys.stderr)
+        print("        why: rundesk logs <name>", file=sys.stderr)
+        left_down = (resume or (lambda _names: []))(stopped)
+        if left_down:
+            print(f"        did not come back: {', '.join(sorted(left_down))}",
+                  file=sys.stderr)
+        return 1
+    # Nothing is going back now: the release is on disk, what it needs is installed and
+    # every agent's records are in the shape it expects. Only here does the copy of what
+    # was there go, because until this line it is the only way back (R-UPD-31).
+    _keep(repo_root)
+    left_down = (resume or (lambda _names: []))(stopped)
+    if left_down:
+        print(
+            f"update: applied, but did not come back: {', '.join(sorted(left_down))}",
+            file=sys.stderr,
+        )
+        print("        why: rundesk logs <name>", file=sys.stderr)
+        return 1
+    return 0
 
 
 #: Which installs *this process* already holds the right to change. `flock` is held per

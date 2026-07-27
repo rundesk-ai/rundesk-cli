@@ -278,6 +278,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     moved = sub.add_parser("update", help="move to the newest published release")
     moved.add_argument("--check", action="store_true", help="say what would happen, and change nothing")
+    # Not offered, because it is not a thing to type: an update hands the rest of its own
+    # window to the release it just laid down, and this is how that release is told which
+    # gateways are waiting (R-UPD-33). Hidden rather than absent, because argparse has to
+    # accept it — the process on the other side of the handover is `rundesk update`.
+    moved.add_argument(updater.CONTINUING, dest="after_replacing", metavar="<names>",
+                       default=None, help=argparse.SUPPRESS)
 
     taken_off = sub.add_parser("uninstall", help="remove rundesk from this machine")
     taken_off.add_argument("--purge", action="store_true",
@@ -553,6 +559,17 @@ def cmd_version(args: argparse.Namespace) -> int:
 
 
 def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
+    if args.after_replacing is not None:
+        # This process *is* the release that just landed, so what it does to an owner's
+        # records is what the release that shipped it says it should be (R-UPD-33). The
+        # window is already open and every gateway named here is already down.
+        waiting = [one for one in args.after_replacing.split(",") if one]
+        return updater.carry_on(
+            REPO_ROOT, waiting,
+            resume=lambda names: _bring_all_back(names, gateways, machine, agents),
+            provision=lambda: dependencies.provision(REPO_ROOT),
+            carry=lambda: _carry_every(agents),
+        )
     return updater.run(
         REPO_ROOT, __version__, check_only=args.check,
         busy=lambda: _in_flight(gateways, agents),

@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from rundesk import __version__  # noqa: E402
 from rundesk import cli  # noqa: E402
 from rundesk import store  # noqa: E402
+from rundesk import updater  # noqa: E402
 
 
 #: How long the command waits on a gateway to appear or to go. Real seconds in the wild,
@@ -478,11 +479,21 @@ class BehindOrCurrentTests(unittest.TestCase):
                     cli.main(argv)
                 self.assertNotEqual(exited.exception.code, 0, f"{argv} was accepted")
 
-        # And nothing but --check is offered, so there is no version to name in the first place.
-        offered = {a for p in cli.build_parser()._subparsers._group_actions
+        # And nothing but --check is offered, so there is no version to name in the first
+        # place. Asked of what a person is actually shown: an update hands the rest of its
+        # own window to the release it just laid down, and the argument that carries the
+        # gateways waiting to come back is accepted without being offered (R-UPD-33).
+        actions = [x for p in cli.build_parser()._subparsers._group_actions
                    for name, sub in p.choices.items() if name == "update"
-                   for a in sum([list(x.option_strings) for x in sub._actions], [])}
-        self.assertEqual(offered - {"-h", "--help"}, {"--check"}, "update offers a way to choose a version")
+                   for x in sub._actions]
+        offered = {one for x in actions if x.help is not argparse.SUPPRESS
+                   for one in x.option_strings}
+        self.assertEqual(offered - {"-h", "--help"}, {"--check"},
+                         "update offers a way to choose a version")
+        hidden = {one for x in actions if x.help is argparse.SUPPRESS
+                  for one in x.option_strings}
+        self.assertEqual(hidden, {updater.CONTINUING},
+                         "update accepts something nobody declared and nobody can see")
 
 
 class FakeGateways:
