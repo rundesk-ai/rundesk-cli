@@ -19,6 +19,7 @@ import asyncio
 import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import shutil
 import sys
@@ -729,11 +730,18 @@ class WhatAnOwnerWhoSaidNothingGets(unittest.TestCase):
         fills the room. On by default is only defensible as the quiet one."""
         self.assertNotEqual(discord.POSTS, self.settled().activity)
 
-    def test_an_owner_who_turned_it_off_still_has_it_off(self):
-        """The guard: a default that could not be overridden would be worse than the one
-        it replaced."""
-        self.assertEqual(discord.OFF, self.settled(["--activity", "off"]).activity)
-        self.assertEqual(discord.OFF, self.settled(settings={"activity": "off"}).activity)
+    def test_a_stale_discord_off_setting_does_not_override_the_channel_choice(self):
+        """R-CH-6 — the channel record is the owner's activity choice. Discord persisted
+        its old default beside that choice, so an upgrade must ignore the contradiction
+        without rewriting stored data."""
+        self.assertEqual(discord.GROWS,
+                         self.settled(settings={"activity": "off"}).activity)
+
+    def test_the_adapter_does_not_offer_a_second_switch_that_turns_activity_off(self):
+        """R-CH-6 — `--no-activity` belongs to the channel command. A second Discord-only
+        switch can disagree with the record that `channels show` reports."""
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            discord.options(["--activity", "off"])
 
     def test_what_was_typed_wins_over_what_was_written_down(self):
         """Both places say the same words, so an owner who set it in either gets it — and

@@ -233,7 +233,7 @@ def options(argv) -> argparse.Namespace:
     said.add_argument("--server", metavar="<id>")
     said.add_argument("--channel", metavar="<id>")
     said.add_argument("--dm", action="store_true")
-    said.add_argument("--activity", choices=("grows", "posts", "off"), default=None,
+    said.add_argument("--activity", choices=("grows", "posts"), default=None,
                       metavar="<how>")
     said.add_argument("--token-from", default=TOKEN_FROM, metavar="<variable>")
     known, rest = said.parse_known_args(list(argv))
@@ -1352,8 +1352,16 @@ def settled(chose, settings: dict, allow: str = ""):
     # and a goodbye go to, so the adapter is told who they are.
     chose.allow = [one for one in (allow or "").split(",") if one]
     for what in FROM_SETTINGS:
-        if not getattr(chose, what, None) and settings.get(what):
-            setattr(chose, what, settings[what])
+        value = settings.get(what)
+        # Rundesk owns whether commentary is shown and already withholds every activity
+        # record when the channel-level `--no-activity` switch is set. Discord's old
+        # adapter default persisted a second `off` decision in settings, leaving records
+        # that say the channel is on while the adapter silently drops every line. Ignore
+        # that stale duplicate at runtime rather than rewriting an owner's records.
+        if what == "activity" and value == OFF:
+            continue
+        if not getattr(chose, what, None) and value:
+            setattr(chose, what, value)
     # **Shown unless somebody said otherwise, which is what rundesk already decided.** This
     # was `or OFF`, and it quietly overruled the core: `answering` sends what the agent is
     # doing unless the channel record turns it off, and its comment says why — "a room that
