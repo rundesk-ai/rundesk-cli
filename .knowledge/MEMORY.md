@@ -339,6 +339,19 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   old seam, which reads exactly like the adapter being broken. Restart the gateway after
   touching anything under `src/`, and check the file's mtime against the gateway's start
   line in its log before believing what you are seeing.
+- **Another agent moves the checkout out from under a long task, and the first sign is a
+  file "modified on disk".** A review that named `37d0753` on `phase-8-…` as its baseline
+  finished on `main` at `66387d7`, with that branch merged and the working tree emptied of
+  the other agent's files. **Do not assume the work is void and do not re-do it**: ask
+  `git merge-base --is-ancestor <baseline> HEAD` and `git diff <baseline> HEAD -- <the files
+  you reviewed>`, and if the scope is byte-identical the baseline still holds — say so
+  rather than silently restating it. Re-check `git rev-parse --abbrev-ref HEAD` immediately
+  before every commit; a commit meant for a feature branch lands on `main` otherwise, and
+  switching back in a shared worktree would disrupt whoever is working in it.
+- **`SUGGESTIONS.md` finding numbers are taken while you are writing.** Numbers are never
+  reused, so two agents filing at once both reach for the next one — 41 and 42 were claimed
+  by another round mid-review. Re-read the file's tail immediately before you number
+  anything, and append rather than editing near somebody else's section.
 - **A second connection with the same bot token silently wins.** Running the Discord
   adapter by hand to diagnose it, while a gateway is already serving that channel, makes
   one of the two stop receiving — with no error on either. Stop the gateway first, or

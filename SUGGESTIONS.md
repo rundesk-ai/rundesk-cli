@@ -39,6 +39,17 @@ A channel admitting a turn is exactly that path, so they are due as the channel 
 open rather than as it is designed, and each is to be reproduced on the baseline of the
 day rather than taken from its write-up.
 
+**What the Discord round closed on its way through.** Round eight reviewed the one channel
+adapter that ships. Five defects it found were fixed in the same run and are therefore not
+entries here — named only so a later reader does not spend the effort finding them again: a
+goodbye that consumed the whole shutdown budget and left the connection dropped rather than
+closed; a reconnection announced to the owner as the agent coming up; a mention stripper that
+removed everybody's naming and any prose between a literal `<@` and the next `>`; two
+attachments on one message rebuilt to one filename, so the second was written over the first;
+and an eviction that dropped a conversation with a turn still running in it, leaving its typing
+indicator renewing for the life of the process. What is left below is what nobody may fix
+without the owner: two behaviour and contract decisions, and a documentation truth.
+
 **Where they came from.** Round two (6–22) reviewed the runtime and lifecycle against
 `205467b`, with reproduction scripts and their output quoted inline. Round three (23–25)
 followed up on the gateway foundation against `7841a0f`. Round four (26–29) asked which
@@ -1023,6 +1034,7 @@ state it is named for.
 | Test | Cited for | What it does not reach |
 |---|---|---|
 | `test_removing_rundesk_refuses_while_a_gateway_is_still_running` (`tests/test_install.py:89`) | R-RM-9 | Writes a plist first, so the no-job case in finding 15 is never exercised |
+| `test_inside_a_thread_it_opened_it_answers_without_being_named` (`tests/test_discord.py`) | R-DIS-3 | Drives `where_to_answer(ours=True)`, a pure function. Nothing proves `ours` is ever true on the wire, where it is `message.channel.owner_id == self.user.id` — so if Discord reports a message-thread's owner as the message's author rather than the bot that opened it, the agent needs naming again inside its own thread and the row is green on a mistake. One look at a real thread settles it |
 
 # Round seven — 2026-07-26
 
@@ -1239,3 +1251,168 @@ not before.
   this is a structural change to working, tested code with no defect behind it, which the
   change threshold in `AGENTS.md` does not admit. Do it when finding 12 is done, or not at
   all.
+
+# Round eight — 2026-07-26
+
+**Scope:** `src/channels/discord` (1,196 lines) and `tests/test_discord.py` — the one channel
+adapter that ships, reviewed against `channel-discord`, `channel-messaging`, `channel-adapter` and
+`guides/write-a-channel-adapter.md`, which the adapter's own docstring makes its governing contract.
+
+**Baseline:** `37d0753`, reviewed on branch `phase-8-updates-an-owner-can-trust`. That branch was
+merged and the checkout moved to `main` (`66387d7`) mid-review by another agent; `37d0753` is an
+ancestor of it and the reviewed scope is **byte-identical at both**, so nothing here needed
+re-establishing. The suite passed alongside every finding: `test_discord` 69 before, 84 after, and
+the whole gate `GATE_EXIT=0` on 20 suites — with `test_discord` genuinely running rather than
+skipping, which is checked by reading the count and the interpreter rather than the word `ok`.
+
+**Outcome:** five defects found and fixed in the same run (named in the preamble, not entered here),
+three left open below. Every claim was reproduced by driving the real adapter offline; nothing in
+this round reached Discord, and the nine `❌` platform rows are untouched because a row nobody
+watched stays `❌`.
+
+## High impact
+
+### 43. Two Discord channels on one bot token, and it is what `channels add` does by default
+
+**Status:** Open — **a contract decision, not an adapter fix**, which is why nothing was changed.
+
+`wanted()` returns `(True, True)` when no place is named, so one `rundesk channels <agent> add
+discord …` writes two channels: `<name>-dms` and `<name>-rooms` (R-CAD-15). `_hold_channels()` is
+"one task per channel, each started through `start`" (`gateway.py:1273-1276`), so two channels are
+two adapter processes — and both read the same `token_from`, so they are two gateway connections on
+one bot token. `.knowledge/MEMORY.md` records what that does, twice: one of the two stops receiving,
+with no error on either side.
+
+The consequence is worse than a plain outage because the failure looks like success. Each adapter
+greets the owner on connect, so an owner adding Discord the ordinary way gets **two** "Gateway
+online" messages, one from each channel — and then one kind of place is silently deaf. There is
+nothing at `--check` time, nothing in the log, and nothing an owner could reasonably infer.
+
+Reproduced structurally, offline: `wanted(options([]))` is `(True, True)`; `_shape()` emits both
+suffixes; `_hold_channels()` starts one adapter per channel record; `token_for()` reads the same
+variable in each. The Discord half of it is the owner's own reproduction, recorded in `MEMORY.md`.
+
+**Why this is the contract's and not the adapter's.** R-CAD-15 — an adapter says which kinds of
+place it reached, and each becomes a channel of its own — assumes the kinds of place are
+independently connectable. On Discord they are two views of **one** connection. Either one adapter
+process serves both kinds for a platform that works that way, or an adapter gains a way to say that
+its shapes share a connection and rundesk holds one process open for the set. Both are changes to
+`channel-adapter`, and the second is the one that keeps a stranger's adapter first-class.
+
+Regression criteria:
+
+- Adding Discord with no place named leaves the agent reachable in **both** direct messages and
+  rooms at the same time, proved by a message in each being answered.
+- An owner is told once that the agent came up, however many channels one `add` wrote.
+- A platform whose kinds of place genuinely are independent is unaffected.
+
+Relevant implementation: `wanted()`, `_shape()` and `token_for()` in `src/channels/discord`;
+`_hold_channels()` in `src/rundesk/gateway.py`; R-CAD-15 in `.knowledge/prd/channel-adapter.md`.
+
+### 44. A control is acknowledged with a promise nothing kept, including to somebody not allowed
+
+**Status:** Open — **two candidate fixes and the choice is a behaviour decision**, so it waits.
+
+`Agent._made` answers every slash command with `"✋ stopping this turn."`, `"🧹 this conversation
+starts fresh."` or `"♻️ restarting the agent — it will be back in a moment."` *before* rundesk has
+been told anything. `Answering._control` (`answering.py:308-318`) then drops the gesture in silence
+when the person is not allowed, and `stop` drops it again when no turn is running there.
+
+So two ordinary paths end with somebody told something that did not happen:
+
+- Somebody **not on the allow list** types `/restart` in a shared room and is told the agent is
+  restarting. That is both a promise nothing kept and a confirmation that the agent is listening —
+  which is the exact thing the guide's silence rule exists to avoid: "replying to a stranger to
+  tell them they are a stranger confirms the agent is listening".
+- An owner types `/stop` in the **room** rather than in the thread the turn is running in, and is
+  told the turn is stopping. `interaction.channel_id` is the room, which is not that conversation,
+  so nothing is stopped.
+
+This breaks two concrete rules in `guides/write-a-channel-adapter.md`: "do not promise the person
+anything you have not been told happened", and silence for somebody not allowed. It does **not**
+break R-DIS-12 — the acknowledgement carries none of the turn's own output, which is the trap that
+requirement is about, and the adapter avoids it correctly.
+
+The owner's choice:
+
+- **Reword only.** Acknowledge the gesture rather than its effect. Smallest change, stays inside
+  Discord's three seconds (R-DIS-11), and what the control actually did still arrives as the turn's
+  own outcome.
+- **Reword, and say nothing at all to an id absent from `RUNDESK_ALLOW`.** Closer to the guide's
+  silence rule, but Discord then shows that person "The application did not respond", and the
+  command is listed to them either way — so it buys less than it appears to.
+
+Regression criteria:
+
+- No acknowledgement states an effect that rundesk has not reported.
+- A `/stop` where no turn is running, and any control from somebody not allowed, leave the person
+  with nothing that claims something happened.
+- The acknowledgement still lands inside the time Discord allows.
+
+Relevant implementation: `Agent._made` and `COMMANDS` in `src/channels/discord`;
+`Answering._control` in `src/rundesk/answering.py`.
+
+## Medium impact
+
+### 45. The nine unproven Discord rows point at lines that mean nothing
+
+**Status:** Open — a documentation truth, and the rows belong to a ratified contract, so they were
+not edited without the owner.
+
+Every `❌` row in `.knowledge/prd/channel-discord.md` carries a `src/channels/discord:<line>` anchor
+in place of the test it cannot name. All nine had already drifted off their subject **before this
+round touched the file**, verified against the reviewed commit itself:
+
+```text
+git show 37d0753:src/channels/discord | sed -n '69p'   # R-DIS-14, "writes are paced"
+  #: agent will never see once it is being kept up properly — which is the only way it is
+                                                        :243p  # R-DIS-11, the three seconds
+      if said:                                                 # (inside token_for)
+                                                        :271p  # R-DIS-16, presence
+  is still a word that has to go somewhere.                    # (inside split_at's docstring)
+                                                        :279p  # R-DIS-15, up and down
+                                                               # (a blank line)
+```
+
+`check-evidence` cannot catch it: it proves a **backticked** name is a real test, and these are
+deliberately written plainly precisely because the row is `❌`. So the one column that is meant to
+be the honest map of what nobody has confirmed sends the next person to the wrong part of the file,
+and every edit to the adapter moves all nine again.
+
+Regression criteria:
+
+- What an unproven row points at survives an edit somewhere else in the same file — a function or a
+  constant's name rather than a line number.
+- The nine rows point at what they are about, checked by reading each one.
+
+Relevant implementation: the Evidence column of `.knowledge/prd/channel-discord.md`;
+`.knowledge/scripts/check-evidence`.
+
+## Recorded on the way past, and not fixed
+
+None meets the threshold — each is a behaviour change, and a behaviour change is the owner's
+decision — and all would be found again by anybody reading the same code.
+
+- **`--check` proves reachability and never the ability to write.** `_room()` fetches a guild or a
+  channel; nothing asks whether the bot may post in it. A server-wide room channel can therefore be
+  added cleanly and be unable to answer in most of the server's rooms, which is `403 Missing Access`
+  at three in the morning — the exact outcome `_room()`'s own docstring says the check exists to
+  prevent. The failure *is* reported when it happens (`could not write: Forbidden…`) rather than
+  swallowed, which is right; what is missing is the check at setup.
+- **The controls an owner does not have.** "Answer in these three rooms and no others" — no, it is
+  one room or a whole server. "Never open threads, answer inline" — no. Both are small changes
+  inside the adapter (`within` already compares one value; `where_to_answer` is one branch), and
+  both are behaviour. **"Answer this person in DMs but not that one" already works**, because the
+  two kinds of place are two channels with two allow lists — worth writing down as the seam holding
+  a line rather than as a gap.
+- **What "named" means is a direct user mention and nothing else.** A role the bot holds, an
+  `@everyone`, a reply to the bot with its ping turned off, and an edit that adds a mention (there
+  is no `on_message_edit`) all leave the agent silent, which *conforms* to R-DIS-2.
+- **A group DM would be answered as a private one**, and handed the direct-message instructions
+  that say "Nobody else can read it". Bots cannot join group DMs, so there is no supported scenario
+  and this is not a finding — but the instruction would be untrue the day that changes.
+- **`--bot <application id>` is accepted, stored in `settings`, and read by nothing.**
+- **The cold guild cache is audited and clean.** `_room_named` waits for the connection;
+  `_where_to_write` and `_react` both fall back to `fetch_channel`. `_typing` uses `get_channel`
+  with neither, and only ever runs after a message has arrived, so there is no reachable
+  consequence.
