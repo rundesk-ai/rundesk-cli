@@ -181,14 +181,14 @@ and reads back one JSON record per line.
 
 Nothing about your brain leaks into rundesk — there is no list of providers and no list of models
 anywhere in the codebase. A brain nobody here has heard of is first-class rather than degraded:
-[a stranger wrote one from the guide alone](.knowledge/guides/write-a-provider-adapter.md) and it
+[a stranger wrote one from the guide alone](src/templates/skills/building-a-provider-adapter/references/the-contract.md) and it
 passed the same test suite the shipped one does, without a line of rundesk changing.
 
 Channels work exactly the same way, which is why the same agent — same memory, same workspace —
 can answer you in the terminal, on Discord and on a schedule, with a different model each time.
 
-→ **[Write a provider adapter](.knowledge/guides/write-a-provider-adapter.md)** ·
-**[Write a channel adapter](.knowledge/guides/write-a-channel-adapter.md)**
+→ **[Write a provider adapter](src/templates/skills/building-a-provider-adapter/references/the-contract.md)** ·
+**[Write a channel adapter](src/templates/skills/building-a-channel-adapter/references/the-contract.md)**
 
 ## 🧰 Everything it does
 
@@ -245,8 +245,8 @@ is worse than not removed. What your agents *wrote* is kept unless you ask for `
 ## 📖 Documentation
 
 - **[CLI.md](CLI.md)** — every operation and argument, generated from the command
-- **[Write a provider adapter](.knowledge/guides/write-a-provider-adapter.md)** — put your own brain behind an agent
-- **[Write a channel adapter](.knowledge/guides/write-a-channel-adapter.md)** — reach an agent from your own platform
+- **[Write a provider adapter](src/templates/skills/building-a-provider-adapter/references/the-contract.md)** — put your own brain behind an agent
+- **[Write a channel adapter](src/templates/skills/building-a-channel-adapter/references/the-contract.md)** — reach an agent from your own platform
 - **[Contracts](.knowledge/prd/README.md)** — what rundesk guarantees, row by row, each naming the test that proves it
 - **[Roadmap](ROADMAP.md)** — what's built, what's next, and why in that order
 - **[Architecture](.knowledge/CODEMAP.md)** — where everything lives

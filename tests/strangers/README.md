@@ -11,8 +11,8 @@ or made to pass; if one of them fails, the guide is what moves.
 
 | Adapter | Written against | What it was written for | From the guide as of |
 |---|---|---|---|
-| [`driftwood-adapter`](./driftwood-adapter) | [`write-a-provider-adapter.md`](../../.knowledge/guides/write-a-provider-adapter.md) | a fictional conversational CLI that steers, resumes, runs tools and reports a session's running totals | `2026-07-26` |
-| [`semaphore-channel`](./semaphore-channel) | [`write-a-channel-adapter.md`](../../.knowledge/guides/write-a-channel-adapter.md) | a fictional chat platform with three markers, no typing indicator and no way to edit a message | `2026-07-25` |
+| [`driftwood-adapter`](./driftwood-adapter) | [`the-contract.md`](../../src/templates/skills/building-a-provider-adapter/references/the-contract.md) | a fictional conversational CLI that steers, resumes, runs tools and reports a session's running totals | `2026-07-26` |
+| [`semaphore-channel`](./semaphore-channel) | [`the-contract.md`](../../src/templates/skills/building-a-channel-adapter/references/the-contract.md) | a fictional chat platform with three markers, no typing indicator and no way to edit a message | `2026-07-25` |
 
 `brains/` and `platforms/` hold the fake command each adapter's author was told about, so a
 pair can be driven with nothing installed:

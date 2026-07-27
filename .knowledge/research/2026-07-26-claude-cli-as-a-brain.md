@@ -346,7 +346,7 @@ at all, and without it the reply would arrive only whole on the `assistant` line
 ## Verdict for us
 
 **Claude is the brain that most rewards the seam and least stresses it.** Everything the contract
-in [`../guides/write-a-provider-adapter.md`](../guides/write-a-provider-adapter.md) asks for is
+in [the provider adapter contract](../../src/templates/skills/building-a-provider-adapter/references/the-contract.md) asks for is
 available honestly: `tools`, `resume`, `usage` and `model` are all `true`, tool calls come with
 paired ids, the model is named rather than requested, and usage is already the turn's own — so
 none of the running-total arithmetic Codex forced on us is needed here. `steer` is `false`, and

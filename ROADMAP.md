@@ -217,7 +217,7 @@ visible drift rather than a silent gap. **Nothing is sent that the transcript do
 a human never wrote and leaving it out of the audit makes the audit a lie.
 
 **What proves the seam open rather than merely designed open:** `tests/strangers/driftwood-adapter` was
-written from [the guide](.knowledge/guides/write-a-provider-adapter.md) by an agent given the guide's text and
+written from [the guide](src/templates/skills/building-a-provider-adapter/references/the-contract.md) by an agent given the guide's text and
 nothing else, is committed exactly as handed over, and passes the same conformance suite unchanged. That is
 `R-PRV-2` — the one row that could not have been ticked from the inside. The claim was tested a second way by
 accident: the shipped adapter was rewritten from `codex exec` to `codex app-server`, a different protocol, and
@@ -254,7 +254,7 @@ The same shape as Phase 2, deliberately — two swappable edges and one core tha
   not into Discord as a special case.
 
 `tests/strangers/semaphore-channel` is the mirror of `driftwood`: written from
-[the guide](.knowledge/guides/write-a-channel-adapter.md) alone and passing the conformance suite unchanged.
+[the guide](src/templates/skills/building-a-channel-adapter/references/the-contract.md) alone and passing the conformance suite unchanged.
 That is `R-CAD-2`.
 
 **Contracts:** [`channel-adapter`](.knowledge/prd/channel-adapter.md) — 13 ✅, 2 ❌ ·
@@ -987,7 +987,7 @@ therefore requires the provider seam to carry *something* about them, which is a
   shape the seam was built to prevent.
 
 Either way it is a new row in the contract and a new line in
-[`write-a-provider-adapter.md`](.knowledge/guides/write-a-provider-adapter.md), and the closed vocabularies
+[`write-a-provider-adapter.md`](src/templates/skills/building-a-provider-adapter/references/the-contract.md), and the closed vocabularies
 are not reopened: a skill is not a record, a verb or a capability.
 
 ### What is built

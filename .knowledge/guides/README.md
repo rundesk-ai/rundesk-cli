@@ -23,10 +23,17 @@ Add a row when you add a guide; `doc-lint` fails the build if one is missing.
 | Guide | How to |
 |---|---|
 | [the-command-surface.md](./the-command-surface.md) | Read the command's shape, and check a new verb against it |
-| [write-a-provider-adapter.md](./write-a-provider-adapter.md) | Put your own brain, or your own loop, behind an agent |
-| [write-a-channel-adapter.md](./write-a-channel-adapter.md) | Reach an agent from your own messaging platform |
-| [write-a-skill.md](./write-a-skill.md) | Write a skill an agent's brain picks up by itself, and give one to an agent |
 | [moving-onto-the-store.md](./moving-onto-the-store.md) | Move a reader or writer off the old layout and onto what an agent keeps |
+
+## Moved into the product
+
+Three how-tos are no longer here: **writing a skill**, **building a provider adapter** and
+**building a channel adapter**. They ship as skills instead, under `src/templates/skills/`, so
+the agent doing the work is handed them rather than being expected to find them — and each
+adapter skill carries the full contract beside it as `references/the-contract.md`.
+
+Edit them there. A guide that duplicated one would be a second place for the same rule to be
+wrong.
 
 ## Rules for a project how-to
 

@@ -336,7 +336,7 @@ no tool it calls appears in the stream.
 ## Verdict for us
 
 **Grok is the honest floor, and that is its whole value to the seam.** It is the brain that proves
-the contract in [`../guides/write-a-provider-adapter.md`](../guides/write-a-provider-adapter.md)
+the contract in [the provider adapter contract](../../src/templates/skills/building-a-provider-adapter/references/the-contract.md)
 degrades rather than breaks: `tools: false`, `steer: false`, `usage: true`, `model: true`, and now
 `resume: true` — claimed because the round trip was run and controlled, not because a flag exists.
 A turn on it is a stream of fragments and a cost, and that is a complete turn.
