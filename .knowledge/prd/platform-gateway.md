@@ -60,6 +60,8 @@ cycled without disturbing the rest.
 | ✅ | R-GW-38 | A gateway that survives only in the account of what it never finished is still discoverable | `a gateway that survives only in what it left is still found`, `a name nothing of ours wrote is passed over`, `a gateway that survives only as history is still listed` |
 | ✅ | R-GW-39 | Work that never finished is readable without opening a file by hand | `what never finished is readable without opening a file`, `an agent with nothing unfinished says nothing about it`, `each thing that never finished is shown with its time and reason` |
 | ✅ | R-GW-40 | Work that is running again is no longer reported as never having finished | `work that is running again is no longer unfinished`, `other work that never finished is left standing` |
+| ✅ | R-GW-41 | An install whose virtualenv does not satisfy the version declared does not fit, and says which | `an install whose virtualenv no longer satisfies what is declared says which`, `the version that was declared fits`, `at least this version is met by a newer one`, `at least this version is not met by an older one`, `a version is compared by number and not by text` |
+| ✅ | R-GW-42 | A declared version this cannot judge is reported as unchecked rather than treated as met | `a comparison this does not understand is refused rather than guessed at`, `a version that is not a plain release is refused rather than compared`, `a requirement that cannot be checked is reported and never passed over` |
 
 ## Open questions
 

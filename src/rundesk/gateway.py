@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from rundesk import ROOT, __version__
+from rundesk import dependencies
 from rundesk import process
 from rundesk import schedule
 
@@ -384,30 +385,10 @@ def reserved_suffixes() -> frozenset[str]:
     return frozenset({path.name[len(_PROBE):] for path in made} | ALSO_WRITTEN)
 
 
-#: What a declared requirement is called once it is installed, where the two differ.
-IMPORTED_AS = {"discord.py": "discord"}
-
-
-def _declared(root: Path) -> list[str]:
-    """What this install says it needs, by the name it is imported under."""
-    try:
-        lines = (root / "requirements.txt").read_text().splitlines()
-    except OSError:
-        return []
-    wanted = []
-    for line in lines:
-        line = line.split("#")[0].strip()
-        if not line:
-            continue
-        name = re.split(r"[=<>!\[ ]", line)[0]
-        wanted.append(IMPORTED_AS.get(name, name.replace("-", "_")))
-    return wanted
-
-
 def fitness(root: Path | None = None) -> str | None:
     """Why this install cannot run here, or None when it can (R-GW-11).
 
-    Two ways it does not fit, and the second is why this asks rather than compares.
+    Three ways it does not fit, and the second is why this asks rather than compares.
 
     What rundesk needs beyond the standard library is built against one version of
     Python, so a machine whose python3 has moved on has a virtualenv that no longer
@@ -417,6 +398,13 @@ def fitness(root: Path | None = None) -> str | None:
     arrives as an import error deep inside a dependency, under a supervisor, in a
     restart loop, hours later, which is the whole thing this exists to prevent. So the
     question asked is whether what was declared can actually be loaded.
+
+    **And which version of it** (R-GW-41). Asking only whether a name imports made
+    `discord.py==2.7.1` satisfied by 2.0.0 read as a perfect fit, so a release that
+    bumped what it needs ran against what was already there and failed wherever the
+    difference bit — with nothing anywhere reporting a mismatch. What is declared is read
+    by `dependencies`, which is also what an update and the installer build against, so
+    the question and the answer cannot come apart.
     """
     root = root or ROOT
     venv = root / ".venv" / "lib"
@@ -429,10 +417,19 @@ def fitness(root: Path | None = None) -> str | None:
             f"what rundesk needs was installed for {', '.join(built)}, and this is {mine}. "
             "Run the installer again to rebuild it."
         )
-    missing = [name for name in _declared(root) if importlib.util.find_spec(name) is None]
+    # Asked before the version question, because a name that will not load is the plainer
+    # complaint and the one an owner can act on without knowing what a specifier is.
+    missing = [one.imported for one in dependencies.declared(root)
+               if importlib.util.find_spec(one.imported) is None]
     if missing:
         return (
             f"what rundesk needs is not all there: {', '.join(missing)} cannot be loaded. "
+            "Run the installer again to rebuild it."
+        )
+    short = dependencies.unsatisfied(root)
+    if short:
+        return (
+            f"what rundesk needs is not what is installed: {'; '.join(short)}. "
             "Run the installer again to rebuild it."
         )
     return None

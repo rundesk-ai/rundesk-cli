@@ -45,6 +45,9 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-24 | An update that stops before replacing anything brings back every gateway it stood down | `an update that stops before replacing anything brings back what it stood down`, `a gateway that would not restart after a refusal is named` |
 | ✅ | R-UPD-25 | An update that replaced only part of a release puts back what was there, or says it could not | `an update that replaced only part of a release puts back what was there`, `an install that could not be put back says so rather than reporting a failure`, `a swap that fails puts back what was working` |
 | ✅ | R-UPD-26 | Only one update changes an install at a time, from the first thing it stops to the last it starts | `only one update changes an install at a time`, `an update refuses while another is already running`, `an update that finishes leaves the way clear for the next` |
+| ✅ | R-UPD-27 | What an install is made of is checked as usable rather than merely installed | `what an install needs is installed and then checked`, `a set that cannot satisfy itself is a build that failed`, `what pip reported is checked against what actually landed` |
+| ✅ | R-UPD-28 | A rebuild that fails puts back what the install was running before it | `what was working is put back when the build fails`, `a build that worked lets go of what it replaced` |
+| ✅ | R-UPD-29 | A release that stops needing something takes it away rather than leaving it for ever | `a release that stops needing something leaves it behind no longer`, `nothing declared makes no virtualenv at all` |
 
 ## Open questions
 

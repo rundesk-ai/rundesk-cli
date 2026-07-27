@@ -340,16 +340,27 @@ fi
 REQUIREMENTS="${RUNDESK_REQUIREMENTS:-$REPO_ROOT/requirements.txt}"
 if [[ -f "$REQUIREMENTS" ]] && grep -qvE '^\s*(#|$)' "$REQUIREMENTS"; then
   echo "installing what rundesk needs into $REPO_ROOT/.venv — this is the slow part"
-  python3 -m venv "$REPO_ROOT/.venv" || die "could not create the virtualenv rundesk keeps its dependencies in."
-  "$REPO_ROOT/.venv/bin/python" -m pip install --quiet --upgrade pip ||
-    die "could not prepare the virtualenv's installer."
-  "$REPO_ROOT/.venv/bin/python" -m pip install --quiet -r "$REQUIREMENTS" ||
+  # **Asked of `rundesk.dependencies`, which is also what an update builds against.** The
+  # same work written twice — once here in shell and once in Python — is how an install and
+  # an update come to disagree about what "installed" means, and only one of them was
+  # checking that what landed is what was declared. Called the way `stop_gateways` above
+  # calls into the tree, because this is the same kind of thing: product behaviour that the
+  # installer asks for rather than contains.
+  if ! python3 - "$REPO_ROOT" "$REQUIREMENTS" <<'DEPS'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1] + "/src")
+from rundesk import dependencies
+
+why = dependencies.provision(Path(sys.argv[1]), requirements=Path(sys.argv[2]))
+if why:
+    print(why, file=sys.stderr)
+    raise SystemExit(1)
+DEPS
+  then
     die "could not install what rundesk needs (see $REQUIREMENTS)."
-  echo "checking they fit together"
-  # Installed is not the same as usable: pip will happily leave a set of packages that
-  # cannot satisfy each other. Better to fail here than at the first turn.
-  "$REPO_ROOT/.venv/bin/python" -m pip check --quiet ||
-    die "what rundesk needs was installed, but the versions do not fit together."
+  fi
   echo "everything rundesk needs is in place"
 fi
 

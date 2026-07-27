@@ -376,10 +376,26 @@ class DependencyTests(Sandbox):
     def test_what_rundesk_needs_goes_inside_its_own_install(self):
         # Never the machine's Python. Modern ones refuse to be written to anyway, and a tool
         # that makes its user reason about that has already lost them.
-        self.assertIn(".venv", (REPO / "install.sh").read_text())
-        installed_into = re.findall(r"python3 -m venv \"([^\"]+)\"", (REPO / "install.sh").read_text())
-        self.assertEqual(installed_into, ['$REPO_ROOT/.venv'],
+        #
+        # Asked of `rundesk.dependencies`, which is where the installer and an update both
+        # go for this now. Read off the commands it would actually run rather than off the
+        # installer's text, because the words in a shell script are no longer where the
+        # decision is made — and a check on text that no longer decides anything is a check
+        # that passes for ever.
+        sys.path.insert(0, str(REPO / "src"))
+        from rundesk import dependencies
+
+        root = self.root / "install"
+        (root / "requirements.txt").parent.mkdir(parents=True, exist_ok=True)
+        (root / "requirements.txt").write_text("some-package==1.0\n")
+        ran = []
+        dependencies.provision(root, run=lambda command: ran.append(command) or "stop here")
+
+        built = [one for one in ran if one[1:3] == ["-m", "venv"]]
+        self.assertEqual([str(root / ".venv")], [one[3] for one in built],
                          "the installer puts dependencies somewhere other than inside the install")
+        outside = [one for one in ran if one[0] == sys.executable and "venv" not in one]
+        self.assertEqual([], outside, "something was installed with the machine's own Python")
 
     def test_the_command_finds_what_was_installed_for_it(self):
         # Added to the path by the launcher rather than by activating anything, so the
@@ -467,9 +483,26 @@ class EverythingNeededTests(unittest.TestCase):
     def test_an_install_refuses_to_report_success_while_what_it_installed_does_not_fit_together(self):
         # pip will happily leave a set of packages that cannot satisfy each other. Installed
         # is not the same as usable, and the person finds out at the first turn otherwise.
-        installer_text = (REPO / "install.sh").read_text()
-        self.assertIn("pip check", installer_text, "nothing verifies the dependencies fit together")
-        self.assertIn("do not fit together", installer_text, "a broken dependency set fails without saying why")
+        #
+        # Driven rather than read: the check lives in `rundesk.dependencies` now, which is
+        # what the installer calls and what an update calls, so the claim is proved by
+        # watching a set that does not fit be refused — not by finding two words in a file.
+        sys.path.insert(0, str(REPO / "src"))
+        from rundesk import dependencies
+
+        root = Path(tempfile.mkdtemp(prefix="rundesk-fits-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "requirements.txt").write_text("some-package==1.0\n")
+
+        def run(command):
+            if "check" in command:
+                return "some-package 1.0 has requirement other<2, but you have other 3"
+            return None
+
+        why = dependencies.provision(root, run=run)
+        self.assertIsNotNone(why, "nothing verifies the dependencies fit together")
+        self.assertIn("do not fit together", why,
+                      "a broken dependency set fails without saying why")
 
 class OneDirectoryTests(Sandbox):
     """Everything rundesk puts on a machine lives in one place the person owns."""
