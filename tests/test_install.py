@@ -1045,6 +1045,83 @@ class DownloadedInstallTests(Sandbox):
         self.assertEqual(gone.returncode, 0, gone.stderr)
         self.assertFalse(theirs.exists(), "--purge left what the owner kept behind")
 
+    def test_removing_rundesk_keeps_the_copies_it_took(self):
+        """R-RM-14 — the copies are the thing somebody reaches for after removing rundesk,
+        and an ordinary uninstall has never had any business with what the owner keeps."""
+        made = self.home / ".rundesk" / "app"
+        shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        copies = self.home / ".rundesk" / "backups"
+        copies.mkdir(parents=True)
+        (copies / "rundesk-data-2026-07-27-040000Z.zip").write_text("a copy\n")
+
+        gone = installer("--uninstall", home=self.home, bindir=self.bindir,
+                         cwd=made, script=made / "install.sh")
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertEqual("a copy\n",
+                         (copies / "rundesk-data-2026-07-27-040000Z.zip").read_text())
+
+    def test_purging_keeps_the_copies_it_took(self):
+        """R-RM-14 — **the one thing a purge does not take.** The whole reason somebody
+        purges is that something is wrong, and that is the worst possible moment to delete
+        the only copy of what they had. This used to be `rm -rf` over the install directory,
+        which would have taken them."""
+        made = self.home / ".rundesk" / "app"
+        shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        theirs = self.home / ".rundesk"
+        (theirs / "data" / "agents" / "ava").mkdir(parents=True)
+        (theirs / "data" / "agents" / "ava" / "state.db").write_text("records\n")
+        copies = theirs / "backups"
+        copies.mkdir()
+        (copies / "rundesk-data-2026-07-27-040000Z.zip").write_text("a copy\n")
+
+        gone = installer("--uninstall", "--purge", home=self.home, bindir=self.bindir,
+                         cwd=made, script=made / "install.sh")
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertFalse((theirs / "data").exists(), "--purge left what the owner kept behind")
+        self.assertFalse(made.exists(), "--purge left the program behind")
+        self.assertEqual("a copy\n",
+                         (copies / "rundesk-data-2026-07-27-040000Z.zip").read_text(),
+                         "a purge took the copies with it")
+        self.assertIn("backups", gone.stdout,
+                      "it never said the copies had been kept")
+
+    def test_removing_rundesk_says_the_copies_are_kept_rather_than_offering_to_purge_them(self):
+        """R-RM-14 — listing them under "add --purge to delete them" would be a lie, and the
+        one place an owner looks for how to be rid of one is the message that mentions it."""
+        made = self.home / ".rundesk" / "app"
+        shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        copies = self.home / ".rundesk" / "backups"
+        copies.mkdir(parents=True)
+        (copies / "rundesk-data-2026-07-27-040000Z.zip").write_text("a copy\n")
+
+        gone = installer("--uninstall", "--purge", home=self.home, bindir=self.bindir,
+                         cwd=made, script=made / "install.sh")
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertIn("rundesk backups remove", gone.stdout,
+                      "it kept them and never said how to be rid of one")
+
+    def test_taking_the_older_program_away_keeps_copies_standing_beside_it(self):
+        """R-RM-14 — an install still on the layout from before `app/` can have copies beside
+        it too, and the sweep that tidies that layout spares a fixed list of names. A list is
+        safe only while nothing new is ever added next to it, and this is the something."""
+        made = self.home / ".rundesk"
+        shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+        copies = made / "backups"
+        copies.mkdir()
+        (copies / "rundesk-data-2026-07-27-040000Z.zip").write_text("a copy\n")
+
+        gone = installer("--uninstall", home=self.home, bindir=self.bindir,
+                         cwd=made, script=made / "install.sh")
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertFalse((made / "src").exists(), "the older program was left behind")
+        self.assertEqual("a copy\n",
+                         (copies / "rundesk-data-2026-07-27-040000Z.zip").read_text(),
+                         "tidying the older layout took the copies with it")
+
     def test_removing_an_install_from_before_the_program_had_its_own_directory(self):
         """R-RM-8 — somebody updating and then removing would otherwise be left with the older
         rundesk still sitting beside their agents, and still on their PATH."""

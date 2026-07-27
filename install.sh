@@ -34,6 +34,12 @@ APP_DIR="$INSTALL_DIR/app"
 # Two names rather than "app and whatever else is lying about" — removal keeps this by naming
 # it, and what is kept can then be said one level in rather than as the single word "data".
 DATA_DIR="$INSTALL_DIR/data"
+# And the third: copies of what the owner keeps. **Nothing in this script deletes it**, which
+# is the point of it having a name of its own — an update never touches it, an uninstall keeps
+# it, and a purge keeps it too, because the reason somebody purges is that something is wrong
+# and that is the worst moment to destroy the only copy they have (R-RM-14). It is declared
+# here so that what is kept can be *said*, never so that it can be removed.
+BACKUPS_DIR="${RUNDESK_BACKUP_DIR:-$INSTALL_DIR/backups}"
 MIN_PYTHON_MINOR=9
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -58,9 +64,11 @@ is_someones_work() {
   [[ -e "$1/.git" ]]
 }
 
-# `rm -rf "$INSTALL_DIR"` runs below, and RUNDESK_INSTALL_DIR is a documented override, so a
-# typo that drops the last segment must not be able to take a home directory with it. It could:
-# setting it to $HOME wiped the home directory and then printed that rundesk was installed.
+# Directories under `$INSTALL_DIR` are deleted below, and RUNDESK_INSTALL_DIR is a documented
+# override, so a typo that drops the last segment must not be able to take a home directory
+# with it. It could: setting it to $HOME wiped the home directory and then printed that rundesk
+# was installed. Nothing sweeps `$INSTALL_DIR` whole any more — a purge names what it takes —
+# but this guard stands in front of every one of those named paths just the same.
 check_install_dir() {
   local dir depth
   dir="$INSTALL_DIR"
@@ -138,8 +146,11 @@ STOP
 # $INSTALL_DIR, beside the data. Take those entries away rather than leaving two rundesks in
 # one place — a stale `src/` there is what `python3 -` below would find first.
 #
-# The names spared are the ones that were data in that layout, and this is the only place such
-# a list is left: it describes a shape that no longer exists, so it cannot go out of date.
+# The names spared are the ones that were data in that layout — plus the two directories that
+# exist in every layout since. That last part is why the comment this replaced was wrong: it
+# claimed the list "describes a shape that no longer exists, so it cannot go out of date", and
+# then `backups/` arrived, which can sit beside an install still on the old shape and which
+# this would have deleted. A spare-list is only safe while nothing new is ever added next to it.
 tidy_the_old_layout() {
   [[ -f "$INSTALL_DIR/rundesk" && ! -e "$INSTALL_DIR/.git" ]] || return 0
   local entry base
@@ -147,7 +158,7 @@ tidy_the_old_layout() {
     [[ -e "$entry" ]] || continue
     base="${entry##*/}"
     case "$base" in
-      app|agents|logs|run|schedules) continue ;;
+      app|data|backups|agents|logs|run|schedules) continue ;;
     esac
     rm -rf "$entry"
   done
@@ -227,7 +238,26 @@ Stop it and try again, or see what is running with: rundesk status"
   # runs to fix the trouble.
   if [[ -d "$INSTALL_DIR" ]] && ! is_someones_work "$INSTALL_DIR"; then
     if [[ "$purge" == 1 ]]; then
-      rm -rf "$INSTALL_DIR"; echo "removed everything rundesk kept: $INSTALL_DIR"; removed=1
+      # **Named, never swept.** This was `rm -rf "$INSTALL_DIR"`, which is the one thing a
+      # purge must not be now that copies live in here: the whole reason somebody purges is
+      # that something is wrong, and that is the worst possible moment to delete the only
+      # copy of what they had. So a purge deletes exactly what it is told to and nothing
+      # else — and `backups` is not in that list, which is what makes reaching it impossible
+      # rather than merely forbidden (R-RM-14). Adding a directory beside them later is
+      # safe by default: what is not named is kept.
+      for owned in "$DATA_DIR" "$INSTALL_DIR/agents" "$INSTALL_DIR/logs" \
+                   "$INSTALL_DIR/run" "$INSTALL_DIR/schedules"; do
+        [[ -e "$owned" ]] || continue
+        rm -rf "$owned"; removed=1
+      done
+      echo "removed everything rundesk kept for you"
+      # Only if there is genuinely nothing left. It fails while `backups/` is there, which
+      # is exactly right and is why nothing checks its result.
+      rmdir "$INSTALL_DIR" 2>/dev/null && echo "removed $INSTALL_DIR"
+      if [[ -d "$BACKUPS_DIR" ]]; then
+        echo "kept your backups ($BACKUPS_DIR) — a purge never takes those."
+        echo "        delete one:  rundesk backups remove <backup>"
+      fi
     else
       theirs=""
       # Named one level in. With everything of the owner's under `data/`, listing the top
@@ -235,12 +265,18 @@ Stop it and try again, or see what is running with: rundesk status"
       # kept. The top level is still walked for anything an older layout left beside it.
       for entry in "$DATA_DIR"/* "$DATA_DIR"/.[!.]* "$INSTALL_DIR"/* "$INSTALL_DIR"/.[!.]*; do
         [[ -e "$entry" ]] || continue
-        case "${entry##*/}" in app|data) continue ;; esac
+        case "${entry##*/}" in app|data|backups) continue ;; esac
         theirs="${theirs:+$theirs, }${entry##*/}"
       done
       if [[ -n "$theirs" ]]; then
         echo "kept your agents and what your gateways wrote ($theirs) — add --purge to delete them."
-      else
+      fi
+      # Said separately, and never under "add --purge to delete them", because that would be
+      # a lie: a purge keeps these.
+      if [[ -d "$BACKUPS_DIR" ]]; then
+        echo "kept your backups ($BACKUPS_DIR) — those survive a purge too."
+      fi
+      if [[ -z "$theirs" ]]; then
         rmdir "$INSTALL_DIR" 2>/dev/null && echo "removed $INSTALL_DIR"
       fi
     fi
