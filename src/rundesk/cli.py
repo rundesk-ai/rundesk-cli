@@ -1266,6 +1266,36 @@ def _cost(tokens: dict) -> str:
     return f"{said}, {tokens['model']}" if tokens.get("model") else said
 
 
+def _running_old_code(name, gateways, agents) -> list:
+    """Is this agent's gateway serving the release that is actually installed (R-AGT-21)?
+
+    **A gateway holds the modules it imported when it started.** Replacing the files under
+    a running one changes nothing it has already loaded, so it goes on serving the old code
+    for everything it has and reads the new files only for whatever it has not imported
+    yet — which is a version nobody can see it is on. An update stands them all down for
+    exactly this reason, and the case that gets past it is the one an owner caused: a
+    gateway started before the code was last replaced.
+
+    Asked of the version the gateway wrote down when it started rather than of a file's
+    modification time. It is the thing itself rather than a proxy for it, it costs a record
+    this command already reads, and a checkout whose files are touched by anything at all
+    would make the proxy cry wolf for ever.
+
+    Reported as a fault rather than a note: the whole trap is that nothing says anything.
+    """
+    try:
+        it = _standing(name, gateways, agents)
+    except Exception:   # noqa: BLE001 — a boundary; a diagnosis reports, it never raises
+        return []
+    if not it.running or not it.version or it.version == __version__:
+        return []
+    return [_agent.Complaint(
+        f"it started on {it.version} and this install is {__version__}",
+        "this agent's gateway is running code that is no longer installed",
+        f"rundesk stop {name} && rundesk start {name}",
+    )]
+
+
 def cmd_doctor(args: argparse.Namespace, gateways, agents) -> int:
     """Say what stands between an agent and a working turn (R-AGT-11).
 
@@ -1285,6 +1315,7 @@ def cmd_doctor(args: argparse.Namespace, gateways, agents) -> int:
             print(f"{name}: INVALID NAME — {why}", file=sys.stderr)
             worst = 1
             continue
+        said = said + _running_old_code(name, gateways, agents)
         if not said:
             print(f"{name}: READY")
             continue

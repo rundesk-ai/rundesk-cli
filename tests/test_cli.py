@@ -1380,6 +1380,39 @@ class DiagnosingAnAgent(unittest.TestCase):
         self.assertIn("NOT READY", said)
         self.assertIn("SOUL.md", said)
 
+    def test_a_gateway_running_code_that_is_no_longer_installed_is_reported(self):
+        """R-AGT-21 — a gateway holds the modules it imported when it started.
+
+        Replacing the files under a running one changes nothing already loaded, so it goes
+        on serving the old code for everything it has and reads the new files only for
+        whatever it has not imported yet. Nothing anywhere says so, which is why an
+        attachment downloaded correctly by a new adapter was dropped by an old seam and
+        read exactly like the adapter being broken.
+        """
+        running = FakeGateways(standing=[FakeGateways.Standing(
+            "ava", running=True, pid=4242, version="0.0.1")])
+        code, said = drive(["doctor", "ava"], running, agents=FakeAgents(made=["ava"]))
+        self.assertEqual(1, code, said)
+        self.assertIn("no longer installed", said)
+        self.assertIn("0.0.1", said, "it never said which version it is actually on")
+        self.assertIn(f"rundesk stop ava", said, "it never said how to put it right")
+
+    def test_a_gateway_on_the_installed_version_is_nothing_to_report(self):
+        """The other half: the ordinary case, where saying anything would be noise."""
+        running = FakeGateways(standing=[FakeGateways.Standing(
+            "ava", running=True, pid=4242, version=__version__)])
+        code, said = drive(["doctor", "ava"], running, agents=FakeAgents(made=["ava"]))
+        self.assertEqual(0, code, said)
+        self.assertIn("READY", said)
+
+    def test_a_gateway_that_is_not_running_is_not_asked_what_version_it_is(self):
+        """Nothing is loaded, so there is nothing stale to warn about — and a stopped
+        gateway's last recorded version is not a fault, it is history."""
+        stopped = FakeGateways(standing=[FakeGateways.Standing(
+            "ava", running=False, version="0.0.1")])
+        code, said = drive(["doctor", "ava"], stopped, agents=FakeAgents(made=["ava"]))
+        self.assertEqual(0, code, said)
+
     def test_diagnosing_with_no_name_asks_after_every_agent(self):
         """R-AGT-11"""
         code, said = drive(["doctor"], agents=FakeAgents(made=["ava", "bo"]))

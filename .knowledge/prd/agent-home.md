@@ -41,6 +41,7 @@ provider's own tools still reach whatever their owner reaches.
 | ✅ | R-AGT-14 | Every place an agent resolves is readable without opening the source | `one agent says every place it resolves` |
 | ✅ | R-AGT-19 | Everything a diagnosis complains about says what to type to put it right | `what is wrong says how to put it right`, `every complaint says what to type next` |
 | ✅ | R-AGT-20 | A diagnosis says where an agent's records stand against what this install expects | `records behind what this install expects are reported with the way out` |
+| ✅ | R-AGT-21 | An agent whose gateway is running code no longer installed is told so | `a gateway running code that is no longer installed is reported`, `a gateway on the installed version is nothing to report`, `a gateway that is not running is not asked what version it is` |
 
 ## Open questions
 
