@@ -104,8 +104,12 @@ class WithARunDirectory(unittest.IsolatedAsyncioTestCase):
         """
         kept = records if records is not None else self.records
         for one in written:
+            # `at` is the other way of saying when — the one moment this runs. Never both,
+            # which is what the records themselves insist on.
+            moment = one.get("at")
             kept.remember_schedule(
-                one["name"], one.get("when", ""), store.stamped(),
+                one["name"], None if moment else one.get("when", ""), store.stamped(),
+                at=moment,
                 command=one.get("run") if one.get("run") is not None else [],
                 enabled=one.get("enabled", True))
 
@@ -1538,6 +1542,105 @@ class WhatCarriesAcrossARestart(WithARunDirectory):
     def _writes(self):
         return {"name": "ran", "when": "* * * * *",
                 "run": [PY, "-c", f"import pathlib; pathlib.Path({str(self.told)!r}).write_text('yes')"]}
+
+    def _writes_once(self, at: str):
+        """The same program, on a schedule that states one moment rather than a repetition."""
+        return {"name": "ran", "at": at,
+                "run": [PY, "-c",
+                        f"import pathlib; pathlib.Path({str(self.told)!r}).write_text('yes')"]}
+
+    async def _ran(self, gw, moment) -> bool:
+        gw._fire(self.schedule, moment)
+        deadline = time.time() + 10
+        while not self.told.exists() and time.time() < deadline:
+            await asyncio.sleep(0.05)
+        return self.told.exists()
+
+    async def test_a_schedule_stating_one_moment_runs_when_the_clock_reaches_it(self):
+        """R-SCH-2 — the clock is what starts it, and this is the only thing that ever does.
+        A moment that never fires at all would make every claim below vacuously true."""
+        from datetime import datetime
+        gw = self.made()
+        gw.claim()
+        self.schedules_for(gw.name, self._writes_once("2026-07-25 09:00"))
+        self.assertTrue(await self._ran(gw, datetime(2026, 7, 25, 9, 0)),
+                        "the moment came and nothing started")
+        self.assertEqual("2026-07-25 09:00",
+                         self.what_each_schedule_last_did()["ran"]["last_auto_run_at"])
+
+    async def test_a_schedule_that_has_run_its_one_moment_can_never_be_due_again(self):
+        """R-SCH-37 — through a gateway restart, a clock put back, and a second gateway
+        starting. Not by trusting a flag: what refuses it is the record of the firing, which
+        is durable, is written before the work begins, and reads the same to all three."""
+        from datetime import datetime
+        moment = datetime(2026, 7, 25, 9, 0)
+        first = self.made()
+        first.claim()
+        self.schedules_for(first.name, self._writes_once("2026-07-25 09:00"))
+        self.assertTrue(await self._ran(first, moment))
+        first.release()
+        self.told.unlink()
+
+        # a gateway that has just come up, holding nothing in memory about what has run
+        again = self.made()
+        again.claim()
+        again._fire(self.schedule, moment)
+        await asyncio.sleep(0.5)
+        self.assertFalse(self.told.exists(), "a restart ran a moment that was already spent")
+
+        # the clock stepped backwards, to before the moment — where a flag saying "in the
+        # past" would say this is waiting to happen
+        again._fire(self.schedule, datetime(2026, 7, 25, 8, 0))
+        await asyncio.sleep(0.5)
+        self.assertFalse(self.told.exists(), "a clock put back brought a spent moment round")
+
+        # and its own minute again, from a third gateway of the same name
+        again.release()
+        third = self.made()
+        third.claim()
+        third._fire(self.schedule, moment)
+        await asyncio.sleep(0.5)
+        self.assertFalse(self.told.exists(), "a second gateway ran a moment that was spent")
+
+    async def test_a_moment_whose_firing_cannot_be_read_back_as_a_time_is_still_spent(self):
+        """R-SCH-37 — and the hole the older guard leaves. What has run is picked up on the
+        way up by *parsing* each minute, and a row it cannot parse is silently passed over, so
+        that schedule reads as never having run. For a repeating one that costs a single
+        early firing; for a moment it runs work a second time that was only ever to happen
+        once. What refuses it here asks whether anything is written, never what it says."""
+        from datetime import datetime
+        moment = datetime(2026, 7, 25, 9, 0)
+        gw = self.made()
+        gw.claim()
+        self.schedules_for(gw.name, self._writes_once("2026-07-25 09:00"))
+        self.assertTrue(await self._ran(gw, moment))
+        gw.release()
+        self.told.unlink()
+        self.records.schedule_fired("ran", "whenever it was", "finished")
+
+        again = self.made()
+        again.claim()
+        self.assertNotIn("ran", again._ran,
+                         "the case is arranging nothing — the minute parsed after all")
+        again._fire(self.schedule, moment)
+        await asyncio.sleep(0.5)
+        self.assertFalse(self.told.exists(),
+                         "a firing nobody could read was taken as never having happened")
+
+    async def test_a_moment_that_passed_while_nothing_ran_is_not_run_late(self):
+        """R-SCH-4 — and it is the whole of why a moment is due in its own minute and in no
+        other. Nothing suppresses this: there is simply no later minute in which it is due."""
+        from datetime import datetime
+        gw = self.made()
+        gw.claim()
+        self.schedules_for(gw.name, self._writes_once("2026-07-25 09:00"))
+        gw._fire(self.schedule, datetime(2026, 7, 25, 9, 1))
+        gw._fire(self.schedule, datetime(2026, 7, 26, 9, 0))
+        await asyncio.sleep(0.5)
+        self.assertFalse(self.told.exists(), "a moment that had passed was run late")
+        # and nothing durable says it ever ran, which is what tells the two kinds of over
+        # apart afterwards (R-SCH-40)
+        self.assertIsNone(self.what_each_schedule_last_did()["ran"]["last_auto_run_at"])
 
     async def test_a_schedule_that_already_ran_this_minute_does_not_run_again_after_a_restart(self):
         """R-SCH-9 — what has run is held in memory, and a new gateway starts with none

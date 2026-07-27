@@ -1673,13 +1673,19 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         about — `when` is the cron, `run` is the program — and writes them as rows. A row that
         names nothing is `command` of `[]`: the database refuses a schedule that is neither a
         program nor a prompt, and an empty program is how "names nothing" stays reachable.
+
+        `at` is the other way of saying when: a case gives that instead of `when`, never both,
+        which is what the records themselves insist on.
         """
         for name, written in (schedules or {}).items():
             kept = self.agents.records(name)
             for one in written:
+                moment, asks = one.get("at"), one.get("ask")
                 kept.remember_schedule(
-                    one["name"], one.get("when", ""), store.stamped(),
-                    command=one.get("run") if one.get("run") is not None else [],
+                    one["name"], None if moment else one.get("when", ""), store.stamped(),
+                    at=moment,
+                    command=None if asks else (one.get("run") or []),
+                    prompt=asks,
                     enabled=one.get("enabled", True))
         for name, did in (ran_schedules or {}).items():
             kept = self.agents.records(name)
@@ -1829,6 +1835,177 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         self.assertIn("ava/tidy", twice, "a refusal named the schedule and not the agent")
         _, missing = drive(["schedules", "ava", "remove", "nope"], gateways, agents=self.agents)
         self.assertIn("ava/nope", missing, "a refusal named the schedule and not the agent")
+
+    # ── a schedule that runs once, at one moment ──────────────────────────────────────────
+
+    #: Far enough ahead that no case here is ever within a minute of it, and a fixed date so
+    #: nothing depends on when the suite is run.
+    AHEAD = "2099-07-28T09:00"
+    AHEAD_AS_KEPT = "2099-07-28 09:00"
+    GONE = "2020-01-01 09:00"
+
+    def test_a_schedule_states_a_repeating_time_or_one_moment_and_never_both(self):
+        """R-SCH-36 — refused rather than ranked, and nothing written either way. A schedule
+        naming both would leave rundesk choosing which, invisibly."""
+        gateways = self._gateways()
+        both = ["schedules", "ava", "add", "tidy", "--when", "0 3 * * *",
+                "--at", self.AHEAD, "--", "/bin/echo"]
+        neither = ["schedules", "ava", "add", "tidy", "--", "/bin/echo"]
+        for asked, expected in ((both, "both"), (neither, "neither")):
+            with self.subTest(said=expected):
+                code, said = drive(asked, gateways, agents=self.agents)
+                self.assertEqual(1, code, said)
+                self.assertIn("NOT ADDED", said)
+                self.assertIn(expected, said)
+                self.assertIn("--at", said, "it refused and never said how to say it")
+                self.assertEqual([], self.schedules_of("ava"), "it refused and wrote anyway")
+
+    def test_a_schedule_that_runs_once_starts_a_program_or_asks_a_turn_alike(self):
+        """R-SCH-36 — the moment is the whole difference. Everything a repeating schedule can
+        do, one stating a moment does: a script or command by its full path, or a turn, with
+        where it reports said the same way."""
+        gateways = self._gateways()
+        code, said = drive(["schedules", "ava", "add", "tidy-up", "--at", self.AHEAD,
+                            "--", "/bin/echo", "swept"], gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("runs once", said)
+        code, said = drive(["schedules", "ava", "add", "report", "--at", self.AHEAD,
+                            "--ask", "how did it go?"], gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        kept = {row["name"]: row for row in self.schedules_of("ava")}
+        self.assertEqual(["/bin/echo", "swept"], kept["tidy-up"]["command"])
+        self.assertEqual("how did it go?", kept["report"]["prompt"])
+        for one in kept.values():
+            self.assertEqual(self.AHEAD_AS_KEPT, one["at"])
+            self.assertIsNone(one["cron"], "a schedule stating a moment was given a cron too")
+
+    def test_a_moment_that_has_already_passed_is_refused_where_it_is_typed(self):
+        """It could never come round, so it would sit in the listing looking like work that
+        is waiting — the one thing a listing must never show."""
+        code, said = drive(["schedules", "ava", "add", "tidy-up", "--at", "2020-01-01T09:00",
+                            "--", "/bin/echo"], self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("already passed", said)
+        self.assertEqual([], self.schedules_of("ava"))
+
+    def test_a_moment_is_given_as_a_moment_and_never_as_a_phrase(self):
+        """An agent is the likely caller and is good at working out what *tomorrow at nine*
+        is. Language in the core would be a second thing to keep true."""
+        for said_as in ("tomorrow at nine", "2026-07-28", "next week"):
+            with self.subTest(said=said_as):
+                code, said = drive(["schedules", "ava", "add", "tidy-up", "--at", said_as,
+                                    "--", "/bin/echo"], self._gateways(), agents=self.agents)
+                self.assertEqual(1, code)
+                self.assertIn("is not a moment", said)
+
+    def test_a_schedule_whose_moment_has_gone_is_out_of_the_listing(self):
+        """R-SCH-39 — the listing is what can still happen. One that can never be due again
+        is no more part of that than one that was removed, and leaving it there pushes the
+        work that *is* waiting down a list of things that are over."""
+        gateways = self._gateways(schedules={"ava": [
+            {"name": "nightly", "when": "0 3 * * *", "run": ["/bin/echo"]},
+            {"name": "tidy-up", "at": self.GONE, "run": ["/bin/echo"]}]})
+        code, said = drive(["schedules", "ava"], gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("nightly", said)
+        self.assertNotIn("tidy-up", said.split("1 expired")[0],
+                         "a schedule that can never run again was listed as work")
+        self.assertIn("1 expired", said, "it left one out and never said so")
+        self.assertIn("--expired", said, "it left one out and never said how to see it")
+
+    def test_a_schedule_whose_moment_has_gone_is_still_in_the_record(self):
+        """R-SCH-39 — out of the listing is not gone. "Did that run?" is asked long after the
+        fact, and what an agent ran alone does not name the schedule that started it."""
+        gateways = self._gateways(
+            schedules={"ava": [{"name": "tidy-up", "at": self.GONE, "run": ["/bin/echo"]}]},
+            ran_schedules={"ava": {"tidy-up": {"at": self.GONE, "outcome": "finished"}}})
+        code, said = drive(["schedules", "ava", "--expired"], gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        for expected in ("tidy-up", self.GONE, "finished"):
+            self.assertIn(expected, said)
+        self.assertEqual(["tidy-up"], [row["name"] for row in self.schedules_of("ava")],
+                         "expiring took the schedule away")
+
+    def test_one_that_ran_is_told_apart_from_one_whose_moment_passed_unrun(self):
+        """R-SCH-40 — the most important thing here. A moment that went by while nothing was
+        running was never run late (R-SCH-4), so it never ran at all — and an owner shown the
+        same word for both cannot tell work that happened from work that silently did not."""
+        gateways = self._gateways(
+            schedules={"ava": [{"name": "did-run", "at": self.GONE, "run": ["/bin/echo"]},
+                               {"name": "never-did", "at": self.GONE, "run": ["/bin/echo"]}]},
+            ran_schedules={"ava": {"did-run": {"at": self.GONE, "outcome": "finished"}}})
+        code, said = drive(["schedules", "ava", "--expired"], gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        ran = [line for line in said.splitlines() if line.startswith("did-run")]
+        never = [line for line in said.splitlines() if line.startswith("never-did")]
+        self.assertEqual(1, len(ran), said)
+        self.assertEqual(1, len(never), said)
+        self.assertIn("finished", ran[0])
+        self.assertIn("never ran", never[0])
+        self.assertNotIn("never ran", ran[0], "work that happened was shown as never having")
+
+    def test_an_agent_with_nothing_expired_says_so_rather_than_showing_an_empty_table(self):
+        gateways = self._gateways(schedules={"ava": [
+            {"name": "nightly", "when": "0 3 * * *", "run": ["/bin/echo"]}]})
+        code, said = drive(["schedules", "ava", "--expired"], gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("NOTHING EXPIRED", said)
+        self.assertNotIn("nightly", said, "a schedule that can still run was called expired")
+
+    def test_running_a_schedule_by_hand_never_uses_up_the_moment_it_states(self):
+        """R-SCH-38, and R-SCH-22 with the stake raised: for a repeating schedule getting this
+        wrong moves tonight's run, and for one stating a single moment it *cancels* it — the
+        work would never happen at all, and the listing would say it already had."""
+        gateways = self._gateways(schedules={"ava": [
+            {"name": "tidy-up", "at": self.AHEAD, "run": ["/bin/echo", "swept"]}]})
+        code, said = drive(["schedules", "ava", "run", "tidy-up"], gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("swept", said)
+        self.assertIn("unchanged", said)
+        one = self.schedules_of("ava")[0]
+        self.assertIsNone(one["last_auto_run_at"], "running it by hand used its moment up")
+        self.assertIsNone(one["last_outcome"])
+        # and it is still work that can happen, which is the fact that would have been lost
+        _, listed = drive(["schedules", "ava"], gateways, agents=self.agents)
+        self.assertIn("tidy-up", listed)
+        self.assertNotIn("expired", listed)
+
+    def test_a_schedule_whose_moment_has_gone_can_still_be_run_by_hand(self):
+        """R-SCH-21 — a schedule can be run by hand at any time, and being over is not an
+        exception. The row is still there, which is the whole reason expiring is not
+        deleting."""
+        gateways = self._gateways(schedules={"ava": [
+            {"name": "tidy-up", "at": self.GONE, "run": ["/bin/echo", "swept"]}]})
+        code, said = drive(["schedules", "ava", "run", "tidy-up"], gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("swept", said)
+        self.assertIn("unchanged", said)
+        self.assertIsNone(self.schedules_of("ava")[0]["last_auto_run_at"])
+
+    def test_a_schedule_whose_moment_has_gone_can_still_be_turned_off_and_taken_away(self):
+        """R-SCH-11, R-SCH-35 — every verb still reaches it. Out of one listing is not out of
+        the product."""
+        gateways = self._gateways(schedules={"ava": [
+            {"name": "tidy-up", "at": self.GONE, "run": ["/bin/echo"]}]})
+        code, said = drive(["schedules", "ava", "off", "tidy-up"], gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertFalse(self.schedules_of("ava")[0]["enabled"])
+        code, said = drive(["schedules", "ava", "remove", "tidy-up"], gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual([], self.schedules_of("ava"))
+
+    def test_an_agent_whose_every_schedule_is_over_says_which_it_is(self):
+        """"Nothing scheduled" and "nothing left that can run" are different answers, and an
+        owner reading the first when the second is true goes looking for what they lost."""
+        gateways = self._gateways(schedules={"ava": [
+            {"name": "tidy-up", "at": self.GONE, "run": ["/bin/echo"]}]})
+        code, said = drive(["schedules", "ava"], gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("NO SCHEDULES THAT CAN STILL RUN", said)
+        self.assertIn("--expired", said)
+        code, bare = drive(["schedules", "gateway"], gateways, agents=self.agents)
+        self.assertIn("NO SCHEDULES", bare)
+        self.assertNotIn("STILL RUN", bare, "an agent with none at all was told some were over")
 
     def test_a_gateway_with_no_schedules_says_so(self):
         """R-SCH-8"""

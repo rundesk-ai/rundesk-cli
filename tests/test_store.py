@@ -533,6 +533,37 @@ class WhatAnAgentIsConfiguredWith(WithAnAgentsOwnRecords):
         self.assertIsNone(standup["command"])
         self.assertEqual("gpt-5", standup["model"])
 
+    def test_a_schedule_states_a_repeating_time_or_one_moment_and_never_both_or_neither(self):
+        """R-SCH-36 — said by the records rather than trusted to whoever writes them, the same
+        way a program and a prompt already are. Cron has no year, so a single occurrence
+        cannot be said in one at all, and a row naming both would leave rundesk choosing."""
+        kept = self.built()
+        for cron, moment in (("0 3 * * *", "2026-07-28 09:00"), (None, None)):
+            with self.assertRaises(ValueError):
+                kept.remember_schedule("tidy-up", cron, AT, at=moment, command=["ls"])
+        self.assertEqual([], kept.schedules())
+
+        kept.remember_schedule("tidy-up", None, AT, at="2026-07-28 09:00", command=["ls"])
+        kept.remember_schedule("nightly", "0 3 * * *", AT, command=["ls"])
+        once = kept.schedule("tidy-up")
+        self.assertEqual("2026-07-28 09:00", once["at"])
+        self.assertIsNone(once["cron"])
+        self.assertIsNone(kept.schedule("nightly")["at"])
+
+    def test_the_records_themselves_refuse_a_schedule_saying_when_two_ways(self):
+        """The rule above, reached around: whatever writes a row, the shape refuses it. A
+        check only the one writer makes is a check that ends the day there are two."""
+        kept = self.built()
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.raw().execute(
+                "INSERT INTO schedule (name, cron, at, command, created_at)"
+                " VALUES ('tidy-up', '0 3 * * *', '2026-07-28 09:00', '[]', ?)", (AT,))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.raw().execute(
+                "INSERT INTO schedule (name, command, created_at) VALUES ('tidy-up', '[]', ?)",
+                (AT,))
+        self.assertEqual([], kept.schedules())
+
     def test_a_schedule_turned_off_keeps_its_row_and_everything_it_did(self):
         """Off is not gone: an owner turning something off for a week still wants to see
         it, and turning it back on must not need it typing again."""
