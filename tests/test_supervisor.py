@@ -4,6 +4,7 @@ No launchd is involved. What the machine is asked is a function passed in, so ev
 here runs on any machine, including one with no supervisor at all.
 """
 
+import os
 import pathlib
 import plistlib
 import shutil
@@ -546,6 +547,41 @@ class HandingItOver(WithAJobDirectory):
     def test_nothing_is_listed_where_no_job_was_ever_written(self):
         """R-GW-13"""
         self.assertEqual([], supervisor.described(str(self.where / "nowhere"), self.root))
+
+
+class WhereAJobCanFindThings(WithAJobDirectory):
+    """R-GW-9 — what a supervised gateway can reach, which is only what the job says."""
+
+    def test_a_job_can_find_the_tools_a_person_installed_for_themselves(self):
+        """A brain is a program on the machine, and a person's own tools go in
+        `~/.local/bin`. Left out, a fresh machine answers `the Codex CLI is not on this
+        machine's path` while `which codex` in the owner's own shell finds it perfectly
+        well — the shell has that directory and the job did not.
+
+        It is rundesk's *own* default: `install.sh` puts the command there whenever
+        `/usr/local/bin` is not writable, which on a machine without Homebrew is always. So
+        rundesk installed itself into a directory it then would not look in."""
+        said = supervisor.describe("gateway", self.root)["EnvironmentVariables"]["PATH"]
+        self.assertIn(str(Path.home() / ".local" / "bin"), said.split(":"))
+
+    def test_a_job_still_finds_what_the_machine_ships(self):
+        """The guard on the one above: a PATH rebuilt around a person's own directory and
+        losing the machine's own would find their brain and nothing else — no `git`, no
+        `python3`, and a turn that fails on the first tool it reaches for."""
+        said = supervisor.describe("gateway", self.root)["EnvironmentVariables"]["PATH"]
+        for named in ("/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin"):
+            self.assertIn(named, said.split(":"))
+
+    def test_where_a_job_looks_is_resolved_rather_than_fixed_when_the_file_is_read(self):
+        """A person's own directory is one person's, so a module-level string would write
+        the developer's own into every job a suite wrote — the trap `MEMORY.md` records one
+        level out, where a directory bound at import reached the real install."""
+        was = Path.home()
+        self.addCleanup(os.environ.pop, "HOME", None)
+        os.environ["HOME"] = str(self.root / "somebody-else")
+        self.assertIn(str(Path(self.root / "somebody-else") / ".local" / "bin"),
+                      supervisor.path_for_a_job().split(":"))
+        self.assertNotEqual(was, Path.home(), "HOME was not actually redirected")
 
 
 class TheInstallsOwnDailyJob(WithAJobDirectory):

@@ -64,6 +64,27 @@ def jobs_home() -> str:
 #: so a program that a gateway will later run has to be findable from here.
 PATH = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+#: And where a person's own tools go, which is not one of those. **This was missing and it
+#: cost a brain.** A fresh machine reports `the Codex CLI is not on this machine's path`
+#: while `which codex` in the owner's shell answers perfectly well — because the shell has
+#: `~/.local/bin` and a supervised gateway did not.
+#:
+#: It is rundesk's own default, which is what makes leaving it out indefensible rather than
+#: merely unlucky: `install.sh` puts the `rundesk` command here whenever `/usr/local/bin` is
+#: not writable, which on a machine without Homebrew is always. So rundesk installed itself
+#: into a directory it then refused to look in.
+WHERE_A_PERSONS_OWN_TOOLS_GO = ".local/bin"
+
+
+def path_for_a_job() -> str:
+    """The PATH a job carries, resolved rather than fixed at import.
+
+    `~/.local/bin` is one person's, so it cannot be a constant string in a module that is
+    imported once — a suite that redirects `HOME` would still be writing the developer's own
+    directory into every job it wrote.
+    """
+    return f"{PATH}:{Path.home() / WHERE_A_PERSONS_OWN_TOOLS_GO}"
+
 
 class NoSupervisor(Exception):
     """This machine has nothing of the kind rundesk knows how to hand a gateway to."""
@@ -145,7 +166,7 @@ def _environment(logs: Path, run: Path | None = None, agents: Path | None = None
     other's fallback wrong.
     """
     return {
-        "PATH": PATH,
+        "PATH": path_for_a_job(),
         "HOME": str(Path.home()),
         "RUNDESK_RUN_DIR": str(run or gateway.home()),
         "RUNDESK_LOG_DIR": str(logs),
