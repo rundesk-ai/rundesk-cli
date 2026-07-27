@@ -43,6 +43,7 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-22 | An update brings back whatever it stopped in order to perform it, unless moving its records forward failed (R-MIG-6) | `an update brings back what it stopped`, `an update that failed still brings back what it stopped`, `an update that broke a gateway says so rather than reporting success`, `a gateway that does not come back is reported rather than passed over` |
 | ✅ | R-UPD-23 | An update refuses rather than interrupting work that is in flight | `an update refuses while work is in flight`, `an update says what is in flight rather than something`, `an update with nothing in flight goes ahead`, `checking never refuses for work in flight`, `what is in flight is asked of every gateway that is running` |
 | ✅ | R-UPD-24 | An update that stops before replacing anything brings back every gateway it stood down | `an update that stops before replacing anything brings back what it stood down`, `a gateway that would not restart after a refusal is named` |
+| ✅ | R-UPD-25 | An update that replaced only part of a release puts back what was there, or says it could not | `an update that replaced only part of a release puts back what was there`, `an install that could not be put back says so rather than reporting a failure`, `a swap that fails puts back what was working` |
 
 ## Open questions
 

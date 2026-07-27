@@ -297,10 +297,20 @@ def _download_and_apply(repo_root: Path, tag: str) -> int:
         print(f"{tag}: installing into {repo_root}", flush=True)
         try:
             _copy_over(roots[0], repo_root)
+        except HalfReplaced as err:
+            # The only path here that a person has to act on, so it does not read like the
+            # ordinary failure above it: running the update again cannot mend an install
+            # that is partly one release and partly another (R-UPD-25).
+            print(f"{tag}: FAILED — {err}", file=sys.stderr)
+            print("        this install is not safe to run; reinstall it:", file=sys.stderr)
+            print("        curl -fsSL https://github.com/" + REPO_SLUG
+                  + "/releases/latest/download/install.sh | bash", file=sys.stderr)
+            return 1
         except OSError as err:
-            # Whatever failed, the swaps are all-or-nothing per item, so what is on disk
-            # is a working install — just possibly still the old one.
+            # What was already swapped has been put back, so this is the release it was on
+            # before — the same install, and running the update again is the whole of the fix.
             print(f"{tag}: FAILED — could not install: {err}", file=sys.stderr)
+            print("        the install is as it was; try again", file=sys.stderr)
             return 1
 
     print(f"{tag}: UPDATED — run 'rundesk version' to confirm")
@@ -354,6 +364,15 @@ def _lands_inside(root: Path, name: str) -> bool:
 EXECUTABLE = {"rundesk", "install.sh"}
 
 
+class HalfReplaced(Exception):
+    """A replacement failed *and* putting back what was there failed too.
+
+    The one outcome nothing else here can describe: the install is neither the version it
+    was nor the version it was going to be. Named rather than folded into the ordinary
+    failure, because the answer is not "run it again" — it is a person and a backup.
+    """
+
+
 def _copy_over(src: Path, dst: Path) -> None:
     """Lay the new tree over the old, leaving anything the release does not ship.
 
@@ -364,8 +383,15 @@ def _copy_over(src: Path, dst: Path) -> None:
     That left `src/rundesk` — the package implementing update, version and uninstall —
     absent for the whole duration of a copy. A Ctrl-C or a full disk inside that window
     bricked every command, including the one that could have repaired it.
+
+    **Each swap is atomic; the loop over them was not** (R-UPD-25). A failure part-way
+    through left some paths on the new release and the rest on the old — `rundesk` from one
+    version and `src/` from another — and the caller then brought every gateway back onto
+    it. Per-item atomicity is not consistency across items, so what was already swapped is
+    put back before the failure is reported, and the install is the version it started as.
     """
     staged: list[tuple[Path, Path]] = []
+    swapped: list[tuple[Path, Path | None]] = []
     try:
         for item in sorted(src.iterdir()):
             pending = dst / f".{item.name}.incoming"
@@ -379,27 +405,67 @@ def _copy_over(src: Path, dst: Path) -> None:
             staged.append((pending, dst / item.name))
         # Everything is written and complete. Only now does anything the running install
         # depends on move, and each move is a rename that either happened or did not.
-        for pending, target in staged:
-            _swap(pending, target)
+        try:
+            for pending, target in staged:
+                # Written down *before* the move that could fail, so nothing this walk set
+                # aside is ever outside what the revert below knows about. A swap that put
+                # its own house in order and then raised kept that knowledge to itself, and
+                # a failure inside its recovery stranded the only copy of what was there.
+                outgoing = _set_aside(target)
+                swapped.append((target, outgoing))
+                os.rename(pending, target)
+        except BaseException:
+            stuck = _put_back(swapped)
+            if stuck:
+                raise HalfReplaced(
+                    "the release was only partly laid down and what was there could not be "
+                    f"put back: {', '.join(stuck)}"
+                ) from None
+            raise
+        for _target, outgoing in swapped:
+            if outgoing is not None:
+                _discard(outgoing)
     finally:
         for pending, _ in staged:
             _discard(pending)
 
 
-def _swap(pending: Path, target: Path) -> None:
-    """Put `pending` where `target` is, atomically enough that no reader sees neither."""
-    if target.is_dir() and not target.is_symlink():
-        outgoing = target.with_name(f".{target.name}.outgoing")
-        _discard(outgoing)
-        os.rename(target, outgoing)
+def _set_aside(target: Path) -> Path | None:
+    """Move whatever stands at `target` out of the way, and say where it went.
+
+    None when the release ships something this install did not have — there was nothing to
+    set aside, and putting it back means taking the new thing away again.
+
+    What is set aside is the caller's to discard once the replacement is known to be good.
+    Letting go of it here would make each swap atomic and the update as a whole one-way.
+    """
+    if not (target.exists() or target.is_symlink()):
+        return None
+    outgoing = target.with_name(f".{target.name}.outgoing")
+    _discard(outgoing)
+    os.rename(target, outgoing)
+    return outgoing
+
+
+def _put_back(swapped: list) -> list:
+    """Undo the swaps already made, and say which could not be undone.
+
+    Newest first, so a path that was set aside twice — which nothing here does today, and
+    which a future release shipping a name twice would — ends on the oldest thing.
+
+    Every failure is caught rather than the first one ending the walk: a revert that gave up
+    half way is the state this exists to prevent, so the remaining paths are still tried and
+    what is genuinely stuck is named.
+    """
+    stuck = []
+    for target, outgoing in reversed(swapped):
         try:
-            os.rename(pending, target)
-        except OSError:
-            os.rename(outgoing, target)  # put back what was working
-            raise
-        shutil.rmtree(outgoing, ignore_errors=True)
-    else:
-        os.replace(pending, target)
+            _discard(target)
+            if outgoing is not None:
+                os.rename(outgoing, target)
+        except OSError:   # noqa: BLE001 — named and reported, never swallowed
+            stuck.append(target.name)
+    return sorted(stuck)
 
 
 def _discard(path: Path) -> None:

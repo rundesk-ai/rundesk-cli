@@ -264,6 +264,63 @@ class InterruptedUpdateTests(unittest.TestCase):
                   if p.name.startswith(".") and (".incoming" in p.name or ".outgoing" in p.name)]
         self.assertEqual(litter, [], f"an interrupted update left staging paths behind: {litter}")
 
+    def _renaming_dies_on(self, victim: str, and_putting_back: str = ""):
+        """A rename that refuses one target — the swap loop failing part of the way through.
+
+        Staging is complete by then, so this is the window the copytree cases above cannot
+        reach: some paths are already the new release and the rest are still the old one.
+        """
+        real = updater.os.rename
+
+        def falls_over(src, dst, *a, **kw):
+            # Only the move *into* place: what was there has already been set aside by
+            # then, so this is a swap that failed with the old thing still recoverable.
+            if Path(dst).name == victim and Path(src).name.endswith(".incoming"):
+                raise OSError(28, "No space left on device")
+            # And, when asked for, the move that would put one of them back.
+            if and_putting_back and Path(src).name == f".{and_putting_back}.outgoing":
+                raise OSError(28, "No space left on device")
+            return real(src, dst, *a, **kw)
+
+        return falls_over
+
+    def test_an_update_that_replaced_only_part_of_a_release_puts_back_what_was_there(self):
+        """R-UPD-25 — each swap is atomic and the loop over them was not. A release ships
+        `README.md`, `install.sh`, `rundesk` and `src` in that order, so failing on the last
+        left three of them new and one old: `rundesk` from one version and its package from
+        another, which the caller then brought every gateway back onto."""
+        original = updater.os.rename
+        updater.os.rename = self._renaming_dies_on("src")
+        try:
+            with self.assertRaises(OSError):
+                updater._copy_over(_release(self.root, "0.2.0"), self.install)
+        finally:
+            updater.os.rename = original
+
+        self.assertIn("# 0.1.0", (self.install / "rundesk").read_text(),
+                      "the entry point was left on the release that never finished landing")
+        self.assertIn('"0.1.0"', (self.install / "src" / "rundesk" / "__init__.py").read_text(),
+                      "the package was left on a different version from the entry point")
+        self.assertFalse((self.install / "README.md").exists(),
+                         "a file only the new release ships was left behind")
+        self.assertFalse((self.install / "install.sh").exists(),
+                         "a file only the new release ships was left behind")
+        litter = [p.name for p in self.install.iterdir() if p.name.startswith(".")]
+        self.assertEqual(litter, [], f"a reverted update left staging paths behind: {litter}")
+
+    def test_an_install_that_could_not_be_put_back_says_so_rather_than_reporting_a_failure(self):
+        """R-UPD-25 — the one outcome running it again cannot mend. An install that is
+        neither version must not be reported in the same words as one that is simply still
+        the old version, because those two need completely different things of a person."""
+        original = updater.os.rename
+        updater.os.rename = self._renaming_dies_on("src", and_putting_back="rundesk")
+        try:
+            with self.assertRaises(updater.HalfReplaced) as stopped:
+                updater._copy_over(_release(self.root, "0.2.0"), self.install)
+        finally:
+            updater.os.rename = original
+        self.assertIn("rundesk", str(stopped.exception), "it never said what was left stuck")
+
 
 class OneAtATimeTests(unittest.TestCase):
     """Two updates at once each replace what the other is halfway through reading."""
@@ -586,28 +643,16 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn("could not install", said)
 
     def test_a_swap_that_fails_puts_back_what_was_working(self):
-        # The rollback in _swap: the old directory has already been renamed aside when the
-        # new one fails to move in. Without it the install is left with no `src` at all.
+        # The old directory has already been renamed aside when the new one fails to move
+        # in, so between those two moments the install has no `src` at all. The halves live
+        # apart — `_set_aside` moves it out, `_put_back` moves it home — so that nothing
+        # set aside is ever outside what the revert knows about: recovery inside the swap
+        # itself kept that knowledge to itself, and failing there stranded the only copy.
         package = self.install / "src"
-        real = updater.os.rename
-        calls = []
+        outgoing = updater._set_aside(package)
+        self.assertFalse(package.exists(), "what was there was never moved out of the way")
 
-        def second_one_fails(a, b):
-            calls.append((a, b))
-            if len(calls) == 2:
-                raise OSError(13, "Permission denied")
-            return real(a, b)
-
-        incoming = self.install / ".src.incoming"
-        incoming.mkdir()
-        (incoming / "new.py").write_text("# new\n")
-        updater.os.rename = second_one_fails
-        try:
-            with self.assertRaises(OSError):
-                updater._swap(incoming, package)
-        finally:
-            updater.os.rename = real
-
+        self.assertEqual([], updater._put_back([(package, outgoing)]))
         self.assertTrue(package.is_dir(), "a failed swap left the install without its package")
         self.assertTrue((package / "rundesk").is_dir(),
                         "a failed swap put back something other than what was there")
