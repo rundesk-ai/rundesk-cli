@@ -34,6 +34,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -1114,6 +1115,10 @@ class Gateway:
         self._unnamed = itertools.count()
         self._lock: int | None = None
         self._released = False
+        #: One gateway lifetime, handed to every adapter it holds open. Two adapters may
+        #: belong to this same gateway and each may reconnect, while a successor must be
+        #: distinguishable even though it uses the same run directory.
+        self._instance = uuid.uuid4().hex
         #: What this gateway ended on the way in, left by whoever held the name before.
         #: Set here as well as in `claim`, so reading it never depends on having claimed.
         self.swept: list[str] = []
@@ -1308,7 +1313,7 @@ class Gateway:
                 # hours by design, and a clock that ends one is a clock that ends the
                 # thing a held-open surface exists for (R-PROC-6).
                 outcome = await self.start(
-                    [str(one.program)], as_name=held, env=dict(one.env),
+                    [str(one.program)], as_name=held, env=self._for_a_channel(one),
                     silence=None, ceiling=None, takes_input=True,
                     sink=answering.heard,
                     # As it is said, not when the program ends. A channel is held open
@@ -1339,6 +1344,12 @@ class Gateway:
             self.log.warning("channel '%s' stopped (%s) — starting it again in %ss",
                              one.name, outcome.reason, int(CHANNEL_AGAIN_SECONDS))
             await asyncio.sleep(CHANNEL_AGAIN_SECONDS)
+
+    def _for_a_channel(self, one) -> dict[str, str]:
+        """What one adapter is told that belongs to this gateway lifetime."""
+        said = dict(one.env)
+        said["RUNDESK_GATEWAY"] = self._instance
+        return said
 
     async def _write_to(self, held: str, record: bytes) -> None:
         """Say something to a channel that is running, or say why it could not be said."""

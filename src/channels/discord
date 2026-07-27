@@ -459,25 +459,36 @@ class Agent(discord.Client):
         both read "nobody has greeted yet" and both greet; creating a file that must not
         already exist is one operation the machine decides, so exactly one of them wins it.
 
-        The claim lives in the directory rundesk hands every adapter of one agent, which is
-        the gateway's own run directory and is *cleared when the gateway stops*. That is the
-        lifetime this needs without anything having to remember to clean up: a Discord
-        session that drops and reconnects finds the claim taken and stays quiet, and a real
-        restart finds the directory swept and greets again.
+        The claim lives in the directory rundesk hands every adapter of one agent, but is
+        named for the gateway lifetime rundesk also hands it. The directory deliberately
+        survives a stop because it carries the gateway lock and record; a static marker
+        there silenced every successor after the first. A reconnect keeps the same lifetime
+        and stays quiet, while a real restart gets a fresh claim.
 
         A machine that will not let it be written is answered `True` — being told once too
         often is a smaller failure than never being told a gateway came up at all.
         """
         home = os.environ.get("RUNDESK_HOME")
-        if not home:
+        gateway = os.environ.get("RUNDESK_GATEWAY")
+        if not home or not gateway:
             return True
+        gateway = "".join(char for char in gateway if char.isalnum() or char in "-_")
+        if not gateway:
+            return True
+        marker = Path(home) / f".said-{what}-{gateway}"
         try:
-            os.close(os.open(os.path.join(home, f".said-{what}"),
-                             os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+            os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
         except FileExistsError:
             return False
         except OSError:
             return True
+        # Only the winner cleans up predecessor claims. Two adapters racing for this
+        # gateway cannot remove each other's current marker, and old releases' static
+        # marker is included so updating repairs the next real startup.
+        for old in Path(home).glob(f".said-{what}*"):
+            if old != marker:
+                with contextlib.suppress(OSError):
+                    old.unlink()
         return True
 
     async def _tell_the_owner(self, said: str) -> None:
