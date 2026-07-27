@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Probe which skills each installed brain really discovers, and whether it uses one.
+
+Evidence, never a CI dependency: the live half reaches real accounts and costs real money,
+so nothing in the suite runs it. Rerun it when a CLI version moves and write what changed
+into `.knowledge/research/2026-07-27-skills-a-brain-discovers.md`.
+
+    python3 .knowledge/scripts/probe-skills            # everything, including live turns
+    python3 .knowledge/scripts/probe-skills --offline  # only what costs nothing
+
+**The offline half is unusually strong here and is free.** Two of the three brains list
+what they discovered without starting a turn — `grok inspect --json`, and `skills/list`
+over `codex app-server` — so which directories each reads is settled at no cost. That
+answers *discovery*. It does not answer whether a model **read** one, which is what the
+live half is for, and the distinction is the whole reason both exist.
+
+Three traps, each already paid for once:
+
+- **One canary per candidate root, each with its own code.** A single canary tells you a
+  brain read *something*; distinct codes tell you *which root*. And the bare `skills/`
+  canary is the anti-grep control — a model rummaging through the tree has no reason to
+  prefer one root over another, so an answer naming the right one is the index talking.
+- **One canary per live run.** Codex indexes two roots; with a different codename in each
+  it read both, found them contradictory and answered UNKNOWN — which is indistinguishable
+  from having discovered nothing. Live runs plant exactly one.
+- **A per-run uuid, always.** Grok reads its other sessions, so a fixed canary is answered
+  from the last run. `--no-memory` as well, and judge grok on the effect: it reports no
+  tool events at all.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
+from pathlib import Path
+
+CLAUDE = os.environ.get("RUNDESK_CLAUDE_BIN", "claude")
+CODEX = os.environ.get("RUNDESK_CODEX_BIN", "codex")
+GROK = os.environ.get("RUNDESK_GROK_BIN", "grok")
+
+#: Every directory worth planting in, including a bare one no brain is expected to read.
+#: Kept here rather than in a brain's own section so that a root added by any vendor is
+#: probed against all three — which is how "grok reads claude's too" was found.
+CANDIDATES = (".claude/skills", ".agents/skills", ".codex/skills",
+              ".grok/skills", ".cursor/skills", "skills")
+
+RUN = uuid.uuid4().hex[:8]
+
+
+def ran(argv, **extra) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True, **extra)
+
+
+def says(what: str, said: str) -> None:
+    print(f"\n{'=' * 78}\n{what}\n{'=' * 78}\n{said.rstrip()}")
+
+
+def plant(where: Path, root: str, tag: str) -> None:
+    """One skill, declaring a code that names the directory it was planted in."""
+    at = where / root / f"canary-{tag}-{RUN}"
+    at.mkdir(parents=True, exist_ok=True)
+    (at / "SKILL.md").write_text(
+        f"---\nname: canary-{tag}-{RUN}\n"
+        f"description: Gives the release codename. Use whenever anyone asks for the "
+        f"release codename.\n---\n\nThe release codename is heron-{tag}-{RUN}.\n",
+        encoding="utf-8")
+
+
+def planted() -> Path:
+    """A scratch working directory with one canary in every candidate root."""
+    where = Path(tempfile.mkdtemp(prefix="rundesk-skills-probe-"))
+    for root in CANDIDATES:
+        plant(where, root, root.strip(".").split("/")[0] or "bare")
+    return where
+
+
+def _codex_lists(where: Path) -> list:
+    """What `codex app-server` says it discovered, without starting a turn."""
+    proc = subprocess.Popen([CODEX, "app-server"], cwd=str(where), stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            text=True, bufsize=1)
+    answers: dict = {}
+
+    def listen():
+        for line in proc.stdout:
+            try:
+                one = json.loads(line)
+            except ValueError:
+                continue
+            if "id" in one and ("result" in one or "error" in one):
+                answers[one["id"]] = one
+
+    threading.Thread(target=listen, daemon=True).start()
+
+    def ask(at, method, params=None):
+        proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": at, "method": method,
+                                     "params": params or {}}) + "\n")
+        proc.stdin.flush()
+        for _ in range(1500):
+            if at in answers:
+                return answers[at]
+            time.sleep(0.02)
+        return None
+
+    try:
+        ask(1, "initialize", {"clientInfo": {"name": "rundesk-probe", "version": "1"}})
+        proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "initialized",
+                                     "params": {}}) + "\n")
+        proc.stdin.flush()
+        got = ask(2, "skills/list", {}) or {}
+    finally:
+        proc.terminate()
+    return [one for group in (got.get("result", {}).get("data") or [])
+            for one in group.get("skills", [])]
+
+
+def offline() -> Path:
+    """Versions, and which roots two of the three brains say they read. Costs nothing."""
+    for name, binary in (("claude", CLAUDE), ("codex", CODEX), ("grok", GROK)):
+        says(f"{name} version", ran([binary, "--version"]).stdout or "(not on this path)")
+
+    where = planted()
+    says("planted", "\n".join(f"{root}/canary-…-{RUN}" for root in CANDIDATES)
+         + f"\n\nunder {where}")
+
+    seen = {one["source"]["path"] for one in
+            json.loads(ran([GROK, "inspect", "--json"], cwd=str(where)).stdout or "{}")
+            .get("skills", [])}
+    says("grok — which roots it read, asked of it rather than of a turn",
+         "\n".join(f"  {root:16} {'READ' if any(root in p and RUN in p for p in seen) else 'no'}"
+                   for root in CANDIDATES))
+
+    paths = {one["path"] for one in _codex_lists(where)}
+    says("codex — the same question, over its own skills/list",
+         "\n".join(f"  {root:16} {'READ' if any(root in p and RUN in p for p in paths) else 'no'}"
+                   for root in CANDIDATES))
+
+    says("claude", "no listing exists at the CLI — `/skills` is in-session only, and "
+                   "`claude doctor` has no skills section. Its verdict is the live half's.")
+    return where
+
+
+def _signed_in() -> str | None:
+    """Why the live half must not run, or None. An unauthenticated probe proves nothing."""
+    import getpass
+    said = ran([CLAUDE, "auth", "status"],
+               env={**os.environ, "USER": getpass.getuser()}).stdout
+    try:
+        if not json.loads(said or "{}").get("loggedIn"):
+            return "claude reports loggedIn: false"
+    except ValueError:
+        return "claude did not answer its auth status"
+    if "Logged in" not in ran([CODEX, "login", "status"]).stdout:
+        return "codex is not logged in"
+    return None
+
+
+def live() -> None:
+    """Does a model actually *read* one — with the control that says the answer is the skill."""
+    why = _signed_in()
+    if why:
+        says("live half — NOT RUN", f"{why}. A probe running unauthenticated proves nothing.")
+        return
+
+    ask = ("What is the release codename? Answer with just the codename, or say UNKNOWN "
+           "if you do not know.")
+    control = Path(tempfile.mkdtemp(prefix="rundesk-skills-control-"))
+    for name, argv in (
+        ("claude", [CLAUDE, "--disallowedTools", "Read", "Grep", "Glob", "Bash",
+                    "-p", ask]),
+        ("codex", [CODEX, "exec", "--sandbox", "read-only", "--skip-git-repo-check", ask]),
+        ("grok", [GROK, "--no-memory", "-p", ask]),
+    ):
+        # **One canary, not six.** Two roots with different codenames made codex read both
+        # and answer UNKNOWN, which reads exactly like discovering nothing.
+        one = Path(tempfile.mkdtemp(prefix=f"rundesk-skills-{name}-"))
+        plant(one, {"claude": ".claude/skills", "codex": ".agents/skills",
+                    "grok": ".grok/skills"}[name], name)
+        import getpass
+        env = {**os.environ, "USER": getpass.getuser()}
+        env.pop("CLAUDE_CONFIG_DIR", None)
+        was = ran(argv, cwd=str(control), env=env, timeout=600).stdout
+        now = ran(argv, cwd=str(one), env=env, timeout=600).stdout
+        wanted = f"heron-{name}-{RUN}"
+        says(f"{name} — control (no skill), then canary",
+             f"control: {was.strip()[-200:]}\n canary: {now.strip()[-200:]}")
+        says(f"{name} verdict", (
+            f"DISCOVERED — answered {wanted} with the skill present and did not without "
+            "it, so the answer came from the skill rather than from the model."
+            if wanted in now and wanted not in was else
+            "NOT DISCOVERED — the canary was not answered with the skill present. Either "
+            "this brain does not read that root, or the skill was not indexed."
+            if wanted not in now else
+            "UNPROVEN — the control answered it too, so this says nothing about the skill. "
+            "Use a fact only the skill can supply."))
+
+
+if __name__ == "__main__":
+    offline()
+    if "--offline" not in sys.argv:
+        live()

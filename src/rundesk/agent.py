@@ -367,9 +367,16 @@ def add(name: str, where: Path | None = None) -> list[str]:
         if not page.exists():
             page.write_text(_copied(called, name), encoding="utf-8")
             made.append(called)
-    made.extend(_given_what_ships(name, where))
     records = store.path_for(directory(name, where))
     fresh = not records.exists()
+    # **Only an agent being made, never one being repaired.** Everything else `add` puts
+    # back is a thing that is missing; a grant that is missing may be one an owner took
+    # away on purpose, and nothing records which. Handing it back on a re-run would undo
+    # a decision by the same command an owner reaches for to fix something unrelated —
+    # which is the failure `_given_what_ships` was written to avoid, reached from the one
+    # call site that had not been thought about.
+    if fresh:
+        made.extend(_given_what_ships(name, where))
     store.Store(records).made()
     if fresh:
         made.append(store.NAME)
@@ -394,6 +401,16 @@ def _what_is_wrong_with_its_skills(name: str, where: Path | None = None) -> list
             found.append(Complaint(
                 str(standing), f"the skill {called} was granted and is no longer there",
                 f"rundesk skills revoke {name} {called}"))
+            continue
+        # **Resolving is not being a skill.** A grant can point at a directory that exists
+        # and holds nothing a brain would index — an update interrupted part way once did
+        # exactly that. Every brain skips it in silence, so the only way an owner learns is
+        # here.
+        why = skill.valid(standing)
+        if why:
+            found.append(Complaint(
+                str(standing), f"the skill {called} was granted and {why}",
+                f"rundesk update"))
     held = skill.library()
     for called in skill.shipped():
         if called in held and called not in skill.granted(mine):

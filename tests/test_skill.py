@@ -361,6 +361,23 @@ class WhatEachShippedAdapterPlaces(WithALibrary):
                                  f"{brain} still places a skill that was revoked")
                 skill.grant(self.mine, "deploy", self.library)   # for the next brain
 
+    def test_no_adapter_removes_an_owners_own_link_whose_target_is_briefly_away(self):
+        """R-PRV-24 — the sharpest one. An owner may hand-place a link here to a skill of
+        their own; a target on an unmounted drive, or mid-move, makes it look exactly like
+        a grant that was revoked. Deleting on dangling alone took those, on every turn."""
+        a_skill(self.library, "deploy")
+        skill.grant(self.mine, "deploy", self.library)
+        for brain in self.BRAINS:
+            with self.subTest(brain=brain):
+                root = self.standing(brain)
+                away = a_skill(self.where / "their-drive", "personal")
+                theirs = root / "personal"
+                theirs.symlink_to(away)
+                shutil.rmtree(self.where / "their-drive")      # the drive goes away
+                self.standing(brain)
+                self.assertTrue(theirs.is_symlink(),
+                                f"{brain} deleted an owner's link while its target was away")
+
     def test_no_adapter_removes_something_it_did_not_place(self):
         """R-PRV-24 — the pruning is the only line here that can destroy anything. A
         directory somebody wrote by hand into the brain's own root is theirs."""
@@ -373,6 +390,151 @@ class WhatEachShippedAdapterPlaces(WithALibrary):
                 self.standing(brain)
                 self.assertTrue((theirs / "SKILL.md").is_file(),
                                 f"{brain} deleted something it did not place")
+
+
+class WhatARevokeCannotReach(WithALibrary):
+    """The confinement every one of these rests on, probed from the outside.
+
+    `Path("/a/b") / "/elsewhere"` is `/elsewhere` — the left side is discarded — so a name
+    that arrives from a command line and is joined without being looked at first is a way
+    to name any file on the machine, and `revoke` unlinks what it is given.
+    """
+
+    def test_a_name_that_is_a_path_cannot_reach_out_of_the_agents_own_directory(self):
+        """R-AGT-29 — reachable by typing a path where a name goes, which is a thing
+        somebody does by pasting. It deleted an owner's own symlink from their desktop."""
+        a_skill(self.library, "deploy")
+        theirs = self.where / "somewhere-else.lnk"
+        theirs.symlink_to(self.library / "deploy")
+        for typed in (str(theirs), "../somewhere-else.lnk", "/etc/hosts", "..", "", "."):
+            with self.subTest(typed=typed):
+                with self.assertRaises(skill.Unknown):
+                    skill.revoke(self.mine, typed, self.library)
+        self.assertTrue(theirs.is_symlink(), "revoking reached outside the agent's own")
+
+    def test_a_name_that_is_a_path_cannot_be_granted_either(self):
+        """R-AGT-29 — the same door on the way in, or `grant` becomes how you reach what
+        `revoke` refused to."""
+        a_skill(self.library, "deploy")
+        with self.assertRaises(skill.Unknown):
+            skill.grant(self.mine, "../deploy", self.library)
+
+
+class WhenBringingOneForwardGoesWrong(WithALibrary):
+    def setUp(self):
+        super().setUp()
+        self.release = self.where / "app" / "src" / "templates" / "skills"
+        self.release.mkdir(parents=True)
+        was = skill.SHIPPED
+        skill.SHIPPED = self.release
+        self.addCleanup(setattr, skill, "SHIPPED", was)
+
+    def test_a_refresh_that_fails_leaves_the_version_that_was_working(self):
+        """R-AGT-30 — removing the old one and copying the new one in its place leaves,
+        if anything fails between the two, a directory that exists and is not a skill: no
+        brain indexes it, the grant still resolves, and nothing reports it."""
+        a_skill(self.release, "writing-skills", says="the old words")
+        skill.lay_down(self.library)
+        a_skill(self.release, "writing-skills", says="the new words")
+        real = shutil.copytree
+
+        def dies(*args, **kw):
+            raise OSError("no space left on device")
+
+        shutil.copytree = dies
+        self.addCleanup(setattr, shutil, "copytree", real)
+        self.assertEqual([], skill.lay_down(self.library, force=True))
+        shutil.copytree = real
+        self.assertIsNone(skill.valid(self.library / "writing-skills"),
+                          "a failed refresh left something no brain would index")
+        self.assertIn("the old words",
+                      (self.library / "writing-skills" / "SKILL.md").read_text())
+
+    def test_a_half_written_skill_is_not_left_in_the_library(self):
+        """R-AGT-30 — what a failed refresh assembles under another name is not a skill
+        anybody is offered, and does not linger as one."""
+        a_skill(self.release, "writing-skills")
+        real = shutil.copytree
+        shutil.copytree = lambda *a, **k: (_ for _ in ()).throw(OSError("full"))
+        self.addCleanup(setattr, shutil, "copytree", real)
+        skill.lay_down(self.library)
+        shutil.copytree = real
+        self.assertEqual({}, skill.library(self.library))
+        self.assertEqual([], [one for one in self.library.iterdir()])
+
+
+class WhatMakingAnAgentGrants(WithALibrary):
+    """The bootstrap, and the one thing it must not undo."""
+
+    def setUp(self):
+        super().setUp()
+        from rundesk import agent as agents
+        self.agents = agents
+        self.release = self.where / "app" / "src" / "templates" / "skills"
+        self.release.mkdir(parents=True)
+        was = skill.SHIPPED
+        skill.SHIPPED = self.release
+        self.addCleanup(setattr, skill, "SHIPPED", was)
+        a_skill(self.release, "writing-skills")
+        skill.lay_down(self.library)
+        for name, at in (("RUNDESK_DATA_DIR", self.where / "data"),
+                         ("RUNDESK_AGENTS_DIR", self.where / "data" / "agents"),
+                         ("RUNDESK_RUN_DIR", self.where / "run"),
+                         ("RUNDESK_LOG_DIR", self.where / "logs")):
+            had = os.environ.get(name)
+            os.environ[name] = str(at)
+            self.addCleanup(lambda n=name, h=had: os.environ.__setitem__(n, h)
+                            if h is not None else os.environ.pop(n, None))
+
+    def test_a_new_agent_is_given_what_the_release_ships(self):
+        """R-AGT-27 — the bootstrap: an agent cannot use `skills grant` to give itself the
+        skill that explains what granting is, so it starts with it."""
+        self.agents.add("ava")
+        self.assertIn("writing-skills", skill.granted(self.agents.skills("ava")))
+
+    def test_making_an_agent_again_does_not_hand_back_a_skill_that_was_taken_away(self):
+        """R-AGT-29 — `add` is also how an owner repairs an agent, and every other thing
+        it puts back is a thing that is missing. A grant that is missing may be one they
+        removed on purpose, and nothing records which — so handing it back would undo a
+        decision using the command they reached for to fix something else."""
+        self.agents.add("ava")
+        skill.revoke(self.agents.skills("ava"), "writing-skills")
+        self.agents.add("ava")          # the documented repair path
+        self.assertEqual([], skill.granted(self.agents.skills("ava")),
+                         "making the agent again handed back a revoked skill")
+
+
+class NothingHereReachesTheOwnersOwn(unittest.TestCase):
+    """The guard on every fixture in this repository that isolates rundesk's directories.
+
+    Making an agent now grants what the release ships, and a grant is a link into the
+    library — so a suite that isolated the four directories an agent keeps and forgot the
+    root they all fall back to would link a scratch agent at the *owner's* real library and
+    pass while doing it. `MEMORY.md` records the same shape costing three real agents in a
+    live install, under the older `RUNDESK_HOME` versus `RUNDESK_AGENTS_DIR` confusion.
+    """
+
+    def test_every_place_an_agent_resolves_is_under_the_data_root_it_was_given(self):
+        """R-AGT-27, R-AGT-28 — a directory this suite did not name is one it cannot have
+        isolated, and the failure is silent: the case passes and the owner's library is
+        what was read."""
+        import rundesk
+        from rundesk import agent as agents
+        where = Path(tempfile.mkdtemp(prefix="rundesk-isolation-"))
+        self.addCleanup(shutil.rmtree, where, ignore_errors=True)
+        was = os.environ.get("RUNDESK_DATA_DIR")
+        os.environ["RUNDESK_DATA_DIR"] = str(where / "data")
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", was)
+                        if was is not None else os.environ.pop("RUNDESK_DATA_DIR", None))
+        for name in ("RUNDESK_AGENTS_DIR", "RUNDESK_RUN_DIR", "RUNDESK_LOG_DIR"):
+            had = os.environ.pop(name, None)
+            if had is not None:
+                self.addCleanup(os.environ.__setitem__, name, had)
+        root = (where / "data").resolve()
+        for what, at in (("data", rundesk.data_home()), ("agents", agents.agents_home()),
+                         ("skills", skill.home())):
+            self.assertEqual(root, at.resolve() if what == "data" else at.resolve().parent,
+                             f"{what} resolves outside the data root it was given")
 
 
 if __name__ == "__main__":

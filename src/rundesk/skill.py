@@ -169,10 +169,20 @@ def lay_down(where: Path | None = None, force: bool = False) -> list[str]:
             continue
         try:
             where.mkdir(parents=True, exist_ok=True)
+            # **Built whole beside it, then swapped in.** Removing the old one and copying
+            # the new one in its place leaves, if anything fails between the two, a
+            # directory that exists and has no `SKILL.md` — which is not a skill, is
+            # skipped in silence by every brain, and leaves a grant that still resolves so
+            # nothing reports it. Assembling under another name means the worst a failure
+            # leaves is the version that was already working.
+            coming = where / f".{name}.coming"
+            shutil.rmtree(coming, ignore_errors=True)
+            shutil.copytree(SHIPPED / name, coming)
             if target.exists():
                 shutil.rmtree(target)
-            shutil.copytree(SHIPPED / name, target)
+            os.replace(coming, target)
         except OSError:
+            shutil.rmtree(where / f".{name}.coming", ignore_errors=True)
             # A library that cannot be written to is a thing to say elsewhere, in words,
             # rather than a traceback out of the middle of an install that otherwise
             # worked. What is missing is reported by a diagnosis.
@@ -213,6 +223,24 @@ def ours(entry: Path, where: Path | None = None) -> bool:
     return where in target.parents
 
 
+def _standing(skills_dir: Path, name: str) -> Path:
+    """Where a grant by that name would stand, or a refusal.
+
+    **A name is one path component and is checked before it is joined to anything.**
+    `Path("/a/b") / "/elsewhere"` is `/elsewhere` — the left side is discarded outright —
+    so a name taken from a command line and joined without looking is a way to name any
+    file on the machine. `revoke` then unlinks it. Everything about confinement here rests
+    on this one check, so it happens before the join rather than after.
+    """
+    # `os.altsep` is None everywhere but Windows, and `"" in name` is true of every string
+    # — so testing it without the guard refuses every name there is. Caught by the suite
+    # immediately, which is the only reason it is worth a comment rather than a scar.
+    separators = [os.sep] + ([os.altsep] if os.altsep else [])
+    if not name or name in (".", "..") or any(one in name for one in separators):
+        raise Unknown(f"'{name}' is not a skill's name")
+    return skills_dir / name
+
+
 def grant(skills_dir: Path, name: str, where: Path | None = None) -> None:
     """Give this agent that skill, by standing a link to it in the agent's own directory.
 
@@ -227,8 +255,8 @@ def grant(skills_dir: Path, name: str, where: Path | None = None) -> None:
     why = valid(at)
     if why:
         raise NotASkill(why)
+    standing = _standing(skills_dir, name)
     skills_dir.mkdir(parents=True, exist_ok=True)
-    standing = skills_dir / name
     if standing.is_symlink() or standing.exists():
         if not ours(standing, where):
             raise InTheWay(f"{standing} is not something rundesk put there")
@@ -240,7 +268,7 @@ def grant(skills_dir: Path, name: str, where: Path | None = None) -> None:
 
 def revoke(skills_dir: Path, name: str, where: Path | None = None) -> None:
     """Take that skill away from this agent, and touch nothing else."""
-    standing = skills_dir / name
+    standing = _standing(skills_dir, name)
     if not standing.is_symlink() and not standing.exists():
         raise Unknown(f"this agent was never given {name}")
     if not ours(standing, where):

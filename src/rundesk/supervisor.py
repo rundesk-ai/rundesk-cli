@@ -164,6 +164,11 @@ def describe(name: str, root: Path | None = None, logs: Path | None = None,
             # command that wrote the job — which is the one thing neither may be wrong
             # about, and is why this dictionary exists at all.
             "RUNDESK_DATA_DIR": str(data_home()),
+            # And the root *that* falls back to. An install pointed elsewhere keeps its
+            # data there, so a job that carried neither would start a gateway resolving
+            # the owner's own while the command that wrote it read the scratch one. Both,
+            # because either alone leaves the other's fallback wrong.
+            "RUNDESK_INSTALL_DIR": os.environ.get("RUNDESK_INSTALL_DIR", str(ROOT.parent)),
             # An agent keeps everything of its own in one directory, and which directory
             # that is has to reach the gateway the machine starts. Passed rather than
             # resolved here, because a gateway knows nothing of agents and this module

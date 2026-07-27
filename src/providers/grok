@@ -326,7 +326,18 @@ def _present(where: str) -> None:
             os.symlink(target, link)
         for name in os.listdir(root):
             link = os.path.join(root, name)
-            if os.path.islink(link) and not os.path.exists(link):
+            if not os.path.islink(link) or os.path.exists(link):
+                continue
+            # **Ours is decided by where it points, not by it being broken.** An owner may
+            # hand-place a link here to a skill of their own, and a target that is briefly
+            # away — an unmounted drive, a file mid-move — makes it look exactly like a
+            # grant that was revoked. Deleting on dangling alone took those. What is ours
+            # is a link into the directory rundesk was told to present from.
+            points_at = os.readlink(link)
+            if not os.path.isabs(points_at):
+                points_at = os.path.normpath(os.path.join(root, points_at))
+            if granted and os.path.commonpath([os.path.abspath(granted), points_at]) == \
+                    os.path.abspath(granted):
                 os.unlink(link)   # granted once, revoked since
     except OSError as gone:
         # A turn without its skills is a whole turn. Say so and carry on rather than
