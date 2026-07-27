@@ -20,6 +20,7 @@ import contextlib
 import importlib.machinery
 import importlib.util
 import json
+import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -457,6 +458,36 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         discord.Agent._stop_typing(None, held)
         self.assertTrue(held.typing is None)
 
+    def test_it_says_it_is_typing_again_after_a_remark_because_the_turn_goes_on(self):
+        """R-DIS-6 — the other half, and it was missing for as long as the half above has
+        existed. A remark stops the indicator so nobody is told the agent is typing while
+        they read it, and the comment promised "the next thing said starts the indicator
+        again" — but nothing did: typing is only ever started from a `taken` or `running`
+        state, and an agent that says something and then carries on working sends neither.
+        The indicator went out at the first remark and stayed out for the rest of the turn.
+
+        Driven through the real `told`, because the bug was in which branch restarts it and
+        a test that called the branch directly would have agreed with the bug."""
+        started = []
+
+        class Turn:
+            live = {}
+
+            async def _flush(self, it, held): pass
+            async def _post(self, it, text): return None
+            def _no_longer_last(self, held): pass
+            def _stop_typing(self, held): held.typing = None
+            async def _typing(self, it): started.append(it)
+
+        turn = Turn()
+        turn.live = {}
+        asyncio.run(discord.Agent.told(turn, {"type": "said", "conversation": "c1",
+                                              "text": "half way there"}))
+        held = turn.live["c1"]
+        self.assertIsNotNone(held.typing, "the indicator was left off for the rest of the turn")
+        # What ends it is a final state, which cancels it — that path is untouched here.
+        held.typing.cancel()
+
     def test_a_commentary_stops_growing_once_something_is_said_under_it(self):
         """R-DIS-20 — a message something has been posted under is one the reader has
         already scrolled past. Editing it changes history rather than showing progress:
@@ -634,6 +665,40 @@ class WhatItOffersAndWhatItIsTold(unittest.TestCase):
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class WhatAnOwnerWhoSaidNothingGets(unittest.TestCase):
+    """R-CH-6 — the defaults, which is where this adapter and the core disagreed."""
+
+    def settled(self, argv=(), settings=None):
+        return discord.settled(discord.options(list(argv)), settings or {})
+
+    def test_what_the_agent_is_doing_is_shown_unless_somebody_said_otherwise(self):
+        """The core already decided this: `answering` streams what the agent is doing
+        unless the channel record turns it off, because a room that goes quiet for four
+        minutes and then answers looks broken. The adapter defaulted to `off` and dropped
+        every line of it — two defaults for one idea, and the one further from the owner
+        won. Nothing appeared, and nothing said why."""
+        self.assertEqual(discord.GROWS, self.settled().activity)
+
+    def test_the_quiet_way_of_showing_it_is_the_default_one(self):
+        """`grows` edits one message so a turn reads as a single thing happening; `posts`
+        fills the room. On by default is only defensible as the quiet one."""
+        self.assertNotEqual(discord.POSTS, self.settled().activity)
+
+    def test_an_owner_who_turned_it_off_still_has_it_off(self):
+        """The guard: a default that could not be overridden would be worse than the one
+        it replaced."""
+        self.assertEqual(discord.OFF, self.settled(["--activity", "off"]).activity)
+        self.assertEqual(discord.OFF, self.settled(settings={"activity": "off"}).activity)
+
+    def test_what_was_typed_wins_over_what_was_written_down(self):
+        """Both places say the same words, so an owner who set it in either gets it — and
+        the one they just typed is the one they meant."""
+        self.assertEqual(discord.POSTS,
+                         self.settled(["--activity", "posts"],
+                                      {"activity": "off"}).activity)
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class WhatItSaysBack(unittest.TestCase):
     """R-CAD-1 — what it reports is what the seam understands, and nothing else."""
 
@@ -716,8 +781,12 @@ class WhatTheOwnerIsTold(unittest.TestCase):
         """Exactly the surface `going` touches, and no more — a stand-in more generous
         than the real thing is what hides a whole feature behind a green suite."""
 
-        def __init__(self, slow=0.0):
+        def __init__(self, slow=0.0, claims=True):
             self.live, self.closed, self.greeted, self._slow = {}, False, [], slow
+            self._claims = claims
+
+        def _claim(self, what):
+            return self._claims
 
         async def _tell_the_owner(self, said):
             self.greeted.append(said)
@@ -761,14 +830,79 @@ class WhatTheOwnerIsTold(unittest.TestCase):
     class Connects:
         """The surface `on_ready` touches."""
 
-        def __init__(self):
+        def __init__(self, claims=True):
             self.greeted, self.said = False, []
+            self._claims = claims
+
+        def _claim(self, what):
+            return self._claims
 
         async def change_presence(self, **kw):
             pass
 
         async def _tell_the_owner(self, said):
             self.said.append(said)
+
+    def test_only_one_adapter_of_a_gateway_greets_the_owner(self):
+        """R-DIS-15 — an agent reachable both by direct message and in rooms runs *two* of
+        these, each with its own `greeted`, so the owner was told the gateway was online
+        twice about a minute apart — which reads as it having restarted in between. The
+        claim is shared by every adapter of one gateway."""
+        it, second = self.Connects(), self.Connects(claims=False)
+        was, discord.say = discord.say, lambda **kw: None
+        try:
+            asyncio.run(discord.Agent.on_ready(it))
+            asyncio.run(discord.Agent.on_ready(second))
+        finally:
+            discord.say = was
+        self.assertEqual(1, len(it.said))
+        self.assertEqual([], second.said, "the second adapter greeted as well")
+
+    def test_only_one_adapter_of_a_gateway_says_the_goodbye(self):
+        """R-DIS-15 — the same on the way out, and for a worse reason than tidiness: two
+        goodbyes for one shutdown read as two gateways."""
+        quiet = self.Stand(claims=False)
+        asyncio.run(discord.Agent.going(quiet))
+        self.assertEqual([], quiet.greeted, "a second adapter said goodbye too")
+        self.assertTrue(quiet.closed, "not claiming the goodbye stopped it closing")
+
+    def test_the_second_adapter_to_ask_does_not_get_the_claim(self):
+        """Driven against a real directory, because what is relied on is the operating
+        system's behaviour and a stand-in for it would be relying on itself.
+
+        **This proves the exclusion, not the atomicity.** Checking and then creating gives
+        the same answer as creating-exclusively when the two happen one after another, which
+        is all a test can arrange without a race it cannot make reliable. Why the one
+        operation rather than the two is in the source, where the reader who would break it
+        is looking — two adapters coming up together would both read "nobody has greeted
+        yet"."""
+        import os
+        import tempfile
+
+        where = tempfile.mkdtemp(prefix="rundesk-greeting-")
+        self.addCleanup(shutil.rmtree, where, True)
+        was = os.environ.get("RUNDESK_HOME")
+        os.environ["RUNDESK_HOME"] = where
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_HOME", was)
+                        if was is not None else os.environ.pop("RUNDESK_HOME", None))
+
+        first = discord.Agent._claim(object(), "online")
+        second = discord.Agent._claim(object(), "online")
+        self.assertTrue(first, "the first adapter did not get the greeting")
+        self.assertFalse(second, "both adapters got it")
+        # Coming up and going down are claimed apart, so an adapter that came up second and
+        # said no hello can still be the one that says the goodbye.
+        self.assertTrue(discord.Agent._claim(object(), "offline"))
+
+    def test_nowhere_to_claim_in_means_greeting_rather_than_silence(self):
+        """Being told once too often is a smaller failure than never being told a gateway
+        came up at all."""
+        import os
+
+        was = os.environ.pop("RUNDESK_HOME", None)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_HOME", was)
+                        if was is not None else None)
+        self.assertTrue(discord.Agent._claim(object(), "online"))
 
     def test_the_owner_is_told_the_agent_came_up_once_and_not_once_per_reconnect(self):
         """R-DIS-15 — this runs on every connection, not only the first: a session Discord

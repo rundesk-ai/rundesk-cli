@@ -442,9 +442,43 @@ class Agent(discord.Client):
         # owner told "the gateway is up" after a blip is told about something that did not
         # happen, and there is no going-down message to pair it with (R-DIS-15).
         say(type="ready")
-        if not self.greeted:
+        # **Once per gateway, not once per adapter.** `self.greeted` is this process's, and
+        # an agent reachable both by direct message and in rooms runs *two* of these — so
+        # the owner was told the gateway was online twice, a minute apart, which reads as it
+        # having restarted in between (R-DIS-15). The claim below is shared by every adapter
+        # of one gateway and settled by the filesystem rather than by asking, so two coming
+        # up together cannot both win it.
+        if not self.greeted and self._claim("online"):
             self.greeted = True
             await self._tell_the_owner("🟢 **Gateway online** — rundesk is up and listening.")
+
+    def _claim(self, what: str) -> bool:
+        """True for exactly one adapter of this gateway, and false for every other.
+
+        **Settled by the filesystem, not by asking.** Two adapters coming up together would
+        both read "nobody has greeted yet" and both greet; creating a file that must not
+        already exist is one operation the machine decides, so exactly one of them wins it.
+
+        The claim lives in the directory rundesk hands every adapter of one agent, which is
+        the gateway's own run directory and is *cleared when the gateway stops*. That is the
+        lifetime this needs without anything having to remember to clean up: a Discord
+        session that drops and reconnects finds the claim taken and stays quiet, and a real
+        restart finds the directory swept and greets again.
+
+        A machine that will not let it be written is answered `True` — being told once too
+        often is a smaller failure than never being told a gateway came up at all.
+        """
+        home = os.environ.get("RUNDESK_HOME")
+        if not home:
+            return True
+        try:
+            os.close(os.open(os.path.join(home, f".said-{what}"),
+                             os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        except FileExistsError:
+            return False
+        except OSError:
+            return True
+        return True
 
     async def _tell_the_owner(self, said: str) -> None:
         """R-DIS-15 — the owner hears about coming up and going down, wherever they are.
@@ -474,10 +508,16 @@ class Agent(discord.Client):
         # goodbye budget to itself, so an owner who could not be reached — a fetch and a
         # send, with the library's own rate-limit waits behind them — spent all of it and
         # the close below was never reached at all (R-DIS-16).
-        with contextlib.suppress(BaseException):
-            await asyncio.wait_for(
-                self._tell_the_owner("🔴 **Gateway offline** — rundesk has shut down."),
-                TELLING_SECONDS)
+        # The same once-per-gateway rule on the way out, and for a worse reason than tidiness:
+        # two goodbyes for one shutdown read as two gateways, and an owner counting them is
+        # counting wrong. Claimed separately from the greeting so that an adapter which came
+        # up second — and therefore said no hello — is still able to say the goodbye if it is
+        # the one that gets there first.
+        if self._claim("offline"):
+            with contextlib.suppress(BaseException):
+                await asyncio.wait_for(
+                    self._tell_the_owner("🔴 **Gateway offline** — rundesk has shut down."),
+                    TELLING_SECONDS)
         for held in self.live.values():
             for task in (held.typing, held.pacing):
                 if task is not None:
@@ -635,6 +675,15 @@ class Agent(discord.Client):
             await self._flush(it, held)
             await self._post(it, str(it.get("text") or ""))
             self._no_longer_last(held)
+            # **And start again, because the turn has not ended.** The line above stops it
+            # so nobody is told the agent is typing while they read what it just said — and
+            # the comment used to promise that "the next thing said starts the indicator
+            # again". Nothing does: typing is only ever started from a `taken` or `running`
+            # state record, and an agent that says something and then carries on working
+            # sends neither. So the indicator went out at the first remark and stayed out
+            # for the rest of the turn, however long it went on. What ends it for real is a
+            # final state, which cancels it a few lines below.
+            held.typing = held.typing or asyncio.ensure_future(self._typing(it))
         elif kind in ("think", "tool", "result", "usage"):
             await self._doing(it, held)
 
@@ -1255,18 +1304,46 @@ async def _read(client: Agent) -> None:
                 await client.told(it)
 
 
-def main(argv) -> int:
-    asking = "--check" in argv
-    chose = options([one for one in argv if one != "--check"])
+#: What is taken from what rundesk wrote down about this channel when it was not given on
+#: the command line. The two are the same words, so an owner who set one in either place
+#: gets the same thing.
+FROM_SETTINGS = ("bot", "server", "channel", "token_from", "activity")
+
+
+def settled(chose, settings: dict, allow: str = ""):
+    """Everything this adapter was told, from wherever it was told it — and the defaults.
+
+    A function of its arguments and nothing else, so what an owner who said nothing ends up
+    with can be read by a test rather than by starting Discord. That is not tidiness: the
+    default below was wrong for as long as it has existed and nothing could see it, because
+    it was resolved three lines into the function that opens a websocket.
+    """
     # Who may use this is rundesk's, and it enforces it — but the owner is who a hello
     # and a goodbye go to, so the adapter is told who they are.
-    chose.allow = [one for one in (os.environ.get("RUNDESK_ALLOW") or "").split(",") if one]
-    settings = json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}")
-    for what in ("bot", "server", "channel", "token_from", "activity"):
+    chose.allow = [one for one in (allow or "").split(",") if one]
+    for what in FROM_SETTINGS:
         if not getattr(chose, what, None) and settings.get(what):
             setattr(chose, what, settings[what])
-    chose.activity = chose.activity or OFF
+    # **Shown unless somebody said otherwise, which is what rundesk already decided.** This
+    # was `or OFF`, and it quietly overruled the core: `answering` sends what the agent is
+    # doing unless the channel record turns it off, and its comment says why — "a room that
+    # goes quiet for four minutes and then answers looks broken". Two defaults for one idea,
+    # and the one further from the owner won: an owner who never said anything got a channel
+    # rundesk was streaming activity to and an adapter dropping every line of it, so nothing
+    # ever appeared and nothing said why.
+    #
+    # `grows` rather than `posts` because it is the quiet one: a turn is a single message
+    # that fills in, not a room filling with commentary.
+    chose.activity = chose.activity or GROWS
     chose.dm = chose.dm or bool(settings.get("dm"))
+    return chose
+
+
+def main(argv) -> int:
+    asking = "--check" in argv
+    chose = settled(options([one for one in argv if one != "--check"]),
+                    json.loads(os.environ.get("RUNDESK_SETTINGS") or "{}"),
+                    os.environ.get("RUNDESK_ALLOW") or "")
     return asyncio.run(check(chose) if asking else carry(chose))
 
 
