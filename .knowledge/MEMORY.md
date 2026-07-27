@@ -19,39 +19,41 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   reporting success. Check `find $SCRATCH` has something in it before believing a run was
   isolated, and check `ls ~/.rundesk` afterwards to be sure it did not.
 
-- **`./install.sh --uninstall` removes the checkout's own `.venv`, whatever else you redirected.**
-  Symmetric — the install put `discord.py` there — but it is where a *developer's* suite loads it from
-  too, so the Discord cases silently start skipping, and a gateway you have running would fail on its
-  next restart with no obvious cause. Run `./install.sh` again straight afterwards, and check
+- **`./install.sh --uninstall` deletes the *checkout's* `.venv`, whatever else you redirected.**
+  `install.sh` removes `${SCRIPT_DIR}/.venv` along with the install's own, which is symmetric — the
+  install put `discord.py` there — but it is also where a *developer's* suite and a developer's
+  `./rundesk` load it from. Two consequences, both delayed: the Discord cases silently start
+  skipping, and a gateway already serving a channel survives (it imported `discord` already) but
+  cannot come back on its next restart, so it presents minutes later as a channel that will not
+  return. Rebuild straight afterwards — `./install.sh`, or `python3 -m venv .venv &&
+  .venv/bin/python -m pip install -r requirements.txt` — and check
   `.venv/bin/python -c "import discord"` before believing a green suite.
-- **The gate cannot tell you whether `test_discord` really ran, and CI is the machine where
-  it matters.** CI runs with an *empty* `.venv` on purpose, so the Discord cases skip there
-  legitimately — which means a suite that skips for the *wrong* reason skips there too, and
-  nothing goes red. Whether the adapter file exists is the one thing that does not depend on
-  the dependency, so it is checked first and raises on every machine. Anything else that
-  fails to load is a skip only when `discord.py` is genuinely absent, asked of the import
-  directly: the adapter catches its own missing import, prints a record and exits, so its
-  exception can never be told apart from being broken. Reading it as one failed CI on the
-  only machine the skip exists for.
-- **The floor check `for f in tests/test_*.py; do /usr/bin/python3 "$f"; done` cannot include
-  `test_discord`, and its failure looks like a real 3.9 break.** 3.9 finds the checkout's
-  `.venv/lib/python3.14/site-packages`, so it imports a `discord` built for another Python;
-  `yarl` falls back to its pure-Python quoter, whose signature is PEP 604, and 3.9 dies on
-  `TypeError: unsupported operand type(s) for |`. Not a `ModuleNotFoundError`, so the suite's
-  skip guard does not catch it — and nothing about the traceback says the cause is the
-  interpreter reading somebody else's virtualenv. **CI never sees it**: it runs 3.9 with an
-  empty `.venv`, which is the whole point. Run the other nineteen on `/usr/bin/python3` and
-  `test_discord` on `.venv/bin/python`; confirmed present before any of this phase's work.
-- **Run the gate with `.venv/bin/python`, not with a bare `python3`.** The gate is
-  `PY = sys.executable`, so it runs every suite on whichever interpreter started it — and on
-  a shell whose PATH does not reach Homebrew, `python3` is `/usr/bin/python3`, which is 3.9.
-  It then finds the checkout's `.venv/lib/python3.14/site-packages`, imports a `discord`
-  built for another Python, and dies in `yarl` on a PEP 604 signature: `TypeError:
-  unsupported operand type(s) for |`. `FAIL test_discord` with a traceback naming nothing of
-  ours, on a gate where the other nineteen suites are green, is this and not a real break.
-  `.venv/bin/python .knowledge/scripts/gate` is the whole fix. It is the same fault the floor
-  check below hits, arriving through the documented command rather than through a loop
-  somebody wrote.
+- **`OK (skipped=65)` and `OK` are the same word to whoever reads the gate, and CI is the
+  machine where it matters.** `test_discord` loaded the adapter from `src/rundesk/channels/discord`,
+  which the src restructure had moved to `src/channels/discord`; the loader raised, a bare
+  `except BaseException` set the module to `None`, and every case skipped for months while the gate
+  said `ok`. CI runs with an *empty* `.venv` on purpose, so the Discord cases skip there
+  legitimately — which means a suite skipping for the *wrong* reason skips there too and nothing
+  goes red. **A suite may only skip for the reason skipping is for.** Whether the adapter file
+  exists does not depend on the dependency, so it is asked first and raises on every machine;
+  anything else is a skip only when `discord.py` is genuinely absent, asked of the import directly
+  — never inferred from how the adapter failed, since it catches its own missing import, prints a
+  record and exits, so its exception cannot be told apart from being broken. **The guard is
+  partial by design**: a load breaking for a third reason still degrades to a skip wherever
+  `discord.py` is absent, which is CI. Check with `.venv/bin/python tests/test_discord.py` and read
+  the *count*, not the word — `python3` alone has no `discord` and skips honestly, so the two
+  failures look identical from the wrong interpreter.
+- **A 3.9 interpreter that can see the checkout's `.venv` dies in `yarl`, and it looks like a real
+  break.** 3.9 finds `.venv/lib/python3.14/site-packages`, imports a `discord` built for another
+  Python, and `yarl` falls back to its pure-Python quoter, whose signature is PEP 604: `TypeError:
+  unsupported operand type(s) for |`. Not a `ModuleNotFoundError`, so the skip guard does not catch
+  it, and nothing in the traceback says the cause is one interpreter reading another's virtualenv.
+  **CI never sees it** — it runs 3.9 with an empty `.venv`, which is the whole point. It arrives two
+  ways. Through the gate: `PY = sys.executable`, so a shell whose PATH does not reach Homebrew runs
+  every suite on `/usr/bin/python3`; `FAIL test_discord` naming nothing of ours while the other
+  nineteen suites are green is this. Use **`.venv/bin/python .knowledge/scripts/gate`**. Through the
+  floor check `for f in tests/test_*.py; do /usr/bin/python3 "$f"; done`: run the others on
+  `/usr/bin/python3` and **`test_discord` on `.venv/bin/python`**.
 - **Regenerate `CLI.md` with that same interpreter, or the gate fails on a line you did not
   write.** `argparse` renders `BooleanOptionalAction` differently across versions — 3.9 adds
   `(default: True)` after the help text and 3.14 does not — so `cli-reference` run on the
@@ -60,19 +62,25 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   reads like the generator being broken. `.venv/bin/python .knowledge/scripts/cli-reference`.
   **CI never catches this**: `build.yml` does not check the reference at all, so the local
   gate is the only thing that does.
-- **`gate > log; echo "GATE_EXIT=$?" >> log` reports the *echo's* status to whoever is
-  watching the command, not the gate's.** A backgrounded compound command exits with its
-  last member, so a harness or a `&&` chain reads `0` from a gate that failed — and the real
-  code is only in the file, which nobody re-reads once they have been told it passed. Two
-  runs were reported green this way while `test_transcript` was failing in both. **Run the
-  gate as the only command in its shell** and read the exit the runner gives you, or grep the
-  log for `^FAIL` before believing any summary — including your own.
+- **`gate > log; echo "GATE_EXIT=$?" >> log` reports the *echo's* status, not the gate's.** A
+  compound command exits with its last member, so a harness or a `&&` chain reads `0` from a gate
+  that failed — and the real code is only in the file, which nobody re-reads once they have been
+  told it passed. Two runs were reported green this way while `test_transcript` was failing in
+  both. **Run the gate as the only command in its shell** and read the exit the runner gives you,
+  or grep the log for `^FAIL` before believing any summary, including your own: a run that printed
+  `ok` against all 19 suites still exited 1 on a check above them.
+- **Waiting for the gate with `while pgrep -f "scripts/gate"` never ends, because the waiter
+  matches itself.** The pattern is in the waiting shell's own command line, so `pgrep` finds it
+  and every waiter keeps every other waiter alive — six were still spinning long after the runs
+  they watched had finished, and one looked like a gate that would not end. Wait on the *output*
+  instead: `until grep -q "GATE_EXIT=" "$log"; do sleep 20; done`.
 - **Deriving a new directory from `agents_home().parent` isolates nothing — derive it
   *downwards*.** It reads like "beside where agents are kept", which for an owner is
   `~/.rundesk` and is right; for a suite it is whatever the scratch directory happens to sit
   in, which is the shared temp root. Every case then shared one directory, and one case's
   template turned up in another case's agent — passing or failing by test order. Anything
-  hung *below* `agents_home()` cannot do that, because redirecting the root redirects it.
+  hung *below* `agents_home()` cannot do that, because redirecting the root redirects it
+  (`templates_home()` is `agents_home().joinpath(*OVERRIDES)` for exactly this reason).
   Assert the shape (`self.assertEqual(self.where, made.parent.parent)`) rather than
   `startswith`, which a parent path satisfies trivially.
 - **Anything a command locates from `cli.REPO_ROOT` writes into the developer's own checkout,
@@ -83,34 +91,39 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   untracked path. **Hang anything new off `agents_home()` instead**, which reads
   `RUNDESK_AGENTS_DIR` on every call, so whatever isolated the agents isolates it too — and
   check `git status --short` in the checkout after running a suite that drives a command.
-- **`OK (skipped=65)` and `OK` are the same word to whoever reads the gate.** `test_discord`
-  loaded the adapter from `src/rundesk/channels/discord`, which the src restructure had moved
-  to `src/channels/discord`; the loader raised, a bare `except BaseException` set the module to
-  `None`, and every case skipped for months while the gate said `ok`. **A suite may only skip
-  for the reason skipping is for** — here, `discord.py` genuinely not installed — and anything
-  else must raise. Check a suite that can skip with `.venv/bin/python tests/test_discord.py`
-  and read the *count*, not the word: `python3` alone has no `discord` and skips honestly, so
-  the two failures look identical from the wrong interpreter.
-- **Waiting for the gate with `while pgrep -f "scripts/gate"` never ends, because the waiter
-  matches itself.** The pattern is in the waiting shell's own command line, so `pgrep` finds it
-  and every waiter keeps every other waiter alive — six of them were still spinning long after
-  the runs they watched had finished, and one looked like a gate that would not end. Wait on
-  the *output* instead: `until grep -q "GATE_EXIT=" "$log"; do sleep 20; done`. And do not
-  trust the exit code of `gate > log; echo "GATE_EXIT=$?" >> log` either — what a caller sees
-  is the `echo`'s, so a failed gate reports success. Read the line out of the log; a run that
-  said `ok` against all 19 suites still exited 1 on a check above them.
+- **`RUNDESK_HOME` does not redirect where agents live — `RUNDESK_AGENTS_DIR` does.** The name
+  reads like the root of everything and is not: `agent.py` resolves the agents root from
+  `RUNDESK_AGENTS_DIR` alone, falling back to `~/.rundesk/agents`. So a scratch run that sets
+  `RUNDESK_HOME`, `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR` and `RUNDESK_JOBS_DIR` — which looks
+  exhaustive — still writes real agents into the owner's own `~/.rundesk/agents`, and
+  `rundesk add` reports success while doing it. Three were created that way and had to be
+  removed with `rundesk remove`. Set `RUNDESK_AGENTS_DIR` too, and check `find $SCRATCH`
+  actually has something in it before believing a command was isolated.
+- **A gateway or an install redirected only part-way still reaches the real one.** Two shapes of
+  the same mistake. A test that builds a `Gateway` without **both** `RUNDESK_RUN_DIR` and
+  `RUNDESK_LOG_DIR` at scratch writes into `~/.rundesk`; the suite did, and left nine log files in
+  the owner's home — point logs somewhere *outside* the run directory too, or the "leaves nothing
+  behind" cases trip over them. And an install/uninstall gate with only `RUNDESK_INSTALL_DIR` and
+  `RUNDESK_BIN_DIR` redirected still discovers and stops **live gateways** through the ambient
+  state directories: point `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR`, `RUNDESK_AGENTS_DIR` and
+  `RUNDESK_JOBS_DIR` at scratch as well before running the destructive half.
 - **A brain running `rundesk` picks a different `python3` than you did, and `fitness()` then
   refuses.** `rundesk` is `#!/usr/bin/env python3`, so what it resolves depends on the PATH of
   whoever ran it — a developer's shell finds Homebrew's 3.14, and a brain's tool shell finds
   `/usr/bin/python3`, which is 3.9.6. The `.venv` is built for whichever one ran `install.sh`,
-  so the other reports `NOT READY — what rundesk needs was installed for python3.14, and this
-  is python3.9` and the agent's records read as unavailable. Grok found this by being told to
-  look something up and reporting what it actually got. Reproduce with
+  so the other reports `what rundesk needs was installed for python3.14, and this is python3.9`
+  and the agent's records read as unavailable. Grok found this by being told to look something
+  up and reporting what it actually got. Reproduce with
   `env PATH=/usr/bin:/bin ./rundesk doctor <agent>`; it is not a bug in the store.
 - **A backticked anything in an Evidence cell is read as the name of a test.** That is the whole
-  mechanism keeping a ✅ honest, and it does not care that the row is ❌ or that the backticks are around
-  a filename, a path or a script. Write those plainly in a note — `check-evidence` fails the gate with
-  "is ❌ but names a test", which reads like the row is wrong when the punctuation is.
+  mechanism keeping a ✅ honest, and it does not care that the row is ❌ or that the backticks are
+  around a filename, a path or a script. Write those plainly in a note — `check-evidence` fails the
+  gate with "is ❌ but names a test", which reads like the row is wrong when the punctuation is.
+
+*The entries below are traps in a **vendor's CLI**. We cannot fix them, only re-verify — and a version
+bump can invalidate one in either direction. Each was probed when it was written; none has been
+re-checked since, so treat these as true-when-found rather than as current.*
+
 - **Codex has two instruction fields and one of them is a trap.** `baseInstructions` on
   `thread/start` *replaces* what codex was built with, including the instructions telling it how to
   use its own tools — nothing reports this, the turn merely behaves strangely and the model gets the
@@ -129,14 +142,6 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   Pass **`--no-memory`** on every turn of a probe *and* make the candidate words unguessable
   per run (a uuid suffix), or a re-run reads the previous run's sessions. The same finding is
   why the shipped adapter passes `--no-memory`: one agent's conversation is not another's.
-- **`RUNDESK_HOME` does not redirect where agents live — `RUNDESK_AGENTS_DIR` does.** The name
-  reads like the root of everything and is not: `agent.py` resolves the agents root from
-  `RUNDESK_AGENTS_DIR` alone, falling back to `~/.rundesk/agents`. So a scratch run that sets
-  `RUNDESK_HOME`, `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR` and `RUNDESK_JOBS_DIR` — which looks
-  exhaustive — still writes real agents into the owner's own
-  `~/.rundesk/agents`, and `rundesk add` reports success while doing it. Three were created that
-  way and had to be removed with `rundesk remove`. Set `RUNDESK_AGENTS_DIR` too, and check
-  `find $SCRATCH` actually has something in it before believing a command was isolated.
 - **Claude reports `loggedIn: false` on a signed-in machine when `USER` is unset.** Its
   sign-in is in the macOS login keychain (`Claude Code-credentials`, `acct=<username>`), and
   the lookup is keyed on the account name — so under the environment rundesk *builds*
@@ -195,6 +200,12 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   leaves session and memory directories under `~/.claude/projects/`, `~/.grok/sessions/` and
   `~/.codex/sessions/`. Name every scratch working directory `probe-…` so the litter is
   identifiable afterwards, and tell the owner what to remove rather than removing it yourself.
+- **`codex exec` will not sign in from a home it was not given.** `CODEX_HOME` isolates
+  credentials as well as configuration — the sign-in is `auth.json` inside it, a plain file
+  rather than a keychain — so a scratch home means `401 Unauthorized` on every request and a
+  conformance run against the real adapter that proves nothing. Point `--home` at a home that
+  has one. A symlink to the owner's own works and stays a link; a copy works and goes stale on
+  the next token refresh. Rundesk makes neither for them.
 - **`claude --help` does not list every flag `claude` accepts, so absence from it proves nothing.**
   `--permission-prompt-tool` — the flag a whole documented approval route rests on — is missing
   from 2.1.220's help output and is still accepted by the parser. The free way to tell is the
@@ -202,11 +213,19 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   starts**, so passing the flag under test costs nothing when it is gone and one live turn when
   it is not. Run the bogus-flag control first, and never conclude a vendor dropped something
   from `--help` alone.
-- **Do not test a model instruction with a question the conversation can already answer.** A first
-  attempt at the above asked for a codename the thread had been asked for before, so the model
-  answered from its own earlier reply and the resume looked like it worked. Use a rule the history
-  cannot supply, and run the control: prove the same rule *is* obeyed when given at the start.
+- **A second connection with the same bot token silently wins.** Running the Discord
+  adapter by hand to diagnose it, while a gateway is already serving that channel, makes
+  one of the two stop receiving — with no error on either. Stop the gateway first, or
+  accept that what you are watching is not what the gateway sees.
+- **Guessing a vendor's field names costs a whole feature, silently.** The Codex adapter
+  looked for `changes`, `files`, `artifacts` and `outputs`; Codex emits `savedPath`. Nothing
+  errored — a generated image was simply never reported. Read a real item out of a run's
+  `.brain` file before writing the name of a field.
 
+- **Do not test a model instruction with a question the conversation can already answer.** A first
+  attempt asked for a codename the thread had been asked for before, so the model answered from its
+  own earlier reply and the resume looked like it worked. Use a rule the history cannot supply, and
+  run the control: prove the same rule *is* obeyed when given at the start.
 - Installing dependencies leaves **caches outside rundesk's own directory** — pip and any build
   tooling it reaches for write under `~/.cache`, `~/Library/Caches`, even `~/.rustup`. Removing
   rundesk cannot take those and does not try. Do not word a requirement as "everything an install
@@ -215,10 +234,6 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   clone looks like** — so the guard protecting a developer's checkout refused to remove `~/.rundesk`
   and uninstalling silently left it. What tells them apart is whether the script sits in the
   directory the installer was told to create.
-- A supposedly isolated install/uninstall gate with only `RUNDESK_INSTALL_DIR` and `RUNDESK_BIN_DIR`
-  redirected still discovers and stops **live gateways** through the ambient state directories. Point
-  `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR`, `RUNDESK_AGENTS_DIR` and `RUNDESK_JOBS_DIR` at scratch too
-  before running the destructive half of the gate.
 - **A `Gateway` built without `root=` asks whether the *developer's checkout* fits**, so with anything in
   `requirements.txt` every case that claims a name refuses on a machine that has run the installer, and
   passes in CI, which has no `.venv`. Give any gateway a test builds a scratch `root`; only the fitness
@@ -228,10 +243,8 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   looks safe and is worse: on Linux it is `kill(-1, …)`, *every process this user may signal*, so it took
   the CI runner's own agent with it — the step then hung forever with an empty log, no timeout applied and
   cancels did nothing, because nothing was left alive to answer. macOS returns an error instead, so it
-  passed there every time. Replace `os.killpg` and assert on what was asked.
-- **`gateway.note()` makes no directory and swallows its `OSError`**, so arranging a log in a scratch
-  directory that does not exist yet leaves you with silence and a `FileNotFoundError` two assertions
-  later, in the reader. Make the log directory in `setUp`; do not assume the first write makes it.
+  passed there every time. Replace `os.killpg` and assert on what was asked. The convention is held by
+  hand in `test_gateway.py` and `test_process.py`; nothing mechanical stops the *next* test naming one.
 
 - **A `--` tail needs `nargs="+"` or `_handed_on`, and `nargs="*"` is the trap between them.**
   argparse carries a tail into a *required* greedy positional on its own, which is why
@@ -249,9 +262,10 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 - **`store` runs with `PRAGMA foreign_keys=ON`, so a test writing a row that references another
   must write that one first.** A schedule with `channel="ops"` on an agent with no such channel
   is `sqlite3.IntegrityError: FOREIGN KEY constraint failed`, from the writer and not from
-  anything that reads it back. And the stand-in `Brain` in `test_answering.py` never calls
-  `store.opened`, so nothing that reads `conversations()` after driving a fake turn finds one —
-  open it yourself when what is under test is where something goes rather than how it got there.
+  anything that reads it back.
+- **The stand-in `Brain` in `test_answering.py` never calls `store.opened`.** So nothing that reads
+  `conversations()` after driving a fake turn finds one — open it yourself when what is under test
+  is where something goes rather than how it got there.
 - **`Gateway._started` is an attribute, not a name going spare.** `_record` sets it lazily
   (`if not hasattr(self, "_started")`) and writes it into the gateway's record as the moment
   it came up, so adding a *method* called `_started` makes `hasattr` true, puts a bound method
@@ -283,14 +297,6 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   and a suite kept running for another twenty minutes while the cleanup was believed done.
   Check with `pgrep -fl <pattern>` before trusting a kill, and remember that killing one
   command in a `&&` chain lets the shell move on to the next one.
-
-- **An adapter that can find itself on its own PATH is a fork bomb.** An adapter looks its
-  brain up by name; committing the stranger's adapter as `strangers/driftwood` and putting
-  that directory on `PATH` meant it resolved `driftwood` to *itself*, ran itself, and that
-  copy did the same — **eight thousand processes and a load average of 641** before anyone
-  noticed, because each generation looks exactly like a legitimate adapter run. The brain is
-  named what the adapter looks for and the adapter is named something else, and
-  `_nothing_of_ours_is_on` in `test_provider.py` now fails the case rather than the machine.
 - **`pkill -f "tests/test_*.py"` in this checkout kills whatever *another agent* is running,
   and their gate then reports a failure that never happened.** More than one agent works in
   this worktree at once, so a suite you did not start is the ordinary case rather than a
@@ -300,25 +306,30 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   its command line: it names the **session** that started it, and one that is not yours is
   not yours to end. A suite left running past a few minutes is far cheaper than a green gate
   somebody has to re-run without knowing why it went red.
-- **Never leave overlapping runs of a suite in the background.** Repeatedly relaunching the
-  gate and `test_provider.py` while earlier ones were still going left real gateways, real
-  `codex app-server` processes and `sleep 300` stand-ins alive across a dozen generations —
-  and made the fork bomb above take minutes to spot rather than seconds, because the process
-  list was already full of things that belonged there. One run at a time; check the previous
-  one is gone before starting another.
-
+- **An adapter that can find itself on its own PATH is a fork bomb.** An adapter looks its
+  brain up by name; committing the stranger's adapter under the brain's own name and putting
+  that directory on `PATH` meant it resolved the brain to *itself*, ran itself, and that
+  copy did the same — **eight thousand processes and a load average of 641** before anyone
+  noticed, because each generation looks exactly like a legitimate adapter run. The brain is
+  named what the adapter looks for and the adapter is named something else (`driftwood` and
+  `driftwood-adapter`), and `_nothing_of_ours_is_on` in `test_provider.py` now fails the case
+  rather than the machine. That guard covers that one case; putting an adapter directory on a
+  `PATH` by hand is still a fork bomb.
+- **Never leave overlapping runs of a suite in the background, and never edit `src/` while one
+  is going.** Repeatedly relaunching the gate and `test_provider.py` while earlier ones were
+  still running left real gateways, real `codex app-server` processes and `sleep 300` stand-ins
+  alive across a dozen generations — and made the fork bomb above take minutes to spot rather
+  than seconds. The same rule covers a *teeth probe*: breaking a module to prove a case has
+  teeth while a background gate is part-way through that suite fails it against code you had
+  already restored, and the failure names the module, so it reads as a real break in your own
+  work. One run at a time; check the previous one is gone before starting another, and hold
+  every `src/` edit until it is.
 - **A test flag that points at a real directory points *every* case at it.** `test_provider.py
   --home ~/.codex` was meant for the adapter under test and reached the stand-ins too, so they
   wrote their own bookkeeping into the owner's real Codex home and read what an earlier run had
   left there — one case failed and the rest passed while quietly polluting it. Anything that
   redirects a case at something real must be scoped to the one class that needs it, and
   everything else left on scratch.
-- **`codex exec` will not sign in from a home it was not given.** `CODEX_HOME` isolates
-  credentials as well as configuration — the sign-in is `auth.json` inside it, a plain file
-  rather than a keychain — so a scratch home means `401 Unauthorized` on every request and a
-  conformance run against the real adapter that proves nothing. Point `--home` at a home that
-  has one. A symlink to the owner's own works and stays a link; a copy works and goes stale on
-  the next token refresh. Rundesk makes neither for them.
 
 - `asyncio`'s `Process.wait()` resolves when **every pipe closes**, not when the process exits. Anything
   the program left running inherited the far end and holds it open, so waiting on the exit lands hours
@@ -336,14 +347,13 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 - A module-level constant used as a **default argument** (`def __init__(self, held=HELD_BYTES)`) is bound
   once, when the file is read, so a test that monkeypatches the constant changes nothing and the case
   passes against unbounded behaviour. Resolve it in the body: `held = HELD_BYTES if held is None else held`.
-- A test that builds a `Gateway` without `RUNDESK_RUN_DIR` **and** `RUNDESK_LOG_DIR` pointed at scratch
-  writes into the real `~/.rundesk`. The suite did, and left nine log files in the owner's home. Point
-  logs somewhere **outside** the run directory too, or the "leaves nothing behind" cases trip over them.
 - **The gate cannot catch a 3.9 break, and CI can.** It runs on one Python — whatever `sys.executable`
   is — and its parse check is `ast.parse`, which accepts `dict[str, bytes | None]` happily. A PEP 604
   `X | None` in a *signature* is evaluated at import on 3.9 and raises `TypeError: unsupported operand
-  type(s) for |`, so a suite that passes the whole gate dies on the floor version CI pins. Every file
-  needs `from __future__ import annotations`, and the check before pushing is
+  type(s) for |: 'type' and 'NoneType'`, so a suite that passes the whole gate dies on the floor version
+  CI pins. Every file needs `from __future__ import annotations` — five still lack it
+  (`src/rundesk/__init__.py`, `tests/test_gateway.py`, `test_process.py`, `test_schedule.py`,
+  `test_supervisor.py`) — and the check before pushing is
   `for f in tests/test_*.py; do /usr/bin/python3 "$f"; done` — macOS ships 3.9.6 at that path, which is
   exactly the floor. `.knowledge/tmp/like-ci` exists for this.
 - A test class appended **after** the `if __name__ == "__main__": unittest.main()` block never runs —
@@ -353,13 +363,6 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   (`t.results().write_results(show_missing=True, coverdir=…)`, then grep `>>>>>>`). Running
   `python3 -m trace` once per test file overwrites the previous file's `.cover` and reports nonsense.
 
-
-- **`./install.sh --uninstall` deletes the *checkout's* `.venv`**, which is the one a
-  developer's own `./rundesk` uses. Run the uninstall half of the gate while a gateway is
-  serving a channel and the next restart of that channel cannot import `discord` — the
-  running process survives, because it imported it already, so this shows up minutes later
-  as a channel that will not come back. Rebuild it (`python3 -m venv .venv && .venv/bin/python
-  -m pip install -r requirements.txt`) before carrying on.
 - **A gateway holds the `channel.py` it imported when it started.** Editing a module and
   restarting *the adapter* is not enough: the adapter is a fresh process each time and the
   gateway is not. An attachment was downloaded correctly by a new adapter and dropped by an
@@ -374,32 +377,25 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   you reviewed>`, and if the scope is byte-identical the baseline still holds — say so
   rather than silently restating it. Re-check `git rev-parse --abbrev-ref HEAD` immediately
   before every commit; a commit meant for a feature branch lands on `main` otherwise, and
-  switching back in a shared worktree would disrupt whoever is working in it.
+  switching back in a shared worktree would disrupt whoever is working in it. A red suite can
+  be theirs and not yours — prove it in a scratch **copy** of the checkout rather than by
+  changing anything in the tree they are working in.
 - **`SUGGESTIONS.md` finding numbers are taken while you are writing.** Numbers are never
   reused, so two agents filing at once both reach for the next one — 41 and 42 were claimed
   by another round mid-review. Re-read the file's tail immediately before you number
   anything, and append rather than editing near somebody else's section.
-- **A second connection with the same bot token silently wins.** Running the Discord
-  adapter by hand to diagnose it, while a gateway is already serving that channel, makes
-  one of the two stop receiving — with no error on either. Stop the gateway first, or
-  accept that what you are watching is not what the gateway sees.
 - **A stand-in that is more generous than the real thing hides whole features.** Twice
   here: a fake `turn.carry` volunteered what the brain could do, which the real one never
   passed on, so steering was dead behind a green suite; and a fake `Outcome` was missing an
   attribute the real one has, so a code path raised only in production. Give a stand-in
   exactly the surface of the thing it stands for — no more.
-- **Guessing a vendor's field names costs a whole feature, silently.** The Codex adapter
-  looked for `changes`, `files`, `artifacts` and `outputs`; Codex emits `savedPath`. Nothing
-  errored — a generated image was simply never reported. Read a real item out of a run's
-  `.brain` file before writing the name of a field.
 
-- **A guard written as a regex over source must be written against how this package
-  actually imports.** `test_the_product_does_not_reach_the_new_store_yet` looked for
-  `from store import` and for a line starting `import …store…`. Every module here writes
-  `from rundesk import gateway, store`, which is neither — so the case that was supposed to
-  hold the whole "deleting the store leaves the product as it was" safety passed green
-  through the commit that broke it. Any case that greps `src/` for an import must be probed
-  by *adding* the thing it forbids, not only by removing it.
+- **A guard written as a regex over source must be written against how this package actually
+  imports, and must be probed by *adding* the thing it forbids.** A case holding "the product does
+  not reach the new store yet" looked for `from store import` and for a line starting
+  `import …store…`. Every module here writes `from rundesk import gateway, store`, which is
+  neither — so the case that was supposed to hold the whole safety passed green through the commit
+  that broke it. Removing the forbidden thing proves nothing; only adding it does.
 - **Changing a `store.py` signature means running `test_migration.py`, not only `test_store.py`.**
   `test_migration`'s fixtures build a furnished agent through the real store, so a new required
   argument on `schedule_fired` broke it while every suite anyone thought to re-run stayed green —
@@ -421,7 +417,7 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 - **A migration whose number is a date with a time on it silently destroys the version.**
   `PRAGMA user_version` is a signed 32-bit integer: past `2147483647` it does not raise, it wraps
   to `0` — which is exactly the value meaning "written partway and cannot be read". `20260726`
-  fits and `20260726120000` does not. `migration.found()` refuses anything above the ceiling, and
+  fits and `20260726120000` does not. `migration.found()` refuses anything above `CEILING`, and
   that guard is the only thing between a plausible-looking filename and unreadable records.
 - **`BEGIN IMMEDIATE` on a read-only SQLite connection succeeds.** SQLite defers taking the write
   lock until something actually writes, so a case proving `store`'s reader "cannot begin a write
@@ -434,9 +430,11 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   attempt and reads as a hang. It is looked up in the body of `_open`, so setting it to `0.05`
   (and restoring it in `addCleanup`) reaches it; the fake `wait=` can then release the held lock
   and the retry resolves at once.
-- **`store.usage()` on an agent that has run nothing reports `None` for the four token totals**, not
-  `0` — `SUM` over no rows is NULL, and only `runs`, `reported` and `unreported` are counted. A case
-  asserting zeros on a fresh database fails.
+- **`store.usage()` on an agent that has run nothing reports `None` for `input`, `output` and
+  `cached`**, not `0` — `SUM` over no rows is NULL. `runs`, `reported` and `unreported` are counted
+  and come back as integers, so only three of the six are absent. This is deliberate, not a defect:
+  `test_what_an_agent_cost_counts_a_run_it_cannot_account_for_apart` pins it, because absent and
+  zero are different claims. A case asserting zeros on a fresh database fails; do not "fix" it.
 - **`/usr/bin/python3` caches bytecode outside the checkout, and a restored file can keep
   running the break.** macOS's system Python writes to `~/Library/Caches/com.apple.python/…`
   rather than to `src/rundesk/__pycache__`, so clearing the repo's `__pycache__` does
