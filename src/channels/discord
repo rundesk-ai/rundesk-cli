@@ -150,6 +150,14 @@ THREAD_CHARS = 80
 #: holding the shutdown open for it would only turn a clean stop into a kill.
 GOODBYE_SECONDS = 3.0
 
+#: How much of that the message to the owner may take. **Well inside it, because the close
+#: is the part that matters.** Telling the owner is two round trips — a user fetched and a
+#: message sent — and an owner who cannot be reached spent the whole budget on them, so
+#: `close()` was never reached and the socket was dropped rather than closed. Discord then
+#: reaps it on its own schedule, and the bot goes on showing as online long after the
+#: gateway behind it has gone (R-DIS-16).
+TELLING_SECONDS = 1.0
+
 #: How many attachments to carry in from one message, and how big one may be. A chat
 #: platform accepts far more than a turn can use, and an agent's own directory is not
 #: somewhere anybody who can message it gets to fill.
@@ -257,6 +265,25 @@ def _plain_name(name: str) -> str:
     """
     kept = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in name).strip(".-")
     return kept[-120:] or "attachment"
+
+
+def _somewhere_new(where: Path, named: str) -> Path:
+    """That name in this directory, or the next one along if it is already taken.
+
+    Two files on one message can differ only in a character the rebuilding above has to
+    remove — `report v2.csv` and `report-v2.csv` are both `report-v2.csv` — so the second
+    was written over the first, and the agent was handed two names that were one file. It
+    opened the right name and read the other one's contents (R-CH-17).
+
+    Bounded by what a message may bring in at all: nothing else writes here, and the
+    directory is this message's own.
+    """
+    at, nth = where / named, 1
+    stem, dot, rest = named.partition(".")
+    while at.exists():
+        nth += 1
+        at = where / f"{stem}-{nth}{dot}{rest}"
+    return at
 
 
 def clip(text: str, limit: int) -> str:
@@ -367,6 +394,9 @@ class Agent(discord.Client):
         #: Recent messages by id, so a mark can be put on one without fetching it back.
         #: Bounded, because this process runs for weeks.
         self.seen: dict = {}
+        #: Whether the owner has been told this agent came up. Once for this process,
+        #: because coming up is what the message says happened (R-DIS-15).
+        self.greeted = False
         self.tree = discord.app_commands.CommandTree(self)
 
     # -- coming up and going down ----------------------------------------------------
@@ -404,8 +434,16 @@ class Agent(discord.Client):
         # when the thing behind it has gone.
         with contextlib.suppress(Exception):
             await self.change_presence(status=discord.Status.online)
+        # **The record every time, the message once.** This runs on every connection, not
+        # only the first: a session Discord will not resume is a fresh one, and over the
+        # weeks a channel is held open that happens on its own. Rundesk wants to hear
+        # `ready` each time, which is how a quiet agent is told from a deaf one — but an
+        # owner told "the gateway is up" after a blip is told about something that did not
+        # happen, and there is no going-down message to pair it with (R-DIS-15).
         say(type="ready")
-        await self._tell_the_owner("🟢 **Gateway online** — rundesk is up and listening.")
+        if not self.greeted:
+            self.greeted = True
+            await self._tell_the_owner("🟢 **Gateway online** — rundesk is up and listening.")
 
     async def _tell_the_owner(self, said: str) -> None:
         """R-DIS-15 — the owner hears about coming up and going down, wherever they are.
@@ -431,7 +469,14 @@ class Agent(discord.Client):
             note(f"told the owner ({person}): {said.splitlines()[0]}")
 
     async def going(self) -> None:
-        await self._tell_the_owner("🔴 **Gateway offline** — rundesk has shut down.")
+        # **Bounded, and before the close rather than instead of it.** This had the whole
+        # goodbye budget to itself, so an owner who could not be reached — a fetch and a
+        # send, with the library's own rate-limit waits behind them — spent all of it and
+        # the close below was never reached at all (R-DIS-16).
+        with contextlib.suppress(BaseException):
+            await asyncio.wait_for(
+                self._tell_the_owner("🔴 **Gateway offline** — rundesk has shut down."),
+                TELLING_SECONDS)
         for held in self.live.values():
             for task in (held.typing, held.pacing):
                 if task is not None:
@@ -475,7 +520,7 @@ class Agent(discord.Client):
         # be answered. The decision that matters is still made once, over there.
         if self.chose.allow and str(message.author.id) not in self.chose.allow:
             return
-        text = _without_mentions(message.content)
+        text = _without_mentions(message.content, self.user.id if self.user else None)
         brought = await self._fetch(message)
         if not text and not brought:
             return
@@ -494,7 +539,8 @@ class Agent(discord.Client):
             # Bounded for the same reason `seen` is, and it was not: an entry is made for
             # every conversation and removed only when a turn ends in it, so anything
             # that never reached a turn stayed for the life of the process.
-            self.live.pop(next(iter(self.live)))
+            if not self._make_room(str(conversation)):
+                break
         self.seen[str(message.id)] = message
         while len(self.seen) > SEEN_KEPT:
             self.seen.pop(next(iter(self.seen)))
@@ -527,8 +573,9 @@ class Agent(discord.Client):
                 where.mkdir(parents=True, exist_ok=True)
                 # Named by us from its own name, never by the name it arrived under: a
                 # filename is somebody else's text, and a path is a thing it must not be
-                # able to become.
-                at = where / _plain_name(one.filename)
+                # able to become. Two of them rebuilt to the same name is one file, so
+                # the second goes beside the first rather than over it.
+                at = _somewhere_new(where, _plain_name(one.filename))
                 await one.save(at)
                 brought.append({"name": one.filename, "at": str(at)})
                 note(f"brought in {one.filename} -> {at}")
@@ -725,6 +772,30 @@ class Agent(discord.Client):
         # rather than becoming the message the next line grows into.
         held.writes += 1
 
+    def _make_room(self, keeping: str) -> bool:
+        """Drop one conversation, and never one with a turn still running in it.
+
+        Says whether it found one to drop, so a caller making room cannot spin on a
+        conversation it is not allowed to take.
+
+        The oldest *entered* one went, whatever was happening in it — and an entry is
+        where that turn's typing and pacing tasks are held, so dropping it left nobody to
+        cancel them: the indicator went on renewing in that conversation for the rest of
+        this process's life, which is weeks (R-CH-11). Idle ones first, and whatever has
+        to go is cancelled on the way out rather than merely forgotten.
+        """
+        idle = [at for at, held in self.live.items()
+                if at != keeping and held.typing is None and held.pacing is None]
+        going = idle[0] if idle else next(
+            (at for at in self.live if at != keeping), None)
+        if going is None:
+            return False
+        held = self.live.pop(going)
+        for task in (held.typing, held.pacing):
+            if task is not None:
+                task.cancel()
+        return True
+
     def _stop_typing(self, held: Live) -> None:
         """Stop saying it is working, the moment there is something to read.
 
@@ -920,17 +991,23 @@ def _who(message) -> str:
     return str(getattr(author, "display_name", None) or getattr(author, "name", "") or "")
 
 
-def _without_mentions(text: str) -> str:
-    """What was said, with the naming taken out — it addressed us, it is not the ask."""
-    out, keep = [], True
-    for part in text.replace("<@!", "<@").split("<@"):
-        if keep:
-            out.append(part)
-            keep = False
-            continue
-        at = part.find(">")
-        out.append(part[at + 1:] if at >= 0 else part)
-    return "".join(out).strip()
+def _without_mentions(text: str, ours=None) -> str:
+    """What was said, with *our* naming taken out — it addressed us, it is not the ask.
+
+    **Ours and nobody else's.** Every mention used to go, and with them everything between
+    a literal `<@` and the next `>`: "ask <@alice> to review it" reached the brain as "ask
+    to review it", and a message about `a<@b` arrived as `ab`. Who else somebody named is
+    part of what they asked, and a word they typed is not this file's to remove.
+
+    Given nobody to strip — which cannot happen once we are signed in — what was said is
+    handed over as it was typed. Leaving the naming in is a question with one word too
+    many; guessing at which mention was ours is a question with one too few.
+    """
+    if ours is None:
+        return text.strip()
+    for named in (f"<@{ours}>", f"<@!{ours}>"):
+        text = text.replace(named, "")
+    return text.strip()
 
 
 def commentary(it: dict) -> str:

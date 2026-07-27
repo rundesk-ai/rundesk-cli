@@ -15,6 +15,8 @@ Run: python3 tests/test_discord.py
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import importlib.machinery
 import importlib.util
 import json
@@ -704,6 +706,202 @@ class WhichRoomAWordMeans(unittest.TestCase):
     def test_what_an_owner_typed_is_taken_as_they_typed_it(self):
         """Spaces around it are typing, not the name."""
         self.assertTrue(discord.room_matches("  #operations  ", "operations"))
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class WhatTheOwnerIsTold(unittest.TestCase):
+    """R-DIS-15, R-DIS-16 — coming up, going down, and closing the connection either way."""
+
+    class Stand:
+        """Exactly the surface `going` touches, and no more — a stand-in more generous
+        than the real thing is what hides a whole feature behind a green suite."""
+
+        def __init__(self, slow=0.0):
+            self.live, self.closed, self.greeted, self._slow = {}, False, [], slow
+
+        async def _tell_the_owner(self, said):
+            self.greeted.append(said)
+            await asyncio.sleep(self._slow)
+
+        async def close(self):
+            self.closed = True
+
+    def test_going_down_closes_the_connection_even_when_the_goodbye_does_not_land(self):
+        """R-DIS-16 — the goodbye had the whole shutdown budget to itself, so an owner who
+        could not be reached spent all of it and `close()` was never reached at all. The
+        socket was then dropped rather than closed, and Discord went on showing the bot as
+        online long after the gateway behind it had gone."""
+        it = self.Stand(slow=discord.GOODBYE_SECONDS * 2)
+        with contextlib.suppress(BaseException):
+            asyncio.run(asyncio.wait_for(discord.Agent.going(it),
+                                         timeout=discord.GOODBYE_SECONDS))
+        self.assertTrue(it.closed, "the connection was dropped rather than closed")
+
+    def test_saying_goodbye_is_bounded_well_inside_what_rundesk_allows(self):
+        """R-DIS-16 — the close has to fit in what is left after the message, so the
+        message cannot be given the whole of it."""
+        self.assertLess(discord.TELLING_SECONDS, discord.GOODBYE_SECONDS)
+
+    def test_a_goodbye_that_lands_is_still_said(self):
+        """The bound is on how long it may take, never on whether it happens."""
+        it = self.Stand()
+        asyncio.run(discord.Agent.going(it))
+        self.assertEqual(1, len(it.greeted))
+        self.assertTrue(it.closed)
+
+    def test_going_down_cancels_what_a_conversation_was_still_running(self):
+        """R-CH-11 — nothing of this channel's is left running once it goes."""
+        held = discord.Live()
+        held.typing, held.pacing = _Cancels(), _Cancels()
+        it = self.Stand()
+        it.live = {"1180": held}
+        asyncio.run(discord.Agent.going(it))
+        self.assertEqual([True, True], [held.typing.cancelled, held.pacing.cancelled])
+
+    class Connects:
+        """The surface `on_ready` touches."""
+
+        def __init__(self):
+            self.greeted, self.said = False, []
+
+        async def change_presence(self, **kw):
+            pass
+
+        async def _tell_the_owner(self, said):
+            self.said.append(said)
+
+    def test_the_owner_is_told_the_agent_came_up_once_and_not_once_per_reconnect(self):
+        """R-DIS-15 — this runs on every connection, not only the first: a session Discord
+        will not resume is a fresh one, and over the weeks a channel is held open that
+        happens on its own. An owner told "the gateway is up" after a blip is told about
+        something that did not happen, and there is no going-down message to pair it
+        with."""
+        it = self.Connects()
+        said = []
+        was, discord.say = discord.say, lambda **kw: said.append(kw)
+        try:
+            asyncio.run(discord.Agent.on_ready(it))
+            asyncio.run(discord.Agent.on_ready(it))
+        finally:
+            discord.say = was
+        self.assertEqual(1, len(it.said), "a reconnection was announced as coming up")
+        self.assertEqual([{"type": "ready"}, {"type": "ready"}], said,
+                         "rundesk stopped being told the connection came back")
+
+
+class _Cancels:
+    """Stands in for a task, so cancelling one can be asserted without a loop."""
+
+    def __init__(self):
+        self.cancelled = False
+
+    def cancel(self):
+        self.cancelled = True
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class WhatWasActuallyAsked(unittest.TestCase):
+    """R-CH-1 — the naming is not the ask, and everything else is."""
+
+    def test_the_naming_is_taken_out(self):
+        self.assertEqual("what changed today?",
+                         discord._without_mentions("<@42> what changed today?", 42))
+        self.assertEqual("what changed today?",
+                         discord._without_mentions("<@!42> what changed today?", 42))
+
+    def test_somebody_else_named_in_the_question_is_left_alone(self):
+        """Every mention used to go: "ask <@alice> to review it" reached the brain as
+        "ask  to review it", so it answered a question a word short of the one asked."""
+        self.assertEqual("ask <@7> to review it",
+                         discord._without_mentions("<@42> ask <@7> to review it", 42))
+
+    def test_words_that_merely_look_like_a_naming_survive(self):
+        """Everything between a literal `<@` and the next `>` went with the mentions, so a
+        message about `a<@b` arrived as `ab` — text nobody wrote, silently."""
+        self.assertEqual("fix the guard: if (a <@ b) return; and log it",
+                         discord._without_mentions(
+                             "<@42> fix the guard: if (a <@ b) return; and log it", 42))
+
+    def test_with_nobody_to_strip_what_was_said_is_handed_over_as_typed(self):
+        """Guessing at which mention was ours is worse than leaving one in."""
+        self.assertEqual("<@42> what changed?",
+                         discord._without_mentions("<@42> what changed?", None))
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class TwoThingsAttachedToOneMessage(unittest.TestCase):
+    """R-CH-17 — what a person attached reaches the agent, and so does the other one."""
+
+    def setUp(self):
+        import tempfile
+
+        self.where = Path(tempfile.mkdtemp(prefix="rundesk-discord-attached-"))
+        self.addCleanup(lambda: [one.unlink() for one in self.where.iterdir()]
+                        and self.where.rmdir())
+
+    def test_two_names_that_rebuild_to_one_are_two_files(self):
+        """`report v2.csv` and `report-v2.csv` are both `report-v2.csv` once a filename has
+        been rebuilt into something that can only be a filename — so the second was written
+        over the first, and the agent was handed two names that were one file. It opened
+        the right name and read the other one's contents."""
+        first = discord._somewhere_new(self.where, discord._plain_name("report v2.csv"))
+        first.write_text("the first one")
+        second = discord._somewhere_new(self.where, discord._plain_name("report-v2.csv"))
+        second.write_text("the second one")
+        self.assertNotEqual(first, second)
+        self.assertEqual("the first one", first.read_text(),
+                         "the second attachment was written over the first")
+
+    def test_a_name_nothing_has_taken_is_used_as_it_stands(self):
+        """A second file beside every first one would be a name nobody recognises."""
+        self.assertEqual(self.where / "chart.png",
+                         discord._somewhere_new(self.where, "chart.png"))
+
+    def test_what_makes_a_filename_only_a_filename_is_not_weakened(self):
+        """A path is the one thing a name arriving from somebody else must not become."""
+        self.assertEqual("etc-passwd", discord._plain_name("../../etc/passwd"))
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class MakingRoomForOneMoreConversation(unittest.TestCase):
+    """R-CH-11 — bounded, and never by dropping a turn that is still running."""
+
+    class Holds:
+        def __init__(self, live):
+            self.live = live
+
+    def _busy(self):
+        held = discord.Live()
+        held.typing, held.pacing = _Cancels(), _Cancels()
+        return held
+
+    def test_a_conversation_with_a_turn_running_is_not_the_one_dropped(self):
+        """The oldest *entered* one went, whatever was happening in it — and an entry is
+        where that turn's typing and pacing tasks are held, so nothing was left to cancel
+        them and the indicator went on renewing for the rest of the process's life."""
+        busy = self._busy()
+        it = self.Holds({"oldest-and-busy": busy, "idle": discord.Live(),
+                         "newest": discord.Live()})
+        self.assertTrue(discord.Agent._make_room(it, "newest"))
+        self.assertIn("oldest-and-busy", it.live, "a running turn was dropped")
+        self.assertNotIn("idle", it.live)
+        self.assertEqual([False, False], [busy.typing.cancelled, busy.pacing.cancelled])
+
+    def test_one_that_has_to_go_has_what_it_was_running_cancelled(self):
+        """With nothing idle to take, something running goes — and it is cancelled on the
+        way out rather than merely forgotten."""
+        busy = self._busy()
+        it = self.Holds({"oldest-and-busy": busy, "newest": self._busy()})
+        self.assertTrue(discord.Agent._make_room(it, "newest"))
+        self.assertNotIn("oldest-and-busy", it.live)
+        self.assertEqual([True, True], [busy.typing.cancelled, busy.pacing.cancelled])
+
+    def test_the_conversation_being_answered_is_never_the_one_dropped(self):
+        """It has just been spoken in, which is what the room is being made for."""
+        it = self.Holds({"newest": discord.Live()})
+        self.assertFalse(discord.Agent._make_room(it, "newest"),
+                         "it would have dropped the conversation it was making room for")
+        self.assertIn("newest", it.live)
 
 
 if __name__ == "__main__":
