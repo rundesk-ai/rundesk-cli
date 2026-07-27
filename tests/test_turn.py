@@ -131,8 +131,21 @@ say(type="text", text="all done")
 say(type="done", ok=True, session="finished-on-its-own")
 '''
 
+#: Starts a turn and then keeps working, so a gateway standing down can cancel it midway.
+#: It never reports `done`, which is exactly what a turn cut off looks like from here.
+GOES_ON = '''
+import json, sys, time
+if "--capabilities" in sys.argv:
+    print(json.dumps({"tools": True, "resume": True}))
+    sys.exit(0)
+sys.stdin.readline()
+say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
+say(type="text", text="working on it")
+time.sleep(30)
+'''
+
 BRAINS = {"plain": PLAIN, "quiet": QUIET, "nosy": NOSY, "strange": STRANGE,
-          "failing": FAILING, "steerable": STEERABLE, "finishes": FINISHES}
+          "failing": FAILING, "steerable": STEERABLE, "finishes": FINISHES, "goes_on": GOES_ON}
 
 
 class WithAnAgentToRunTurnsFor(unittest.IsolatedAsyncioTestCase):
@@ -810,6 +823,42 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
         self.ask("add", "ava", "--provider", self.brain("quiet"))
         _, _, why = self.ask("ask", "ava", "hi")
         self.assertIn("never reported", why)
+
+
+class ATurnTheGatewayStoodDownOn(WithAnAgentToRunTurnsFor):
+    """R-RUN-13 — a run that was begun is settled, whatever happens to the turn."""
+
+    async def test_a_cancelled_turn_does_not_stay_running_for_ever(self):
+        """Reported: stopping or restarting a gateway mid-turn cut the brain off and left
+        the run marked `running` in the owner's own records permanently. `rundesk runs`
+        went on showing a turn in flight that nothing was doing, no restart cleared it —
+        nothing afterwards knew it had ever been begun — and a later turn succeeded beside
+        it, which reads as two gateways rather than one bad record.
+
+        A cancellation is the ordinary way a gateway stands down, and it unwinds *past* the
+        settling at the end of the happy path rather than through it, so no `except` in the
+        body could have caught this."""
+        going = asyncio.ensure_future(self.ask("goes_on"))
+        # Long enough for the brain to be started and the run admitted, short enough that
+        # the turn is certainly still in flight — the brain sleeps for thirty seconds.
+        await asyncio.sleep(1.5)
+        going.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await going
+
+        runs = list(self.kept().runs())
+        self.assertEqual(1, len(runs), "the turn never got as far as being admitted")
+        self.assertIsNotNone(runs[0]["ended_at"], "the run is still marked as running")
+        self.assertEqual("stopped", runs[0]["outcome"])
+        self.assertIn("gateway stopped", (runs[0]["why"] or ""))
+
+    async def test_a_turn_that_ended_normally_keeps_the_outcome_it_earned(self):
+        """The other half, and the one that makes the guard safe: settling on the way out
+        must never write over the real outcome a finished turn already recorded."""
+        said = await self.ask("plain")
+        runs = list(self.kept().runs())
+        self.assertEqual("finished", runs[0]["outcome"])
+        self.assertEqual("finished", said.became)
 
 
 if __name__ == "__main__":

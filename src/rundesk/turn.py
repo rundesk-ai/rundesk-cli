@@ -221,8 +221,23 @@ async def carry(
     )
     if admitted is not None:
         admitted(run, dict(can))
-    with _Account(kept, run, where_it_is, transcript.beside(whose["logs"], run),
-                  now=now) as writing:
+    # **A run that was begun is settled, whatever happens next** (R-RUN-13). Everything
+    # below can be cancelled — a gateway standing down mid-turn is the ordinary way — and a
+    # cancellation is not an exception the body can catch on its way past: it unwinds
+    # straight through `ended` below, leaving the run marked `running` in an owner's records
+    # for ever. `rundesk runs` then shows a turn still going that nothing is doing, and no
+    # restart clears it because nothing afterwards knows it was ever begun.
+    #
+    # A list rather than a flag because the settling happens inside the `with` and the
+    # guard below reads it on the way out: what is remembered is *that* it was settled, and
+    # what it was settled as is worth having for anyone debugging one of these.
+    #
+    # Entered outside `_Account`, so it is the last thing to unwind and the account is
+    # already closed when it writes.
+    settled: list = []
+    with _settled_whatever_happens(kept, run, settled, now), \
+            _Account(kept, run, where_it_is, transcript.beside(whose["logs"], run),
+                     now=now) as writing:
         # Written before the brain is started, because what is sent is what the account
         # has to show — and an account written afterwards is one that can be written to
         # match whatever happened. A steered turn records it as it sends it instead, so
@@ -291,7 +306,45 @@ async def carry(
         # by two fields that a reader had to combine correctly to get right.
         kept.ended(run, store.stamped(now), outcome.became, exit_code=result.code,
                    why=_why(said), tokens=tokens)
+        settled.append(outcome.became)
     return outcome
+
+
+#: What a run that never got to say for itself is recorded as. `stopped` rather than
+#: `failed`, because "it stopped" and "it broke" are different news about the same silence
+#: — the same distinction `channel.STATES` already draws — and a gateway standing down
+#: mid-turn is the ordinary way this happens rather than a fault.
+INTERRUPTED = "stopped"
+
+
+@contextlib.contextmanager
+def _settled_whatever_happens(kept, run: str, settled: list, now):
+    """Leave no run marked as still going once nothing is doing it (R-RUN-13).
+
+    **The path this exists for cannot be caught by the body it wraps.** A gateway standing
+    down cancels the turn, and a cancellation unwinds straight past the `ended` at the end
+    of the happy path — so a run that had been admitted stayed `running` in an owner's own
+    records for ever. `rundesk runs` went on showing a turn in flight that nothing was
+    doing, no restart cleared it because nothing afterwards knew it had been begun, and a
+    later turn on the same agent succeeded beside it, which is what makes it look like two
+    gateways rather than one bad record.
+
+    **Exactly once**, which is the other half: the happy path has already written the real
+    outcome and this must not write a second one over it. `settled` is how the two agree.
+
+    Written even while the process is being taken down, so it is kept as narrow as it can
+    be — one row, no reading, and anything that goes wrong swallowed. A settlement that
+    raised on the way out of a cancelled turn would replace one bad record with a worse
+    traceback, and the thing it is protecting is a database write nobody is waiting on.
+    """
+    try:
+        yield
+    finally:
+        if not settled:
+            with contextlib.suppress(Exception):
+                kept.ended(run, store.stamped(now), INTERRUPTED,
+                           why="the gateway stopped while this turn was running")
+                settled.append(INTERRUPTED)
 
 
 class _Account:
