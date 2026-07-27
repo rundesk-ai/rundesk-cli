@@ -520,8 +520,14 @@ async def _run(program, prompt: str, writing, said: list, watching,
                 watching(understood)
 
     await program.start()
-    if started is not None:
-        started(program.pid)
+    try:
+        if started is not None:
+            started(program.pid)
+    except BaseException:
+        # Registration happens after spawn because it needs the PID. If that boundary
+        # fails, do not leave a provider running with nobody reading or owning it.
+        await program.end()
+        raise
     reading = asyncio.ensure_future(program.wait(sink=heard))
     if not steer:
         # Decided by what the brain said it can do, and by nothing else. A brain that
