@@ -3,10 +3,10 @@
 **Revised:** 2026-07-26, against the ✅/❌ columns in [`.knowledge/prd/`](.knowledge/prd/README.md), the
 code, and a green `python3 .knowledge/scripts/gate` — not against this document's own prose, which had
 drifted in four places.
-**Released:** `v0.5.1`. **Status:** direction, not a ratified product contract — the contracts are.
+**Released:** `v0.6.0` — the first release an owner is running. **Status:** direction, not a ratified product contract — the contracts are.
 
 **Starting implementation? Read this file's Direction, then [What Remains, In Order](#what-remains-in-order),
-then the phase at the top of that table.** Phases 0–5 are done and compressed into
+then the phase at the top of that table.** Phases 0–6 are done and compressed into
 [What Is Already Built](#what-is-already-built); their contracts are ratified and are the truth about them,
 not the summaries here. Then [`CLI.md`](CLI.md) for every operation as it is typed, and
 [`.knowledge/guides/the-command-surface.md`](.knowledge/guides/the-command-surface.md) for why the surface is
@@ -352,7 +352,6 @@ is also the list of what the phases below have to pick up:
 
 | | Phase | What lands |
 |---|---|---|
-| **6** | Let the clock start work | The end-to-end proof: a schedule fires a *turn*, not just a program, and its outcome reaches a channel |
 | **7** | Move everything onto it | The gateway's own three directories — the last readers of `~/.rundesk/{run,logs,schedules}` — carried by `002.py` |
 | **8** | Updates an owner can trust | Dependencies move with the records, `update --check` says what it would do, and where every agent stands is a question with an answer |
 | **9** | Templates an owner can make their own | The files a new agent is copied from become the owner's to override, one at a time, and survive an update |
@@ -362,6 +361,24 @@ is also the list of what the phases below have to pick up:
 | **13** | Know what an agent was granted | Inventory, search and explain: what each brain reports it has, and what this agent has actually run |
 | **14** | Questions, approvals, recovery | A brain pausing mid-turn for an answer, and surviving a restart while it waits |
 | **15** | Channel breadth | Slack, needing no provider or agent change |
+
+**What `v0.6.0` shipped, beyond the clock.** Written here because the phases below are ordered against it:
+
+- **`rundesk messages <agent>`** — what was said, newest first, across every surface, narrowable by
+  `--conversation`, `--channel`, `--author`, `--source` and `--since`. The listing `runs` could never be:
+  `runs` says *that* work happened and never *what* was said in it, which is what an agent asked "nice work?"
+  actually needs.
+- **`--in <where>` on a schedule** — which place on a surface its outcome is said in, carried unread and
+  resolved by the adapter, so a channel spanning a server stops posting wherever somebody last spoke. What is
+  posted is the agent's answer, not a line of rundesk's bookkeeping above it.
+- **Rundesk's own words reach every turn** (R-AGT-17), ahead of anything an owner adds rather than instead of
+  it: what the agent is, how to find work its session never saw, and that nothing else on the machine calling
+  itself a schedule is rundesk. The home template lost that section, because a copy an owner edits is a second
+  place for it to be wrong.
+- **An agent is not made without a brain** (R-AGT-18), and one without is not `READY` — a diagnosis whose
+  whole job is what stands between an agent and a turn was answering `READY` for one that refused every turn.
+- Two schema bugs: a schedule that had run could not be removed at all, and a run now outlives the schedule
+  that started it.
 
 **Why this order.**
 
