@@ -33,6 +33,13 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   directly: the adapter catches its own missing import, prints a record and exits, so its
   exception can never be told apart from being broken. Reading it as one failed CI on the
   only machine the skip exists for.
+- **`gate > log; echo "GATE_EXIT=$?" >> log` reports the *echo's* status to whoever is
+  watching the command, not the gate's.** A backgrounded compound command exits with its
+  last member, so a harness or a `&&` chain reads `0` from a gate that failed — and the real
+  code is only in the file, which nobody re-reads once they have been told it passed. Two
+  runs were reported green this way while `test_transcript` was failing in both. **Run the
+  gate as the only command in its shell** and read the exit the runner gives you, or grep the
+  log for `^FAIL` before believing any summary — including your own.
 - **Deriving a new directory from `agents_home().parent` isolates nothing — derive it
   *downwards*.** It reads like "beside where agents are kept", which for an owner is
   `~/.rundesk` and is right; for a suite it is whatever the scratch directory happens to sit
