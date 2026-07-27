@@ -33,6 +33,15 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   directly: the adapter catches its own missing import, prints a record and exits, so its
   exception can never be told apart from being broken. Reading it as one failed CI on the
   only machine the skip exists for.
+- **The floor check `for f in tests/test_*.py; do /usr/bin/python3 "$f"; done` cannot include
+  `test_discord`, and its failure looks like a real 3.9 break.** 3.9 finds the checkout's
+  `.venv/lib/python3.14/site-packages`, so it imports a `discord` built for another Python;
+  `yarl` falls back to its pure-Python quoter, whose signature is PEP 604, and 3.9 dies on
+  `TypeError: unsupported operand type(s) for |`. Not a `ModuleNotFoundError`, so the suite's
+  skip guard does not catch it — and nothing about the traceback says the cause is the
+  interpreter reading somebody else's virtualenv. **CI never sees it**: it runs 3.9 with an
+  empty `.venv`, which is the whole point. Run the other nineteen on `/usr/bin/python3` and
+  `test_discord` on `.venv/bin/python`; confirmed present before any of this phase's work.
 - **`gate > log; echo "GATE_EXIT=$?" >> log` reports the *echo's* status to whoever is
   watching the command, not the gate's.** A backgrounded compound command exits with its
   last member, so a harness or a `&&` chain reads `0` from a gate that failed — and the real
