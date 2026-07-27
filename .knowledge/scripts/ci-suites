@@ -13,7 +13,7 @@ from concurrent import futures
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 LOGS = ROOT / "suite-logs"
 WORKERS = 6
-SUITE_TIMEOUT_SECONDS = 420
+SUITE_TIMEOUT_SECONDS = 180
 
 
 def suites() -> list[pathlib.Path]:

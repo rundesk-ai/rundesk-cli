@@ -30,6 +30,11 @@ class FastPullRequestFeedback(unittest.TestCase):
         workers = re.search(r"^WORKERS = (\d+)$", self.runner, re.MULTILINE)
         self.assertIsNotNone(workers)
         self.assertLessEqual(int(workers.group(1)), 6)
+        timeout = re.search(
+            r"^SUITE_TIMEOUT_SECONDS = (\d+)$", self.runner, re.MULTILINE
+        )
+        self.assertIsNotNone(timeout)
+        self.assertLessEqual(int(timeout.group(1)), 180)
 
     def test_each_suite_keeps_its_own_log_and_names_failures(self):
         self.assertIn('f"{path.stem}.log"', self.runner)
