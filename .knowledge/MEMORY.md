@@ -133,6 +133,40 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `No conversation found with session ID: …` is on stderr only. So an adapter deciding
   whether to start again must read both streams, and must not report a handle for a turn
   that failed, or it poisons the conversation for good.
+- **Codex asks nobody anything unless `approvalPolicy` is set, so a probe that leaves it out
+  reports "no approval exists" about a policy nothing turned on.** The shipped adapter never
+  sets it and its default does not ask; the first run of `probe-asking codex-approve` therefore
+  said `NEVER FIRES` while `item/fileChange/requestApproval` was working perfectly. Pass
+  `{"approvalPolicy": "untrusted", "approvalsReviewer": "user"}` on `thread/start`. And read
+  the *item* type as `agentMessage`, not the `agent_message` the old `exec` stream used — the
+  wrong spelling leaves every reply looking empty, which reads exactly like a turn that said
+  nothing.
+- **Allowlisting the very tool whose permission you are testing means nothing ever asks.**
+  `--allowedTools Write` plus `--permission-prompt-tool` reported that Claude has no approval
+  gate; a permitted tool never prompts, so the broker had nothing to be asked about. Grant
+  nothing, and set `--permission-mode manual` — headless defaults to a mode Claude itself calls
+  "don't ask". Always carry the canary: `system/init.mcp_servers` says whether the broker
+  actually connected, and zero calls from a server that never started is not evidence.
+- **Claude writes an auto-memory keyed by the working directory, and a `Read`-only allowlist
+  does not stop it.** It lands in `~/.claude/projects/<resolved cwd slug>/memory/`, so a *fresh*
+  session standing in the same directory answers another conversation's question — the grok
+  cross-session trap, on a second brain, and rundesk stands every one of an agent's turns in
+  one directory. A resume probe therefore needs its control in a **different** directory, or it
+  reports `CARRIED-BY-SOMETHING-ELSE` forever. Build the slug from `os.path.realpath()`: on
+  macOS `/var` resolves to `/private/var`, and the obvious spelling inspects a directory that
+  never existed and reports nothing written.
+- **A brain cannot be probed without writing into the owner's real brain home.** Isolating
+  `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME` logs that brain out, so every probe run
+  leaves session and memory directories under `~/.claude/projects/`, `~/.grok/sessions/` and
+  `~/.codex/sessions/`. Name every scratch working directory `probe-…` so the litter is
+  identifiable afterwards, and tell the owner what to remove rather than removing it yourself.
+- **`claude --help` does not list every flag `claude` accepts, so absence from it proves nothing.**
+  `--permission-prompt-tool` — the flag a whole documented approval route rests on — is missing
+  from 2.1.220's help output and is still accepted by the parser. The free way to tell is the
+  control: a genuinely unknown flag dies with `error: unknown option '…'` **before a turn
+  starts**, so passing the flag under test costs nothing when it is gone and one live turn when
+  it is not. Run the bogus-flag control first, and never conclude a vendor dropped something
+  from `--help` alone.
 - **Do not test a model instruction with a question the conversation can already answer.** A first
   attempt at the above asked for a codename the thread had been asked for before, so the model
   answered from its own earlier reply and the resume looked like it worked. Use a rule the history

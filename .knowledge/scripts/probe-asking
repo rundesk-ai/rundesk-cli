@@ -1,0 +1,1341 @@
+#!/usr/bin/env python3
+"""Probe what a brain can and cannot do when nobody is watching the turn.
+
+Seven questions, three brains, and the answers differ per brain — so every scenario is
+named, carries its own control, and ends in a **named verdict** rather than output to
+squint at. Evidence, never a CI dependency: the live half reaches real accounts and costs
+real money, so nothing in the suite runs it.
+
+    python3 .knowledge/scripts/probe-asking --offline       # costs nothing at all
+    python3 .knowledge/scripts/probe-asking                 # everything
+    python3 .knowledge/scripts/probe-asking claude-approve  # one, by name
+    python3 .knowledge/scripts/probe-asking --list          # what there is to run
+
+The questions, and which scenarios answer them:
+
+    1 can it ask at all?        *-ask, *-ask-schema
+    2 can an answer get back?   *-resume            (each with a fresh-session control)
+    3 mid-turn input            claude-steer, codex-steer, grok-stdio
+    4 approvals                 *-approve, claude-plan, grok-plan
+    5 nobody answers            codex-approve-ignored
+    6 failure and recovery      *-gone, codex-kill
+
+**Three traps this file is built around, each already paid for elsewhere:**
+
+- Never ask something the conversation can already answer. Every resume scenario mints its
+  candidate words per run and runs a *fresh-session control* that must fail — grok reads
+  its own other sessions, so the naive probe passes without resuming anything.
+- Never isolate a home. `CODEX_HOME`, `CLAUDE_CONFIG_DIR` and `GROK_HOME` all carry the
+  sign-in, so pointing one at scratch is the same act as logging out. The working
+  directory is scratch; the home is the machine's.
+- Never run without a deadline. Claude plan mode did not terminate in 120 seconds, and a
+  probe with no deadline is a session that hangs until somebody notices.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import random
+import shutil
+import signal
+import string
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
+
+CLAUDE = os.environ.get("RUNDESK_CLAUDE_BIN", "claude")
+CODEX = os.environ.get("RUNDESK_CODEX_BIN", "codex")
+GROK = os.environ.get("RUNDESK_GROK_BIN", "grok")
+
+# A hung CLI is a finding, not a reason to sit here.
+DEADLINE = 120.0
+PATIENT = 240.0          # for a turn that is deliberately made to take a while
+
+
+# ── saying what happened ──────────────────────────────────────────────────────────────
+
+def says(what: str, said: str) -> None:
+    print(f"\n{'=' * 78}\n{what}\n{'=' * 78}\n{said.rstrip()}", flush=True)
+
+
+def verdict(name: str, said: str) -> None:
+    print(f"\n  VERDICT [{name}] {said}\n", flush=True)
+
+
+def line(said: str) -> None:
+    print(f"    {said}", flush=True)
+
+
+# ── running one ──────────────────────────────────────────────────────────────────────
+
+class Ran:
+    def __init__(self, out: str, err: str, code, timed_out: bool, took: float):
+        self.out, self.err, self.code = out, err, code
+        self.timed_out, self.took = timed_out, took
+
+    @property
+    def records(self) -> list:
+        found = []
+        for one in self.out.splitlines():
+            one = one.strip()
+            if not one.startswith("{"):
+                continue
+            try:
+                found.append(json.loads(one))
+            except ValueError:
+                pass
+        return found
+
+    def summary(self) -> str:
+        return (f"exit {self.code}"
+                + (" (TIMED OUT)" if self.timed_out else "")
+                + f" in {self.took:.1f}s")
+
+
+def ran(argv, stdin=None, deadline: float = DEADLINE, where=None, env=None) -> Ran:
+    """One program, with a deadline of its own, and both streams kept apart."""
+    began = time.monotonic()
+    proc = subprocess.Popen(
+        argv, cwd=where, env=env, text=True,
+        stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        start_new_session=True)   # its own group, so the deadline takes its children too
+    timed_out = False
+    try:
+        out, err = proc.communicate(input=stdin, timeout=deadline)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        out, err = proc.communicate()
+    return Ran(out or "", err or "", proc.returncode, timed_out, time.monotonic() - began)
+
+
+def scratch(what: str) -> str:
+    return tempfile.mkdtemp(prefix=f"probe-asking-{what}-")
+
+
+def marked() -> str:
+    """A word no earlier run and no other session can have seen."""
+    return "".join(random.choice(string.ascii_uppercase) for _ in range(6))
+
+
+# ── the three brains, driven the way rundesk drives them ─────────────────────────────
+
+def claude_argv(*more, session=None, resume=None) -> list:
+    argv = [CLAUDE, "-p", "--output-format", "stream-json", "--verbose",
+            "--include-partial-messages"]
+    if session:
+        argv += ["--session-id", session]
+    if resume:
+        argv += ["--resume", resume]
+    return argv + list(more)
+
+
+def claude_said(said: Ran) -> str:
+    """What Claude actually replied — the deltas, which are the whole of the text once."""
+    out = ""
+    for one in said.records:
+        if one.get("type") == "stream_event":
+            event = one.get("event") or {}
+            if (event.get("delta") or {}).get("type") == "text_delta":
+                out += (event["delta"] or {}).get("text") or ""
+        if one.get("type") == "result" and not out:
+            out += str(one.get("result") or "")
+    return out.strip()
+
+
+def claude_tools(said: Ran) -> list:
+    used = []
+    for one in said.records:
+        for block in ((one.get("message") or {}).get("content") or []):
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                used.append(str(block.get("name")))
+    return used
+
+
+def grok_argv(*more, resume=None) -> list:
+    # `--no-memory` on every turn: without it this CLI answers from conversations it was
+    # never handed, and a resume probe passes without resuming anything.
+    argv = [GROK, "--output-format", "streaming-json", "--no-memory"]
+    if resume:
+        argv += ["--resume", resume]
+    return argv + list(more)
+
+
+def grok_said(said: Ran) -> str:
+    out = ""
+    for one in said.records:
+        if one.get("type") == "text":
+            out += str(one.get("data") or "")
+    return out.strip()
+
+
+def grok_end(said: Ran) -> dict:
+    for one in said.records:
+        if one.get("type") == "end":
+            return one
+    return {}
+
+
+class Codex:
+    """One `codex app-server`, spoken and listened to at once — as the adapter does it.
+
+    Its own class for the same reason the shipped adapter has one: a request carries an id
+    and its answer arrives later, notifications arrive whenever they like, and both share
+    one pipe. What this adds, and the whole reason it exists here, is that it **keeps every
+    server-initiated request** — the approvals and the structured question — which is the
+    thing the shipped adapter has no answer for.
+    """
+
+    def __init__(self, where: str):
+        self.asked = 0
+        self.answers: dict = {}
+        self.notifications: list = []
+        self.requests: list = []        # what codex asked *us*, which is the finding
+        self.answer_requests = None     # None: never answer one. Otherwise a builder.
+        self.thread = None
+        self.turn = None
+        self.finished = threading.Event()
+        self.status = None
+        self.said = ""
+        self.err: list = []
+        self.writing = threading.Lock()
+        self.proc = subprocess.Popen(
+            [CODEX, "app-server"], cwd=where, text=True, bufsize=1,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            start_new_session=True)
+        threading.Thread(target=self._listen, daemon=True).start()
+        threading.Thread(target=self._listen_err, daemon=True).start()
+
+    def ask(self, method, params=None) -> int:
+        with self.writing:
+            self.asked += 1
+            at = self.asked
+            self._write({"jsonrpc": "2.0", "id": at, "method": method, "params": params or {}})
+        return at
+
+    def tell(self, method, params=None) -> None:
+        with self.writing:
+            self._write({"jsonrpc": "2.0", "method": method, "params": params or {}})
+
+    def reply(self, at, result) -> None:
+        with self.writing:
+            self._write({"jsonrpc": "2.0", "id": at, "result": result})
+
+    def _write(self, message) -> None:
+        if self.proc.stdin is None or self.proc.stdin.closed:
+            return
+        try:
+            self.proc.stdin.write(json.dumps(message) + "\n")
+            self.proc.stdin.flush()
+        except (BrokenPipeError, ValueError, OSError):
+            self.finished.set()
+
+    def answered(self, at: int, patience: float = 60.0):
+        waited = 0.0
+        while waited < patience:
+            if at in self.answers:
+                return self.answers.pop(at)
+            if self.proc.poll() is not None:
+                return None
+            time.sleep(0.02)
+            waited += 0.02
+        return None
+
+    def _listen(self) -> None:
+        assert self.proc.stdout is not None
+        for one in self.proc.stdout:
+            try:
+                said = json.loads(one)
+            except ValueError:
+                continue
+            if "id" in said and ("result" in said or "error" in said):
+                self.answers[said["id"]] = said
+                continue
+            if "id" in said and "method" in said:
+                # Codex asking *us* something. The shipped adapter drops these on the floor.
+                self.requests.append(said)
+                if self.answer_requests is not None:
+                    self.reply(said["id"], self.answer_requests(said))
+                continue
+            self._heard(said.get("method"), said.get("params") or {})
+        self.finished.set()
+
+    def _listen_err(self) -> None:
+        assert self.proc.stderr is not None
+        for one in self.proc.stderr:
+            self.err.append(one)
+
+    def _heard(self, method, params) -> None:
+        self.notifications.append(method)
+        if method == "turn/started":
+            self.turn = (params.get("turn") or {}).get("id")
+        elif method == "turn/completed":
+            became = params.get("turn") or {}
+            self.status = became.get("status")
+            self.finished.set()
+        elif method == "turn/failed":
+            self.status = "failed"
+            self.finished.set()
+        elif method == "item/completed":
+            item = params.get("item") or {}
+            # `agentMessage`, as the shipped adapter has it — not the `agent_message` the
+            # `exec` stream used. Reading the wrong one leaves every reply looking empty,
+            # which reads exactly like a turn that said nothing.
+            if item.get("type") == "agentMessage":
+                self.said += str(item.get("text") or "")
+
+    def start(self, where: str, sandbox="read-only", extra=None):
+        """`sandbox` is passed exactly as given — the spelling is itself under test.
+
+        0.145.0's schema types it as a plain `SandboxMode` string, while the shipped
+        adapter sends the externally-tagged `{"read-only": {}}` an earlier probe measured.
+        Both are tried by `codex-sandbox-spelling`, because a posture that is accepted and
+        ignored is the failure this repo has already been bitten by once.
+        """
+        if self.answered(self.ask("initialize",
+                                  {"clientInfo": {"name": "probe-asking", "version": "1"}})) is None:
+            return None
+        self.tell("initialized")
+        opening = {"cwd": where, "sandbox": sandbox}
+        opening.update(extra or {})
+        said = self.answered(self.ask("thread/start", opening))
+        if not said or "result" not in said:
+            self.err.append(f"thread/start refused: {json.dumps(said)[:300]}\n")
+            return None
+        self.thread = ((said["result"] or {}).get("thread") or {}).get("id")
+        return self.thread
+
+    def resume(self, where: str, thread: str, sandbox="read-only"):
+        if self.answered(self.ask("initialize",
+                                  {"clientInfo": {"name": "probe-asking", "version": "1"}})) is None:
+            return None
+        self.tell("initialized")
+        return self.answered(self.ask("thread/resume",
+                                      {"cwd": where, "sandbox": sandbox,
+                                       "threadId": thread}))
+
+    def turn_now(self, where: str, text: str, deadline: float = DEADLINE, extra=None) -> bool:
+        params = {"threadId": self.thread, "cwd": where,
+                  "input": [{"type": "text", "text": text}]}
+        params.update(extra or {})
+        at = self.ask("turn/start", params)
+        ended = self.finished.wait(deadline)
+        said = self.answers.pop(at, None)
+        if said and "error" in said:
+            self.err.append(f"turn/start refused: {json.dumps(said['error'])[:300]}\n")
+        return ended
+
+    def trace(self) -> str:
+        """What actually came back — so an empty turn is told apart from a silent one."""
+        return (f"notifications: {sorted(set(self.notifications)) or '(none)'}"
+                + (f"  stderr: {''.join(self.err)[:300]}" if self.err else ""))
+
+    def stop(self) -> None:
+        try:
+            os.killpg(self.proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            self.proc.kill()
+
+
+# ── the prompts, and why each is shaped the way it is ────────────────────────────────
+
+def remember_prompt(first: str, second: str) -> str:
+    """Turn one. Two candidates it cannot guess, and an instruction to ask rather than pick."""
+    return ("I want you to remember exactly one word for me, but I have not told you which. "
+            f'The two candidates are "{first}" and "{second}". Do not choose one yourself '
+            "and do not guess. End your turn by asking me which of the two you should "
+            "remember, and nothing else.")
+
+
+ANSWER = "the second one"
+
+AMBIGUOUS = ("I want to rename a variable in a file, but there are two reasonable names and "
+             "I have no preference between them. Ask me which one to use before doing "
+             "anything else. Do not pick one yourself.")
+
+PLAN = ("Plan how you would add a new command to this CLI. Do not write any code — present "
+        "the plan and wait for my approval before doing anything.")
+
+QUESTION_SCHEMA = json.dumps({
+    "type": "object",
+    "properties": {
+        "needs_answer": {"type": "boolean"},
+        "question": {"type": "string"},
+        "options": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["needs_answer", "question", "options"],
+})
+
+
+# ══ OFFLINE — every one of these costs nothing ════════════════════════════════════════
+
+def offline() -> None:
+    says("versions — what every finding below is true of", "\n".join(
+        f"{name}: {ran([binary, '--version']).out.strip() or '(not on PATH)'}"
+        for name, binary in (("claude", CLAUDE), ("codex", CODEX), ("grok", GROK))))
+
+    # 1. Does codex's protocol even *define* an approval, or a structured question?
+    where = scratch("schema")
+    made = ran([CODEX, "app-server", "generate-json-schema", "--out", where], deadline=60)
+    server_requests, decisions = [], []
+    if made.code == 0:
+        try:
+            with open(os.path.join(where, "ServerRequest.json")) as f:
+                for one in (json.load(f).get("oneOf") or []):
+                    method = (one.get("properties") or {}).get("method") or {}
+                    named = method.get("const") or (method.get("enum") or [None])[0]
+                    if named:
+                        server_requests.append(named)
+            with open(os.path.join(where, "codex_app_server_protocol.schemas.json")) as f:
+                whole = json.load(f)
+            defined = whole.get("definitions") or whole.get("$defs") or {}
+            for name in sorted(defined):
+                if name.endswith("ApprovalDecision") or name == "ReviewDecision":
+                    words = []
+                    for one in (defined[name].get("oneOf") or []):
+                        words += one.get("enum") or []
+                    decisions.append(f"{name}: {', '.join(words)}")
+        except (OSError, ValueError) as why:
+            server_requests = [f"(could not be read: {why})"]
+    says("codex app-server — what the server may ask the client",
+         "\n".join(server_requests) or "(the schema would not generate)")
+    says("codex app-server — the decisions a client may return", "\n".join(decisions))
+    shutil.rmtree(where, ignore_errors=True)
+    verdict("codex-approval-protocol",
+            "DEFINED — approvals and a structured question are first-class requests"
+            if any("requestApproval" in one for one in server_requests) else
+            "ABSENT — this version defines no approval request")
+
+    # 2. `claude --help` does not list everything claude accepts, so the control matters:
+    #    a flag that certainly does not exist dies *before* a turn starts, for nothing.
+    control = ran([CLAUDE, "-p", "--zzz-definitely-not-a-flag", "say ok"], deadline=30)
+    strict = "unknown option" in (control.err + control.out)
+    listed = ran([CLAUDE, "--help"], deadline=30).out
+    says("claude — the flags an interaction would be built on", "\n".join(
+        f"{flag}: in --help {'YES' if flag in listed else 'NO '}"
+        for flag in ("--permission-prompt-tool", "--input-format", "--replay-user-messages",
+                     "--json-schema", "--permission-mode", "--settings", "--mcp-config",
+                     "--fork-session")))
+    line(f"control — an invented flag is rejected: {'YES' if strict else 'NO'}"
+         f"  ({(control.err or control.out).strip().splitlines()[0][:70] if (control.err or control.out).strip() else '(nothing said)'})")
+    verdict("claude-help-is-complete",
+            "NO — the parser is strict, so a flag missing from --help that is still "
+            "accepted is undocumented rather than gone" if strict else
+            "UNDECIDABLE — the parser did not reject an invented flag either")
+
+    # 3. Grok's unprobed surfaces. `--always-approve` only exists if something asks.
+    says("grok — surfaces that were never probed for any of this",
+         ran([GROK, "agent", "--help"], deadline=30).out)
+
+
+# ══ LIVE ══════════════════════════════════════════════════════════════════════════════
+
+# ── Question 1 & 2: asking, and getting an answer back ───────────────────────────────
+
+def claude_ask() -> None:
+    where = scratch("claude-ask")
+    said = ran(claude_argv("--allowedTools", "Read"), stdin=AMBIGUOUS, where=where)
+    line(said.summary())
+    line(f"tools used: {', '.join(claude_tools(said)) or '(none)'}")
+    line(f"said: {claude_said(said)[:220] or '(nothing)'}")
+    verdict("claude-ask",
+            "HANGS — it asked and never ended the turn" if said.timed_out else
+            "ASKS-WITH-A-TOOL" if "AskUserQuestion" in claude_tools(said) else
+            "ASKS-IN-PROSE-AND-ENDS — the turn terminated with the question as text")
+
+
+def claude_ask_schema() -> None:
+    where = scratch("claude-schema")
+    said = ran(claude_argv("--allowedTools", "Read", "--json-schema", QUESTION_SCHEMA),
+               stdin=AMBIGUOUS, where=where)
+    line(said.summary())
+    body = claude_said(said)
+    line(f"said: {body[:300] or '(nothing)'}")
+    structured = _structured(body)
+
+    # Fairness: the streaming output rundesk uses may simply be the wrong carrier for a
+    # constrained reply. Saying "does not exist" off one output format would be reporting
+    # an interaction between two flags as a missing capability.
+    if structured is None:
+        plain = ran([CLAUDE, "-p", "--output-format", "json", "--json-schema", QUESTION_SCHEMA],
+                    stdin=AMBIGUOUS, where=where)
+        line(f"again with --output-format json: {plain.summary()}")
+        whole = plain.records[0] if plain.records else {}
+        body2 = whole.get("result") if isinstance(whole.get("result"), str) else json.dumps(whole.get("result"))
+        line(f"said: {str(body2)[:260] or '(nothing)'}")
+        structured = _structured(str(body2))
+
+    verdict("claude-ask-schema",
+            "HANGS" if said.timed_out else
+            f"ASKS-AS-STRUCTURE — needs_answer={structured.get('needs_answer')}, "
+            f"{len(structured.get('options') or [])} options"
+            if isinstance(structured, dict) and "needs_answer" in structured else
+            "NO-STRUCTURED-QUESTION — the schema did not constrain the reply under either "
+            "output format")
+
+
+def _structured(body: str):
+    try:
+        found = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    return found if isinstance(found, dict) and "needs_answer" in found else None
+
+
+def claude_resume() -> None:
+    where = scratch("claude-resume")
+    first, second = f"ZEBRA{marked()}", f"WALRUS{marked()}"
+    session = str(uuid.uuid4())
+    one = ran(claude_argv("--allowedTools", "Read", session=session),
+              stdin=remember_prompt(first, second), where=where)
+    line(f"turn 1 {one.summary()} — asked: {claude_said(one)[:160] or '(nothing)'}")
+    two = ran(claude_argv("--allowedTools", "Read", resume=session), stdin=ANSWER, where=where)
+    replied = claude_said(two)
+    line(f"turn 2 {two.summary()} — replied: {replied[:160] or '(nothing)'}")
+
+    # **Two controls, because the first one caught something.** A fresh session standing in
+    # the *same* directory answered correctly — Claude files an auto-memory under
+    # `~/.claude/projects/<cwd slug>/memory/`, so one conversation resolves another's
+    # question without resuming anything. That is the grok trap on a second brain, and the
+    # real control has to stand somewhere else.
+    beside = ran(claude_argv("--allowedTools", "Read", session=str(uuid.uuid4())),
+                 stdin=ANSWER, where=where)
+    leaked = second.lower() in claude_said(beside).lower()
+    line(f"control A (fresh session, SAME directory) — replied: {claude_said(beside)[:160] or '(nothing)'}")
+
+    elsewhere = scratch("claude-resume-control")
+    blind = claude_said(ran(claude_argv("--allowedTools", "Read", session=str(uuid.uuid4())),
+                            stdin=ANSWER, where=elsewhere))
+    line(f"control B (fresh session, fresh directory) — replied: {blind[:160] or '(nothing)'}")
+
+    # The slug is built from the *resolved* path — on macOS `/var` is `/private/var`, so
+    # the obvious spelling looks at a directory that never existed and reports nothing.
+    kept = os.path.join(os.path.expanduser("~/.claude/projects"),
+                        os.path.realpath(where).replace("/", "-"), "memory")
+    wrote = os.path.isdir(kept) and sorted(os.listdir(kept))
+    line(f"what it wrote to memory under a `Read`-only allowlist: {wrote or '(nothing)'}")
+
+    carried = second.lower() in replied.lower()
+    verdict("claude-resume",
+            "CARRIED-BY-SOMETHING-ELSE — even the fresh-directory control answered"
+            if second.lower() in blind.lower() else
+            "RESUME CARRIES THE QUESTION" if carried else "RESUME DOES NOT CARRY")
+    verdict("claude-memory-crosses-conversations",
+            "YES — a fresh session in the same working directory answered another "
+            "conversation's question, and the allowlist did not stop the write"
+            if leaked else "NO — a fresh session in the same directory could not answer")
+
+
+def codex_ask() -> None:
+    where = scratch("codex-ask")
+    codex = Codex(where)
+    try:
+        if codex.start(where) is None:
+            return verdict("codex-ask", "COULD NOT START — no thread")
+        ended = codex.turn_now(where, AMBIGUOUS)
+        line(f"thread {codex.thread}  turn ended: {ended}  status: {codex.status}")
+        line(f"codex asked us: {[r.get('method') for r in codex.requests] or '(nothing)'}")
+        line(f"said: {codex.said[:220] or '(nothing)'}")
+        verdict("codex-ask",
+                "HANGS — it asked and never ended the turn" if not ended else
+                "ASKS-AS-PROTOCOL-REQUEST"
+                if any("requestUserInput" in str(r.get("method")) for r in codex.requests)
+                else "ASKS-IN-PROSE-AND-ENDS")
+    finally:
+        codex.stop()
+
+
+def codex_resume() -> None:
+    where = scratch("codex-resume")
+    first, second = f"ZEBRA{marked()}", f"WALRUS{marked()}"
+    one = Codex(where)
+    thread = None
+    try:
+        if one.start(where) is None:
+            return verdict("codex-resume", "COULD NOT START")
+        one.turn_now(where, remember_prompt(first, second))
+        thread = one.thread
+        line(f"turn 1 thread {thread} — asked: {one.said[:160] or '(nothing)'}")
+    finally:
+        one.stop()
+    # A whole new process, which is the shape rundesk really runs.
+    two = Codex(where)
+    try:
+        if two.resume(where, thread) is None:
+            return verdict("codex-resume", "COULD NOT RESUME")
+        two.thread = thread
+        two.turn_now(where, ANSWER)
+        replied = two.said
+        line(f"turn 2 (fresh process) — replied: {replied[:160] or '(nothing)'}")
+    finally:
+        two.stop()
+    control = Codex(where)
+    try:
+        control.start(where)
+        control.turn_now(where, ANSWER)
+        blind = control.said
+        line(f"control (fresh thread, same words) — replied: {blind[:160] or '(nothing)'}")
+    finally:
+        control.stop()
+    verdict("codex-resume",
+            "CARRIED-BY-SOMETHING-ELSE — the control answered too" if second.lower() in blind.lower()
+            else "RESUME CARRIES THE QUESTION" if second.lower() in replied.lower()
+            else "RESUME DOES NOT CARRY")
+
+
+def grok_ask() -> None:
+    where = scratch("grok-ask")
+    said = ran(grok_argv("--tools", "read_file,list_dir,grep", "-p", AMBIGUOUS), where=where)
+    line(said.summary())
+    line(f"line kinds: {sorted({str(o.get('type')) for o in said.records})}")
+    line(f"said: {grok_said(said)[:220] or '(nothing)'}")
+    line(f"stopReason: {grok_end(said).get('stopReason')}")
+    verdict("grok-ask",
+            "HANGS — it asked and never ended the turn" if said.timed_out else
+            "ASKS-IN-PROSE-AND-ENDS — judged on effect, since this brain reports no tools")
+
+
+def grok_ask_schema() -> None:
+    where = scratch("grok-schema")
+    said = ran(grok_argv("--tools", "read_file", "--json-schema", QUESTION_SCHEMA,
+                         "-p", AMBIGUOUS), where=where)
+    line(said.summary())
+    body = grok_said(said) or said.out.strip()
+    line(f"said: {body[:300] or '(nothing)'}")
+    structured = None
+    for candidate in (body, said.out.strip()):
+        try:
+            structured = json.loads(candidate)
+            break
+        except ValueError:
+            continue
+    verdict("grok-ask-schema",
+            "HANGS" if said.timed_out else
+            f"ASKS-AS-STRUCTURE — needs_answer={structured.get('needs_answer')}"
+            if isinstance(structured, dict) and "needs_answer" in structured else
+            "NO-STRUCTURED-QUESTION")
+
+
+def grok_resume() -> None:
+    where = scratch("grok-resume")
+    first, second = f"ZEBRA{marked()}", f"WALRUS{marked()}"
+    session = str(uuid.uuid4())
+    one = ran(grok_argv("--tools", "read_file", "--session-id", session,
+                        "-p", remember_prompt(first, second)), where=where)
+    line(f"turn 1 {one.summary()} — asked: {grok_said(one)[:160] or '(nothing)'}")
+    handle = grok_end(one).get("sessionId") or session
+    two = ran(grok_argv("--tools", "read_file", "-p", ANSWER, resume=handle), where=where)
+    replied = grok_said(two)
+    line(f"turn 2 {two.summary()} — replied: {replied[:160] or '(nothing)'}")
+    control = ran(grok_argv("--tools", "read_file", "-p", ANSWER), where=where)
+    blind = grok_said(control)
+    line(f"control (fresh session, --no-memory) — replied: {blind[:160] or '(nothing)'}")
+    verdict("grok-resume",
+            "CARRIED-BY-SOMETHING-ELSE — the control answered too" if second.lower() in blind.lower()
+            else "RESUME CARRIES THE QUESTION" if second.lower() in replied.lower()
+            else "RESUME DOES NOT CARRY")
+
+
+# ── Question 3: mid-turn input ───────────────────────────────────────────────────────
+
+COUNT = ("Count slowly from 1 to 40. Put each number on its own line and nothing else. "
+         "Take your time.")
+STOP = "Change of plan: stop counting at 5 and then say the word HALTED and finish."
+
+
+def claude_steer() -> None:
+    """`--input-format stream-json` says 'realtime streaming input'. Is it really mid-turn?
+
+    Two messages down one stdin: the second arrives while the first is being answered. If
+    HALTED appears and 40 does not, a word landed in a turn that was already running.
+    """
+    where = scratch("claude-steer")
+    argv = claude_argv("--allowedTools", "Read", "--input-format", "stream-json",
+                       "--replay-user-messages", session=str(uuid.uuid4()))
+
+    def message(text: str) -> str:
+        return json.dumps({"type": "user", "message": {"role": "user",
+                           "content": [{"type": "text", "text": text}]}}) + "\n"
+
+    began = time.monotonic()
+    proc = subprocess.Popen(argv, cwd=where, text=True, bufsize=1,
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, start_new_session=True)
+    proc.stdin.write(message(COUNT))
+    proc.stdin.flush()
+    time.sleep(8)                      # long enough that the first turn is under way
+    sent_late = True
+    try:
+        proc.stdin.write(message(STOP))
+        proc.stdin.flush()
+    except (BrokenPipeError, OSError):
+        sent_late = False
+    timed_out = False
+    try:
+        out, err = proc.communicate(timeout=PATIENT)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        out, err = proc.communicate()
+    said = Ran(out or "", err or "", proc.returncode, timed_out, time.monotonic() - began)
+    body = claude_said(said)
+    line(said.summary() + f"  second message written: {sent_late}")
+    line(f"result lines: {sum(1 for o in said.records if o.get('type') == 'result')}")
+    line(f"said (tail): ...{body[-260:] or '(nothing)'}")
+    if said.err.strip():
+        line(f"stderr: {said.err.strip()[:200]}")
+    halted = "HALTED" in body
+    counted_all = "\n40" in body or body.rstrip().endswith("40")
+    results = sum(1 for o in said.records if o.get("type") == "result")
+    verdict("claude-steer",
+            "HANGS" if timed_out else
+            "TAKES-INPUT-MID-TURN — the second message changed the running turn"
+            if halted and not counted_all and results <= 1 else
+            "QUEUES-FOR-THE-NEXT-TURN — it finished the first, then answered the second"
+            if results > 1 else
+            "IGNORES-MID-TURN-INPUT")
+
+
+def codex_steer() -> None:
+    """`turn/steer` is a first-class request. This re-proves it on the installed version."""
+    where = scratch("codex-steer")
+    codex = Codex(where)
+    try:
+        if codex.start(where) is None:
+            return verdict("codex-steer", "COULD NOT START")
+        codex.ask("turn/start", {"threadId": codex.thread, "cwd": where,
+                                 "input": [{"type": "text", "text": COUNT}]})
+        waited = 0.0
+        while codex.turn is None and waited < 30 and not codex.finished.is_set():
+            time.sleep(0.05)
+            waited += 0.05
+        time.sleep(8)
+        steered = codex.answered(codex.ask("turn/steer", {
+            "threadId": codex.thread, "expectedTurnId": codex.turn,
+            "input": [{"type": "text", "text": STOP}]}), patience=30)
+        ended = codex.finished.wait(PATIENT)
+        # **The mechanical discriminator, not the text.** Both brains can end up printing a
+        # similar tail; what tells steering from queueing is whether the later words landed
+        # in the turn that was already running. One `turn/started` means they did.
+        turns = codex.notifications.count("turn/started")
+        line(f"turn {codex.turn}  steer answered: {json.dumps(steered)[:160] if steered else '(nothing)'}")
+        line(f"turn ended: {ended}  status: {codex.status}  turns started: {turns}")
+        line(f"said (tail): ...{codex.said[-260:] or '(nothing)'}")
+        halted = "HALTED" in codex.said
+        verdict("codex-steer",
+                "HANGS" if not ended else
+                "STEER-REFUSED" if steered and "error" in steered else
+                "TAKES-INPUT-MID-TURN — one turn started, and the later word reached it"
+                if halted and turns == 1 and steered and "result" in steered else
+                "QUEUES-FOR-THE-NEXT-TURN — the later word became a turn of its own"
+                if turns > 1 else "IGNORES-MID-TURN-INPUT")
+    finally:
+        codex.stop()
+
+
+def grok_stdio() -> None:
+    """`grok agent stdio` — a surface nobody here has ever spoken to. What does it say?"""
+    where = scratch("grok-stdio")
+    proc = subprocess.Popen([GROK, "agent", "stdio"], cwd=where, text=True, bufsize=1,
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, start_new_session=True)
+    heard: list = []
+
+    def listen():
+        for one in proc.stdout:
+            heard.append(one.rstrip())
+
+    threading.Thread(target=listen, daemon=True).start()
+    # Two handshakes, because a stdio agent is either JSON-RPC or ACP and both start here.
+    for at, method in ((1, "initialize"), (2, "session/new")):
+        try:
+            proc.stdin.write(json.dumps({
+                "jsonrpc": "2.0", "id": at, "method": method,
+                "params": {"clientInfo": {"name": "probe-asking", "version": "1"},
+                           "protocolVersion": 1,
+                           "cwd": where, "mcpServers": []}}) + "\n")
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            break
+        time.sleep(3)
+    time.sleep(2)
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+    err = (proc.stderr.read() or "")[:400]
+    says("grok agent stdio — what it answered", "\n".join(heard[:20]) or "(nothing on stdout)")
+    if err.strip():
+        line(f"stderr: {err.strip()[:300]}")
+    spoke = any(one.strip().startswith("{") for one in heard)
+    verdict("grok-stdio",
+            "SPEAKS-A-PROTOCOL — a bidirectional surface exists on this brain" if spoke else
+            "NO-ANSWER — nothing came back from the handshakes tried here")
+
+
+# ── Question 4: approvals ────────────────────────────────────────────────────────────
+
+BROKER = r'''#!/usr/bin/env python3
+"""The smallest MCP server that can be a permission-prompt tool.
+
+It denies everything and writes down what it was asked. If this file gains a line, a
+capturable approval point exists on a headless Claude; if it stays empty, there is none.
+"""
+import json, sys, os
+
+KEPT = os.environ["PROBE_BROKER_LOG"]
+
+
+def kept(what):
+    with open(KEPT, "a") as f:
+        f.write(json.dumps(what) + "\n")
+
+
+def reply(at, result):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": at, "result": result}) + "\n")
+    sys.stdout.flush()
+
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        said = json.loads(line)
+    except ValueError:
+        continue
+    method, at = said.get("method"), said.get("id")
+    if method == "initialize":
+        reply(at, {"protocolVersion": said.get("params", {}).get("protocolVersion", "2024-11-05"),
+                   "capabilities": {"tools": {}},
+                   "serverInfo": {"name": "approver", "version": "1"}})
+    elif method == "tools/list":
+        reply(at, {"tools": [{
+            "name": "approve",
+            "description": "Decide whether a tool call may proceed.",
+            "inputSchema": {"type": "object", "properties": {
+                "tool_name": {"type": "string"},
+                "input": {"type": "object"}}}}]})
+    elif method == "tools/call":
+        kept(said.get("params"))
+        reply(at, {"content": [{"type": "text", "text": json.dumps({
+            "behavior": "deny",
+            "message": "denied by the probe, deliberately"})}]})
+    elif at is not None:
+        reply(at, {})
+'''
+
+
+def claude_approve() -> None:
+    """Is there a capturable point where Claude asks permission and waits?
+
+    `--permission-prompt-tool` is absent from 2.1.220's `--help` and still accepted by the
+    parser. Either it routes a permission decision to our broker — in which case an
+    approval gate exists on this brain — or it is accepted and ignored, which is the
+    failure mode this repo has already been bitten by once.
+    """
+    where = scratch("claude-approve")
+    kept = os.path.join(where, "broker.log")
+    broker = os.path.join(where, "broker.py")
+    with open(broker, "w") as f:
+        f.write(BROKER)
+    os.chmod(broker, 0o755)
+    config = json.dumps({"mcpServers": {"approver": {
+        "command": sys.executable, "args": [broker],
+        "env": {"PROBE_BROKER_LOG": kept}}}})
+
+    def asking(at: str) -> str:
+        return (f"Create a file called TOUCHED.txt in {at} containing the word HELLO. "
+                "Then stop.")
+
+    # **No allowlist.** The first attempt at this probe allowlisted `Write` and then
+    # wondered why nothing asked permission: a tool that was already permitted never
+    # prompts, so the broker had nothing to be asked about. The whole point is a tool call
+    # that *would* otherwise stop and ask.
+    said = ran(claude_argv("--mcp-config", config,
+                           "--permission-prompt-tool", "mcp__approver__approve"),
+               stdin=asking(where), where=where, deadline=PATIENT)
+    line(said.summary())
+
+    # The canary: did our broker connect at all? Zero calls from a server that never
+    # started is not evidence about permissions.
+    connected = "(no init line)"
+    for one in said.records:
+        if one.get("type") == "system" and one.get("subtype") == "init":
+            connected = json.dumps(one.get("mcp_servers"))
+    line(f"canary — mcp servers claude reports: {connected}")
+
+    asked = []
+    if os.path.exists(kept):
+        with open(kept) as f:
+            asked = [one.strip() for one in f if one.strip()]
+    made = os.path.exists(os.path.join(where, "TOUCHED.txt"))
+    line(f"the broker was asked {len(asked)} time(s)")
+    for one in asked[:3]:
+        line(f"  {one[:220]}")
+    line(f"the file was written anyway: {made}")
+    line(f"said: {claude_said(said)[:200] or '(nothing)'}")
+
+    # And again under a mode that *does* ask. Headless defaults to a mode Claude itself
+    # calls "don't ask", so a broker under it has nothing to be asked about — reporting no
+    # gate off that run alone would be reporting a default as a limit.
+    manual_where = scratch("claude-approve-manual")
+    manual_kept = os.path.join(manual_where, "broker.log")
+    manual_broker = os.path.join(manual_where, "broker.py")
+    with open(manual_broker, "w") as f:
+        f.write(BROKER)
+    manual_config = json.dumps({"mcpServers": {"approver": {
+        "command": sys.executable, "args": [manual_broker],
+        "env": {"PROBE_BROKER_LOG": manual_kept}}}})
+    manual = ran(claude_argv("--permission-mode", "manual", "--mcp-config", manual_config,
+                             "--permission-prompt-tool", "mcp__approver__approve"),
+                 stdin=asking(manual_where), where=manual_where, deadline=PATIENT)
+    manual_asked = []
+    if os.path.exists(manual_kept):
+        with open(manual_kept) as f:
+            manual_asked = [one.strip() for one in f if one.strip()]
+    manual_made = os.path.exists(os.path.join(manual_where, "TOUCHED.txt"))
+    line(f"--permission-mode manual: {manual.summary()}, broker asked "
+         f"{len(manual_asked)} time(s), file written: {manual_made}")
+    for one in manual_asked[:3]:
+        line(f"  {one[:220]}")
+    line(f"manual said: {claude_said(manual)[:200] or '(nothing)'}")
+    if manual_asked:
+        asked, made = manual_asked, manual_made
+
+    # Control A — the ask itself works when the tool is simply permitted.
+    able_where = scratch("claude-approve-permitted")
+    able = ran(claude_argv("--allowedTools", "Write"), stdin=asking(able_where),
+               where=able_where, deadline=PATIENT)
+    able_made = os.path.exists(os.path.join(able_where, "TOUCHED.txt"))
+    line(f"control A (Write allowlisted, no broker) wrote the file: {able_made} — {able.summary()}")
+
+    # Control B — the same unpermitted turn with no broker at all. What headless does on
+    # its own is the thing the broker is supposed to change.
+    bare_where = scratch("claude-approve-bare")
+    bare = ran(claude_argv(), stdin=asking(bare_where), where=bare_where, deadline=PATIENT)
+    bare_made = os.path.exists(os.path.join(bare_where, "TOUCHED.txt"))
+    line(f"control B (no allowlist, no broker) wrote the file: {bare_made} — {bare.summary()}")
+    line(f"control B said: {claude_said(bare)[:200] or '(nothing)'}")
+
+    verdict("claude-approve",
+            "CONTROL FAILED — even a permitted turn did not write the file, so nothing "
+            "below means anything" if not able_made else
+            "GATE EXISTS AND WAITS — the decision really was routed to us, and we held it"
+            if asked and not made else
+            "GATE FIRES BUT DOES NOT HOLD — we were asked and the write happened anyway"
+            if asked and made else
+            "FLAG ACCEPTED AND IGNORED — no permission decision ever reached us, and the "
+            "write happened regardless" if made else
+            "NO GATE, AND NO WRITE — the unpermitted tool was refused without anybody "
+            "being asked, exactly as it is with no broker at all"
+            if bare_made == made else
+            "FLAG ACCEPTED AND IGNORED — nothing reached us")
+
+
+def claude_plan() -> None:
+    """The prior art's headline: plan mode emitted no capture point and never terminated."""
+    where = scratch("claude-plan")
+    said = ran(claude_argv("--permission-mode", "plan"), stdin=PLAN, where=where,
+               deadline=DEADLINE)
+    line(said.summary())
+    line(f"tools used: {', '.join(claude_tools(said)) or '(none)'}")
+    line(f"said: {claude_said(said)[:200] or '(nothing)'}")
+    made = [one for one in os.listdir(where)] if os.path.isdir(where) else []
+    line(f"left behind in a directory it was only asked to plan in: {made or '(nothing)'}")
+    verdict("claude-plan",
+            "STILL NEVER TERMINATES — no capture point, and it outlived the deadline"
+            if said.timed_out else
+            "EXITS-WITH-A-CAPTURE-POINT" if "ExitPlanMode" in claude_tools(said) else
+            "TERMINATES-WITHOUT-A-CAPTURE-POINT — it plans and ends, and nothing is capturable")
+
+
+def codex_approve() -> None:
+    """Does codex actually raise one of the approvals its protocol defines?
+
+    Read-only sandbox, and a turn that must write. The interesting half is what happens
+    when nobody answers: the shipped adapter drops server-initiated requests on the floor,
+    so if codex waits, that is a hung turn in the product today.
+    """
+    where = scratch("codex-approve")
+    make = f"Create a file called TOUCHED.txt in {where} containing the word HELLO. Then stop."
+
+    # `approvalPolicy` is what decides whether codex asks anybody anything. The shipped
+    # adapter never sets it, and its default is not to ask — so the first run of this probe
+    # reported "never fires" about a policy nothing had turned on.
+    policy = {"approvalPolicy": "untrusted", "approvalsReviewer": "user"}
+
+    codex = Codex(where)
+    asked_first = []
+    try:
+        if codex.start(where, sandbox="read-only", extra=policy) is None:
+            line(codex.trace())
+            return verdict("codex-approve", "COULD NOT START")
+        ended = codex.turn_now(where, make, deadline=DEADLINE)
+        asked_first = [r.get("method") for r in codex.requests]
+        line(f"[nobody answers] turn ended inside {DEADLINE:.0f}s: {ended}  status: {codex.status}")
+        line(f"[nobody answers] codex asked us: {asked_first or '(nothing)'}")
+        line(f"[nobody answers] file written: {os.path.exists(os.path.join(where, 'TOUCHED.txt'))}")
+        line(f"[nobody answers] said: {codex.said[:180] or '(nothing)'}")
+        line(f"[nobody answers] {codex.trace()}")
+    finally:
+        codex.stop()
+    verdict("codex-approve-ignored",
+            "HUNG — codex asked and waited forever, which is what the shipped adapter does today"
+            if asked_first and not ended else
+            "ASKED AND CARRIED ON" if asked_first else
+            "NEVER ASKED — the sandbox decided without us")
+
+    # Now the same turn with a client that answers. `decline` is the safe half of a gate.
+    where2 = scratch("codex-approve-answered")
+    make2 = f"Create a file called TOUCHED.txt in {where2} containing the word HELLO. Then stop."
+    second = Codex(where2)
+    second.answer_requests = lambda said: (
+        {"decision": "decline"} if "requestApproval" in str(said.get("method"))
+        else {"decision": "abort"} if "Approval" in str(said.get("method"))
+        else {})
+    try:
+        if second.start(where2, sandbox="read-only", extra=policy) is None:
+            line(second.trace())
+            return verdict("codex-approve", "COULD NOT START (answered half)")
+        ended = second.turn_now(where2, make2, deadline=DEADLINE)
+        asked = [r.get("method") for r in second.requests]
+        made = os.path.exists(os.path.join(where2, "TOUCHED.txt"))
+        line(f"[we decline] turn ended: {ended}  status: {second.status}")
+        line(f"[we decline] codex asked us: {asked or '(nothing)'}")
+        line(f"[we decline] file written anyway: {made}")
+        line(f"[we decline] said: {second.said[:180] or '(nothing)'}")
+        line(f"[we decline] {second.trace()}")
+        verdict("codex-approve",
+                "GATE EXISTS AND WAITS — codex asked, we declined, and it obeyed"
+                if asked and not made else
+                "GATE FIRES BUT DOES NOT HOLD — asked, declined, written anyway"
+                if asked and made else
+                "NEVER FIRES — no approval request under this posture")
+    finally:
+        second.stop()
+
+
+def codex_sandbox_spelling() -> None:
+    """Which spelling of `sandbox` does the installed codex honour — and does it say?
+
+    The shipped adapter sends `{"read-only": {}}`; 0.145.0's schema types the field as a
+    plain `SandboxMode` string. A posture that is accepted and quietly ignored is the exact
+    failure `--permission-mode dontAsk` already produced once on another brain, so this is
+    judged on **whether a write happens**, never on whether the request was accepted.
+    """
+    for spelling, what in (("read-only", 'the plain string the schema names'),
+                           ({"read-only": {}}, 'the tagged form the shipped adapter sends')):
+        where = scratch("codex-sandbox")
+        codex = Codex(where)
+        try:
+            started = codex.start(where, sandbox=spelling)
+            if started is None:
+                line(f"{what}: REFUSED at thread/start — {codex.trace()}")
+                continue
+            codex.turn_now(where, f"Create a file called TOUCHED.txt in {where} "
+                                  "containing the word HELLO. Then stop.", deadline=DEADLINE)
+            made = os.path.exists(os.path.join(where, "TOUCHED.txt"))
+            line(f"{what}: accepted, status {codex.status}, file written: {made}")
+            line(f"  said: {codex.said[:160] or '(nothing)'}")
+        finally:
+            codex.stop()
+    verdict("codex-sandbox-spelling",
+            "read the two lines above — a spelling that is accepted and still writes the "
+            "file is a posture that does not hold")
+
+
+def grok_stdio_approve() -> None:
+    """`grok agent stdio` speaks ACP and advertises a blocking `pre_tool_use` hook. Does a
+    permission request actually reach a client, and does refusing it hold?
+
+    Judged on the file, never on what the handshake advertised — a capability announced in
+    `agentCapabilities` is a claim, and this brain has already shipped two flags that were
+    accepted and did nothing.
+    """
+    where = scratch("grok-acp")
+    proc = subprocess.Popen([GROK, "agent", "stdio"], cwd=where, text=True, bufsize=1,
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, start_new_session=True)
+    answers, asked, done = {}, [], threading.Event()
+    writing = threading.Lock()
+
+    def send(message) -> None:
+        with writing:
+            try:
+                proc.stdin.write(json.dumps(message) + "\n")
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                done.set()
+
+    def listen() -> None:
+        for one in proc.stdout:
+            try:
+                said = json.loads(one)
+            except ValueError:
+                continue
+            if "id" in said and ("result" in said or "error" in said):
+                answers[said["id"]] = said
+                continue
+            method = said.get("method")
+            if "id" in said and method:
+                asked.append(said)
+                if "request_permission" in str(method):
+                    # Refuse, and see whether the refusal holds.
+                    options = ((said.get("params") or {}).get("options") or [])
+                    refusing = next((o.get("optionId") for o in options
+                                     if "reject" in str(o.get("kind", "")).lower()
+                                     or "deny" in str(o.get("optionId", "")).lower()), None)
+                    send({"jsonrpc": "2.0", "id": said["id"], "result": {
+                        "outcome": {"outcome": "selected", "optionId": refusing}
+                        if refusing else {"outcome": "cancelled"}}})
+                else:
+                    send({"jsonrpc": "2.0", "id": said["id"], "result": {}})
+        done.set()
+
+    threading.Thread(target=listen, daemon=True).start()
+
+    def wait_for(at, patience=90.0):
+        waited = 0.0
+        while waited < patience:
+            if at in answers:
+                return answers.pop(at)
+            if proc.poll() is not None:
+                return None
+            time.sleep(0.05)
+            waited += 0.05
+        return None
+
+    try:
+        send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {"protocolVersion": 1,
+                         "clientCapabilities": {"fs": {"readTextFile": False,
+                                                       "writeTextFile": False}}}})
+        if wait_for(1, 30) is None:
+            return verdict("grok-stdio-approve", "NO HANDSHAKE")
+        made = wait_for(send({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+                              "params": {"cwd": where, "mcpServers": []}}) or 2, 60)
+        session = ((made or {}).get("result") or {}).get("sessionId")
+        line(f"session: {session or json.dumps(made)[:200]}")
+        if not session:
+            return verdict("grok-stdio-approve", "NO SESSION")
+        send({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+              "params": {"sessionId": session, "prompt": [{"type": "text", "text":
+                         f"Create a file called TOUCHED.txt in {where} containing the "
+                         "word HELLO. Then stop."}]}})
+        ended = wait_for(3, PATIENT)
+        written = os.path.exists(os.path.join(where, "TOUCHED.txt"))
+        methods = [str(a.get("method")) for a in asked]
+        line(f"prompt ended: {json.dumps(ended)[:200] if ended else '(no answer inside the deadline)'}")
+        line(f"grok asked us: {sorted(set(methods)) or '(nothing)'}")
+        line(f"file written: {written}")
+        permission = [a for a in asked if "request_permission" in str(a.get("method"))]
+        if permission:
+            line(f"  first permission request: {json.dumps(permission[0].get('params'))[:300]}")
+        verdict("grok-stdio-approve",
+                "GATE EXISTS AND WAITS — it asked permission and our refusal held"
+                if permission and not written else
+                "GATE FIRES BUT DOES NOT HOLD — it asked, we refused, it wrote anyway"
+                if permission else
+                "NEVER ASKS — no permission request, though the handshake advertises one")
+    finally:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+
+
+def grok_approve() -> None:
+    """Grok has `--always-approve`, which only exists if something asks. Does it, headless?"""
+    where = scratch("grok-approve")
+    make = f"Create a file called TOUCHED.txt in {where} containing the word HELLO. Then stop."
+    said = ran(grok_argv("--tools", "create_file,read_file,list_dir", "-p", make),
+               where=where, deadline=PATIENT)
+    made = os.path.exists(os.path.join(where, "TOUCHED.txt"))
+    line(said.summary())
+    line(f"said: {grok_said(said)[:220] or '(nothing)'}")
+    line(f"file written: {made}")
+    verdict("grok-approve",
+            "HANGS — it asked and never ended" if said.timed_out else
+            "NO-GATE-AND-IT-ACTS — the write happened with nothing asked of us" if made else
+            "BLOCKED-SILENTLY — it did not write and nothing was asked of us either")
+
+
+def grok_plan() -> None:
+    where = scratch("grok-plan")
+    said = ran(grok_argv("--tools", "read_file", "--permission-mode", "plan", "-p", PLAN),
+               where=where, deadline=DEADLINE)
+    line(said.summary())
+    line(f"said: {grok_said(said)[:200] or '(nothing)'}")
+    verdict("grok-plan",
+            "STILL NEVER TERMINATES" if said.timed_out else
+            "TERMINATES-WITHOUT-A-CAPTURE-POINT — this brain reports no tool events at all, "
+            "so there is nothing to capture even in principle")
+
+
+# ── Question 6: failure and recovery ─────────────────────────────────────────────────
+
+def claude_gone() -> None:
+    """MEMORY records that a lost conversation is on stderr only. Is that still true?"""
+    where = scratch("claude-gone")
+    said = ran(claude_argv("--allowedTools", "Read", resume=str(uuid.uuid4())),
+               stdin="say ok", where=where, deadline=60)
+    result = [o for o in said.records if o.get("type") == "result"]
+    line(said.summary())
+    line(f"stdout said: {json.dumps(result[0])[:220] if result else '(no result line at all)'}")
+    line(f"stderr said: {said.err.strip()[:220] or '(nothing)'}")
+    # The question is not whether a session id appears — it always does — but whether the
+    # *reason* does. `error_during_execution` on its own tells an adapter nothing to act on.
+    reason = "no conversation found"
+    on_stderr = reason in said.err.lower()
+    on_stdout = bool(result) and reason in json.dumps(result[0]).lower()
+    line(f"result subtype: {result[0].get('subtype') if result else '(none)'}")
+    verdict("claude-gone",
+            "STDERR ONLY — the result line still says only `error_during_execution`, so an "
+            "adapter must read both streams" if on_stderr and not on_stdout else
+            "ON BOTH" if on_stderr and on_stdout else
+            "ON THE STREAM" if on_stdout else
+            "SILENT — neither stream said what happened")
+
+
+def codex_gone() -> None:
+    where = scratch("codex-gone")
+    codex = Codex(where)
+    try:
+        said = codex.resume(where, str(uuid.uuid4()))
+        line(f"thread/resume of an id that never existed: {json.dumps(said)[:300] if said else '(no answer)'}")
+        verdict("codex-gone",
+                "REFUSED WITH A REASON — the protocol says so in the error"
+                if said and "error" in said else
+                "ACCEPTED — a thread that does not exist was resumed anyway"
+                if said and "result" in said else "NO ANSWER")
+    finally:
+        codex.stop()
+
+
+def grok_gone() -> None:
+    where = scratch("grok-gone")
+    said = ran(grok_argv("--tools", "read_file", "-p", "say ok", resume=str(uuid.uuid4())),
+               where=where, deadline=60)
+    line(said.summary())
+    line(f"stdout: {said.out.strip()[:220] or '(nothing)'}")
+    line(f"stderr: {said.err.strip()[:220] or '(nothing)'}")
+    verdict("grok-gone",
+            "REFUSED — it would not resume what is not there" if said.code not in (0, None)
+            else "STARTED ANEW — a missing session became a new conversation silently")
+
+
+def codex_kill() -> None:
+    """A brain killed mid-turn, and the conversation afterwards."""
+    where = scratch("codex-kill")
+    first, second = f"ZEBRA{marked()}", f"WALRUS{marked()}"
+    one = Codex(where)
+    thread, killed_after = None, False
+    try:
+        one.ask("initialize", {"clientInfo": {"name": "probe-asking", "version": "1"}})
+        time.sleep(1.0)
+        one.tell("initialized")
+        said = one.answered(one.ask("thread/start", {"cwd": where, "sandbox": {"read-only": {}}}))
+        thread = ((said or {}).get("result") or {}).get("thread", {}).get("id") if said else None
+        one.thread = thread
+        one.ask("turn/start", {"threadId": thread, "cwd": where,
+                               "input": [{"type": "text", "text": remember_prompt(first, second)}]})
+        time.sleep(10)          # mid-question, deliberately
+        killed_after = one.finished.is_set()
+        line(f"killing the brain — thread {thread}, turn {one.turn}, "
+             f"the turn had already finished: {killed_after}")
+    finally:
+        one.stop()
+    if not thread:
+        return verdict("codex-kill", "COULD NOT START")
+    two = Codex(where)
+    try:
+        resumed = two.resume(where, thread)
+        if not resumed or "result" not in resumed:
+            line(f"resume said: {json.dumps(resumed)[:220] if resumed else '(no answer)'}")
+            return verdict("codex-kill", "POISONED — the thread could not be resumed at all")
+        two.thread = thread
+        ended = two.turn_now(where, ANSWER, deadline=DEADLINE)
+        line(f"turn after the kill ended: {ended} — replied: {two.said[:200] or '(nothing)'}")
+        # Which case was actually proven depends on whether the turn was still running when
+        # the brain was killed. A short question finishes inside the ten seconds, and then
+        # what is proven is the *gateway-restart* case — asked, process gone, answered later
+        # — rather than a turn interrupted halfway.
+        mid = "mid-turn" if not killed_after else "after the question, before the answer"
+        verdict("codex-kill",
+                f"SURVIVES ({mid}) — the thread resumed and the answer landed"
+                if second.lower() in two.said.lower() else
+                f"RESUMES WITHOUT THE QUESTION ({mid}) — the thread is there, the half-turn is not")
+    finally:
+        two.stop()
+
+
+# ── the register ─────────────────────────────────────────────────────────────────────
+
+SCENARIOS = [
+    ("claude-ask", "1. can claude ask at all, non-interactively?", claude_ask),
+    ("claude-ask-schema", "1. can its question be made structured?", claude_ask_schema),
+    ("codex-ask", "1. can codex app-server ask, and how?", codex_ask),
+    ("grok-ask", "1. can grok ask at all?", grok_ask),
+    ("grok-ask-schema", "1. can grok's question be made structured?", grok_ask_schema),
+    ("claude-resume", "2. does an answer route back on claude?", claude_resume),
+    ("codex-resume", "2. does an answer route back on codex app-server?", codex_resume),
+    ("grok-resume", "2. does an answer route back on grok?", grok_resume),
+    ("claude-steer", "3. does --input-format stream-json take input mid-turn?", claude_steer),
+    ("codex-steer", "3. does turn/steer still take input mid-turn?", codex_steer),
+    ("grok-stdio", "3. does `grok agent stdio` speak anything?", grok_stdio),
+    ("claude-approve", "4. is there a capturable approval point on claude?", claude_approve),
+    ("claude-plan", "4. is plan mode usable headless yet?", claude_plan),
+    ("codex-approve", "4/5. does codex raise an approval, and what if nobody answers?", codex_approve),
+    ("codex-sandbox-spelling", "4. which spelling of the posture does codex honour?", codex_sandbox_spelling),
+    ("grok-approve", "4. does grok ask permission for anything?", grok_approve),
+    ("grok-stdio-approve", "4. does grok's ACP surface raise a permission request?", grok_stdio_approve),
+    ("grok-plan", "4. does grok's plan mode capture anything?", grok_plan),
+    ("claude-gone", "6. resuming a claude session that no longer exists", claude_gone),
+    ("codex-gone", "6. resuming a codex thread that never existed", codex_gone),
+    ("grok-gone", "6. resuming a grok session that never existed", grok_gone),
+    ("codex-kill", "6. a brain killed mid-question, then resumed", codex_kill),
+]
+
+
+def main() -> int:
+    args = [one for one in sys.argv[1:] if not one.startswith("--")]
+    flags = [one for one in sys.argv[1:] if one.startswith("--")]
+
+    if "--list" in flags:
+        for name, what, _ in SCENARIOS:
+            print(f"  {name:20} {what}")
+        return 0
+
+    if not args:
+        offline()
+    if "--offline" in flags:
+        return 0
+
+    chosen = [s for s in SCENARIOS if not args or s[0] in args]
+    if args and not chosen:
+        print(f"no such scenario: {', '.join(args)}", file=sys.stderr)
+        return 2
+
+    for name, what, go in chosen:
+        says(f"{name} — {what}", "")
+        try:
+            go()
+        except Exception as why:                       # a probe that dies is a finding too
+            verdict(name, f"PROBE FAILED — {type(why).__name__}: {why}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

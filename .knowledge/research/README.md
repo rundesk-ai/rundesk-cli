@@ -8,6 +8,7 @@ Add a row when you add a note; `doc-lint` fails the build if one is missing. New
 
 | Last updated | Note | Question it answers |
 |---|---|---|
+| 2026-07-26 | [What a brain can do when nobody is watching the turn](./2026-07-26-questions-approvals-and-recovery.md) | Driving command-line programs rather than APIs, what can and cannot be built for a turn nobody is watching — can a brain ask, can an answer get back, can an approval gate exist, and what survives a restart? |
 | 2026-07-26 | [The Claude Code CLI as an agent's brain](./2026-07-26-claude-cli-as-a-brain.md) | What does the installed Claude Code CLI actually do when it is driven headlessly, and which of it has to be absorbed by an adapter? |
 | 2026-07-26 | [The Grok CLI as an agent's brain](./2026-07-26-grok-cli-as-a-brain.md) | What does the installed Grok CLI actually do when it is driven headlessly, and which of it has to be absorbed by an adapter? |
 | 2026-07-26 | [SQLite as a record store, and how the world orders migrations](./2026-07-26-sqlite-store-and-migrations.md) | How does the world order and record schema migrations, and what does practice say about SQLite as a per-agent record store with a single query seam? |
