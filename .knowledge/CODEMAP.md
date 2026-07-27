@@ -20,7 +20,7 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
   reports it, the updater compares against it, and a release tag is expected to match it. Nothing else
   holds a copy. `ROOT` is the same idea for *where* this install is, resolved rather than assumed.
 
-### Where what an install keeps is decided (4 places)
+### Where what an install keeps is decided (6 places)
 
 An install's own directories are not mapped here — this is the source tree, and a layout written down
 twice is a layout that disagrees with itself. Each of these files *is* the answer for one part of it, and
@@ -29,6 +29,8 @@ none of them is a copy of another:
 | Decided in | What it settles |
 |---|---|
 | `src/rundesk/agent.py` — `agents_home()`, `directory()`, `paths()` | every directory that is one agent's own, off one list that making and diagnosing both read |
+| `src/rundesk/agent.py` — `templates_home()`, `sourced()` | where an owner's own templates stand and which file each page really comes from. **Below `agents_home()`**, so whatever redirects where agents live redirects it too, and outside anything a release ships, which is the whole of why an update cannot reach it (R-AGT-23) |
+| `src/rundesk/dependencies.py` — `wanted_at()`, `site_packages()` | what this install is made of and where it is kept, asked the same way by the installer, an update and a gateway |
 | `src/migrations/001.py` | **the shape of everything an agent keeps**, and the only description of it there is |
 | `src/rundesk/store.py` | the only way in to it, and what may be asked of it |
 | `src/rundesk/supervisor.py` — `describe()` | what the machine's own job carries, so a gateway resolves what the command that made it resolved (R-AGT-9) |
@@ -44,7 +46,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 15 modules)
+## Backend / Services (src/rundesk/ — 16 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -115,7 +117,18 @@ file with it.
   agent runs the migration path from nothing rather than building tables directly, so the path is exercised
   every time anybody adds an agent and a fresh install cannot drift from an upgraded one.
 - `src/rundesk/updater.py` — where this install stands against what is published, and moving between
-  them. Every network call is behind an argument, so the whole module is exercised offline.
+  them. Every network call is behind an argument, so the whole module is exercised offline. An update
+  is **two tiers**: what rundesk is made of and what its agents keep both come forward, in that order,
+  and either failing puts the release back and the records with it. What was replaced is kept aside
+  until the whole thing is proved, which is the only way back there is. Once the files land the rest
+  of the window is handed to the release that just landed, because a step is found on disk and would
+  otherwise be run by the runner it replaced.
+- `src/rundesk/dependencies.py` — what this install is made of beyond the standard library, and putting
+  it there. One place decides what `requirements.txt` declares, what the virtualenv actually holds and
+  how the second is made to satisfy the first — `install.sh` asked in shell and `gateway.fitness` asked
+  in Python, and neither could see a version. **Imports nothing of rundesk's**: the installer calls it
+  through a bare `python3` before there is a virtualenv, and an update calls it part-way through
+  replacing every other module here. What runs a program is an argument, so pip never runs in the suite.
 - `src/rundesk/process.py` — a program rundesk runs, and how it keeps hold of it: its own session so
   ending it ends the whole tree, silence rather than duration as the failure, output streamed and never
   accumulated. Knows nothing of gateways or agents, and holds no state of its own, so any number of
@@ -140,30 +153,31 @@ file with it.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 15 files, ~790 cases)
+## Tests (tests/ — 20 files, ~1300 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
 
 | File | Cases | Covers |
 |---|---|---|
-| `test_gateway.py` | 139 | `platform-gateway` — real processes, real signals, waits turned down |
-| `test_agent.py` | 41 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
-| `test_cli.py` | 86 | `command-surface` — walks every verb off the parser, so one wired nowhere is caught |
-| `test_process.py` | 87 | `platform-process` — real process groups, grandchildren, drains and ceilings |
-| `test_updater.py` | 55 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
-| `test_install.py` | 41 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
-| `test_supervisor.py` | 38 | the launchd job — a fake `launchctl`, so it runs where there is none |
-| `test_schedule.py` | 28 | `platform-schedule` — pure time arithmetic, the clock passed in |
+| `test_gateway.py` | 178 | `platform-gateway` — real processes, real signals, waits turned down |
+| `test_agent.py` | 80 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
+| `test_cli.py` | 208 | `command-surface` — walks every verb off the parser, so one wired nowhere is caught |
+| `test_process.py` | 97 | `platform-process` — real process groups, grandchildren, drains and ceilings |
+| `test_updater.py` | 75 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
+| `test_dependencies.py` | 27 | `lifecycle-update` — what the install is made of: what is declared, what the virtualenv holds, and building one **without pip ever running** |
+| `test_install.py` | 53 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
+| `test_supervisor.py` | 39 | the launchd job — a fake `launchctl`, so it runs where there is none |
+| `test_schedule.py` | 32 | `platform-schedule` — pure time arithmetic, the clock passed in |
 | `test_provider.py` | 34 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
-| `test_claude.py` | 32 | `provider-adapter` — the arithmetic and the postures one shipped brain decides on its own, driven against 184 captured lines rather than an account |
-| `test_grok.py` | 32 | `provider-adapter` — a brain that reports no tools, and the two flags of its that are accepted and enforce nothing |
-| `test_turn.py` | 39 | `agent-run` — one whole turn, and `rundesk ask` end to end |
+| `test_claude.py` | 42 | `provider-adapter` — the arithmetic and the postures one shipped brain decides on its own, driven against 184 captured lines rather than an account |
+| `test_grok.py` | 33 | `provider-adapter` — a brain that reports no tools, and the two flags of its that are accepted and enforce nothing |
+| `test_turn.py` | 54 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_transcript.py` | 19 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
-| `test_store.py` | 57 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
-| `test_channel.py` | 42 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
-| `test_answering.py` | 36 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
-| `test_discord.py` | 37 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up |
+| `test_store.py` | 102 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
+| `test_channel.py` | 65 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
+| `test_answering.py` | 64 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
+| `test_discord.py` | 69 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and
 `.knowledge/scripts/check-evidence` fails the build when a row names one that does not exist.

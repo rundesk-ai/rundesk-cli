@@ -14,7 +14,7 @@ shaped that way.
 
 **The numbers ascend in the order the work happens**, and there are no gaps in them. They were labels once,
 with seven landing before six and thirteen running next; that cost every reader the same reconciliation, so
-they were renumbered in one pass. Phase 6 is where work stands today.
+they were renumbered in one pass. Phase 7 is where work stands today.
 
 This roadmap gets Rundesk from a proven process/gateway/schedule substrate to named agents reached through
 Discord, Slack, schedules and the terminal. It deliberately advances one testable concept at a time. The Node
@@ -353,8 +353,6 @@ is also the list of what the phases below have to pick up:
 | | Phase | What lands |
 |---|---|---|
 | **7** | Move everything onto it | The gateway's own three directories — the last readers of `~/.rundesk/{run,logs,schedules}` — carried by `002.py` |
-| **8** | Updates an owner can trust | Dependencies move with the records, `update --check` says what it would do, and where every agent stands is a question with an answer |
-| **9** | Templates an owner can make their own | The files a new agent is copied from become the owner's to override, one at a time, and survive an update |
 | **10** | Provider adapters — audit the seam | A generic endpoint adapter, the decoupling test, and the contradictions settled |
 | **11** | Channel adapters — audit the seam, and prove it beyond chat | The same on the surfaces side, proved by a surface that is not a chat app: a board or a webhook fires work at an agent, and the outcome lands back on the task |
 | **12** | Skills a brain loads by itself | One skill, written once, discovered natively by every brain that has discovery — and a live probe proving each one sees it |
@@ -627,7 +625,7 @@ the whole story of that agent. A phase that has moved the data but left one read
 kept, and whether an owner or a size decides. Phase 8 is where it is answered, because a copy kept until a
 move is proved is the same question.
 
-## Phase 8 — Updates an Owner Can Trust
+## Phase 8 — Updates an Owner Can Trust — **done**
 
 **Outcome:** an owner on any released version can reach any later one and know, before they start, what it
 will change and what it will move — and afterwards, that it moved. What an install is *made of* and what an
@@ -684,15 +682,33 @@ Three things that costs today, in order of how quietly they happen:
 - Where every agent stands is answered without opening a database.
 - A copy taken before records are moved is found afterwards, and something says when it may go.
 
-### Exit proof
+### Exit proof — **met**
 
-An install of `v0.5.1`, with agents, schedules, channels and history, reaches this one in one command: what it
-is made of and what its agents keep both move, every gateway comes back, and the command said beforehand what
-both of those would be. The same update run twice changes nothing the second time. An update made to fail at
-each of its three points — the download, the dependencies, a step — leaves the agents down, the data as it
-was, and a sentence naming which point and why.
+An install of `v0.5.9` with an agent reached `v0.6.0` in one command, driven against a scratch install built
+for the purpose: the virtualenv was rebuilt by the same module the installer uses, the records came forward,
+what the owner had written into the agent's home was untouched, their own template was kept, and a new agent
+made afterwards took it. The same update run twice changed nothing the second time.
 
-## Phase 9 — Templates an Owner Can Make Their Own
+**What it became, beyond what was asked for.** Two tiers rather than one sequence: what rundesk is made of
+comes forward before what its agents keep, because a build that fails then leaves every record exactly as it
+was. Either failing puts the release back **and the records with it** — a copy of each agent's is taken before
+any is moved — so a failed update is a no-op rather than a stop. `R-MIG-6` changed meaning to say so: a failed
+step used to leave every agent down and now leaves them running the version they were on, which is safe
+because records newer than the code that reads them are refused on open.
+
+And once the files land the rest of the window is handed to the release that just landed. Nothing re-executed
+before, so the new step files were being run by the runner they replaced — every future release quietly
+depending on that pairing holding.
+
+**Three defects were found in the existing window on the way**, all live: a refused update left the gateways
+it had already stood down unnamed and down; a part-way swap left a mixed install and brought gateways back
+onto it; and the lock covered only the download. Two more came out of review: a backup left by an interrupted
+run was discarded on sight by the run that followed it, in both tiers.
+
+**Not built:** a command to write the factory set into the override directory to be edited. It needs a verb,
+and the surface decision was to add none.
+
+## Phase 9 — Templates an Owner Can Make Their Own — **done**
 
 **Outcome:** the files a new agent's home is copied from are the owner's to override — one at a time, any or
 all — and what they wrote survives an update.
@@ -778,11 +794,25 @@ verbatim, which is a legitimate thing to want.
   already records what the same mistake one level down cost: a scratch run that redirected five variables
   still wrote real agents into `~/.rundesk/agents`, and reported success while doing it.
 
-### Exit proof
+### Exit proof — **met**
 
-An owner overrides one of the five files, makes an agent, and finds their words and four shipped ones in its
-home. They update to a later release; their file is untouched and the other four are the new release's.
-`doctor` says which is which without being asked twice.
+Driven for real against a scratch install: an owner's `SOUL.md` stood in their own directory, the install was
+updated from `v0.5.9` to `v0.6.0`, their file came through untouched, and an agent made afterwards took their
+words and four shipped ones. `doctor` names, per page, which is which and from where.
+
+**Where they live moved while it was built.** Derived from `agents_home().parent` it read as "beside where
+agents are kept", which is right for an owner and, for anything pointed at a scratch directory, resolves to
+whatever that directory happens to sit in — so every case in a suite shared one, and one case's template
+turned up in another's agent. It is below `agents_home()` now and dotted, so whatever redirects where agents
+live redirects it too, and nothing walking that place can mistake it for an agent.
+
+Surviving an update is a property of **where**, not of anything the updater does — nothing in the updater
+knows the directory exists — so one case drives the real `_copy_over` and a second pins the shape, or the
+first would start holding by accident the day somebody moves it. Nothing in `install.sh` was taught any of
+this either: the templates stand among the agents, and everything beside the program is kept.
+
+**Not built:** deliverable 2, a way to write the factory set into the override directory to be edited. It
+needs a verb, and the surface decision for these two phases was to add none. An owner copies five files.
 
 ## Phase 10 — Provider Adapters: Audit the Seam
 
