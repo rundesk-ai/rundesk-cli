@@ -48,6 +48,11 @@ class WithAnAgentThatHasRun(unittest.TestCase):
             os.environ[said] = str(at)
             at.mkdir(parents=True, exist_ok=True)
         agent.add("ava", self.where)
+        # With a brain, because an agent that has none is now a fault every diagnosis
+        # reports (R-AGT-18) — and one case here asks a freshly made agent to have nothing
+        # wrong with it. A fixture that left it out would put that complaint into a case
+        # about where an account is kept.
+        agent.remember("ava", self.where, provider="codex")
 
     def kept(self, name: str = "ava") -> store.Store:
         return agent.records(name, self.where)
