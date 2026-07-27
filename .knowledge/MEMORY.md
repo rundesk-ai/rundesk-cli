@@ -115,6 +115,25 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   and the agent's records read as unavailable. Grok found this by being told to look something
   up and reporting what it actually got. Reproduce with
   `env PATH=/usr/bin:/bin ./rundesk doctor <agent>`; it is not a bug in the store.
+- **`until gh run view …; do :; done` spends five thousand API calls in a couple of minutes
+  and locks you out of GitHub for the rest of the hour.** The loop body is empty, so it asks
+  as fast as the network answers — four of those while watching a release exhausted the
+  authenticated quota (5,000/hr, shared by every tool and agent on the account), and then
+  *nothing* could read a run, a release or an issue until the top of the hour. Watching a
+  workflow is the obvious thing to do and this is the obvious way to write it. Use
+  `gh run watch <id> --exit-status --interval 20`, which GitHub paces for you, or put a
+  `sleep 20` in the loop. Check what is left with
+  `gh api rate_limit --jq .resources.core` before starting anything that polls.
+- **A tag fires `build` and `release` at the same time, so the job that installs the
+  *published* release tests the previous one.** `build.yml` runs on every push including a
+  tag, and its bare-machine job asks GitHub for the newest release and installs it — while
+  `release.yml` is still publishing the tag that triggered both. The job therefore installs
+  the *old* release and compares it against the *new* tag: `installed: rundesk 0.9.0 |
+  newest release: v0.9.1`. It is red on every release, and it is not the release that is
+  wrong. Re-run that job once the release has finished publishing and it passes. Worth
+  fixing properly — either it should not run on a tag at all, or it should wait for the
+  release — but until then, a red bare-machine job on a tag means "run it again", not
+  "the release is broken".
 - **`unittest -k "a or b"` runs nothing and says `NO TESTS RAN`, which in a teeth probe reads
   exactly like "the test passed".** `-k` takes a substring, not an expression — an `or` matches
   no test name at all. Two probes in a run of six reported the code was fine when neither had
