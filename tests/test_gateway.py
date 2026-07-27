@@ -1498,11 +1498,25 @@ class TheClockIsLookedAtAsSoonAsThereIsAGatewayToLookAtIt(WithARunDirectory):
 
     async def test_the_first_look_and_the_ordinary_tick_do_not_start_one_minute_twice(self):
         """R-SCH-9, R-SCH-26 — the durable per-minute guard is what makes looking early
-        safe, and it is the thing an extra look would have broken."""
+        safe, and it is the thing an extra look would have broken.
+
+        **The whole window has to sit inside one minute**, and that is arranged rather than
+        hoped for. The schedule is due every minute against the wall clock, so a window
+        that crosses a boundary sees a *second* firing that is entirely correct — and this
+        case then fails saying a minute was started twice, which is not what happened. It
+        failed exactly that way once on a loaded CI runner and passes on every unloaded
+        machine, which is the signature.
+        """
         self.addCleanup(setattr, gateway, "TICK_SECONDS", gateway.TICK_SECONDS)
         gateway.TICK_SECONDS = 0.05
+        # Start early in a minute, so the first firing and the second of ticking after it
+        # cannot land either side of a boundary. Waiting is cheap and only ever happens in
+        # the last quarter of a minute.
+        while datetime.now().second > 45:
+            await asyncio.sleep(0.5)
         gw = self.made()
         self.schedules_for(gw.name, self._appends())
+        began = datetime.now().minute
         serving = asyncio.ensure_future(gw.serve())
         await self._up(gw)
         self.assertTrue(await self._ran_within(30.0), "nothing due was started at all")
@@ -1510,6 +1524,11 @@ class TheClockIsLookedAtAsSoonAsThereIsAGatewayToLookAtIt(WithARunDirectory):
         await asyncio.sleep(1.0)
         gw.ask_to_stop()
         await asyncio.wait_for(serving, 10)
+        if datetime.now().minute != began:
+            # Alignment above makes this effectively unreachable, and if a machine is slow
+            # enough to reach it anyway then a second firing is the right answer and this
+            # case has measured nothing. Said out loud rather than passed quietly.
+            self.skipTest("the window crossed a minute, so a second firing is correct here")
         self.assertEqual(1, self._ran(), "one minute was started more than once")
 
     async def test_a_stop_asked_for_while_it_takes_hold_starts_nothing(self):
