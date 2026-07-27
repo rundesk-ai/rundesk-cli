@@ -635,7 +635,7 @@ your channels, what you have run and what it cost. **Anything else on this machi
 "schedules" or "tasks" is not this**, whatever it is called: `rundesk --help` is the authority, \
 and a question about your schedules is answered by `rundesk schedules {name}`.
 
-Everything else rundesk does is in ~/.rundesk/USING-RUNDESK.md, and `rundesk --help` always \
+Everything else rundesk does is in your `using-rundesk` skill, and `rundesk --help` always \
 works."""
 
 

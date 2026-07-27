@@ -1016,7 +1016,13 @@ class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):
         rest. Everything else rundesk can do is in the guide rather than in every prompt."""
         said = agent.standing("ava")
         self.assertIn("rundesk messages ava", said)
-        self.assertIn("USING-RUNDESK.md", said)
+        # **Not a path.** This named a file, and after the layout split it named one that
+        # exists on neither kind of install — a downloaded one keeps the program under
+        # `app/`, and a checkout install symlinks the source, so `~/.rundesk` holds neither.
+        # Every agent was told, on every turn, to read something it could not find. What it
+        # names now travels with the agent instead of being somewhere to go and look.
+        self.assertIn("using-rundesk", said)
+        self.assertNotIn(".md", said)
 
 
 if __name__ == "__main__":
