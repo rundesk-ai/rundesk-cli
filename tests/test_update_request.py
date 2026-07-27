@@ -87,6 +87,7 @@ class DurableRequests(unittest.TestCase):
         os.environ["RUNDESK_UPDATE_ROOT"] = str(target)
         self.addCleanup(os.environ.pop, "RUNDESK_UPDATE_ROOT", None)
         completed = [
+            mock.Mock(returncode=0, stdout="rundesk 0.9.6\n", stderr=""),
             mock.Mock(returncode=0, stdout="updated safely\n", stderr=""),
             mock.Mock(returncode=0, stdout="rundesk 0.9.7\n", stderr=""),
         ]
@@ -95,7 +96,26 @@ class DurableRequests(unittest.TestCase):
             self.assertEqual(0, cli._run_update_worker(
                 mock.Mock(), mock.Mock(), mock.Mock()
             ))
-        self.assertEqual(str(target / "rundesk"), ran.call_args_list[0].args[0][0])
+        update = ran.call_args_list[1]
+        self.assertEqual(str(cli.REPO_ROOT / "rundesk"), update.args[0][0])
+        self.assertEqual(str(target), update.kwargs["env"]["RUNDESK_UPDATE_ROOT"])
+        self.assertEqual("0.9.6", update.kwargs["env"]["RUNDESK_UPDATE_VERSION"])
+
+    def test_bootstrap_child_drives_the_old_target_with_its_new_update_logic(self):
+        target = pathlib.Path(self.temporary.name) / "installed"
+        args = mock.Mock(
+            after_replacing=None, worker=False, status=False, check=False
+        )
+        with mock.patch.dict(os.environ, {
+                    "RUNDESK_UPDATE_ROOT": str(target),
+                    "RUNDESK_UPDATE_VERSION": "0.9.6",
+                }, clear=True), \
+                mock.patch.object(cli.updater, "run", return_value=0) as ran:
+            self.assertEqual(0, cli.cmd_update(
+                args, mock.Mock(), mock.Mock(), mock.Mock()
+            ))
+        self.assertEqual(target, ran.call_args.args[0])
+        self.assertEqual("0.9.6", ran.call_args.args[1])
 
     def test_agent_initiation_queues_the_external_worker_and_returns(self):
         """R-UPD-35, R-UPD-36"""

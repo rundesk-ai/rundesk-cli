@@ -56,7 +56,7 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-35 | An agent-initiated update is completed by a supervisor-owned process outside every gateway | `the update worker is outside the gateway namespace`, `the machine owns the worker that may stop gateways`, `agent initiation queues the external worker and returns` |
 | ✅ | R-UPD-36 | An update request durably records pending, running, and final states | `pending running and final outcomes are durable`, `agent initiation queues the external worker and returns` |
 | ✅ | R-UPD-37 | Duplicate update requests share one worker request and cannot overlap | `duplicate requests share one pending update`, `duplicate agent initiation does not restart the worker` |
-| ✅ | R-UPD-38 | The external worker waits for active turns before running the guarded updater | `an update refuses while work is in flight`, `update busy reader includes provider turns` |
+| ✅ | R-UPD-38 | The external worker waits for active turns before running the guarded updater | `an update refuses while work is in flight`, `update busy reader includes provider turns`, `bootstrap child drives the old target with its new update logic` |
 | ✅ | R-UPD-39 | Connected channel adapters do not themselves block an otherwise idle update | `a connected channel adapter does not block an idle update` |
 | ✅ | R-UPD-40 | A channel-triggered update outcome is delivered after its originating agent reconnects | `final outcome waits for its origin agent and is delivered once`, `a completed update is delivered after the channel reconnects` |
 

@@ -656,24 +656,28 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
         return 0 if row.get("state") != "failed" else 1
     # A check remains immediate and read-only even inside a provider turn.
     if args.check:
+        update_root, current_version = _update_install()
         return updater.run(
-            REPO_ROOT, __version__, check_only=True,
-            unfit=lambda: gateways.fitness(REPO_ROOT),
-            preview=lambda: _what_an_update_would_do(agents),
+            update_root, current_version, check_only=True,
+            unfit=lambda: gateways.fitness(update_root),
+            preview=lambda: _what_an_update_would_do(agents, update_root),
         )
     if os.environ.get("RUNDESK_RUN"):
         origin = _origin_of_update(agents)
         if origin.get("agent"):
             return _queue_update(machine, origin)
+    update_root, current_version = _update_install()
     return updater.run(
-        REPO_ROOT, __version__, check_only=False,
+        update_root, current_version, check_only=False,
         busy=lambda: _in_flight(gateways, agents),
         pause=lambda: _stand_all_down(gateways, machine, agents),
-        resume=lambda names: _bring_all_back(names, gateways, machine, agents),
-        provision=_provisioned,
+        resume=lambda names: _bring_all_back(
+            names, gateways, machine, agents, update_root
+        ),
+        provision=lambda: _provisioned(update_root),
         carry=lambda: _carry_every(agents),
-        unfit=lambda: gateways.fitness(REPO_ROOT),
-        preview=lambda: _what_an_update_would_do(agents),
+        unfit=lambda: gateways.fitness(update_root),
+        preview=lambda: _what_an_update_would_do(agents, update_root),
     )
 
 
@@ -752,6 +756,19 @@ def _run_update_worker(gateways, machine, agents) -> int:
         return 1
     if request is None:
         return 0
+    if target_root == REPO_ROOT:
+        target_version = __version__
+    else:
+        reported = _reported_version(target_root, environment)
+        prefix = "rundesk "
+        if not reported or not reported.startswith(prefix):
+            update_request.finish(
+                request["id"], "failed",
+                f"could not read the installed version at {target_root}",
+            )
+            return 1
+        target_version = reported[len(prefix):]
+    environment["RUNDESK_UPDATE_VERSION"] = target_version
     deadline = time.monotonic() + UPDATE_WAIT_SECONDS
     while True:
         busy = _in_flight(gateways, agents)
@@ -767,7 +784,7 @@ def _run_update_worker(gateways, machine, agents) -> int:
         time.sleep(UPDATE_POLL_SECONDS)
     try:
         done = subprocess.run(
-            [str(target_root / "rundesk"), "update"],
+            [str(REPO_ROOT / "rundesk"), "update"],
             capture_output=True, text=True, env=environment, timeout=UPDATE_RUN_SECONDS,
         )
         version = _reported_version(target_root, environment)
@@ -798,7 +815,15 @@ def _reported_version(root: Path, environment: dict) -> str | None:
         return None
 
 
-def _what_an_update_would_do(agents) -> list:
+def _update_install() -> tuple[Path, str]:
+    """The install this externally owned worker is driving."""
+    return (
+        Path(os.environ.get("RUNDESK_UPDATE_ROOT") or REPO_ROOT),
+        os.environ.get("RUNDESK_UPDATE_VERSION") or __version__,
+    )
+
+
+def _what_an_update_would_do(agents, root: Path = REPO_ROOT) -> list:
     """What an update would install and what it would move, before it does either.
 
     Reads what is on disk and asks nothing of a network, a package index or a database that
@@ -806,7 +831,7 @@ def _what_an_update_would_do(agents) -> list:
     reads "nothing to install, nothing to move" every time stops reading it.
     """
     said = []
-    for one in dependencies.unsatisfied(REPO_ROOT):
+    for one in dependencies.unsatisfied(root):
         said.append(f"would install: {one}")
     standing = migration.what_would_run(agents.agents_home(), store.VERSION)
     for name, steps in sorted(standing.items()):
@@ -925,7 +950,8 @@ def _stand_all_down(gateways, machine, agents) -> tuple:
     return stopped, None
 
 
-def _bring_all_back(names: list, gateways, machine, agents) -> list:
+def _bring_all_back(names: list, gateways, machine, agents,
+                    root: Path = REPO_ROOT) -> list:
     """Start again everything the update stopped, and say what did not come back.
 
     What this exists to catch is not the machine refusing — it is a gateway that starts,
@@ -944,7 +970,7 @@ def _bring_all_back(names: list, gateways, machine, agents) -> list:
         if not said.ok or _came_up(name, gateways, agents) is None:
             down.append(name)
     if down:
-        unfit = gateways.fitness(REPO_ROOT)
+        unfit = gateways.fitness(root)
         if unfit:
             print(f"update: what rundesk is made of no longer fits: {unfit}", file=sys.stderr)
     return down
@@ -1546,7 +1572,7 @@ def _running_old_code(name, gateways, agents) -> list:
     )]
 
 
-def _provisioned() -> str | None:
+def _provisioned(root: Path = REPO_ROOT) -> str | None:
     """What an install is made of, brought forward: what it needs, then what it ships.
 
     Skills after dependencies, which is the same order the window itself keeps and for the
@@ -1557,7 +1583,7 @@ def _provisioned() -> str | None:
     step. A skill that could not be written is not an update that failed — `doctor` says
     which one, and everything else is already forward.
     """
-    went_wrong = dependencies.provision(REPO_ROOT)
+    went_wrong = dependencies.provision(root)
     if went_wrong:
         return went_wrong
     skill.lay_down(force=True)
