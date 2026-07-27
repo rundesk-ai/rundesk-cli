@@ -537,13 +537,24 @@ def _download_and_apply(repo_root: Path, tag: str) -> int:
     return 0
 
 
+def readable(held_bytes: int) -> str:
+    """A number of bytes as a person reads it — the one place that is decided.
+
+    Here rather than beside either caller, because there are two and they are in different
+    modules: how big a release is while it downloads, and how big a backup is in a listing.
+    Written twice, they disagree the day one of them changes where megabytes begin — and a
+    reader comparing "11 KB" against "0.0 MB" has no way to tell which of the two moved.
+    """
+    kb = held_bytes / 1024
+    return f"{kb / 1024:.1f} MB" if kb >= 1024 else f"{kb:.0f} KB"
+
+
 def _size(path: Path) -> str:
     """A downloaded size a person can read, so 'unpacking' names something real."""
     try:
-        kb = path.stat().st_size / 1024
+        return readable(path.stat().st_size)
     except OSError:
         return "the release"
-    return f"{kb / 1024:.1f} MB" if kb >= 1024 else f"{kb:.0f} KB"
 
 
 def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:

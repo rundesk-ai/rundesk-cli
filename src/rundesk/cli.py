@@ -1566,7 +1566,7 @@ def _take_a_backup() -> int:
         return 1
     said = backups.manifest_of(at)
     print(f"took a backup: {at}")
-    print(f"        {len(said['records'])} agents, {_held(at.stat().st_size)}")
+    print(f"        {len(said['records'])} agents, {updater.readable(at.stat().st_size)}")
     if said.get("copied_whole"):
         # Never silent. A copy that is not a consistent copy is still worth having and is
         # not the same thing, and the only moment anybody can act on the difference is now.
@@ -1597,7 +1597,7 @@ def _list_backups() -> int:
         rows.append((
             one.at.name,
             one.taken_at if one.readable else "-",
-            _held(one.held_bytes) if one.held_bytes is not None else "-",
+            updater.readable(one.held_bytes) if one.held_bytes is not None else "-",
             str(len(said.get("records", {}))) if one.readable else "-",
             said.get("why", "-") if one.readable else "UNREADABLE",
         ))
@@ -1608,14 +1608,6 @@ def _list_backups() -> int:
     for one in unreadable:
         print(f"        {one.at.name}: {one.why}", file=sys.stderr)
     return 0
-
-
-def _held(size) -> str:
-    """A size a person reads, in the one place that decides how one is written."""
-    kb = size / 1024
-    if kb >= 1024:
-        return f"{kb / 1024:.1f} MB"
-    return f"{kb:.0f} KB"
 
 
 def cmd_skills(args: argparse.Namespace, agents, skills) -> int:

@@ -127,6 +127,45 @@ def ask(*args: str) -> Spoke:
     return Spoke(done.returncode == 0, (done.stdout + done.stderr).strip())
 
 
+def _environment(logs: Path, run: Path | None = None, agents: Path | None = None) -> dict:
+    """Where things are, written into a job rather than left to whatever starts it.
+
+    **The machine hands a job almost nothing**, so a place rundesk can be pointed at that the
+    job does not name is a place the started process resolves differently from the command
+    that wrote the job — and they then disagree about whether anything is running at all,
+    which is the one thing neither may be wrong about. That is why this dictionary exists.
+
+    Every job rundesk writes carries the same set, which is why it is built here and not in
+    each of them: the two that exist were already identical key for key, and `RUNDESK_BACKUP_DIR`
+    had to be added to both in one commit — the second copy is exactly the thing that is not
+    added next time.
+
+    The roots are carried as well as the directories that default from them. An install
+    pointed elsewhere keeps its data there, so a job carrying only one of the two leaves the
+    other's fallback wrong.
+    """
+    return {
+        "PATH": PATH,
+        "HOME": str(Path.home()),
+        "RUNDESK_RUN_DIR": str(run or gateway.home()),
+        "RUNDESK_LOG_DIR": str(logs),
+        "RUNDESK_JOBS_DIR": os.path.expanduser(jobs_home()),
+        "RUNDESK_DATA_DIR": str(data_home()),
+        "RUNDESK_INSTALL_DIR": os.environ.get("RUNDESK_INSTALL_DIR", str(ROOT.parent)),
+        # An agent keeps everything of its own in one directory, and which directory that is
+        # has to reach the gateway the machine starts. Passed rather than resolved here,
+        # because a gateway knows nothing of agents and this module knows only what it is
+        # handed (R-AGT-9).
+        "RUNDESK_AGENTS_DIR": str(agents) if agents else os.environ.get(
+            "RUNDESK_AGENTS_DIR", str(data_home() / "agents")),
+        # The one directory an owner may point off the machine entirely. A job that did not
+        # name it would have the daily backup writing under the install while every copy the
+        # owner has ever seen sits on their external disk — two sets, and the one they would
+        # look for after trouble is the one that stopped being written to.
+        "RUNDESK_BACKUP_DIR": str(backups_home()),
+    }
+
+
 def describe(name: str, root: Path | None = None, logs: Path | None = None,
              run: Path | None = None, agents: Path | None = None) -> dict:
     """The job: what to run, and what the machine should do about it.
@@ -153,37 +192,7 @@ def describe(name: str, root: Path | None = None, logs: Path | None = None,
         # the command line while the gateway keeping the machine knew nothing of it. It is
         # gone because a schedule is a row an agent keeps, so where agents are is the whole
         # of what has to agree.
-        "EnvironmentVariables": {
-            "PATH": PATH,
-            "HOME": str(Path.home()),
-            "RUNDESK_RUN_DIR": str(run or gateway.home()),
-            "RUNDESK_LOG_DIR": str(logs),
-            "RUNDESK_JOBS_DIR": os.path.expanduser(jobs_home()),
-            # The root the three above default from. Carried even though all three are
-            # also given outright, because a place rundesk can be pointed at that the job
-            # does not name is a place a supervised gateway resolves differently from the
-            # command that wrote the job — which is the one thing neither may be wrong
-            # about, and is why this dictionary exists at all.
-            "RUNDESK_DATA_DIR": str(data_home()),
-            # And the root *that* falls back to. An install pointed elsewhere keeps its
-            # data there, so a job that carried neither would start a gateway resolving
-            # the owner's own while the command that wrote it read the scratch one. Both,
-            # because either alone leaves the other's fallback wrong.
-            "RUNDESK_INSTALL_DIR": os.environ.get("RUNDESK_INSTALL_DIR", str(ROOT.parent)),
-            # An agent keeps everything of its own in one directory, and which directory
-            # that is has to reach the gateway the machine starts. Passed rather than
-            # resolved here, because a gateway knows nothing of agents and this module
-            # knows only what it is handed (R-AGT-9).
-            "RUNDESK_AGENTS_DIR": str(agents) if agents else os.environ.get(
-                "RUNDESK_AGENTS_DIR", str(data_home() / "agents")),
-            # Where copies of what the owner keeps are put. Carried for the same reason as
-            # the rest and for one of its own: this is the directory an owner may point off
-            # the machine entirely, so a job that did not name it would have the daily
-            # backup writing under the install while every backup the owner has ever seen
-            # sits on their external disk — two sets of copies, and the one they would look
-            # for after trouble is the one that stopped being written to.
-            "RUNDESK_BACKUP_DIR": str(backups_home()),
-        },
+        "EnvironmentVariables": _environment(logs, run, agents),
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
         "ThrottleInterval": THROTTLE_SECONDS,
@@ -230,22 +239,8 @@ def describe_backup(at: str, root: Path | None = None, logs: Path | None = None)
         "Label": BACKUP_LABEL,
         "ProgramArguments": [str(root / "rundesk"), "backups", "add"],
         "WorkingDirectory": str(root),
-        # The same places the gateway jobs carry, and for the same reason: the machine hands
-        # a job almost nothing, so a backup started by it would otherwise resolve a different
-        # install from the command that wrote the job — and write its copies somewhere the
-        # owner never looks.
-        "EnvironmentVariables": {
-            "PATH": PATH,
-            "HOME": str(Path.home()),
-            "RUNDESK_RUN_DIR": str(gateway.home()),
-            "RUNDESK_LOG_DIR": str(logs),
-            "RUNDESK_JOBS_DIR": os.path.expanduser(jobs_home()),
-            "RUNDESK_DATA_DIR": str(data_home()),
-            "RUNDESK_INSTALL_DIR": os.environ.get("RUNDESK_INSTALL_DIR", str(ROOT.parent)),
-            "RUNDESK_AGENTS_DIR": os.environ.get(
-                "RUNDESK_AGENTS_DIR", str(data_home() / "agents")),
-            "RUNDESK_BACKUP_DIR": str(backups_home()),
-        },
+        # The same places every job carries, from the one place that decides them.
+        "EnvironmentVariables": _environment(logs),
         "StartCalendarInterval": {"Hour": int(hour), "Minute": int(minute)},
         "RunAtLoad": False,
         "StandardOutPath": str(logs / "backups.out"),
