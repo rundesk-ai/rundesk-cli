@@ -177,6 +177,12 @@ EXAMPLES: list[tuple[str, list[tuple[str, str]]]] = [
          "a different brain for a different schedule, on the same agent"),
         ("rundesk schedules ava add tidy --when \"0 4 * * *\" -- /usr/local/bin/tidy --quiet",
          "a program rather than a turn, by its full path"),
+        ("rundesk schedules ava add tidy-up --at \"2026-07-28T09:00\" -- /usr/local/bin/tidy",
+         "a script or command run once, at one moment, and never again"),
+        ('rundesk schedules ava add report --at "2026-07-28T09:00" --ask "how did the migration go?" --to ops',
+         "the same one moment, asking a turn and saying what it came to on a surface"),
+        ("rundesk schedules ava --expired",
+         "the one-time schedules that are over — which ran, and which never did"),
         ("rundesk schedules ava off nightly",
          "keep it, and stop it running"),
     ]),
@@ -378,11 +384,26 @@ def build_parser() -> argparse.ArgumentParser:
     # words with the new one, instead of by an argparse dump about an unrecognized option.
     listed.add_argument("--gateway", dest="gateway_was", metavar="<agent>",
                         help=argparse.SUPPRESS)
+    # What can no longer happen, which the ordinary listing leaves out because it shows work
+    # that still can. Kept out of the way rather than deleted: "did that run?" is asked long
+    # after the fact, and `runs` alone does not name the schedule.
+    listed.add_argument("--expired", action="store_true",
+                        help="instead, the one-time schedules whose moment has gone — whether "
+                             "each ran, or whether it passed while nothing was running")
     acts = listed.add_subparsers(dest="act", metavar="<action>")
     added = acts.add_parser("add", help="add a schedule")
     added.add_argument("schedule", metavar="<schedule>", help="what to call it, and what to name it by later")
-    added.add_argument("--when", required=True, metavar="<cron>",
-                       help="when it runs, as five cron fields — minute, hour, day, month, weekday")
+    # **A repeating time or a single moment, and never both.** Cron has no year, so
+    # `0 9 28 7 *` is every 28 July for ever and a single occurrence cannot be said in it at
+    # all. Refused rather than ranked, the same way a program and a prompt are: a schedule
+    # naming both would leave rundesk choosing, and the choice would be invisible afterwards.
+    added.add_argument("--when", metavar="<cron>",
+                       help="when it runs, over and over, as five cron fields — minute, hour, "
+                            "day, month, weekday")
+    added.add_argument("--at", dest="moment", metavar="<moment>",
+                       help="instead of --when: the one moment it runs, on this machine's own "
+                            "clock, as YYYY-MM-DDTHH:MM. It runs then and never again — a "
+                            "moment is given, never a phrase like 'tomorrow at nine'")
     # **A schedule starts a program or asks a turn, and never both.** The two are one verb
     # because they are one thing to an owner — work that happens because the time came — and
     # the difference is only what the gateway does when it is due. Refused rather than
@@ -2127,10 +2148,25 @@ def _add_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
     # it off in front of the parser, and the positional is there so the reference shows it.
     runs = list(args.options) + list(getattr(args, "handed_on", []))
     prompt = (args.prompt or "").strip()
+    when = (args.when or "").strip()
+    moment = (args.moment or "").strip()
     try:
-        made = schedule.Schedule(args.schedule, args.when)
+        made = schedule.Schedule(args.schedule, when or None, at=moment or None)
     except schedule.NotASchedule as why:
         print(f"{args.name}/{args.schedule}: NOT ADDED — {why}", file=sys.stderr)
+        if bool(when) == bool(moment):
+            print('        say one:  --when "0 3 * * *"   or   '
+                  f'--at "{schedule.SAID_AS}"', file=sys.stderr)
+        return 1
+    now = datetime.now()
+    if made.expired_at(now):
+        # Refused where it is typed rather than found never to have run. A moment behind us
+        # can never come round again — unlike a cron nobody can reach, which at least says
+        # `never` in the listing, this would sit there looking like work that is waiting.
+        print(f"{args.name}/{args.schedule}: NOT ADDED — "
+              f"{made.stated.strftime(schedule.A_MINUTE)} has already passed, so this could "
+              f"never run", file=sys.stderr)
+        print(f"        say a moment ahead of now, as {schedule.SAID_AS}", file=sys.stderr)
         return 1
     # Exactly one of the two, said here as well as refused by the records themselves: a
     # schedule that named both would leave rundesk choosing which, and the choice would be
@@ -2176,7 +2212,11 @@ def _add_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
               file=sys.stderr)
         return 1
     try:
-        kept.remember_schedule(args.schedule, args.when, store.stamped(),
+        kept.remember_schedule(args.schedule, when or None, store.stamped(),
+                               # The minute it was understood as, not the characters somebody
+                               # typed: a space where a `T` goes is the same moment, and one
+                               # spelling is what the gateway compares and the listing shows.
+                               at=made.stated.strftime(schedule.A_MINUTE) if made.once else None,
                                command=runs or None,
                                prompt=prompt or None,
                                provider=args.provider, model=args.model,
@@ -2193,10 +2233,13 @@ def _add_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
     except store.Refused as why:
         print(f"{args.name}/{args.schedule}: NOT ADDED — {why}", file=sys.stderr)
         return 1
-    unlogged = _note(gateways, args.name, f"schedule '{args.schedule}' added ({args.when})", whose)
+    unlogged = _note(gateways, args.name,
+                     f"schedule '{args.schedule}' added ({when or made.at})", whose)
     # Both named, because a schedule belongs to one agent and the success line saying only
     # its own name could not tell you it had landed on the wrong one.
-    print(f"{args.name}/{args.schedule}: ADDED — next {schedule.describe(made, datetime.now())}")
+    said = schedule.describe(made, now)
+    print(f"{args.name}/{args.schedule}: ADDED — "
+          + (f"runs once, at {said}" if made.once else f"next {said}"))
     return unlogged
 
 
@@ -2251,7 +2294,8 @@ def _run_schedule(args: argparse.Namespace, gateways, agents, kept, whose) -> in
     if not one.run:
         print(f"{args.name}/{args.schedule}: NOTHING TO RUN — it names no program", file=sys.stderr)
         return 1
-    was_due = schedule.describe(one, datetime.now())
+    now = datetime.now()
+    was_due = schedule.describe(one, now)
     print(f"{args.name}/{args.schedule}: RUNNING BY HAND — {' '.join(one.run)}")
     said = asyncio.run(process.run(
         list(one.run),
@@ -2267,8 +2311,12 @@ def _run_schedule(args: argparse.Namespace, gateways, agents, kept, whose) -> in
           + ("RAN" if said.ok else f"FAILED — {said.reason}")
           + (f" ({said.code})" if said.code else ""))
     # Said out loud, because the whole point of running one by hand is that it changes
-    # nothing about when it runs on its own.
-    print(f"        next, unchanged: {was_due}")
+    # nothing about when it runs on its own. **A single moment is not used up by this**
+    # (R-SCH-22): only the clock reaching it can do that, so one still ahead is still ahead
+    # afterwards, and one already gone is no more gone than it was.
+    print(f"        next, unchanged: {was_due}" if not one.once
+          else f"        its one moment, unchanged: "
+               f"{one.stated.strftime(schedule.A_MINUTE)} ({was_due})")
     return 0 if said.ok else 1
 
 
@@ -2293,11 +2341,19 @@ def _list_schedules(args: argparse.Namespace, gateways, kept, whose) -> int:
 
     rows = kept.schedules()
     wanted, refused = schedule.read(rows)
-    if not wanted and not refused:
-        print(f"{args.name}: NO SCHEDULES")
-        return 0
     now = datetime.now()
     ran = {row["name"]: row for row in rows}
+    if args.expired:
+        return _list_expired(args, [one for one in wanted if one.expired_at(now)], ran, refused)
+    # What can still happen. A schedule whose one moment has gone can never be due again, so
+    # it is no more part of what this agent runs than one that was removed — and leaving it
+    # here would push the work that *is* waiting down a list of things that are over.
+    spent = [one for one in wanted if one.expired_at(now)]
+    wanted = [one for one in wanted if not one.expired_at(now)]
+    if not wanted and not refused:
+        print(f"{args.name}: NO SCHEDULES" + (" THAT CAN STILL RUN" if spent else ""))
+        _also_expired(args, spent)
+        return 0
     # A firing is written down before the run begins, so `started` on its own means only
     # that — and if no gateway of this name is up, nothing it started is still going. The
     # store is reconciled by the next gateway to claim the name (R-SCH-23); until one
@@ -2314,13 +2370,69 @@ def _list_schedules(args: argparse.Namespace, gateways, kept, whose) -> int:
         # is a sentence and a program is a path and neither fits beside five others. Which of
         # the two it is decides everything about how it runs, and where it reports is the
         # thing an owner asks next.
-        ("asks" if one.prompt else "runs") + (f" → {one.channel}" if one.channel else ""),
-        one.when,
+        _what_it_starts(one),
+        # The one moment where it states one, so the WHEN column answers the same question
+        # for both kinds — when does this run — rather than being blank for half of them.
+        one.stated.strftime(schedule.A_MINUTE) if one.once else one.when,
         schedule.describe(one, now),
         ran.get(one.name, {}).get("last_auto_run_at") or "-",
         _became(ran.get(one.name, {}).get("last_outcome") or "-", up),
     ) for one in wanted]
     _as_table(("SCHEDULE", "STATE", "IT", "WHEN", "NEXT", "LAST RUN", "OUTCOME"), rows)
+    _also_expired(args, spent)
+    for name, why in refused:
+        print(f"{name or '(unnamed)'}: NOT UNDERSTOOD — {why}", file=sys.stderr)
+    return 1 if refused else 0
+
+
+def _what_it_starts(one) -> str:
+    """What this schedule starts, and where what that came to is said — one column.
+
+    Said in a word rather than in full: a prompt is a sentence and a program is a path and
+    neither fits beside five others. Which of the two it is decides everything about how it
+    runs, and where it reports is the thing an owner asks next.
+    """
+    return ("asks" if one.prompt else "runs") + (f" → {one.channel}" if one.channel else "")
+
+
+def _also_expired(args: argparse.Namespace, spent: list) -> None:
+    """Say that there are schedules this listing left out, and how to read them.
+
+    The listing shows work that can still happen, which is what an owner wants nine times in
+    ten. The tenth is "did that run?", and an option nobody knows about cannot answer it —
+    so the listing names the option rather than leaving it to be discovered.
+    """
+    if not spent:
+        return
+    print(f"        {len(spent)} expired — "
+          f"rundesk schedules {args.name} --expired")
+
+
+def _list_expired(args: argparse.Namespace, spent: list, ran: dict, refused: list) -> int:
+    """The one-time schedules whose moment has gone, and which kind of gone each is.
+
+    **Two ways to be expired, and they are not the same news** (R-SCH-4): one came due while
+    a gateway was up and ran, and its outcome says what that came to; the other's moment
+    passed while nothing was running, so it never ran at all. An owner told only that both
+    are over cannot tell work that happened from work that silently did not — which is the
+    whole question this listing exists to answer.
+
+    Nothing is deleted to get here. What each of these last did, and the run that says which
+    schedule started it, are exactly as they were.
+    """
+    from rundesk import schedule
+
+    if not spent:
+        print(f"{args.name}: NOTHING EXPIRED")
+        return 1 if refused else 0
+    rows = [(
+        one.name,
+        _what_it_starts(one),
+        one.stated.strftime(schedule.A_MINUTE),
+        ran.get(one.name, {}).get("last_auto_run_at") or "-",
+        schedule.became_of(one, ran.get(one.name, {}).get("last_outcome")),
+    ) for one in spent]
+    _as_table(("SCHEDULE", "IT", "WHEN", "RAN AT", "OUTCOME"), rows)
     for name, why in refused:
         print(f"{name or '(unnamed)'}: NOT UNDERSTOOD — {why}", file=sys.stderr)
     return 1 if refused else 0

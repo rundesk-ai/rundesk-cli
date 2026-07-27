@@ -51,6 +51,13 @@ class NotASchedule(ValueError):
 class Schedule:
     """One thing that should happen, and when.
 
+    **When is said one of two ways, and never both.** `when` is a repeating time, stated the
+    way schedules ordinarily are; `at` is a single moment, after which this can never be due
+    again. Cron has no year — `0 9 28 7 *` says every 28 July for ever — so a moment cannot
+    be said in the first and a repetition cannot be said in the second. Exactly one of them
+    is the records' rule as well as this one's, and it is asked here too because a row is
+    still a person's typing at the moment it arrives.
+
     `run` is whatever the thing doing the starting understands — a program, or nothing where
     this schedule asks a turn instead. Carried, never looked at (R-SCH-3).
 
@@ -62,10 +69,16 @@ class Schedule:
     **Exactly one of `run` and `prompt` says anything.** That is the records' rule rather than
     this one's, and it is not re-checked here: what arrives is what was written down, and a
     row that broke it could not have been written.
+
+    `ran_at` is that the clock has already started this, carried exactly as `run` is and never
+    read as a time. It is what makes a single moment *used*: durable, written before the work
+    began, and therefore the same answer through a restart, a clock stepped backwards and a
+    second gateway. A repeating schedule ignores it — its guard is the minute it last ran,
+    which is passed to `due` rather than held here.
     """
 
     name: str
-    when: str
+    when: str | None = None
     run: Any = None
     enabled: bool = True
     prompt: str | None = None
@@ -73,23 +86,69 @@ class Schedule:
     model: str | None = None
     instructions: str | None = None
     channel: str | None = None
+    at: str | None = None
+    ran_at: str | None = None
     _fields: tuple = field(default=(), repr=False, compare=False)
     #: Which fields were written as `*`. Kept because "was anything allowed here?" cannot
     #: be answered by counting what a field ended up allowing: `0-6` allows every day of
     #: the week and is not a restriction, but it is one value short of the full set.
     _anything: tuple = field(default=(), repr=False, compare=False)
+    #: The single moment, understood. Empty for a repeating schedule.
+    _moment: Any = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        fields, unrestricted = _understand(self.when)
+        said, moment = (self.when or "").strip(), (self.at or "").strip()
+        if bool(said) == bool(moment):
+            raise NotASchedule(
+                "a schedule says when it runs over and over, or the one moment it runs — "
+                + ("and this says both" if said else "and this says neither")
+            )
+        if moment:
+            object.__setattr__(self, "_moment", understood_moment(moment))
+            return
+        fields, unrestricted = _understand(said)
         object.__setattr__(self, "_fields", fields)
         object.__setattr__(self, "_anything", unrestricted)
 
+    @property
+    def once(self) -> bool:
+        """Does this run one time and then never again?"""
+        return self._moment is not None
+
+    @property
+    def stated(self):
+        """The single moment this states, understood — or None where it repeats.
+
+        What was typed, read back as the minute it means, so whatever shows it shows one
+        spelling however many a person may have written.
+        """
+        return self._moment
+
+    @property
+    def used(self) -> bool:
+        """Has the one moment this states already been reached and started?
+
+        Only of a schedule that states one. A repeating schedule is never used up, however
+        many times it has run.
+        """
+        return self.once and bool((self.ran_at or "").strip())
+
     def due_at(self, moment: datetime) -> bool:
-        """Is this schedule due at this exact minute?"""
+        """Is this schedule due at this exact minute?
+
+        A single moment is due in its own minute and in no other — never in one after it,
+        which is what makes a moment that passed while nothing was running not run late
+        (R-SCH-4) rather than something this has to suppress.
+        """
+        if self.once:
+            return not self.used and moment == self._moment
         return _matches(self._fields, moment, self._anything)
 
     def next_after(self, moment: datetime) -> datetime | None:
         """The next minute this is due, after the one given — or None if never again."""
+        if self.once:
+            found = self._moment
+            return found if not self.used and found > moment else None
         found = moment.replace(second=0, microsecond=0) + timedelta(minutes=1)
         limit = moment + LOOK_AHEAD
         while found <= limit:
@@ -97,6 +156,24 @@ class Schedule:
                 return found
             found = _skip(self._fields, found, self._anything)
         return None
+
+    def expired_at(self, moment: datetime) -> bool:
+        """Can this never be due again?
+
+        True two ways, and they are the two an owner has to be able to tell apart: the clock
+        reached its moment and started it, or the moment went by while nothing was running
+        and it never ran at all (R-SCH-4). `used` is which.
+
+        **Derived, never stored.** There is no column saying a schedule is spent, because a
+        column is a second answer that can disagree with what happened. A moment is behind
+        us or it is not, and that reads the same to a gateway coming up, to one whose clock
+        stepped backwards, and to a second one starting — none of which can be told a flag.
+
+        Its own minute is not yet behind it: a schedule is live in the minute it is due,
+        which is exactly when it runs.
+        """
+        return self.once and (self.used
+                              or self._moment < moment.replace(second=0, microsecond=0))
 
 
 def read(said: Any) -> list[Schedule]:
@@ -108,9 +185,9 @@ def read(said: Any) -> list[Schedule]:
 
     One schedule nobody can understand does not stop the rest (R-SCH-10): a typo in the
     fourth of five is a reason to say so about the fourth, not to leave an agent with
-    nothing scheduled at all. What could not be read comes back as its own list. The cron is
-    the only part of a row that can be wrong — the shape is the database's now — and it is
-    still a person's typing, so it is still refused one row at a time.
+    nothing scheduled at all. What could not be read comes back as its own list. When it
+    runs is the only part of a row that can be wrong — the shape is the database's now — and
+    it is still a person's typing, so it is still refused one row at a time.
     """
     kept, refused = [], []
     for one in said if isinstance(said, list) else []:
@@ -123,7 +200,13 @@ def read(said: Any) -> list[Schedule]:
                 raise NotASchedule("a schedule with no name cannot be reported on")
             kept.append(Schedule(
                 name=name,
-                when=str(one.get("cron", "")),
+                when=one.get("cron"),
+                at=one.get("at"),
+                # Carried, exactly as `command` is, and never read as a time here. What it
+                # is for is one question — has the single moment this states already been
+                # started — and that is answered by whether anything is written, which no
+                # spelling of a minute can get wrong.
+                ran_at=one.get("last_auto_run_at"),
                 run=one.get("command"),
                 enabled=_switched(one.get("enabled", True)),
                 prompt=one.get("prompt"),
@@ -156,6 +239,11 @@ def due(
     `already` is the minute each schedule last ran, passed in rather than remembered.
     A schedule runs once for the minute it is due however often this is asked (R-SCH-9),
     which is also what stops a clock stepping backwards from running one twice.
+
+    A schedule stating a single moment carries a second guard of its own, in `due_at`: it is
+    spent the moment anything durable says the clock started it. That one does not depend on
+    what is passed in here, which is held in memory by whoever is asking and is empty in a
+    gateway that has just come up.
     """
     already = already or {}
     this_minute = moment.replace(second=0, microsecond=0)
@@ -197,6 +285,48 @@ def passed_over(one: Schedule, since: datetime, moment: datetime) -> int:
 
 
 # -- understanding what a schedule says ------------------------------------------------
+
+#: How a single moment is written, and the only spelling there is. Minutes, because that is
+#: what a schedule is due in — a moment carrying seconds would name a time the clock is never
+#: asked about. `T` between the day and the time, with a space accepted because that is what
+#: a person types and refusing it teaches nobody anything.
+A_MOMENT = "%Y-%m-%dT%H:%M"
+SAID_AS = "YYYY-MM-DDTHH:MM"
+
+
+def understood_moment(said: str) -> datetime:
+    """The one moment a schedule states, read off what somebody typed.
+
+    **The machine's own clock, and deliberately.** A schedule is stated in local time and
+    matched against a local clock everywhere else here, and what a schedule last did is
+    written down the same way — so a moment kept in any other clock face would be a schedule
+    whose stated time and whose record of running sat one column apart in two different
+    zones. Wrong by an hour for part of the year, and invisible for the rest of it.
+
+    So a moment carrying a zone is refused rather than converted: an owner who wrote one
+    means something this cannot honour, and quietly reinterpreting it is worse than saying
+    so. Nothing is guessed from words either — *tomorrow at nine* is the caller's to resolve,
+    and natural language in here would be a second thing to keep true.
+    """
+    said = (said or "").strip()
+    if said.endswith("Z") or _zoned(said):
+        raise NotASchedule(
+            f"'{said}' names a time zone, and a schedule runs on this machine's own clock — "
+            f"say the local moment, as {SAID_AS}"
+        )
+    try:
+        return datetime.strptime(said.replace(" ", "T", 1), A_MOMENT)
+    except ValueError:
+        raise NotASchedule(
+            f"'{said}' is not a moment — say one as {SAID_AS}, such as 2026-07-28T09:00"
+        ) from None
+
+
+def _zoned(said: str) -> bool:
+    """Does this carry an offset? Asked of the time only — the date's own hyphens are not one."""
+    _, _, clock = said.partition("T" if "T" in said else " ")
+    return "+" in clock or "-" in clock
+
 
 def _understand(when: str) -> tuple:
     """The five fields, each as the set of values it allows (R-SCH-1)."""
@@ -347,6 +477,28 @@ def describe(one: Schedule, moment: datetime) -> str:
     following = one.next_after(moment)
     if not one.enabled:
         return "off"
+    if one.expired_at(moment):
+        return EXPIRED
     if following is None:
         return "never"
     return following.strftime(A_MINUTE)
+
+
+#: What a schedule that can never be due again is called, and the two facts that are not the
+#: same one. An owner seeing only that a schedule is spent cannot tell work that happened
+#: from work that silently did not, which is the question they are actually asking.
+EXPIRED = "expired"
+RAN = "ran"
+NEVER_RAN = "never ran"
+
+
+def became_of(one: Schedule, outcome: str | None = None) -> str:
+    """What became of a schedule whose single moment has gone.
+
+    Two answers, told apart by whether anything durable says the clock ever started it: it
+    ran, and `outcome` says what that came to — or its moment passed while nothing was
+    running and, being never run late (R-SCH-4), it never ran at all.
+    """
+    if not one.used:
+        return NEVER_RAN
+    return (outcome or "").strip() or RAN

@@ -345,5 +345,192 @@ class ADayAndAWeekdayAgreeWhicheverWayItIsAsked(unittest.TestCase):
                         "a combined schedule was walked minute by minute")
 
 
+class WhenItRunsOnceAndNeverAgain(unittest.TestCase):
+    """R-SCH-36, R-SCH-37 — a schedule that states one moment rather than a repeating time.
+
+    Cron has no year, so `0 9 28 7 *` is every 28 July for ever and one occurrence cannot be
+    said in it at all. The moment is the whole difference; everything after it — what it
+    starts, where it reports, whether it is off — is the schedule this already was.
+    """
+
+    def once(self, said: str = "2026-07-28T09:00", **rest) -> schedule.Schedule:
+        return schedule.Schedule("tidy-up", at=said, run=["/bin/tidy"], **rest)
+
+    def test_a_schedule_states_a_repeating_time_or_one_moment_and_never_both(self):
+        """R-SCH-36 — refused rather than ranked. A schedule naming both would leave rundesk
+        choosing which, and the choice would be invisible in everything that shows it."""
+        with self.assertRaises(schedule.NotASchedule) as refused:
+            schedule.Schedule("both", "0 9 * * *", at="2026-07-28T09:00")
+        self.assertIn("both", str(refused.exception))
+        with self.assertRaises(schedule.NotASchedule) as empty:
+            schedule.Schedule("neither")
+        self.assertIn("neither", str(empty.exception))
+
+    def test_a_moment_is_given_to_the_minute_and_never_as_a_phrase(self):
+        """R-SCH-36 — turning *tomorrow at nine* into a time is the caller's job. Language in
+        here would be a second thing to keep true, and it would be wrong in the dark."""
+        self.assertEqual(at("2026-07-28 09:00"), self.once().stated)
+        self.assertEqual(at("2026-07-28 09:00"), self.once("2026-07-28 09:00").stated)
+        for said in ("tomorrow at nine", "2026-07-28", "09:00", "28/07/2026 09:00", ""):
+            with self.assertRaises(schedule.NotASchedule, msg=said):
+                self.once(said)
+
+    def test_a_moment_carrying_a_time_zone_is_refused_rather_than_converted(self):
+        """A schedule runs on the machine's own clock, and what it last did is written down
+        on that clock too. Quietly reinterpreting somebody's zone would put the two an hour
+        apart for part of the year and read perfectly for the rest of it."""
+        for said in ("2026-07-28T09:00Z", "2026-07-28T09:00+01:00", "2026-07-28T09:00-05:00"):
+            with self.assertRaises(schedule.NotASchedule, msg=said) as refused:
+                self.once(said)
+            self.assertIn("this machine's own clock", str(refused.exception))
+
+    def test_a_schedule_stating_one_moment_is_due_in_that_minute_and_in_no_other(self):
+        """R-SCH-4 inherited rather than re-decided: due only in its own minute means a
+        moment that went by while nothing was running is not run late, because there is no
+        later minute in which it is ever due."""
+        one = self.once()
+        self.assertTrue(one.due_at(at("2026-07-28 09:00")))
+        self.assertFalse(one.due_at(at("2026-07-28 08:59")))
+        self.assertFalse(one.due_at(at("2026-07-28 09:01")))
+        self.assertFalse(one.due_at(at("2027-07-28 09:00")), "it came round the next year")
+
+    def test_a_schedule_that_has_run_its_one_moment_can_never_be_due_again(self):
+        """R-SCH-37 — and asked of the record rather than of anything held in memory, so a
+        gateway that has just come up, one whose clock stepped backwards, and a second one
+        starting all get the same answer."""
+        used = self.once(ran_at="2026-07-28 09:00")
+        self.assertFalse(used.due_at(at("2026-07-28 09:00")), "it ran a second time")
+        self.assertEqual([], schedule.due([used], at("2026-07-28 09:00")))
+        # Nothing is passed in about what has already run — which is exactly the state a
+        # gateway is in on the way up, and the state the old guard could not survive.
+        self.assertEqual([], schedule.due([used], at("2026-07-28 09:00"), already={}))
+        self.assertIsNone(used.next_after(at("2026-07-27 00:00")))
+
+    def test_a_clock_stepping_backwards_does_not_bring_one_moment_round_again(self):
+        """The hour that repeats every autumn, and any correction at all. What refuses this
+        is a durable record of the firing, so it refuses whatever the clock says."""
+        used = self.once(ran_at="2026-07-28 09:00")
+        self.assertFalse(used.due_at(at("2026-07-28 09:00")))
+        self.assertTrue(used.expired_at(at("2026-07-28 08:00")),
+                        "a clock put back made a schedule that has run wait to run")
+
+    def test_the_next_time_a_schedule_runs_once_is_its_moment_and_then_never(self):
+        """R-SCH-8 — every schedule says when it next runs, and one that can never run again
+        has to be able to say so rather than naming a time that will not come."""
+        one = self.once()
+        self.assertEqual(at("2026-07-28 09:00"), one.next_after(at("2026-07-27 09:00")))
+        self.assertIsNone(one.next_after(at("2026-07-28 09:00")), "its own minute is not next")
+        self.assertIsNone(one.next_after(at("2026-07-29 09:00")))
+
+    def test_a_schedule_is_live_in_the_minute_it_is_due_and_spent_after_it(self):
+        """The boundary both ways round: it is not over while it is happening, and it is over
+        the moment the clock has passed it — however that came about."""
+        one = self.once()
+        self.assertFalse(one.expired_at(at("2026-07-28 08:59")))
+        self.assertFalse(one.expired_at(at("2026-07-28 09:00")), "it expired while it was due")
+        self.assertTrue(one.expired_at(at("2026-07-28 09:01")))
+        self.assertTrue(self.once(ran_at="2026-07-28 09:00").expired_at(at("2026-07-28 09:00")),
+                        "one that had already run was still shown as waiting to")
+
+    def test_one_that_ran_is_told_apart_from_one_whose_moment_passed_unrun(self):
+        """R-SCH-40 — the two ways to be over, and the whole reason this is worth showing at
+        all. An owner told only that a schedule is finished cannot tell work that happened
+        from work that silently did not."""
+        ran = self.once(ran_at="2026-07-28 09:00")
+        self.assertEqual("finished", schedule.became_of(ran, "finished"))
+        self.assertEqual(schedule.RAN, schedule.became_of(ran, None))
+        self.assertEqual(schedule.RAN, schedule.became_of(ran, "  "))
+        never = self.once()
+        self.assertEqual(schedule.NEVER_RAN, schedule.became_of(never, None))
+        self.assertEqual(schedule.NEVER_RAN, schedule.became_of(never, "failed"),
+                         "an outcome from somewhere made a schedule that never ran look run")
+
+    def test_a_repeating_schedule_is_never_used_up_however_often_it_has_run(self):
+        """The other side of the same claim: `ran_at` says a single moment is spent and says
+        nothing at all about a schedule that comes round again."""
+        nightly = schedule.Schedule("nightly", "0 3 * * *", ran_at="2026-07-28 03:00")
+        self.assertFalse(nightly.once)
+        self.assertFalse(nightly.used)
+        self.assertFalse(nightly.expired_at(at("2030-01-01 00:00")))
+        self.assertTrue(nightly.due_at(at("2026-07-29 03:00")))
+
+    def test_a_schedule_that_runs_once_and_is_off_does_not_run_when_its_moment_comes(self):
+        """R-SCH-11 — off is off, whichever way when was said."""
+        one = self.once(enabled=False)
+        self.assertEqual([], schedule.due([one], at("2026-07-28 09:00")))
+        self.assertEqual("off", schedule.describe(one, at("2026-07-27 09:00")))
+
+    def test_when_a_schedule_that_runs_once_next_runs_is_said_as_a_moment_or_as_over(self):
+        """R-SCH-8 — read straight into the listing, so what it says is what an owner sees."""
+        one = self.once()
+        self.assertEqual("2026-07-28 09:00", schedule.describe(one, at("2026-07-27 09:00")))
+        self.assertEqual(schedule.EXPIRED, schedule.describe(one, at("2026-07-29 09:00")))
+        self.assertEqual(schedule.EXPIRED,
+                         schedule.describe(self.once(ran_at="2026-07-28 09:00"),
+                                           at("2026-07-27 09:00")))
+
+    def test_a_moment_that_went_by_while_nothing_ran_is_counted_among_what_was_passed_over(self):
+        """R-SCH-5 — not run late, and not silent either. A gateway coming up says what fell
+        due while it was away, and a single moment is exactly the kind an owner would
+        otherwise never learn had been missed."""
+        one = self.once()
+        self.assertEqual(1, schedule.passed_over(one, at("2026-07-27 00:00"),
+                                                 at("2026-07-29 00:00")))
+        self.assertEqual(0, schedule.passed_over(one, at("2026-07-29 00:00"),
+                                                 at("2026-07-30 00:00")))
+        self.assertEqual(0, schedule.passed_over(self.once(ran_at="2026-07-28 09:00"),
+                                                 at("2026-07-27 00:00"), at("2026-07-29 00:00")),
+                         "one that ran was counted as having been missed")
+
+    def test_what_a_schedule_that_runs_once_names_is_carried_exactly_as_any_other(self):
+        """R-SCH-3 — the moment is the only difference. What it starts, which brain, what it
+        is told and where it reports are carried past this module unread, as they always are."""
+        one = schedule.Schedule("report", at="2026-07-28T09:00", prompt="how did it go?",
+                                provider="codex", model="o4", instructions="be terse",
+                                channel="ops")
+        self.assertEqual(("how did it go?", "codex", "o4", "be terse", "ops"),
+                         (one.prompt, one.provider, one.model, one.instructions, one.channel))
+        self.assertIsNone(one.run)
+
+
+class ReadingASingleMomentOffWhatAnAgentKeeps(unittest.TestCase):
+    """A row as the store hands it back, which is the only way one ever arrives."""
+
+    def row(self, **rest) -> dict:
+        said = {"name": "tidy-up", "cron": None, "at": "2026-07-28 09:00",
+                "command": ["/bin/tidy"], "enabled": True}
+        said.update(rest)
+        return said
+
+    def test_a_schedule_that_runs_once_is_read_back_off_what_the_agent_keeps(self):
+        kept, refused = schedule.read([self.row()])
+        self.assertEqual([], refused)
+        self.assertTrue(kept[0].once)
+        self.assertEqual(at("2026-07-28 09:00"), kept[0].stated)
+        self.assertEqual(["/bin/tidy"], kept[0].run)
+
+    def test_that_the_clock_started_one_is_carried_off_the_row_and_never_read_as_a_time(self):
+        """R-SCH-37 — what makes a moment spent is read on every look, out of the record that
+        was written before the work began. Nothing parses it, so no spelling of a minute can
+        turn a schedule that has run back into one that has not."""
+        kept, _ = schedule.read([self.row(last_auto_run_at="2026-07-28 09:00")])
+        self.assertTrue(kept[0].used)
+        self.assertEqual([], schedule.due(kept, at("2026-07-28 09:00")))
+        # Even written in a way nothing here could parse as a minute.
+        odd, _ = schedule.read([self.row(last_auto_run_at="whenever it was")])
+        self.assertTrue(odd[0].used, "a firing nobody could read was taken as never having been")
+        self.assertEqual([], schedule.due(odd, at("2026-07-28 09:00")))
+
+    def test_a_row_stating_both_a_time_and_a_moment_is_refused_by_itself(self):
+        """R-SCH-10 — one schedule nobody can act on leaves every other one running. The
+        records refuse this too, so it should not arrive; a row is still a person's typing."""
+        kept, refused = schedule.read([
+            self.row(name="broken", cron="0 3 * * *"),
+            self.row(name="fine"),
+        ])
+        self.assertEqual(["fine"], [one.name for one in kept])
+        self.assertEqual(["broken"], [name for name, _ in refused])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -401,6 +401,8 @@ class Store:
                 # an upgraded one, because there is only one way to arrive.
                 found = migration.carry(self.at, self.at.parent, want=want)
                 conn = self._open(writing=True)
+            elif 0 < found < want:
+                found = self._settled(conn, found, want)
             self._refused(conn, found, want)
             self._searchable = self._has_search(conn)
         finally:
@@ -439,6 +441,38 @@ class Store:
             # Never treated as empty. What is there still holds everything the owner wrote.
             self._noted(f"these records could not be read at all: {why}", "ERROR")
             raise Unreadable(f"{self.at} could not be read: {why}") from why
+
+    def _settled(self, conn, found: int, want: int) -> int:
+        """What version these records are really on, once whoever is moving them has stopped.
+
+        Records behind the installed shape are refused rather than moved forward by whatever
+        opened them (R-MIG-10) — but **a fresh database somebody else is still building is
+        behind too**, for as long as its steps take, and a single read cannot tell the two
+        apart. What tells them apart is movement: a build is a version going up, and records
+        that are genuinely behind read the same however often they are asked.
+
+        Unreachable while one step shipped — a builder went from nothing to the installed
+        shape in one transaction, so there was no half-built state to look at. The moment a
+        second step landed, two commands reaching for one new agent at the same time left one
+        of them refusing a database that was healthy a millisecond later.
+
+        The write lock is taken before each look, so nothing is being read mid-step: a builder
+        holds it for the whole of one. Bounded rather than endless — a build that died halfway
+        leaves the version standing still, which is exactly the answer this then gives.
+        """
+        for _ in range(TRIES):
+            # Waited *before* the first look, never after it. The version read on the way in
+            # here was taken without the lock and a builder may simply not have reached its
+            # next step yet, so concluding from it that nothing is moving is concluding from
+            # no evidence at all.
+            self._wait(random.uniform(WAIT_LEAST, WAIT_MOST))
+            self._boundary(conn, "BEGIN IMMEDIATE")
+            moved = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            self._boundary(conn, "COMMIT")
+            if moved >= want or moved == found:
+                return moved
+            found = moved
+        return found
 
     def _refused(self, conn, found: int, want: int) -> None:
         """Whether this shape may be read at all — one decision, said the same to everyone.
@@ -654,12 +688,23 @@ class Store:
         kept["enabled"] = bool(kept["enabled"])
         return kept
 
-    def remember_schedule(self, name, cron, created_at, command=None, prompt=None,
+    def remember_schedule(self, name, cron=None, created_at=None, command=None, prompt=None,
                           provider=None, model=None, instructions=None, enabled=True,
-                          channel=None, place=None):
+                          channel=None, place=None, at=None):
         """Work an agent does because the time came — either a program, or a turn.
 
         Exactly one of `command` and `prompt`, which the database enforces rather than trusts.
+
+        **Exactly one of `cron` and `at`**, enforced the same way. `cron` is a repeating time;
+        `at` is the single moment this runs, after which it can never be due again. Cron has
+        no year, so one cannot say the other — and a row naming both would leave rundesk
+        choosing which, with the choice invisible in the listing.
+
+        `at` is the machine's own local clock, to the minute, spelled the way `last_auto_run_at`
+        beside it is: a schedule is stated in local time and compared against a local clock,
+        and the two sitting one column apart in different zones would be wrong by an hour for
+        part of the year. Never `stamped()`, which is UTC because a run is a durable fact two
+        agents' records have to sort against each other.
 
         Refused rather than replacing: `Taken` where the name is already a schedule's, `Refused`
         where it names a channel that is not there.
@@ -680,6 +725,10 @@ class Store:
         """
         if (command is None) == (prompt is None):
             raise ValueError("a schedule runs a command or asks a turn, never both or neither")
+        if (cron is None) == (at is None):
+            raise ValueError(
+                "a schedule states a repeating time or a single moment, never both or neither"
+            )
         # **A plain insert, so the name is claimed by writing it.** It was an upsert, and a
         # caller that asked whether the name was free and then wrote was two decisions with a
         # gap in the middle: two `schedules add` of one name both found it absent, both reported
@@ -688,11 +737,11 @@ class Store:
         try:
             with self._writing() as conn:
                 conn.execute(
-                    "INSERT INTO schedule (name, enabled, cron, command, prompt, provider,"
-                    " model, instructions, channel, place, created_at)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO schedule (name, enabled, cron, at, command, prompt,"
+                    " provider, model, instructions, channel, place, created_at)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
-                        name, 1 if enabled else 0, cron,
+                        name, 1 if enabled else 0, cron, at,
                         json.dumps(command) if command is not None else None,
                         prompt, provider, model, instructions, channel, place, created_at,
                     ),
