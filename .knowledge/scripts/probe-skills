@@ -72,11 +72,22 @@ def plant(where: Path, root: str, tag: str) -> None:
         encoding="utf-8")
 
 
+def tagged(root: str) -> str:
+    """The word this root's canary is named after — unique per root.
+
+    **Matched on rather than the root itself.** `"skills" in path` is true of
+    `.grok/skills/…` as well as of a bare `skills/`, so testing the root as a substring
+    reported the one directory no brain reads as read by all of them. The canary's own name
+    is the only thing that appears in exactly one place.
+    """
+    return root.strip(".").split("/")[0] or "bare"
+
+
 def planted() -> Path:
     """A scratch working directory with one canary in every candidate root."""
     where = Path(tempfile.mkdtemp(prefix="rundesk-skills-probe-"))
     for root in CANDIDATES:
-        plant(where, root, root.strip(".").split("/")[0] or "bare")
+        plant(where, root, tagged(root))
     return where
 
 
@@ -133,12 +144,14 @@ def offline() -> Path:
             json.loads(ran([GROK, "inspect", "--json"], cwd=str(where)).stdout or "{}")
             .get("skills", [])}
     says("grok — which roots it read, asked of it rather than of a turn",
-         "\n".join(f"  {root:16} {'READ' if any(root in p and RUN in p for p in seen) else 'no'}"
+         "\n".join(f"  {root:16} "
+                   f"{'READ' if any(f'canary-{tagged(root)}-{RUN}' in p for p in seen) else 'no'}"
                    for root in CANDIDATES))
 
     paths = {one["path"] for one in _codex_lists(where)}
     says("codex — the same question, over its own skills/list",
-         "\n".join(f"  {root:16} {'READ' if any(root in p and RUN in p for p in paths) else 'no'}"
+         "\n".join(f"  {root:16} "
+                   f"{'READ' if any(f'canary-{tagged(root)}-{RUN}' in p for p in paths) else 'no'}"
                    for root in CANDIDATES))
 
     says("claude", "no listing exists at the CLI — `/skills` is in-session only, and "
