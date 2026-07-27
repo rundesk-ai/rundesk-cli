@@ -119,6 +119,28 @@ SCHEDULE  STATE  WHEN       NEXT              LAST RUN          OUTCOME
 nightly   ON     0 3 * * *  2026-07-27 03:00  2026-07-26 03:00  finished
 ```
 
+### Teach it how you do something
+
+A skill is a folder with a `SKILL.md` in it — what to do, and one line saying when it applies.
+Write it once into the library, then give it to the agents that should have it:
+
+```sh
+mkdir -p "$(rundesk skills --where)/release-notes"
+$EDITOR "$(rundesk skills --where)/release-notes/SKILL.md"
+rundesk skills grant ava release-notes
+rundesk skills
+```
+
+```
+SKILL           FROM      AGENTS
+release-notes   yours     ava
+writing-skills  built-in  ava, winston
+```
+
+**The brain finds it by itself.** Rundesk never puts a skill in a prompt — it costs one line
+of context until the turn it is actually needed, and the agent decides that, not us. Every
+agent starts with `writing-skills`, so you can ask one to write the next skill for you.
+
 ## 💬 Reach it where you already are
 
 ```sh
@@ -184,6 +206,12 @@ can answer you in the terminal, on Discord and on a schedule, with a different m
 - Never late, never overlapping, and exactly once for the minute it's due — across restarts and
   across the hour the clock goes back
 - A program that can't be found is refused when you write the schedule, not at 3am
+
+**Skills**
+- Write one once; every brain that agent reaches finds it **by itself** — nothing is pasted
+  into a prompt, so a skill costs a line of context until the moment it is actually used
+- Give it to the agents that should have it and nobody else: `rundesk skills grant ava deploy`
+- Built-in skills come with rundesk and move forward with it; yours are never touched
 
 **Channels**
 - Threads, reactions and typing on Discord; a plain surface still carries the whole turn

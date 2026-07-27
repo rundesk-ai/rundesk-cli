@@ -28,6 +28,7 @@ none of them is a copy of another:
 
 | Decided in | What it settles |
 |---|---|
+| `src/rundesk/__init__.py` — `data_home()` | **the program and the data are two directories**: `app/` is what an update replaces and an uninstall takes whole, and everything below is the owner's, which is what makes removal structurally incapable of reaching it (R-INS-13, R-RM-8) |
 | `src/rundesk/agent.py` — `agents_home()`, `directory()`, `paths()` | every directory that is one agent's own, off one list that making and diagnosing both read |
 | `src/rundesk/agent.py` — `templates_home()`, `sourced()` | where an owner's own templates stand and which file each page really comes from. **Below `agents_home()`**, so whatever redirects where agents live redirects it too, and outside anything a release ships, which is the whole of why an update cannot reach it (R-AGT-23) |
 | `src/rundesk/dependencies.py` — `wanted_at()`, `site_packages()` | what this install is made of and where it is kept, asked the same way by the installer, an update and a gateway |
@@ -97,6 +98,13 @@ file with it.
 - `src/rundesk/turn.py` — the only module that knows the three above exist: resolve, write down what was
   resolved, run the brain, write down what it said, keep where the conversation got to, write down how it
   ended. Nothing reaches a brain that the account does not show.
+- `src/rundesk/skill.py` — the library of skills on this machine, and what makes one. Everything
+  stands in `data/skills/`: built-ins copied there by the install and brought forward by an update,
+  an owner's own beside them and never touched. **A grant is a link in the agent's own `skills/`,
+  not a record of one** — rundesk never loads a skill, so the only lever with force is what is
+  standing there before the brain runs, and a rule in a config file would describe what rundesk
+  placed while the brain read on. Knows nothing of any brain: where a skill is *presented* is each
+  adapter's, told through `RUNDESK_SKILLS`.
 - `src/rundesk/store.py` — everything one agent keeps, and **the only way in to it**. One database per
   agent, never one shared, so a turn's write is never in another agent's way. Reading and writing are told
   apart at the connection: a reader is opened read-only, so it cannot begin work that would make a turn

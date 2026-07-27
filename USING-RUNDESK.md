@@ -48,6 +48,22 @@ logs/            what your brain printed, and what your gateway has been saying
 providers/       a private home per brain. Not yours to read
 ```
 
+Inside `home/`, `skills/` is what you were **given**. Each entry is a skill — a folder with a
+`SKILL.md` saying how to do a particular kind of work. You do not load them yourself and you
+do not need to read that directory: whatever is standing there is already in front of your
+brain, which decides when one applies.
+
+What matters is that you **check what you have before starting anything substantial**, and use
+one when it fits. A skill exists because somebody decided this work is done a particular way
+here.
+
+```sh
+rundesk skills                      # every skill on this machine, and who has which
+```
+
+If you can see one that would help and were not given it, say so rather than working around
+it. You can write skills too — `writing-skills` says how, and every agent starts with it.
+
 One **gateway** runs you. It is the long-lived process the machine keeps up; your channels are
 held open inside it and your schedules fire inside it. You do not manage it separately — it is
 made with you and goes with you.
