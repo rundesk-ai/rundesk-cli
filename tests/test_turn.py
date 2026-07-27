@@ -852,6 +852,67 @@ class ATurnTheGatewayStoodDownOn(WithAnAgentToRunTurnsFor):
         self.assertEqual("stopped", runs[0]["outcome"])
         self.assertIn("gateway stopped", (runs[0]["why"] or ""))
 
+    async def test_a_gateway_cancelled_channel_turn_is_left_for_one_successor(self):
+        """R-GW-22 — gateway loss is marked apart from a person's explicit stop."""
+        going = asyncio.ensure_future(self.ask(
+            "goes_on", conversation="one", on="ops", kind="somewhere",
+            asked_by={"channel": "ops", "on": "one", "user": "2207"},
+            resume_on_interrupt=lambda: True,
+        ))
+        await asyncio.sleep(1.5)
+        going.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await going
+
+        recoverable = self.kept().recoverable("ops")
+        self.assertEqual(1, len(recoverable))
+        self.assertEqual("one", recoverable[0]["conversation"])
+
+    async def test_recovery_without_a_saved_session_refuses_before_replaying_the_prompt(self):
+        """R-GW-22 — a missing handle produces a terminal failure, never repeated effects."""
+        with self.assertRaises(turn.CannotResume):
+            await self.ask(
+                "plain", prompt="continue safely", conversation="one", on="ops",
+                kind="somewhere", resume_required=True, prompt_author="rundesk",
+            )
+        self.assertEqual([], self.kept().runs(), "an unsafe replay was admitted as a run")
+
+    async def test_a_recovery_interrupted_again_is_not_retried_forever(self):
+        """R-GW-24 — one continuation attempt is the bound, not a restart loop."""
+        kept = agent.records("ava", self.where)
+        conversation = store.conversation_id("ops", "one")
+        kept.opened(conversation, "ops", "somewhere", "one", store.stamped())
+        kept.remember_session(
+            conversation, provider.key(self.brain("goes_on")), "saved-session",
+        )
+        going = asyncio.ensure_future(self.ask(
+            "goes_on", prompt="continue safely", conversation="one", on="ops",
+            kind="somewhere", resume_required=True, prompt_author="rundesk",
+            resume_on_interrupt=lambda: False,
+        ))
+        await asyncio.sleep(1.5)
+        going.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await going
+        self.assertEqual([], self.kept().recoverable("ops"))
+
+    async def test_a_recovery_run_names_the_execution_it_continues(self):
+        """R-RUN-17 — both executions remain readable as one recovery chain."""
+        kept = agent.records("ava", self.where)
+        conversation = store.conversation_id("ops", "one")
+        kept.opened(conversation, "ops", "somewhere", "one", store.stamped())
+        kept.remember_session(
+            conversation, provider.key(self.brain("plain")), "saved-session",
+        )
+        outcome = await self.ask(
+            "plain", prompt="continue safely", conversation="one", on="ops",
+            kind="somewhere", resume_required=True, prompt_author="rundesk",
+            recovery_of="1-old",
+        )
+        linked = [one for one in self.account(outcome.run)
+                  if one.get("type") == "recovery"]
+        self.assertEqual(["1-old"], [one["run"] for one in linked])
+
     async def test_a_turn_that_ended_normally_keeps_the_outcome_it_earned(self):
         """The other half, and the one that makes the guard safe: settling on the way out
         must never write over the real outcome a finished turn already recorded."""
