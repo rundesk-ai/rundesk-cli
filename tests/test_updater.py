@@ -24,6 +24,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk import updater  # noqa: E402
 
+#: An install these cases can take the right to change. `run` holds that right around the
+#: whole window now (R-UPD-26) rather than around the download alone, so a repo root that
+#: does not exist is no longer something an update can be asked about — the lock has nowhere
+#: to live. Made once and shared, because every case releases it before the next begins.
+_installed = tempfile.TemporaryDirectory(prefix="rundesk-install-")
+INSTALL = Path(_installed.name)
+
 
 def run(**kwargs) -> tuple[int, str]:
     out = io.StringIO()
@@ -59,7 +66,7 @@ class OutcomeTests(unittest.TestCase):
     def test_up_to_date_says_so_and_changes_nothing(self):
         applied: list[str] = []
         code, said = run(
-            repo_root=Path("/nowhere"),
+            repo_root=INSTALL,
             current_version="1.0.0",
             latest=lambda: ("v1.0.0", None),
             apply=lambda root, tag: applied.append(tag) or 0,
@@ -71,7 +78,7 @@ class OutcomeTests(unittest.TestCase):
     def test_being_behind_moves_the_install(self):
         applied: list[str] = []
         code, said = run(
-            repo_root=Path("/nowhere"),
+            repo_root=INSTALL,
             current_version="0.1.0",
             latest=lambda: ("v0.2.0", None),
             apply=lambda root, tag: applied.append(tag) or 0,
@@ -83,7 +90,7 @@ class OutcomeTests(unittest.TestCase):
     def test_check_only_reports_and_changes_nothing(self):
         applied: list[str] = []
         code, said = run(
-            repo_root=Path("/nowhere"),
+            repo_root=INSTALL,
             current_version="0.1.0",
             latest=lambda: ("v0.2.0", None),
             check_only=True,
@@ -96,7 +103,7 @@ class OutcomeTests(unittest.TestCase):
     def test_an_unreachable_forge_is_reported_as_unknown_never_as_current(self):
         # "up to date" when we simply could not ask is the one answer that would
         # leave someone on an old version believing they are current.
-        code, said = run(repo_root=Path("/nowhere"), current_version="0.1.0", latest=lambda: (None, updater.UNREACHABLE))
+        code, said = run(repo_root=INSTALL, current_version="0.1.0", latest=lambda: (None, updater.UNREACHABLE))
         self.assertEqual(code, 1)
         self.assertIn("UNKNOWN", said)
         self.assertNotIn("UP TO DATE", said)
@@ -344,17 +351,55 @@ class OneAtATimeTests(unittest.TestCase):
             return 0
 
         updater._download_and_apply = should_not_run
+        # Held the way *another process* holds it — a bare descriptor of its own — rather
+        # than through `_only_one`. The window takes that right around the whole of itself
+        # now and the download inside asks for it again, so asking twice from one process
+        # is the ordinary case and no longer a refusal (R-UPD-26). What must still be
+        # refused is a second update, and a second update is a second process.
+        elsewhere = open(self.install / ".update.lock", "w")
         try:
-            with updater._only_one(self.install):
-                # The error stream, because that is where a refusal belongs and where
-                # every other verb puts one.
-                with contextlib.redirect_stderr(io.StringIO()) as said:
-                    code = updater.download_and_apply(self.install, "v9.9.9")
+            updater.fcntl.flock(elsewhere.fileno(),
+                                updater.fcntl.LOCK_EX | updater.fcntl.LOCK_NB)
+            # The error stream, because that is where a refusal belongs and where
+            # every other verb puts one.
+            with contextlib.redirect_stderr(io.StringIO()) as said:
+                code = updater.download_and_apply(self.install, "v9.9.9")
         finally:
             updater._download_and_apply = original
+            elsewhere.close()
 
         self.assertEqual(started, [], "a second update began while the first held the install")
         self.assertEqual(code, 1, "a refused update reported success")
+        self.assertIn("already running", said.getvalue())
+
+    def test_only_one_update_changes_an_install_at_a_time(self):
+        """R-UPD-26 — the right to change this install is held around the whole window.
+
+        Taken around the download alone, everything either side of it ran unguarded: a
+        second update could stand every gateway down, or begin moving an agent's records
+        forward, while the first was part-way through doing the same. Nothing about that
+        would look wrong until an owner read one agent's log twice over.
+        """
+        reached = []
+        elsewhere = open(self.install / ".update.lock", "w")
+        try:
+            updater.fcntl.flock(elsewhere.fileno(),
+                                updater.fcntl.LOCK_EX | updater.fcntl.LOCK_NB)
+            with contextlib.redirect_stdout(io.StringIO()):
+                with contextlib.redirect_stderr(io.StringIO()) as said:
+                    code = updater.run(
+                        self.install, "0.1.0", latest=lambda: ("9.9.9", None),
+                        busy=lambda: reached.append("busy") or [],
+                        pause=lambda: (reached.append("pause") or [], None),
+                        apply=lambda root, tag: reached.append("apply") or 0,
+                        carry=lambda: reached.append("carry") or None,
+                    )
+        finally:
+            elsewhere.close()
+
+        self.assertEqual(1, code, "a second update reported success")
+        self.assertEqual([], reached,
+                         "a second update reached the window while the first held the install")
         self.assertIn("already running", said.getvalue())
 
     def test_an_update_that_finishes_leaves_the_way_clear_for_the_next(self):
@@ -765,11 +810,11 @@ class WhyItCouldNotSayTests(unittest.TestCase):
         """The reason travelled as a module global, set by the real network call. Injected
         look-ups — the seam this module is built around — never set it, so `update` read
         whatever the last real call had left there and reported the wrong kind of nothing."""
-        _, nothing_there = run(repo_root=Path("/nowhere"), current_version="0.1.0",
+        _, nothing_there = run(repo_root=INSTALL, current_version="0.1.0",
                                latest=lambda: (None, updater.NOTHING_PUBLISHED))
         self.assertIn("NO RELEASES", nothing_there)
 
-        _, could_not_ask = run(repo_root=Path("/nowhere"), current_version="0.1.0",
+        _, could_not_ask = run(repo_root=INSTALL, current_version="0.1.0",
                                latest=lambda: (None, updater.UNREACHABLE))
         self.assertIn("could not reach", could_not_ask)
 
@@ -787,7 +832,7 @@ class AnUpdateAndWorkInFlight(unittest.TestCase):
     def _run(self, busy, check_only=False):
         applied = []
         code = updater.run(
-            Path("/tmp/rundesk-not-real"), "0.1.0", check_only=check_only,
+            INSTALL, "0.1.0", check_only=check_only,
             latest=lambda: ("9.9.9", None),
             apply=lambda root, version: applied.append(version) or 0,
             busy=lambda: busy,
@@ -822,7 +867,7 @@ class AnUpdateAndWorkInFlight(unittest.TestCase):
         """R-UPD-18 — nothing is going to be moved, so nothing is worth refusing over."""
         asked = []
         code = updater.run(
-            Path("/tmp/rundesk-not-real"), "9.9.9", latest=lambda: ("9.9.9", None),
+            INSTALL, "9.9.9", latest=lambda: ("9.9.9", None),
             apply=lambda root, version: 0, busy=lambda: asked.append(True) or ["x"],
         )
         self.assertEqual(0, code)
@@ -857,7 +902,7 @@ class AnUpdateAndWhatIsRunning(unittest.TestCase):
             return carried
 
         code = updater.run(
-            Path("/tmp/rundesk-not-real"), "0.1.0", latest=lambda: ("9.9.9", None),
+            INSTALL, "0.1.0", latest=lambda: ("9.9.9", None),
             apply=apply, busy=lambda: [], pause=pause, resume=resume, carry=carry,
         )
         return code
@@ -880,7 +925,7 @@ class AnUpdateAndWhatIsRunning(unittest.TestCase):
         beginning to move one forward."""
         order = []
         updater.run(
-            Path("/tmp/rundesk-not-real"), "0.1.0", latest=lambda: ("9.9.9", None),
+            INSTALL, "0.1.0", latest=lambda: ("9.9.9", None),
             busy=lambda: [], pause=lambda: (order.append("stopped") or ["alpha"], None),
             apply=lambda root, version: order.append("replaced") or 0,
             carry=lambda: order.append("carried") or None,

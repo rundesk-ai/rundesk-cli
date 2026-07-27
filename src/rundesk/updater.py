@@ -154,6 +154,34 @@ def run(
         return 0
     if check_only:
         return 0
+    # Held around everything that follows rather than around the download alone
+    # (R-UPD-26). Standing gateways down, replacing the files and moving records forward
+    # are one act from the machine's point of view, and a second update reaching any part
+    # of it is two updates deciding the same install's shape at once.
+    try:
+        with _only_one(repo_root):
+            return _replace_this_install(
+                repo_root, published, apply, busy, pause, resume, carry,
+            )
+    except Busy as err:
+        print(f"update: NOT APPLIED — {err}", file=sys.stderr)
+        return 1
+
+
+def _replace_this_install(
+    repo_root: Path,
+    published: str,
+    apply=None,
+    busy=None,
+    pause=None,
+    resume=None,
+    carry=None,
+) -> int:
+    """The window itself: nothing an owner runs is up between the first line and the last.
+
+    Split out from `run` so the right to change this install is held around the whole of
+    it and released once, rather than taken and let go part-way through.
+    """
     # Asked before anything is fetched or laid down, and only when something is actually
     # going to be moved (R-UPD-23). An update replaces the files a running gateway is
     # made of while it is part-way through a turn — the process keeps the code it already
@@ -229,6 +257,12 @@ def run(
     return moved
 
 
+#: Which installs *this process* already holds the right to change. `flock` is held per
+#: open file, not per process, so a second one taken here would refuse the first — and the
+#: window takes it once around everything while the download inside it asks again.
+_HELD: set = set()
+
+
 @contextlib.contextmanager
 def _only_one(repo_root: Path):
     """Hold the right to change this install, or say who already has it.
@@ -236,16 +270,27 @@ def _only_one(repo_root: Path):
     Two updates running at once each replace what the other is mid-way through reading.
     The lock is advisory and only updates take it: a `rundesk version` racing an update is
     left to the swap being a rename, which is as close to instant as this gets.
+
+    **Held around the whole window, not only the download** (R-UPD-26). It used to be taken
+    inside the replacement alone, so standing every gateway down, moving records forward and
+    bringing them back all ran unguarded — and a second update could stand gateways down
+    while the first was part-way through moving an agent's records.
     """
     lock = repo_root / ".update.lock"
+    key = str(lock)
+    if key in _HELD:
+        yield          # already this process's; asking the kernel again would refuse us
+        return
     handle = open(lock, "w")
     try:
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             raise Busy(f"another update is already running (holding {lock})")
+        _HELD.add(key)
         yield
     finally:
+        _HELD.discard(key)
         handle.close()
 
 
