@@ -1781,6 +1781,10 @@ class Gateway:
                 # next gateway of this name is the only thing that will ever end it
                 # (R-GW-16). Erasing it here is admitting to orphans and then losing them.
                 self._say()
+                # Freeze that final record before any running task can unwind. Clearing
+                # `running` and only then releasing left a scheduling gap in which a
+                # task's `finally` rewrote the record as empty (R-GW-16).
+                self._released = True
                 # And said where something other than a person can read it (R-GW-23). The
                 # log already carries this, which answers the owner and nothing else.
                 for held, program in self.running.items():
