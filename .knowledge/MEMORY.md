@@ -8,11 +8,31 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **`~/.rundesk` is the owner's live install. Never touch it.** It is a running product with
+  real agents, real channels and real history in it — not a fixture. **Never install,
+  uninstall, update, migrate, start, stop, add, remove or write anything there**, and never
+  run a command that resolves there by default, which is most of them. This is not a thing to
+  weigh against convenience: a scratch agent is free and a stopped gateway of theirs is not.
+  Test installs somewhere else — `RUNDESK_INSTALL_DIR` and `RUNDESK_BIN_DIR` for the install
+  itself, and **all four of** `RUNDESK_AGENTS_DIR`, `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR` and
+  `RUNDESK_JOBS_DIR` for what an agent keeps, or the command reaches the real one while
+  reporting success. Check `find $SCRATCH` has something in it before believing a run was
+  isolated, and check `ls ~/.rundesk` afterwards to be sure it did not.
+
 - **`./install.sh --uninstall` removes the checkout's own `.venv`, whatever else you redirected.**
   Symmetric — the install put `discord.py` there — but it is where a *developer's* suite loads it from
   too, so the Discord cases silently start skipping, and a gateway you have running would fail on its
   next restart with no obvious cause. Run `./install.sh` again straight afterwards, and check
   `.venv/bin/python -c "import discord"` before believing a green suite.
+- **The gate cannot tell you whether `test_discord` really ran, and CI is the machine where
+  it matters.** CI runs with an *empty* `.venv` on purpose, so the Discord cases skip there
+  legitimately — which means a suite that skips for the *wrong* reason skips there too, and
+  nothing goes red. Whether the adapter file exists is the one thing that does not depend on
+  the dependency, so it is checked first and raises on every machine. Anything else that
+  fails to load is a skip only when `discord.py` is genuinely absent, asked of the import
+  directly: the adapter catches its own missing import, prints a record and exits, so its
+  exception can never be told apart from being broken. Reading it as one failed CI on the
+  only machine the skip exists for.
 - **`OK (skipped=65)` and `OK` are the same word to whoever reads the gate.** `test_discord`
   loaded the adapter from `src/rundesk/channels/discord`, which the src restructure had moved
   to `src/channels/discord`; the loader raised, a bare `except BaseException` set the module to

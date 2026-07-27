@@ -33,6 +33,15 @@ for _packages in sorted((ROOT / ".venv" / "lib").glob("python3.*/site-packages")
 def _adapter():
     """The adapter, loaded from its path — it is a program, not a module."""
     at = ROOT / "src" / "channels" / "discord"
+    # **Asked before anything else, and on every machine.** Whether the file is there does not
+    # depend on the dependency, so this is the one check that still fails where the skip is
+    # legitimate — which is precisely where the adapter moving went unnoticed: CI runs with an
+    # empty virtualenv, so a suite that only noticed a missing adapter when `discord.py` was
+    # installed would have gone on skipping there for ever.
+    if not at.is_file():
+        raise RuntimeError(
+            f"test_discord cannot find the adapter it tests at {at} — this is not a skip"
+        )
     loader = importlib.machinery.SourceFileLoader("rundesk_discord", str(at))
     spec = importlib.util.spec_from_loader("rundesk_discord", loader)
     made = importlib.util.module_from_spec(spec)
@@ -40,24 +49,33 @@ def _adapter():
     return made
 
 
+#: Whether the one thing that may legitimately be missing is missing. **Asked of the
+#: dependency itself, never inferred from how the adapter failed** — the adapter catches its
+#: own absent import, says so as a record, and exits, so it never raises anything a caller
+#: could tell apart from being broken. Reading its exception was exactly that mistake: CI
+#: runs with an empty `.venv` on purpose, and a suite that turned that into "this is not a
+#: skip" failed the build on the one machine the skip exists for.
+try:  # pragma: no cover - the presence of a dependency is not a branch worth covering
+    import discord as _installed
+except ModuleNotFoundError:
+    _installed = None
+
 try:
     discord = _adapter()
-except ModuleNotFoundError as why:  # pragma: no cover - proved by the install
-    # **Only the dependency may be missing.** A machine without `discord.py` is a real
-    # configuration — CI runs one — and skipping there is honest.
-    if why.name != "discord":
-        raise
-    discord = None
-    WHY = str(why)
-except BaseException as why:  # pragma: no cover
-    # **Anything else is this suite being broken, and it must say so.** The adapter moved in
-    # the src restructure and this went on loading it from where it used to be: every case
-    # skipped, the file was never opened, and the gate said `ok` for months of commits. A
-    # skip and a pass read identically, so the only defence is refusing to skip for a reason
-    # that is not the one skipping is for.
-    raise RuntimeError(
-        f"test_discord cannot load the adapter it tests, which is not a skip: {why}"
-    ) from why
+except BaseException as why:  # pragma: no cover - proved by the install
+    if _installed is None:
+        # A machine without `discord.py` is a real configuration and skipping there is honest.
+        discord = None
+        WHY = "discord.py is not installed — run ./install.sh"
+    else:
+        # **Anything else is this suite being broken, and it must say so.** The adapter moved
+        # in the src restructure and this went on loading it from where it used to be: every
+        # case skipped, the file was never opened, and the gate said `ok` for months of
+        # commits. A skip and a pass read identically, so the only defence is refusing to
+        # skip for a reason that is not the one skipping is for.
+        raise RuntimeError(
+            f"test_discord cannot load the adapter it tests, which is not a skip: {why}"
+        ) from why
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
