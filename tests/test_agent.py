@@ -74,7 +74,14 @@ class WithSomewhereToKeepAgents(unittest.TestCase):
             at.mkdir(parents=True, exist_ok=True)
 
     def made(self, name: str = "ava") -> str:
+        """An agent as an owner actually has one: with a brain (R-AGT-18).
+
+        Named here rather than in each case, because an agent without one is now a fault
+        every diagnosis reports — so a fixture that left it out would put that complaint into
+        every case about something else.
+        """
         agent.add(name, self.where)
+        agent.remember(name, self.where, provider="codex")
         return name
 
 
@@ -147,6 +154,9 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         one whose absence is reported as ready. Read off the list itself, so the day a new
         one lands it is made and looked for without either being edited."""
         agent.add("ava", self.where)
+        # A brain, so the only complaint a diagnosis has is the directory this case took
+        # away — an agent without one is its own fault now (R-AGT-18).
+        agent.remember("ava", self.where, provider="codex")
         wanted = agent.made_of("ava", self.where)
         self.assertIn("home", wanted, "an agent is made of nothing at all")
 
@@ -208,6 +218,7 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         """R-AGT-11 — a home with no files in it and nothing to have copied there would
         otherwise be diagnosed as a working agent."""
         agent.add("ava", self.where)
+        agent.remember("ava", self.where, provider="codex")   # R-AGT-18, as above
         nowhere = self.where / "no-templates"
         self.addCleanup(setattr, agent, "TEMPLATES", agent.TEMPLATES)
         agent.TEMPLATES = nowhere
@@ -711,6 +722,36 @@ class AGatewayThatHasNoAgentYet(WithSomewhereToKeepAgents):
         """R-AGW-1"""
         agent.add("fresh", self.where)
         self.assertEqual([], agent.adopt("fresh", self.where, logs=self.before / "logs"))
+
+
+class AnAgentNeedsABrain(WithSomewhereToKeepAgents):
+    """R-AGT-18 — an agent that cannot take a turn is not a thing to have made."""
+
+    def test_an_agent_with_no_brain_is_not_ready(self):
+        """`doctor` promises what stands between an agent and a working turn, and answered
+        READY for one that refuses every turn it is given. A diagnosis claiming a success it
+        has not earned is the one failure this command exists to prevent."""
+        self.made()
+        agent.remember("ava", self.where, provider="")
+        found = agent.diagnosed("ava", self.where, root=self.root)
+        self.assertTrue(any("which brain" in one.said for one in found),
+                        f"a brainless agent was called ready: {found}")
+
+    def test_what_is_wrong_says_how_to_put_it_right(self):
+        """The complaint names the command, because an owner reading NOT READY is asking
+        what to type next."""
+        self.made()
+        agent.remember("ava", self.where, provider="")
+        found = [one for one in agent.diagnosed("ava", self.where, root=self.root)
+                 if "which brain" in one.said]
+        self.assertIn("--provider", found[0].about)
+
+    def test_an_agent_with_a_brain_is_not_complained_about(self):
+        """The other half: a named brain that runs is nothing to report."""
+        self.made()
+        agent.remember("ava", self.where, provider="codex")
+        found = agent.diagnosed("ava", self.where, root=self.root, runnable=lambda one: None)
+        self.assertEqual([], [one for one in found if "which brain" in one.said])
 
 
 class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):

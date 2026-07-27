@@ -610,7 +610,14 @@ def diagnosed(name: str, where: Path | None = None, root: Path | None = None,
         # of the middle of one. It is reported and the rest of the check still runs.
         found.append(Complaint(str(store.path_for(directory(name, where))), str(why)))
         named = None
-    if runnable is not None and named:
+    if not named:
+        # **A brain nobody named is what stands between this agent and every turn** — and
+        # this said READY, which is a diagnosis claiming a success it had not earned. The
+        # turn refuses correctly and says how to fix it; the check that exists to find that
+        # out first was the one place it did not (R-AGT-18).
+        found.append(Complaint(f"rundesk add {name} --provider <provider>",
+                               "nothing says which brain answers for this agent"))
+    elif runnable is not None:
         try:
             runnable(named)
         except Exception as why:

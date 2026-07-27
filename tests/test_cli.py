@@ -1188,7 +1188,7 @@ class MakingAnAgent(unittest.TestCase):
     def test_making_an_agent_makes_it_and_says_where_it_stands(self):
         """R-AGW-1"""
         agents = FakeAgents()
-        code, said = drive(["add", "ava"], agents=agents)
+        code, said = drive(["add", "ava", "--provider", "codex"], agents=agents)
         self.assertEqual(0, code, said)
         self.assertEqual(["ava"], agents.added)
         self.assertIn("MADE", said)
@@ -1198,6 +1198,7 @@ class MakingAnAgent(unittest.TestCase):
         """R-AGT-4 — repairing a home you half deleted must not be how you lose the rules
         you spent a month writing."""
         agents = FakeAgents(made=["ava"])
+        agents.remember("ava", provider="codex")   # it already has a brain (R-AGT-18)
         code, said = drive(["add", "ava"], agents=agents)
         self.assertEqual(0, code, said)
         self.assertIn("ALREADY MADE", said)
@@ -1214,7 +1215,7 @@ class MakingAnAgent(unittest.TestCase):
         not a name a second agent may have. `ava.ran` used to be one of these and is an
         ordinary name again: what a schedule last did is a row, so nothing writes that file."""
         agents = FakeAgents()
-        code, said = drive(["add", "ava.log"], agents=agents)
+        code, said = drive(["add", "ava.log", "--provider", "codex"], agents=agents)
         self.assertEqual(1, code)
         self.assertIn("INVALID NAME", said)
         self.assertEqual([], agents.added, "it refused the name and made one anyway")
@@ -1222,7 +1223,7 @@ class MakingAnAgent(unittest.TestCase):
     def test_adopting_a_gateway_that_has_no_agent_brings_what_it_wrote_in(self):
         """R-AGW-1 — one place afterwards, rather than two that disagree."""
         agents = FakeAgents(wrote=["gateway.log", "gateway.json"])
-        code, said = drive(["add", "gateway"], agents=agents)
+        code, said = drive(["add", "gateway", "--provider", "codex"], agents=agents)
         self.assertEqual(0, code, said)
         self.assertEqual(["gateway"], agents.adopted)
         self.assertIn("gateway.log", said, "it moved things and never said which")
@@ -1232,7 +1233,7 @@ class MakingAnAgent(unittest.TestCase):
         while every command reads another."""
         agents = FakeAgents(wrote=["gateway.log"])
         gateways = FakeGateways(standing=[FakeGateways.Standing("gateway", running=True, pid=7)])
-        code, said = drive(["add", "gateway"], gateways, agents=agents)
+        code, said = drive(["add", "gateway", "--provider", "codex"], gateways, agents=agents)
         self.assertEqual(1, code)
         self.assertEqual([], agents.adopted, "it moved what a running gateway is reading")
         self.assertIn("rundesk stop gateway", said, "it refused and never said what to do")
@@ -2970,6 +2971,28 @@ class MovingEveryAgentForwardWhenAnUpdateLands(unittest.TestCase):
             cli._carry_every(self.agents)
         self.assertIn("could not be opened at all",
                       (broken / "logs" / "gateway.log").read_text())
+
+
+class MakingAnAgentNeedsABrain(unittest.TestCase):
+    """R-AGT-18 — an agent that would refuse every turn is not a thing to make."""
+
+    def test_making_an_agent_with_no_brain_is_refused(self):
+        """Said at the moment somebody asks, rather than at the first turn: a half-made agent
+        that reports MADE and then refuses everything told them the wrong thing first."""
+        code, said = drive(["add", "ava"], agents=FakeAgents())
+        self.assertEqual(1, code)
+        self.assertIn("NO BRAIN", said)
+        self.assertIn("--provider", said, "it refused without saying what to type")
+
+    def test_making_an_agent_that_has_one_already_does_not_ask_again(self):
+        """Making one that exists is how an owner repairs a home (R-AGT-4), and a repair
+        that demanded the brain again would be a repair nobody could run from memory."""
+        agents = FakeAgents()
+        code, said = drive(["add", "ava", "--provider", "codex"], agents=agents)
+        self.assertEqual(0, code, said)
+        code, said = drive(["add", "ava", "--provider", "codex"], agents=agents)
+        self.assertNotIn("NO BRAIN", said)
+        self.assertEqual(0, code, said)
 
 
 class WhoSaidIt(unittest.TestCase):

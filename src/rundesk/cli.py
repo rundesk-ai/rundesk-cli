@@ -965,6 +965,17 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
         print(f"{name}: INVALID NAME — {why}", file=sys.stderr)
         return 1
     knew = agents.exists(name)
+    # **An agent with no brain cannot take a turn**, so it is not a thing to make. Asked here
+    # rather than left to the first `ask`: a half-made agent that reports MADE and then
+    # refuses everything is worse than a refusal now, and an owner who has to be told twice
+    # was told the wrong thing first. Making one that *already* has a brain is a repair and
+    # must not demand it again (R-AGT-4, R-AGT-18).
+    if not args.provider and not (knew and (agents.chosen(name) or {}).get("provider")):
+        print(f"{name}: NO BRAIN — say which one answers for this agent", file=sys.stderr)
+        print(f"        like this:  rundesk add {name} --provider <provider>",
+              file=sys.stderr)
+        print("        a shipped one, or the path to a program you wrote", file=sys.stderr)
+        return 1
     wrote = agents.standing_before(name)
     # Whether or not the agent already exists. An adoption that was refused leaves the
     # files where they were, and asking again is how an owner retries it — conditioning
