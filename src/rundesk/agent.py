@@ -25,7 +25,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from rundesk import data_home, gateway, migration, store
+from rundesk import data_home, gateway, migration, skill, store
 
 #: What a new agent's home is copied from. Ordinary Markdown files rather than text built
 #: in code, because they are what an owner reads first and edits next, and a rule about how
@@ -367,12 +367,65 @@ def add(name: str, where: Path | None = None) -> list[str]:
         if not page.exists():
             page.write_text(_copied(called, name), encoding="utf-8")
             made.append(called)
+    made.extend(_given_what_ships(name, where))
     records = store.path_for(directory(name, where))
     fresh = not records.exists()
     store.Store(records).made()
     if fresh:
         made.append(store.NAME)
     return sorted(made)
+
+
+def _what_is_wrong_with_its_skills(name: str, where: Path | None = None) -> list:
+    """What stands between this agent's skills and a brain reading them.
+
+    Two things, and neither is a fault of the agent's own making. A grant whose skill has
+    gone — a built-in dropped by a release, or one an owner deleted from the library —
+    leaves a link pointing at nothing, which every brain skips in silence. And a built-in
+    this release ships that this agent has never been given, because it was made before
+    the release that added it; there is no backfill on purpose (see `_given_what_ships`),
+    so a diagnosis is where an owner hears about it.
+    """
+    found = []
+    mine = skills(name, where)
+    for called in skill.granted(mine):
+        standing = mine / called
+        if standing.is_symlink() and not standing.exists():
+            found.append(Complaint(
+                str(standing), f"the skill {called} was granted and is no longer there",
+                f"rundesk skills revoke {name} {called}"))
+    held = skill.library()
+    for called in skill.shipped():
+        if called in held and called not in skill.granted(mine):
+            found.append(Complaint(
+                called, "this agent has not been given a skill this release ships",
+                f"rundesk skills grant {name} {called}"))
+    return found
+
+
+def _given_what_ships(name: str, where: Path | None = None) -> list[str]:
+    """The skills every agent starts with, granted as it is made.
+
+    One of them is the skill that says how to write a skill, and it is the reason this
+    happens without being asked for: an agent cannot be told to use `rundesk skills grant`
+    to give itself the thing that explains what granting is. It is the bootstrap.
+
+    **Only as an agent is made.** There is deliberately no backfill on update, because
+    nothing records that a grant was taken away — a backfill would hand back, on every
+    update, the skill an owner had just removed. An agent made before a built-in existed
+    is told by a diagnosis, with the line to type.
+
+    A library that has nothing in it yet is a checkout somebody is working in rather than
+    an install, and is not a half-made agent.
+    """
+    given = []
+    for called in skill.shipped():
+        try:
+            skill.grant(skills(name, where), called)
+        except (skill.Unknown, skill.NotASkill, skill.InTheWay, OSError):
+            continue
+        given.append(f"skills/{called}")
+    return given
 
 
 def adopt(name: str, where: Path | None = None, logs: Path | None = None,
@@ -685,6 +738,7 @@ def diagnosed(name: str, where: Path | None = None, root: Path | None = None,
     unfit = gateway.fitness(root)
     if unfit:
         found.append(Complaint("this install", unfit, "rundesk update"))
+    found.extend(_what_is_wrong_with_its_skills(name, where))
     # **Where these records stand against what this install expects** (R-AGT-20). Read
     # without opening a store, which refuses records it will not read — and refusing is the
     # right answer for a turn and the wrong one for the check that exists to explain it.

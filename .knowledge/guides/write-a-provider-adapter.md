@@ -73,6 +73,7 @@ rundesk add ava --provider /opt/my-brain   # yours
 | `RUNDESK_SETTINGS` | a JSON object of whatever the owner set, passed through unread |
 | `RUNDESK_RAW` | somewhere to append everything your *brain* said, if you want to keep it |
 | `RUNDESK_PREFACE` | standing instructions for this turn's situation, or unset — see below |
+| `RUNDESK_SKILLS` | the skills this agent was given — present them where your brain looks |
 
 The first four are always set. `RUNDESK_MODEL`, `RUNDESK_RESUME` and `RUNDESK_SETTINGS` are
 **absent** rather than empty when there is nothing to say, so `${RUNDESK_MODEL:-default}`
@@ -112,6 +113,30 @@ know what your brain offers:
 
 It arrives already composed and already bounded, and it does not come through again with a
 steer — a brain does not read its standing instructions twice in one turn.
+
+**`RUNDESK_SKILLS` is a directory of skills, and presenting them is yours.** Each is a
+folder holding a `SKILL.md` — the open Agent Skills format, which every brain that has
+skills already reads. What differs is *where* each brain looks, and only you know that for
+yours. So put them where it looks, before you start your turn.
+
+- **Link, do not copy.** An owner editing a skill should reach every agent holding it with
+  nothing to re-run. All three shipped brains follow a symlink, follow a link to a link,
+  and index a skill once when the same target is reachable twice.
+- **Link each skill, never the whole directory.** Making a path your vendor owns an alias
+  for rundesk's library means your brain's own skill-installer writes into the library,
+  and anything aimed at that directory destroys it.
+- **Make nothing when there is nothing.** An agent granted no skills should not have a
+  directory of yours in its home to explain.
+- **Remove only what you put there.** A directory somebody wrote by hand, and a link
+  pointing somewhere else, are not yours to take away. The shipped adapters unlink an
+  entry only when it is a symlink *and* it now dangles.
+- **Discovering nothing is a whole adapter.** If your brain has no notion of a skill,
+  ignore this variable. Rundesk will not pretend otherwise by putting the text in a
+  prompt — that would charge every turn for every skill and make the account untrue.
+
+`RUNDESK_PROVIDER_HOME` is **not** where skills go. That is yours for what you must
+remember between turns; skills are knowledge the *agent* loads, and they stand in the
+agent's own home.
 
 **`RUNDESK_RAW` is worth using.** Rundesk sees what *you* report and never what your brain
 said before you made records of it — so if your brain changes its output shape, that shows

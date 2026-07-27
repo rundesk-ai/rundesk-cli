@@ -399,6 +399,15 @@ echo "linked $BINDIR/rundesk -> $SHIM"
 "$BINDIR/rundesk" version >/dev/null 2>&1 || die "rundesk was installed but would not run."
 echo "checked that it runs"
 
+# The skills this release ships, into the owner's library beside their own. Asked of the
+# installed command rather than done in shell, because which skills a release ships is
+# read off a directory and that reading lives in one place (R-AGT-30). What is already
+# there is left alone: an install is not a thing that overwrites somebody's work, and it
+# is `rundesk update` that brings a built-in forward.
+if laid="$("$BINDIR/rundesk" skills --lay-down 2>/dev/null)" && [[ -n "$laid" ]]; then
+  echo "put the skills this release ships in your library: $laid"
+fi
+
 case ":$PATH:" in
   *":$BINDIR:"*) ;;
   *) echo; echo "note: $BINDIR is not on your PATH. Add it:"; echo "  export PATH=\"$BINDIR:\$PATH\"" ;;

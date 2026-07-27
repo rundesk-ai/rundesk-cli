@@ -51,6 +51,8 @@ rundesk uninstall [--purge]                                                     
 rundesk messages [--most <n>] [--since <id>] [--channel <channel>] [--conversation <where>] [--author <who>] [--source <how>] <agent>                                                                                  what was said, newest first
 rundesk resume <agent>                                                                                                                                                                                                 carry one run on from where it stopped   [planned]
 rundesk search [--most <n>] <agent> <words>                                                                                                                                                                            what was said, by the words in it
+rundesk skills grant <agent> <skill>                                                                                                                                                                                   give an agent one of the skills in the library
+rundesk skills revoke <agent> <skill>                                                                                                                                                                                  take a skill away from an agent
 ```
 
 ## What it looks like
@@ -144,6 +146,7 @@ rundesk schedules ava off nightly
 <prompt>                        what to ask it, in quotes
 <run>                           which run — the id listed against each by `runs`
 <schedule>                      what to call it, and what to name it by later
+<skill>                         which skill, by the name it is under
 <text>                          what to tell it, with {agent} {channel} {surface} {where} {called} {user} {conversation} filled in — empty takes it back off, and left out shows what is there
 <words>                         what to look for, in the words that were actually said
 ```
