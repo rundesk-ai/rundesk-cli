@@ -39,10 +39,10 @@ update already stands every gateway down for. A step forward exists; a step back
 | ✅ | R-MIG-18 | Data moved forward is never moved back | `records moved forward are never moved back`, `records are left alone when the files never landed` |
 | ✅ | R-MIG-19 | A copy of every agent's records is taken before any is moved, and put back when one cannot be | `an agent already carried is put back when a later one cannot be`, `an agent with no records yet is neither copied nor in the way` |
 | ✅ | R-MIG-20 | A copy is let go of once the move it insured is proved | `a copy is let go of once the move it insured is proved` |
+| ✅ | R-MIG-21 | An owner may ask which steps would run against each agent before any of them runs | `which steps would run is answerable without running any of them`, `asking what would run never makes records for an agent that has none` |
 
 ## Open questions
 
-- Whether an owner may ask what a step would do before it does it.
 - What happens to an agent whose records cannot be read at all when every other agent's can.
 - Whether a machine that never updates, only reinstalls, needs any of this.
 - What becomes of something an earlier rundesk left behind that belongs to no agent, given

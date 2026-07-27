@@ -52,6 +52,7 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-31 | An update that cannot bring either forward puts the install back on the release it was | `an update that cannot build what a release needs puts the release back`, `a migration that fails puts the install back and says which and why` |
 | ✅ | R-UPD-32 | An install already current but unfit is mended rather than reported as current | `an install already current but unfit is mended rather than called current`, `an install that is current and fits is left entirely alone`, `asking where a broken install stands still changes nothing` |
 | ✅ | R-UPD-33 | Everything after the files are replaced is done by the release that was just installed | `the rest of the window is handed to the release that just landed`, `the release that took over brings every gateway back`, `a release whose entry point will not start is put back` |
+| ✅ | R-UPD-34 | Asking what an update would do names what it would install and what it would move | `update check names every step it would run and installs nothing`, `asking what an update would do is asked of nothing but this machine` |
 
 ## Open questions
 

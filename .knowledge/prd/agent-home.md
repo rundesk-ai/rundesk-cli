@@ -39,6 +39,8 @@ provider's own tools still reach whatever their owner reaches.
 | ✅ | R-AGT-18 | An agent is not made without a brain, and one that has none is not ready | `an agent with no brain is not ready`, `what is wrong says how to put it right`, `an agent with a brain is not complained about`, `making an agent with no brain is refused`, `making an agent that has one already does not ask again` |
 | ✅ | R-AGT-16 | What a turn is told about its situation is the nearest thing that said anything, and the order is one place | `what a turn was told itself wins`, `the agents own is next`, `rundesks own line is last`, `nothing anywhere is nothing rather than a guess`, `what an agent is told is kept and read back`, `taking what an agent is told off leaves nothing behind`, `a channel that says nothing falls to what the agent says`, `what this channel says still wins`, `a schedule that says nothing falls to what the agent says`, `a channel that says nothing falls to what the agent says`, `what this channel says still wins over the agents` |
 | ✅ | R-AGT-14 | Every place an agent resolves is readable without opening the source | `one agent says every place it resolves` |
+| ✅ | R-AGT-19 | Everything a diagnosis complains about says what to type to put it right | `what is wrong says how to put it right`, `every complaint says what to type next` |
+| ✅ | R-AGT-20 | A diagnosis says where an agent's records stand against what this install expects | `records behind what this install expects are reported with the way out` |
 
 ## Open questions
 

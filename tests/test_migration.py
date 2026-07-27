@@ -706,6 +706,34 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
         self.assertEqual([], list(aside.iterdir()),
                          "a proved update kept a copy of what it replaced")
 
+    def test_which_steps_would_run_is_answerable_without_running_any_of_them(self):
+        """R-MIG-21 — the question an owner asks *before* an update. Two agents are never
+        at the same version, so "what will this do" has as many answers as there are
+        agents, and reading three logs afterwards is what this exists to replace."""
+        self.nothing_open(self.agent("ava"))
+        self.nothing_open(self.agent("john"))
+        migration.carry(store.path_for(self.where / "john"), self.where / "john", 1,
+                        where=self.steps)
+        self.wrote(2, signs("two"))
+        self.wrote(3, signs("three"))
+
+        standing = migration.what_would_run(self.where, 3, where=self.steps)
+        self.assertEqual({"ava", "john"}, set(standing))
+        self.assertEqual(["002.py", "003.py"], [repr(one) for one in standing["ava"]])
+        self.assertEqual(1, self._version("ava"), "asking what would happen moved something")
+
+    def test_asking_what_would_run_never_makes_records_for_an_agent_that_has_none(self):
+        """`carry` reaches its database through `sqlite3.connect`, which *makes* one where
+        there is none — so asking by way of the thing that does it would leave records
+        behind on exactly the agents a preview must not touch."""
+        (self.where / "fresh" / "home").mkdir(parents=True)
+        self.wrote(2, signs("two"))
+
+        standing = migration.what_would_run(self.where, 2, where=self.steps)
+        self.assertEqual(["002.py"], [repr(one) for one in standing["fresh"]])
+        self.assertFalse(store.path_for(self.where / "fresh").exists(),
+                         "a preview made the records it was asked about")
+
     def test_what_may_have_to_be_put_back_is_kept_where_the_agents_are(self):
         """R-MIG-19 — and the reason it is there rather than inside the program.
 

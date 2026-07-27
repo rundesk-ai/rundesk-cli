@@ -110,6 +110,42 @@ class OutcomeTests(unittest.TestCase):
         self.assertIn("v0.2.0", said)
         self.assertEqual(applied, [], "--check moved the install")
 
+    def test_update_check_names_every_step_it_would_run_and_installs_nothing(self):
+        """R-UPD-34 — what it would do, before it does it. `--check` used to say only which
+        version is published, so an owner learned what an update would move to their records
+        by letting it move them."""
+        applied: list[str] = []
+        code, said = run(
+            repo_root=INSTALL,
+            current_version="0.1.0",
+            latest=lambda: ("v0.2.0", None),
+            check_only=True,
+            preview=lambda: ["would install: discord.py==2.7.1 is declared and is not installed",
+                             "would move ava: '002.py'"],
+            apply=lambda root, tag: applied.append(tag) or 0, relaunch=_stays_here,
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("would install: discord.py==2.7.1", said)
+        self.assertIn("would move ava: '002.py'", said)
+        self.assertEqual(applied, [], "--check moved the install")
+
+    def test_asking_what_an_update_would_do_is_asked_of_nothing_but_this_machine(self):
+        """R-UPD-8 — the one path that promises to change nothing. Whatever the preview
+        says, it is reached only after the version question and never runs the window."""
+        reached = []
+        code, _ = run(
+            repo_root=INSTALL, current_version="0.1.0", check_only=True,
+            latest=lambda: ("v0.2.0", None),
+            preview=lambda: reached.append("asked") or [],
+            busy=lambda: reached.append("busy") or [],
+            pause=lambda: (reached.append("stopped") or [], None),
+            provision=lambda: reached.append("provisioned") or None,
+            carry=lambda: reached.append("carried") or None,
+            apply=lambda root, tag: reached.append("replaced") or 0, relaunch=_stays_here,
+        )
+        self.assertEqual(0, code)
+        self.assertEqual(["asked"], reached, "a check did something other than look")
+
     def test_an_unreachable_forge_is_reported_as_unknown_never_as_current(self):
         # "up to date" when we simply could not ask is the one answer that would
         # leave someone on an old version believing they are current.

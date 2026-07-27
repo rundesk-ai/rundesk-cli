@@ -578,7 +578,28 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
         provision=lambda: dependencies.provision(REPO_ROOT),
         carry=lambda: _carry_every(agents),
         unfit=lambda: gateways.fitness(REPO_ROOT),
+        preview=lambda: _what_an_update_would_do(agents),
     )
+
+
+def _what_an_update_would_do(agents) -> list:
+    """What an update would install and what it would move, before it does either.
+
+    Reads what is on disk and asks nothing of a network, a package index or a database that
+    does not already exist (R-UPD-34). Silence where there is nothing to say: an owner who
+    reads "nothing to install, nothing to move" every time stops reading it.
+    """
+    said = []
+    for one in dependencies.unsatisfied(REPO_ROOT):
+        said.append(f"would install: {one}")
+    standing = migration.what_would_run(agents.agents_home(), store.VERSION)
+    for name, steps in sorted(standing.items()):
+        if steps:
+            said.append(f"would move {name}: " + ", ".join(repr(one) for one in steps))
+    behind = sorted(name for name, steps in standing.items() if steps)
+    if behind:
+        said.append(f"agents to move: {len(behind)} of {len(standing)}")
+    return said
 
 
 def _carry_every(agents) -> str | None:
@@ -1271,6 +1292,11 @@ def cmd_doctor(args: argparse.Namespace, gateways, agents) -> int:
         print(f"{name}: NOT READY", file=sys.stderr)
         for one in said:
             print(f"        {one.said}: {one.about}", file=sys.stderr)
+            # What to do about it, under the thing it is about (R-AGT-19). An owner running
+            # this is already asking because something is wrong; leaving them to work the
+            # command out from the fault is asking them to diagnose it twice.
+            if one.fix:
+                print(f"            fix: {one.fix}", file=sys.stderr)
     if _cannot_search(names, agents):
         # A fact about the machine rather than a fault of any agent, so it is said here
         # and is not a complaint: this SQLite was built without FTS5. Said by the command

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -738,13 +739,50 @@ class AnAgentNeedsABrain(WithSomewhereToKeepAgents):
                         f"a brainless agent was called ready: {found}")
 
     def test_what_is_wrong_says_how_to_put_it_right(self):
-        """The complaint names the command, because an owner reading NOT READY is asking
-        what to type next."""
+        """R-AGT-19 — the complaint names the command, because an owner reading NOT READY
+        is asking what to type next.
+
+        The command has a field of its own now rather than standing in for the place the
+        fault is: `about` is where, `said` is what, and `fix` is what to type. Carried in
+        `about`, one complaint's location was a command and every other one's was a path,
+        so nothing could be relied on to print them the same way.
+        """
         self.made()
         agent.remember("ava", self.where, provider="")
         found = [one for one in agent.diagnosed("ava", self.where, root=self.root)
                  if "which brain" in one.said]
-        self.assertIn("--provider", found[0].about)
+        self.assertIn("--provider", found[0].fix)
+
+    def test_records_behind_what_this_install_expects_are_reported_with_the_way_out(self):
+        """R-AGT-20 — where these records stand, said by the command an owner already runs
+        to find out what is wrong.
+
+        Read without opening a store, which refuses records it will not read — and refusing
+        is the right answer for a turn and the wrong one for the check that exists to
+        explain it. This is what an update interrupted before it moved anything leaves
+        behind, and it had no way of being seen at all.
+        """
+        self.made()
+        agent.remember("ava", self.where, provider="codex")
+        at = store.path_for(agent.directory("ava", self.where))
+        conn = sqlite3.connect(str(at), isolation_level=None)
+        self.addCleanup(conn.close)
+        conn.execute("PRAGMA user_version = 0")
+
+        found = [one for one in agent.diagnosed("ava", self.where, root=self.root)
+                 if "expects" in one.said]
+        self.assertEqual(1, len(found), "records behind this install were not reported")
+        self.assertIn(str(store.VERSION), found[0].said, "it never said what is expected")
+        self.assertEqual("rundesk update", found[0].fix)
+
+    def test_every_complaint_says_what_to_type_next(self):
+        """R-AGT-19 — and not only the one that happened to be written that way. A
+        diagnosis is run *because* something is wrong, so a fault with no way out leaves an
+        owner doing the diagnosis a second time themselves."""
+        self.made()
+        agent.remember("ava", self.where, provider="")
+        for one in agent.diagnosed("ava", self.where, root=self.root):
+            self.assertTrue(one.fix, f"nothing says what to do about: {one.said}")
 
     def test_an_agent_with_a_brain_is_not_complained_about(self):
         """The other half: a named brain that runs is nothing to report."""

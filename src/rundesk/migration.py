@@ -256,6 +256,51 @@ def carry_every(agents, want: int, where=None, note=None, clock=None) -> dict:
 ROLLBACK = ".update.rollback"
 
 
+def what_would_run(agents, want: int, where=None) -> dict:
+    """Which steps each agent would take, without taking any of them (R-MIG-21).
+
+    Answers the question an owner asks before an update rather than after it, and answers it
+    for every agent at once — two are never at the same version, so "what will this do" has
+    as many answers as there are agents.
+
+    **Opens nothing that is not already there.** `carry` reaches its database through
+    `sqlite3.connect`, which *makes* one where there is none — so asking what would happen
+    by way of the thing that does it would leave records behind on every agent that has none
+    yet, which is precisely the state a preview must not create. The connection is read-only
+    and the file is looked for first.
+    """
+    standing = {}
+    if not Path(agents).is_dir():
+        return standing
+    for home in sorted(Path(agents).iterdir()):
+        if home.name == ROLLBACK or not home.is_dir() or not _an_agent(home):
+            continue
+        standing[home.name] = between(version_on_disk(home / RECORDS), want, where)
+    return standing
+
+
+def version_on_disk(records: Path) -> int:
+    """What version these records say they are, or zero where there are none yet.
+
+    Zero rather than an error: an agent from a release before there were records has none,
+    and every step there is would run against it — which is what making one already does.
+    """
+    if not records.exists():
+        return 0
+    try:
+        conn = sqlite3.connect(f"file:{records}?mode=ro", uri=True, timeout=5.0)
+    except sqlite3.Error:
+        return 0
+    try:
+        return int(conn.execute("PRAGMA user_version").fetchone()[0])
+    except sqlite3.Error:
+        # Unreadable is not the same as behind, and a preview is not the place to decide
+        # which — `carry` says so properly, with the agent named, when it is asked to run.
+        return 0
+    finally:
+        conn.close()
+
+
 def carry_every_or_put_back(agents, want: int, aside: Path | None = None, where=None,
                             note=None, clock=None) -> str | None:
     """Move every agent forward, or leave every one of them exactly as it was.

@@ -25,7 +25,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from rundesk import gateway, store
+from rundesk import gateway, migration, store
 
 #: What a new agent's home is copied from. Ordinary Markdown files rather than text built
 #: in code, because they are what an owner reads first and edits next, and a rule about how
@@ -559,10 +559,17 @@ def remember(name: str, where: Path | None = None, provider: str | None = None,
 
 @dataclass(frozen=True)
 class Complaint:
-    """One thing standing between an agent and a working turn."""
+    """One thing standing between an agent and a working turn, and the way out of it.
+
+    **What is wrong and what to do about it are one answer, not two** (R-AGT-19). A
+    diagnosis is what an owner runs *because* something is already wrong, so leaving them to
+    work out the command from the fault is asking them to do the diagnosis twice. `fix` is
+    what they would type; it is empty only where there is genuinely nothing to type.
+    """
 
     about: str
     said: str
+    fix: str = ""
 
 
 def diagnosed(name: str, where: Path | None = None, root: Path | None = None,
@@ -582,48 +589,68 @@ def diagnosed(name: str, where: Path | None = None, root: Path | None = None,
     found = []
     where_it_is = paths(name, where)
     if not where_it_is["home"].is_dir():
-        return [Complaint(str(where_it_is["home"]), "there is no agent of that name here")]
+        return [Complaint(str(where_it_is["home"]), "there is no agent of that name here",
+                          f"rundesk add {name} --provider <provider>")]
     for what, path in sorted(made_of(name, where).items()):
         if what == "home":
             continue  # asked above, and its absence is "there is no agent", not a fault
         if not path.is_dir():
-            found.append(Complaint(str(path), f"the agent's {what} is not there"))
+            found.append(Complaint(str(path), f"the agent's {what} is not there",
+                                   f"rundesk add {name}"))
         elif not os.access(path, os.W_OK):
-            found.append(Complaint(str(path), f"the agent's {what} cannot be written to"))
+            found.append(Complaint(str(path), f"the agent's {what} cannot be written to",
+                                   f"chmod u+w {path}"))
     holds = knowledge()
     if not holds:
         # Asked before the files are looked for, because an install with nothing to copy
         # from would otherwise find nothing missing and call a bare home a working agent.
-        found.append(Complaint(str(TEMPLATES), "this install has nothing to make an agent from"))
+        found.append(Complaint(str(TEMPLATES), "this install has nothing to make an agent from",
+                               "reinstall rundesk"))
     for called in holds:
         page = where_it_is["home"] / called
         if not page.is_file():
-            found.append(Complaint(str(page), "the agent is missing one of the files it loads"))
+            found.append(Complaint(str(page), "the agent is missing one of the files it loads",
+                                   f"rundesk add {name}"))
     unfit = gateway.fitness(root)
     if unfit:
-        found.append(Complaint("this install", unfit))
+        found.append(Complaint("this install", unfit, "rundesk update"))
+    # **Where these records stand against what this install expects** (R-AGT-20). Read
+    # without opening a store, which refuses records it will not read — and refusing is the
+    # right answer for a turn and the wrong one for the check that exists to explain it.
+    at = store.path_for(directory(name, where))
+    if at.exists():
+        reached = migration.version_on_disk(at)
+        if reached < store.VERSION:
+            found.append(Complaint(
+                str(at),
+                f"these records are version {reached} and this rundesk expects "
+                f"{store.VERSION}",
+                "rundesk update"))
     try:
         named = chosen(name, where).get("provider")
     except (store.Unreadable, store.TooNew, store.Behind) as why:
         # A diagnosis is what an owner runs *because* something is already wrong, so
         # records this rundesk will not read are the answer rather than an exception out
         # of the middle of one. It is reported and the rest of the check still runs.
-        found.append(Complaint(str(store.path_for(directory(name, where))), str(why)))
+        found.append(Complaint(str(store.path_for(directory(name, where))), str(why),
+                               "rundesk update"))
         named = None
     if not named:
         # **A brain nobody named is what stands between this agent and every turn** — and
         # this said READY, which is a diagnosis claiming a success it had not earned. The
         # turn refuses correctly and says how to fix it; the check that exists to find that
         # out first was the one place it did not (R-AGT-18).
-        found.append(Complaint(f"rundesk add {name} --provider <provider>",
-                               "nothing says which brain answers for this agent"))
+        found.append(Complaint(str(store.path_for(directory(name, where))),
+                               "nothing says which brain answers for this agent",
+                               f"rundesk add {name} --provider <provider>"))
     elif runnable is not None:
         try:
             runnable(named)
         except Exception as why:
             # The detail is what is *about* the complaint and the sentence is what is
             # said, because a diagnosis reads "<what is wrong>: <where>" everywhere else.
-            found.append(Complaint(str(why), "the brain this agent reaches for"))
+            found.append(Complaint(str(why), "the brain this agent reaches for",
+                                   f"rundesk add {name} --provider <one that is installed>"))
     return found
 
 

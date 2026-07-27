@@ -134,6 +134,7 @@ def run(
     provision: Callable[[], str | None] | None = None,
     unfit: Callable[[], str | None] | None = None,
     relaunch: Callable[[Path, list], str | None] | None = None,
+    preview: Callable[[], list] | None = None,
 ) -> int:
     """Report where this install stands, and move it if asked.
 
@@ -163,6 +164,12 @@ def run(
         return _mend(repo_root, current_version, check_only,
                      unfit, busy, pause, resume, carry, provision)
     if check_only:
+        # **What it would do, before it does it** (R-UPD-34). Said here and nowhere else,
+        # because this is the one path that promises to change nothing (R-UPD-8): the
+        # preview reads what is on disk and asks nothing of a network, a package index or
+        # a database that does not already exist.
+        for line in (preview or (lambda: []))():
+            print(f"        {line}")
         return 0
     # Held around everything that follows rather than around the download alone
     # (R-UPD-26). Standing gateways down, replacing the files and moving records forward
