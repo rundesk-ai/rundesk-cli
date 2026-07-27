@@ -1388,6 +1388,38 @@ Regression criteria:
 Relevant implementation: the Evidence column of `.knowledge/prd/channel-discord.md`;
 `.knowledge/scripts/check-evidence`.
 
+### 46. `CODEMAP.md` tells every agent that nothing reads the store, and four modules do
+
+**Baseline:** `c25bbc6`, working tree clean. **Scope:** `.knowledge/CODEMAP.md`, found while auditing
+`MEMORY.md`.
+
+`CODEMAP.md`'s entry for `src/rundesk/store.py` still ends: "**Nothing reads it yet**; it is built
+and proved before anything moves onto it, so deleting it would leave the product exactly as it is."
+That was true when the store was built ahead of its callers. It is now false — `agent.py:28`,
+`answering.py:34`, `cli.py:40` and `turn.py:43` all import it, and the product reads the store on
+the ordinary path.
+
+Why it matters rather than merely being untidy: `CODEMAP.md` is **always loaded**, so this is not a
+stale corner somebody might find, it is a sentence every agent reads before every task. It invites
+exactly two wrong moves — treating `store.py` as removable dead weight, and building a second path
+to what an agent keeps on the belief that nothing depends on this one — and the second is the more
+expensive, because `store.py` is declared elsewhere in the same file as "the only way in to it".
+
+This is a documentation-truth defect against a concrete rule in the governing `AGENTS.md`
+("Keep docs true in the same task that changes reality"; "Moved/restructured files -> update
+`.knowledge/CODEMAP.md`"), not a behaviour change. Nothing in the gate can catch it: `doc-lint`
+checks form, and `check-evidence` only reads `prd/` rows.
+
+**Fix:** replace the "nothing reads it yet" clause with what is now true — which modules read it and
+that it remains the only way in. One clause; left unfixed here only because `CODEMAP.md` was outside
+the audit's scope and `AGENTS.md` gates changes outside a task's immediate scope.
+
+**Regression check:** the sentence is absent, and `grep -rn "from rundesk import.*store" src/` names
+the readers the entry claims.
+
+Relevant implementation: `.knowledge/CODEMAP.md`, the `src/rundesk/store.py` entry under
+"Backend / Services".
+
 ## Recorded on the way past, and not fixed
 
 None meets the threshold — each is a behaviour change, and a behaviour change is the owner's
