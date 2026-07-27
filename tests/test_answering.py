@@ -1079,6 +1079,65 @@ class WhatTheAgentMade(CarriesAConversation):
         self.assertEqual(1, len(surface.of("answer")), "the picture was never sent")
 
 
+class InterruptedTurnsContinue(CarriesAConversation):
+    def interrupted(self, session=True) -> str:
+        kept = agents.records("ava", self.where)
+        conversation = store.conversation_id("ops", "one")
+        kept.opened(conversation, "ops", "somewhere", "one", AT)
+        asked = kept.arrived(conversation, AT, "finish the release", who="2207")
+        run = kept.began(
+            "channel", "a-brain", "safe", AT, conversation_id=conversation,
+            trigger_message_id=asked, model="gpt-5", can={"resume": True},
+            settings={"effort": "high"},
+        )
+        if session:
+            kept.remember_session(conversation, "a-brain", "thread-1180")
+        kept.interrupted(
+            run, store.stamped(), "the gateway stopped while this turn was running",
+            recoverable=True,
+        )
+        return run
+
+    async def test_a_successor_continues_the_interrupted_provider_session_once(self):
+        """R-GW-22 — reconnecting resumes rather than replaying the original request."""
+        interrupted = self.interrupted()
+        brain, surface = Brain(outcome=Outcome(run="2-bbbb", text="released")), Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, {"type": "ready"})
+        await self.carry(held, {"type": "ready"})
+
+        self.assertEqual(1, len(brain.asked), "one interrupted turn was continued twice")
+        asked = brain.asked[0]
+        self.assertEqual(answering.CONTINUE, asked["prompt"])
+        self.assertEqual(("a-brain", "gpt-5", {"effort": "high"}, "safe"),
+                         (asked["provider"], asked["model"], asked["settings"],
+                          asked["posture"]))
+        self.assertTrue(asked["resume_required"])
+        self.assertEqual("rundesk", asked["prompt_author"])
+        self.assertEqual(["released"], [one["text"] for one in surface.of("answer")])
+        raw = [one["raw"] for one in agents.reading("ava", self.where).records(interrupted)]
+        self.assertIn(store.RECOVERY_CLAIMED, raw)
+        self.assertIn(store.RECOVERED_BY + "2-bbbb", raw)
+
+    async def test_an_interrupted_turn_without_a_session_gets_one_visible_failure(self):
+        """R-GW-22 — unsafe replay is refused, but the original conversation is not silent."""
+        self.interrupted(session=False)
+        brain = Brain(raises=RuntimeError(
+            "the interrupted turn could not be resumed because no provider session was saved"
+        ))
+        surface = Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, {"type": "ready"})
+        await self.carry(held, {"type": "ready"})
+
+        self.assertEqual(1, len(brain.asked), "the failed recovery was retried")
+        failed = [one for one in surface.of("state") if one["state"] == "failed"]
+        self.assertEqual(1, len(failed))
+        self.assertIn("no provider session", failed[0]["why"])
+
+
 class WhatAChannelDoesNotWriteDown(CarriesAConversation):
     """R-CH-15 — delivery on top of the account, never a second record."""
 

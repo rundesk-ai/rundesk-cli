@@ -53,6 +53,13 @@ _UNWINDING = 3
 #: by name, so forgetting one here costs nothing at all.
 CONVERSATIONS = 200
 
+# A recovery continues the provider session; it never replays the person's original prompt,
+# because doing so can repeat tool effects that already happened before the restart.
+CONTINUE = (
+    "Continue the interrupted work from where the previous gateway stopped. "
+    "Do not repeat actions already completed. Finish the original request."
+)
+
 class Exchange:
     """One conversation, and the turn running in it if there is one."""
 
@@ -112,6 +119,7 @@ class Answering:
         #: without this, cancelling the last turn started the next one, after the caller
         #: had been told everything had stopped (R-CH-11).
         self._stopping = False
+        self._recovered = False
 
     # -- what the adapter says -------------------------------------------------------
 
@@ -129,6 +137,7 @@ class Answering:
         if kind == "ready":
             self.connected = True
             self._note(f"channel '{self.channel}' is connected")
+            await self._recover()
         elif kind == "gone":
             # Said, never acted on. Coming back is the adapter's own (R-CAD-7), and a
             # turn already running is not interrupted by the surface it will be shown on.
@@ -357,21 +366,63 @@ class Answering:
         agents.records(self.name, self._where).forget_session(
             store.conversation_id(self.channel, conversation))
 
+    async def _recover(self) -> None:
+        """Claim and continue each turn a predecessor stopped on this channel (R-GW-22)."""
+        if self._recovered or self._stopping:
+            return
+        self._recovered = True
+        kept = agents.records(self.name, self._where)
+        for interrupted in kept.recoverable(self.channel):
+            if not kept.claim_recovery(interrupted["id"], store.stamped()):
+                continue
+            conversation = interrupted["conversation"]
+            held = self.exchanges.get(conversation)
+            if held is None:
+                self._make_room()
+                held = self.exchanges.setdefault(conversation, Exchange(conversation))
+            if held.task is not None and not held.task.done():
+                self._note(
+                    f"channel '{self.channel}': interrupted run {interrupted['id']} "
+                    "could not be resumed because its conversation is already running"
+                )
+                self._say(
+                    channel.FAILED, held,
+                    why="the interrupted turn could not be resumed because its conversation "
+                        "is already running",
+                )
+                continue
+            held.run = interrupted["id"]
+            held.stopped = False
+            held.task = asyncio.ensure_future(
+                self._one(
+                    held, CONTINUE, interrupted.get("user") or "",
+                    recovery_of=interrupted,
+                )
+            )
+
     # -- one turn --------------------------------------------------------------------
 
-    async def _one(self, held: Exchange, prompt: str, user: str, preface: str = "") -> None:
+    async def _one(self, held: Exchange, prompt: str, user: str, preface: str = "",
+                   recovery_of: dict | None = None) -> None:
         """Carry one turn, and say how it stands at each point rundesk decides it."""
-        chose = agents.chosen(self.name, self._where)
+        chose = recovery_of or agents.chosen(self.name, self._where)
         held.saying = asyncio.Queue()
         # Emptied for each turn. Left standing, what the *last* turn ended on was still
         # in hand when this one began — so the first finished thing said here pushed the
         # previous turn's answer out as a remark, and every turn after the first posted
         # one message too many, quoting itself from a minute ago.
         held.spoken = []
-        held.run = None
+        held.run = recovery_of["id"] if recovery_of else None
         shown = _Shown(self, held)
         self._say(channel.TAKEN, held, ref=held.ref)
         outcome = None
+        kept = agents.records(self.name, self._where)
+
+        def admitted(run, can):
+            self._took(held, run, can)
+            if recovery_of:
+                kept.recovery_began(recovery_of["id"], run, store.stamped())
+
         try:
             outcome = await self._carry(
                 self.name, prompt, chose.get("provider") or "",
@@ -384,8 +435,15 @@ class Answering:
                 watching=shown,
                 steering=_saying(held.saying),
                 asked_by={"channel": self.channel, "on": held.conversation, "user": user},
-                admitted=lambda run, can: self._took(held, run, can),
+                admitted=admitted,
                 preface=preface,
+                resume_required=bool(recovery_of),
+                prompt_author="rundesk" if recovery_of else "user",
+                recovery_of=recovery_of["id"] if recovery_of else None,
+                resume_on_interrupt=lambda: (
+                    self._stopping and not held.stopped and recovery_of is None
+                ),
+                **({"posture": recovery_of["posture"]} if recovery_of else {}),
             )
         except asyncio.CancelledError:
             # Asked for, or the gateway going. Either way the turn is over and the

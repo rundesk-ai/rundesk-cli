@@ -37,11 +37,11 @@ worth having if what it did can be read back afterwards.
 | ✅ | R-RUN-14 | Losing what a conversation was continuing costs the next turn its context and nothing else | `losing what a conversation was continuing costs the next turn its context`, `a conversation can be started fresh for one brain or for all of them`, `a turn asked to start fresh carries nothing on`, `asking for a fresh start carries nothing on` |
 | ❌ | R-RUN-15 | No credential a brain was given appears in a run's account | src/rundesk/turn.py:118 — nothing puts one there; no test |
 | ✅ | R-RUN-16 | A run says what admitted it, and it is one of the declared ways work is admitted | `every way work is admitted is named here`, `work admitted from somewhere nobody declared is refused`, `a run refused for its source is not written at all`, `a turn the clock started says so in the account` |
+| ✅ | R-RUN-17 | An interrupted execution and the run continuing it name each other in their accounts | `a recovery run names the execution it continues`, `a successor continues the interrupted provider session once` |
 
 ## Open questions
 
 - How long an account is kept, and whether an owner or a size decides.
 - Whether an account records what a brain was sent, or only what it reported back.
 - What is read back when a brain's own session files are gone but our account remains.
-- Whether a run interrupted by a restart is one run continued or two runs recorded.
 - Where an account lives when the work was for no conversation at all.

@@ -74,6 +74,13 @@ MARK_LENGTH = 4
 RECORD_KINDS = ("think", "tool", "result", "usage", "file", "done", "lost", "unknown")
 AUTHORS = ("user", "agent", "rundesk")
 
+# Appended to a stopped run's account rather than added to the schema. Recovery is lifecycle
+# bookkeeping, not a new shape of owner data, and these exact private records make claiming
+# one interrupted turn atomic without rewriting the account it already left (R-GW-22).
+RECOVERABLE = "rundesk:recovery:available"
+RECOVERY_CLAIMED = "rundesk:recovery:claimed"
+RECOVERED_BY = "rundesk:recovery:run:"
+
 #: Every way work is admitted for an agent, and the whole of it. Three, because there are
 #: three things that start one: somebody at a terminal, somebody on a surface the agent is
 #: reachable on, and the clock.
@@ -1082,6 +1089,73 @@ class Store:
                     run_id,
                 ),
             )
+
+    def interrupted(self, run_id: str, ended_at: str, why: str,
+                    recoverable: bool = False) -> None:
+        """Settle a cancelled run and, where safe, leave one durable recovery claim.
+
+        The marker is appended in the same write as the outcome. A successor can therefore
+        never see a run as recoverable before the interrupted execution is settled, or see
+        a settled recoverable run without the marker that makes its claim single-use.
+        """
+        with self._writing() as conn:
+            conn.execute(
+                "UPDATE run SET ended_at = ?, outcome = ?, why = ? WHERE id = ?",
+                (ended_at, "stopped", why, run_id),
+            )
+            if recoverable:
+                self._mark(conn, run_id, ended_at, RECOVERABLE)
+
+    def recoverable(self, channel: str) -> list:
+        """Interrupted channel runs this surface may claim, oldest first (R-GW-22)."""
+        with self._reading() as conn:
+            rows = conn.execute(
+                "SELECT r.*, c.space AS conversation, c.kind AS channel_kind,"
+                " m.who AS user"
+                " FROM run r"
+                " JOIN conversation c ON c.id = r.conversation_id"
+                " LEFT JOIN message m ON m.id = r.trigger_message_id"
+                " WHERE r.source = 'channel' AND c.channel = ?"
+                " AND EXISTS (SELECT 1 FROM record a WHERE a.run_id = r.id"
+                "             AND a.kind = 'unknown' AND a.raw = ?)"
+                " AND NOT EXISTS (SELECT 1 FROM record z WHERE z.run_id = r.id"
+                "                 AND z.kind = 'unknown' AND z.raw = ?)"
+                " ORDER BY r.n",
+                (channel, RECOVERABLE, RECOVERY_CLAIMED),
+            ).fetchall()
+        return [self._run(row) for row in rows]
+
+    def claim_recovery(self, run_id: str, at: str) -> bool:
+        """Claim an interrupted run once, under the store's one writer lock."""
+        with self._writing() as conn:
+            available = conn.execute(
+                "SELECT 1 FROM record WHERE run_id = ? AND kind = 'unknown' AND raw = ?",
+                (run_id, RECOVERABLE),
+            ).fetchone()
+            claimed = conn.execute(
+                "SELECT 1 FROM record WHERE run_id = ? AND kind = 'unknown' AND raw = ?",
+                (run_id, RECOVERY_CLAIMED),
+            ).fetchone()
+            if available is None or claimed is not None:
+                return False
+            self._mark(conn, run_id, at, RECOVERY_CLAIMED)
+            return True
+
+    def recovery_began(self, interrupted_run: str, recovery_run: str, at: str) -> None:
+        """Link the interrupted execution to the one continuing its provider session."""
+        with self._writing() as conn:
+            self._mark(conn, interrupted_run, at, RECOVERED_BY + recovery_run)
+
+    @staticmethod
+    def _mark(conn, run_id: str, at: str, marker: str) -> None:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM record WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        conn.execute(
+            "INSERT INTO record (run_id, seq, at, kind, raw) VALUES (?,?,?,?,?)",
+            (run_id, int(row[0]), at, "unknown", marker),
+        )
 
     def run(self, run_id: str):
         with self._reading() as conn:

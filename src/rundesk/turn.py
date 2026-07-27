@@ -117,6 +117,10 @@ class Outcome:
                                           else self.reason)
 
 
+class CannotResume(RuntimeError):
+    """An interrupted turn has no provider session that can safely be continued."""
+
+
 async def carry(
     name: str,
     prompt: str,
@@ -139,6 +143,10 @@ async def carry(
     preface: str = "",
     source: str | None = None,
     schedule_id: int | None = None,
+    resume_required: bool = False,
+    prompt_author: str = "user",
+    resume_on_interrupt=None,
+    recovery_of: str | None = None,
 ) -> Outcome:
     """Run one turn for this agent, and write down everything about it.
 
@@ -197,6 +205,10 @@ async def carry(
     resume = None
     if can["resume"] and not fresh:
         resume = kept.session(where_it_is, brain)
+    if resume_required and not resume:
+        raise CannotResume(
+            "the interrupted turn could not be resumed because no provider session was saved"
+        )
 
     at_now = store.stamped(now)
     if preface:
@@ -208,8 +220,12 @@ async def carry(
     # What was asked, written *before* the run that answers it — so the run says what
     # caused it (R-STO-10) rather than being linked to it afterwards, and so a turn that
     # died before it reached the brain still shows what somebody asked for.
-    asked = kept.arrived(where_it_is, at_now, prompt,
-                         who=(asked_by or {}).get("user") or None)
+    who = (asked_by or {}).get("user") or None
+    if prompt_author != "user":
+        who = None
+    asked = kept.arrived(
+        where_it_is, at_now, prompt, author=prompt_author, who=who,
+    )
     run = kept.began(
         # How this turn came about, and one of the three the records declare (R-RUN-16).
         # Said by the caller where the caller knows something this cannot work out — the
@@ -235,9 +251,15 @@ async def carry(
     # Entered outside `_Account`, so it is the last thing to unwind and the account is
     # already closed when it writes.
     settled: list = []
-    with _settled_whatever_happens(kept, run, settled, now), \
+    with _settled_whatever_happens(
+            kept, run, settled, now, recoverable=resume_on_interrupt), \
             _Account(kept, run, where_it_is, transcript.beside(whose["logs"], run),
                      now=now) as writing:
+        if recovery_of:
+            # The old run names this one when it is admitted; this is the other direction.
+            # Appended before the provider starts, so another interruption still leaves a
+            # truthful audit trail linking both executions (R-RUN-17).
+            writing.add(event={"type": "recovery", "run": recovery_of})
         # Written before the brain is started, because what is sent is what the account
         # has to show — and an account written afterwards is one that can be written to
         # match whatever happened. A steered turn records it as it sends it instead, so
@@ -315,10 +337,11 @@ async def carry(
 #: — the same distinction `channel.STATES` already draws — and a gateway standing down
 #: mid-turn is the ordinary way this happens rather than a fault.
 INTERRUPTED = "stopped"
+INTERRUPTED_WHY = "the gateway stopped while this turn was running"
 
 
 @contextlib.contextmanager
-def _settled_whatever_happens(kept, run: str, settled: list, now):
+def _settled_whatever_happens(kept, run: str, settled: list, now, recoverable=None):
     """Leave no run marked as still going once nothing is doing it (R-RUN-13).
 
     **The path this exists for cannot be caught by the body it wraps.** A gateway standing
@@ -342,8 +365,10 @@ def _settled_whatever_happens(kept, run: str, settled: list, now):
     finally:
         if not settled:
             with contextlib.suppress(Exception):
-                kept.ended(run, store.stamped(now), INTERRUPTED,
-                           why="the gateway stopped while this turn was running")
+                kept.interrupted(
+                    run, store.stamped(now), INTERRUPTED_WHY,
+                    recoverable=bool(recoverable is not None and recoverable()),
+                )
                 settled.append(INTERRUPTED)
 
 

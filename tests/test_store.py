@@ -848,6 +848,38 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
         self.assertEqual("unexpected status 401 Unauthorized", kept.run(named)["why"])
         self.assertEqual([], kept.records(named), "nothing was printed, and why survives")
 
+    def test_an_interrupted_channel_turn_is_claimed_for_recovery_once(self):
+        """R-GW-22 — two successor starts cannot continue one interrupted turn twice."""
+        kept = self.built()
+        kept.opened("c1", "ops", "somewhere", "one", AT)
+        asked = kept.arrived("c1", AT, "finish the release", who="2207")
+        named = kept.began(
+            "channel", "a-brain", "safe", AT, conversation_id="c1",
+            trigger_message_id=asked, settings={"effort": "high"}, pick=lambda _: "a",
+        )
+        kept.interrupted(named, LATER, "the gateway stopped", recoverable=True)
+
+        found = kept.recoverable("ops")
+        self.assertEqual([named], [one["id"] for one in found])
+        self.assertEqual(("one", "2207", {"effort": "high"}),
+                         (found[0]["conversation"], found[0]["user"], found[0]["settings"]))
+        self.assertTrue(kept.claim_recovery(named, LATER))
+        self.assertFalse(kept.claim_recovery(named, LATER),
+                         "a second successor claimed the same interrupted turn")
+        self.assertEqual([], kept.recoverable("ops"))
+
+    def test_an_explicitly_stopped_turn_is_not_offered_for_recovery(self):
+        """R-GW-22 — only gateway loss is continued; a person's stop remains stopped."""
+        kept = self.built()
+        kept.opened("c1", "ops", "somewhere", "one", AT)
+        asked = kept.arrived("c1", AT, "stop here", who="2207")
+        named = kept.began(
+            "channel", "a-brain", "safe", AT, conversation_id="c1",
+            trigger_message_id=asked, pick=lambda _: "a",
+        )
+        kept.interrupted(named, LATER, "stopped by the person", recoverable=False)
+        self.assertEqual([], kept.recoverable("ops"))
+
     def test_a_run_that_finished_well_says_nothing_about_why(self):
         """Absent rather than empty, so `why` reads as a reason and never as a field."""
         kept = self.built()
