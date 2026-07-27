@@ -131,6 +131,8 @@ def run(
     pause: Callable[[], tuple] | None = None,
     resume: Callable[[list], list] | None = None,
     carry: Callable[[], str | None] | None = None,
+    provision: Callable[[], str | None] | None = None,
+    unfit: Callable[[], str | None] | None = None,
 ) -> int:
     """Report where this install stands, and move it if asked.
 
@@ -151,7 +153,14 @@ def run(
     if published is None:
         return 1
     if not is_newer(published, current_version):
-        return 0
+        # **Current is not the same as working** (R-UPD-32). An update interrupted after the
+        # files landed leaves this install reporting the new version with the old
+        # dependencies beside it and records nothing has moved — and every later `rundesk
+        # update` said UP TO DATE, which is the one answer that stops an owner looking. The
+        # way out is to run the update again, so running it again has to be the thing that
+        # mends it.
+        return _mend(repo_root, current_version, check_only,
+                     unfit, busy, pause, resume, carry, provision)
     if check_only:
         return 0
     # Held around everything that follows rather than around the download alone
@@ -161,7 +170,40 @@ def run(
     try:
         with _only_one(repo_root):
             return _replace_this_install(
-                repo_root, published, apply, busy, pause, resume, carry,
+                repo_root, published, apply, busy, pause, resume, carry, provision,
+            )
+    except Busy as err:
+        print(f"update: NOT APPLIED — {err}", file=sys.stderr)
+        return 1
+
+
+def _mend(repo_root, current_version, check_only, unfit, busy, pause, resume,
+          carry, provision) -> int:
+    """Nothing newer to move to — so is what is already here actually usable?
+
+    The same window, with nothing to lay down: what an install is made of and what its
+    agents keep are brought forward exactly as they would be for a release, because the
+    state this mends is one where the files arrived and neither of those followed. Reusing
+    it rather than writing a second, shorter one is deliberate — two windows would be two
+    orders, and the order is the part that protects the records.
+    """
+    why = (unfit or (lambda: None))()
+    if not why:
+        return 0
+    print(f"{current_version}: DOES NOT FIT — {why}", file=sys.stderr)
+    if check_only:
+        # Asking where this install stands never changes it (R-UPD-8), and that a check now
+        # has something to complain about does not make it a command that acts.
+        print("        to mend it, run: rundesk update", file=sys.stderr)
+        return 1
+    try:
+        with _only_one(repo_root):
+            return _replace_this_install(
+                repo_root, current_version,
+                # Already here: there is no release to fetch, only what should have
+                # followed one.
+                apply=lambda _root, _tag: 0,
+                busy=busy, pause=pause, resume=resume, carry=carry, provision=provision,
             )
     except Busy as err:
         print(f"update: NOT APPLIED — {err}", file=sys.stderr)
@@ -176,6 +218,7 @@ def _replace_this_install(
     pause=None,
     resume=None,
     carry=None,
+    provision=None,
 ) -> int:
     """The window itself: nothing an owner runs is up between the first line and the last.
 
@@ -235,16 +278,44 @@ def _replace_this_install(
         # when they actually landed: a replacement that failed leaves the old shape on disk,
         # and moving records forward for code that is not there is how an install ends up
         # with data no version of it understands.
-        went_wrong = (carry or (lambda: None))()
+        #
+        # **What an install is made of comes forward before what it keeps** (R-UPD-30). Two
+        # reasons, in order of weight. Records are the irreplaceable thing, so the failure
+        # that can happen without touching them should happen first: a build that fails here
+        # leaves every agent's records exactly as they were and running the update again is
+        # the whole of the fix. And a step that one day needs a dependency can only have one
+        # if they are already there — nothing forces that today, and the order that allows
+        # it costs nothing.
+        went_wrong = (provision or (lambda: None))()
+        where = "what rundesk is made of"
+        if not went_wrong:
+            went_wrong = (carry or (lambda: None))()
+            where = "moving records forward"
         if went_wrong:
-            # **And every agent stays down** (R-MIG-6). This is the one failure the
-            # resume above must not answer: bringing them back onto records half moved is
-            # worse than leaving them down and saying which one and why.
-            print(f"update: FAILED — {went_wrong}", file=sys.stderr)
-            print("        every agent is still down, and its records are as they were",
+            # **The release is put back and the agents come back onto it** (R-UPD-31).
+            # Migrations are one way, so reverting the program alone would strand an agent
+            # already carried — its records newer than the code that must read them, refused
+            # on open (R-MIG-10). What makes coming back safe is that `carry` puts every
+            # agent's records back as well, so the machine is what it was before the update.
+            print(f"update: NOT APPLIED — {where} could not be brought forward: {went_wrong}",
                   file=sys.stderr)
+            put_back = _undo(repo_root)
+            if put_back:
+                print(f"        this install is back on the version it was; try again",
+                      file=sys.stderr)
+            else:
+                print("        the release could not be put back — reinstall this install",
+                      file=sys.stderr)
             print("        why: rundesk logs <name>", file=sys.stderr)
+            left_down = (resume or (lambda _names: []))(stopped)
+            if left_down:
+                print(f"        did not come back: {', '.join(sorted(left_down))}",
+                      file=sys.stderr)
             return 1
+        # Nothing is going back now: the release is on disk, what it needs is installed and
+        # every agent's records are in the shape it expects. Only here does the copy of what
+        # was there go, because until this line it is the only way back (R-UPD-31).
+        _keep(repo_root)
     left_down = (resume or (lambda _names: []))(stopped)
     if left_down:
         print(
@@ -467,9 +538,10 @@ def _copy_over(src: Path, dst: Path) -> None:
                     f"put back: {', '.join(stuck)}"
                 ) from None
             raise
-        for _target, outgoing in swapped:
-            if outgoing is not None:
-                _discard(outgoing)
+        # **What was replaced is left where it was set aside**, for `_keep` to let go of or
+        # `_undo` to put back (R-UPD-31). Discarding it here would make the replacement
+        # atomic and the update as a whole one-way: what an install is made of and what its
+        # agents keep both still have to come forward, and either can still fail.
     finally:
         for pending, _ in staged:
             _discard(pending)
@@ -486,10 +558,45 @@ def _set_aside(target: Path) -> Path | None:
     """
     if not (target.exists() or target.is_symlink()):
         return None
-    outgoing = target.with_name(f".{target.name}.outgoing")
+    outgoing = target.with_name(OUTGOING.format(name=target.name))
     _discard(outgoing)
     os.rename(target, outgoing)
     return outgoing
+
+
+#: How a replaced item is named while the update that replaced it is still being proved.
+OUTGOING = ".{name}.outgoing"
+
+
+def _set_aside_here(repo_root: Path) -> list:
+    """Everything this install has set aside, as (where it belongs, where it is).
+
+    Found by looking rather than carried along, so it survives the update being asked
+    about by a process other than the one that replaced the files.
+    """
+    found = []
+    for outgoing in sorted(repo_root.glob(".*.outgoing")):
+        name = outgoing.name[1: -len(".outgoing")]
+        if name:
+            found.append((repo_root / name, outgoing))
+    return found
+
+
+def _keep(repo_root: Path) -> None:
+    """Let go of what was replaced, now that the whole update is proved (R-UPD-31)."""
+    for _target, outgoing in _set_aside_here(repo_root):
+        _discard(outgoing)
+
+
+def _undo(repo_root: Path) -> bool:
+    """Put this install back on the release it was, and say whether that worked.
+
+    Asked when what an install is *made of* or what its agents *keep* could not be brought
+    forward. Both are failures the release itself cannot be blamed for and both leave a
+    machine on a version whose dependencies or records do not match it, so the release goes
+    back rather than the owner being left to work out which half landed.
+    """
+    return not _put_back(_set_aside_here(repo_root))
 
 
 def _put_back(swapped: list) -> list:

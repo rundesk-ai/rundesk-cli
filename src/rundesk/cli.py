@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from rundesk import __version__  # noqa: E402
 from rundesk import agent as _agent  # noqa: E402
 from rundesk import channel  # noqa: E402
+from rundesk import dependencies  # noqa: E402
 from rundesk import gateway as _gateway  # noqa: E402
 from rundesk import migration  # noqa: E402
 from rundesk import process  # noqa: E402
@@ -557,7 +558,9 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
         busy=lambda: _in_flight(gateways, agents),
         pause=lambda: _stand_all_down(gateways, machine, agents),
         resume=lambda names: _bring_all_back(names, gateways, machine, agents),
+        provision=lambda: dependencies.provision(REPO_ROOT),
         carry=lambda: _carry_every(agents),
+        unfit=lambda: gateways.fitness(REPO_ROOT),
     )
 
 
@@ -570,17 +573,17 @@ def _carry_every(agents) -> str | None:
     together would both begin moving one forward.
 
     Says what went wrong rather than raising it, because the updater is a decision and
-    knows nothing of agents or of what they keep. Everything is caught: an agent whose
-    records cannot be opened at all is exactly the case where every agent must stay down
-    and the owner must be told, and a traceback out of the middle of an update tells them
-    which file it happened in and nothing about what to do. What each step did, or failed
-    to do, is already in that agent's own log.
+    knows nothing of agents or of what they keep. What each step did, or failed to do, is
+    already in that agent's own log.
+
+    **And puts every agent back as it was when one of them cannot be moved** (R-MIG-19).
+    Two agents are never at the same version, so the walk stops with earlier ones already
+    carried — and the updater then puts the release back, which would leave exactly those
+    agents holding records newer than the only code left to read them.
     """
-    try:
-        migration.carry_every(agents.agents_home(), store.VERSION, note=_out_loud)
-    except Exception as stopped:   # noqa: BLE001 — a process boundary, reporting truthfully
-        return str(stopped)
-    return None
+    return migration.carry_every_or_put_back(
+        agents.agents_home(), store.VERSION, note=_out_loud,
+    )
 
 
 def _out_loud(said: str) -> None:

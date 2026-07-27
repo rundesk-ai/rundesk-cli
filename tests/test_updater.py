@@ -874,6 +874,59 @@ class AnUpdateAndWorkInFlight(unittest.TestCase):
         self.assertEqual([], asked, "it asked what was running when it was already current")
 
 
+class AnInstallThatIsCurrentAndDoesNotFit(unittest.TestCase):
+    """R-UPD-32 — being on the newest version is not the same as working.
+
+    An update interrupted after the files landed leaves this install reporting the new
+    version with the old dependencies beside it and records nothing has moved. Every later
+    `rundesk update` answered UP TO DATE, which is the one answer that stops an owner
+    looking — and the way out was the very command that said it.
+    """
+
+    def _run(self, unfit=None, check_only=False):
+        self.order = []
+        return updater.run(
+            INSTALL, "9.9.9", check_only=check_only, latest=lambda: ("9.9.9", None),
+            unfit=lambda: unfit,
+            busy=lambda: self.order.append("asked what was running") or [],
+            pause=lambda: (self.order.append("stopped") or ["alpha"], None),
+            apply=lambda root, tag: self.order.append("replaced") or 0,
+            provision=lambda: self.order.append("provisioned") or None,
+            carry=lambda: self.order.append("carried") or None,
+            resume=lambda names: self.order.append("started") or [],
+        )
+
+    def test_an_install_that_is_current_and_fits_is_left_entirely_alone(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, self._run(unfit=None))
+        self.assertEqual([], self.order, "an install with nothing wrong was taken apart")
+
+    def test_an_install_already_current_but_unfit_is_mended_rather_than_called_current(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            with contextlib.redirect_stderr(io.StringIO()) as said:
+                code = self._run(unfit="discord cannot be loaded")
+        self.assertIn("UP TO DATE", out.getvalue())
+        self.assertIn("DOES NOT FIT", said.getvalue(),
+                      "it reported a broken install as current and stopped there")
+        self.assertIn("discord cannot be loaded", said.getvalue())
+        # No "replaced": the release is already here, and what is missing is what should
+        # have followed it. Everything else is the window in the order that protects the
+        # records — what the install is made of before what it keeps.
+        self.assertEqual(["asked what was running", "stopped", "provisioned",
+                          "carried", "started"], self.order,
+                         "mending took a different path from the one that protects records")
+        self.assertEqual(0, code)
+
+    def test_asking_where_a_broken_install_stands_still_changes_nothing(self):
+        """R-UPD-8 — a check that has something to complain about is still a check."""
+        with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stderr(io.StringIO()) as said:
+                code = self._run(unfit="discord cannot be loaded", check_only=True)
+        self.assertEqual(1, code)
+        self.assertEqual([], self.order, "--check mended the install")
+        self.assertIn("rundesk update", said.getvalue(), "it never said what to do about it")
+
+
 class AnUpdateAndWhatIsRunning(unittest.TestCase):
     """R-UPD-21, R-UPD-22 — an update replaces the files a running gateway is made of.
 
@@ -881,10 +934,13 @@ class AnUpdateAndWhatIsRunning(unittest.TestCase):
     for everything it has not, so it goes on serving a version nobody can see it is on.
     """
 
-    def _run(self, stopped=(), refused=None, down=(), applied_code=0, carried=None):
+    def _run(self, stopped=(), refused=None, down=(), applied_code=0, carried=None,
+             provisioned=None):
         self.brought_back = None
         self.applied = []
         self.carried = 0
+        self.provisioned = 0
+        self.order = []
 
         def pause():
             return list(stopped), refused
@@ -895,17 +951,46 @@ class AnUpdateAndWhatIsRunning(unittest.TestCase):
 
         def apply(root, version):
             self.applied.append(version)
+            self.order.append("replaced")
             return applied_code
 
         def carry():
             self.carried += 1
+            self.order.append("carried")
             return carried
+
+        def provision():
+            self.provisioned += 1
+            self.order.append("provisioned")
+            return provisioned
 
         code = updater.run(
             INSTALL, "0.1.0", latest=lambda: ("9.9.9", None),
             apply=apply, busy=lambda: [], pause=pause, resume=resume, carry=carry,
+            provision=provision,
         )
         return code
+
+    def test_what_an_install_is_made_of_comes_forward_before_what_it_keeps(self):
+        """R-UPD-30 — records are the irreplaceable thing, so the failure that can happen
+        without touching them happens first. A build that fails after the records moved
+        would leave them in the shape of an install just declared unfit, and there is no
+        step backwards to undo it with."""
+        self._run(stopped=["alpha"])
+        self.assertEqual(["replaced", "provisioned", "carried"], self.order)
+
+    def test_an_update_that_cannot_build_what_a_release_needs_puts_the_release_back(self):
+        """R-UPD-31 — the files have landed and what they need is not there, so this is an
+        install that cannot run. Nothing has touched a single agent's records yet, which is
+        exactly why the build goes first: putting the release back is the whole of the fix."""
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            code = self._run(stopped=["alpha"], provisioned="could not reach the index")
+        self.assertEqual(1, code)
+        self.assertEqual(0, self.carried, "it moved records for a release it could not build")
+        self.assertEqual(["alpha"], self.brought_back,
+                         "an agent was left down after the install went back")
+        self.assertIn("could not reach the index", said.getvalue())
+        self.assertIn("what rundesk is made of", said.getvalue())
 
     def test_an_update_stops_what_it_is_about_to_replace_the_files_of(self):
         """R-UPD-21"""
@@ -933,19 +1018,25 @@ class AnUpdateAndWhatIsRunning(unittest.TestCase):
         )
         self.assertEqual(["stopped", "replaced", "carried", "started"], order)
 
-    def test_a_migration_that_fails_leaves_every_agent_down_and_says_which_and_why(self):
-        """R-MIG-6 — the one failure `resume` must not answer for. Bringing agents back
-        onto records half moved is worse than leaving them down: the first is an agent
-        quietly reading a shape nobody wrote, and the second is a machine somebody looks at."""
+    def test_a_migration_that_fails_puts_the_install_back_and_says_which_and_why(self):
+        """R-MIG-6 — the update becomes a no-op rather than a stop.
+
+        Records are put back by `carry` itself and the release by the updater, so what an
+        owner is left with is the machine they had. Bringing agents back is safe whichever
+        way that went: records newer than the code that reads them are refused on open
+        (R-MIG-10), so the worst case is a gateway that ends well and says why — which is
+        what leaving them down used to buy, without the version they were working on.
+        """
         with contextlib.redirect_stderr(io.StringIO()) as said:
             code = self._run(stopped=["alpha"],
                              carried="migration 002.py did not finish — the data is still "
                                      "at version 1: no such column")
         self.assertEqual(1, code)
-        self.assertIsNone(self.brought_back, "an agent came back onto records half moved")
+        self.assertEqual(["alpha"], self.brought_back,
+                         "the install went back and the agent was left down anyway")
         self.assertIn("002.py", said.getvalue(), "it never said which step")
         self.assertIn("no such column", said.getvalue(), "it never said why")
-        self.assertIn("still down", said.getvalue())
+        self.assertIn("NOT APPLIED", said.getvalue())
 
     def test_records_are_left_alone_when_the_files_never_landed(self):
         """R-MIG-18 — moving records forward for code that is not there is how an install

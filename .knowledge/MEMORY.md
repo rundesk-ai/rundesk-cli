@@ -33,6 +33,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   directly: the adapter catches its own missing import, prints a record and exits, so its
   exception can never be told apart from being broken. Reading it as one failed CI on the
   only machine the skip exists for.
+- **Anything a command locates from `cli.REPO_ROOT` writes into the developer's own checkout,
+  whatever a suite redirected.** It is `Path(__file__).resolve().parent.parent.parent`, resolved
+  at import and answering for the tree the test is *running from* — so a new update-time
+  directory hung off it put a real copy of a fake agent's `state.db` into `rundesk-cli/` while
+  every `RUNDESK_*` variable pointed at scratch. Found only because `git status` showed an
+  untracked path. **Hang anything new off `agents_home()` instead**, which reads
+  `RUNDESK_AGENTS_DIR` on every call, so whatever isolated the agents isolates it too — and
+  check `git status --short` in the checkout after running a suite that drives a command.
 - **`OK (skipped=65)` and `OK` are the same word to whoever reads the gate.** `test_discord`
   loaded the adapter from `src/rundesk/channels/discord`, which the src restructure had moved
   to `src/channels/discord`; the loader raised, a bare `except BaseException` set the module to

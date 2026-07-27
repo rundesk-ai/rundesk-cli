@@ -632,6 +632,116 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
         at = Path(home) / migration.LOG
         return at.read_text() if at.exists() else ""
 
+    def nothing_open(self, made: tuple) -> None:
+        """Close the connection the fixture left open on this agent's records.
+
+        An update stands every gateway down before any of this, so nothing anywhere is
+        reading them — which is the only reason copying and restoring a database as a plain
+        file is honest. A connection held open across a restore sees the file change under
+        it and answers `disk I/O error`, so a case that kept one would be proving something
+        no update ever does.
+        """
+        made[2].close()
+
+    def _aside(self) -> Path:
+        """Where an update keeps what it may have to put back — outside where agents are
+        kept, because anything standing there is walked as though it were one."""
+        at = Path(tempfile.mkdtemp(prefix="rundesk-rollback-"))
+        self.addCleanup(shutil.rmtree, at, True)
+        return at
+
+    def _stumbles_on(self, called: str):
+        """A step that works for every agent but one. Two agents are never at the same
+        version, so a walk always stops with earlier ones already carried."""
+        self.wrote(2, f"""
+            def up(conn, home):
+                conn.execute("INSERT INTO ran (step) VALUES ('two')")
+                if home.name == {called!r}:
+                    raise RuntimeError("no such column")
+                return []
+            """)
+
+    def _version(self, called: str) -> int:
+        at = store.path_for(self.where / called)
+        return int(sqlite3.connect(str(at)).execute("PRAGMA user_version").fetchone()[0])
+
+    def _rows(self, called: str) -> list:
+        at = store.path_for(self.where / called)
+        return list(sqlite3.connect(str(at)).execute("SELECT step FROM ran"))
+
+    def test_an_agent_already_carried_is_put_back_when_a_later_one_cannot_be(self):
+        """R-MIG-19 — a step forward exists and a step back does not, so the way back is a
+        copy taken before anything ran. Without it the walk stops with `ava` at the new
+        version, the update puts the release back underneath it, and `ava` is left holding
+        records newer than the only code left to read them — refused on open (R-MIG-10),
+        which is an agent that will not start for a release the owner never received."""
+        for called in ("ava", "john", "plans"):
+            self.nothing_open(self.agent(called))
+        self._stumbles_on("john")
+
+        why = migration.carry_every_or_put_back(self.where, 2, self._aside(),
+                                                where=self.steps)
+
+        self.assertIsNotNone(why, "a walk that stopped reported success")
+        self.assertIn("john", why, "it never said which agent")
+        self.assertIn("no such column", why, "it never said why")
+        self.assertEqual(1, self._version("ava"), "an agent carried before the failure kept it")
+        self.assertEqual([], self._rows("ava"), "what a step wrote was left behind")
+        self.assertEqual(1, self._version("john"))
+        self.assertEqual(1, self._version("plans"))
+
+    def test_a_copy_is_let_go_of_once_the_move_it_insured_is_proved(self):
+        """R-MIG-20 — kept exactly as long as it is the only way back, and no longer."""
+        self.nothing_open(self.agent("ava"))
+        self.wrote(2, """
+            def up(conn, home):
+                conn.execute("INSERT INTO ran (step) VALUES ('two')")
+                return []
+            """)
+        aside = self._aside()
+
+        self.assertIsNone(migration.carry_every_or_put_back(self.where, 2, aside,
+                                                            where=self.steps))
+        self.assertEqual(2, self._version("ava"), "the agent was not carried")
+        self.assertEqual([], list(aside.iterdir()),
+                         "a proved update kept a copy of what it replaced")
+
+    def test_what_may_have_to_be_put_back_is_kept_where_the_agents_are(self):
+        """R-MIG-19 — and the reason it is there rather than inside the program.
+
+        Whatever redirects where agents live redirects this with it, so a suite that
+        isolated the one has isolated the other. Pointed at the program instead, driving an
+        update wrote a real copy of a fake agent's records into the developer's own
+        checkout — the trap `MEMORY.md` records one level down, at the next level up.
+        """
+        self.nothing_open(self.agent("ava"))
+        self._stumbles_on("ava")
+
+        migration.carry_every_or_put_back(self.where, 2, where=self.steps)
+        self.assertTrue((self.where / migration.ROLLBACK / "ava").is_dir(),
+                        "the copy went somewhere the agents directory does not cover")
+
+    def test_what_may_have_to_be_put_back_is_never_walked_as_an_agent(self):
+        self.nothing_open(self.agent("ava"))
+        self.wrote(2, signs("two"))
+
+        migration.carry_every_or_put_back(self.where, 2, where=self.steps)
+        self.assertEqual(2, self._version("ava"))
+        self.assertFalse((self.where / migration.ROLLBACK / migration.ROLLBACK).exists(),
+                         "the place copies are kept was carried forward as though it were one")
+
+    def test_an_agent_with_no_records_yet_is_neither_copied_nor_in_the_way(self):
+        """An agent from a release before there were records has none to put back, and
+        making one is what carrying it does — so there is nothing here to insure."""
+        (self.where / "fresh" / "home").mkdir(parents=True)
+        self.nothing_open(self.agent("ava"))
+        self._stumbles_on("ava")
+
+        why = migration.carry_every_or_put_back(self.where, 2, self._aside(),
+                                                where=self.steps)
+        self.assertIsNotNone(why)
+        self.assertIn("ava", why)
+
     def test_every_agent_is_walked_and_each_reaches_its_own_version(self):
         for called in ("ava", "john", "plans"):
             self.agent(called)

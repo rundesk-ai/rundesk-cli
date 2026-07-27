@@ -24,7 +24,7 @@ update already stands every gateway down for. A step forward exists; a step back
 | ✅ | R-MIG-3 | Steps run in order, from the shape on disk to the shape now installed | `steps are ordered by the number they carry and never by their name` |
 | ✅ | R-MIG-4 | A step runs once, and an update that stopped partway does not run it again | `running again after the step is fixed resumes at it and does not redo the one before` |
 | ✅ | R-MIG-5 | A step that fails leaves the data exactly as it was | `a step that fails leaves the data exactly as it was` |
-| ✅ | R-MIG-6 | A step that fails stops the update and leaves every agent down | `a migration that fails leaves every agent down and says which and why`, `an agent whose records cannot be moved names that agent` |
+| ✅ | R-MIG-6 | A step that fails stops the update and puts every agent back on the version it was | `a migration that fails puts the install back and says which and why`, `an agent whose records cannot be moved names that agent`, `an agent already carried is put back when a later one cannot be` |
 | ✅ | R-MIG-7 | An owner is told which agent could not be moved, which step failed, and what it had reached | `which step failed and the version it reached are both named`, `an agent whose records cannot be moved names that agent`, `what went wrong is left in that agents own log` |
 | ✅ | R-MIG-8 | Data newer than this copy of rundesk understands is refused rather than read (R-STO-12) | `data newer than this rundesk understands is refused rather than read` |
 | ✅ | R-MIG-9 | A newly made agent is built by taking every step in order | `a brand new agent is built by running the steps that ship`, `an agent is made with the records it keeps` |
@@ -37,14 +37,13 @@ update already stands every gateway down for. A step forward exists; a step back
 | ✅ | R-MIG-16 | A number too large to be recorded as a version is refused rather than wrapped | `a number that could not be a version is refused rather than wrapped` |
 | ✅ | R-MIG-17 | Nothing an update moves loses an account, a log, or what a schedule last did | `nothing an update moves loses an account a log or what a schedule last did` |
 | ✅ | R-MIG-18 | Data moved forward is never moved back | `records moved forward are never moved back`, `records are left alone when the files never landed` |
+| ✅ | R-MIG-19 | A copy of every agent's records is taken before any is moved, and put back when one cannot be | `an agent already carried is put back when a later one cannot be`, `an agent with no records yet is neither copied nor in the way` |
+| ✅ | R-MIG-20 | A copy is let go of once the move it insured is proved | `a copy is let go of once the move it insured is proved` |
 
 ## Open questions
 
-- Whether an update part-way through moving data can be resumed or must be run again from the
-  version on disk.
 - Whether an owner may ask what a step would do before it does it.
 - What happens to an agent whose records cannot be read at all when every other agent's can.
-- Whether a copy of what was there is kept after a move is proved, and for how long.
 - Whether a machine that never updates, only reinstalls, needs any of this.
 - What becomes of something an earlier rundesk left behind that belongs to no agent, given
   nothing outside an agent carries a version to move it under.

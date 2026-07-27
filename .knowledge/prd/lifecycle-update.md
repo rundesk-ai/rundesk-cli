@@ -48,12 +48,11 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-27 | What an install is made of is checked as usable rather than merely installed | `what an install needs is installed and then checked`, `a set that cannot satisfy itself is a build that failed`, `what pip reported is checked against what actually landed` |
 | ✅ | R-UPD-28 | A rebuild that fails puts back what the install was running before it | `what was working is put back when the build fails`, `a build that worked lets go of what it replaced` |
 | ✅ | R-UPD-29 | A release that stops needing something takes it away rather than leaving it for ever | `a release that stops needing something leaves it behind no longer`, `nothing declared makes no virtualenv at all` |
+| ✅ | R-UPD-30 | What an install is made of comes forward before what its agents keep | `what an install is made of comes forward before what it keeps` |
+| ✅ | R-UPD-31 | An update that cannot bring either forward puts the install back on the release it was | `an update that cannot build what a release needs puts the release back`, `a migration that fails puts the install back and says which and why` |
+| ✅ | R-UPD-32 | An install already current but unfit is mended rather than reported as current | `an install already current but unfit is mended rather than called current`, `an install that is current and fits is left entirely alone`, `asking where a broken install stands still changes nothing` |
 
 ## Open questions
 
-- Whether an update should rebuild what rundesk is made of, rather than only saying it no longer fits. A
-  release that needs something new leaves the old one in place, since only the installer ever builds it —
-  so the update reports the mismatch and the person runs the installer. Whether that hand-off is the right
-  one, or the update should do it, is not settled.
-- Whether an update part-way through replacing an install can be resumed or must be re-run. Each item
-  moves whole, so what is on disk is always readable, but a release half laid down is neither version.
+- How long an account of what a run did is kept, and whether an owner or a size decides. Separate from
+  the copy an update takes, which is answered: that one lives exactly as long as the move it insures.

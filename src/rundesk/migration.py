@@ -27,6 +27,7 @@ import datetime
 import importlib.util
 import os
 import re
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -244,6 +245,106 @@ def carry_every(agents, want: int, where=None, note=None, clock=None) -> dict:
             say(f"{home.name} could not be moved: {trouble}")
             raise Failed("(opening)", None, trouble, agent=home.name) from trouble
     return reached
+
+
+#: Where an update keeps what it may have to put back. Beside the agents rather than inside
+#: the program, for two reasons: a copy of an owner's records is the owner's, so an ordinary
+#: uninstall keeps it — and **whatever redirects where agents live redirects this with it**.
+#: Pointed at the program instead, a suite driving an update wrote a real copy of a fake
+#: agent's records into the developer's own checkout, which is the trap `MEMORY.md` already
+#: records one level down. A second thing to redirect is a second thing to forget.
+ROLLBACK = ".update.rollback"
+
+
+def carry_every_or_put_back(agents, want: int, aside: Path | None = None, where=None,
+                            note=None, clock=None) -> str | None:
+    """Move every agent forward, or leave every one of them exactly as it was.
+
+    Says what went wrong rather than raising it, because the caller is a decision about an
+    update and not a place to handle a database error.
+
+    **A step forward exists and a step back does not**, which is the whole shape of
+    migration here — so the way back is not a reverse step but a copy taken before anything
+    ran (R-MIG-19). Two agents are never at the same version, so the first that cannot be
+    moved stops the walk with earlier ones already carried; without this they would stay
+    carried while the release went back underneath them, and an agent's records would be
+    newer than the only code left to read them.
+
+    The copy goes somewhere the program owns rather than beside the records it copies: an
+    agent's own directory holds three files and nothing else, and a fourth appearing in it
+    would be a surprise to everything that looks there.
+    """
+    say = note if note is not None else (lambda said: None)
+    agents = Path(agents)
+    kept = _set_aside(agents, agents / ROLLBACK if aside is None else Path(aside))
+    try:
+        carry_every(agents, want, where=where, note=say, clock=clock)
+    except Exception as stopped:   # noqa: BLE001 — a boundary, reporting truthfully
+        stuck = _put_records_back(kept)
+        if stuck:
+            return (f"{stopped}. What is worse, these could not be put back as they were: "
+                    f"{', '.join(stuck)}")
+        return str(stopped)
+    _let_records_go(kept)
+    return None
+
+
+def _set_aside(agents: Path, aside: Path) -> list:
+    """A copy of every agent's records, taken while nothing an owner runs is up.
+
+    Nothing is reading them at this moment, which is the only reason a plain file copy is
+    honest here: an open connection would have a write-ahead log beside it that the copy
+    would not include, and the copy would be a database missing its most recent truth.
+    """
+    kept = []
+    if not agents.is_dir():
+        return kept
+    _clear(aside)
+    for home in sorted(agents.iterdir()):
+        if home == aside or not home.is_dir() or not _an_agent(home):
+            continue
+        records = home / RECORDS
+        if not records.exists():
+            continue          # nothing yet to put back; making one is what `carry` does
+        copy = aside / home.name / RECORDS
+        copy.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(records, copy)
+        kept.append((records, copy))
+    return kept
+
+
+def _put_records_back(kept: list) -> list:
+    """Put every copy back where it came from, and say which could not be.
+
+    Every one is tried rather than the walk ending at the first failure: a restore that gave
+    up half way is the state this exists to prevent.
+    """
+    stuck = []
+    for records, copy in kept:
+        try:
+            shutil.copy2(copy, records)
+            # The write-ahead log and the shared-memory file belong to the records that were
+            # *there*, not to the ones being put back, and a stale one beside a restored
+            # database is read as its most recent truth.
+            for beside in (records.with_name(records.name + "-wal"),
+                           records.with_name(records.name + "-shm")):
+                with contextlib.suppress(OSError):
+                    if beside.exists():
+                        os.remove(beside)
+        except OSError:   # noqa: BLE001 — named and reported, never swallowed
+            stuck.append(records.parent.name)
+    return sorted(stuck)
+
+
+def _let_records_go(kept: list) -> None:
+    """Let go of the copies, now that the move they insured is proved (R-MIG-20)."""
+    for _records, copy in kept:
+        _clear(copy.parent)
+
+
+def _clear(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path, ignore_errors=True)
 
 
 #: What tells an agent's directory from anything else that happens to stand where agents
