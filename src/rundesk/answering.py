@@ -60,6 +60,12 @@ CONTINUE = (
     "Do not repeat actions already completed. Finish the original request."
 )
 
+AFTER_UPDATE = (
+    "The external Rundesk update attempt has finished and the gateway is back online. "
+    "Verify the installed version and update outcome, then continue and finish the user's "
+    "original request. Do not stop at reporting status or repeat completed actions."
+)
+
 class Exchange:
     """One conversation, and the turn running in it if there is one."""
 
@@ -229,7 +235,7 @@ class Answering:
             self._note(said)
 
     async def told_update_finished(self, conversation: str, text: str) -> None:
-        """Deliver one durable update outcome after this channel reconnects."""
+        """Deliver an update outcome and resume its work after reconnect (R-UPD-40, R-UPD-41)."""
         if not self.connected:
             raise RuntimeError(f"channel '{self.channel}' is not connected")
         await self._sending(channel.spoken(
@@ -239,6 +245,39 @@ class Answering:
             store.conversation_id(self.channel, conversation),
             None, store.stamped(), text,
         )
+        held = self.exchanges.get(conversation)
+        if held is not None and held.task is not None and not held.task.done():
+            # A message that arrived during reconnect already continued this conversation.
+            # Starting another turn would duplicate the work the owner just resumed.
+            return
+        if held is None:
+            self._make_room()
+            held = self.exchanges.setdefault(conversation, Exchange(conversation))
+        began = asyncio.Event()
+        held.ref = None
+        held.stopped = False
+        held.task = asyncio.ensure_future(
+            self._one(
+                held, AFTER_UPDATE, "", prompt_author="rundesk",
+                on_admitted=lambda _run: began.set(),
+            )
+        )
+        admitted = asyncio.ensure_future(began.wait())
+        done, _pending = await asyncio.wait(
+            {held.task, admitted}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if began.is_set():
+            admitted.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await admitted
+            return
+        admitted.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await admitted
+        # A turn that failed before admission is not a continuation. Leave the update
+        # request undelivered so the reconnected gateway tries again truthfully.
+        await held.task
+        raise RuntimeError("the post-update continuation was not admitted")
 
     def _where_to_say(self, kept, place):
         """The conversation to say it in, and why there is none where there is none.
@@ -415,7 +454,8 @@ class Answering:
     # -- one turn --------------------------------------------------------------------
 
     async def _one(self, held: Exchange, prompt: str, user: str, preface: str = "",
-                   recovery_of: dict | None = None) -> None:
+                   recovery_of: dict | None = None, prompt_author: str = "user",
+                   on_admitted=None) -> None:
         """Carry one turn, and say how it stands at each point rundesk decides it."""
         chose = recovery_of or agents.chosen(self.name, self._where)
         held.saying = asyncio.Queue()
@@ -434,6 +474,8 @@ class Answering:
             self._took(held, run, can)
             if recovery_of:
                 kept.recovery_began(recovery_of["id"], run, store.stamped())
+            if on_admitted is not None:
+                on_admitted(run)
 
         try:
             outcome = await self._carry(
@@ -450,7 +492,7 @@ class Answering:
                 admitted=admitted,
                 preface=preface,
                 resume_required=bool(recovery_of),
-                prompt_author="rundesk" if recovery_of else "user",
+                prompt_author="rundesk" if recovery_of else prompt_author,
                 recovery_of=recovery_of["id"] if recovery_of else None,
                 resume_on_interrupt=lambda: (
                     self._stopping and not held.stopped and recovery_of is None
