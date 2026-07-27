@@ -115,6 +115,22 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   and the agent's records read as unavailable. Grok found this by being told to look something
   up and reporting what it actually got. Reproduce with
   `env PATH=/usr/bin:/bin ./rundesk doctor <agent>`; it is not a bug in the store.
+- **`unittest -k "a or b"` runs nothing and says `NO TESTS RAN`, which in a teeth probe reads
+  exactly like "the test passed".** `-k` takes a substring, not an expression — an `or` matches
+  no test name at all. Two probes in a run of six reported the code was fine when neither had
+  executed a single case. Pass `-k` twice for two patterns, and **read the "Ran N tests" count
+  before believing any probe**: a probe that ran zero tests has proved nothing in the direction
+  that matters. The same run also showed that a probe naming *one* test can pass while a
+  sibling catches the break, so a green probe means "this case has no teeth", never "the code
+  is unprotected" — narrow to the case, then widen to its class before concluding either.
+- **Adding any `RUNDESK_*_DIR` resolver fails `test_supervisor` until the launchd job carries
+  it.** `test_the_job_carries_every_place_rundesk_can_be_pointed_at` scrapes
+  `environ.get("RUNDESK_..._DIR")` out of the *source* of `gateway`, `agent` and the package
+  `__init__`, then asserts `supervisor.describe()` names every one it found. So a new directory
+  variable is caught the moment it is written, in a suite that looks unrelated to the feature
+  adding it — which is the guard working, not a broken test. Add the variable to `describe()`'s
+  `EnvironmentVariables` in the same change; a supervised gateway resolving a different place
+  from the command that wrote its job is the failure it exists to prevent.
 - **A backticked anything in an Evidence cell is read as the name of a test.** That is the whole
   mechanism keeping a ✅ honest, and it does not care that the row is ❌ or that the backticks are
   around a filename, a path or a script. Write those plainly in a note — `check-evidence` fails the
