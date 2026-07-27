@@ -174,7 +174,7 @@ file with it.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 20 files, ~1300 cases)
+## Tests (tests/ — 23 files, ~1500 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
@@ -199,6 +199,7 @@ provider. One file per contract, named for it:
 | `test_channel.py` | 65 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
 | `test_answering.py` | 64 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
 | `test_discord.py` | 69 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up |
+| `test_ci.py` | 6 | the build topology — one PR run, bounded discovery, retained logs, and the supported matrix |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and
 `.knowledge/scripts/check-evidence` fails the build when a row names one that does not exist.
@@ -236,15 +237,14 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   and the pointer named a path that existed on neither kind of install. As a skill it is handed
   to the agent instead. Each adapter skill carries its contract beside it in `references/`.
 - `.knowledge/scripts/gate` — everything that has to be true before work here is finished, in one
-  command. The suites are **found**, not listed, and it fails when the workflow does not name one of
-  them, so the local gate and CI cannot come apart. Runs everything rather than stopping at the first
+  command. The suites are **found**, not listed, and it fails when CI stops delegating to the same
+  discovery rule, so the local gate and CI cannot come apart. Runs everything rather than stopping at the first
   failure, and says what it did not cover: the real `./install.sh` and `--uninstall`.
-- `.github/workflows/build.yml` — the gate, in four named jobs so a red X says what broke: the knowledge
-  base (docs, contracts, evidence); the tests, one step per contract, across macOS and Ubuntu on Python
-  3.9 (the oldest a fresh macOS ships) and 3.13, with an empty `.venv` put beside the checkout so a
-  runner is the machine a developer has; installing this checkout, using it — including starting a real
-  gateway through the installed command, which is the only thing that exercises how the launcher reaches
-  what was installed — and removing it; and installing the published release on a bare machine.
+- `.knowledge/scripts/ci-suites` — discovers every suite, runs six at a time, and keeps one bounded log
+  per suite so a timeout or failure still names what broke.
+- `.github/workflows/build.yml` — one run per PR, with the full tests across macOS and Ubuntu on Python
+  3.9 and 3.13, real checkout installs on both systems, the knowledge gate, retained suite logs, and one
+  stable required check. Scheduled, release-tag, and manually requested canaries use separate concurrency.
 - `.github/workflows/release.yml` — a `vX.Y.Z` tag publishes the release that `rundesk update` finds.
 
 ## Integrations / Jobs

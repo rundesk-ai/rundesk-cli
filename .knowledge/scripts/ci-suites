@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Run every suite in bounded parallel CI shards, keeping one log per suite."""
+
+from __future__ import annotations
+
+import os
+import pathlib
+import signal
+import subprocess
+import sys
+from concurrent import futures
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+LOGS = ROOT / "suite-logs"
+WORKERS = 6
+SUITE_TIMEOUT_SECONDS = 420
+
+
+def suites() -> list[pathlib.Path]:
+    return sorted((ROOT / "tests").glob("test_*.py"))
+
+
+def _tail(path: pathlib.Path, limit: int = 200_000) -> str:
+    with open(path, "rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - limit))
+        return handle.read().decode("utf-8", "replace")
+
+
+def run(path: pathlib.Path) -> tuple[str, int, pathlib.Path, bool]:
+    log = LOGS / f"{path.stem}.log"
+    with open(log, "wb") as output:
+        process = subprocess.Popen(
+            [sys.executable, "-u", str(path), "-v"],
+            cwd=ROOT,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        timed_out = False
+        try:
+            code = process.wait(timeout=SUITE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                code = process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                code = process.wait()
+    return path.stem, code, log, timed_out
+
+
+def main() -> int:
+    found = suites()
+    if not found:
+        print("::error::no test suites were found")
+        return 1
+    LOGS.mkdir(parents=True, exist_ok=True)
+    failed = []
+    with futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        running = {pool.submit(run, path): path.stem for path in found}
+        for done in futures.as_completed(running):
+            name, code, log, timed_out = done.result()
+            print(f"\n===== {name} =====")
+            print(_tail(log))
+            if code != 0 or timed_out:
+                reason = "timed out" if timed_out else f"exited {code}"
+                print(f"::error title={name}::{name} {reason}; see {log.name}")
+                failed.append(name)
+    if failed:
+        print("failed suites: " + ", ".join(sorted(failed)), file=sys.stderr)
+        return 1
+    print(f"all {len(found)} suites passed ({WORKERS} at a time)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

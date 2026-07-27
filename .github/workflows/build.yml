@@ -2,6 +2,8 @@ name: build
 
 on:
   push:
+    branches: [main]
+    tags: ['v*.*.*']
   pull_request:
   workflow_dispatch:
   # Once a day, because the thing most likely to break the published release is not a
@@ -13,7 +15,7 @@ on:
 # One run per ref at a time. Four pushes in forty minutes ran four whole matrices at once,
 # every one of them carrying the same stuck job, and nothing stopped the superseded ones.
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 # Four jobs, each answering one question, so a red tick says what is broken before you
@@ -84,228 +86,18 @@ jobs:
         # Made empty and on purpose: nothing below may care that it is there.
         run: mkdir -p .venv/lib/python${{ matrix.python }}
 
-      # -- the platform: what runs, and what keeps it running ------------------------
-      - name: platform-process — a program rundesk runs, and keeping hold of it
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_process.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
+      - name: Every suite — discovered, bounded, and logged separately
+        timeout-minutes: 8
+        run: python -u .knowledge/scripts/ci-suites
 
-      - name: platform-gateway — one gateway per name, and what it takes with it
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_gateway.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: platform-gateway — handing a gateway to the machine that keeps it up
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_supervisor.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: platform-schedule — work that starts itself, because the time came
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_schedule.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: agent-store — everything one agent keeps, and the only way in to it
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_store.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: lifecycle-migration — steps found not listed, each whole or not at all
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_migration.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      # -- the agent, above the gateway that runs it ---------------------------------
-      - name: agent-home — what an agent is, and the one gateway that runs it
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_agent.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: agent-home — the library of skills, and which agent was given which
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_skill.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: lifecycle-backup — copies of what the owner keeps, and what one leaves out
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_backup.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: agent-run — what a turn did, and what is left of it afterwards
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_transcript.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: agent-run — one whole turn, and the account it leaves
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_turn.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      # -- the seam a brain is reached through --------------------------------------
-      - name: provider-adapter — the contract any brain is reached by, shipped or a stranger's
-        run: |
-          # Run bare, which drives the stand-in adapters the suite writes itself. Given
-          # `--adapter`, the same cases drive a real one — which is a probe against a
-          # real account, and never something CI depends on.
-          set +e; python -u tests/test_provider.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: channel-messaging — what arrives on a channel, carried through to an answer
-        run: |
-          # Both edges are arguments here: what a turn does is a stand-in the suite
-          # writes, and what reaches the adapter is a list. So a routing failure and a
-          # platform failure can never be confused for one another.
-          set +e; python -u tests/test_answering.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: provider-codex — where standing instructions go, and where they must not
-        run: |
-          # The policy this adapter decides on its own. `developerInstructions` adds to
-          # what codex was built with; `baseInstructions`, next to it, replaces them —
-          # including the ones telling it how to use its own tools. Both were established
-          # by probing a real codex, and this holds the adapter to what was measured.
-          set +e; python -u tests/test_codex.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: provider-claude — the arithmetic and the postures, against 184 captured lines
-        run: |
-          # Drives `tests/samples/claude-stream.jsonl`, which is real output from a real
-          # account, committed because it cost money and cannot be re-derived by reading.
-          # So this needs no account and no network, and still holds the adapter to what a
-          # brain said: the reply arrives twice and reporting both doubles every answer,
-          # three lines carry a usage block and only one is the turn, and two token fields
-          # are billed differently so summing them is real and misleading.
-          set +e; python -u tests/test_claude.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: provider-grok — a brain that reports no tools, and the flags that lie
-        run: |
-          # Drives `tests/samples/grok-stream.jsonl`. This brain reports no tool events at
-          # all, and the case that matters most is that none is invented. Two of its flags
-          # are accepted and enforce nothing — one of them shipped a bug where an agent
-          # with full access could write nothing while its turn reported success — so the
-          # argv is asserted on as hard as the arithmetic is.
-          set +e; python -u tests/test_grok.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: channel-discord — what a turn looks like on Discord, decided offline
-        run: |
-          # The policy, never the wire: which messages are for this agent, what a mark
-          # means, how a long answer is broken up. A socket, a rate limit and a
-          # permission are what the canary against a private server is for.
-          set +e; python -u tests/test_discord.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: channel-adapter — the contract any surface is reached by, shipped or a stranger's
-        run: |
-          # The mirror of the one above, and bare for the same reason: the fake channel is
-          # the floor. Nothing here reaches a platform or needs a token — a real surface
-          # is a canary against a server the owner owns, run by hand.
-          set +e; python -u tests/test_channel.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      # -- the surface, and this copy of rundesk on a machine ------------------------
-      - name: command-surface — every verb, and what it honestly refuses
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_cli.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: lifecycle-update — which version this is, and moving between them
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_updater.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: lifecycle-update — what this install is made of, and putting it there
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_dependencies.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
-
-      - name: lifecycle-install — putting it on a machine, and taking it off
-        run: |
-          # Into a file, never the runner's own pipe. A suite that leaks a process
-          # leaks the step's stdout with it, and the runner then waits for a stream
-          # that nothing will close — the step hangs after Python has already exited,
-          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
-          set +e; python -u tests/test_install.py -v > suite.log 2>&1; ran=$?; set -e
-          tail -c 200000 suite.log
-          exit $ran
+      - name: Keep every suite log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-logs-${{ matrix.os }}-py${{ matrix.python }}
+          path: suite-logs/
+          if-no-files-found: warn
+          retention-days: 14
 
   # ------------------------------------------------------------------ installing this checkout
   # The suites above prove the install *logic*. This runs the installer for real and then
@@ -410,6 +202,24 @@ jobs:
           test ! -e "$RUNDESK_BIN_DIR/rundesk" || { echo "::error::the command is still on the PATH"; exit 1; }
           test ! -d .venv || { echo "::error::what the install put in place was left behind"; exit 1; }
           test -f rundesk || { echo "::error::uninstalling deleted the checkout"; exit 1; }
+
+  # One stable required check for branch protection. Matrix job names may grow as supported
+  # environments do; this name stays fixed and succeeds only when every required job did.
+  required-pr-gate:
+    name: required PR gate
+    if: always()
+    needs: [knowledge, tests, install-this-checkout]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every required job passed
+        env:
+          KNOWLEDGE: ${{ needs.knowledge.result }}
+          TESTS: ${{ needs.tests.result }}
+          INSTALL: ${{ needs.install-this-checkout.result }}
+        run: |
+          test "$KNOWLEDGE" = success
+          test "$TESTS" = success
+          test "$INSTALL" = success
 
   # ------------------------------------------------------------------ installing what is published (R-INS-1)
   # The claim the whole product rests on, and the one every other job is blind to: a machine

@@ -28,6 +28,10 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   return. Rebuild straight afterwards — `./install.sh`, or `python3 -m venv .venv &&
   .venv/bin/python -m pip install -r requirements.txt` — and check
   `.venv/bin/python -c "import discord"` before believing a green suite.
+- **The command sandbox rejects an isolated install check when its chain ends in `rm -rf`,
+  even for a validated `mktemp -d` directory.** The command never starts, so it proves
+  nothing about the installer. Leave the scratch directory in place for that run and report
+  its path, or remove it later through an approved recoverable cleanup.
 - **`OK (skipped=65)` and `OK` are the same word to whoever reads the gate, and CI is the
   machine where it matters.** `test_discord` loaded the adapter from `src/rundesk/channels/discord`,
   which the src restructure had moved to `src/channels/discord`; the loader raised, a bare
@@ -116,6 +120,10 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `gh run watch <id> --exit-status --interval 20`, which GitHub paces for you, or put a
   `sleep 20` in the loop. Check what is left with
   `gh api rate_limit --jq .resources.core` before starting anything that polls.
+- **`gh release view --json isLatest` fails because this `gh` does not expose that field.**
+  The command prints its supported release fields and exits before anything chained after it
+  runs. Use `tagName,name,publishedAt,url` and compare `tagName` with
+  `gh release list --limit 1` when whether it is latest matters.
 - **A tag fires `build` and `release` at the same time, so the job that installs the
   *published* release tests the previous one.** `build.yml` runs on every push including a
   tag, and its bare-machine job asks GitHub for the newest release and installs it — while
