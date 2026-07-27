@@ -31,7 +31,7 @@ none of them is a copy of another:
 | `src/rundesk/agent.py` — `agents_home()`, `directory()`, `paths()` | every directory that is one agent's own, off one list that making and diagnosing both read |
 | `src/rundesk/agent.py` — `templates_home()`, `sourced()` | where an owner's own templates stand and which file each page really comes from. **Below `agents_home()`**, so whatever redirects where agents live redirects it too, and outside anything a release ships, which is the whole of why an update cannot reach it (R-AGT-23) |
 | `src/rundesk/dependencies.py` — `wanted_at()`, `site_packages()` | what this install is made of and where it is kept, asked the same way by the installer, an update and a gateway |
-| `src/migrations/001.py` | **the shape of everything an agent keeps**, and the only description of it there is |
+| `src/migrations/` | **the shape of everything an agent keeps**, and the only description of it there is. `001.py` is the shape an agent starts from and every step after it is one change to that shape, so what the records are today is the steps read in order — never a second description kept beside them |
 | `src/rundesk/store.py` | the only way in to it, and what may be asked of it |
 | `src/rundesk/supervisor.py` — `describe()` | what the machine's own job carries, so a gateway resolves what the command that made it resolved (R-AGT-9) |
 
@@ -113,9 +113,13 @@ file with it.
   `carry_every()` walks every agent in turn and stops at the first that cannot be moved, and every step
   that ran or failed is written into that agent's own log — an update that went wrong overnight is read
   afterwards rather than watched.
-- `src/migrations/001.py` — **the schema, and the only description of it there is.** Making an
-  agent runs the migration path from nothing rather than building tables directly, so the path is exercised
-  every time anybody adds an agent and a fresh install cannot drift from an upgraded one.
+- `src/migrations/` — **the schema, and the only description of it there is.** `001.py` is the shape an
+  agent starts from; every step after it changes that shape, and reading them in order is what the records
+  are today. Making an agent runs the whole path from nothing rather than building tables directly, so it is
+  exercised every time anybody adds an agent and a fresh install cannot drift from an upgraded one. A step
+  that rebuilds a table something else references puts those references back itself: the runner opens every
+  step with foreign keys on and cannot turn them off inside its own transaction, so dropping a table fires
+  the actions pointing at it.
 - `src/rundesk/updater.py` — where this install stands against what is published, and moving between
   them. Every network call is behind an argument, so the whole module is exercised offline. An update
   is **two tiers**: what rundesk is made of and what its agents keep both come forward, in that order,

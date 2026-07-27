@@ -695,7 +695,8 @@ class Store:
 
         Exactly one of `command` and `prompt`, which the database enforces rather than trusts.
 
-        **Exactly one of `cron` and `at`**, enforced the same way. `cron` is a repeating time;
+        **Exactly one of `cron` and `at`** (R-SCH-36), enforced the same way. `cron` is a
+        repeating time;
         `at` is the single moment this runs, after which it can never be due again. Cron has
         no year, so one cannot say the other — and a row naming both would leave rundesk
         choosing which, with the choice invisible in the listing.

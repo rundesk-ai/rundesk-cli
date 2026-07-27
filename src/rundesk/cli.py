@@ -2312,8 +2312,8 @@ def _run_schedule(args: argparse.Namespace, gateways, agents, kept, whose) -> in
           + (f" ({said.code})" if said.code else ""))
     # Said out loud, because the whole point of running one by hand is that it changes
     # nothing about when it runs on its own. **A single moment is not used up by this**
-    # (R-SCH-22): only the clock reaching it can do that, so one still ahead is still ahead
-    # afterwards, and one already gone is no more gone than it was.
+    # (R-SCH-22, R-SCH-39): only the clock reaching it can do that, so one still ahead is
+    # still ahead afterwards, and one already gone is no more gone than it was.
     print(f"        next, unchanged: {was_due}" if not one.once
           else f"        its one moment, unchanged: "
                f"{one.stated.strftime(schedule.A_MINUTE)} ({was_due})")
@@ -2409,7 +2409,8 @@ def _also_expired(args: argparse.Namespace, spent: list) -> None:
 
 
 def _list_expired(args: argparse.Namespace, spent: list, ran: dict, refused: list) -> int:
-    """The one-time schedules whose moment has gone, and which kind of gone each is.
+    """The one-time schedules whose moment has gone, and which kind of gone each is
+    (R-SCH-40, R-SCH-41).
 
     **Two ways to be expired, and they are not the same news** (R-SCH-4): one came due while
     a gateway was up and ran, and its outcome says what that came to; the other's moment

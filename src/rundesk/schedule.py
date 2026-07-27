@@ -51,12 +51,12 @@ class NotASchedule(ValueError):
 class Schedule:
     """One thing that should happen, and when.
 
-    **When is said one of two ways, and never both.** `when` is a repeating time, stated the
-    way schedules ordinarily are; `at` is a single moment, after which this can never be due
-    again. Cron has no year — `0 9 28 7 *` says every 28 July for ever — so a moment cannot
-    be said in the first and a repetition cannot be said in the second. Exactly one of them
-    is the records' rule as well as this one's, and it is asked here too because a row is
-    still a person's typing at the moment it arrives.
+    **When is said one of two ways, and never both** (R-SCH-36). `when` is a repeating time,
+    stated the way schedules ordinarily are; `at` is a single moment, after which this can
+    never be due again. Cron has no year — `0 9 28 7 *` says every 28 July for ever — so a
+    moment cannot be said in the first and a repetition cannot be said in the second. Exactly
+    one of them is the records' rule as well as this one's, and it is asked here too because
+    a row is still a person's typing at the moment it arrives.
 
     `run` is whatever the thing doing the starting understands — a program, or nothing where
     this schedule asks a turn instead. Carried, never looked at (R-SCH-3).
@@ -71,10 +71,10 @@ class Schedule:
     row that broke it could not have been written.
 
     `ran_at` is that the clock has already started this, carried exactly as `run` is and never
-    read as a time. It is what makes a single moment *used*: durable, written before the work
-    began, and therefore the same answer through a restart, a clock stepped backwards and a
-    second gateway. A repeating schedule ignores it — its guard is the minute it last ran,
-    which is passed to `due` rather than held here.
+    read as a time. It is what makes a single moment *used* (R-SCH-38): durable, written before
+    the work began, and therefore the same answer through a restart, a clock stepped backwards
+    and a second gateway. A repeating schedule ignores it — its guard is the minute it last
+    ran, which is passed to `due` rather than held here.
     """
 
     name: str
@@ -295,7 +295,7 @@ SAID_AS = "YYYY-MM-DDTHH:MM"
 
 
 def understood_moment(said: str) -> datetime:
-    """The one moment a schedule states, read off what somebody typed.
+    """The one moment a schedule states, read off what somebody typed (R-SCH-37).
 
     **The machine's own clock, and deliberately.** A schedule is stated in local time and
     matched against a local clock everywhere else here, and what a schedule last did is
@@ -493,7 +493,7 @@ NEVER_RAN = "never ran"
 
 
 def became_of(one: Schedule, outcome: str | None = None) -> str:
-    """What became of a schedule whose single moment has gone.
+    """What became of a schedule whose single moment has gone (R-SCH-41).
 
     Two answers, told apart by whether anything durable says the clock ever started it: it
     ran, and `outcome` says what that came to — or its moment passed while nothing was

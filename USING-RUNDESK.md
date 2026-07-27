@@ -159,21 +159,63 @@ rundesk channels <name>        what it is reachable on — add, show, remove, in
 rundesk schedules <name>       what it runs on its own — add, on, off, remove, run
 ```
 
-**Work that starts itself, and where its answer goes.** A schedule can run a program or ask a
-turn, and `--to <channel>` is how its outcome reaches a surface — named by the channel it was
-added under, not by anything about the platform:
+**Work that starts itself, and where its answer goes.** A schedule can run a program — a
+script, a command, anything with a full path — or ask a turn, and `--to <channel>` is how its
+outcome reaches a surface, named by the channel it was added under rather than by anything
+about the platform:
 
 ```sh
 rundesk schedules <name> add nightly --when "0 6 * * *" \
     --ask "summarise what changed yesterday" --to ops
+rundesk schedules <name> add tidy --when "0 4 * * *" -- /usr/local/bin/tidy --quiet
 ```
+
+**Say when one of two ways, never both.** `--when` is a repeating time, in the five cron
+fields. `--at` is a single moment: it runs then and never again.
+
+```sh
+rundesk schedules <name> add tidy-up --at "2026-07-28T09:00" -- /usr/local/bin/tidy
+rundesk schedules <name> add report --at "2026-07-28T09:00" \
+    --ask "how did the migration go?" --to ops
+```
+
+Everything else is the same either way — a program or a turn, `--to` and `--in`, `--provider`,
+`--instructions`, `on` and `off`, running it by hand.
+
+**You supply a moment, not a phrase.** *"Remind me tomorrow at nine"* is yours to turn into
+`--at "2026-07-28T09:00"` — work out the date, use the machine's own local time, and check what
+you resolved before you write it. rundesk refuses a phrase, refuses a moment carrying a time
+zone, and refuses one that has already gone. That is deliberate: a schedule that guessed at
+language would guess in the dark, with nobody there to notice.
+
+**A moment that goes by while the gateway is down does not run late.** It is not a reminder
+that waits for you; it is work the clock starts, and a clock that has passed has passed. If it
+matters that something happens, the gateway has to be up.
+
+**Expired is not gone.** Once its moment has passed, a one-time schedule leaves
+`rundesk schedules <name>` — that listing is work that can still happen — and stays in the
+record:
+
+```sh
+rundesk schedules <name> --expired
+```
+
+That says which kind of over each one is: an outcome where the clock reached it and it ran, or
+**`never ran`** where its moment passed while nothing was running. If somebody asks whether last
+Tuesday's job happened, that column is the answer — do not read "it is not in the listing" as
+"it ran". A schedule that is over can still be run by hand, turned off, and removed.
 
 **There is no way to change a schedule — remove it and add it again.** The verbs are `add`,
 `on`, `off`, `remove` and `run`, and no more. So "move the morning report to nine" is
 `rundesk schedules <name> remove morning` then `add` with the new time, keeping every other
 option the same — read the old one with `rundesk schedules <name>` *before* removing it, or
 you will be reconstructing it from memory. `off` is what you want when somebody means "stop
-it for now": it keeps the schedule and what it last did, and `on` puts it back.
+it for now": it keeps the schedule and what it last did, and `on` puts it back. A moment that
+has been used cannot be reused — add another schedule rather than trying to revive one.
+
+**Running one by hand does not use its moment up.** `rundesk schedules <name> run <schedule>`
+does the work now and changes nothing about when it falls due on its own, which is what makes
+it safe for checking that a job does what somebody expects before the night it matters.
 
 **You never post it yourself.** There is no command that sends a message, deliberately: you do
 the work and answer, and the gateway delivers the outcome through the channel already held
