@@ -1328,6 +1328,15 @@ def cmd_doctor(args: argparse.Namespace, gateways, agents) -> int:
             # command out from the fault is asking them to diagnose it twice.
             if one.fix:
                 print(f"            fix: {one.fix}", file=sys.stderr)
+    # Per page, where a *new* agent's would come from (R-AGT-26). Said once for the install
+    # rather than once per agent, because it is a fact about this machine and not about any
+    # one of them — and said only when an owner has overridden something, since a list of
+    # five identical "install" lines every time is a list nobody reads.
+    from_each = agents.where_each_page_comes_from()
+    if any(whose == "owner" for _called, whose, _at in from_each):
+        print("templates a new agent would be made from:")
+        for called, whose, at in from_each:
+            print(f"        {called}: {whose} ({at})")
     if _cannot_search(names, agents):
         # A fact about the machine rather than a fault of any agent, so it is said here
         # and is not a complaint: this SQLite was built without FTS5. Said by the command

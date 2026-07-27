@@ -42,6 +42,11 @@ provider's own tools still reach whatever their owner reaches.
 | ✅ | R-AGT-19 | Everything a diagnosis complains about says what to type to put it right | `what is wrong says how to put it right`, `every complaint says what to type next` |
 | ✅ | R-AGT-20 | A diagnosis says where an agent's records stand against what this install expects | `records behind what this install expects are reported with the way out` |
 | ✅ | R-AGT-21 | An agent whose gateway is running code no longer installed is told so | `a gateway running code that is no longer installed is reported`, `a gateway on the installed version is nothing to report`, `a gateway that is not running is not asked what version it is` |
+| ✅ | R-AGT-22 | A new agent takes each page from its owner's template where there is one, and the install's otherwise | `a home made with no overrides is what the install ships`, `one overridden page is the owners and the rest are shipped`, `an override directory that is empty changes nothing`, `an override directory that cannot be read is not a half made agent` |
+| ✅ | R-AGT-23 | A template an owner wrote survives an update | `an update replaces the shipped templates and leaves every override`, `what an owner wrote is not under anything a release ships` |
+| ✅ | R-AGT-24 | An owner may add a page the install does not ship, and agents made earlier are not faulted for lacking it | `a page the install does not ship reaches a new agent`, `an agent made before a page was added is not reported as missing it` |
+| ✅ | R-AGT-25 | A template that never names the agent still makes a working one | `an override that never names the agent still makes a working agent` |
+| ✅ | R-AGT-26 | A diagnosis says, for each page, whether it came from the install or the owner and from where | `a diagnosis says which pages are the owners and where from` |
 
 ## Open questions
 

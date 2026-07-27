@@ -292,6 +292,38 @@ class RemovalTests(Sandbox):
                          "an ordinary uninstall took an agent's home")
         self.assertTrue((home / "workspace").is_dir(), "it took the agent's workspace")
 
+    def test_removing_rundesk_keeps_the_templates_an_owner_wrote(self):
+        """R-RM-12 — a template an owner made their own is theirs, and removing the program
+        is not asking for it to go (R-RM-4).
+
+        Nothing in the installer was taught this. The templates stand among the agents, and
+        everything beside the program is kept — so it holds by the shape of the layout
+        rather than by a list of names, which is the whole reason the list went away.
+        """
+        mine = self.home / ".rundesk" / "agents" / ".templates" / "agent"
+        mine.mkdir(parents=True)
+        (mine / "SOUL.md").write_text("the words I wrote for every agent I make\n")
+
+        self.install()
+        kept = self.uninstall()
+
+        self.assertEqual(kept.returncode, 0, kept.stderr)
+        self.assertEqual("the words I wrote for every agent I make\n",
+                         (mine / "SOUL.md").read_text(),
+                         "an ordinary uninstall took a template its owner wrote")
+
+    def test_purging_takes_the_templates_an_owner_wrote_as_well(self):
+        """R-RM-12 — the other half, so "keeps it" cannot pass by never removing anything."""
+        mine = self.home / ".rundesk" / "agents" / ".templates" / "agent"
+        mine.mkdir(parents=True)
+        (mine / "SOUL.md").write_text("mine\n")
+
+        self.install()
+        gone = self.uninstall("--purge")
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertFalse(mine.exists(), "a purge left the templates behind")
+
     def test_purging_takes_every_agents_home_as_well(self):
         """R-AGT-3 — the other half, so "keeps it" cannot pass by never removing anything."""
         agents = self.home / ".rundesk" / "agents"

@@ -39,16 +39,78 @@ NAMED = "{{name}}"
 WORKING = "workspace", "skills"
 
 
-def knowledge() -> tuple[str, ...]:
-    """The files an agent's home holds, asked of what they are copied from.
+#: Where an owner keeps the templates they made their own — **inside** where agents are
+#: kept, rather than beside it.
+#:
+#: Derived rather than given a variable of its own, so whatever redirects where agents live
+#: redirects this with it: a second name to set is a second name to forget, and `MEMORY.md`
+#: records what forgetting one cost. But derived *downwards*. Hung off the parent, it
+#: resolved to a sibling of the agents directory — which for an owner is `~/.rundesk` and
+#: is right, and for anything pointed at a scratch directory is whatever that scratch
+#: directory happens to sit in. Every case in a suite then shared one, and one case's
+#: template turned up in another's agent. Anything below the redirected root cannot do that.
+#:
+#: Dotted because it stands among the agents without being one: what makes a directory an
+#: agent is a `home/` inside it, so nothing that walks this place can mistake it for one.
+#:
+#: It is still the owner's tier — above every agent, inside none of them, and outside the
+#: program, which is the whole reason an update cannot reach it (R-AGT-23).
+OVERRIDES = ".templates", "agent"
 
-    Read off the directory rather than listed here, so a template added later is written
-    into a new agent's home, looked for by a diagnosis and covered by the suite without
-    anything being added to a list kept somewhere else.
+
+def templates_home() -> Path:
+    """Where an owner's own templates stand, resolved on every call.
+
+    Never cached and never a default argument: an owner's directory is machine state, and
+    binding it once at import is how a suite comes to write into the real one.
+    """
+    return agents_home().joinpath(*OVERRIDES)
+
+
+def shipped() -> tuple[str, ...]:
+    """The pages this install ships, whatever an owner has done beside them.
+
+    Kept apart from `knowledge()` for one reason, and it only shows up once somebody has
+    agents: an owner may add a page the install does not ship (R-AGT-24), and every agent
+    made before they did has never heard of it. A diagnosis that looked for the *whole* set
+    would report every one of those as missing a file it loads — a customisation that
+    retroactively breaks the reading of agents it never touched. So what an agent is
+    *judged* against is this, and what a new one is *made* from is the other.
     """
     if not TEMPLATES.is_dir():
         return ()
     return tuple(sorted(page.name for page in TEMPLATES.iterdir() if page.is_file()))
+
+
+def sourced(overrides: Path | None = None) -> dict:
+    """Every page a new agent's home is made from, and the file each really comes from.
+
+    **The one place precedence is decided** (R-AGT-22), so `add` and a diagnosis can never
+    disagree about which file an agent got. Per page rather than per set: an owner who wants
+    their own `SOUL.md` and nothing else writes one file, and the other four stay whatever
+    the install ships — including whatever a later release improves them into. Taking on all
+    five to change one would mean never getting an improvement to any of them.
+
+    An override directory that is missing, empty or unreadable is simply an owner who has
+    not made one, which is the ordinary case and never an error.
+    """
+    from_install = {called: TEMPLATES / called for called in shipped()}
+    where = templates_home() if overrides is None else overrides
+    try:
+        theirs = sorted(page for page in where.iterdir() if page.is_file())
+    except OSError:
+        return from_install
+    return {**from_install, **{page.name: page for page in theirs}}
+
+
+def knowledge(overrides: Path | None = None) -> tuple[str, ...]:
+    """The files an agent's home holds, asked of what they are copied from.
+
+    Read off the directories rather than listed here, so a template added later is written
+    into a new agent's home and covered by the suite without anything being added to a list
+    kept somewhere else — and so is one an *owner* adds.
+    """
+    return tuple(sorted(sourced(overrides)))
 
 
 class NotAnAgentName(ValueError):
@@ -600,7 +662,11 @@ def diagnosed(name: str, where: Path | None = None, root: Path | None = None,
         elif not os.access(path, os.W_OK):
             found.append(Complaint(str(path), f"the agent's {what} cannot be written to",
                                    f"chmod u+w {path}"))
-    holds = knowledge()
+    # **What an agent is judged against is what the install ships** (R-AGT-24), never the
+    # whole set an owner may have added to. An owner-added page reaches new agents; every
+    # agent made before it has never heard of it, and reporting each of those as missing a
+    # file it loads would be a customisation breaking the reading of agents it never touched.
+    holds = shipped()
     if not holds:
         # Asked before the files are looked for, because an install with nothing to copy
         # from would otherwise find nothing missing and call a bare home a working agent.
@@ -654,14 +720,35 @@ def diagnosed(name: str, where: Path | None = None, root: Path | None = None,
     return found
 
 
-def _copied(called: str, name: str) -> str:
+def where_each_page_comes_from(overrides: Path | None = None) -> list:
+    """Per page: whether a new agent would take it from the install or from the owner, and
+    from which file (R-AGT-26).
+
+    "Why does my new agent not have my rules" has to be answerable without reading source.
+    Says it for every page rather than only the overridden ones, because an owner who
+    misspelled a filename needs to see the four that are still the install's to notice that
+    the fifth is not theirs.
+    """
+    return [
+        (called, "install" if at.parent == TEMPLATES else "owner", at)
+        for called, at in sorted(sourced(overrides).items())
+    ]
+
+
+def _copied(called: str, name: str, overrides: Path | None = None) -> str:
     """One template, with the agent's name put where the template asks for it.
 
-    A copy and one substitution, so what an owner finds in a new home is what stands in
-    `templates/agent/` — editable there, readable as ordinary Markdown, and never a second
+    A copy and one substitution, so what an owner finds in a new home is what stands in the
+    file it came from — editable there, readable as ordinary Markdown, and never a second
     version of the same words held in code.
+
+    **Writing `{{name}}` is optional** (R-AGT-25). The substitution is the whole of the
+    contract an override has to honour, and honouring it is a choice: a template with no
+    placeholder is one every agent gets verbatim, which is a legitimate thing to want.
+    `replace` on a string that does not contain it is the string, so this is already true
+    and is asserted rather than arranged.
     """
-    return (TEMPLATES / called).read_text(encoding="utf-8").replace(NAMED, name)
+    return sourced(overrides)[called].read_text(encoding="utf-8").replace(NAMED, name)
 
 
 @dataclass(frozen=True)

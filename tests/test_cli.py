@@ -658,7 +658,11 @@ class FakeAgents:
     NotAnAgentName = real_agent.NotAnAgentName
     Where = real_agent.Where
 
-    def __init__(self, made=(), wrote=(), complaints=None, at=None):
+    def __init__(self, made=(), wrote=(), complaints=None, at=None, overrides=None):
+        #: Where this case's owner keeps templates of their own, or None for an owner who
+        #: has made none — never the real one, which is what `agents_home` would resolve.
+        self._overrides = pathlib.Path(overrides) if overrides else pathlib.Path(
+            "/nowhere/templates/agent")
         #: A real directory to resolve into, for the cases that write something. Without
         #: one every path here is under `/nowhere`, which is what keeps a case that only
         #: reads from ever touching a disk.
@@ -729,6 +733,11 @@ class FakeAgents:
         if self.refuses is not None:
             raise self.refuses
         return list(self._unrunnable)
+
+    def where_each_page_comes_from(self):
+        """Borrowed from the real module rather than invented: a stand-in more generous
+        than the thing it stands for hides whole features, twice in this codebase."""
+        return real_agent.where_each_page_comes_from(self._overrides)
 
     def standing_before(self, name):
         return [pathlib.Path(f"/nowhere/{one}") for one in self._wrote] if name in ("gateway",) else []

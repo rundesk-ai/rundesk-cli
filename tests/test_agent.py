@@ -24,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import agent, gateway, store  # noqa: E402
+from rundesk import agent, gateway, store, updater  # noqa: E402
 
 
 #: The two files SQLite keeps beside a database, which are its bookkeeping and not the
@@ -84,6 +84,171 @@ class WithSomewhereToKeepAgents(unittest.TestCase):
         agent.add(name, self.where)
         agent.remember(name, self.where, provider="codex")
         return name
+
+
+class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
+    """The files a new agent's home is copied from, and an owner's right to replace them.
+
+    **No case here reads the owner's real override directory.** It is derived from where
+    agents are kept, which `setUp` already points at scratch, so isolating one isolates the
+    other — but `own()` asserts that rather than trusting it, because `MEMORY.md` records
+    what the same mistake one level down cost: five variables redirected, and real agents
+    written into `~/.rundesk/agents` while `rundesk add` reported success.
+    """
+
+    def own(self, called: str = "", says: str = "") -> Path:
+        """A template of this owner's, in the directory derived from where agents are kept."""
+        where = agent.templates_home()
+        # **Below the directory this case redirected**, not beside it. Hung off the parent
+        # it resolved to whatever the scratch directory happened to sit in — the shared
+        # temp root — so every case wrote into one place and one case's template turned up
+        # in another's agent. Asserted rather than trusted, because that is exactly the
+        # class of mistake `MEMORY.md` records at the level below this one.
+        self.assertEqual(self.where, where.parent.parent,
+                         f"the owner's own templates would be read from {where}")
+        where.mkdir(parents=True, exist_ok=True)
+        if called:
+            (where / called).write_text(says, encoding="utf-8")
+        return where
+
+    def held(self, name: str = "ava") -> dict:
+        home = agent.home(name, self.where)
+        return {page.name: page.read_text(encoding="utf-8")
+                for page in sorted(home.iterdir()) if page.is_file()}
+
+    def test_a_home_made_with_no_overrides_is_what_the_install_ships(self):
+        """R-AGT-22 — the floor everything else is measured from. An owner who has made no
+        template of their own gets the factory set, byte for byte but for the one name."""
+        self.made()
+        for called, says in self.held().items():
+            self.assertEqual((agent.TEMPLATES / called).read_text().replace("{{name}}", "ava"),
+                             says, f"{called} is not what the install ships")
+
+    def test_one_overridden_page_is_the_owners_and_the_rest_are_shipped(self):
+        """R-AGT-22 — per page, not per set. Taking on all five to change one would mean
+        never getting an improvement to any of them, which is a choice worth avoiding."""
+        self.own("SOUL.md", "# {{name}} answers only in haiku\n")
+        self.made()
+
+        held = self.held()
+        self.assertEqual("# ava answers only in haiku\n", held["SOUL.md"])
+        for called in ("AGENTS.md", "CLAUDE.md", "USER.md", "MEMORY.md"):
+            self.assertEqual((agent.TEMPLATES / called).read_text().replace("{{name}}", "ava"),
+                             held[called], f"{called} stopped being the install's")
+
+    def test_an_override_that_never_names_the_agent_still_makes_a_working_agent(self):
+        """R-AGT-25 — the substitution is the whole contract an override has to honour, and
+        honouring it is optional. A template with no placeholder is one every agent gets
+        verbatim, which is a legitimate thing to want."""
+        self.own("SOUL.md", "# be terse\n")
+        self.made()
+        self.assertEqual("# be terse\n", self.held()["SOUL.md"])
+        self.assertEqual([], agent.diagnosed("ava", self.where, root=self.root,
+                                             runnable=lambda one: None))
+
+    def test_an_override_directory_that_is_empty_changes_nothing(self):
+        self.own()
+        self.made()
+        self.assertEqual(set(agent.shipped()), set(self.held()))
+
+    def test_an_override_directory_that_cannot_be_read_is_not_a_half_made_agent(self):
+        """Unreadable is an owner who has made none, not a failure: a diagnosis is what
+        somebody runs *because* something is wrong, and an agent they cannot make is worse
+        than one made from the words that ship."""
+        where = self.own()
+        where.chmod(0o000)
+        self.addCleanup(where.chmod, 0o755)
+        self.made()
+        self.assertEqual(set(agent.shipped()), set(self.held()))
+
+    def test_a_page_the_install_does_not_ship_reaches_a_new_agent(self):
+        """R-AGT-24 — an override may add, not only replace."""
+        self.own("RULES.md", "# {{name}} never force-pushes\n")
+        self.made()
+        self.assertEqual("# ava never force-pushes\n", self.held()["RULES.md"])
+
+    def test_an_agent_made_before_a_page_was_added_is_not_reported_as_missing_it(self):
+        """R-AGT-24 — the reason this decision is not cosmetic, and it only shows up once
+        somebody has agents. What an agent is judged against is what the install ships; if
+        it were the whole set, adding one page would report every agent ever made as
+        missing a file it loads — a customisation retroactively breaking the reading of
+        agents it never touched."""
+        self.made("older")
+        self.own("RULES.md", "# added afterwards\n")
+
+        found = agent.diagnosed("older", self.where, root=self.root,
+                                runnable=lambda one: None)
+        self.assertEqual([], found, f"an agent made earlier was reported broken: {found}")
+        self.assertNotIn("RULES.md", self.held("older"),
+                         "a page added later was written into an agent that already existed")
+
+    def test_an_override_added_afterwards_changes_nothing_in_an_existing_home(self):
+        """R-AGT-4 — what makes running `add` again a repair rather than a reset. An owner
+        who overrides a template and wants an existing agent to have it edits that agent's
+        home; rundesk never rewrites words a person may have changed."""
+        self.made()
+        (agent.home("ava", self.where) / "SOUL.md").write_text("# what I wrote myself\n")
+        self.own("SOUL.md", "# the owner's template\n")
+
+        agent.add("ava", self.where)
+        self.assertEqual("# what I wrote myself\n", self.held()["SOUL.md"])
+
+    def test_an_update_replaces_the_shipped_templates_and_leaves_every_override(self):
+        """R-AGT-23 — the claim this phase exists for, and it is a property of *where* the
+        overrides live rather than of anything the update does.
+
+        `updater._copy_over` stages each top-level item of the release and swaps it in, and
+        `_swap` renames what was there aside and lets go of it once the update is proved —
+        so anything under a path the release ships is replaced wholesale. The release ships
+        `src/`, and the shipped templates are inside it. An owner's are not under any path
+        it ships, and are not under the program at all.
+
+        Driven against the real `_copy_over` rather than reasoned about: the whole point is
+        that nothing in the updater knows this directory exists, so nothing in the updater
+        can be relied on to leave it alone on purpose.
+        """
+        mine = self.own("SOUL.md", "# what I wrote\n")
+        install = Path(tempfile.mkdtemp(prefix="rundesk-install-"))
+        self.addCleanup(shutil.rmtree, install, True)
+        (install / "src" / "templates" / "agent").mkdir(parents=True)
+        (install / "src" / "templates" / "agent" / "SOUL.md").write_text("# the old shipped one\n")
+
+        release = Path(tempfile.mkdtemp(prefix="rundesk-release-"))
+        self.addCleanup(shutil.rmtree, release, True)
+        (release / "src" / "templates" / "agent").mkdir(parents=True)
+        (release / "src" / "templates" / "agent" / "SOUL.md").write_text("# the new shipped one\n")
+
+        updater._copy_over(release, install)
+
+        self.assertEqual("# the new shipped one\n",
+                         (install / "src" / "templates" / "agent" / "SOUL.md").read_text(),
+                         "the update did not replace what the release ships")
+        self.assertEqual("# what I wrote\n", (mine / "SOUL.md").read_text(),
+                         "an update took a template its owner wrote")
+
+    def test_what_an_owner_wrote_is_not_under_anything_a_release_ships(self):
+        """R-AGT-23 — said as a shape rather than only as an outcome, because the outcome
+        holds by accident the day somebody moves the directory. What an update lays down is
+        the release's own top-level items; an owner's templates are under none of them."""
+        self.own("SOUL.md", "# mine\n")
+        theirs = agent.templates_home().resolve()
+        self.assertNotIn(agent.TEMPLATES.resolve().parent, theirs.parents,
+                         "an owner's templates stand inside what a release ships")
+        self.assertNotIn(ROOT.resolve(), theirs.parents,
+                         "an owner's templates stand inside the program")
+
+    def test_a_diagnosis_says_which_pages_are_the_owners_and_where_from(self):
+        """R-AGT-26 — "why does my new agent not have my rules" answered without reading
+        source, and said for every page rather than only the overridden ones: an owner who
+        misspelled a filename needs the four still saying "install" to notice the fifth."""
+        where = self.own("SOUL.md", "# mine\n")
+        from_each = dict((called, (whose, at))
+                         for called, whose, at in agent.where_each_page_comes_from())
+
+        self.assertEqual(("owner", where / "SOUL.md"), from_each["SOUL.md"])
+        self.assertEqual(("install", agent.TEMPLATES / "AGENTS.md"), from_each["AGENTS.md"])
+        self.assertEqual(set(agent.shipped()), set(from_each),
+                         "a page was left out of what a diagnosis reports")
 
 
 class AnAgentIsMade(WithSomewhereToKeepAgents):
