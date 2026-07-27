@@ -3,7 +3,7 @@
 **Revised:** 2026-07-26, against the ✅/❌ columns in [`.knowledge/prd/`](.knowledge/prd/README.md), the
 code, and a green `python3 .knowledge/scripts/gate` — not against this document's own prose, which had
 drifted in four places.
-**Released:** `v0.6.0` — the first release an owner is running. **Status:** direction, not a ratified product contract — the contracts are.
+**Released:** `v0.7.0` — schedules that run once, and the first release that moves an owner's records forward. **Status:** direction, not a ratified product contract — the contracts are.
 
 **Starting implementation? Read this file's Direction, then [What Remains, In Order](#what-remains-in-order),
 then the phase at the top of that table.** Phases 0–6 are done and compressed into
