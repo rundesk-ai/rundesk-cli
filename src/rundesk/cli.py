@@ -1420,7 +1420,71 @@ def cmd_backups(args: argparse.Namespace, gateways, machine, agents) -> int:
         return _take_a_backup()
     if act == "restore":
         return _restore_a_backup(args, gateways, machine, agents)
+    if act == "remove":
+        return _remove_a_backup(args)
+    if act in ("on", "off"):
+        return _daily_backups(act, machine)
     return cmd_not_available(f"backups {act}")
+
+
+def _remove_a_backup(args: argparse.Namespace) -> int:
+    """Delete one copy, by name, having said what it holds."""
+    where = backups_home()
+    try:
+        said = backups.manifest_of(where / args.backup)
+    except backups.Unreadable:
+        said = None                       # unreadable is exactly what somebody removes
+    except backups.Refused as why:
+        print(f"backups remove: FAILED — {why}", file=sys.stderr)
+        return 1
+    if said:
+        print(f"{args.backup} holds {len(said.get('records', {}))} agents, "
+              f"taken {said.get('taken_at', 'at an unknown moment')}")
+    else:
+        print(f"{args.backup} cannot be read, so what it holds is unknown")
+    if not args.yes and not _agreed():
+        print("nothing was removed")
+        return 0
+    try:
+        backups.remove(where, args.backup)
+    except (backups.Refused, OSError) as why:
+        print(f"backups remove: FAILED — {why}", file=sys.stderr)
+        return 1
+    print(f"removed {args.backup}")
+    return 0
+
+
+def _daily_backups(act: str, machine) -> int:
+    """Hand the daily backup to the machine, or take it back.
+
+    rundesk supervises nothing itself, so this is the machine's job in exactly the way a
+    gateway is — and it is the install's rather than any agent's, which is why it is not a
+    schedule: a schedule is a row one agent keeps, and a backup that stopped when that agent
+    was removed would be a backup nobody noticed had stopped.
+    """
+    if not machine.available():
+        print("backups: there is no supervisor on this machine to hand a daily backup to",
+              file=sys.stderr)
+        return 1
+    if act == "off":
+        said = machine.remove_backup()
+        if not said.ok:
+            print(f"backups off: FAILED — {said.why}", file=sys.stderr)
+            return 1
+        print("the machine no longer takes a backup every day")
+        return 0
+    try:
+        at = config.backups()["at"]
+    except config.Unreadable as why:
+        print(f"backups on: FAILED — {why}", file=sys.stderr)
+        return 1
+    said = machine.install_backup(at)
+    if not said.ok:
+        print(f"backups on: FAILED — {said.why}", file=sys.stderr)
+        return 1
+    print(f"the machine will take a backup every day at {at}")
+    print(f"        kept for {config.backups()['keep_days']} days, in {backups_home()}")
+    return 0
 
 
 def _restore_a_backup(args: argparse.Namespace, gateways, machine, agents) -> int:
@@ -1509,6 +1573,13 @@ def _take_a_backup() -> int:
         for one in said["copied_whole"]:
             print(f"        WARNING: {one} could not be copied consistently and is in the "
                   f"backup exactly as it is on disk", file=sys.stderr)
+    # Pruned here rather than on a second schedule of its own: the thing that makes an old
+    # copy old is a newer one arriving, so this is the moment the question has a new answer,
+    # and a machine that has stopped taking backups stops deleting them too.
+    gone = backups.prune(backups_home(), config.backups()["keep_days"], note=_out_loud)
+    if gone:
+        print(f"        {len(gone)} older than "
+              f"{config.backups()['keep_days']} days were removed")
     return 0
 
 
@@ -1968,8 +2039,23 @@ def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
         ("fit to run", "yes" if not unfit else f"no — {unfit}"),
         ("supervisor", supervisor),
         ("agents", str(len(agents.known()))),
+        # Said here because "am I backed up" is a question about the install rather than
+        # about any agent, and the answer somebody needs is not how many copies there are
+        # but whether anything is still making them.
+        ("backups", _how_backups_stand(machine)),
     ])
     return 1 if unfit else 0
+
+
+def _how_backups_stand(machine) -> str:
+    """Whether the machine takes one every day, and how many there are to fall back on."""
+    found = backups.every(backups_home())
+    held = f"{len(found)} kept" if found else "none yet"
+    try:
+        daily = machine.keeps_backups()
+    except Exception:                                    # pragma: no cover - defensive
+        return held
+    return f"{held}, daily {'on' if daily else 'off'}"
 
 
 def _version_of(it) -> str:

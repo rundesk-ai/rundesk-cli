@@ -726,6 +726,91 @@ def _rewrite_manifest(at: Path, **said) -> None:
             opened.writestr(one, json.dumps(was) if one.filename == backup.MANIFEST else body)
 
 
+class KeepingOnlySoMany(WithSomethingToBackUp):
+    """Pruning by age, and the one copy age may never take."""
+
+    def older(self, days: int, why: str = "daily") -> Path:
+        return self.taken(why=why, now=AT - datetime.timedelta(days=days))
+
+    def test_copies_past_the_stated_age_are_taken_away(self):
+        """R-BKP-22 — a directory that only ever grows is a disk that fills, and the whole
+        point of stating an age is that something acts on it."""
+        self.an_agent()
+        old = self.older(90)
+        recent = self.older(2)
+        newest = self.taken()
+        gone = backup.prune(self.into, days=30, now=AT)
+        self.assertEqual([old.name], gone)
+        self.assertEqual([recent.name, newest.name],
+                         [one.at.name for one in backup.every(self.into)])
+
+    def test_the_only_copy_there_is_is_never_taken_away_by_age(self):
+        """R-BKP-23 — a machine off for a month has nothing recent, and pruning it to nothing
+        would leave an owner with no copy at all on the day they most need one.
+
+        Named for what it proves: with one copy there is nothing to compare, and the case is
+        answered before any age is looked at. The newest-of-several rule is the one below —
+        keeping both, because they are different code and the first hid the second."""
+        self.an_agent()
+        only = self.older(400)
+        self.assertEqual([], backup.prune(self.into, days=30, now=AT))
+        self.assertEqual([only.name], [one.at.name for one in backup.every(self.into)])
+
+    def test_every_copy_being_old_still_leaves_the_newest_one(self):
+        """R-BKP-23 — the case that empties the directory if the newest is exempted by date
+        rather than by being the newest: a machine left off for a year has nothing recent."""
+        self.an_agent()
+        self.older(400)
+        self.older(380)
+        newest = self.older(360)
+        backup.prune(self.into, days=30, now=AT)
+        self.assertEqual([newest.name], [one.at.name for one in backup.every(self.into)])
+
+    def test_a_copy_whose_age_cannot_be_read_is_never_the_one_removed(self):
+        """R-BKP-22 — deciding to delete something on the strength of not understanding it is
+        the one thing pruning must not do."""
+        self.an_agent()
+        self.taken()
+        self.into.mkdir(parents=True, exist_ok=True)
+        odd = self.into / "rundesk-data-1999-01-01-000000Z.zip"
+        odd.write_bytes(b"not a zip at all")
+        self.assertEqual([], backup.prune(self.into, days=30, now=AT))
+        self.assertTrue(odd.exists(), "something unreadable was deleted by age")
+
+
+class TakingOneAway(WithSomethingToBackUp):
+    def test_one_copy_is_removed_by_the_name_it_is_listed_under(self):
+        """R-BKP-24 — "always kept" plus "no way to be rid of them" is a disk that fills, so
+        there is a way, and it is a separate act rather than a flag on something else."""
+        self.an_agent()
+        first = self.taken()
+        second = self.taken()
+        backup.remove(self.into, first.name)
+        self.assertEqual([second.name], [one.at.name for one in backup.every(self.into)])
+
+    def test_removing_one_that_is_not_there_says_so(self):
+        """R-BKP-24 — a name typed wrongly is the ordinary case, and reporting success would
+        leave somebody believing they had freed space they had not."""
+        self.an_agent()
+        self.taken()
+        with self.assertRaises(backup.Refused):
+            backup.remove(self.into, "rundesk-data-1999-01-01-000000Z.zip")
+
+    def test_removing_cannot_reach_outside_the_directory_copies_are_kept_in(self):
+        """R-BKP-24 — a name is a name and not a path. A command whose whole job is deleting
+        is the wrong one to be relaxed about what it is handed."""
+        self.an_agent()
+        self.taken()
+        # One directory up from where copies are kept, so that `../precious.zip` really does
+        # name it. Anywhere else and the refusal fires because the file is not there at all,
+        # which passes the case while proving nothing about the guard — as it did.
+        elsewhere = self.into.parent / "precious.zip"
+        elsewhere.write_bytes(b"not rundesk's")
+        with self.assertRaises(backup.Refused):
+            backup.remove(self.into, "../precious.zip")
+        self.assertTrue(elsewhere.exists(), "a name reached out of the directory")
+
+
 class HowThisInstallIsConfigured(unittest.TestCase):
     """`config.json` — the first thing kept there is how backups behave."""
 

@@ -621,6 +621,76 @@ def _clear(at: Path) -> None:
     shutil.rmtree(at, ignore_errors=True)
 
 
+def older_than(into: Path, days: int, now=None) -> list:
+    """Which copies are past the age an owner stated — never including the newest.
+
+    **The newest is never old.** "Kept for thirty days" must not come to mean "kept none" on a
+    machine that was off for a month, or on one where an owner set a short age and then went
+    away: the whole point of a backup is the one you reach for after trouble, and a rule that
+    can empty the directory is a rule that will, on exactly the day it matters.
+
+    A copy whose age cannot be read is never chosen. Deciding to delete something on the
+    strength of not understanding it is the one thing pruning must not do.
+    """
+    now = _now() if now is None else now
+    found = every(into)
+    if len(found) <= 1:
+        return []
+    oldest_first = sorted(found, key=lambda one: one.at.name)
+    spent = []
+    for one in oldest_first[:-1]:
+        when = _taken_at(one)
+        if when is not None and (now - when).days > days:
+            spent.append(one)
+    return spent
+
+
+def _taken_at(one) -> datetime.datetime | None:
+    """When this copy says it was taken, or nothing where it cannot be told."""
+    said = (one.said or {}).get("taken_at")
+    if not isinstance(said, str):
+        return None
+    try:
+        return datetime.datetime.strptime(said, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return None
+
+
+def prune(into: Path, days: int, now=None, note=None) -> list:
+    """Take away the copies past the stated age, and say which went."""
+    say = note if note is not None else (lambda said: None)
+    gone = []
+    for one in older_than(into, days, now=now):
+        try:
+            os.remove(one.at)
+        except OSError as trouble:
+            say(f"{one.at.name} could not be removed: {trouble}")
+            continue
+        gone.append(one.at.name)
+        say(f"{one.at.name} was older than {days} days and has been removed")
+    return gone
+
+
+def remove(into: Path, named: str) -> Path:
+    """Take one copy away, by the name it is listed under, and only that one.
+
+    Asked for by name and never derived from anything: "always kept" plus "no way to be rid of
+    them" is a disk that fills, and the answer to that is a separate, explicit act rather than
+    a flag on something else.
+    """
+    at = Path(into) / named
+    if at.parent.resolve() != Path(into).resolve() or not at.name.endswith(SUFFIX):
+        # A name is a name, not a path. Without this, `../../something` reaches out of the
+        # directory entirely, and a command whose whole job is deleting is the wrong one to
+        # be relaxed about that.
+        raise Refused(f"{named!r} is not the name of a backup in {into}")
+    if not at.is_file():
+        raise Refused(f"there is no backup called {named} in {into}")
+    os.remove(at)
+    return at
+
+
 def every(into: Path) -> list:
     """Every backup in this directory, newest last, including any that cannot be read.
 

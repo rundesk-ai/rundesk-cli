@@ -548,5 +548,63 @@ class HandingItOver(WithAJobDirectory):
         self.assertEqual([], supervisor.described(str(self.where / "nowhere"), self.root))
 
 
+class TheInstallsOwnDailyJob(WithAJobDirectory):
+    """The job that belongs to the install rather than to any agent."""
+
+    def written(self, at: str = "04:00"):
+        return plistlib.loads(
+            supervisor.write_backup(at, self.root, self.logs, str(self.where)).read_bytes())
+
+    def test_the_daily_job_cannot_be_mistaken_for_a_gateway(self):
+        """R-BKP-25 — gateways are found by globbing one namespace, so a daily backup named
+        inside it would be reported as a gateway called `backup`: an uninstall would try to
+        stop it as one, and an agent an owner really did call `backup` would collide with it
+        outright. The glob wants a literal dot where this label has a hyphen, so it cannot
+        match — structurally, rather than by anybody remembering to exclude it."""
+        supervisor.write_backup("04:00", self.root, self.logs, str(self.where))
+        supervisor.write("ava", self.root, self.logs, str(self.where))
+        self.assertEqual(["ava"], supervisor.described(str(self.where), self.root))
+
+    def test_an_agent_may_be_called_backup_without_colliding_with_the_daily_job(self):
+        """R-BKP-25 — the collision the namespace exists to make impossible, asserted from
+        the other side: the name an owner is most likely to choose is the one that would
+        have overwritten the job."""
+        supervisor.write_backup("04:00", self.root, self.logs, str(self.where))
+        made = supervisor.write("backup", self.root, self.logs, str(self.where))
+        self.assertNotEqual(made, supervisor.backup_job_path(str(self.where)))
+        self.assertTrue(supervisor.keeps_backups(str(self.where)),
+                        "an agent called backup wrote over the install's own job")
+
+    def test_the_daily_job_runs_at_the_hour_it_was_given(self):
+        """R-BKP-25 — an owner states a time of day. A period would drift against the clock
+        and fire at a different hour after every restart."""
+        said = self.written("04:30")
+        self.assertEqual({"Hour": 4, "Minute": 30}, said["StartCalendarInterval"])
+        self.assertEqual(["backups", "add"], said["ProgramArguments"][1:])
+
+    def test_the_daily_job_is_never_kept_alive(self):
+        """R-BKP-25 — every other job rundesk writes must stay up, and the key that keeps
+        one up would start a job that finishes in a second again immediately, for ever."""
+        said = self.written()
+        self.assertNotIn("KeepAlive", said)
+        self.assertFalse(said["RunAtLoad"],
+                         "asking for a daily backup took one there and then")
+
+    def test_the_daily_job_carries_where_backups_go(self):
+        """R-BKP-25 — the machine hands a job almost nothing, so a backup started by it
+        would otherwise write its copies somewhere the owner never looks."""
+        self.assertIn("RUNDESK_BACKUP_DIR", self.written()["EnvironmentVariables"])
+
+    def test_stopping_the_daily_job_takes_its_description_away_too(self):
+        """R-BKP-25 — unlike a gateway's, nothing else names this job and it has no process
+        that could outlive it. A description left behind is a job the machine picks up again
+        at the next login, after an owner asked for it to stop."""
+        supervisor.install_backup("04:00", self.root, self.logs, str(self.where), self.machine)
+        self.assertTrue(supervisor.keeps_backups(str(self.where)))
+        supervisor.remove_backup(str(self.where), asking=self.machine)
+        self.assertFalse(supervisor.keeps_backups(str(self.where)),
+                         "the job was left where the machine would find it again")
+
+
 if __name__ == "__main__":
     unittest.main()

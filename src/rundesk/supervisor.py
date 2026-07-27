@@ -20,6 +20,7 @@ exercised without a supervisor anywhere near it.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import plistlib
 import time
@@ -189,6 +190,104 @@ def describe(name: str, root: Path | None = None, logs: Path | None = None,
         "StandardOutPath": str(logs / f"{name}.out"),
         "StandardErrorPath": str(logs / f"{name}.err"),
     }
+
+
+# ------------------------------------------------------------------- the install's own job
+#
+# Everything above is one gateway's. This is the other kind: a job that belongs to the install
+# rather than to any agent, runs at a stated hour rather than staying up, and ends.
+#
+# **The label is deliberately not under `PREFIX.`** — `described()` finds gateways by globbing
+# `ai.rundesk.*.plist`, so a job called `ai.rundesk.backup` would be reported as a gateway
+# called `backup`: `_every_name` would offer it to `_stand_all_down`, an uninstall would try to
+# stop it as though it were one, and an agent an owner really did call `backup` would collide
+# with it outright. `ai.rundesk-backup` cannot be matched by that glob, because the glob wants a
+# literal dot where this has a hyphen. Structurally unable to collide, rather than remembered.
+
+#: The install's own job, in a namespace beside the gateways rather than inside it.
+BACKUP_LABEL = f"{PREFIX}-backup"
+
+
+def backup_job_path(where: str | None = None) -> Path:
+    return Path(os.path.expanduser(where or jobs_home())) / f"{BACKUP_LABEL}.plist"
+
+
+def describe_backup(at: str, root: Path | None = None, logs: Path | None = None) -> dict:
+    """The daily backup job: what to run, and when the machine should run it.
+
+    **No `KeepAlive`.** Every job above this one is a thing that must stay up, and the key
+    that keeps it up would, on a job that finishes in a second, start it again immediately
+    and for ever. What is wanted here is the opposite: run, end, and do not be revived until
+    the hour comes round again.
+
+    **`StartCalendarInterval`, not an interval.** An owner states a time of day. A period
+    would drift against the clock and would fire at a different hour after every restart.
+    """
+    root = root or ROOT
+    logs = logs or gateway.logs_home()
+    hour, _, minute = at.partition(":")
+    return {
+        "Label": BACKUP_LABEL,
+        "ProgramArguments": [str(root / "rundesk"), "backups", "add"],
+        "WorkingDirectory": str(root),
+        # The same places the gateway jobs carry, and for the same reason: the machine hands
+        # a job almost nothing, so a backup started by it would otherwise resolve a different
+        # install from the command that wrote the job — and write its copies somewhere the
+        # owner never looks.
+        "EnvironmentVariables": {
+            "PATH": PATH,
+            "HOME": str(Path.home()),
+            "RUNDESK_RUN_DIR": str(gateway.home()),
+            "RUNDESK_LOG_DIR": str(logs),
+            "RUNDESK_JOBS_DIR": os.path.expanduser(jobs_home()),
+            "RUNDESK_DATA_DIR": str(data_home()),
+            "RUNDESK_INSTALL_DIR": os.environ.get("RUNDESK_INSTALL_DIR", str(ROOT.parent)),
+            "RUNDESK_AGENTS_DIR": os.environ.get(
+                "RUNDESK_AGENTS_DIR", str(data_home() / "agents")),
+            "RUNDESK_BACKUP_DIR": str(backups_home()),
+        },
+        "StartCalendarInterval": {"Hour": int(hour), "Minute": int(minute)},
+        "RunAtLoad": False,
+        "StandardOutPath": str(logs / "backups.out"),
+        "StandardErrorPath": str(logs / "backups.err"),
+    }
+
+
+def write_backup(at: str, root: Path | None = None, logs: Path | None = None,
+                 where: str | None = None) -> Path:
+    """Put the install's own job where the machine looks for it."""
+    path = backup_job_path(where)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    (logs or gateway.logs_home()).mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as file:
+        plistlib.dump(describe_backup(at, root, logs), file)
+    return path
+
+
+def install_backup(at: str, root: Path | None = None, logs: Path | None = None,
+                   where: str | None = None, asking: Callable[..., Spoke] = ask) -> Spoke:
+    """Hand the daily backup to the machine, replacing any job of ours already there."""
+    asking("bootout", f"{domain()}/{BACKUP_LABEL}")
+    path = write_backup(at, root, logs, where)
+    return asking("bootstrap", domain(), str(path))
+
+
+def remove_backup(where: str | None = None, asking: Callable[..., Spoke] = ask) -> Spoke:
+    """Ask the machine to let the daily backup go, and take its description away.
+
+    Unlike a gateway's, the description *is* removed here: nothing else names this job, there
+    is no process of its own that could outlive it, and a description left behind is a job the
+    machine picks up again at the next login after an owner asked for it to stop.
+    """
+    said = asking("bootout", f"{domain()}/{BACKUP_LABEL}")
+    with contextlib.suppress(OSError):
+        os.remove(backup_job_path(where))
+    return said
+
+
+def keeps_backups(where: str | None = None) -> bool:
+    """Whether this install has given the machine a daily backup to run."""
+    return backup_job_path(where).is_file()
 
 
 def write(name: str, root: Path | None = None, logs: Path | None = None,

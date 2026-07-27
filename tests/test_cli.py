@@ -981,6 +981,29 @@ class FakeMachine:
             self.jobs.remove(name)
         return True
 
+    #: The install's own job, which belongs to no agent. Kept apart from `jobs` above for
+    #: the same reason the real label is kept out of the gateway namespace: a daily backup
+    #: that turned up in `described()` would be offered to everything that stands gateways
+    #: down, and an agent an owner called `backup` would collide with it.
+    backups_daily = None
+
+    def install_backup(self, at):
+        self.did.append(("install_backup", at))
+        if self.refuses:
+            return self.Spoke(False, "the machine said no")
+        self.backups_daily = at
+        return self.Spoke(True)
+
+    def remove_backup(self):
+        self.did.append(("remove_backup", None))
+        if self.refuse_acts:
+            return self.Spoke(False, "the supervisor said no")
+        self.backups_daily = None
+        return self.Spoke(True)
+
+    def keeps_backups(self):
+        return self.backups_daily is not None
+
 
 def drive(argv, gateways=None, machine=None, agents=None):
     """Run the command line and hand back what it printed and what it returned."""

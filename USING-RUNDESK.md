@@ -280,6 +280,33 @@ rundesk status                 how rundesk is on this machine
 rundesk version                what is installed, and whether it is current
 ```
 
+**Copies of everything, and putting one back.**
+
+```sh
+rundesk backups                what copies there are, with dates and sizes
+rundesk backups add            take one now
+```
+
+A backup holds everything your owner keeps — every agent, its home and workspace, everything
+it has been told and has said, the skills library and this install's configuration. It does
+**not** hold rundesk itself, because a release can be downloaded again and a copy of it would
+be a second copy of something already published. Copies live beside the program and the data,
+in a directory that surviving an uninstall is the whole point of, and each one carries a
+manifest saying what it holds and what it deliberately left out.
+
+Taking one is safe and is a reasonable thing to do before anything irreversible — before an
+update, or before you are asked to remove an agent. It is quick, it never interrupts a turn,
+and it never writes over a copy that is already there.
+
+**Putting one back is not yours to decide.** `rundesk backups restore <backup>` replaces
+*everything* your owner keeps: an agent removed since that copy was taken comes back, and one
+made since it was taken goes away — including, possibly, you. It stands every gateway down to
+do it. Treat it exactly like `remove` and `uninstall` below: if your owner asks for a restore,
+tell them the command and let them run it, unless they have asked you for that exact thing and
+named the exact copy. If you do run it, `rundesk backups` first and tell them which copy you
+mean and what it says it holds, because the one thing nobody can undo is restoring the wrong
+one on top of the right one.
+
 **A credential is never typed as an argument.** Anything on a command line is readable through
 the process list and is written into shell history. Where a channel needs a token, rundesk
 takes it on standard input or from a file the owner already controls. Never put a secret in a
@@ -295,6 +322,11 @@ These are not style points. Each one ends your own turn or somebody else's work.
   running it.
 - **Never remove an agent, or uninstall rundesk, unless you were asked for that exact thing.**
   Both are destructive and neither can be undone.
+- **Never put a backup back unless you were asked for that exact copy.** A restore replaces
+  everything your owner keeps, not only the part that looks wrong: agents made since that copy
+  was taken go away, and one of them may be you. Taking a copy is safe; putting one back is
+  theirs to decide. It does take a copy of what is there first, which is the only reason a
+  mistake here is survivable — do not treat that as permission.
 - **`rundesk update` will refuse while you are running**, because your own turn is work in
   flight and an update refuses rather than interrupting work. This is correct and not a fault.
   Tell your owner; do not retry it.

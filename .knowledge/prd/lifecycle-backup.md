@@ -42,10 +42,10 @@ own act, and the dangerous half.
 | ✅ | R-BKP-19 | A copy behind the shape installed is brought forward as it is put back | `a backup from an older shape is brought forward as it is put back`, `a restore brings records forward before it swaps anything in` |
 | ✅ | R-BKP-20 | Putting a copy back while anything is running or any work is in flight is refused | `putting one back while work is in flight is refused`, `a gateway that will not stand down stops the restore`, `a restore stands gateways down and starts them again`, `a gateway that does not come back is said rather than passed over` |
 | ✅ | R-BKP-21 | What was there survives a restore that fails part way | `what was there survives a restore that fails part way`, `what was there survives the swap itself going wrong` |
-| ❌ | R-BKP-22 | Copies older than the stated age are taken away once a newer one exists | — |
-| ❌ | R-BKP-23 | The newest copy is never taken away by age | — |
-| ❌ | R-BKP-24 | Deleting a copy is asked for by name and never happens as a side effect | — |
-| ❌ | R-BKP-25 | The machine takes a copy every day once it is asked to | — |
+| ✅ | R-BKP-22 | Copies older than the stated age are taken away once a newer one exists | `copies past the stated age are taken away`, `a copy whose age cannot be read is never the one removed` |
+| ✅ | R-BKP-23 | The newest copy is never taken away by age | `the only copy there is is never taken away by age`, `every copy being old still leaves the newest one` |
+| ✅ | R-BKP-24 | Deleting a copy is asked for by name and never happens as a side effect | `one copy is removed by the name it is listed under`, `removing one that is not there says so`, `removing cannot reach outside the directory copies are kept in` |
+| ✅ | R-BKP-25 | The machine takes a copy every day once it is asked to | `the daily job runs at the hour it was given`, `the daily job is never kept alive`, `the daily job carries where backups go`, `the daily job cannot be mistaken for a gateway`, `an agent may be called backup without colliding with the daily job`, `stopping the daily job takes its description away too` |
 | ❌ | R-BKP-26 | Copies survive removing rundesk, with or without its data | — |
 
 ## Open questions
