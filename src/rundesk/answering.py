@@ -228,6 +228,18 @@ class Answering:
         elif said:
             self._note(said)
 
+    async def told_update_finished(self, conversation: str, text: str) -> None:
+        """Deliver one durable update outcome after this channel reconnects."""
+        if not self.connected:
+            raise RuntimeError(f"channel '{self.channel}' is not connected")
+        await self._sending(channel.spoken(
+            type="said", conversation=conversation, text=text,
+        ))
+        agents.records(self.name, self._where).answered(
+            store.conversation_id(self.channel, conversation),
+            None, store.stamped(), text,
+        )
+
     def _where_to_say(self, kept, place):
         """The conversation to say it in, and why there is none where there is none.
 

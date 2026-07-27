@@ -44,7 +44,7 @@ rundesk usage <agent>                                                           
 # rundesk itself
 rundesk status                                                                                                                                                                                                         how rundesk itself is on this machine
 rundesk version [--check]                                                                                                                                                                                              what is installed, and whether that is current
-rundesk update [--check]                                                                                                                                                                                               move to the newest published release
+rundesk update [--check] [--status]                                                                                                                                                                                    move to the newest published release
 rundesk backups add                                                                                                                                                                                                    take a backup now
 rundesk backups off                                                                                                                                                                                                    stop the machine taking one every day
 rundesk backups on                                                                                                                                                                                                     have the machine take one every day
@@ -139,6 +139,7 @@ rundesk schedules ava off nightly
 --since <id>                    only what was said after this one, by the id shown beside it
 --source <how>                  only messages belonging to work admitted this way — one of channel | schedule | terminal
 --source <source>               whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine
+--status                        show the last queued update and its final outcome
 --steer                         keep saying more to it while it works — a line at a time, until you stop
 --to <channel>                  which channel to say what this came to on, by the name it was added under — the account and `schedules` say it either way
 --token-stdin                   read the credential this channel needs from standard input, one line; asked for at the terminal when left out

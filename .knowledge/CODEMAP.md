@@ -47,7 +47,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 16 modules)
+## Backend / Services (src/rundesk/ — 17 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -146,6 +146,9 @@ file with it.
   until the whole thing is proved, which is the only way back there is. Once the files land the rest
   of the window is handed to the release that just landed, because a step is found on disk and would
   otherwise be run by the runner it replaced.
+- `src/rundesk/update_request.py` — the durable handoff from an agent turn to the
+  supervisor-owned update worker: one request, its origin, lifecycle, final outcome, and delivery state,
+  all changed under one lock and atomically replaced.
 - `src/rundesk/dependencies.py` — what this install is made of beyond the standard library, and putting
   it there. One place decides what `requirements.txt` declares, what the virtualenv actually holds and
   how the second is made to satisfy the first — `install.sh` asked in shell and `gateway.fitness` asked
@@ -176,7 +179,7 @@ file with it.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 24 files, ~1500 cases)
+## Tests (tests/ — 25 files, ~1500 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
@@ -188,6 +191,7 @@ provider. One file per contract, named for it:
 | `test_cli.py` | 208 | `command-surface` — walks every verb off the parser, so one wired nowhere is caught |
 | `test_process.py` | 97 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 75 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
+| `test_update_request.py` | 9 | `lifecycle-update` — durable self-update handoff, duplicate requests, external ownership, and outcome delivery |
 | `test_dependencies.py` | 27 | `lifecycle-update` — what the install is made of: what is declared, what the virtualenv holds, and building one **without pip ever running** |
 | `test_install.py` | 53 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
 | `test_supervisor.py` | 39 | the launchd job — a fake `launchctl`, so it runs where there is none |

@@ -45,6 +45,7 @@ from rundesk import activity
 from rundesk import dependencies
 from rundesk import process
 from rundesk import schedule
+from rundesk import update_request
 
 #: The gateway that exists before there are agents to name one after.
 DEFAULT_NAME = "gateway"
@@ -1660,14 +1661,18 @@ class Gateway:
         # somebody has asked again is a reply that failed. Everything it starts goes
         # through `start`, so ending it, sweeping it and recording it are already done.
         holding = asyncio.ensure_future(self._hold_channels())
+        notices = asyncio.ensure_future(self._deliver_update_notices())
         try:
             await self._stopped.wait()
         finally:
             beating.cancel()
             ticking.cancel()
             holding.cancel()
+            notices.cancel()
             with contextlib.suppress(BaseException):
                 await holding
+            with contextlib.suppress(BaseException):
+                await notices
             # The handlers stay installed across `_go()`. Removing them here restores the
             # system default, which for these two signals is *terminate* — so a second
             # signal arriving during the shutdown window would kill the gateway outright,
@@ -1685,6 +1690,31 @@ class Gateway:
             self.log.info("ending so the machine starts this gateway again")
             return 1
         return 0 if drained else 1
+
+    async def _deliver_update_notices(self) -> None:
+        """Deliver a completed self-update once the originating channel is connected."""
+        while not self._stopping:
+            try:
+                row = update_request.deliverable(self.name)
+            except update_request.Unreadable as why:
+                self.log.warning("could not read update outcome: %s", why)
+                await asyncio.sleep(2)
+                continue
+            if row is not None:
+                origin = row.get("origin") or {}
+                channel_name = origin.get("channel")
+                conversation = origin.get("conversation")
+                answering = self._reached.get(channel_name) if channel_name else None
+                if answering is not None and conversation:
+                    try:
+                        await answering.told_update_finished(
+                            conversation, update_request.summary(row)
+                        )
+                        update_request.delivered(row["id"])
+                        self.log.info("delivered update outcome for request %s", row["id"])
+                    except Exception as why:  # noqa: BLE001 — retried after reconnect
+                        self.log.warning("could not deliver update outcome: %s", why)
+            await asyncio.sleep(2)
 
     def ask_to_stop(self, come_back: bool = False) -> None:
         """Take no more work, and begin going away (R-GW-6).
