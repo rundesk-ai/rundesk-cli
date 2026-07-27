@@ -75,6 +75,7 @@ def tearDownModule():
     cli._remove_this_install = _REAL_REMOVAL
     cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS = _REAL_PATIENCE
 from rundesk import agent as real_agent  # noqa: E402
+from rundesk import skill as real_skill  # noqa: E402
 from rundesk import channel  # noqa: E402
 from rundesk import gateway as real_gateway  # noqa: E402
 
@@ -100,7 +101,8 @@ def run(argv: list[str], published: str | None = None,
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
                 code = cli.main(argv, gateways=FakeGateways(written=written),
-                                machine=FakeMachine(), agents=FakeAgents())
+                                machine=FakeMachine(), agents=FakeAgents(),
+                                skills=FakeSkills())
             except SystemExit as usage:
                 # What a shell sees, which is the subject of several cases here: argparse
                 # refuses a usage error by exiting rather than returning, and a test that
@@ -426,7 +428,7 @@ class BuiltCommandTests(unittest.TestCase):
         # which answer wins would depend on the order of the checks in `main`.
         built = {"version", "update", "uninstall", "add", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
-                 "channels", "runs", "usage", "search", "messages"}
+                 "channels", "runs", "usage", "search", "messages", "skills"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 
@@ -645,6 +647,50 @@ class FakeGateways:
         return One()
 
 
+class FakeSkills:
+    """The skills module, as far as the command line is concerned.
+
+    Nothing here touches a disk. What a library holds and what a grant is are
+    `tests/test_skill.py`'s; what the surface does about them is this file's. It exists at
+    all because the real module resolves the *owner's* library from their home, and a
+    surface case that reached it would read — and could write — what somebody actually has.
+    """
+
+    Unknown = real_skill.Unknown
+    NotASkill = real_skill.NotASkill
+    InTheWay = real_skill.InTheWay
+
+    def __init__(self, held=(), ships=(), given=None):
+        self._held = {name: pathlib.Path("/nowhere/skills") / name for name in held}
+        self._ships = tuple(ships)
+        self._given = dict(given or {})
+
+    def home(self):
+        return pathlib.Path("/nowhere/skills")
+
+    def library(self):
+        return dict(self._held)
+
+    def shipped(self):
+        return self._ships
+
+    def granted(self, whose):
+        return sorted(self._given.get(whose.name, ()))
+
+    def lay_down(self, where=None, force=False):
+        return list(self._ships)
+
+    def grant(self, whose, name):
+        if name not in self._held:
+            raise self.Unknown(f"there is no skill called {name}")
+        self._given.setdefault(whose.name, []).append(name)
+
+    def revoke(self, whose, name):
+        if name not in self._given.get(whose.name, []):
+            raise self.Unknown(f"this agent was never given {name}")
+        self._given[whose.name].remove(name)
+
+
 class FakeAgents:
     """The agent module, as far as the command line is concerned.
 
@@ -657,6 +703,11 @@ class FakeAgents:
     checked = staticmethod(real_agent.checked)
     NotAnAgentName = real_agent.NotAnAgentName
     Where = real_agent.Where
+
+    def skills(self, name, where=None):
+        """Where this agent's skills stand. A path and nothing on disk: what the
+        surface does with it is passed a fake library, so nothing here is read."""
+        return pathlib.Path(self._at or "/nowhere/agents") / name / "home" / "skills"
 
     def __init__(self, made=(), wrote=(), complaints=None, at=None, overrides=None):
         #: Where this case's owner keeps templates of their own, or None for an owner who

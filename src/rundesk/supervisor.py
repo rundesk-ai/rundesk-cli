@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from rundesk import ROOT, gateway
+from rundesk import ROOT, data_home, gateway
 
 #: Every job rundesk writes is named this way, so what belongs to rundesk is obvious in
 #: a directory full of other people's jobs, and one gateway's job never collides with
@@ -158,12 +158,23 @@ def describe(name: str, root: Path | None = None, logs: Path | None = None,
             "RUNDESK_RUN_DIR": str(run or gateway.home()),
             "RUNDESK_LOG_DIR": str(logs),
             "RUNDESK_JOBS_DIR": os.path.expanduser(jobs_home()),
+            # The root the three above default from. Carried even though all three are
+            # also given outright, because a place rundesk can be pointed at that the job
+            # does not name is a place a supervised gateway resolves differently from the
+            # command that wrote the job — which is the one thing neither may be wrong
+            # about, and is why this dictionary exists at all.
+            "RUNDESK_DATA_DIR": str(data_home()),
+            # And the root *that* falls back to. An install pointed elsewhere keeps its
+            # data there, so a job that carried neither would start a gateway resolving
+            # the owner's own while the command that wrote it read the scratch one. Both,
+            # because either alone leaves the other's fallback wrong.
+            "RUNDESK_INSTALL_DIR": os.environ.get("RUNDESK_INSTALL_DIR", str(ROOT.parent)),
             # An agent keeps everything of its own in one directory, and which directory
             # that is has to reach the gateway the machine starts. Passed rather than
             # resolved here, because a gateway knows nothing of agents and this module
             # knows only what it is handed (R-AGT-9).
             "RUNDESK_AGENTS_DIR": str(agents) if agents else os.environ.get(
-                "RUNDESK_AGENTS_DIR", str(Path.home() / ".rundesk" / "agents")),
+                "RUNDESK_AGENTS_DIR", str(data_home() / "agents")),
         },
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},

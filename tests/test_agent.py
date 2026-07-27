@@ -63,7 +63,12 @@ class WithSomewhereToKeepAgents(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.before, True)
         self.root = Path(tempfile.mkdtemp(prefix="rundesk-root-"))
         self.addCleanup(shutil.rmtree, self.root, True)
-        for said, at in (("RUNDESK_AGENTS_DIR", self.where),
+        # **The data root as well, and it is not optional.** Everything else here
+        # falls back to it, so a fixture that isolates the four and forgets this
+        # one still reaches the owner's real library — `add` grants what the
+        # release ships, and would link a scratch agent at what they actually have.
+        for said, at in (("RUNDESK_DATA_DIR", self.before / "data"),
+                         ("RUNDESK_AGENTS_DIR", self.where),
                          ("RUNDESK_RUN_DIR", self.before / "run"),
                          ("RUNDESK_LOG_DIR", self.before / "logs"),
                          ("RUNDESK_JOBS_DIR", self.before / "jobs")):

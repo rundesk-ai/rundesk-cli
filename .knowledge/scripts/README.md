@@ -23,6 +23,7 @@ by version bump. Everything else you drop in here is yours.
 | [`probe-codex`](./probe-codex) | What the installed Codex CLI really does, asked of it rather than assumed. Evidence for `research/`, never a test dependency — the live half reaches a real account. |
 | [`probe-codex-instructions`](./probe-codex-instructions) | Where Codex reads standing instructions, and which of its two instruction fields replaces what the brain was built with. Both were established by probing, not by reading its schema, which describes neither. |
 | [`probe-discord`](./probe-discord) | The canary. Prints what to do and what to watch for each channel row a fake cannot settle — a mark appearing, an indicator running, a bot showing online. It does not drive Discord: every row here is *what a person sees*, so a script reporting success would be asserting the one thing it cannot observe. |
+| [`probe-skills`](./probe-skills) | Which roots each installed brain really discovers a skill in, and whether a model reads one. The `--offline` half is free and settles discovery: two of the three list what they found without starting a turn. One canary per root with its own code, because a single one says *something* was read and not *which*. |
 | [`probe-grok`](./probe-grok) | The four things nobody measured about the Grok CLI: whether a resume round trip carries context, whether its usage is a turn's or a conversation's, whether `GROK_HOME` isolates a login, and whether the prompt can stay off the command line. Each settled by what happened rather than by how a reply read. |
 
 ## Usage

@@ -37,6 +37,7 @@ from rundesk import migration  # noqa: E402
 from rundesk import process  # noqa: E402
 from rundesk import provider  # noqa: E402
 from rundesk import schedule as schedules  # noqa: E402
+from rundesk import skill  # noqa: E402
 from rundesk import store  # noqa: E402
 from rundesk import supervisor as _supervisor  # noqa: E402
 from rundesk import turn  # noqa: E402
@@ -509,6 +510,24 @@ def build_parser() -> argparse.ArgumentParser:
                       help="whose lines to show — what the gateway wrote, or what the "
                            "machine caught that never reached it")
 
+    # **No optional positional in front of the actions.** `agents <agent>` and subcommands
+    # under one verb cannot both exist: argparse matches the agent's name against the
+    # action names and dies with `invalid choice`. So the bare form takes no name at all
+    # and every action names its agent itself, which reads better anyway — the catalog is
+    # about the machine and a grant is about one agent.
+    known = sub.add_parser("skills", help="the skills on this machine, and who has which")
+    known.add_argument("--lay-down", action="store_true", dest="lay_down",
+                       help=argparse.SUPPRESS)   # the installer's; not an owner's verb
+    known.add_argument("--where", action="store_true",
+                       help="print the directory skills are kept in, and nothing else")
+    doing = known.add_subparsers(dest="act", metavar="<action>")
+    given = doing.add_parser("grant", help="give an agent one of the skills in the library")
+    given.add_argument("name", metavar="<agent>", help="who is being given it")
+    given.add_argument("skill", metavar="<skill>", help="which skill, by the name it is under")
+    taken = doing.add_parser("revoke", help="take a skill away from an agent")
+    taken.add_argument("name", metavar="<agent>", help="who is losing it")
+    taken.add_argument("skill", metavar="<skill>", help="which skill, by the name it is under")
+
     # Named the way schedules are: the agent is the word after the verb, the channel is
     # what you call it, and what it *is* comes from `--kind`. Everything a particular
     # platform needs goes after `--` and is never read here (R-CAD-13).
@@ -588,7 +607,7 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
         return updater.carry_on(
             REPO_ROOT, waiting,
             resume=lambda names: _bring_all_back(names, gateways, machine, agents),
-            provision=lambda: dependencies.provision(REPO_ROOT),
+            provision=_provisioned,
             carry=lambda: _carry_every(agents),
         )
     return updater.run(
@@ -596,7 +615,7 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
         busy=lambda: _in_flight(gateways, agents),
         pause=lambda: _stand_all_down(gateways, machine, agents),
         resume=lambda names: _bring_all_back(names, gateways, machine, agents),
-        provision=lambda: dependencies.provision(REPO_ROOT),
+        provision=_provisioned,
         carry=lambda: _carry_every(agents),
         unfit=lambda: gateways.fitness(REPO_ROOT),
         preview=lambda: _what_an_update_would_do(agents),
@@ -1337,6 +1356,84 @@ def _running_old_code(name, gateways, agents) -> list:
         "this agent's gateway is running code that is no longer installed",
         f"rundesk stop {name} && rundesk start {name}",
     )]
+
+
+def _provisioned() -> str | None:
+    """What an install is made of, brought forward: what it needs, then what it ships.
+
+    Skills after dependencies, which is the same order the window itself keeps and for the
+    same reason — the failure that cannot touch an owner's files happens first. Bringing a
+    built-in forward is what makes it rundesk's rather than a copy an owner then owns, and
+    it is the whole of "always the latest version" (R-AGT-30): the set is read off the
+    release each time, so there is no record of what was laid down before to get out of
+    step. A skill that could not be written is not an update that failed — `doctor` says
+    which one, and everything else is already forward.
+    """
+    went_wrong = dependencies.provision(REPO_ROOT)
+    if went_wrong:
+        return went_wrong
+    skill.lay_down(force=True)
+    return None
+
+
+def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
+    """The skills on this machine, who has which, and giving or taking one away.
+
+    The catalog is read off the library and the agents rather than from anything written
+    down about them: a grant *is* the link standing in an agent's own directory, so there
+    is no record that could disagree with what a brain will actually find.
+    """
+    if getattr(args, "where", False):
+        # Said by the command rather than written into any prose, because where the
+        # library is depends on where this install is: an install pointed elsewhere
+        # keeps its skills there too, and a guide naming `~/.rundesk` would be wrong
+        # for every one of them.
+        print(skills.home())
+        return 0
+    if getattr(args, "lay_down", False):
+        # The installer's, and deliberately not an owner's verb: what a release ships is
+        # not a thing anybody should have to ask for.
+        print(" ".join(skills.lay_down()))
+        return 0
+    act = getattr(args, "act", None)
+    if act in ("grant", "revoke"):
+        try:
+            whose = agents.skills(args.name)
+        except agents.NotAnAgentName as why:
+            print(f"{args.name}: INVALID NAME — {why}", file=sys.stderr)
+            return 1
+        if not agents.exists(args.name):
+            print(f"{args.name}: NO SUCH AGENT", file=sys.stderr)
+            print(f"        make one:  rundesk add {args.name} --provider <provider>",
+                  file=sys.stderr)
+            return 1
+        try:
+            if act == "grant":
+                skills.grant(whose, args.skill)
+                print(f"{args.name} was given {args.skill}")
+            else:
+                skills.revoke(whose, args.skill)
+                print(f"{args.name} no longer has {args.skill}")
+        except (skills.Unknown, skills.NotASkill, skills.InTheWay) as why:
+            print(f"{args.skill}: {why}", file=sys.stderr)
+            return 1
+        return 0
+
+    held = skills.library()
+    if not held:
+        print("no skills")
+        print(f"        write one:  {skills.home()}/<name>/SKILL.md")
+        return 0
+    ships = set(skills.shipped())
+    # Asked of every agent rather than kept anywhere, because "who has this" is otherwise
+    # a question only a reverse scan can answer and a stored answer would go stale the
+    # first time somebody removed a link by hand.
+    whose: dict = {name: skills.granted(agents.skills(name)) for name in agents.known()}
+    rows = [(name, "built-in" if name in ships else "yours",
+             ", ".join(sorted(who for who, mine in whose.items() if name in mine)) or "-")
+            for name in sorted(held)]
+    _as_table(("SKILL", "FROM", "AGENTS"), rows)
+    return 0
 
 
 def cmd_doctor(args: argparse.Namespace, gateways, agents) -> int:
@@ -2755,7 +2852,7 @@ def _handed_on(argv: list[str], carries: set) -> tuple[list[str], list[str]]:
     return list(argv[:at]), list(argv[at + 1:])
 
 
-def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
+def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None) -> int:
     """The command surface.
 
     What the commands act on is passed in rather than imported here, so this file knows
@@ -2765,6 +2862,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
     gateways = gateways if gateways is not None else _gateway
     machine = machine if machine is not None else _supervisor
     agents = agents if agents is not None else _agent
+    skills = skills if skills is not None else skill
     parser = build_parser()
     argv, handed_on = _handed_on(argv, _carries_a_tail(parser))
     args = parser.parse_args(argv)
@@ -2808,6 +2906,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None) -> int:
         return cmd_restart(args, gateways, machine, agents)
     if args.command == "status":
         return cmd_status(args, gateways, machine, agents)
+    if args.command == "skills":
+        return cmd_skills(args, agents, skills)
     if args.command == "channels":
         return cmd_channels(args, gateways, agents)
     if args.command == "schedules":

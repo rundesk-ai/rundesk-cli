@@ -188,8 +188,8 @@ async def carry(
     transcript.home(whose["logs"]).mkdir(parents=True, exist_ok=True)
 
     can = await provider.capabilities(at, provider.environment(
-        home=whose["run"], cwd=whose["home"], provider_home=home, run="capabilities",
-        posture=posture, path=None,
+        home=whose["run"], cwd=whose["home"], provider_home=home, skills=whose["skills"],
+        run="capabilities", posture=posture, path=None,
     ))
     kept = agents.records(name, where)
     where_it_is = kept.opened(store.conversation_id(on, conversation), on, kind,
@@ -243,7 +243,8 @@ async def carry(
         program = process.Program(
             [str(at)],
             env=provider.environment(
-                home=whose["run"], cwd=whose["home"], provider_home=home, run=run,
+                home=whose["run"], cwd=whose["home"], provider_home=home,
+                skills=whose["skills"], run=run,
                 model=model, resume=resume, posture=posture, settings=settings,
                 raw=transcript.printed(whose["logs"], run), preface=preface,
             ),

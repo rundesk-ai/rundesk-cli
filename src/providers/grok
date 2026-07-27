@@ -270,6 +270,81 @@ def _asked_at(home, asked: str) -> str:
     return at
 
 
+#: Where this brain looks for skills, relative to the directory a turn stands in.
+#:
+#: **Measured, not read off the documentation** — one canary planted per candidate
+#: directory, each declaring its own unguessable code. This brain reads its own `.grok/skills` and, unusually, three other vendors'
+#: roots as well — `.agents`, `.claude` and `.cursor` — deduplicating by name. Only its
+#: own is written to: a skill placed for another brain is that brain's adapter's to
+#: place, and relying on this one reading it would couple two files that must not know
+#: about each other. It does not read `.codex/skills`, and no brain reads a bare
+#: `skills/`. Measured 2026-07-27 against 0.2.112.
+#: Re-probe with `.knowledge/scripts/probe-skills` when the version moves.
+#:
+#: Relative to `RUNDESK_CWD`, which is the agent's own home — so what one agent is given
+#: is inside that agent's directory and no other agent stands anywhere near it.
+SKILLS_ROOT = os.path.join(".grok", "skills")
+
+
+def _present(where: str) -> None:
+    """Stand this agent's granted skills where this brain will find them (R-PRV-24).
+
+    Links rather than copies, so an owner editing the library edits what every agent
+    holding that skill reads, with nothing to re-run. Measured: this brain follows a
+    symlink, follows a link to a link, and indexes a skill once even when the same target
+    is reachable from more than one place.
+
+    **Never a link to the whole directory.** That would make a path this vendor owns an
+    alias for the library itself — so its own skill-installer would write into the source
+    of truth, and anything aimed at this directory would destroy it.
+
+    Idempotent, and the pruning is deliberately narrow: an entry goes only when it is a
+    link *we* made whose skill is no longer granted. A directory somebody wrote by hand
+    and a link pointing somewhere else are things this did not put there.
+    """
+    granted = os.environ.get("RUNDESK_SKILLS")
+    standing = []
+    if granted and os.path.isdir(granted):
+        standing = sorted(one for one in os.listdir(granted)
+                          if not one.startswith("."))
+    root = os.path.join(where, SKILLS_ROOT)
+    # Nothing granted and nothing placed before: make no directory at all. An agent with
+    # no skills should not have a vendor's directory in its home to explain.
+    if not standing and not os.path.isdir(root):
+        return
+    try:
+        os.makedirs(root, exist_ok=True)
+        for name in standing:
+            link = os.path.join(root, name)
+            target = os.path.relpath(os.path.join(granted, name), root)
+            if os.path.islink(link):
+                if os.readlink(link) == target:
+                    continue
+                os.unlink(link)
+            elif os.path.exists(link):
+                continue          # somebody else's, and not ours to replace
+            os.symlink(target, link)
+        for name in os.listdir(root):
+            link = os.path.join(root, name)
+            if not os.path.islink(link) or os.path.exists(link):
+                continue
+            # **Ours is decided by where it points, not by it being broken.** An owner may
+            # hand-place a link here to a skill of their own, and a target that is briefly
+            # away — an unmounted drive, a file mid-move — makes it look exactly like a
+            # grant that was revoked. Deleting on dangling alone took those. What is ours
+            # is a link into the directory rundesk was told to present from.
+            points_at = os.readlink(link)
+            if not os.path.isabs(points_at):
+                points_at = os.path.normpath(os.path.join(root, points_at))
+            if granted and os.path.commonpath([os.path.abspath(granted), points_at]) == \
+                    os.path.abspath(granted):
+                os.unlink(link)   # granted once, revoked since
+    except OSError as gone:
+        # A turn without its skills is a whole turn. Say so and carry on rather than
+        # failing a turn over what is, at worst, a brain that is less well informed.
+        went_wrong(f"this agent's skills could not be presented: {gone}")
+
+
 def carry() -> int:
     """One turn, from what rundesk set to what this brain said about it."""
     where = os.environ.get("RUNDESK_CWD") or os.getcwd()
@@ -313,6 +388,8 @@ def carry() -> int:
     # adapter's own bookkeeping and has nothing to do with credentials. An owner who wants
     # a genuinely separate identity passes one through `--set`, which reaches this brain
     # unread like any other flag.
+    _present(where)
+
     env = dict(os.environ)
     try:
         return _turn(argv, where, env, session)

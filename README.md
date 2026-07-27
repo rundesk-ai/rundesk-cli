@@ -70,11 +70,11 @@ Everything lands in **`~/.rundesk`** — one directory under your home, with the
 ```text
 ~/.rundesk/
   app/          rundesk itself — what an update replaces and an uninstall removes, whole
-  agents/       your agents: what each is, what it knows, and everything it has done
+  data/         everything you make — your agents, your skills, and what your gateways wrote
 ```
 
 That split is the point: removing rundesk takes `app/` and is structurally incapable of
-reaching the rest, rather than remembering a list of things to spare. Your shell profile is
+reaching `data/`, rather than remembering a list of things to spare. Your shell profile is
 left alone too; if the command isn't on your `PATH`, the installer shows you the line to add
 rather than editing a file you own.
 

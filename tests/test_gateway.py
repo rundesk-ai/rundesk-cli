@@ -345,14 +345,24 @@ class WhereAGatewayKeepsWhatItNeeds(WithARunDirectory):
         is not part of the release."""
         self.addCleanup(os.environ.pop, "RUNDESK_RUN_DIR", None)
         os.environ.pop("RUNDESK_RUN_DIR", None)
-        self.assertEqual(Path.home() / ".rundesk" / "run", gateway.home())
+        # The root it defaults from as well, or this asserts wherever the suite happens to
+        # have pointed the data directory rather than what an owner with nothing set gets.
+        pointed = os.environ.pop("RUNDESK_DATA_DIR", None)
+        if pointed is not None:
+            self.addCleanup(os.environ.__setitem__, "RUNDESK_DATA_DIR", pointed)
+        self.assertEqual(Path.home() / ".rundesk" / "data" / "run", gateway.home())
 
     def test_what_it_writes_goes_beside_the_run_directory_by_default(self):
         """R-GW-18 — history and state are kept apart, so giving a name back cannot take
         the record of what happened with it."""
         self.addCleanup(os.environ.__setitem__, "RUNDESK_LOG_DIR", os.environ["RUNDESK_LOG_DIR"])
         del os.environ["RUNDESK_LOG_DIR"]
-        self.assertEqual(Path.home() / ".rundesk" / "logs", gateway.logs_home())
+        # The root it defaults from as well, or this asserts wherever the suite happens to
+        # have pointed the data directory rather than what an owner with nothing set gets.
+        pointed = os.environ.pop("RUNDESK_DATA_DIR", None)
+        if pointed is not None:
+            self.addCleanup(os.environ.__setitem__, "RUNDESK_DATA_DIR", pointed)
+        self.assertEqual(Path.home() / ".rundesk" / "data" / "logs", gateway.logs_home())
         self.assertNotEqual(gateway.home(), gateway.logs_home())
 
     def test_where_it_keeps_things_can_be_said(self):

@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from rundesk import ROOT, __version__
+from rundesk import ROOT, __version__, data_home
 from rundesk import dependencies
 from rundesk import process
 from rundesk import schedule
@@ -164,7 +164,7 @@ def logs_home() -> Path:
     """Where gateways write what happened. Kept apart from what they are *doing* now, in
     `home()`: that is state, cleared when a gateway goes, and this is history, which is
     only worth anything if it outlives the gateway that wrote it (R-GW-18)."""
-    return Path(os.environ.get("RUNDESK_LOG_DIR") or Path.home() / ".rundesk" / "logs")
+    return Path(os.environ.get("RUNDESK_LOG_DIR") or data_home() / "logs")
 
 
 def log_path(name: str, logs: Path | None = None) -> Path:
@@ -266,7 +266,7 @@ def home() -> Path:
     Beside the install rather than inside the source: an update lays a new release over
     the install, and what is running is not part of the release.
     """
-    return Path(os.environ.get("RUNDESK_RUN_DIR") or Path.home() / ".rundesk" / "run")
+    return Path(os.environ.get("RUNDESK_RUN_DIR") or data_home() / "run")
 
 
 def _written_whole(target: Path, text: str, durable: bool = False) -> None:

@@ -406,16 +406,20 @@ class TheJobCarriesWhereThingsAre(WithAJobDirectory):
         somewhere else, which no test naming the variables by hand would ever notice."""
         import inspect
         import re as regex
+        import rundesk as package
         from rundesk import agent as agents
         from rundesk import gateway as real
 
         # Read off what a supervised gateway actually asks the environment for, rather
         # than a list kept by hand here — a hand-kept list has the same gap as the one in
-        # `describe` and goes stale in the same moment. Both modules, because an agent
-        # resolves a directory of its own and the gateway the machine starts is an
-        # agent's: reading only one of them is how the next one added is left out.
-        pointed = set(regex.findall(r'environ\.get\("(RUNDESK_[A-Z_]+_DIR)"',
-                                    inspect.getsource(real) + inspect.getsource(agents)))
+        # `describe` and goes stale in the same moment. All three, because an agent
+        # resolves a directory of its own, the gateway the machine starts is an agent's,
+        # and the root both of those default from is the package's: reading only some of
+        # them is how the next one added is left out.
+        pointed = set(regex.findall(
+            r'environ\.get\("(RUNDESK_[A-Z_]+_DIR)"',
+            inspect.getsource(real) + inspect.getsource(agents)
+            + inspect.getsource(package)))
         self.assertTrue(pointed, "nothing reads a directory from the environment at all")
         said = supervisor.describe("gateway", self.root)["EnvironmentVariables"]
         for variable in sorted(pointed):

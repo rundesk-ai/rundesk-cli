@@ -205,7 +205,14 @@ class InstallTests(Sandbox):
         # Development and installed use share one layout, so there is no second copy to drift.
         self.install()
         self.assertEqual((self.bindir / "rundesk").resolve(), (REPO / "rundesk").resolve())
-        self.assertFalse((self.home / ".rundesk").exists(), "it downloaded a second copy beside the checkout")
+        # The *program*, which is what a second copy would be. `data/` is beside it and is
+        # expected: an install has a skills library whether its program is a checkout or a
+        # download, and the whole point of the two names is that one of them is not the
+        # other. Asserting the install directory was empty said "no second copy" and meant
+        # "nothing here at all", which stopped being the same sentence the day data got a
+        # name of its own.
+        self.assertFalse((self.home / ".rundesk" / "app").exists(),
+                         "it downloaded a second copy beside the checkout")
 
 
 class RemovalTests(Sandbox):
@@ -258,7 +265,7 @@ class RemovalTests(Sandbox):
         program, at the one moment an owner is most likely to want it: a reinstall after
         trouble. The command someone runs to fix the trouble was deleting the account of
         what the trouble was (R-GW-18)."""
-        wrote = self.home / ".rundesk" / "logs"
+        wrote = self.home / ".rundesk" / "data" / "logs"
         wrote.mkdir(parents=True)
         (wrote / "gateway.log").write_text("what happened\n")
         # The account of what a gateway never finished stands with its log, and is the one
@@ -279,10 +286,10 @@ class RemovalTests(Sandbox):
         """R-AGT-3 — an agent's home is what its owner wrote in it: its rules, who it works
         for, what it has learned. Removing the program is not asking for that to go, and it
         sits under the install directory only because that is where rundesk keeps things."""
-        home = self.home / ".rundesk" / "agents" / "ava" / "home"
+        home = self.home / ".rundesk" / "data" / "agents" / "ava" / "home"
         (home / "workspace").mkdir(parents=True)
         (home / "SOUL.md").write_text("what ava is for, in my own words\n")
-        (self.home / ".rundesk" / "agents" / "ava" / "logs").mkdir(parents=True)
+        (self.home / ".rundesk" / "data" / "agents" / "ava" / "logs").mkdir(parents=True)
 
         self.install()
         kept = self.uninstall()
@@ -300,7 +307,7 @@ class RemovalTests(Sandbox):
         everything beside the program is kept — so it holds by the shape of the layout
         rather than by a list of names, which is the whole reason the list went away.
         """
-        mine = self.home / ".rundesk" / "agents" / ".templates" / "agent"
+        mine = self.home / ".rundesk" / "data" / "agents" / ".templates" / "agent"
         mine.mkdir(parents=True)
         (mine / "SOUL.md").write_text("the words I wrote for every agent I make\n")
 
@@ -314,7 +321,7 @@ class RemovalTests(Sandbox):
 
     def test_purging_takes_the_templates_an_owner_wrote_as_well(self):
         """R-RM-12 — the other half, so "keeps it" cannot pass by never removing anything."""
-        mine = self.home / ".rundesk" / "agents" / ".templates" / "agent"
+        mine = self.home / ".rundesk" / "data" / "agents" / ".templates" / "agent"
         mine.mkdir(parents=True)
         (mine / "SOUL.md").write_text("mine\n")
 
@@ -326,7 +333,7 @@ class RemovalTests(Sandbox):
 
     def test_purging_takes_every_agents_home_as_well(self):
         """R-AGT-3 — the other half, so "keeps it" cannot pass by never removing anything."""
-        agents = self.home / ".rundesk" / "agents"
+        agents = self.home / ".rundesk" / "data" / "agents"
         (agents / "ava" / "home").mkdir(parents=True)
         (agents / "ava" / "home" / "SOUL.md").write_text("mine\n")
 
@@ -338,7 +345,7 @@ class RemovalTests(Sandbox):
 
     def test_purging_takes_what_the_gateways_wrote_as_well(self):
         """R-RM-10 — the other half, so "keeps it" cannot pass by never removing anything."""
-        wrote = self.home / ".rundesk" / "logs"
+        wrote = self.home / ".rundesk" / "data" / "logs"
         wrote.mkdir(parents=True)
         (wrote / "gateway.log").write_text("what happened\n")
 

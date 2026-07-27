@@ -156,6 +156,16 @@ jobs:
           tail -c 200000 suite.log
           exit $ran
 
+      - name: agent-home — the library of skills, and which agent was given which
+        run: |
+          # Into a file, never the runner's own pipe. A suite that leaks a process
+          # leaks the step's stdout with it, and the runner then waits for a stream
+          # that nothing will close — the step hangs after Python has already exited,
+          # the log stays empty, and neither a timeout nor a cancel ends it promptly.
+          set +e; python -u tests/test_skill.py -v > suite.log 2>&1; ran=$?; set -e
+          tail -c 200000 suite.log
+          exit $ran
+
       - name: agent-run — what a turn did, and what is left of it afterwards
         run: |
           # Into a file, never the runner's own pipe. A suite that leaks a process
