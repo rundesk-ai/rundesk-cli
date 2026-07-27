@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from rundesk import ROOT, __version__, data_home
+from rundesk import activity
 from rundesk import dependencies
 from rundesk import process
 from rundesk import schedule
@@ -978,7 +979,21 @@ def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list
     record = _record_path(name, where or home())
     said = _read_json(record, None)
     working = said.get("working") if isinstance(said, dict) else None
-    return sorted(working) if isinstance(working, dict) else []
+    programs = sorted(working) if isinstance(working, dict) else []
+    turns = [f"turn:{row['run']}" for row in activity.active(where)]
+    return programs + turns
+
+
+def what_is_working(name: str = DEFAULT_NAME, where: Path | None = None) -> dict:
+    """Safe process details for persistent work directly owned by a gateway."""
+    said = _read_json(_record_path(name, where or home()), None)
+    working = said.get("working") if isinstance(said, dict) else None
+    return dict(working) if isinstance(working, dict) else {}
+
+
+def what_is_turning(name: str = DEFAULT_NAME, where: Path | None = None) -> list[dict]:
+    """Safe identities for provider turns belonging to this agent."""
+    return activity.active(where)
 
 
 @contextlib.contextmanager

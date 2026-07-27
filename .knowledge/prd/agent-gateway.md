@@ -1,7 +1,7 @@
 ---
 id: AGW
 name: An agent, and the one gateway it runs in
-last_verified: 2026-07-25
+last_verified: 2026-07-27
 ---
 
 ## What this is
@@ -32,6 +32,9 @@ is how it runs rather than a second thing to keep.
 | ❌ | R-AGW-9 | Taking an agent away takes the channels that were its own | — |
 | ✅ | R-AGW-10 | A gateway that has no agent is listed rather than left out | `a gateway with no agent is listed and marked` |
 | ✅ | R-AGW-11 | A gateway that has no agent is given one only when its owner asks | `adopting a gateway moves what it wrote into the agents own`, `adopting a gateway brings what its log rotated into along`, `adopting a gateway that wrote nothing moves nothing`, `adopting a gateway that has no agent brings what it wrote in`, `a gateway that is still running is not adopted` |
+| ✅ | R-AGW-12 | Status counts configured agents, running gateways, live processes, and active turns separately | `status counts gateways processes and turns separately` |
+| ✅ | R-AGW-13 | Agents lists simultaneous provider turns separately with source, conversation, PID, and elapsed time | `agents lists simultaneous turns without prompts or arguments`, `simultaneous turns are distinct and end independently` |
+| ✅ | R-AGW-14 | Live turn records persist no prompts, process arguments, tokens, or credentials | `only safe identity is persisted` |
 
 ## Open questions
 

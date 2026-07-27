@@ -39,6 +39,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from rundesk import activity
 from rundesk import agent as agents
 from rundesk import process, provider, store, transcript
 
@@ -147,6 +148,7 @@ async def carry(
     prompt_author: str = "user",
     resume_on_interrupt=None,
     recovery_of: str | None = None,
+    started=None,
 ) -> Outcome:
     """Run one turn for this agent, and write down everything about it.
 
@@ -297,8 +299,27 @@ async def carry(
             errors_apart=True,
             on_error=_noting(writing, trouble),
         )
-        result = await _run(program, prompt, writing, said, watching,
-                            steer=can["steer"], steering=steering)
+        source_name = source or (CHANNEL if asked_by else TERMINAL)
+
+        def provider_started(pid: int) -> None:
+            activity.began(whose["run"], {
+                "run": run,
+                "source": source_name,
+                "surface": on,
+                "conversation": conversation,
+                "pid": pid,
+                "since": time.time(),
+            })
+            if started is not None:
+                started(pid)
+
+        try:
+            result = await _run(
+                program, prompt, writing, said, watching,
+                steer=can["steer"], steering=steering, started=provider_started,
+            )
+        finally:
+            activity.ended(whose["run"], run)
 
         # Inside the same writer, and last. A second one would count from nothing and
         # give the end of a run the same places in the order as its beginning.
@@ -476,7 +497,7 @@ def _noting(writing, trouble: list):
 
 
 async def _run(program, prompt: str, writing, said: list, watching,
-               steer: bool = False, steering=None) -> process.Result:
+               steer: bool = False, steering=None, started=None) -> process.Result:
     """Start the brain, feed it the turn, and write down every line it answers with.
 
     The sink is the account itself. Every line lands in the run's raw exactly as it
@@ -499,6 +520,14 @@ async def _run(program, prompt: str, writing, said: list, watching,
                 watching(understood)
 
     await program.start()
+    try:
+        if started is not None:
+            started(program.pid)
+    except BaseException:
+        # Registration happens after spawn because it needs the PID. If that boundary
+        # fails, do not leave a provider running with nobody reading or owning it.
+        await program.end()
+        raise
     reading = asyncio.ensure_future(program.wait(sink=heard))
     if not steer:
         # Decided by what the brain said it can do, and by nothing else. A brain that
