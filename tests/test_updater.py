@@ -317,6 +317,29 @@ class InterruptedUpdateTests(unittest.TestCase):
                   if p.name.startswith(".") and (".incoming" in p.name or ".outgoing" in p.name)]
         self.assertEqual(litter, [], f"an interrupted update left staging paths behind: {litter}")
 
+    def test_what_an_interrupted_update_set_aside_is_what_a_later_one_puts_back(self):
+        """R-UPD-25 — the swap loop goes item by item, so a kill part-way leaves some
+        already swapped, each with a correct `.outgoing` beside it. `__version__` lives in
+        `src`, which sorts last, so the install still reports the old version and the next
+        run takes the ordinary path and lays the same release down again.
+
+        Setting those items aside a second time replaced the true old content with the new
+        one already sitting there — and `_undo` then restored new over new and reported
+        that the install was back on the version it was. A false claim of a clean revert,
+        which is the one thing worse than the mixed install it was meant to prevent.
+        """
+        # What a killed run leaves: `rundesk` already swapped, its true old text aside.
+        (self.install / "rundesk").write_text("# 0.2.0\n")
+        (self.install / ".rundesk.outgoing").write_text("# 0.1.0\n")
+
+        updater._copy_over(_release(self.root, "0.2.0"), self.install)
+        self.assertEqual("# 0.1.0\n", (self.install / ".rundesk.outgoing").read_text(),
+                         "a later run overwrote what the interrupted one set aside")
+
+        self.assertTrue(updater._undo(self.install), "it could not put the install back")
+        self.assertEqual("# 0.1.0\n", (self.install / "rundesk").read_text(),
+                         "it reported the install was back on the version it was, and it was not")
+
     def _renaming_dies_on(self, victim: str, and_putting_back: str = ""):
         """A rename that refuses one target — the swap loop failing part of the way through.
 
@@ -980,6 +1003,26 @@ class TheReleaseFinishesItsOwnWindow(unittest.TestCase):
                         "a release that could not be run was left in place")
         self.assertEqual(["started"], self.after,
                          "the agents were left down after the install went back")
+
+    def test_a_release_that_would_not_start_and_could_not_be_put_back_says_which(self):
+        """R-UPD-25 — putting the release back can itself fail part-way, and saying "back
+        on the version it was" there sends an owner to try again on an install that is a
+        mix of two releases. Every other failure path branched on this; the newest one said
+        it unconditionally."""
+        (self.install / "src").mkdir()
+        (self.install / ".src.outgoing").mkdir()
+
+        real = updater._put_back
+        updater._put_back = lambda swapped: ["src"]
+        try:
+            code = self._run(lambda root, stopped: "Exec format error")
+        finally:
+            updater._put_back = real
+
+        self.assertEqual(1, code)
+        self.assertIn("could not be put back", self.said)
+        self.assertNotIn("back on the version it was", self.said,
+                         "it claimed a clean revert that did not happen")
 
     def test_the_release_that_took_over_brings_every_gateway_back(self):
         """The far side of the handover: the window is already open and every gateway

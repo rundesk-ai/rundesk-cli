@@ -982,6 +982,23 @@ def cmd_stop(args: argparse.Namespace, gateways, machine, agents) -> int:
     return _stand_down(args, gateways, machine, agents, "stop")
 
 
+def _brain_already_named(name: str, agents) -> bool:
+    """Does this agent already say which brain answers for it?
+
+    Records this rundesk will not read are **not** an answer of no. Asking them opens the
+    store, which refuses what it does not understand — and asked without a guard, the
+    ordinary repair (`rundesk add <name>`, no `--provider`, because the brain is already
+    remembered) came out as a raw traceback for exactly the agent an owner was repairing.
+    The refusal itself is reported a few lines below, by the code that already knows how to
+    say it; this only decides whether to demand a brain, and a store nobody can read is not
+    a reason to demand one.
+    """
+    try:
+        return bool((agents.chosen(name) or {}).get("provider"))
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed):
+        return True
+
+
 def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
     """Make an agent, and the one gateway that runs it (R-AGW-1).
 
@@ -1011,7 +1028,7 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
     # refuses everything is worse than a refusal now, and an owner who has to be told twice
     # was told the wrong thing first. Making one that *already* has a brain is a repair and
     # must not demand it again (R-AGT-4, R-AGT-18).
-    if not args.provider and not (knew and (agents.chosen(name) or {}).get("provider")):
+    if not args.provider and not (knew and _brain_already_named(name, agents)):
         print(f"{name}: NO BRAIN — say which one answers for this agent", file=sys.stderr)
         print(f"        like this:  rundesk add {name} --provider <provider>",
               file=sys.stderr)
@@ -1285,8 +1302,13 @@ def _running_old_code(name, gateways, agents) -> list:
     """
     try:
         it = _standing(name, gateways, agents)
-    except Exception:   # noqa: BLE001 — a boundary; a diagnosis reports, it never raises
-        return []
+    except Exception as why:   # noqa: BLE001 — a boundary; a diagnosis reports, never raises
+        # **Said, not swallowed.** `gateway._held` deliberately re-raises an OSError that is
+        # not a lock being held, so returning nothing here would let `doctor` print READY
+        # for an agent whose gateway could not be looked at — a truthful-looking silence,
+        # which is the one thing this command must never produce.
+        return [_agent.Complaint(str(why), "what this agent's gateway is doing cannot be read",
+                                 f"rundesk status {name}")]
     if not it.running or not it.version or it.version == __version__:
         return []
     return [_agent.Complaint(

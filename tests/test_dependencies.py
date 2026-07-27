@@ -265,6 +265,29 @@ class Provisioning(WithAnInstallOfItsOwn):
         self.assertFalse((self.root / ".venv").exists(),
                          "an install went on carrying what no version of it asks for")
 
+    def test_a_virtualenv_an_interrupted_attempt_set_aside_is_what_gets_put_back(self):
+        """R-UPD-28 — `pip install` can run for minutes, which is a wide window to be
+        killed in, and being killed there leaves `.venv` gone and `.venv.outgoing` holding
+        the last one that worked. Running the update again is the documented way out, so
+        the retry must not begin by destroying it: one that also fails would then have
+        nothing to put back, and the install would end with no virtualenv at all — the
+        release reverted underneath it and every gateway refusing to start.
+        """
+        self.needs("discord.py==2.7.1")
+        # What a killed attempt leaves: nothing at `.venv`, the good one set aside.
+        aside = self.root / ".venv.outgoing" / "lib" / f"python3.{sys.version_info.minor}"
+        (aside / "site-packages").mkdir(parents=True)
+        (aside / "site-packages" / "discord.py-2.7.1.dist-info").mkdir()
+
+        why = dependencies.provision(
+            self.root, run=self.runner(fails_at="pip install", why="no network"))
+
+        self.assertIsNotNone(why)
+        self.assertEqual({"discord-py": "2.7.1"}, dependencies.installed(self.root),
+                         "a retry that failed destroyed the last virtualenv that worked")
+        self.assertFalse((self.root / ".venv.outgoing").exists(),
+                         "the copy was put back and something was still left aside")
+
     def test_a_build_that_worked_lets_go_of_what_it_replaced(self):
         self.needs("discord.py==2.7.1")
         self.holding(("discord.py", "2.0.0"))

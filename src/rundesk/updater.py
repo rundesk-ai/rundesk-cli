@@ -349,9 +349,17 @@ def _replace_this_install(
         if went:
             print(f"update: NOT APPLIED — the new release would not start: {went}",
                   file=sys.stderr)
-            _undo(repo_root)
-            print("        this install is back on the version it was; try again",
-                  file=sys.stderr)
+            # Branched on, not assumed. Putting the release back can itself fail part-way,
+            # which is the one state `HalfReplaced` exists to name — and saying "back on the
+            # version it was" there sends an owner to try again on an install that is a mix
+            # of two releases. The path below this one always got that right; this one, the
+            # newest, said it unconditionally.
+            if _undo(repo_root):
+                print("        this install is back on the version it was; try again",
+                      file=sys.stderr)
+            else:
+                print("        the release could not be put back — reinstall this install",
+                      file=sys.stderr)
             (resume or (lambda _names: []))(stopped)
             return 1
         return _bring_forward(repo_root, stopped, resume, carry, provision)
@@ -652,10 +660,18 @@ def _set_aside(target: Path) -> Path | None:
     What is set aside is the caller's to discard once the replacement is known to be good.
     Letting go of it here would make each swap atomic and the update as a whole one-way.
     """
+    outgoing = target.with_name(OUTGOING.format(name=target.name))
+    if outgoing.exists() or outgoing.is_symlink():
+        # **An earlier attempt was interrupted after setting this aside**, so *that* copy is
+        # the version this install was really on, and what stands at `target` now is however
+        # far that attempt got. Discarding it and setting the target aside in its place —
+        # which is what this used to do — replaced the true old content with the new, and a
+        # later `_undo` then restored new over new and reported that the install was back on
+        # the version it was. Keep the older one; the newer is the disposable half.
+        _discard(target)
+        return outgoing
     if not (target.exists() or target.is_symlink()):
         return None
-    outgoing = target.with_name(OUTGOING.format(name=target.name))
-    _discard(outgoing)
     os.rename(target, outgoing)
     return outgoing
 

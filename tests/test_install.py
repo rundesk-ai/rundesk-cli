@@ -470,12 +470,22 @@ class EverythingNeededTests(unittest.TestCase):
     """An install has to leave a working command, not a nearly-working one."""
 
     def _declared(self) -> set[str]:
-        names = set()
-        for line in (REPO / "requirements.txt").read_text().split("\n"):
-            line = line.split("#")[0].strip()
-            if line:
-                names.add(re.split(r"[=<>!\[ ]", line)[0].lower().replace("-", "_"))
-        return names
+        """What this install declares, by the name it is imported under.
+
+        Asked of `rundesk.dependencies`, which is what the installer, an update and
+        `gateway.fitness` all read — rather than parsed a fourth time here. A hand-rolled
+        copy agreed with it only for as long as `requirements.txt` held one plainly pinned
+        line, and this case's whole job is catching an import nobody declared: a parser
+        that quietly extracted a different name would fail for a reason that has nothing
+        to do with what is being asserted, or pass when it should not.
+
+        It also carried an alias table whose `discord_py` key could never be reached,
+        because nothing in it ever turned `discord.py` into that spelling.
+        """
+        sys.path.insert(0, str(REPO / "src"))
+        from rundesk import dependencies
+
+        return {one.imported for one in dependencies.declared(REPO)}
 
     def test_everything_the_code_imports_is_the_standard_library_or_declared(self):
         # The failure this stops: an import added without a line in requirements.txt. The
@@ -485,9 +495,6 @@ class EverythingNeededTests(unittest.TestCase):
         stdlib = Path(sysconfig.get_paths()["stdlib"]).resolve()
         ours = {p.stem for p in (REPO / "src" / "rundesk").glob("*.py")} | {"rundesk"}
         declared = self._declared()
-        # discord.py installs as `discord`; a package name is not always its module name.
-        aliases = {"discord.py": "discord", "discord_py": "discord"}
-        declared |= {aliases[d] for d in list(declared) if d in aliases}
 
         undeclared = []
         for path in (REPO / "src").rglob("*.py"):

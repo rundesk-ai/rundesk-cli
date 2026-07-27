@@ -233,13 +233,28 @@ def provision(root: Path, run=None, requirements: Path | None = None) -> str | N
         return _nothing_needed(root)
     venv = root / ".venv"
     outgoing = root / ".venv.outgoing"
-    _discard(outgoing)
+    # **A virtualenv already set aside is one an interrupted attempt left**, and it is the
+    # last one this install is known to have worked with — `pip install` can run for
+    # minutes, which is a wide window to be killed in. Discarding it here, which is what
+    # this used to do, meant a retry that also failed had nothing to put back and left the
+    # install with no virtualenv at all: the release reverted underneath it and every
+    # gateway refusing to start (R-UPD-28).
     kept = False
-    if venv.exists():
-        os.rename(venv, outgoing)
-        kept = True
+    # Setting the old one aside is inside the guard too. Left outside it, a rename that
+    # failed — a permission, a full disk — came out of here as a bare traceback, and the
+    # one caller invokes this without a `try` because everything else about it returns
+    # rather than raises. One promise, kept on every path.
     try:
+        kept = outgoing.exists()
+        if kept:
+            _discard(venv)   # however far the interrupted attempt got; the older one is truth
+        elif venv.exists():
+            os.rename(venv, outgoing)
+            kept = True
         why = _build(root, venv, wanted, asking, requirements)
+    except OSError as err:
+        _put_back(venv, outgoing, kept)
+        return f"could not build what rundesk needs: {err}"
     except BaseException:
         _put_back(venv, outgoing, kept)
         raise
@@ -310,7 +325,16 @@ def _put_back(venv: Path, outgoing: Path, kept: bool) -> None:
 
 
 def _discard(path: Path) -> None:
-    """Remove a virtualenv, whatever state it turned out to be in."""
+    """Remove a virtualenv, whatever state it turned out to be in.
+
+    **The same eight lines stand in `updater.py`, and that is deliberate.** This module
+    imports nothing of rundesk's on purpose — the installer calls it through a bare
+    `python3` before there is a virtualenv, and an update calls it part-way through
+    replacing every other module here — so reaching for the updater's copy would give it
+    the one dependency it is built not to have. Said here rather than left to be noticed,
+    because an unexplained twin reads like an oversight and invites somebody to fix one of
+    them and not the other.
+    """
     if path.is_dir() and not path.is_symlink():
         shutil.rmtree(path, ignore_errors=True)
     elif path.exists() or path.is_symlink():

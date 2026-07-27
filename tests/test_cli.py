@@ -742,7 +742,22 @@ class FakeAgents:
     def standing_before(self, name):
         return [pathlib.Path(f"/nowhere/{one}") for one in self._wrote] if name in ("gateway",) else []
 
+    def directory(self, name):
+        """Everything this agent is, in one place — as the real module resolves it.
+
+        Absent until now, which meant `cmd_add`'s refusal branch could not run at all: it
+        names where the records are, and reached an attribute the stand-in did not have. A
+        stand-in missing a surface the real one has raises only in production, which
+        `MEMORY.md` records as its own class of trap.
+        """
+        return self._at / name
+
     def add(self, name):
+        # The real one builds the records by walking the steps, so it raises on records
+        # this rundesk will not read — which is the whole reason `cmd_add` wraps it. A
+        # stand-in that quietly succeeded made that guard look untested.
+        if self.refuses is not None:
+            raise self.refuses
         self.added.append(name)
         made = [] if name in self._made else ["AGENTS.md", "home/"]
         if name not in self._made:
@@ -804,6 +819,13 @@ class FakeAgents:
         return self._complaints.get(name, [])
 
     def chosen(self, name):
+        # Refuses what the real one refuses. `agent.chosen` opens the store, which raises
+        # on records this rundesk will not read — and a stand-in that always answered
+        # cheerfully is exactly why a crash on that path reached a commit. A fake more
+        # generous than the thing it stands for hides whole features, twice in this
+        # codebase; this is the third.
+        if self.refuses is not None:
+            raise self.refuses
         return self._chosen.get(name, {})
 
     def remember(self, name, provider=None, model=None, settings=None, instructions=None):
@@ -922,6 +944,37 @@ def drive(argv, gateways=None, machine=None, agents=None):
             # what the caller was left with.
             code = usage.code if isinstance(usage.code, int) else 1
     return code, out.getvalue() + err.getvalue()
+
+
+class RepairingAnAgentWhoseRecordsWillNotOpen(unittest.TestCase):
+    """R-AGT-18, R-STO-12 — `rundesk add <name>` with no `--provider` is the ordinary
+    repair, because the brain is already remembered. Asking the store which one it is
+    opens records this rundesk may refuse, and asked without a guard that came out as a
+    raw traceback — for exactly the agent an owner was trying to repair."""
+
+    def _repairing(self, why):
+        agents = FakeAgents(made=["ava"])
+        agents.refuses = why
+        return drive(["add", "ava"], agents=agents)
+
+    def test_records_this_rundesk_will_not_read_are_said_rather_than_raised(self):
+        for why in (store.TooNew(99, 1), store.Behind(0, 1), store.Unreadable("state.db")):
+            with self.subTest(why=type(why).__name__):
+                code, said = self._repairing(why)
+                self.assertEqual(1, code, said)
+                self.assertIn("NOT MADE", said,
+                              "it did not report the refusal the way every other verb does")
+                self.assertNotIn("NO BRAIN", said,
+                                 "a store it could not read was read as an agent with no brain")
+
+    def test_an_agent_that_has_a_brain_is_still_not_asked_for_one_again(self):
+        """R-AGT-4 — the other half: making one that already has a brain is a repair, and
+        demanding it again would make the repair impossible to type."""
+        agents = FakeAgents(made=["ava"])
+        agents.remember("ava", provider="codex")
+        code, said = drive(["add", "ava"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertNotIn("NO BRAIN", said)
 
 
 class ServingAGateway(unittest.TestCase):
