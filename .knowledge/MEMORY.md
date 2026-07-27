@@ -418,6 +418,27 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   (`step.version` → `step.at.name` is character-for-character the same size) matches both. The
   suite then keeps failing against code that is byte-for-byte correct, and `diff` says nothing
   is wrong. `touch src/rundesk/<module>.py` after restoring invalidates it.
+- **`DROP TABLE` fires the foreign-key actions pointing *at* it, so rebuilding `schedule`
+  silently empties `run.schedule_id`.** With `PRAGMA foreign_keys=ON` — which is how the
+  runner opens every step's connection — `DROP TABLE` performs an implicit `DELETE FROM`
+  first, and that fires `ON DELETE SET NULL` on every run a schedule ever started. The
+  rebuild then looks perfect: the table is right, the schedules are all there, and the one
+  thing `001.py` added that clause *to preserve* is gone, with nothing raised. A step that
+  rebuilds a referenced table must read the links out first (`SELECT n, schedule_id FROM run
+  WHERE schedule_id IS NOT NULL`), do the rebuild, put them back, and end on
+  `PRAGMA foreign_key_check` — which returns rows rather than raising, so it has to be read
+  and raised on by hand.
+- **`PRAGMA foreign_keys=OFF` is a no-op inside a transaction, and answers `1` when you ask
+  it back.** So SQLite's documented twelve-step procedure for changing a table's shape —
+  which *begins* by turning foreign keys off — cannot be followed by a migration step at all:
+  the runner hands the step a live `BEGIN IMMEDIATE`, and a step may not commit. Neither
+  `PRAGMA legacy_alter_table=ON` nor `defer_foreign_keys` rescues it; the first still rewrites
+  the reference and the second defers violations while the actions still run. What does work,
+  probed on both `legacy_alter_table` settings: create the new table, copy, `DROP TABLE` the
+  old, `ALTER TABLE … RENAME TO` the old name — after which the referencing table's clause
+  names the rebuilt one — then restore the links by hand. Restore `sqlite_sequence` too: the
+  drop takes the old table's row with it, and an `AUTOINCREMENT` id that goes backwards can
+  be re-issued.
 - **Breaking `migration.py` to remove a step's spare files *before* the version commits proves
   nothing** — a probe that looks decisive and fails silently. A step that dies never returns its
   list, so the runner has nothing to remove on the path the claim is about, and every case still

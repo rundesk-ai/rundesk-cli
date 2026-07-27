@@ -30,6 +30,19 @@ from rundesk import migration, store  # noqa: E402
 AT = "2026-07-26T09:00:00Z"
 LATER = "2026-07-26T10:00:00Z"
 
+#: Where a step this suite writes for itself is numbered from — **above whatever ships**.
+#: A case that builds its records through the real store gets them at the shape this rundesk
+#: understands, so a step numbered at or below that has already run: the case then proves
+#: nothing and says so by failing, a long way from the reason. Derived rather than written,
+#: because it *was* written as `2` in twenty places and every one of them broke the day a
+#: second step shipped.
+MINE = store.VERSION + 1
+
+
+def label(version: int) -> str:
+    """What a step of this suite's own signs the ledger as — its file's own name."""
+    return f"{version:03d}"
+
 # What a step that is never meant to run looks like — enough to be found, and no work in it.
 NOTHING = "def up(conn, home):\n    return []\n"
 
@@ -246,16 +259,16 @@ class BringingRecordsForward(WithStepsOfThisCasesOwn):
         run, which is the belt to the ledger's braces."""
         self.records()
         self.ledger()
-        self.wrote(2, working("mark", "002"))
-        self.assertEqual(2, migration.carry(self.at, self.home, 2, where=self.steps))
-        self.assertEqual(["002"], self.ran())
+        self.wrote(MINE, working("mark", label(MINE)))
+        self.assertEqual(MINE, migration.carry(self.at, self.home, MINE, where=self.steps))
+        self.assertEqual([label(MINE)], self.ran())
         self.assertIn("mark", self.columns())
         said = []
-        self.assertEqual(2, migration.carry(self.at, self.home, 2, where=self.steps,
-                                            note=said.append))
-        self.assertEqual(["002"], self.ran(), "a step that had already run ran again")
+        self.assertEqual(MINE, migration.carry(self.at, self.home, MINE, where=self.steps,
+                                               note=said.append))
+        self.assertEqual([label(MINE)], self.ran(), "a step that had already run ran again")
         self.assertEqual([], said, "an update with nothing to do said it was doing something")
-        self.assertEqual(2, self.stamped())
+        self.assertEqual(MINE, self.stamped())
 
     def test_records_already_at_the_shape_installed_need_no_step(self):
         """A fresh agent is born at the shape this rundesk installs, so the first thing an
@@ -276,14 +289,15 @@ class BringingRecordsForward(WithStepsOfThisCasesOwn):
         at, and both versions are named."""
         self.records()
         self.ledger()
-        self.raw().execute("PRAGMA user_version = 5")
-        self.wrote(2, working("mark", "002"))
+        ahead = MINE + 3
+        self.raw().execute(f"PRAGMA user_version = {ahead}")
+        self.wrote(MINE, working("mark", label(MINE)))
         with self.assertRaises(migration.Failed) as refused:
-            migration.carry(self.at, self.home, 2, where=self.steps)
-        self.assertEqual(5, refused.exception.reached)
-        self.assertIn("version 5", str(refused.exception))
-        self.assertIn("expects 2", str(refused.exception))
-        self.assertEqual(5, self.stamped())
+            migration.carry(self.at, self.home, MINE, where=self.steps)
+        self.assertEqual(ahead, refused.exception.reached)
+        self.assertIn(f"version {ahead}", str(refused.exception))
+        self.assertIn(f"expects {MINE}", str(refused.exception))
+        self.assertEqual(ahead, self.stamped())
         self.assertEqual([], self.ran(), "data nobody understood was migrated anyway")
         self.assertNotIn("mark", self.columns())
 
@@ -291,11 +305,11 @@ class BringingRecordsForward(WithStepsOfThisCasesOwn):
         """A step whose work is spelled anything but `up` has not run, and skipping it would
         stamp the version saying it had — the one lie the version-as-record cannot survive."""
         self.records()
-        self.wrote(2, "def down(conn, home):\n    return []\n")
+        self.wrote(MINE, "def down(conn, home):\n    return []\n")
         with self.assertRaises(migration.Failed) as refused:
-            migration.carry(self.at, self.home, 2, where=self.steps)
+            migration.carry(self.at, self.home, MINE, where=self.steps)
         self.assertIsInstance(refused.exception.why, AttributeError)
-        self.assertIn("002.py", str(refused.exception))
+        self.assertIn(f"{label(MINE)}.py", str(refused.exception))
         self.assertIn("no `up`", str(refused.exception))
         self.assertEqual(store.VERSION, self.stamped())
 
@@ -305,12 +319,13 @@ class BringingRecordsForward(WithStepsOfThisCasesOwn):
         version its records are going to."""
         self.records()
         self.ledger()
-        self.wrote(2, working("mark", "002"))
-        self.wrote(3, working("named_model", "003"))
+        self.wrote(MINE, working("mark", label(MINE)))
+        self.wrote(MINE + 1, working("named_model", label(MINE + 1)))
         said = []
-        self.assertEqual(3, migration.carry(self.at, self.home, 3, where=self.steps,
-                                            note=said.append))
-        self.assertEqual(["migrating ops to version 2", "migrating ops to version 3"], said)
+        self.assertEqual(MINE + 1, migration.carry(self.at, self.home, MINE + 1,
+                                                   where=self.steps, note=said.append))
+        self.assertEqual([f"migrating ops to version {MINE}",
+                          f"migrating ops to version {MINE + 1}"], said)
 
     def test_nothing_is_said_when_there_is_nothing_to_do(self):
         """Most agents on most updates. An owner reading a line about work that did not
@@ -332,9 +347,9 @@ class WhenAStepDoesNotFinish(WithStepsOfThisCasesOwn):
         be run again once the trip is taken away."""
         self.records()
         self.ledger()
-        self.wrote(2, working("mark", "002"))
-        self.wrote(3, working("named_model", "003", TRIPS))
-        self.wrote(4, working("caused_by", "004"))
+        self.wrote(MINE, working("mark", label(MINE)))
+        self.wrote(MINE + 1, working("named_model", label(MINE + 1), TRIPS))
+        self.wrote(MINE + 2, working("caused_by", label(MINE + 2)))
         (self.home / "trip").write_text("this step is not right yet\n")
 
     def test_a_step_that_fails_leaves_the_data_exactly_as_it_was(self):
@@ -343,18 +358,18 @@ class WhenAStepDoesNotFinish(WithStepsOfThisCasesOwn):
         — and an owner whose update went wrong has lost nothing at all."""
         self.records()
         self.ledger()
-        self.wrote(2, """
+        self.wrote(MINE, f"""
             def up(conn, home):
                 conn.execute("ALTER TABLE agent ADD COLUMN badge TEXT")
                 conn.execute("UPDATE agent SET badge = 'kept' WHERE id = 1")
                 conn.execute(
                     "INSERT INTO channel (name, kind, allow, created_at)"
                     " VALUES ('ops', 'discord', '[]', '2026-07-26T09:00:00Z')")
-                conn.execute("INSERT INTO ran (step) VALUES ('002')")
+                conn.execute("INSERT INTO ran (step) VALUES ('{label(MINE)}')")
                 raise RuntimeError("the shape underneath was not what this step assumed")
         """)
         with self.assertRaises(migration.Failed):
-            migration.carry(self.at, self.home, 2, where=self.steps)
+            migration.carry(self.at, self.home, MINE, where=self.steps)
         self.assertNotIn("badge", self.columns(), "a failed step left its column behind")
         self.assertEqual(0, self.raw().execute("SELECT count(*) FROM channel").fetchone()[0],
                          "a failed step left a row behind")
@@ -366,7 +381,7 @@ class WhenAStepDoesNotFinish(WithStepsOfThisCasesOwn):
         update run again would then do the work twice, and there is no record to stop it.
         One step file, tripped and then not, so the pair is read in both directions."""
         self.records()
-        self.wrote(2, """
+        self.wrote(MINE, """
             def up(conn, home):
                 conn.execute("ALTER TABLE agent ADD COLUMN mark TEXT")
                 conn.execute("UPDATE agent SET mark = 'carried' WHERE id = 1")
@@ -376,24 +391,25 @@ class WhenAStepDoesNotFinish(WithStepsOfThisCasesOwn):
         """)
         (self.home / "trip").write_text("not yet\n")
         with self.assertRaises(migration.Failed):
-            migration.carry(self.at, self.home, 2, where=self.steps)
+            migration.carry(self.at, self.home, MINE, where=self.steps)
         self.assertNotIn("mark", self.columns(),
                          "the work committed without the version that names it")
         self.assertEqual(store.VERSION, self.stamped())
         (self.home / "trip").unlink()
-        self.assertEqual(2, migration.carry(self.at, self.home, 2, where=self.steps))
+        self.assertEqual(MINE, migration.carry(self.at, self.home, MINE, where=self.steps))
         self.assertIn("mark", self.columns())
-        self.assertEqual(2, self.stamped(), "the work committed and the version did not follow")
+        self.assertEqual(MINE, self.stamped(),
+                         "the work committed and the version did not follow")
 
     def test_a_step_that_finished_before_a_later_one_failed_stays_finished(self):
         """Each step is its own transaction, so an update stopped part-way is not one long
         thing rolled back — it is a version that moved as far as it honestly got."""
         self.three_steps_the_middle_one_tripping()
         with self.assertRaises(migration.Failed):
-            migration.carry(self.at, self.home, 4, where=self.steps)
-        self.assertEqual(2, self.stamped(),
+            migration.carry(self.at, self.home, MINE + 2, where=self.steps)
+        self.assertEqual(MINE, self.stamped(),
                          "the step that did finish was rolled back with the one that did not")
-        self.assertEqual(["002"], self.ran())
+        self.assertEqual([label(MINE)], self.ran())
         self.assertIn("mark", self.columns())
         self.assertNotIn("named_model", self.columns(), "the step that failed left work behind")
         self.assertNotIn("caused_by", self.columns(), "a step after the failure ran anyway")
@@ -404,12 +420,12 @@ class WhenAStepDoesNotFinish(WithStepsOfThisCasesOwn):
         about; naming neither leaves them restoring a backup."""
         self.three_steps_the_middle_one_tripping()
         with self.assertRaises(migration.Failed) as stopped:
-            migration.carry(self.at, self.home, 4, where=self.steps)
-        self.assertEqual("003.py", stopped.exception.step)
-        self.assertEqual(2, stopped.exception.reached)
+            migration.carry(self.at, self.home, MINE + 2, where=self.steps)
+        self.assertEqual(f"{label(MINE + 1)}.py", stopped.exception.step)
+        self.assertEqual(MINE, stopped.exception.reached)
         self.assertIsInstance(stopped.exception.why, RuntimeError)
-        self.assertIn("003.py", str(stopped.exception))
-        self.assertIn("still at version 2", str(stopped.exception))
+        self.assertIn(f"{label(MINE + 1)}.py", str(stopped.exception))
+        self.assertIn(f"still at version {MINE}", str(stopped.exception))
         self.assertIn("the shape underneath was not what this step assumed",
                       str(stopped.exception))
 
@@ -420,15 +436,16 @@ class WhenAStepDoesNotFinish(WithStepsOfThisCasesOwn):
         not offered."""
         self.three_steps_the_middle_one_tripping()
         with self.assertRaises(migration.Failed):
-            migration.carry(self.at, self.home, 4, where=self.steps)
+            migration.carry(self.at, self.home, MINE + 2, where=self.steps)
         (self.home / "trip").unlink()
         said = []
-        self.assertEqual(4, migration.carry(self.at, self.home, 4, where=self.steps,
-                                            note=said.append))
-        self.assertEqual(["002", "003", "004"], self.ran(),
+        self.assertEqual(MINE + 2, migration.carry(self.at, self.home, MINE + 2,
+                                                   where=self.steps, note=said.append))
+        self.assertEqual([label(MINE), label(MINE + 1), label(MINE + 2)], self.ran(),
                          "the update began again from the start rather than where it stopped")
-        self.assertEqual(["migrating ops to version 3", "migrating ops to version 4"], said)
-        self.assertEqual(4, self.stamped())
+        self.assertEqual([f"migrating ops to version {MINE + 1}",
+                          f"migrating ops to version {MINE + 2}"], said)
+        self.assertEqual(MINE + 2, self.stamped())
 
 
 class WhatAStepKeepsAsFiles(WithStepsOfThisCasesOwn):
@@ -438,7 +455,7 @@ class WhatAStepKeepsAsFiles(WithStepsOfThisCasesOwn):
         was = self.home / "kept" / "what-was-said.json"
         was.parent.mkdir()
         was.write_text('{"said": "what about the parser"}\n')
-        self.wrote(2, COPYING)
+        self.wrote(MINE, COPYING)
         return was
 
     def test_what_a_step_copied_is_let_go_of_only_once_the_version_has_committed(self):
@@ -447,11 +464,11 @@ class WhatAStepKeepsAsFiles(WithStepsOfThisCasesOwn):
         self.records()
         was = self.a_file_worth_keeping()
         now = self.home / "moved" / "what-was-said.json"
-        self.assertEqual(2, migration.carry(self.at, self.home, 2, where=self.steps))
+        self.assertEqual(MINE, migration.carry(self.at, self.home, MINE, where=self.steps))
         self.assertTrue(now.exists(), "the copy the step made is not there")
         self.assertEqual('{"said": "what about the parser"}\n', now.read_text())
         self.assertFalse(was.exists(), "what the step handed back was never let go of")
-        self.assertEqual(2, self.stamped())
+        self.assertEqual(MINE, self.stamped())
 
     def test_a_step_that_fails_after_copying_leaves_both_copies_and_the_version_where_it_was(self):
         """The same step, dying after the copy. A rename here would have taken the owner's
@@ -462,7 +479,7 @@ class WhatAStepKeepsAsFiles(WithStepsOfThisCasesOwn):
         now = self.home / "moved" / "what-was-said.json"
         (self.home / "trip").write_text("the records will refuse this\n")
         with self.assertRaises(migration.Failed):
-            migration.carry(self.at, self.home, 2, where=self.steps)
+            migration.carry(self.at, self.home, MINE, where=self.steps)
         self.assertTrue(was.exists(), "what the owner had was removed by a step that failed")
         self.assertTrue(now.exists(), "the copy went too, so a retry has nothing to compare")
         self.assertEqual(store.VERSION, self.stamped())
@@ -545,6 +562,123 @@ class TheShapeAnAgentStartsWith(WithStepsOfThisCasesOwn):
         self.assertEqual(1, self.raw().execute("SELECT count(*) FROM channel").fetchone()[0])
 
 
+class CarryingTheShapeThatShippedForward(WithStepsOfThisCasesOwn):
+    """The steps that really ship, against records built at the version an owner is on.
+
+    The other cases here write the steps they are about, which is what keeps them true as
+    steps land. These are the opposite claim and need the opposite arrangement: what has to
+    be proved is that the file somebody's records were *actually built by* carries them into
+    the shape this rundesk expects, so the first step is copied out of `migrations/` and run
+    on its own to build a database at version one.
+
+    Never the owner's install. A copy of one step, a scratch directory, and a database this
+    case made.
+    """
+
+    #: The version an owner running the release before this one is on, and the only shape
+    #: there has ever been to carry forward from.
+    FIRST = 1
+
+    def setUp(self):
+        super().setUp()
+        # A directory holding the first step alone, so `carry` can stop at version one the
+        # way an owner's records really did.
+        self.only_the_first = self.where / "first"
+        self.only_the_first.mkdir()
+        shutil.copy2(migration.STEPS / "001.py", self.only_the_first / "001.py")
+
+    def built_at_the_first_shape(self) -> None:
+        """Records at version one, furnished the way an owner's are.
+
+        A cron schedule that has fired, the channel it reports to, and a run the clock
+        started — which is the link the rebuild below can silently destroy.
+        """
+        self.assertEqual(self.FIRST, migration.carry(self.at, self.home, want=self.FIRST,
+                                                     where=self.only_the_first))
+        conn = sqlite3.connect(str(self.at), isolation_level=None, timeout=5.0)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("INSERT INTO channel (name, kind, allow, created_at)"
+                         " VALUES ('ops', 'discord', '[]', ?)", (AT,))
+            conn.execute(
+                "INSERT INTO schedule (name, cron, command, channel, place,"
+                " last_auto_run_at, last_outcome, created_at)"
+                " VALUES ('nightly', '0 3 * * *', ?, 'ops', '#ops', '2026-07-25 03:00',"
+                " 'ok', ?)", ('["/usr/local/bin/tidy", "--quiet"]', AT))
+            # Added and taken away, so the id counter stands above the highest id left —
+            # which is the only arrangement in which losing it can be seen.
+            conn.execute("INSERT INTO schedule (name, cron, prompt, created_at)"
+                         " VALUES ('weekly', '0 9 * * 1', 'what is worth knowing?', ?)", (AT,))
+            conn.execute("DELETE FROM schedule WHERE name = 'weekly'")
+            conn.execute(
+                "INSERT INTO run (id, schedule_id, source, provider, posture, started_at)"
+                " VALUES ('run-1', 1, 'schedule', 'codex', 'autonomous', ?)", (AT,))
+        finally:
+            # Closed before anything migrates it: a connection left open holds the
+            # write-ahead log's read lock on newer Pythons and not on the floor version,
+            # so the leak would be invisible exactly where CI would catch it.
+            conn.close()
+
+    def carried(self):
+        """Forward to the shape this rundesk understands, through the steps that ship."""
+        self.assertEqual(store.VERSION,
+                         migration.carry(self.at, self.home, want=store.VERSION))
+        conn = self.raw()
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    def test_a_schedule_written_at_the_shape_that_shipped_is_carried_forward_untouched(self):
+        """Every schedule anybody has is a repeating one, and stays exactly one. A step that
+        rebuilds the table it lives in has every opportunity to drop a column quietly — what
+        it reports back is not the check, what is in the row afterwards is."""
+        self.built_at_the_first_shape()
+        one = self.carried().execute("SELECT * FROM schedule").fetchone()
+        self.assertEqual(
+            ("nightly", 1, "0 3 * * *", '["/usr/local/bin/tidy", "--quiet"]', None,
+             "ops", "#ops", "2026-07-25 03:00", "ok", AT),
+            (one["name"], one["enabled"], one["cron"], one["command"], one["prompt"],
+             one["channel"], one["place"], one["last_auto_run_at"], one["last_outcome"],
+             one["created_at"]))
+        self.assertIsNone(one["at"], "a schedule that recurs was given a single moment")
+
+    def test_a_run_still_names_the_schedule_that_started_it_after_the_shape_changes(self):
+        """The loss this step exists not to cause. With foreign keys on — which is how the
+        runner opens every step — dropping the table a run references performs an implicit
+        delete that fires `ON DELETE SET NULL`, so a rebuild that looks perfect leaves every
+        run saying the clock started it and no longer saying which schedule."""
+        self.built_at_the_first_shape()
+        conn = self.carried()
+        started_by = conn.execute("SELECT schedule_id FROM run WHERE id = 'run-1'").fetchone()
+        self.assertEqual(1, started_by["schedule_id"],
+                         "the run stopped saying which schedule started it")
+        self.assertEqual(1, conn.execute(
+            "SELECT id FROM schedule WHERE name = 'nightly'").fetchone()["id"])
+        self.assertEqual([], conn.execute("PRAGMA foreign_key_check").fetchall())
+
+    def test_records_carried_forward_refuse_a_schedule_stating_a_time_and_a_moment_both(self):
+        """The rebuilt table has to enforce what the new shape says, not merely hold the
+        column: a CHECK that did not survive the rebuild is a rule nothing keeps, and the
+        first thing to notice would be two schedules disagreeing about when they run."""
+        self.built_at_the_first_shape()
+        conn = self.carried()
+        for cron, at in (("0 3 * * *", "2026-07-28 09:00"), (None, None)):
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute("INSERT INTO schedule (name, cron, at, command, created_at)"
+                             " VALUES ('both-or-neither', ?, ?, '[]', ?)", (cron, at, AT))
+
+    def test_a_schedule_added_after_the_shape_changes_never_takes_an_id_already_used(self):
+        """Dropping a table takes its id counter with it. Left to restart from the highest
+        id copied across, the next schedule added would take one a removed schedule already
+        held — and a run still pointing at that id would read as this new schedule's."""
+        self.built_at_the_first_shape()
+        conn = self.carried()
+        conn.execute("INSERT INTO schedule (name, at, command, created_at)"
+                     " VALUES ('tidy-up', '2026-07-28 09:00', '[]', ?)", (AT,))
+        self.assertEqual(3, conn.execute(
+            "SELECT id FROM schedule WHERE name = 'tidy-up'").fetchone()["id"])
+
+
 class EachAgentIsCarriedOnItsOwn(WithStepsOfThisCasesOwn):
     """One database per agent means one migration per agent, and no agent waits on another.
 
@@ -574,14 +708,16 @@ class EachAgentIsCarriedOnItsOwn(WithStepsOfThisCasesOwn):
         self.records()
         self.ledger()
         theirs_home, theirs_at, theirs = self.another("plans")
-        self.wrote(2, self.SIGNS % "two")
-        self.wrote(3, self.SIGNS % "three")
+        self.wrote(MINE, self.SIGNS % "two")
+        self.wrote(MINE + 1, self.SIGNS % "three")
 
         # one of them is already part way, as an agent made after a release would be
-        self.raw().execute("PRAGMA user_version = 2")
+        self.raw().execute(f"PRAGMA user_version = {MINE}")
 
-        self.assertEqual(3, migration.carry(self.at, self.home, 3, where=self.steps))
-        self.assertEqual(3, migration.carry(theirs_at, theirs_home, 3, where=self.steps))
+        self.assertEqual(MINE + 1,
+                         migration.carry(self.at, self.home, MINE + 1, where=self.steps))
+        self.assertEqual(MINE + 1,
+                         migration.carry(theirs_at, theirs_home, MINE + 1, where=self.steps))
 
         self.assertEqual(["three"], self.ran(), "a step already taken was taken again")
         self.assertEqual(
@@ -593,22 +729,22 @@ class EachAgentIsCarriedOnItsOwn(WithStepsOfThisCasesOwn):
         self.records()
         self.ledger()
         theirs_home, theirs_at, theirs = self.another("plans")
-        self.wrote(2, self.SIGNS % "two")
-        self.wrote(3, """
+        self.wrote(MINE, self.SIGNS % "two")
+        self.wrote(MINE + 1, """
             def up(conn, home):
                 conn.execute("INSERT INTO ran (step) VALUES ('three')")
                 raise RuntimeError("this one cannot be moved")
             """)
 
         with self.assertRaises(migration.Failed) as stopped:
-            migration.carry(theirs_at, theirs_home, 3, where=self.steps)
-        self.assertEqual(2, stopped.exception.reached,
+            migration.carry(theirs_at, theirs_home, MINE + 1, where=self.steps)
+        self.assertEqual(MINE, stopped.exception.reached,
                          "it stopped somewhere other than where the last good step left it")
 
         # the one that failed kept what it had, and stopped where it stopped
         self.assertEqual([("two",)], list(theirs.execute("SELECT step FROM ran ORDER BY n")))
         self.assertEqual(
-            2, sqlite3.connect(str(theirs_at)).execute("PRAGMA user_version").fetchone()[0])
+            MINE, sqlite3.connect(str(theirs_at)).execute("PRAGMA user_version").fetchone()[0])
         # and the other agent was never opened at all
         self.assertEqual(store.VERSION, self.stamped(),
                          "one agent's failure reached another agent's records")
@@ -653,7 +789,7 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
     def _stumbles_on(self, called: str):
         """A step that works for every agent but one. Two agents are never at the same
         version, so a walk always stops with earlier ones already carried."""
-        self.wrote(2, f"""
+        self.wrote(MINE, f"""
             def up(conn, home):
                 conn.execute("INSERT INTO ran (step) VALUES ('two')")
                 if home.name == {called!r}:
@@ -679,30 +815,31 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
             self.nothing_open(self.agent(called))
         self._stumbles_on("john")
 
-        why = migration.carry_every_or_put_back(self.where, 2, self._aside(),
+        why = migration.carry_every_or_put_back(self.where, MINE, self._aside(),
                                                 where=self.steps)
 
         self.assertIsNotNone(why, "a walk that stopped reported success")
         self.assertIn("john", why, "it never said which agent")
         self.assertIn("no such column", why, "it never said why")
-        self.assertEqual(1, self._version("ava"), "an agent carried before the failure kept it")
+        self.assertEqual(store.VERSION, self._version("ava"),
+                         "an agent carried before the failure kept it")
         self.assertEqual([], self._rows("ava"), "what a step wrote was left behind")
-        self.assertEqual(1, self._version("john"))
-        self.assertEqual(1, self._version("plans"))
+        self.assertEqual(store.VERSION, self._version("john"))
+        self.assertEqual(store.VERSION, self._version("plans"))
 
     def test_a_copy_is_let_go_of_once_the_move_it_insured_is_proved(self):
         """R-MIG-20 — kept exactly as long as it is the only way back, and no longer."""
         self.nothing_open(self.agent("ava"))
-        self.wrote(2, """
+        self.wrote(MINE, """
             def up(conn, home):
                 conn.execute("INSERT INTO ran (step) VALUES ('two')")
                 return []
             """)
         aside = self._aside()
 
-        self.assertIsNone(migration.carry_every_or_put_back(self.where, 2, aside,
+        self.assertIsNone(migration.carry_every_or_put_back(self.where, MINE, aside,
                                                             where=self.steps))
-        self.assertEqual(2, self._version("ava"), "the agent was not carried")
+        self.assertEqual(MINE, self._version("ava"), "the agent was not carried")
         self.assertEqual([], list(aside.iterdir()),
                          "a proved update kept a copy of what it replaced")
 
@@ -712,15 +849,20 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
         agents, and reading three logs afterwards is what this exists to replace."""
         self.nothing_open(self.agent("ava"))
         self.nothing_open(self.agent("john"))
-        migration.carry(store.path_for(self.where / "john"), self.where / "john", 1,
+        self.wrote(MINE, signs("two"))
+        self.wrote(MINE + 1, signs("three"))
+        # One of them further along than the other, which is the whole point: two agents are
+        # never at the same version, so what would run has as many answers as there are.
+        migration.carry(store.path_for(self.where / "john"), self.where / "john", MINE,
                         where=self.steps)
-        self.wrote(2, signs("two"))
-        self.wrote(3, signs("three"))
 
-        standing = migration.what_would_run(self.where, 3, where=self.steps)
+        standing = migration.what_would_run(self.where, MINE + 1, where=self.steps)
         self.assertEqual({"ava", "john"}, set(standing))
-        self.assertEqual(["002.py", "003.py"], [repr(one) for one in standing["ava"]])
-        self.assertEqual(1, self._version("ava"), "asking what would happen moved something")
+        self.assertEqual([f"{label(MINE)}.py", f"{label(MINE + 1)}.py"],
+                         [repr(one) for one in standing["ava"]])
+        self.assertEqual([f"{label(MINE + 1)}.py"], [repr(one) for one in standing["john"]])
+        self.assertEqual(store.VERSION, self._version("ava"),
+                         "asking what would happen moved something")
 
     def test_asking_what_would_run_never_makes_records_for_an_agent_that_has_none(self):
         """`carry` reaches its database through `sqlite3.connect`, which *makes* one where
@@ -745,16 +887,16 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
         self.nothing_open(self.agent("ava"))
         self._stumbles_on("ava")
 
-        migration.carry_every_or_put_back(self.where, 2, where=self.steps)
+        migration.carry_every_or_put_back(self.where, MINE, where=self.steps)
         self.assertTrue((self.where / migration.ROLLBACK / "ava").is_dir(),
                         "the copy went somewhere the agents directory does not cover")
 
     def test_what_may_have_to_be_put_back_is_never_walked_as_an_agent(self):
         self.nothing_open(self.agent("ava"))
-        self.wrote(2, signs("two"))
+        self.wrote(MINE, signs("two"))
 
-        migration.carry_every_or_put_back(self.where, 2, where=self.steps)
-        self.assertEqual(2, self._version("ava"))
+        migration.carry_every_or_put_back(self.where, MINE, where=self.steps)
+        self.assertEqual(MINE, self._version("ava"))
         self.assertFalse((self.where / migration.ROLLBACK / migration.ROLLBACK).exists(),
                          "the place copies are kept was carried forward as though it were one")
 
@@ -765,7 +907,7 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
         self.nothing_open(self.agent("ava"))
         self._stumbles_on("ava")
 
-        why = migration.carry_every_or_put_back(self.where, 2, self._aside(),
+        why = migration.carry_every_or_put_back(self.where, MINE, self._aside(),
                                                 where=self.steps)
         self.assertIsNotNone(why)
         self.assertIn("ava", why)
@@ -773,13 +915,13 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
     def test_every_agent_is_walked_and_each_reaches_its_own_version(self):
         for called in ("ava", "john", "plans"):
             self.agent(called)
-        self.wrote(2, """
+        self.wrote(MINE, """
             def up(conn, home):
                 conn.execute("INSERT INTO ran (step) VALUES ('two')")
                 return []
             """)
-        reached = migration.carry_every(self.where, 2, where=self.steps)
-        self.assertEqual({"ava": 2, "john": 2, "plans": 2}, reached)
+        reached = migration.carry_every(self.where, MINE, where=self.steps)
+        self.assertEqual({"ava": MINE, "john": MINE, "plans": MINE}, reached)
         for called in ("ava", "john", "plans"):
             self.assertEqual(
                 [("two",)],
@@ -810,7 +952,7 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
     def test_the_first_agent_that_cannot_be_moved_stops_the_walk(self):
         for called in ("ava", "john", "zeta"):
             self.agent(called)
-        self.wrote(2, """
+        self.wrote(MINE, """
             def up(conn, home):
                 if home.name == "john":
                     raise RuntimeError("this one cannot be moved")
@@ -818,11 +960,11 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
                 return []
             """)
         with self.assertRaises(migration.Failed):
-            migration.carry_every(self.where, 2, where=self.steps)
+            migration.carry_every(self.where, MINE, where=self.steps)
         # what was carried before it stays carried; what came after is untouched
-        self.assertEqual(2, self.stamped_at(self.where / "ava"))
-        self.assertEqual(1, self.stamped_at(self.where / "john"))
-        self.assertEqual(1, self.stamped_at(self.where / "zeta"),
+        self.assertEqual(MINE, self.stamped_at(self.where / "ava"))
+        self.assertEqual(store.VERSION, self.stamped_at(self.where / "john"))
+        self.assertEqual(store.VERSION, self.stamped_at(self.where / "zeta"),
                          "an agent after the failure was moved anyway")
 
     def stamped_at(self, home) -> int:
@@ -835,28 +977,28 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
         finds the agent down something to read — and this is the one moment where what happened
         to an agent's records is not yet in those records."""
         home, at, _ = self.agent("ava")
-        self.wrote(2, "def up(conn, home):\n    return []\n")
-        migration.carry_every(self.where, 2, where=self.steps,
+        self.wrote(MINE, "def up(conn, home):\n    return []\n")
+        migration.carry_every(self.where, MINE, where=self.steps,
                               clock=lambda: "2026-07-26 03:00:00")
         wrote = self.said(home)
-        self.assertIn("moving records from version 1 to 2", wrote)
-        self.assertIn("002.py finished — records are at version 2", wrote)
+        self.assertIn(f"moving records from version {store.VERSION} to {MINE}", wrote)
+        self.assertIn(f"{label(MINE)}.py finished — records are at version {MINE}", wrote)
         self.assertIn("2026-07-26 03:00:00", wrote)
         self.assertIn("INFO", wrote)
 
     def test_a_migration_that_failed_says_so_in_the_agents_own_log(self):
         home, at, _ = self.agent("ava")
-        self.wrote(2, """
+        self.wrote(MINE, """
             def up(conn, home):
                 raise RuntimeError("the machine went away")
             """)
         with self.assertRaises(migration.Failed):
-            migration.carry_every(self.where, 2, where=self.steps,
+            migration.carry_every(self.where, MINE, where=self.steps,
                                   clock=lambda: "2026-07-26 03:00:00")
         wrote = self.said(home)
         self.assertIn("ERROR", wrote)
         self.assertIn("did not finish", wrote)
-        self.assertIn("still at version 1", wrote)
+        self.assertIn(f"still at version {store.VERSION}", wrote)
         self.assertIn("the machine went away", wrote)
 
     def test_a_log_that_cannot_be_written_does_not_stop_the_update(self):
@@ -900,14 +1042,16 @@ class WhatAnUpdateMustNotCost(WithStepsOfThisCasesOwn):
         """R-MIG-17 — asked of a step that really changes the shape, because a step that
         changed nothing would prove only that nothing happened."""
         named = self.furnished()
-        self.wrote(2, """
+        self.wrote(MINE, """
             def up(conn, home):
                 conn.execute("ALTER TABLE run ADD COLUMN carried TEXT")
                 return []
             """)
-        self.assertEqual({"ops": 2}, migration.carry_every(self.where, 2, where=self.steps))
+        self.assertEqual({"ops": MINE},
+                         migration.carry_every(self.where, MINE, where=self.steps))
+        self.assertIn("carried", self.columns("run"), "the step never really ran")
 
-        kept = store.Store(self.at, version=2)
+        kept = store.Store(self.at, version=MINE)
         self.assertEqual("codex", kept.agent()["provider"])
         self.assertEqual(["ops"], [one["name"] for one in kept.channels()])
         self.assertEqual(LATER, kept.schedule("nightly")["last_auto_run_at"])
@@ -926,26 +1070,26 @@ class WhatAnUpdateMustNotCost(WithStepsOfThisCasesOwn):
         downgraded is kept down and told which version it found, rather than reading a shape
         it cannot know what it is missing from."""
         self.furnished()
-        self.wrote(2, "def up(conn, home):\n    return []\n")
-        migration.carry_every(self.where, 2, where=self.steps)
+        self.wrote(MINE, "def up(conn, home):\n    return []\n")
+        migration.carry_every(self.where, MINE, where=self.steps)
 
         with self.assertRaises(migration.Failed) as refused:
-            migration.carry_every(self.where, 1, where=self.steps)
+            migration.carry_every(self.where, MINE - 1, where=self.steps)
         self.assertIn("ops", str(refused.exception), "it never said which agent")
-        self.assertEqual(2, self.stamped(), "an older rundesk moved the records back")
+        self.assertEqual(MINE, self.stamped(), "an older rundesk moved the records back")
 
     def test_an_agent_already_at_the_shape_installed_is_not_moved_again(self):
         """R-MIG-4 — the same update run twice migrates once, which is what makes an update
         that stopped part-way safe to simply run again."""
         self.furnished()
         self.ledger()
-        self.wrote(2, """
+        self.wrote(MINE, """
             def up(conn, home):
                 conn.execute("INSERT INTO ran (step) VALUES ('two')")
                 return []
             """)
-        migration.carry_every(self.where, 2, where=self.steps)
-        migration.carry_every(self.where, 2, where=self.steps)
+        migration.carry_every(self.where, MINE, where=self.steps)
+        migration.carry_every(self.where, MINE, where=self.steps)
         self.assertEqual(["two"], self.ran())
 
 
