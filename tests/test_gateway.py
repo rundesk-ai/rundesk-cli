@@ -288,7 +288,9 @@ class WhatIsRunning(WithARunDirectory):
         """R-GW-9 — the record is what tells an owner a gateway is up but wedged, so it
         has to keep moving on its own without anyone asking."""
         self.addCleanup(setattr, gateway, "BEAT_SECONDS", gateway.BEAT_SECONDS)
-        gateway.BEAT_SECONDS = 0.1
+        # Leave enough room between the observation wait and the stale threshold for a
+        # loaded older interpreter to schedule the heartbeat task.
+        gateway.BEAT_SECONDS = 0.2
         gw = self.made()
         serving = asyncio.ensure_future(gw.serve())
         record = self.where / f"{gw.name}.json"

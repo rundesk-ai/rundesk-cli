@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import os
 import pathlib
-import re
 import subprocess
 import sys
 import time
@@ -48,17 +47,20 @@ def suites() -> list[pathlib.Path]:
 def named_by_the_workflow(found: list[pathlib.Path]) -> str | None:
     """Which suites CI never runs, or None when it runs them all.
 
-    The workflow names each suite in a step of its own, so a red tick says which contract
-    broke without opening it. That legibility is worth keeping and is exactly what drifts:
-    a hand-kept list does not grow when `tests/` does.
+    CI delegates to the same discovery rule as this gate. A suite added under `tests/`
+    therefore runs locally and remotely without a second list to update.
     """
     if not WORKFLOW.is_file():
         return f"there is no {WORKFLOW.relative_to(ROOT)} to check against"
     text = WORKFLOW.read_text(encoding="utf-8")
-    ran = set(re.findall(r"tests/(test_[a-z0-9_]+\.py)", text))
-    missing = sorted(path.name for path in found if path.name not in ran)
-    if missing:
-        return "the workflow never runs " + ", ".join(missing)
+    runner = KNOWLEDGE / "scripts" / "ci-suites"
+    if ".knowledge/scripts/ci-suites" not in text:
+        return "the workflow does not invoke the discovering suite runner"
+    if not runner.is_file():
+        return "the workflow names a suite runner that does not exist"
+    source = runner.read_text(encoding="utf-8")
+    if 'glob("test_*.py")' not in source:
+        return "the CI suite runner does not discover every test_*.py suite"
     return None
 
 
