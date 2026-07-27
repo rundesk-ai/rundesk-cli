@@ -165,6 +165,7 @@ either. `doctor` reports what is discoverable per brain rather than asserting a 
 - What a skill should do when it must behave differently on one brain than another; no product surveyed
   scopes a skill by provider, and `compatibility` is advisory free text ignored by loaders.[1]
 - Whether the git-root widening of the upward walk should be defended against or merely documented.
+- Whether a `tool` record should carry which delegation a step belonged to. Claude sends enough to know — `parent_tool_use_id`, `subagent_type` and `task_description` — and rundesk reads none of it, so a turn that delegated reads as one agent doing everything.[14]
 - Whether a shared library should eventually be managed by a verb or left as links an owner makes.
 
 ## Sources

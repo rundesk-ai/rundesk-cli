@@ -69,7 +69,7 @@ WHOLE = "whole"
 #: rather than stretching one to fit: a reader shown nothing is better than one taught
 #: to believe a word that means something else here. Growing it is a release, not a
 #: guess an adapter makes on its own.
-DID = ("read", "search", "run", "edit", "list", "make")
+DID = ("read", "search", "run", "edit", "list", "make", "delegate")
 
 #: What an adapter may say it can do (R-PRV-15). Absent means no, so an adapter that
 #: answers with nothing at all is a whole brain with the work simply absent — which is

@@ -72,6 +72,15 @@ class Asked:
         return None
 
 
+class WhenItHandsWorkToAHelper(unittest.TestCase):
+    def test_both_ways_it_reports_a_subagent_are_reported_as_delegating(self):
+        """R-PRV-8, R-PRV-21 — measured 2026-07-27 against codex-cli 0.145.0. This brain
+        says it twice: the child's activity and the call that started it. Both are the
+        same thing to whoever is reading, and neither carried a verb."""
+        self.assertEqual("delegate", codex.DID.get("subAgentActivity"))
+        self.assertEqual("delegate", codex.DID.get("collabAgentToolCall"))
+
+
 class WhereStandingInstructionsGo(unittest.TestCase):
     """R-PRV-23 — codex takes two kinds of instruction and only one of them is safe."""
 

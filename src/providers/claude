@@ -78,6 +78,11 @@ DID = {
     "Edit": "edit",
     "Write": "edit",
     "NotebookEdit": "edit",
+    # **Measured, because the name is not the one the documentation suggests.** A
+    # subagent spawn arrives as `Agent`, not `Task`; probed 2026-07-27 against 2.1.220.
+    # Its own steps stream through the parent as ordinary tool calls, so without a verb
+    # here the only thing marking a delegation at all was this vendor's word for it.
+    "Agent": "delegate",
 }
 
 #: Which tools a turn may reach for, per posture (R-PRV-18). The allowlist is the only

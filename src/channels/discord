@@ -204,13 +204,14 @@ COMMANDS = (
 #: into this file forever. A verb with no mark here would silently show as the fallback,
 #: so the suite checks this covers the seam's list rather than trusting it to.
 DID = {"read": "📖", "search": "🔎", "run": "💻", "edit": "✏️", "list": "📁",
-       "make": "🎨"}
+       "make": "🎨", "delegate": "👥"}
 UNKNOWN = "⚙"
 
 #: The same verbs as a person would say them. A commentary is read as a sentence, and
 #: `edit` beside a pencil reads as an instruction rather than as something that happened.
 SHOWN = {"read": "read a file", "search": "searched", "run": "ran a command",
-         "edit": "edited a file", "list": "listed files", "make": "made something"}
+         "edit": "edited a file", "list": "listed files", "make": "made something",
+         "delegate": "handed work to a helper"}
 
 
 def say(**it) -> None:

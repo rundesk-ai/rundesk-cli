@@ -226,11 +226,28 @@ one brain, `shell` on the next and `run_terminal_command` on a third. A channel 
 recognised your vendor's names would be carrying your vocabulary forever, so it never sees
 them.
 
-The list is closed and short on purpose — `read`, `search`, `run`, `edit`, `list`, `make`.
+The list is closed and short on purpose — `read`, `search`, `run`, `edit`, `list`, `make`,
+`delegate`.
 If what your tool did is not one of those, **leave `did` out**: `name` still carries your own word
 for it, and a reader that shows nothing is better than one taught to believe a word that
 means something else here. Do not stretch one to fit; tell us instead, and the list can
 grow by a release rather than by every adapter guessing differently.
+
+**`delegate` is for handing work to a helper, and it is worth mapping.** A brain that
+spawns a subagent usually streams the helper's own steps up through the same turn, so
+without a verb the only thing marking the delegation is your brain's word for it — and that
+word is the one thing a channel never sees. Measured in the shipped adapters:
+
+| Brain | What arrives |
+|---|---|
+| `claude` | a tool named `Agent` — **not** `Task`, whatever its documentation says |
+| `codex` | `subAgentActivity` and `collabAgentToolCall`, both for the one delegation |
+| `grok` | nothing: the session rundesk builds has an empty subagent allowlist, so it cannot delegate at all |
+
+What rundesk does **not** carry is which steps belonged to the helper. Claude sends enough to
+know (`parent_tool_use_id`, `subagent_type`, `task_description`) and a `tool` record has
+nowhere to put it, so a delegated turn reads as one agent doing everything. Recorded rather
+than fixed; say so if it matters to you.
 
 **Report the turn's own tokens, not the conversation's.** If your brain hands you a running
 total, subtract what you reported last time. Getting this wrong overstates every turn after

@@ -77,6 +77,11 @@ DID = {
     "fileRead": "read",
     "listFiles": "list",
     "imageGeneration": "make",
+    # **Two of them, measured 2026-07-27 against codex-cli 0.145.0**, because this brain
+    # reports a delegation twice over: the activity of the child, and the call that
+    # started it. Both are the same thing to a reader, and neither had a verb.
+    "subAgentActivity": "delegate",
+    "collabAgentToolCall": "delegate",
 }
 
 #: Item kinds that are not tools: what the brain said, what it thought, and the echo of

@@ -268,6 +268,20 @@ class WhenTheStreamGoesWrong(unittest.TestCase):
         self.assertTrue(said["ok"])
 
 
+class WhenItHandsWorkToAHelper(unittest.TestCase):
+    def test_a_subagent_spawn_is_reported_as_delegating(self):
+        """R-PRV-8, R-PRV-21 — measured 2026-07-27 against 2.1.220: a subagent arrives as a
+        tool named `Agent`, and its own steps then stream through the parent as ordinary
+        tool calls. Without a verb the only thing marking a delegation at all was this
+        vendor's word for it, which is the one thing a channel must never be shown.
+
+        The name is measured rather than read: the documentation describes a `Task` tool,
+        and what actually came over the stream was `Agent`.
+        """
+        self.assertEqual("delegate", claude.DID.get("Agent"))
+        self.assertNotIn("Task", claude.DID)
+
+
 class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
     """The command line, which is where this brain's two traps live."""
 
