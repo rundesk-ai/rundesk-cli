@@ -291,6 +291,15 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   noticed, because each generation looks exactly like a legitimate adapter run. The brain is
   named what the adapter looks for and the adapter is named something else, and
   `_nothing_of_ours_is_on` in `test_provider.py` now fails the case rather than the machine.
+- **`pkill -f "tests/test_*.py"` in this checkout kills whatever *another agent* is running,
+  and their gate then reports a failure that never happened.** More than one agent works in
+  this worktree at once, so a suite you did not start is the ordinary case rather than a
+  stray: a leftover-looking `test_gateway.py` was a step inside somebody else's gate, killed
+  by a cleanup that had every reason to look safe. Before killing anything, read the parent —
+  `ps -o ppid= -p <pid>` up to the `scripts/gate` that owns it, and look at the log path in
+  its command line: it names the **session** that started it, and one that is not yours is
+  not yours to end. A suite left running past a few minutes is far cheaper than a green gate
+  somebody has to re-run without knowing why it went red.
 - **Never leave overlapping runs of a suite in the background.** Repeatedly relaunching the
   gate and `test_provider.py` while earlier ones were still going left real gateways, real
   `codex app-server` processes and `sleep 300` stand-ins alive across a dozen generations —
