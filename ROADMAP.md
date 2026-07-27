@@ -1058,6 +1058,39 @@ not.
 **Outcome:** a supported provider can pause for remote input without weakening its native permission model,
 and Rundesk can recover truthfully after a gateway/channel restart.
 
+**It opens with a research phase, because the shape of what is possible is decided by somebody else.**
+Rundesk drives command-line programs rather than APIs, and a brain run non-interactively cannot do
+everything the same brain can do with a person at a keyboard. What is actually available has to be
+measured on the installed versions before any of it is designed — and the Node build already measured
+most of it, so the first work is carrying that in and re-proving it rather than starting over.
+
+**What the Node build found, and what it costs us** (`../rundesk/docs/clarify.md`, captured 2026-07-24
+against `claude 2.1.219` and `codex-cli 0.144.6` by `probes/clarify.ts` — grok was never probed):
+
+- **Neither brain asks with a tool.** `AskUserQuestion` is not offered to a headless Claude and
+  allowlisting it changes nothing; both brains ask in ordinary prose and end the turn. So a
+  `clarify_request` event has **no live producer** — the question arrives as text and is already
+  rendered correctly, and a channel posting it as the answer is exactly right.
+- **End-turn then resume carries the question, proved on both.** Turn one asks which of two words to
+  remember; turn two says only "the second one" and lands correctly. **Resuming the session is the
+  entire answer-routing mechanism** — no pending-ask record is needed to make an answer arrive.
+- **Plan mode is not usable headless.** `claude -p --permission-mode plan` emitted no `ExitPlanMode`,
+  said so itself, and did not terminate inside a 120-second deadline. There is no capturable
+  approve/edit/reject point, so an approval gate cannot be built on that path at all.
+- **`--permission-mode` is not a read-only posture** — the allowlist is. Plan mode still reached for
+  `Write` and `Bash` and wrote a file outside the repo.
+
+**So the honest shape of "two-way" here is turn-shaped, not mid-turn.** A brain asks, the turn ends,
+the answer is the next turn on the same session. That is a real limit of wrapping a CLI and it is not
+a defect to design around — it is the thing to design *with*, and it means most of this phase is
+routing and correlation rather than a protocol. Where a brain genuinely does offer more — `codex
+app-server` can take input mid-turn where `codex exec` cannot — that is a capability an adapter
+declares, and a surface asks rather than assumes.
+
+**All of it is stale until re-proved.** Those captures predate the adapters this repo ships: codex
+moved from `exec` to `app-server`, grok arrived and was never probed for any of it, and every version
+has moved. The phase does not begin with code.
+
 Add one interaction type at a time: question, allow once, deny and cancel. Each pending interaction is a
 single-use capability bound to the authorized user, provider request, conversation, run and expiry. Mismatches
 and expiry deny by default.
