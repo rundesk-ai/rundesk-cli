@@ -482,8 +482,8 @@ class BehindOrCurrentTests(unittest.TestCase):
                     cli.main(argv)
                 self.assertNotEqual(exited.exception.code, 0, f"{argv} was accepted")
 
-        # And nothing but --check is offered, so there is no version to name in the first
-        # place. Asked of what a person is actually shown: an update hands the rest of its
+        # Neither visible option names a version. Asked of what a person is actually shown:
+        # an update hands the rest of its
         # own window to the release it just laid down, and the argument that carries the
         # gateways waiting to come back is accepted without being offered (R-UPD-33).
         actions = [x for p in cli.build_parser()._subparsers._group_actions
@@ -491,11 +491,11 @@ class BehindOrCurrentTests(unittest.TestCase):
                    for x in sub._actions]
         offered = {one for x in actions if x.help is not argparse.SUPPRESS
                    for one in x.option_strings}
-        self.assertEqual(offered - {"-h", "--help"}, {"--check"},
+        self.assertEqual(offered - {"-h", "--help"}, {"--check", "--status"},
                          "update offers a way to choose a version")
         hidden = {one for x in actions if x.help is argparse.SUPPRESS
                   for one in x.option_strings}
-        self.assertEqual(hidden, {updater.CONTINUING},
+        self.assertEqual(hidden, {updater.CONTINUING, "--worker"},
                          "update accepts something nobody declared and nobody can see")
 
 
@@ -1007,6 +1007,10 @@ class FakeMachine:
             return self.Spoke(False, "the machine said no")
         self.backups_daily = at
         return self.Spoke(True)
+
+    def install_update_worker(self):
+        self.did.append(("install_update_worker", None))
+        return self.Spoke(not self.refuses, "the machine said no" if self.refuses else "")
 
     def remove_backup(self):
         self.did.append(("remove_backup", None))
@@ -3117,6 +3121,12 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
             def what_is_running(self, name, where=None):
                 return list(working)
 
+            def what_is_working(self, name, where=None):
+                return {one: {"pgid": 1} for one in working}
+
+            def what_is_turning(self, name, where=None):
+                return []
+
             def fitness(self, root=None):
                 return None
         return Gateways()
@@ -3163,6 +3173,18 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
         self.assertEqual([], stopped)
         self.assertIn("began work", refused)
         self.assertEqual([], machine.asked, "it stopped a gateway that had just taken work")
+
+    def test_a_connected_channel_adapter_does_not_block_an_idle_update(self):
+        """R-UPD-39"""
+        machine = self._machine(loaded=("alpha",))
+        stopped, refused = cli._stand_all_down(
+            self._gateways(
+                [self.Standing("alpha")], working=("channel:discord-dms",)
+            ),
+            machine, FakeAgents(),
+        )
+        self.assertIsNone(refused)
+        self.assertEqual(["alpha"], stopped)
 
     def test_a_gateway_that_does_not_come_back_is_reported_rather_than_passed_over(self):
         """R-UPD-22 — a release needing something this install does not have starts a

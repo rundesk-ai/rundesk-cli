@@ -1170,5 +1170,26 @@ class WhatAChannelDoesNotWriteDown(CarriesAConversation):
         self.assertNotIn("conversations.json", beside)
 
 
+class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
+    async def test_a_completed_update_is_delivered_after_the_channel_reconnects(self):
+        """R-UPD-40"""
+        where = Path(tempfile.mkdtemp(prefix="rundesk-update-notice-"))
+        self.addCleanup(shutil.rmtree, where, True)
+        agents.add("ava", where)
+        agents.remember("ava", where, provider="a-brain")
+        records = agents.records("ava", where)
+        records.opened(
+            store.conversation_id("ops", "one"), "ops", "somewhere", "one", AT
+        )
+        surface = Surface()
+        held = answering.Answering(
+            "ava", "ops", {"kind": "somewhere", "allow": ["2207"]},
+            surface, where=where, carry=Brain(),
+        )
+        held.connected = True
+        await held.told_update_finished("one", "Rundesk update succeeded")
+        self.assertEqual("Rundesk update succeeded", surface.of("said")[0]["text"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

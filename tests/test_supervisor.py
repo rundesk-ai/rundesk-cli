@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -640,6 +641,46 @@ class TheInstallsOwnDailyJob(WithAJobDirectory):
         supervisor.remove_backup(str(self.where), asking=self.machine)
         self.assertFalse(supervisor.keeps_backups(str(self.where)),
                          "the job was left where the machine would find it again")
+
+
+class TheExternalUpdateWorker(WithAJobDirectory):
+    def written(self):
+        return plistlib.loads(
+            supervisor.write_update_worker(
+                self.root, self.logs, str(self.where)
+            ).read_bytes()
+        )
+
+    def test_the_update_worker_is_outside_the_gateway_namespace(self):
+        """R-UPD-35"""
+        supervisor.write_update_worker(self.root, self.logs, str(self.where))
+        supervisor.write("ava", self.root, self.logs, str(self.where))
+        self.assertEqual(["ava"], supervisor.described(str(self.where), self.root))
+
+    def test_the_machine_owns_the_worker_that_may_stop_gateways(self):
+        """R-UPD-35"""
+        said = self.written()
+        self.assertEqual(["update", "--worker"], said["ProgramArguments"][1:])
+        self.assertTrue(said["RunAtLoad"])
+        self.assertEqual({"SuccessfulExit": False}, said["KeepAlive"])
+
+    def test_the_worker_carries_an_explicit_install_target(self):
+        with mock.patch.dict(os.environ, {
+            "RUNDESK_UPDATE_ROOT": str(self.where / "installed")
+        }):
+            said = self.written()
+        self.assertEqual(
+            str(self.where / "installed"),
+            said["EnvironmentVariables"]["RUNDESK_UPDATE_ROOT"],
+        )
+
+    def test_installing_the_worker_loads_and_starts_it(self):
+        supervisor.install_update_worker(
+            self.root, self.logs, str(self.where), self.machine
+        )
+        verbs = [asked[0] for asked in self.machine.asked]
+        self.assertIn("bootstrap", verbs)
+        self.assertIn("kickstart", verbs)
 
 
 if __name__ == "__main__":

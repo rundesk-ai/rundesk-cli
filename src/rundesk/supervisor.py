@@ -236,6 +236,7 @@ def describe(name: str, root: Path | None = None, logs: Path | None = None,
 
 #: The install's own job, in a namespace beside the gateways rather than inside it.
 BACKUP_LABEL = f"{PREFIX}-backup"
+UPDATE_LABEL = f"{PREFIX}-update"
 
 
 def backup_job_path(where: str | None = None) -> Path:
@@ -304,6 +305,63 @@ def remove_backup(where: str | None = None, asking: Callable[..., Spoke] = ask) 
 def keeps_backups(where: str | None = None) -> bool:
     """Whether this install has given the machine a daily backup to run."""
     return backup_job_path(where).is_file()
+
+
+def update_job_path(where: str | None = None) -> Path:
+    return Path(os.path.expanduser(where or jobs_home())) / f"{UPDATE_LABEL}.plist"
+
+
+def describe_update_worker(root: Path | None = None, logs: Path | None = None) -> dict:
+    """A one-shot worker owned beside gateways, never by one it may stop."""
+    root = root or ROOT
+    logs = logs or gateway.logs_home()
+    environment = _environment(logs)
+    if os.environ.get("RUNDESK_UPDATE_ROOT"):
+        environment["RUNDESK_UPDATE_ROOT"] = os.environ["RUNDESK_UPDATE_ROOT"]
+    return {
+        "Label": UPDATE_LABEL,
+        "ProgramArguments": [str(root / "rundesk"), "update", "--worker"],
+        "WorkingDirectory": str(root),
+        "EnvironmentVariables": environment,
+        # Reconcile a pending/running request after login; a final request exits at once.
+        "RunAtLoad": True,
+        # A crash is retried. A reported failure exits non-zero once, then the retry sees
+        # its durable final state and exits successfully rather than looping.
+        "KeepAlive": {"SuccessfulExit": False},
+        "StandardOutPath": str(logs / "update-worker.out"),
+        "StandardErrorPath": str(logs / "update-worker.err"),
+    }
+
+
+def write_update_worker(root: Path | None = None, logs: Path | None = None,
+                        where: str | None = None) -> Path:
+    path = update_job_path(where)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    (logs or gateway.logs_home()).mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as file:
+        plistlib.dump(describe_update_worker(root, logs), file)
+    return path
+
+
+def install_update_worker(root: Path | None = None, logs: Path | None = None,
+                          where: str | None = None,
+                          asking: Callable[..., Spoke] = ask) -> Spoke:
+    """Load and start the external update worker."""
+    asking("bootout", f"{domain()}/{UPDATE_LABEL}")
+    path = write_update_worker(root, logs, where)
+    said = asking("bootstrap", domain(), str(path))
+    if said.ok:
+        kicked = asking("kickstart", f"{domain()}/{UPDATE_LABEL}")
+        return kicked if not kicked.ok else said
+    return said
+
+
+def remove_update_worker(where: str | None = None,
+                         asking: Callable[..., Spoke] = ask) -> Spoke:
+    said = asking("bootout", f"{domain()}/{UPDATE_LABEL}")
+    with contextlib.suppress(OSError):
+        os.remove(update_job_path(where))
+    return said
 
 
 def write(name: str, root: Path | None = None, logs: Path | None = None,

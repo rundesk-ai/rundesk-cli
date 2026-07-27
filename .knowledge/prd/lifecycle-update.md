@@ -1,7 +1,7 @@
 ---
 id: UPD
 name: Staying current
-last_verified: 2026-07-24
+last_verified: 2026-07-27
 ---
 
 ## What this is
@@ -53,6 +53,12 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-32 | An install already current but unfit is mended rather than reported as current | `an install already current but unfit is mended rather than called current`, `an install that is current and fits is left entirely alone`, `asking where a broken install stands still changes nothing` |
 | ✅ | R-UPD-33 | Everything after the files are replaced is done by the release that was just installed | `the rest of the window is handed to the release that just landed`, `the release that took over brings every gateway back`, `a release whose entry point will not start is put back` |
 | ✅ | R-UPD-34 | Asking what an update would do names what it would install and what it would move | `update check names every step it would run and installs nothing`, `asking what an update would do is asked of nothing but this machine` |
+| ✅ | R-UPD-35 | An agent-initiated update is completed by a supervisor-owned process outside every gateway | `the update worker is outside the gateway namespace`, `the machine owns the worker that may stop gateways`, `agent initiation queues the external worker and returns` |
+| ✅ | R-UPD-36 | An update request durably records pending, running, and final states | `pending running and final outcomes are durable`, `agent initiation queues the external worker and returns` |
+| ✅ | R-UPD-37 | Duplicate update requests share one worker request and cannot overlap | `duplicate requests share one pending update`, `duplicate agent initiation does not restart the worker` |
+| ✅ | R-UPD-38 | The external worker waits for active turns before running the guarded updater | `an update refuses while work is in flight`, `update busy reader includes provider turns` |
+| ✅ | R-UPD-39 | Connected channel adapters do not themselves block an otherwise idle update | `a connected channel adapter does not block an idle update` |
+| ✅ | R-UPD-40 | A channel-triggered update outcome is delivered after its originating agent reconnects | `final outcome waits for its origin agent and is delivered once`, `a completed update is delivered after the channel reconnects` |
 
 ## Open questions
 

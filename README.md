@@ -234,6 +234,7 @@ reference is **[CLI.md](CLI.md)**, generated from the parser.
 ```sh
 rundesk version --check    # what you have, and whether it's current
 rundesk update             # move to the newest release
+rundesk update --status    # outcome of an agent-initiated update
 rundesk status             # how rundesk itself is on this machine
 rundesk remove ava         # take an agent away  (--purge takes its home too)
 rundesk uninstall          # take rundesk off this machine

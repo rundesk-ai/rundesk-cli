@@ -44,6 +44,7 @@ from rundesk import store  # noqa: E402
 from rundesk import supervisor as _supervisor  # noqa: E402
 from rundesk import turn  # noqa: E402
 from rundesk import updater  # noqa: E402
+from rundesk import update_request  # noqa: E402
 
 #: The installer as published, for the one case where this install has lost its own:
 #: removing rundesk is exactly when a broken install has to be removable.
@@ -293,6 +294,9 @@ def build_parser() -> argparse.ArgumentParser:
     # accept it — the process on the other side of the handover is `rundesk update`.
     moved.add_argument(updater.CONTINUING, dest="after_replacing", metavar="<names>",
                        default=None, help=argparse.SUPPRESS)
+    moved.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    moved.add_argument("--status", action="store_true",
+                       help="show the last queued update and its final outcome")
 
     taken_off = sub.add_parser("uninstall", help="remove rundesk from this machine")
     taken_off.add_argument("--purge", action="store_true",
@@ -637,8 +641,32 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
             provision=_provisioned,
             carry=lambda: _carry_every(agents),
         )
+    if args.worker:
+        return _run_update_worker(gateways, machine, agents)
+    if args.status:
+        try:
+            row = update_request.read()
+        except update_request.Unreadable as why:
+            print(f"update: UNKNOWN — {why}", file=sys.stderr)
+            return 1
+        if row is None:
+            print("no queued update")
+            return 0
+        print(update_request.summary(row))
+        return 0 if row.get("state") != "failed" else 1
+    # A check remains immediate and read-only even inside a provider turn.
+    if args.check:
+        return updater.run(
+            REPO_ROOT, __version__, check_only=True,
+            unfit=lambda: gateways.fitness(REPO_ROOT),
+            preview=lambda: _what_an_update_would_do(agents),
+        )
+    if os.environ.get("RUNDESK_RUN"):
+        origin = _origin_of_update(agents)
+        if origin.get("agent"):
+            return _queue_update(machine, origin)
     return updater.run(
-        REPO_ROOT, __version__, check_only=args.check,
+        REPO_ROOT, __version__, check_only=False,
         busy=lambda: _in_flight(gateways, agents),
         pause=lambda: _stand_all_down(gateways, machine, agents),
         resume=lambda names: _bring_all_back(names, gateways, machine, agents),
@@ -647,6 +675,127 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
         unfit=lambda: gateways.fitness(REPO_ROOT),
         preview=lambda: _what_an_update_would_do(agents),
     )
+
+
+UPDATE_WAIT_SECONDS = 30 * 60
+UPDATE_POLL_SECONDS = 1.0
+UPDATE_RUN_SECONDS = 30 * 60
+
+
+def _origin_of_update(agents) -> dict:
+    run_id = os.environ.get("RUNDESK_RUN") or ""
+    origin = {"run": run_id}
+    for name in agents.known():
+        try:
+            kept = agents.reading(name)
+            run = kept.run(run_id)
+        except (store.Unreadable, store.TooNew, store.Behind, migration.Failed):
+            continue
+        if run is None:
+            continue
+        origin["agent"] = name
+        conversation_id = run.get("conversation_id")
+        for conversation in kept.conversations(limit=200):
+            if conversation.get("id") == conversation_id:
+                origin["channel"] = conversation.get("channel")
+                origin["conversation"] = conversation.get("space")
+                break
+        return origin
+    return origin
+
+
+def _queue_update(machine, origin: dict) -> int:
+    """Hand an agent-initiated update to a process its gateway does not own."""
+    if not machine.available():
+        print("update: NOT QUEUED — this machine has no usable supervisor", file=sys.stderr)
+        return 1
+    agent = origin.get("agent")
+    if agent:
+        try:
+            if not machine.loaded(agent):
+                print(f"update: NOT QUEUED — '{agent}' is not supervised", file=sys.stderr)
+                return 1
+        except machine.Unsure as why:
+            print(f"update: NOT QUEUED — {why}", file=sys.stderr)
+            return 1
+    try:
+        row, created = update_request.queue(origin)
+    except update_request.Unreadable as why:
+        print(f"update: NOT QUEUED — {why}", file=sys.stderr)
+        return 1
+    if not created:
+        print(f"update: ALREADY QUEUED — request {row['id']}; "
+              "it will run after active turns finish")
+        print("        outcome: rundesk update --status")
+        return 0
+    said = machine.install_update_worker()
+    if not said.ok:
+        why = said.said or "the supervisor refused the worker"
+        update_request.finish(row["id"], "failed", why)
+        print(f"update: NOT QUEUED — {why}", file=sys.stderr)
+        return 1
+    print(f"update: QUEUED — request {row['id']}; it will run after active turns finish")
+    print("        outcome: rundesk update --status")
+    return 0
+
+
+def _run_update_worker(gateways, machine, agents) -> int:
+    """Wait outside every gateway, run the ordinary guarded updater, persist its outcome."""
+    target_root = Path(os.environ.get("RUNDESK_UPDATE_ROOT") or REPO_ROOT)
+    environment = dict(os.environ)
+    for key in ("RUNDESK_RUN", "RUNDESK_RESUME"):
+        environment.pop(key, None)
+    try:
+        request = update_request.claim()
+    except update_request.Unreadable as why:
+        print(f"update worker: FAILED — {why}", file=sys.stderr)
+        return 1
+    if request is None:
+        return 0
+    deadline = time.monotonic() + UPDATE_WAIT_SECONDS
+    while True:
+        busy = _in_flight(gateways, agents)
+        if not busy:
+            break
+        if time.monotonic() >= deadline:
+            update_request.finish(
+                request["id"], "failed",
+                "timed out waiting for active work: " + ", ".join(busy),
+                _reported_version(target_root, environment),
+            )
+            return 1
+        time.sleep(UPDATE_POLL_SECONDS)
+    try:
+        done = subprocess.run(
+            [str(target_root / "rundesk"), "update"],
+            capture_output=True, text=True, env=environment, timeout=UPDATE_RUN_SECONDS,
+        )
+        version = _reported_version(target_root, environment)
+        result = (done.stdout + done.stderr).strip() or (
+            "update completed" if done.returncode == 0 else "update failed without output"
+        )
+        state = "succeeded" if done.returncode == 0 else (
+            "rolled_back" if "roll" in result.lower() and "back" in result.lower()
+            else "failed"
+        )
+        update_request.finish(request["id"], state, result, version)
+        return done.returncode
+    except (OSError, subprocess.TimeoutExpired) as why:
+        update_request.finish(
+            request["id"], "failed", str(why),
+            _reported_version(target_root, environment),
+        )
+        return 1
+
+
+def _reported_version(root: Path, environment: dict) -> str | None:
+    try:
+        return subprocess.run(
+            [str(root / "rundesk"), "version"],
+            capture_output=True, text=True, env=environment, timeout=30,
+        ).stdout.strip() or None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
 
 
 def _what_an_update_would_do(agents) -> list:
@@ -749,7 +898,15 @@ def _stand_all_down(gateways, machine, agents) -> tuple:
         # Asked again, immediately before stopping it: the check for work in flight
         # happened before any of this, and a turn that began in between is one this would
         # otherwise kill (R-UPD-23).
-        if gateways.what_is_running(it.name, agents.resolved(it.name).run):
+        run_home = agents.resolved(it.name).run
+        protected = [
+            one for one in gateways.what_is_working(it.name, run_home)
+            if not one.startswith("channel:")
+        ]
+        protected.extend(
+            f"turn:{row['run']}" for row in gateways.what_is_turning(it.name, run_home)
+        )
+        if protected:
             return stopped, (f"'{it.name}' began work while the update was starting, so "
                              f"nothing was replaced under it")
         if not kept:
@@ -805,7 +962,8 @@ def _in_flight(gateways, agents) -> list:
         run_home = agents.resolved(name).run
         if _standing(name, gateways, agents).running:
             found.extend(f"{name}/{one}"
-                         for one in gateways.what_is_working(name, run_home))
+                         for one in gateways.what_is_working(name, run_home)
+                         if not one.startswith("channel:"))
         found.extend(f"{name}/turn:{row['run']}"
                      for row in gateways.what_is_turning(name, run_home))
     return found

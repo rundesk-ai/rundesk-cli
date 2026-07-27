@@ -129,6 +129,7 @@ from rundesk import supervisor
 if not supervisor.available():
     raise SystemExit(0)          # nothing of the kind on this machine
 taken, stubborn = supervisor.take_all_back()
+supervisor.remove_update_worker()
 for name in taken:
     print(f"stopped gateway '{name}' and removed its job")
 if stubborn:
