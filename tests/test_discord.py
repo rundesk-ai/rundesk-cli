@@ -927,9 +927,13 @@ class WhatTheOwnerIsTold(unittest.TestCase):
         where = tempfile.mkdtemp(prefix="rundesk-greeting-")
         self.addCleanup(shutil.rmtree, where, True)
         was = os.environ.get("RUNDESK_HOME")
+        was_gateway = os.environ.get("RUNDESK_GATEWAY")
         os.environ["RUNDESK_HOME"] = where
+        os.environ["RUNDESK_GATEWAY"] = "this-gateway"
         self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_HOME", was)
                         if was is not None else os.environ.pop("RUNDESK_HOME", None))
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_GATEWAY", was_gateway)
+                        if was_gateway is not None else os.environ.pop("RUNDESK_GATEWAY", None))
 
         first = discord.Agent._claim(object(), "online")
         second = discord.Agent._claim(object(), "online")
@@ -938,6 +942,33 @@ class WhatTheOwnerIsTold(unittest.TestCase):
         # Coming up and going down are claimed apart, so an adapter that came up second and
         # said no hello can still be the one that says the goodbye.
         self.assertTrue(discord.Agent._claim(object(), "offline"))
+
+    def test_a_successor_gateway_gets_its_own_claim(self):
+        """R-DIS-15 — a claim belongs to one gateway lifetime, not to the run directory.
+
+        The run directory deliberately survives a stop: it carries the lock and the
+        successor's record. A static marker there therefore silenced every real startup
+        after the first one, even though both new adapters connected successfully."""
+        import os
+        import tempfile
+
+        where = tempfile.mkdtemp(prefix="rundesk-greeting-")
+        self.addCleanup(shutil.rmtree, where, True)
+        was_home = os.environ.get("RUNDESK_HOME")
+        was_gateway = os.environ.get("RUNDESK_GATEWAY")
+        os.environ["RUNDESK_HOME"] = where
+        os.environ["RUNDESK_GATEWAY"] = "first"
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_HOME", was_home)
+                        if was_home is not None else os.environ.pop("RUNDESK_HOME", None))
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_GATEWAY", was_gateway)
+                        if was_gateway is not None else os.environ.pop("RUNDESK_GATEWAY", None))
+
+        self.assertTrue(discord.Agent._claim(object(), "online"))
+        self.assertFalse(discord.Agent._claim(object(), "online"),
+                         "the second adapter of one gateway also claimed the greeting")
+        os.environ["RUNDESK_GATEWAY"] = "successor"
+        self.assertTrue(discord.Agent._claim(object(), "online"),
+                        "the predecessor's claim silenced the successor gateway")
 
     def test_nowhere_to_claim_in_means_greeting_rather_than_silence(self):
         """Being told once too often is a smaller failure than never being told a gateway

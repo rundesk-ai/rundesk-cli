@@ -1445,6 +1445,25 @@ class AProgramTheGatewayStartsReadsWhatTheGatewayReads(WithARunDirectory):
         self.assertIn("probe", outcome.output, f"{outcome.reason}: {outcome.output}")
 
 
+class WhatEveryAdapterOfOneGatewayIsTold(WithARunDirectory):
+    """R-DIS-15 — adapters share one lifetime, and a successor gets another."""
+
+    class Surface:
+        env = {"SOMETHING": "kept"}
+
+    async def test_the_gateway_lifetime_is_shared_only_by_its_own_adapters(self):
+        first = self.made()
+        successor = self.made("successor")
+        one = first._for_a_channel(self.Surface())
+        two = first._for_a_channel(self.Surface())
+        later = successor._for_a_channel(self.Surface())
+
+        self.assertEqual(one["RUNDESK_GATEWAY"], two["RUNDESK_GATEWAY"])
+        self.assertNotEqual(one["RUNDESK_GATEWAY"], later["RUNDESK_GATEWAY"])
+        self.assertEqual("kept", one["SOMETHING"],
+                         "naming the gateway dropped what the adapter was already told")
+
+
 class TheClockIsLookedAtAsSoonAsThereIsAGatewayToLookAtIt(WithARunDirectory):
     """R-SCH-26 — the tick slept before its first look, so a gateway examined nothing for
     twenty seconds after claiming its name. A schedule is due only in its stated minute, so
