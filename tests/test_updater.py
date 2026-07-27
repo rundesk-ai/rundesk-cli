@@ -897,6 +897,30 @@ class AnUpdateAndWhatIsRunning(unittest.TestCase):
         self.assertEqual(["9.9.9"], self.applied)
         self.assertEqual([], self.brought_back)
 
+    def test_an_update_that_stops_before_replacing_anything_brings_back_what_it_stood_down(self):
+        """R-UPD-24 — standing every gateway down is one act per gateway, so a refusal
+        arrives with some already stopped. Reporting NOT APPLIED and leaving those down
+        reads as "nothing happened" while an owner's agents are unreachable, and nothing
+        named them: an update that changed no files still took the machine apart."""
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            code = self._run(stopped=["alpha", "beta"],
+                             refused="'gamma' is running unsupervised")
+        self.assertEqual(1, code)
+        self.assertEqual([], self.applied, "it replaced the install anyway")
+        self.assertEqual(["alpha", "beta"], self.brought_back,
+                         "the ones it stopped before the refusal were left down")
+        self.assertIn("brought back: alpha, beta", said.getvalue())
+
+    def test_a_gateway_that_would_not_restart_after_a_refusal_is_named(self):
+        """R-UPD-24 — putting them back is not the same as them coming back, and the one
+        an owner has to go and look at is the one nothing said anything about."""
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            code = self._run(stopped=["alpha", "beta"], down=["beta"],
+                             refused="'gamma' is running unsupervised")
+        self.assertEqual(1, code)
+        self.assertIn("brought back: alpha", said.getvalue())
+        self.assertIn("did not come back: beta", said.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

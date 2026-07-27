@@ -175,6 +175,24 @@ def run(
     stopped, refused = (pause or (lambda: ([], None)))()
     if refused:
         print(f"update: NOT APPLIED — {refused}", file=sys.stderr)
+        # Standing everything down is not one act but one per gateway, so a refusal arrives
+        # with some of them already stopped — `pause` hands those back beside the reason.
+        # Saying "NOT APPLIED" and leaving them down reads as "nothing happened" while an
+        # owner's agents are unreachable and unnamed, which is exactly what R-UPD-22 exists
+        # to prevent, on the one path that did not answer for it (R-UPD-24).
+        #
+        # Asked only when something actually went down. A refusal on the first gateway it
+        # looked at stopped nothing, and starting a conversation with the machine about an
+        # empty list is how a refusal grows a second failure of its own.
+        if stopped:
+            left_down = (resume or (lambda _names: []))(stopped)
+            back = sorted(set(stopped) - set(left_down))
+            if back:
+                print(f"        brought back: {', '.join(back)}", file=sys.stderr)
+            if left_down:
+                print(f"        did not come back: {', '.join(sorted(left_down))}",
+                      file=sys.stderr)
+                print("        why: rundesk logs <name>", file=sys.stderr)
         return 1
     try:
         moved = (apply or download_and_apply)(repo_root, published)
