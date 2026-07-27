@@ -458,6 +458,51 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         discord.Agent._stop_typing(None, held)
         self.assertTrue(held.typing is None)
 
+    def test_a_direct_message_gets_a_typing_indicator_at_all(self):
+        """R-DIS-6 — `get_channel` reads the client's cache and a direct message is very
+        often not in it, so it answered None, the renewal loop never ran once, and there was
+        no indicator in a DM ever. Nothing reported it: the task was created and returned
+        immediately, and a `held.typing` holding a finished task looks exactly like one that
+        is working. `_react` has always fetched as a fallback, which is what makes this an
+        omission rather than a decision."""
+        typed = []
+
+        class Cached:
+            async def typing(self):
+                typed.append(True)
+                raise RuntimeError("stop after one, so the loop does not run for ever")
+
+        class NotCached:
+            def get_channel(self, where):
+                return None                      # a DM, as the cache reports it
+
+            async def fetch_channel(self, where):
+                return Cached()
+
+        with contextlib.suppress(BaseException):
+            asyncio.run(asyncio.wait_for(
+                discord.Agent._typing(NotCached(), {"conversation": "1180"}), 0.3))
+        self.assertTrue(typed, "a direct message was never told the agent was typing")
+
+    def test_a_channel_that_cannot_be_resolved_says_so_rather_than_going_quiet(self):
+        """A turn with no indicator and no line saying why is the shape this bug already
+        had once."""
+        said = []
+
+        class Gone:
+            def get_channel(self, where):
+                return None
+
+            async def fetch_channel(self, where):
+                raise RuntimeError("no such channel")
+
+        was, discord.note = discord.note, lambda line: said.append(line)
+        try:
+            asyncio.run(discord.Agent._typing(Gone(), {"conversation": "1180"}))
+        finally:
+            discord.note = was
+        self.assertTrue(any("typing" in one for one in said), said)
+
     def test_it_says_it_is_typing_again_after_a_remark_because_the_turn_goes_on(self):
         """R-DIS-6 — the other half, and it was missing for as long as the half above has
         existed. A remark stops the indicator so nobody is told the agent is typing while

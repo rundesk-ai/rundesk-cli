@@ -713,9 +713,28 @@ class Agent(discord.Client):
 
     async def _typing(self, it: dict) -> None:
         """Kept alive for as long as the turn runs (R-DIS-6). Discord's indicator lapses
-        in about ten seconds, so it is renewed inside that rather than set once."""
-        channel = self.get_channel(int(it["conversation"]))
-        while channel is not None:
+        in about ten seconds, so it is renewed inside that rather than set once.
+
+        **Fetched, not just looked up.** `get_channel` reads the client's cache, and a
+        direct message is very often not in it — so it answered `None`, the loop below never
+        ran once, and there was no typing indicator in a DM at all, ever. Nothing reported
+        it: the task was created, returned immediately, and a `held.typing` that is a
+        finished task looks exactly like one that is working. `_react` twenty lines down has
+        always fetched as a fallback, which is what makes this one an omission rather than a
+        decision.
+
+        Said out loud when the channel cannot be resolved at all, because a turn with no
+        indicator and no line saying why is the shape this bug already had once.
+        """
+        where = int(it["conversation"])
+        channel = self.get_channel(where)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(where)
+            except Exception as why:  # noqa: BLE001 — a platform boundary
+                note(f"no typing indicator for {where}: {type(why).__name__}: {why}")
+                return
+        while True:
             with contextlib.suppress(Exception):
                 await channel.typing()
             await asyncio.sleep(TYPING_SECONDS)
