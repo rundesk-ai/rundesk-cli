@@ -34,6 +34,12 @@ def up(conn, home):
     return []                      # or paths that are safe to delete once the version commits
 ```
 
+**A step has no kind, and the runner never asks what it is doing.** It is handed a connection
+*and* a directory, so it may change tables, move files, rewrite a workspace, or do all of those
+in one step — one thing has to run, and this is that thing. Nothing here classifies steps into
+schema ones and file ones, because the moment it did, a step that needed to do both would have
+nowhere to live and the order between two of them would stop being the order in this directory.
+
 - **Do not open a connection and do not commit.** You are handed one, inside
   `BEGIN IMMEDIATE`, and the runner stamps the new version and commits — together with your
   work, so there is no moment where the change is present and the version is not. That is why

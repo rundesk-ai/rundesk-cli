@@ -47,7 +47,14 @@ CREATE TABLE schedule (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     name              TEXT NOT NULL UNIQUE,
     enabled           INTEGER NOT NULL DEFAULT 1,
-    cron              TEXT NOT NULL,
+    -- When it runs, over and over. NULL where this schedule states a single moment instead.
+    cron              TEXT,
+    -- The single moment it runs, once, after which it can never be due again. The machine's
+    -- own local clock, to the minute, spelled the way `last_auto_run_at` beside it is — a
+    -- schedule is stated in local time and compared against local time, and a moment kept in
+    -- a second clock face one column away would be wrong by an hour for part of the year and
+    -- invisible for the rest of it.
+    at                TEXT,
     command           TEXT,
     prompt            TEXT,
     -- Which provider answers work this schedule starts, and what it is told before it reads
@@ -69,9 +76,15 @@ CREATE TABLE schedule (
     -- place is not wrong; it follows the conversation, which is what a channel reaching one
     -- place already means.
     place             TEXT,
+    -- That the clock started this, and what it came to. Together they are also what says a
+    -- single moment has been used: one whose moment has passed with nothing written here
+    -- never ran at all, which is a different fact from one that ran and failed.
     last_auto_run_at  TEXT,
     last_outcome      TEXT,
     created_at        TEXT NOT NULL,
+    -- Exactly one of each pair, said by the records rather than trusted to whoever writes
+    -- them. A schedule repeats or happens once, and it runs a program or asks a turn.
+    CHECK ((cron IS NULL) <> (at IS NULL)),
     CHECK ((command IS NULL) <> (prompt IS NULL))
 ) STRICT;
 
