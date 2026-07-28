@@ -516,6 +516,62 @@ class CarryingAConversationOn(WithAnAgentToRunTurnsFor):
                          "the lookup is wrong, so finding nothing proved nothing")
 
 
+class WhatOneReplyIsMadeOf(unittest.TestCase):
+    """R-PRV-22 read from the other end: an adapter marks a finished thought `whole`, and
+    what a person reads back is where that marking has to land.
+
+    No agent and no brain — `_reply` is the whole decision and is asked directly."""
+
+    def test_two_finished_thoughts_do_not_run_into_each_other(self):
+        """Measured on a real account: two `whole` records concatenated with nothing
+        between them produced `caught it running.The worker (PID 72422)` — the last word
+        of one thought fused to the first of the next, in the record and on the surface."""
+        said = [{"type": "text", "text": "caught it running.", "whole": True},
+                {"type": "text", "text": "The worker (PID 72422) is blocked.",
+                 "whole": True}]
+        self.assertEqual("caught it running.\n\nThe worker (PID 72422) is blocked.",
+                         turn._reply(said))
+
+    def test_a_reply_arriving_a_piece_at_a_time_is_still_one_sentence(self):
+        """The guard on the one above. Fragments are not thoughts: separating them would
+        break a single sentence into paragraphs, which is the opposite failure."""
+        said = [{"type": "text", "text": "one "},
+                {"type": "text", "text": "whole "},
+                {"type": "text", "text": "sentence"}]
+        self.assertEqual("one whole sentence", turn._reply(said))
+
+    def test_fragments_still_open_are_closed_by_the_thought_that_follows(self):
+        """A brain may do both. What is open when a finished thought lands is its own
+        paragraph, rather than being swallowed into the next one."""
+        said = [{"type": "text", "text": "half a "},
+                {"type": "text", "text": "sentence"},
+                {"type": "text", "text": "Then a finished thought.", "whole": True}]
+        self.assertEqual("half a sentence\n\nThen a finished thought.", turn._reply(said))
+
+    def test_nothing_but_text_records_reach_the_reply(self):
+        """A turn says more than it replies with: what it thought and what a tool returned
+        are kept, and are not what somebody asked for."""
+        said = [{"type": "think", "text": "working it out", "whole": True},
+                {"type": "text", "text": "the answer", "whole": True},
+                {"type": "tool", "name": "Read"},
+                {"type": "usage", "input": 1}]
+        self.assertEqual("the answer", turn._reply(said))
+
+    def test_what_a_brain_put_inside_one_thought_is_left_exactly_as_it_said_it(self):
+        """R-USE-2's reasoning, applied to prose: the blank lines *between* thoughts are
+        rundesk's, and the ones *within* one are the brain's."""
+        said = [{"type": "text", "text": "a heading\n\n- one\n- two\n", "whole": True},
+                {"type": "text", "text": "\nand after it", "whole": True}]
+        self.assertEqual("a heading\n\n- one\n- two\n\nand after it", turn._reply(said))
+
+    def test_a_turn_that_said_nothing_replies_with_nothing(self):
+        """`answered` writes nothing for an empty reply, so this must stay empty rather
+        than becoming a paragraph separator with nothing on either side of it."""
+        self.assertEqual("", turn._reply([]))
+        self.assertEqual("", turn._reply([{"type": "text", "text": "  ", "whole": True}]))
+        self.assertEqual("", turn._reply([{"type": "usage", "input": 1}]))
+
+
 class WhatATurnCost(WithAnAgentToRunTurnsFor):
     async def test_every_run_records_what_it_cost_in_tokens(self):
         """R-USE-1"""
