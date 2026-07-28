@@ -3545,6 +3545,28 @@ class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
         self.assertIn("finished", said)
         self.assertIn("channel", said)
 
+    def test_a_runs_listing_shows_the_cached_input_a_provider_reported(self):
+        """R-USE-12 — cached input is billed and routinely dwarfs the fresh input beside
+        it, so a row naming only fresh input and output hid the whole of what the run cost
+        and hid which conversations should have been started again."""
+        self.furnished()
+        code, said = drive(["runs", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("120 in / 10 cached / 30 out", said)
+
+    def test_a_run_whose_provider_reported_no_cache_at_all_claims_none(self):
+        """R-USE-6 — absent is not zero. A provider that never mentions a cache and one
+        that read nothing from it are different facts, and inventing a `0 cached` for the
+        first would claim to know something nobody said."""
+        kept = self.agents.records("ava")
+        run = kept.began("terminal", "grok", "work", "2026-07-26T09:00:00Z")
+        kept.ended(run, "2026-07-26T09:00:01Z", "finished", exit_code=0,
+                   tokens={"input": 7, "output": 3, "reported": True})
+        code, said = drive(["runs", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("7 in / 3 out", said)
+        self.assertNotIn("cached", said)
+
     def test_an_agent_that_has_run_nothing_says_so_and_says_what_to_do(self):
         """A listing that printed an empty table would read as a failure to answer."""
         code, said = drive(["runs", "ava"], agents=self.agents)

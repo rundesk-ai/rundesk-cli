@@ -32,6 +32,7 @@ account: how much of a plan is left is that provider's question, not this one's.
 | ✅ | R-USE-9 | What an agent has cost outlives the gateway that recorded it | `what an agent has cost outlives the gateway that recorded it` |
 | ✅ | R-USE-10 | What an agent has cost is read without a provider being started | `what an agent has cost is read without a brain being started`, `what an agent has run is listed with what became of each` |
 | ❌ | R-USE-11 | Nothing about a provider's plan or remaining allowance is claimed | src/rundesk/turn.py:236 — nothing asks a brain about a plan, so nothing proves it is not asked |
+| ✅ | R-USE-12 | What one run cost names the cached input its provider reported, apart from fresh input | `a runs listing shows the cached input a provider reported`, `a run whose provider reported no cache at all claims none` |
 
 ## Open questions
 

@@ -46,6 +46,7 @@ from rundesk import dependencies
 from rundesk import process
 from rundesk import schedule
 from rundesk import update_request
+from rundesk import updater
 
 #: The gateway that exists before there are agents to name one after.
 DEFAULT_NAME = "gateway"
@@ -1371,6 +1372,15 @@ class Gateway:
         said["RUNDESK_MAINTENANCE"] = str(
             update_request.maintenance_path(self.name, self.where)
         )
+        # **The version of the process that actually came up**, and where what changed in
+        # it is published (R-UPD-46). Told to the adapter rather than looked up by it: a
+        # surface that asked GitHub what is newest would name a release this gateway is not
+        # running, and one that read a version out of an updater transcript would have
+        # nothing to read after an unattended update nobody's conversation started.
+        said["RUNDESK_VERSION"] = __version__
+        where = updater.release_url(__version__)
+        if where:
+            said["RUNDESK_RELEASE_URL"] = where
         return said
 
     async def _write_to(self, held: str, record: bytes) -> None:

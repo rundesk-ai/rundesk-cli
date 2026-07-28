@@ -155,6 +155,65 @@ class OutcomeTests(unittest.TestCase):
         self.assertNotIn("UP TO DATE", said)
 
 
+class ReleaseNotesTests(unittest.TestCase):
+    """R-UPD-46, R-UPD-47 — an owner who has just been updated can read what changed."""
+
+    def test_a_version_is_linked_to_the_release_that_carries_it(self):
+        self.assertEqual(
+            "https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.15.0",
+            updater.release_url("0.15.0"),
+        )
+
+    def test_the_link_is_built_from_the_repository_this_install_updates_itself_from(self):
+        """Never a second copy of the repository's name: an install pointed at one
+        repository and linked to another is an install offering somebody else's notes."""
+        self.assertIn(updater.REPO_SLUG, updater.release_url("1.2.3"))
+
+    def test_the_whole_of_what_the_command_prints_is_accepted(self):
+        """The worker records the version by running `rundesk version`, so what reaches
+        this is the command's own line rather than a bare number."""
+        self.assertEqual(
+            updater.release_url("0.15.0"), updater.release_url("rundesk 0.15.0")
+        )
+
+    def test_something_that_is_not_a_release_version_gets_no_link_rather_than_a_wrong_one(self):
+        """A release tag names all three parts. `v1.2` is a page that does not exist, and a
+        release note nobody can open is worse than none offered at all."""
+        for said in ("", None, "unknown", "1.2", "0.15.0-rc1", "rundesk"):
+            self.assertIsNone(updater.release_url(said), said)
+
+    def test_an_applied_update_names_the_release_it_landed_and_links_it(self):
+        code, said = run(
+            repo_root=INSTALL,
+            current_version="0.1.0",
+            latest=lambda: ("0.2.0", None),
+            apply=lambda root, tag: 0, relaunch=_stays_here,
+        )
+        self.assertEqual(0, code, said)
+        self.assertIn("update: applied — now on 0.2.0", said)
+        self.assertIn(
+            "https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.2.0", said
+        )
+
+    def test_an_update_that_did_not_land_never_names_a_release_as_applied(self):
+        """The one claim this must not make. What could not be brought forward is put back,
+        so the owner is on the version they were — and a release link beside that would say
+        the opposite of what happened."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = updater.run(
+                repo_root=INSTALL,
+                current_version="0.1.0",
+                latest=lambda: ("0.2.0", None),
+                apply=lambda root, tag: 0, relaunch=_stays_here,
+                provision=lambda: "the virtualenv could not be built",
+            )
+        said = out.getvalue()
+        self.assertEqual(1, code, said)
+        self.assertNotIn("applied", said)
+        self.assertNotIn("releases/tag", said)
+
+
 class ArchiveTests(unittest.TestCase):
     def test_an_archive_cannot_write_outside_where_it_is_unpacked(self):
         # A release archive is untrusted input; a member with a path that escapes

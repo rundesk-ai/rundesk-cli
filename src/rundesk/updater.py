@@ -26,6 +26,7 @@ from typing import Callable
 REPO_SLUG = "rundesk-ai/rundesk-cli"
 RELEASES_LATEST_URL = f"https://api.github.com/repos/{REPO_SLUG}/releases/latest"
 ARCHIVE_URL = f"https://github.com/{REPO_SLUG}/archive/refs/tags/{{tag}}.tar.gz"
+RELEASE_URL = f"https://github.com/{REPO_SLUG}/releases/tag/{{tag}}"
 HTTP_TIMEOUT = 5
 DOWNLOAD_TIMEOUT = 60
 USER_AGENT = "rundesk-cli-updater"
@@ -39,6 +40,35 @@ def parse_version(value: str) -> tuple[int, int, int] | None:
     if not match:
         return None
     return tuple(int(part or 0) for part in match.groups())  # type: ignore[return-value]
+
+
+#: A release tag names all three parts, always. `parse_version` is deliberately forgiving —
+#: it reads `1.2` so a comparison never fails on a shortened tag — and forgiveness is the
+#: wrong instinct for a link: `v1.2` is a page that does not exist, and a release note nobody
+#: can open is worse than none offered at all.
+_RELEASE_VERSION_RE = re.compile(r"^v?(\d+\.\d+\.\d+)$")
+
+
+def release_url(version: str | None) -> str | None:
+    """Where what changed in a version is published, or None when it is not a version.
+
+    Built from this repository's identity and the version itself, never read back out of a
+    sentence written for a person: an outcome summary is prose, and a link derived from
+    prose changes meaning the day somebody rewords it (R-UPD-46).
+
+    A version arrives here either bare (`0.15.0`) or as the whole of what `rundesk version`
+    printed (`rundesk 0.15.0`), so the last word is taken and then held to the shape a
+    release tag actually has. Anything else is no link rather than a wrong one.
+    """
+    if not version:
+        return None
+    words = str(version).split()
+    if not words:
+        return None
+    match = _RELEASE_VERSION_RE.match(words[-1])
+    if not match:
+        return None
+    return RELEASE_URL.format(tag=f"v{match.group(1)}")
 
 
 def is_newer(latest: str, local: str) -> bool:
@@ -217,15 +247,18 @@ def _relaunch(repo_root: Path, stopped: list) -> str | None:
 
 
 def carry_on(repo_root: Path, stopped: list, resume=None, carry=None,
-             provision=None) -> int:
+             provision=None, landed: str | None = None) -> int:
     """Finish a window the release before this one opened (R-UPD-33).
 
     The public half of the handover: whoever runs this *is* the new code, so what it does
-    to an owner's records is what the release that shipped it says it should be.
+    to an owner's records is what the release that shipped it says it should be — and
+    `landed` is what the release that shipped it calls itself, which is why the caller
+    states it rather than this module inferring it from a version it was never given.
     """
     try:
         with _only_one(repo_root):
-            return _bring_forward(repo_root, stopped, resume, carry, provision)
+            return _bring_forward(repo_root, stopped, resume, carry, provision,
+                                  landed=landed)
     except Busy as err:
         print(f"update: NOT APPLIED — {err}", file=sys.stderr)
         return 1
@@ -362,7 +395,8 @@ def _replace_this_install(
                       file=sys.stderr)
             (resume or (lambda _names: []))(stopped)
             return 1
-        return _bring_forward(repo_root, stopped, resume, carry, provision)
+        return _bring_forward(repo_root, stopped, resume, carry, provision,
+                              landed=published)
     # The release never landed, so there is nothing to bring forward and nothing to put
     # back — only whatever was stood down, which comes back onto the code it was already on.
     left_down = (resume or (lambda _names: []))(stopped)
@@ -377,7 +411,7 @@ def _replace_this_install(
 
 
 def _bring_forward(repo_root: Path, stopped: list, resume=None, carry=None,
-                   provision=None) -> int:
+                   provision=None, landed: str | None = None) -> int:
     """What an install is made of, then what its agents keep, then everything back up.
 
     The one window where nothing is up and the new files are already down. Reached twice —
@@ -429,7 +463,22 @@ def _bring_forward(repo_root: Path, stopped: list, resume=None, carry=None,
         )
         print("        why: rundesk logs <name>", file=sys.stderr)
         return 1
+    # **Said only here** (R-UPD-46, R-UPD-47), which is the one line in this module that is reached
+    # exactly when a release is on disk, its dependencies are in place, every agent's
+    # records are in the shape it expects and every gateway is back. Every failure and
+    # rollback above returns before it, so nothing that did not land can say it did.
+    _say_what_landed(landed)
     return 0
+
+
+def _say_what_landed(landed: str | None) -> None:
+    """Which release is now installed, and where to read what changed in it."""
+    if not landed:
+        return
+    print(f"update: applied — now on {landed}")
+    where = release_url(landed)
+    if where:
+        print(f"        what changed: {where}")
 
 
 #: Which installs *this process* already holds the right to change. `flock` is held per

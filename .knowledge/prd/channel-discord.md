@@ -47,6 +47,8 @@ so only a running commentary may grow.
 | ✅ | R-DIS-23 | A Discord command is handled only by the channel whose configured place contains it | `one slash interaction belongs to exactly one configured surface` |
 | ✅ | R-DIS-24 | A completed Discord answer shows compact elapsed time beside any reported token cost | `elapsed time is compact at seconds minutes and hours`, `elapsed time runs from taken until the answer is ready`, `repeated taken does not restart elapsed time`, `elapsed time is shown when usage was not reported` |
 | ✅ | R-DIS-25 | A single-user Discord channel offers a provider change and privately reports its result | `provider is deferred and reported for authorized configuration`, `provider result completes the exact private interaction`, `shared channel provider command is privately refused before reporting` |
+| ✅ | R-DIS-26 | A gateway returning from update maintenance names the version now listening and links its release | `a gateway returning from an update links the version now listening`, `a gateway told only a version still names it` |
+| ✅ | R-DIS-27 | An ordinary gateway startup adds no update wording and no release link | `an ordinary startup adds no update wording and no release link` |
 
 ## Open questions
 

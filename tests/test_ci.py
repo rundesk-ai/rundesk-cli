@@ -47,7 +47,7 @@ class FastPullRequestFeedback(unittest.TestCase):
         self.assertIn('f"{path.stem}.log"', self.runner)
         self.assertIn("::error title={name}", self.runner)
         self.assertIn("failed suites:", self.runner)
-        self.assertIn("actions/upload-artifact@v4", self.workflow)
+        self.assertIn("actions/upload-artifact@v7", self.workflow)
         self.assertIn("if: always()", self.workflow)
 
     def test_timeout_log_contains_thread_diagnostics(self):
@@ -151,6 +151,28 @@ class FastPullRequestFeedback(unittest.TestCase):
         self.assertIn('update --after-replacing ""', upgrade)
         self.assertIn("owner-kept.txt", upgrade)
         self.assertIn("serve existing", upgrade)
+
+    def test_every_workflow_pins_one_major_of_each_action_it_shares(self):
+        """Build and release both check out and set Python up, and the two drifting apart
+        is how a release job goes on running a runtime the build stopped exercising. Every
+        action here was forced onto Node 24 by the runner while the workflows still asked
+        for the Node 20 majors, and nothing said so but an annotation nobody opened.
+
+        Read off the files rather than compared with a list of expected versions: a list of
+        action versions kept beside the workflows is a second copy that disagrees with them
+        the first time one is bumped."""
+        used = {}
+        for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+            for action, major in re.findall(
+                r"uses:\s*([\w.-]+/[\w.-]+)@v(\d+)", path.read_text(encoding="utf-8")
+            ):
+                used.setdefault(action, {}).setdefault(major, []).append(path.name)
+        self.assertTrue(used, "no workflow names an action at all")
+        for action, majors in sorted(used.items()):
+            self.assertEqual(
+                1, len(majors),
+                f"{action} is pinned at {sorted(majors)} across {sorted(used[action])}",
+            )
 
     def test_published_release_canary_does_not_race_tag_publication(self):
         condition = self.workflow.split("  install-published-release:", 1)[1]

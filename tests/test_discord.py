@@ -1337,10 +1337,70 @@ class WhatTheOwnerIsTold(unittest.TestCase):
             with mock.patch.dict(
                     os.environ, {"RUNDESK_MAINTENANCE": str(marker)}, clear=False), \
                     mock.patch.object(discord, "say"):
+                # An install told no version says the shorter sentence, and this case is
+                # about the marker rather than the version — so it states which of the two
+                # it is arranging rather than inheriting whatever ran it (R-DIS-26).
+                for named in ("RUNDESK_VERSION", "RUNDESK_RELEASE_URL"):
+                    os.environ.pop(named, None)
                 it = self.Connects()
                 asyncio.run(discord.Agent.on_ready(it))
         self.assertIn("maintenance is complete", it.said[0].lower())
         self.assertFalse(marker.exists(), "completed maintenance stayed attached to the gateway")
+
+    def test_a_gateway_returning_from_an_update_links_the_version_now_listening(self):
+        """R-DIS-26 — the green notice is the only thing every returning gateway sends,
+        including after an unattended update no conversation started. Told the version and
+        the link by rundesk: an adapter that asked a forge what is newest would name a
+        release this gateway is not running."""
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / "maintenance"
+            marker.touch()
+            with mock.patch.dict(os.environ, {
+                        "RUNDESK_MAINTENANCE": str(marker),
+                        "RUNDESK_VERSION": "0.15.0",
+                        "RUNDESK_RELEASE_URL":
+                            "https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.15.0",
+                    }, clear=False), \
+                    mock.patch.object(discord, "say"):
+                it = self.Connects()
+                asyncio.run(discord.Agent.on_ready(it))
+        self.assertIn(
+            "[v0.15.0](https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.15.0)",
+            it.said[0],
+        )
+        self.assertIn("maintenance", it.said[0].lower())
+
+    def test_a_gateway_told_only_a_version_still_names_it(self):
+        """An install with no link to offer says which release is listening in plain text.
+        Saying nothing would make the useful half of the notice depend on the other."""
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / "maintenance"
+            marker.touch()
+            with mock.patch.dict(os.environ, {
+                        "RUNDESK_MAINTENANCE": str(marker),
+                        "RUNDESK_VERSION": "0.15.0",
+                    }, clear=False), \
+                    mock.patch.object(discord, "say"):
+                # Inside the patch, which restores the whole environment on the way out.
+                os.environ.pop("RUNDESK_RELEASE_URL", None)
+                it = self.Connects()
+                asyncio.run(discord.Agent.on_ready(it))
+        self.assertIn("v0.15.0", it.said[0])
+        self.assertNotIn("](", it.said[0], "a link was made out of nothing")
+
+    def test_an_ordinary_startup_adds_no_update_wording_and_no_release_link(self):
+        """R-DIS-27 — a reconnection is not a release. Discord drops a session it will not
+        resume on its own over the weeks a channel is held open, and a version offered
+        there would read as one having just been installed."""
+        with mock.patch.dict(os.environ, {"RUNDESK_VERSION": "0.15.0"}, clear=False), \
+                mock.patch.object(discord, "say"):
+            # Inside the patch, which restores the whole environment on the way out.
+            os.environ.pop("RUNDESK_MAINTENANCE", None)
+            it = self.Connects()
+            asyncio.run(discord.Agent.on_ready(it))
+        self.assertNotIn("maintenance", it.said[0].lower())
+        self.assertNotIn("0.15.0", it.said[0])
+        self.assertNotIn("releases/tag", it.said[0])
 
     def test_only_one_adapter_of_a_gateway_says_the_goodbye(self):
         """R-DIS-15 — the same on the way out, and for a worse reason than tidiness: two

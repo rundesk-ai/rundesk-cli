@@ -558,11 +558,21 @@ class Agent(discord.Client):
         if not self.greeted and self._claim("online"):
             self.greeted = True
             if _maintenance():
+                # **The version, in the ordinary green notice** (R-DIS-26). Every returning
+                # gateway sends this one, including after an unattended update no
+                # conversation started — so it is the only place an owner is certain to be
+                # told which release is now listening, and the only one that can link it.
+                landed = _running_release()
                 await self._tell_the_owner(
+                    f"🟢 **Gateway online** — maintenance to {landed} is complete; "
+                    "rundesk is listening."
+                    if landed else
                     "🟢 **Gateway online** — maintenance is complete; rundesk is listening."
                 )
                 _finish_maintenance()
             else:
+                # Unchanged, deliberately: a reconnection is not a release, and a version
+                # offered here would read as one having just been installed.
                 await self._tell_the_owner(
                     "🟢 **Gateway online** — rundesk is up and listening."
                 )
@@ -1477,6 +1487,22 @@ async def check(chose) -> int:
 def _maintenance() -> bool:
     marker = os.environ.get("RUNDESK_MAINTENANCE")
     return bool(marker and Path(marker).is_file())
+
+
+def _running_release() -> str:
+    """This gateway's version as Discord should show it, linked where there is a link.
+
+    Both parts are handed over by rundesk: the version is the process that actually came
+    up, and the URL is built from the repository this install updates itself from. Nothing
+    is composed here, so this adapter never learns a repository name — and an install told
+    only a version still names it, in plain text, rather than saying nothing at all.
+    """
+    version = (os.environ.get("RUNDESK_VERSION") or "").strip()
+    if not version:
+        return ""
+    shown = version if version.startswith("v") else f"v{version}"
+    where = (os.environ.get("RUNDESK_RELEASE_URL") or "").strip()
+    return f"[{shown}]({where})" if where else shown
 
 
 def _finish_maintenance() -> None:

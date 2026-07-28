@@ -1474,6 +1474,15 @@ class WhatEveryAdapterOfOneGatewayIsTold(WithARunDirectory):
         self.assertEqual("kept", one["SOMETHING"],
                          "naming the gateway dropped what the adapter was already told")
 
+    async def test_every_adapter_is_told_the_version_that_actually_came_up(self):
+        """R-UPD-46 — a surface reporting a version it asked a forge for would name the
+        newest *published* release rather than the one it is running, and one reading an
+        updater transcript would have nothing to read after an unattended update."""
+        from rundesk import __version__, updater
+        told = self.made()._for_a_channel(self.Surface())
+        self.assertEqual(__version__, told["RUNDESK_VERSION"])
+        self.assertEqual(updater.release_url(__version__), told["RUNDESK_RELEASE_URL"])
+
 
 class TheClockIsLookedAtAsSoonAsThereIsAGatewayToLookAtIt(WithARunDirectory):
     """R-SCH-26 — the tick slept before its first look, so a gateway examined nothing for
