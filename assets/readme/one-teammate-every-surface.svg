@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="470" viewBox="0 0 1200 470" role="img" aria-labelledby="title desc">
+  <title id="title">One Rundesk teammate across every surface</title>
+  <desc id="desc">Provider CLIs connect through a named Rundesk agent to terminal, Discord, schedules, and custom channels.</desc>
+  <defs>
+    <radialGradient id="background" cx="50%" cy="45%" r="75%">
+      <stop offset="0" stop-color="#15111d"/>
+      <stop offset="0.55" stop-color="#090b16"/>
+      <stop offset="1" stop-color="#030611"/>
+    </radialGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff5a5f"/>
+      <stop offset="1" stop-color="#e52e3d"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#697084"/>
+    </marker>
+    <style>
+      .title { fill: #f7f7f8; font: 700 30px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .subtitle { fill: #a8adbb; font: 400 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .label { fill: #858c9e; font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 1.8px; }
+      .pill { fill: #f4f5f7; font: 600 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .agent { fill: #fff; font: 700 25px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .detail { fill: #c4c8d2; font: 500 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .foot { fill: #949aaa; font: 500 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="470" rx="28" fill="url(#background)"/>
+  <circle cx="600" cy="270" r="210" fill="#f04444" opacity="0.035"/>
+
+  <text x="56" y="58" class="title">One teammate. Every surface.</text>
+  <text x="56" y="88" class="subtitle">Choose the brain once. Keep the same workspace, rules, and operating layer everywhere.</text>
+
+  <text x="60" y="142" class="label">PROVIDER CLIS</text>
+  <text x="930" y="142" class="label">WAYS IN</text>
+
+  <g>
+    <rect x="56" y="162" width="220" height="45" rx="12" fill="#111522" stroke="#272c3b"/>
+    <text x="78" y="190" class="pill">OpenAI Codex</text>
+    <rect x="56" y="217" width="220" height="45" rx="12" fill="#111522" stroke="#272c3b"/>
+    <text x="78" y="245" class="pill">Claude Code</text>
+    <rect x="56" y="272" width="220" height="45" rx="12" fill="#111522" stroke="#272c3b"/>
+    <text x="78" y="300" class="pill">Grok CLI</text>
+    <rect x="56" y="327" width="220" height="45" rx="12" fill="#111522" stroke="#272c3b"/>
+    <text x="78" y="355" class="pill">Antigravity</text>
+    <rect x="56" y="382" width="220" height="38" rx="11" fill="#0d101b" stroke="#3b4050" stroke-dasharray="5 5"/>
+    <text x="78" y="406" class="detail">Any custom adapter</text>
+  </g>
+
+  <path d="M 295 230 C 350 230, 360 245, 405 245" fill="none" stroke="#697084" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M 295 345 C 350 345, 360 310, 405 310" fill="none" stroke="#697084" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="420" y="150" width="360" height="230" rx="26" fill="#0e111c" stroke="#f04444" stroke-width="2"/>
+    <circle cx="476" cy="207" r="27" fill="none" stroke="url(#accent)" stroke-width="7"/>
+    <path d="M465 233v-42h11c13 0 19 6 19 16 0 8-4 13-12 15l14 15" fill="none" stroke="#f04444" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="522" y="202" class="label" fill="#f04444">RUNDESK</text>
+    <text x="522" y="233" class="agent">Named agent</text>
+    <line x1="456" y1="263" x2="744" y2="263" stroke="#282d3b"/>
+    <text x="456" y="297" class="detail">workspace · rules · memory · skills</text>
+    <text x="456" y="327" class="detail">conversations · records · history</text>
+    <rect x="456" y="345" width="288" height="2" rx="1" fill="#f04444" opacity="0.7"/>
+  </g>
+
+  <path d="M 795 245 C 840 245, 850 230, 905 230" fill="none" stroke="#697084" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M 795 310 C 840 310, 850 345, 905 345" fill="none" stroke="#697084" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <g>
+    <rect x="924" y="162" width="220" height="45" rx="12" fill="#111522" stroke="#272c3b"/>
+    <text x="946" y="190" class="pill">Terminal</text>
+    <rect x="924" y="217" width="220" height="45" rx="12" fill="#111522" stroke="#272c3b"/>
+    <text x="946" y="245" class="pill">Discord</text>
+    <rect x="924" y="272" width="220" height="45" rx="12" fill="#111522" stroke="#272c3b"/>
+    <text x="946" y="300" class="pill">Schedules</text>
+    <rect x="924" y="327" width="220" height="45" rx="12" fill="#111522" stroke="#272c3b"/>
+    <text x="946" y="355" class="pill">One-time runs</text>
+    <rect x="924" y="382" width="220" height="38" rx="11" fill="#0d101b" stroke="#3b4050" stroke-dasharray="5 5"/>
+    <text x="946" y="406" class="detail">Any custom channel</text>
+  </g>
+
+  <text x="600" y="444" text-anchor="middle" class="foot">Rundesk owns lifecycle, access, context, and the durable record of every turn.</text>
+</svg>

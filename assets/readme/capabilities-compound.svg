@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+  <title id="title">Turn experience into reusable capability</title>
+  <desc id="desc">Work can be captured in memory, turned into a reusable skill or integration, and granted to teammates for future turns.</desc>
+  <defs>
+    <radialGradient id="background" cx="50%" cy="50%" r="80%">
+      <stop offset="0" stop-color="#15111d"/>
+      <stop offset="0.58" stop-color="#090b16"/>
+      <stop offset="1" stop-color="#030611"/>
+    </radialGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#f04444"/>
+    </marker>
+    <style>
+      .title { fill: #f7f7f8; font: 700 30px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .subtitle { fill: #a8adbb; font: 400 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .number { fill: #fff; font: 700 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .stage { fill: #f4f5f7; font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .detail { fill: #aeb3c1; font: 400 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .foot { fill: #949aaa; font: 500 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="420" rx="28" fill="url(#background)"/>
+  <text x="56" y="58" class="title">Turn experience into reusable capability.</text>
+  <text x="56" y="88" class="subtitle">When a pattern repeats, teammates can capture what worked and reuse it next time.</text>
+
+  <path d="M 195 225 H 310" stroke="#f04444" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M 425 225 H 540" stroke="#f04444" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M 655 225 H 770" stroke="#f04444" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M 885 225 H 1000" stroke="#f04444" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <g>
+    <rect x="54" y="150" width="142" height="150" rx="22" fill="#111522" stroke="#2b3040"/>
+    <circle cx="91" cy="188" r="18" fill="#f04444"/>
+    <text x="91" y="194" text-anchor="middle" class="number">1</text>
+    <text x="76" y="237" class="stage">Do the work</text>
+    <text x="76" y="266" class="detail">A real task,</text>
+    <text x="76" y="286" class="detail">with a real result.</text>
+  </g>
+
+  <g>
+    <rect x="284" y="150" width="142" height="150" rx="22" fill="#111522" stroke="#2b3040"/>
+    <circle cx="321" cy="188" r="18" fill="#f04444"/>
+    <text x="321" y="194" text-anchor="middle" class="number">2</text>
+    <text x="306" y="237" class="stage">Remember</text>
+    <text x="306" y="266" class="detail">Keep decisions,</text>
+    <text x="306" y="286" class="detail">context, and rules.</text>
+  </g>
+
+  <g>
+    <rect x="514" y="150" width="142" height="150" rx="22" fill="#111522" stroke="#2b3040"/>
+    <circle cx="551" cy="188" r="18" fill="#f04444"/>
+    <text x="551" y="194" text-anchor="middle" class="number">3</text>
+    <text x="536" y="237" class="stage">Make a skill</text>
+    <text x="536" y="266" class="detail">Turn a repeatable</text>
+    <text x="536" y="286" class="detail">method into guidance.</text>
+  </g>
+
+  <g>
+    <rect x="744" y="150" width="142" height="150" rx="22" fill="#111522" stroke="#2b3040"/>
+    <circle cx="781" cy="188" r="18" fill="#f04444"/>
+    <text x="781" y="194" text-anchor="middle" class="number">4</text>
+    <text x="766" y="237" class="stage">Add a tool</text>
+    <text x="766" y="266" class="detail">Share an integration</text>
+    <text x="766" y="286" class="detail">CLI across agents.</text>
+  </g>
+
+  <g>
+    <rect x="974" y="150" width="172" height="150" rx="22" fill="#14121d" stroke="#f04444" stroke-width="2"/>
+    <circle cx="1011" cy="188" r="18" fill="#f04444"/>
+    <text x="1011" y="194" text-anchor="middle" class="number">5</text>
+    <text x="996" y="237" class="stage">Grant &amp; reuse</text>
+    <text x="996" y="266" class="detail">Give the capability</text>
+    <text x="996" y="286" class="detail">to any teammate.</text>
+  </g>
+
+  <path d="M 1060 320 C 1060 370, 130 370, 130 320" fill="none" stroke="#555c6e" stroke-width="2" stroke-dasharray="6 7" marker-end="url(#arrow)"/>
+  <text x="600" y="397" text-anchor="middle" class="foot">Explicitly authored and granted, each capability gives future turns more to build on.</text>
+</svg>
