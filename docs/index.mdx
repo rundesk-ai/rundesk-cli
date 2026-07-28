@@ -7,19 +7,47 @@ editUrl: false
 next: false
 prev: false
 hero:
-  tagline: Teammates that remember, adapt, and grow.
+  tagline: Teammates that remember, adapt, and grow. Run the coding CLI you already use as a durable, named agent on your own Mac.
+  actions:
+    - text: Get started
+      link: /start/what-rundesk-is/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/rundesk-ai/rundesk-cli
+      icon: github
+      variant: minimal
   image:
-    file: ../site/src/assets/rundesk-mark.png
+    html: |
+      <div class="rd-term" role="img" aria-label="A terminal session creating an agent named ava, asking it a question, and starting its gateway.">
+        <div class="rd-term__bar">
+          <span class="rd-term__dot"></span><span class="rd-term__dot"></span><span class="rd-term__dot"></span>
+          <span class="rd-term__name">ava — rundesk</span>
+        </div>
+        <pre class="rd-term__body"><code><span class="l"><span class="p">$</span> rundesk add ava <span class="f">--provider</span> codex</span>
+      <span class="l ok">✓ ava is ready — home, memory, skills</span>
+      <span class="l"><span class="p">$</span> rundesk ask ava <span class="s">"what looks risky?"</span></span>
+      <span class="l dim">ava · codex · thinking…</span>
+      <span class="l">3 commits today. One worth a look:</span>
+      <span class="l"><span class="a">api.py:88</span> drops the auth guard.</span>
+      <span class="l"><span class="p">$</span> rundesk start ava</span>
+      <span class="l ok">✓ gateway up — live on Discord<span class="rd-term__cursor"></span></span></code></pre>
+      </div>
 ---
 
 import { Card, CardGrid, LinkCard, Steps } from '@astrojs/starlight/components';
 
-**Run AI coding agents as durable, named teammates on your own Mac — then reach them from
-your terminal, Discord, or a schedule.**
+<div class="rd-pills">
+	<span class="rd-pill"><span class="rd-pill__dot"></span> macOS</span>
+	<span class="rd-pill">Python 3.9+</span>
+	<span class="rd-pill">No build step</span>
+	<span class="rd-pill">MIT</span>
+</div>
 
-Rundesk keeps the coding CLI you already use — Codex, Claude Code, Grok, Google Antigravity —
-running with its own workspace, rules, memory, skills, conversations, and history. It does not
-replace them. It gives them a dependable home and a common operating layer.
+Rundesk keeps the coding CLI you already use — **Codex**, **Claude Code**, **Grok**, **Google
+Antigravity** — running with its own workspace, rules, memory, skills, conversations, and
+history. It does not replace them. It gives them a dependable home and a common operating
+layer.
 
 <CardGrid>
 	<Card title="Get started" icon="rocket">

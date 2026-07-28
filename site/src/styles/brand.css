@@ -204,3 +204,215 @@ starlight-sidebar-topics-list,
 	border-color: color-mix(in srgb, var(--rd-red-500) 35%, transparent);
 	color: var(--sl-color-white);
 }
+
+/* ========================================================== atmosphere == */
+
+/* A flat near-black page reads as unfinished rather than as restrained. Two
+   blooms in the brand red give the ground depth, plus a hairline grid so it
+   reads as a surface rather than as an absence.
+
+   These are background layers on `body`, not fixed pseudo-elements. A fixed
+   pseudo-element with a z-index establishes a stacking context that paints over
+   the content, and lifting `.page` back above it breaks Starlight's own layout —
+   the article drops several hundred pixels down the page. A background layer has
+   no such effect because it never enters the stacking order at all. */
+:root[data-theme='dark'] body {
+	background-image:
+		radial-gradient(60rem 32rem at 78% -6%, rgb(253 48 49 / 0.13), transparent 62%),
+		radial-gradient(44rem 26rem at 2% 4%, rgb(90 60 255 / 0.07), transparent 58%),
+		repeating-linear-gradient(to right, rgb(255 255 255 / 0.018) 0 1px, transparent 1px 3.5rem),
+		repeating-linear-gradient(to bottom, rgb(255 255 255 / 0.018) 0 1px, transparent 1px 3.5rem);
+	background-attachment: fixed;
+	background-repeat: no-repeat;
+}
+
+/* ============================================================ terminal == */
+
+/* The product is a command line, so the landing image is a command line. */
+.rd-term {
+	width: 100%;
+	max-width: 30rem;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.75rem;
+	overflow: hidden;
+	background: color-mix(in srgb, var(--rd-ground) 88%, #000);
+	box-shadow:
+		0 1.5rem 4rem rgb(0 0 0 / 0.55),
+		0 0 0 1px rgb(253 48 49 / 0.08),
+		0 0 5rem rgb(253 48 49 / 0.1);
+	text-align: start;
+}
+
+.rd-term__bar {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	padding: 0.6rem 0.85rem;
+	background: color-mix(in srgb, var(--rd-ground-raised) 92%, #fff 2%);
+	border-bottom: 1px solid var(--sl-color-gray-6);
+}
+
+.rd-term__dot {
+	width: 0.6rem;
+	height: 0.6rem;
+	border-radius: 50%;
+	background: var(--sl-color-gray-5);
+}
+
+.rd-term__dot:first-child {
+	background: var(--rd-red-500);
+}
+
+.rd-term__name {
+	margin-inline-start: auto;
+	font-size: 0.7rem;
+	color: var(--sl-color-gray-3);
+	letter-spacing: 0.04em;
+}
+
+.rd-term__body {
+	margin: 0;
+	padding: 1rem 1.1rem 1.2rem;
+	background: transparent;
+	font-size: 0.74rem;
+	line-height: 1.7;
+	overflow-x: auto;
+}
+
+.rd-term__body code {
+	background: none;
+	border: none;
+	padding: 0;
+	color: var(--sl-color-gray-2);
+	font-family: var(--__sl-font-mono, ui-monospace, monospace);
+}
+
+/* Each line fades up in turn, so the session reads as something that happened
+   rather than as a screenshot of text. */
+.rd-term .l {
+	display: block;
+	opacity: 0;
+	animation: rd-line 0.45s ease forwards;
+}
+
+.rd-term .l:nth-child(1) { animation-delay: 0.15s; }
+.rd-term .l:nth-child(2) { animation-delay: 0.5s; }
+.rd-term .l:nth-child(3) { animation-delay: 0.85s; }
+.rd-term .l:nth-child(4) { animation-delay: 1.2s; }
+.rd-term .l:nth-child(5) { animation-delay: 1.6s; }
+.rd-term .l:nth-child(6) { animation-delay: 1.85s; }
+.rd-term .l:nth-child(7) { animation-delay: 2.2s; }
+.rd-term .l:nth-child(8) { animation-delay: 2.55s; }
+
+@keyframes rd-line {
+	from { opacity: 0; transform: translateY(0.35rem); }
+	to { opacity: 1; transform: none; }
+}
+
+.rd-term .p { color: var(--rd-red-500); font-weight: 700; }
+.rd-term .f { color: #7aa2f7; }
+.rd-term .s { color: #9ece6a; }
+.rd-term .a { color: var(--rd-red-400); }
+.rd-term .ok { color: #7ddba0; }
+.rd-term .dim { color: var(--sl-color-gray-4); font-style: italic; }
+
+.rd-term__cursor {
+	display: inline-block;
+	width: 0.5rem;
+	height: 0.95em;
+	margin-inline-start: 0.35rem;
+	vertical-align: text-bottom;
+	background: var(--rd-red-500);
+	animation: rd-blink 1.1s steps(2, start) infinite;
+}
+
+@keyframes rd-blink {
+	to { visibility: hidden; }
+}
+
+/* Motion is decoration here; anybody who has asked for less should get none. */
+@media (prefers-reduced-motion: reduce) {
+	.rd-term .l { opacity: 1; animation: none; }
+	.rd-term__cursor { animation: none; }
+	.sl-link-card:hover { transform: none; }
+}
+
+/* =============================================================== pills == */
+
+.rd-pills {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	margin-block: 0 1.75rem;
+}
+
+.rd-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	padding: 0.25rem 0.7rem;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 999px;
+	font-size: var(--sl-text-xs);
+	color: var(--sl-color-gray-2);
+	background: color-mix(in srgb, var(--rd-ground-raised) 70%, transparent);
+}
+
+.rd-pill__dot {
+	width: 0.4rem;
+	height: 0.4rem;
+	border-radius: 50%;
+	background: #7ddba0;
+	box-shadow: 0 0 0.5rem #7ddba0;
+}
+
+/* ======================================================== card motion == */
+
+.card {
+	position: relative;
+	transition: border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+.card:hover {
+	transform: translateY(-3px);
+	border-color: color-mix(in srgb, var(--rd-red-500) 40%, transparent);
+	box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 0.45);
+}
+
+.card:hover .icon {
+	background: color-mix(in srgb, var(--rd-red-500) 20%, transparent);
+	border-color: color-mix(in srgb, var(--rd-red-500) 45%, transparent);
+}
+
+.sl-link-card:hover {
+	box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 0.45);
+}
+
+/* The primary action is the one thing on the page that should look clickable
+   from across the room. */
+.action.primary {
+	background: linear-gradient(180deg, var(--rd-red-500), var(--rd-red-600));
+	color: #fff;
+	border: 1px solid color-mix(in srgb, var(--rd-red-400) 60%, transparent);
+	box-shadow: 0 0.5rem 1.5rem rgb(253 48 49 / 0.28);
+	transition: transform 150ms ease, box-shadow 150ms ease;
+}
+
+.action.primary:hover {
+	transform: translateY(-2px);
+	box-shadow: 0 0.75rem 2rem rgb(253 48 49 / 0.4);
+}
+
+/* ======================================================= section rules == */
+
+/* An accent tick before each h2 gives the long pages a rhythm to scroll past. */
+.sl-markdown-content h2::before {
+	content: '';
+	display: inline-block;
+	width: 0.2rem;
+	height: 0.9em;
+	margin-inline-end: 0.6rem;
+	vertical-align: -0.04em;
+	border-radius: 999px;
+	background: linear-gradient(180deg, var(--rd-red-500), transparent);
+}
