@@ -60,6 +60,8 @@ rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
   token usage without relying on a provider's private session format.
 - **Reusable capabilities.** Grant agents on-demand skills and place shared integration
   CLIs on every agent's `PATH`.
+- **Self-improving by design.** Agents can turn repeated work into reusable skills and
+  integration CLIs, so a capability developed once can be granted to every agent.
 - **Local and recoverable.** Rundesk keeps its program separate from your data, supports
   manual and daily backups, and never requires a hosted Rundesk server.
 
@@ -103,6 +105,9 @@ Rundesk installs under `~/.rundesk` without editing your shell profile:
 ```
 
 Updates replace `app/`; uninstall leaves `data/` alone unless you explicitly ask to purge it.
+When an update needs to migrate agent records, Rundesk first stops every gateway and keeps a
+rollback copy of each database. If any migration fails, it restores every agent's records and
+keeps the previous release in place.
 
 ### Create and check an agent
 
@@ -286,3 +291,7 @@ python3 .knowledge/scripts/gate
 
 The gate discovers every suite, checks the documentation evidence, validates the shell
 surface, and performs a real install and uninstall.
+
+## License
+
+Rundesk is available under the [MIT License](LICENSE).
