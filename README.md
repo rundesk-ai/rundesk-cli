@@ -28,10 +28,6 @@ Rundesk keeps the coding CLI you already use running with its own workspace, rul
 skills, conversations, and history. It does not replace Codex, Claude Code, Grok, or Google
 Antigravity; it gives those tools a dependable home and a common operating layer.
 
-<p align="center">
-  <img src="assets/readme/one-teammate-every-surface.svg" alt="Provider CLIs connect through one named Rundesk agent to terminal, Discord, schedules, and custom channels." width="100%">
-</p>
-
 ## ⚡ It's this simple
 
 ```sh
@@ -71,10 +67,6 @@ rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
 - **Local and recoverable.** Rundesk keeps its program separate from your data, supports
   manual and daily backups, and never requires a hosted Rundesk server.
 
-<p align="center">
-  <img src="assets/readme/capabilities-compound.svg" alt="Work can be remembered, turned into reusable skills and integration tools, and granted to teammates for future turns." width="100%">
-</p>
-
 ## 💡 Why Rundesk?
 
 Coding agents are excellent at a turn of work, but their native home is usually one terminal
@@ -82,7 +74,7 @@ session. Rundesk adds the parts needed to operate them over time:
 
 - a stable identity and workspace for each agent;
 - an always-on gateway owned by the operating system;
-- continuing conversations and a durable history of terminal, chat, and scheduled work;
+- conversations that resume across turns and surfaces;
 - schedules that run once, never overlap, and do not run late after downtime;
 - access controls for chat channels;
 - normalized history and usage across different provider CLIs; and
