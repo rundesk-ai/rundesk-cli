@@ -435,6 +435,29 @@ class WhatOneTurnLooksLike(unittest.TestCase):
                      {"type": "think", "text": "   "}, {"type": "answer", "text": "hi"}):
             self.assertEqual("", discord.commentary(said), f"{said} became commentary")
 
+    def test_a_long_remark_is_split_without_losing_any_of_it(self):
+        """R-CH-19, R-DIS-13 — a finished thing said mid-turn goes through `told` as a
+        remark. Discord refuses one content field beyond its limit, so bounding only the
+        final answer loses scheduled reports before their final record arrives."""
+        posted = []
+
+        class Turn:
+            live = {}
+
+            async def _flush(self, it, held): pass
+            async def _post(self, it, text): posted.append(text)
+            def _no_longer_last(self, held): pass
+            def _stop_typing(self, held): pass
+            async def _typing(self, it): pass
+
+        text = ("first line\n" + ("x" * discord.LIMIT) + "\nlast line")
+        asyncio.run(discord.Agent.told(
+            Turn(), {"type": "said", "conversation": "c1", "text": text}))
+
+        self.assertGreater(len(posted), 1, "the oversized remark was posted as one message")
+        self.assertTrue(all(len(piece) <= discord.LIMIT for piece in posted), posted)
+        self.assertEqual(text.replace("\n", ""), "".join(posted).replace("\n", ""))
+
     def test_what_the_agent_did_does_become_commentary(self):
         """R-DIS-20 — the other half, or the option would show nothing at all."""
         self.assertNotEqual("", discord.commentary(

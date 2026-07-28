@@ -13,6 +13,9 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   release preparation can inspect or edit a stale version while the new worktree is correct.
   Start the next command with the new worktree as its working directory, then verify its
   branch before editing.
+- **A fresh worktree has no `.venv`, so its Discord regression test skips and looks green.**
+  Run the worktree's test path with the main checkout's `.venv/bin/python`; the interpreter
+  supplies `discord.py` while the working directory and imported adapter remain the worktree's.
 - **`~/.rundesk` is the owner's live install. Never touch it.** It is a running product with
   real agents, real channels and real history in it — not a fixture. **Never install,
   uninstall, update, migrate, start, stop, add, remove or write anything there**, and never
