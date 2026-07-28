@@ -94,11 +94,18 @@ class WhatTheGoldenSaysBack(unittest.TestCase):
     def test_what_it_thought_is_never_reported_as_what_it_said(self):
         """`thought` and `text` are one field apart on the same shape, so anything scanning
         raw lines for `data` reports what the model merely considered as what it said."""
-        self.assertEqual(41, len(only(self.said, "think")))
+        self.assertEqual(1, len(only(self.said, "think")))
         self.assertEqual(37, len(only(self.said, "text")))
         spoken = "".join(one["text"] for one in only(self.said, "text"))
         self.assertEqual(215, len(spoken))
         self.assertNotIn("The", spoken[:3], "a thought has leaked into the reply")
+
+    def test_token_sized_thought_fragments_are_one_broad_activity(self):
+        """R-DIS-20 — Grok's 41 contiguous thought fragments are one reasoning phase, not
+        41 separate activities for Discord to render as `thinking (x41)`."""
+        thought = only(self.said, "think")
+        self.assertEqual(1, len(thought))
+        self.assertTrue(thought[0]["text"])
 
     def test_what_it_cost_is_taken_across_unchanged_and_cached_is_kept_apart(self):
         """Measured: `input_tokens` excludes `cache_read_input_tokens` — 13,373 + 5,248 +
@@ -208,8 +215,17 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
         was present and the argv looked deliberate."""
         for posture in ("read", "work"):
             argv = self.opening(posture=posture)
-            self.assertNotIn("--permission-mode", argv)
             self.assertNotIn("dontAsk", argv)
+
+    def test_headless_tools_do_not_wait_for_an_approval_nobody_can_give(self):
+        """A real working turn asked to inspect files emitted 37 thought fragments and
+        ended `Cancelled` with exit 0: the default policy reached a tool approval, but this
+        adapter has no interactive stdin. `bypassPermissions` is measured to apply, while
+        the tool list below remains the posture boundary."""
+        for posture in ("read", "work"):
+            argv = self.opening(posture=posture)
+            self.assertEqual("bypassPermissions",
+                             argv[argv.index("--permission-mode") + 1])
 
     def test_a_flag_that_reads_like_a_guarantee_and_enforces_nothing_is_never_passed(self):
         """Measured: under `--sandbox read-only` this CLI created a file both through its
