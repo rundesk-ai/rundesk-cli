@@ -223,6 +223,13 @@ SHOWN = {"read": "read a file", "search": "searched", "run": "ran a command",
          "edit": "edited a file", "list": "listed files", "make": "made something",
          "delegate": "Delegated to subagent"}
 
+#: What a failed tool says without relaying its arguments or result. Those remain in the
+#: run account; Discord activity is broad, because a command or path may be private
+#: (R-DIS-9, R-DIS-20).
+FAILED = {"read": "file read failed", "search": "search failed", "run": "command failed",
+          "edit": "file edit failed", "list": "file listing failed",
+          "make": "creation failed", "delegate": "subagent failed"}
+
 
 def say(**it) -> None:
     """One record, one line, flushed — because rundesk is watching this as it happens."""
@@ -1218,6 +1225,8 @@ def _activity_line(it: dict, tools: dict) -> str:
             did, who = remembered.get("did"), remembered.get("who") or ""
         else:  # an in-memory turn begun by an older adapter shape during an update
             did, who = remembered, ""
+        if it.get("ok") is False:
+            return f"-# ⚠ {FAILED.get(did, 'tool failed')}"
         if did == "delegate" and it.get("ok") is True:
             return f"-# 🤖 Subagent finished{': ' + who if who else ''}"
     return commentary(it)
@@ -1296,10 +1305,10 @@ def _as_a_line(it: dict) -> str:
         mark = DID.get(did, UNKNOWN)
         return f"-# {mark} {SHOWN.get(did, 'thinking')}"
     if kind == "result":
-        # Only when it went wrong. A running commentary of everything that worked is
-        # noise, and what somebody watching wants is the thing that did not.
+        # Only when it went wrong, and never with its raw summary: an uncorrelated result
+        # is still broad rather than a route around the privacy boundary above.
         if it.get("ok") is False:
-            return f"-# ⚠ {clip(str(it.get('summary') or 'that did not work'), 200)}"
+            return "-# ⚠ tool failed"
         return ""
     if kind == "usage":
         parts = [f"{_amount(it[what])} {what}" for what in ("input", "output", "cached")
