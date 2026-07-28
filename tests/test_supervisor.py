@@ -812,6 +812,37 @@ class AutomaticUpdates(WithAJobDirectory):
             {"Hour": 2, "Minute": 30}, described["StartCalendarInterval"]
         )
 
+    def test_removing_the_job_removes_the_empty_default_log_directory_it_created(self):
+        """R-RM-8 — a fresh install followed by uninstall leaves no Rundesk directory."""
+        data = self.where / "data"
+        logs = data / "logs"
+        with mock.patch.dict(os.environ, {"RUNDESK_DATA_DIR": str(data)}):
+            supervisor.install_automatic_update(
+                "03:00", self.root, logs, str(self.where), self.machine
+            )
+            self.assertTrue(
+                (logs / supervisor.AUTOMATIC_UPDATE_LOGS_MARKER).is_file()
+            )
+            supervisor.remove_automatic_update(
+                str(self.where), self.root, self.machine, logs
+            )
+        self.assertFalse(logs.exists())
+
+    def test_removing_the_job_preserves_logs_that_hold_gateway_history(self):
+        """R-GW-18"""
+        data = self.where / "data"
+        logs = data / "logs"
+        with mock.patch.dict(os.environ, {"RUNDESK_DATA_DIR": str(data)}):
+            supervisor.install_automatic_update(
+                "03:00", self.root, logs, str(self.where), self.machine
+            )
+            history = logs / "gateway.log"
+            history.write_text("worth keeping\n", encoding="utf-8")
+            supervisor.remove_automatic_update(
+                str(self.where), self.root, self.machine, logs
+            )
+        self.assertEqual("worth keeping\n", history.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -260,6 +260,17 @@ class InstallTests(Sandbox):
         self.assertEqual(gone.returncode, 0, gone.stdout + gone.stderr)
         self.assertFalse(job.exists())
 
+    def test_a_fresh_install_then_uninstall_leaves_no_install_directory(self):
+        """R-RM-8"""
+        installed = self.install()
+        self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+        gone = self.uninstall()
+        self.assertEqual(gone.returncode, 0, gone.stdout + gone.stderr)
+        self.assertFalse(
+            (self.home / ".rundesk").exists(),
+            "automatic update setup left an empty directory behind",
+        )
+
     def test_the_installed_command_is_reachable_by_name_from_any_directory(self):
         self.install()
         elsewhere = self.root / "somewhere-else"
