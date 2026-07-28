@@ -210,7 +210,7 @@ def run(
         with _only_one(repo_root):
             return _replace_this_install(
                 repo_root, published, apply, busy, pause, resume, carry, provision,
-                relaunch, plugins,
+                relaunch, plugins, was=current_version,
             )
     except Busy as err:
         print(f"update: NOT APPLIED — {err}", file=sys.stderr)
@@ -223,7 +223,11 @@ def run(
 CONTINUING = "--after-replacing"
 
 
-def _relaunch(repo_root: Path, stopped: list) -> str | None:
+#: How the release being left tells the one replacing it what it was called.
+LEAVING = "RUNDESK_UPDATE_FROM"
+
+
+def _relaunch(repo_root: Path, stopped: list, was: str | None = None) -> str | None:
     """Hand the rest of the window to the release that just landed.
 
     Never returns when it works — this process *becomes* the new one, so its exit code is
@@ -238,6 +242,13 @@ def _relaunch(repo_root: Path, stopped: list) -> str | None:
     """
     entry = repo_root / "rundesk"
     argv = [str(entry), "update", CONTINUING, ",".join(stopped)]
+    if was:
+        # **The version being left, carried across on purpose** (R-PLG-44). The far side is
+        # the new code and knows only what it calls itself, so without this the one line an
+        # owner reads about their own update can say where they arrived and never where
+        # they came from. `RUNDESK_UPDATE_VERSION` is not this: that is the target the old
+        # process was aiming at, which on this path is simply where it now is.
+        os.environ[LEAVING] = was
     try:
         sys.stdout.flush()
         sys.stderr.flush()
@@ -259,7 +270,8 @@ def carry_on(repo_root: Path, stopped: list, resume=None, carry=None,
     try:
         with _only_one(repo_root):
             return _bring_forward(repo_root, stopped, resume, carry, provision,
-                                  landed=landed, plugins=plugins)
+                                  landed=landed, plugins=plugins,
+                                  was=os.environ.get(LEAVING))
     except Busy as err:
         print(f"update: NOT APPLIED — {err}", file=sys.stderr)
         return 1
@@ -294,7 +306,7 @@ def _mend(repo_root, current_version, check_only, unfit, busy, pause, resume,
                 # Nothing arrived, so there is nobody to hand over to: this process is
                 # already running the release whose dependencies and steps are about to be
                 # brought forward, which is the whole condition the handover exists for.
-                relaunch=lambda _root, _names: None,
+                relaunch=lambda _root, _names, _was=None: None,
                 busy=busy, pause=pause, resume=resume, carry=carry, provision=provision,
                 plugins=plugins,
             )
@@ -314,6 +326,7 @@ def _replace_this_install(
     provision=None,
     relaunch=None,
     plugins=None,
+    was: str | None = None,
 ) -> int:
     """The window itself: nothing an owner runs is up between the first line and the last.
 
@@ -381,7 +394,7 @@ def _replace_this_install(
         # Does not return when it works. When it cannot — a release whose entry point will
         # not start is exactly the case worth surviving — this process is still the old
         # code, still holds everything it needs, and puts the release back itself.
-        went = (relaunch or _relaunch)(repo_root, stopped)
+        went = (relaunch or _relaunch)(repo_root, stopped, was)
         if went:
             print(f"update: NOT APPLIED — the new release would not start: {went}",
                   file=sys.stderr)
@@ -399,7 +412,7 @@ def _replace_this_install(
             (resume or (lambda _names: []))(stopped)
             return 1
         return _bring_forward(repo_root, stopped, resume, carry, provision,
-                              landed=published, plugins=plugins)
+                              landed=published, plugins=plugins, was=was)
     # The release never landed, so there is nothing to bring forward and nothing to put
     # back — only whatever was stood down, which comes back onto the code it was already on.
     left_down = (resume or (lambda _names: []))(stopped)
@@ -414,7 +427,8 @@ def _replace_this_install(
 
 
 def _bring_forward(repo_root: Path, stopped: list, resume=None, carry=None,
-                   provision=None, landed: str | None = None, plugins=None) -> int:
+                   provision=None, landed: str | None = None, plugins=None,
+                   was: str | None = None) -> int:
     """What an install is made of, then what its agents keep, then everything back up.
 
     The one window where nothing is up and the new files are already down. Reached twice —
@@ -461,10 +475,14 @@ def _bring_forward(repo_root: Path, stopped: list, resume=None, carry=None,
     # **After the records and before anything comes back up, and it can never fail this**
     # (R-PLG-15). A plugin is a stranger's release: it is moved forward in the same window,
     # because a step of its own needs every gateway down exactly as rundesk's do — but what
-    # it does is reported in words, and one that cannot be moved is held back and named
-    # rather than taking an owner's agents down with it.
-    for line in (plugins or (lambda: []))():
-        print(f"        {line}")
+    # it does is reported rather than acted on, and one that cannot be moved is held back
+    # and named rather than taking an owner's agents down with it.
+    #
+    # **Done here, said at the end.** The work has to happen while nothing is up; the
+    # account of it belongs after the release line, so an owner reads one ordered list —
+    # rundesk, then each plugin — rather than plugin news arriving before the news that the
+    # release landed at all (R-PLG-44).
+    moved = (plugins or (lambda: []))()
     left_down = (resume or (lambda _names: []))(stopped)
     if left_down:
         print(
@@ -472,13 +490,62 @@ def _bring_forward(repo_root: Path, stopped: list, resume=None, carry=None,
             file=sys.stderr,
         )
         print("        why: rundesk logs <name>", file=sys.stderr)
+        # Said even here: the release did land and the plugins were moved, and an owner
+        # chasing a gateway that did not come back still needs to know what else changed
+        # underneath it.
+        _say_what_moved(landed, moved, was)
         return 1
     # **Said only here** (R-UPD-46, R-UPD-47), which is the one line in this module that is reached
     # exactly when a release is on disk, its dependencies are in place, every agent's
     # records are in the shape it expects and every gateway is back. Every failure and
     # rollback above returns before it, so nothing that did not land can say it did.
     _say_what_landed(landed)
+    _say_what_moved(landed, moved, was)
     return 0
+
+
+#: How wide the name column is before it gives up and just spaces once. Every plugin name
+#: measured, so nothing is truncated and a machine with one plugin does not get a table
+#: sized for ten.
+NAME_ROOM = 4
+
+
+def _say_what_moved(landed: str | None, moved: list, was: str | None = None) -> None:
+    """One ordered list of everything this update moved: rundesk, then each plugin.
+
+    **In the order it went through them**, which is the order somebody debugging needs and
+    the order they watched it happen in. Rundesk first because a plugin is judged against
+    it — a plugin held back for needing a newer rundesk makes sense only under the line
+    saying which rundesk this now is.
+
+    Silent on a machine with no plugins. An owner who has never installed one should see
+    exactly what they saw before this existed (R-PLG-44).
+    """
+    if not moved:
+        return
+    # Bare digits, because every plugin beside it is bare: a table where one row says
+    # `v0.16.0` and the next says `1.5.0` makes a reader wonder what the `v` means.
+    now = (landed or "").lstrip("v")
+    rows = [("rundesk", (was or "").lstrip("v"), now,
+             "updated" if landed else "up to date", "")]
+    rows += [(one.name, one.was or "", one.now or "", one.state, one.why or "")
+             for one in moved]
+    room = max(NAME_ROOM, max(len(name) for name, *_ in rows))
+    print()
+    print("what moved:")
+    for name, was, now, state, why in rows:
+        # `1.4.0 -> 1.5.0` when it moved and both are known; the version it is on otherwise.
+        # A plugin that was never readable has neither, and an empty column is the honest
+        # answer rather than a guess at one.
+        version = f"{was} -> {now}" if (now and was and now != was) else (was or now or "-")
+        print(f"  {name.ljust(room)}  {version.ljust(16)}  {state}"
+              + (f" — {why}" if why else ""))
+    held = [one for one in moved if one.held]
+    if held:
+        print()
+        print(f"        held back, and no agent can reach {'them' if len(held) > 1 else 'it'}: "
+              + ", ".join(sorted(one.name for one in held)))
+        print("        why, and how to try again: rundesk plugins")
 
 
 def _say_what_landed(landed: str | None) -> None:

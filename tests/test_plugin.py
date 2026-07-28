@@ -455,12 +455,15 @@ class UpdatingOne(WithAMachine):
     def test_a_newer_release_replaces_the_one_installed(self):
         """R-PLG-26 — the whole point of a version being in the manifest."""
         said = self.update("example", self._published(version="1.1.0"))
-        self.assertEqual("example: 1.0.0 -> 1.1.0", said)
+        self.assertEqual(plugin.Outcome.UPDATED, said.state)
+        self.assertEqual(("1.0.0", "1.1.0"), (said.was, said.now))
+        self.assertEqual("example: 1.0.0 -> 1.1.0", str(said))
         self.assertEqual("1.1.0", plugin.installed(self.plugins)["example"].version)
 
     def test_a_release_that_is_not_newer_leaves_everything_where_it_was(self):
         """R-PLG-26 — current is not a failure and is not news."""
-        self.assertIsNone(self.update("example", self._published(version="1.0.0")))
+        said = self.update("example", self._published(version="1.0.0"))
+        self.assertEqual(plugin.Outcome.CURRENT, said.state)
         self.assertEqual("1.0.0", plugin.installed(self.plugins)["example"].version)
 
     def test_what_a_plugin_keeps_survives_being_moved_forward(self):
@@ -488,7 +491,7 @@ class UpdatingOne(WithAMachine):
         """R-PLG-28 — a stranger's broken step costs an owner nothing."""
         said = self.update("example", self._published(version="2.0.0",
                                                       steps=((1, A_STEP_THAT_FAILS),)))
-        self.assertIn("held back", said)
+        self.assertTrue(said.held, said)
         standing = plugin.installed(self.plugins)["example"]
         self.assertEqual("1.0.0", standing.version)
         self.assertTrue(standing.quarantined)
@@ -503,7 +506,9 @@ class UpdatingOne(WithAMachine):
         """R-PLG-14 — the plugin installed still works; the new one would not."""
         said = self.update("example", self._published(version="2.0.0", requires=">=9.0.0"),
                            version="0.15.0")
-        self.assertIn("staying on 1.0.0", said)
+        self.assertEqual(plugin.Outcome.CURRENT, said.state)
+        self.assertEqual("1.0.0", said.was)
+        self.assertIn("needs rundesk", said.why)
         self.assertEqual("1.0.0", plugin.installed(self.plugins)["example"].version)
 
     def test_a_release_tagged_differently_from_its_manifest_is_not_taken(self):
@@ -511,12 +516,14 @@ class UpdatingOne(WithAMachine):
         said = plugin.update("example", self.plugins, self.scripts, self.skills,
                              version="0.15.0",
                              fetch=_fetching(self._published(version="2.0.0"), tag="v9.9.9"))
-        self.assertIn("staying on 1.0.0", said)
+        self.assertEqual(plugin.Outcome.CURRENT, said.state)
+        self.assertEqual("1.0.0", said.was)
 
     def test_a_plugin_that_calls_itself_something_else_now_is_refused(self):
         """R-PLG-30 — a repository that changed hands does not get to become another plugin."""
         said = self.update("example", self._published(name="other", version="2.0.0"))
-        self.assertIn("calls itself other", said)
+        self.assertEqual(plugin.Outcome.UNCHANGED, said.state)
+        self.assertIn("calls itself other", said.why)
 
     def test_a_release_that_stops_providing_a_command_takes_it_off_the_path(self):
         """R-PLG-29 — what every agent sees agrees with what is installed."""
@@ -533,7 +540,7 @@ class WhenAnUpdateLands(WithAMachine):
             self.plugins, self.scripts, self.skills, version="0.15.0",
             fetch=_fetching(a_plugin(self.where / "next", version="2.0.0",
                                      steps=((1, A_STEP_THAT_FAILS),))))
-        self.assertTrue(any("held back" in line for line in said))
+        self.assertTrue(any(one.held for one in said), said)
         self.assertTrue(plugin.installed(self.plugins)["example"].quarantined)
 
     def test_an_installed_plugin_that_no_longer_fits_is_held_back_before_it_is_moved(self):
@@ -542,7 +549,7 @@ class WhenAnUpdateLands(WithAMachine):
                      fetch=_fetching(a_plugin(self.made, version="1.0.0", requires="<1.0.0")))
         said = plugin.bring_forward(self.plugins, self.scripts, self.skills,
                                     version="1.2.0", fetch=_fetching(self.made / "example"))
-        self.assertTrue(any("held back" in line for line in said))
+        self.assertTrue(any(one.held for one in said), said)
         self.assertFalse((self.scripts / "example").is_symlink())
 
     def test_a_plugin_that_fits_again_comes_back_by_itself(self):
@@ -561,6 +568,40 @@ class WhenAnUpdateLands(WithAMachine):
         """R-PLG-15 — an update on an ordinary machine is unchanged by any of this."""
         self.assertEqual([], plugin.bring_forward(self.plugins, self.scripts, self.skills,
                                                   version="0.15.0"))
+
+    def test_an_install_that_has_never_had_a_plugins_directory_updates_as_it_always_did(self):
+        """R-PLG-45 — every existing owner's first update, and the commonest case there is.
+
+        A rundesk from before plugins existed has no `data/plugins/` at all. Reading a
+        directory that is not there has to be "no plugins", never an error the update then
+        has to survive — and this is the path every single existing install takes once.
+        """
+        absent = self.where / "never-existed" / "plugins"
+        self.assertFalse(absent.exists())
+        self.assertEqual({}, plugin.installed(absent))
+        self.assertEqual([], plugin.bring_forward(absent, self.scripts, self.skills,
+                                                  version="0.15.0"))
+        self.assertFalse(absent.exists(), "asking made a directory nobody wanted")
+
+    def test_a_plugin_whose_manifest_cannot_be_read_is_held_back_rather_than_skipped(self):
+        """R-PLG-15 — an update must have something to say about every plugin it finds."""
+        self.install("owner/repo", fetch=_fetching(a_plugin(self.made, version="1.0.0")))
+        (self.plugins / "example" / plugin.APP / plugin.MANIFEST).write_text(
+            "{ not json", encoding="utf-8")
+        said = plugin.bring_forward(self.plugins, self.scripts, self.skills,
+                                    version="0.15.0")
+        self.assertEqual(1, len(said))
+        self.assertTrue(said[0].held, said)
+        self.assertFalse((self.scripts / "example").is_symlink())
+
+    def test_every_plugin_gets_a_row_whether_or_not_anything_happened_to_it(self):
+        """R-PLG-44 — a list an owner reads is one where silence is not an outcome."""
+        at = a_plugin(self.made, version="1.0.0")
+        self.install("owner/repo", fetch=_fetching(at))
+        said = plugin.bring_forward(self.plugins, self.scripts, self.skills,
+                                    version="0.15.0", fetch=_fetching(at))
+        self.assertEqual(["example"], [one.name for one in said])
+        self.assertEqual(plugin.Outcome.CURRENT, said[0].state)
 
 
 # ---------------------------------------------------------------------------

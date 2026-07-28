@@ -373,6 +373,52 @@ def fits(wanted, version: str) -> bool:
     return True
 
 
+class Outcome:
+    """What became of one plugin when something tried to move it.
+
+    **A row, not a sentence.** An update reports every plugin it looked at, in order, and a
+    reader needs to see at a glance which moved and which did not — so what happened is a
+    state and two versions rather than prose somebody has to parse back out. The sentence is
+    still there, because a single plugin moved on its own deserves one.
+    """
+
+    #: The four things that can become of a plugin. `UNCHANGED` is not `CURRENT`: one means
+    #: there was nothing newer, the other that it could not be looked at properly, and
+    #: folding them together is how "nothing happened" comes to mean two different things.
+    UPDATED = "updated"
+    CURRENT = "up to date"
+    HELD = "held back"
+    UNCHANGED = "unchanged"
+
+    __slots__ = ("name", "was", "now", "state", "why")
+
+    def __init__(self, name: str, state: str, was: str | None = None,
+                 now: str | None = None, why: str | None = None):
+        self.name = name
+        self.state = state
+        self.was = was
+        self.now = now
+        self.why = why
+
+    @property
+    def moved(self) -> bool:
+        return self.state == self.UPDATED
+
+    @property
+    def held(self) -> bool:
+        return self.state == self.HELD
+
+    def __str__(self) -> str:
+        if self.state == self.UPDATED:
+            return f"{self.name}: {self.was} -> {self.now}"
+        if self.state == self.CURRENT:
+            return f"{self.name}: up to date"
+        return f"{self.name}: {self.state}" + (f" — {self.why}" if self.why else "")
+
+    def __repr__(self) -> str:
+        return f"<{self.name} {self.state}>"
+
+
 class Installed:
     """One plugin as it stands on this machine right now."""
 
@@ -943,9 +989,10 @@ def update(name: str, where: Path | None = None, scripts_dir: Path | None = None
            fetch=None, note=None, clock=None) -> str | None:
     """Move one plugin to what is published, or leave it exactly where it was.
 
-    Returns what happened in words, or None when there was nothing to do. **A failure never
-    raises past here**: the caller is either an owner who asked for one plugin, or an
-    update that must land whatever a stranger's release does.
+    Returns an `Outcome` — always one, never None, because "nothing happened" is a row an
+    update has to be able to show rather than a silence a reader has to interpret. **A
+    failure never raises past here**: the caller is either an owner who asked for one
+    plugin, or an update that must land whatever a stranger's release does.
     """
     where = where or home()
     say = note or (lambda said: None)
@@ -960,9 +1007,10 @@ def update(name: str, where: Path | None = None, scripts_dir: Path | None = None
         entry = ledger(where).get(name) or {}
     source = entry.get("source")
     if not source:
-        return f"{name}: no record of where it came from, so it cannot be moved"
+        return Outcome(name, Outcome.UNCHANGED, was=standing.version,
+                       why="no record of where it came from")
     if entry.get("pinned"):
-        return None
+        return Outcome(name, Outcome.CURRENT, was=standing.version)
 
     at = standing.at
     with tempfile.TemporaryDirectory() as work:
@@ -970,25 +1018,29 @@ def update(name: str, where: Path | None = None, scripts_dir: Path | None = None
             got = (fetch or _fetch)(source, Path(work), say)
             coming = read(got.at)
         except NotAPlugin as why:
-            return f"{name}: {why}"
+            return Outcome(name, Outcome.UNCHANGED, was=standing.version, why=str(why))
         if coming.name != name:
-            return f"{name}: what is published there now calls itself {coming.name}"
+            return Outcome(name, Outcome.UNCHANGED, was=standing.version,
+                           why=f"what is published there now calls itself {coming.name}")
         if standing.manifest and not updater.is_newer(coming.version, standing.version):
             # Not newer is not the same as broken, and it is not a failure: a plugin that
             # is current stays linked and stays quiet.
             if standing.quarantined and fits(coming.requires, running):
                 release(at)
                 relink(where, scripts_dir, skills_dir)
-                return f"{name}: fits again, and is back"
-            return None
+                return Outcome(name, Outcome.UPDATED, was=standing.version,
+                               now=standing.version, why="fits again, and is back")
+            return Outcome(name, Outcome.CURRENT, was=standing.version)
         if not fits(coming.requires, running):
             # **Held at the version it is on, never dragged into a rundesk it disclaims**
             # (R-PLG-14). The plugin that is installed still works; the new one would not.
-            return (f"{name}: {coming.version} needs rundesk '{coming.requires}' and this "
-                    f"is {running} — staying on {standing.version}")
+            return Outcome(name, Outcome.CURRENT, was=standing.version,
+                           why=f"{coming.version} needs rundesk '{coming.requires}' and "
+                               f"this is {running}")
         if got.tag and not _tag_matches(got.tag, coming.version):
-            return (f"{name}: published as {got.tag} but its manifest says "
-                    f"{coming.version} — staying on {standing.version}")
+            return Outcome(name, Outcome.CURRENT, was=standing.version,
+                           why=f"published as {got.tag} but its manifest says "
+                               f"{coming.version}")
 
         kept = _set_app_aside(at)
         try:
@@ -1000,8 +1052,8 @@ def update(name: str, where: Path | None = None, scripts_dir: Path | None = None
             _put_app_back(at, kept)
             hold(at, f"the move to {coming.version} failed: {why}")
             unlink(standing.manifest, at, scripts_dir, skills_dir)
-            return (f"{name}: could not be moved to {coming.version} and is held back "
-                    f"until somebody looks — {why}")
+            return Outcome(name, Outcome.HELD, was=standing.version, now=coming.version,
+                           why=f"could not be moved to {coming.version}: {why}")
         _let_app_go(kept)
         release(at)
         try:
@@ -1009,11 +1061,12 @@ def update(name: str, where: Path | None = None, scripts_dir: Path | None = None
             link(read(at / APP), at, scripts_dir, skills_dir)
         except InTheWay as why:
             hold(at, str(why))
-            return f"{name}: moved to {coming.version} but is held back — {why}"
+            return Outcome(name, Outcome.HELD, was=standing.version, now=coming.version,
+                           why=str(why))
         remember(name, {**entry, "tag": got.tag, "sha256": got.sha256,
                         "version": coming.version,
                         "installed_at": (clock or migration._now)()}, where)
-    return f"{name}: {standing.version} -> {coming.version}"
+    return Outcome(name, Outcome.UPDATED, was=standing.version, now=coming.version)
 
 
 #: Where the release an update is replacing waits until the new one is proved.
@@ -1060,27 +1113,30 @@ def bring_forward(where: Path | None = None, scripts_dir: Path | None = None,
     running = version or __version__
     said = []
     for name, one in sorted(installed(where).items()):
+        # A plugin whose own manifest cannot be read has nothing to judge and nothing to
+        # move. It is already held back by `installed`; saying so is the whole of what is
+        # left to do about it.
+        if one.manifest is None:
+            unlink(None, one.at, scripts_dir, skills_dir)
+            said.append(Outcome(name, Outcome.HELD, why=one.why_unfit))
+            continue
         # A plugin that no longer fits the rundesk about to run is held back before it is
         # asked to move, because the version it would move to is not the question — the
         # one already installed is the thing that no longer belongs on every agent's PATH.
-        if one.manifest is not None and not fits(one.manifest.requires, running):
-            hold(one.at, f"{one.version} needs rundesk '{one.manifest.requires}' "
-                         f"and this is {running}")
+        if not fits(one.manifest.requires, running):
+            why = (f"needs rundesk '{one.manifest.requires}' and this is {running}")
+            hold(one.at, f"{one.version} {why}")
             unlink(one.manifest, one.at, scripts_dir, skills_dir)
-            said.append(f"{name}: held back — it needs rundesk "
-                        f"'{one.manifest.requires}' and this is {running}")
+            said.append(Outcome(name, Outcome.HELD, was=one.version, why=why))
             continue
         try:
-            what = update(name, where, scripts_dir, skills_dir, running,
-                          fetch=fetch, note=say, clock=clock)
+            said.append(update(name, where, scripts_dir, skills_dir, running,
+                               fetch=fetch, note=say, clock=clock))
         except Exception as trouble:    # noqa: BLE001 — a boundary; an update must land
             hold(one.at, str(trouble))
             with contextlib.suppress(Exception):
                 unlink(one.manifest, one.at, scripts_dir, skills_dir)
-            said.append(f"{name}: held back — {trouble}")
-            continue
-        if what:
-            said.append(what)
+            said.append(Outcome(name, Outcome.HELD, was=one.version, why=str(trouble)))
     return said
 
 

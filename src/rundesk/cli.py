@@ -1044,7 +1044,10 @@ def _plugins_forward(version: str) -> list:
         return plugin.bring_forward(version=version)
     except Exception as trouble:      # noqa: BLE001 — a boundary; an update must land
         # Not even a plugins directory that cannot be read may take an owner's agents down.
-        return [f"plugins: could not be brought forward — {trouble}"]
+        # **An outcome, not a sentence**: the summary reads a state off every row, and a
+        # string here reached it as one — so the boundary that exists to keep an update
+        # alive would itself have ended it, on exactly the path nothing else covers.
+        return [plugin.Outcome("plugins", plugin.Outcome.HELD, why=str(trouble))]
 
 
 def _carry_every(agents) -> str | None:
@@ -2311,24 +2314,28 @@ def _missing_credentials(manifest) -> None:
 
 
 def _update_plugins(args: argparse.Namespace, plugins) -> int:
-    """Move one plugin, or every one, to what is published."""
+    """Move one plugin, or every one, to what is published.
+
+    One plugin gets a sentence and every plugin gets the same ordered list `rundesk update`
+    prints, so the two ways of moving a plugin do not describe the outcome differently
+    (R-PLG-44).
+    """
     if args.plugin:
         try:
             what = plugins.update(args.plugin, note=_out_loud)
         except plugins.Unknown as why:
             print(f"plugins: {why}", file=sys.stderr)
             return 1
-        print(what or f"{args.plugin}: up to date")
+        print(str(what))
+        return 1 if what.held else 0
+    moved = plugins.bring_forward(note=_out_loud)
+    if not moved:
+        print("no plugins")
         return 0
-    said = plugins.bring_forward(note=_out_loud)
-    if not said:
-        print("plugins: up to date")
-        return 0
-    for line in said:
-        print(line)
-    # Held back is not the same as failed to run, and the exit code has to tell them
-    # apart: a script that reads 0 believes every plugin is on every agent's PATH.
-    return 1 if any("held back" in line for line in said) else 0
+    updater._say_what_moved(None, moved)
+    # Held back is not the same as up to date, and the exit code has to tell them apart:
+    # a script that reads 0 believes every plugin is on every agent's PATH.
+    return 1 if any(one.held for one in moved) else 0
 
 
 def _remove_a_plugin(args: argparse.Namespace, plugins) -> int:

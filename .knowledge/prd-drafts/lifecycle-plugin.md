@@ -38,7 +38,7 @@ rundesk loads.
 | ✅ | R-PLG-12 | An archive that would write outside where it is unpacked is refused (R-UPD-24) | `an archive that would write outside where it is unpacked is refused` |
 | ✅ | R-PLG-13 | A plugin declares which versions of rundesk it fits, and a range that cannot be judged is refused rather than assumed | `a plugin that names no range fits anything`, `a range is judged against the version it is given`, `a range this cannot judge is refused rather than guessed` |
 | ✅ | R-PLG-14 | A plugin is judged against the rundesk about to run, and one that does not fit is held back rather than dragged forward | `a plugin needing a newer rundesk is refused with both versions named`, `a release needing a newer rundesk is not dragged into this one`, `an installed plugin that no longer fits is held back before it is moved` |
-| ✅ | R-PLG-15 | Nothing a plugin does can fail the update it is moved forward by | `a plugin that cannot be moved never fails the update it rides`, `a machine with no plugins does nothing and says nothing` |
+| ✅ | R-PLG-15 | A plugin is moved after every agent's records and before anything is back up, and nothing it does can fail that update | `a plugin that cannot be moved never fails the update it rides`, `a machine with no plugins does nothing and says nothing`, `a plugin whose manifest cannot be read is held back rather than skipped`, `plugins are moved after every agents records and before anything is back up`, `an update lands even when every plugin is held back`, `a plugin step that raises is not something an update has to survive`, `an update with nothing newer still moves plugins when it mends` |
 | ✅ | R-PLG-16 | Taking rundesk off a machine takes away every link a plugin stood, whatever it kept (R-RM-7) | `taking rundesk off pulls every link a plugin stood` |
 | ✅ | R-PLG-17 | One install puts a plugin's command within reach of every agent, with no step for each | `a plugin puts its command on every agents path`, `one install serves every agent through one directory` |
 | ✅ | R-PLG-18 | A plugin's skills stand in the one library, and are granted and revoked as any other are | `a plugin puts its skills in the library every agent reads`, `a skill a plugin ships can be granted and then revoked` |
@@ -71,6 +71,9 @@ rundesk loads.
 
 | ✅ | R-PLG-43 | A new plugin is written whole or not at all, whatever its name is made of | `a hyphenated name still produces credential names a shell can export`, `a scaffold that fails leaves nothing half written behind` |
 
+| ✅ | R-PLG-44 | An update says what it moved as one ordered list: rundesk first, then every plugin, each with both versions and its outcome | `every plugin gets a row whether or not anything happened to it`, `what moved is listed in order with rundesk first`, `the list comes after the release it is about`, `an owner with no plugins sees exactly what they saw before`, `the version being left survives the handover to the new release`, `rundesks own row shows where it came from and where it got to` |
+| ✅ | R-PLG-45 | An install that has never had a plugins directory updates exactly as it always did | `an install that has never had a plugins directory updates as it always did` |
+
 ## Open questions
 
 - Whether a plugin should be able to ship a provider or channel adapter, which would put a
@@ -79,5 +82,10 @@ rundesk loads.
   a plugin is installed once and shared.
 - Whether a plugin held back should be reported by `doctor` as well as by `plugins`, and
   whether anything should report it without being asked.
+- Whether `rundesk plugins update`, run on its own, should take the same window `rundesk
+  update` does. It does not today, so an owner running it by hand can move a plugin's
+  shared records while agents are live — the step is still one transaction and a command
+  that meets records it does not understand refuses rather than reads them, but the
+  guarantee is weaker than the one an update gives.
 - What becomes of what a plugin kept when the plugin is never reinstalled — nothing collects
   it today, and nothing knows how long it has been there.

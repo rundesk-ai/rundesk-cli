@@ -33,7 +33,7 @@ _installed = tempfile.TemporaryDirectory(prefix="rundesk-install-")
 INSTALL = Path(_installed.name)
 
 
-def _stays_here(_repo_root, _stopped) -> None:
+def _stays_here(_repo_root, _stopped, _was=None) -> None:
     """No handover: this suite has one process, so the window runs where it started.
 
     None is its own answer and not a pretend success — the real one either replaces this
@@ -47,6 +47,150 @@ def run(**kwargs) -> tuple[int, str]:
     with contextlib.redirect_stdout(out):
         code = updater.run(**kwargs)
     return code, out.getvalue()
+
+
+class Moved:
+    """What a plugin step hands back, in the shape `_say_what_moved` reads.
+
+    Deliberately not `plugin.Outcome`: what the seam requires is a name, two versions, a
+    state and a reason, and a suite that imported the real class would stop noticing the
+    day the seam quietly started needing something more.
+    """
+
+    def __init__(self, name, state, was=None, now=None, why=None):
+        self.name, self.state, self.was, self.now, self.why = name, state, was, now, why
+
+    @property
+    def held(self):
+        return self.state == "held back"
+
+
+class PluginsInTheWindowTests(unittest.TestCase):
+    """That plugins are moved by an update at all, and at the right moment.
+
+    The module that moves them is proved in `test_plugin.py`. What is proved here is the
+    wiring — which nothing tested until somebody asked whether it was.
+    """
+
+    def setUp(self):
+        self.order = []
+
+    def _update(self, plugins=None, **kw):
+        return run(
+            repo_root=INSTALL, current_version="0.1.0",
+            latest=lambda: ("v0.2.0", None),
+            apply=lambda _root, _tag: self.order.append("apply") or 0,
+            busy=lambda: [],
+            pause=lambda: (["ava"], []),
+            resume=lambda names: self.order.append("resume") or [],
+            provision=lambda: self.order.append("provision"),
+            carry=lambda: self.order.append("carry"),
+            plugins=plugins if plugins is not None else (
+                lambda: self.order.append("plugins") or []),
+            relaunch=_stays_here, **kw)
+
+    def test_plugins_are_moved_after_every_agents_records_and_before_anything_is_back_up(self):
+        """R-PLG-15 — a step of a plugin's own needs every gateway down, as rundesk's do."""
+        code, _ = self._update()
+        self.assertEqual(0, code)
+        self.assertEqual(["apply", "provision", "carry", "plugins", "resume"], self.order)
+
+    def test_an_update_lands_even_when_every_plugin_is_held_back(self):
+        """R-PLG-15 — a stranger's release cannot take an owner's agents down."""
+        code, said = self._update(
+            plugins=lambda: [Moved("jira", "held back", was="1.4.0", why="its step failed")])
+        self.assertEqual(0, code, "a held-back plugin failed the update")
+        self.assertIn("update: applied", said)
+        self.assertIn("held back", said)
+
+    def test_a_plugin_step_that_raises_is_not_something_an_update_has_to_survive(self):
+        """R-PLG-15 — the callable is the boundary, and `cli` never lets one through."""
+        from rundesk import cli
+        was = cli.plugin.bring_forward
+
+        def explode(*_a, **_kw):
+            raise RuntimeError("the plugins directory is unreadable")
+        cli.plugin.bring_forward = explode
+        self.addCleanup(lambda: setattr(cli.plugin, "bring_forward", was))
+        said = cli._plugins_forward("0.1.0")
+        self.assertEqual(1, len(said))
+        self.assertTrue(said[0].held)
+        self.assertIn("unreadable", said[0].why)
+
+    def test_what_moved_is_listed_in_order_with_rundesk_first(self):
+        """R-PLG-44 — rundesk first, because a plugin is judged against it."""
+        _code, said = self._update(plugins=lambda: [
+            Moved("jira", "updated", was="1.4.0", now="1.5.0"),
+            Moved("linear", "held back", was="0.9.0", why="needs rundesk '>=1.0.0'"),
+            Moved("weather", "up to date", was="2.0.1"),
+        ])
+        rows = said[said.index("what moved:"):].splitlines()[1:]
+        # The rows are indented two; the footer naming what is held back is indented eight,
+        # which is how every other aside in this module is set off.
+        listed = [line.split()[0] for line in rows
+                  if line.startswith("  ") and not line.startswith("   ")]
+        self.assertEqual(["rundesk", "jira", "linear", "weather"], listed)
+        self.assertIn("1.4.0 -> 1.5.0", said)
+        self.assertIn("held back — needs rundesk '>=1.0.0'", said)
+
+    def test_the_list_comes_after_the_release_it_is_about(self):
+        """R-PLG-44 — plugin news before the news that the release landed reads backwards."""
+        _code, said = self._update(
+            plugins=lambda: [Moved("jira", "updated", was="1.4.0", now="1.5.0")])
+        self.assertLess(said.index("update: applied"), said.index("what moved:"))
+
+    def test_an_owner_with_no_plugins_sees_exactly_what_they_saw_before(self):
+        """R-PLG-44 — the commonest machine there is, and it gains no new output at all."""
+        _code, said = self._update(plugins=lambda: [])
+        self.assertNotIn("what moved", said)
+        self.assertNotIn("plugin", said)
+
+    def test_the_version_being_left_survives_the_handover_to_the_new_release(self):
+        """R-PLG-44 — otherwise the commonest update of all can only say where it arrived.
+
+        A real update replaces this process with the new one, and the new one knows only
+        what it calls itself. The version being left is put in the environment the exec
+        carries, which is the only channel across it that already exists.
+        """
+        was = os.environ.pop(updater.LEAVING, None)
+        self.addCleanup(lambda: os.environ.__setitem__(updater.LEAVING, was)
+                        if was is not None else os.environ.pop(updater.LEAVING, None))
+        handed = {}
+
+        def handover(repo_root, stopped, leaving=None):
+            # What `_relaunch` does before `execv`, without the exec.
+            if leaving:
+                os.environ[updater.LEAVING] = leaving
+            handed["to"] = leaving
+            return "cannot exec here"
+
+        run(repo_root=INSTALL, current_version="0.1.0",
+            latest=lambda: ("v0.2.0", None), apply=lambda _r, _t: 0, busy=lambda: [],
+            pause=lambda: ([], []), resume=lambda _n: [], provision=lambda: None,
+            carry=lambda: None, plugins=lambda: [], relaunch=handover)
+        self.assertEqual("0.1.0", handed["to"])
+        self.assertEqual("0.1.0", os.environ.get(updater.LEAVING))
+
+    def test_rundesks_own_row_shows_where_it_came_from_and_where_it_got_to(self):
+        """R-PLG-44 — the same before-and-after every plugin row gets."""
+        _code, said = self._update(
+            plugins=lambda: [Moved("jira", "updated", was="1.4.0", now="1.5.0")])
+        self.assertIn("0.1.0 -> 0.2.0", said)
+        self.assertNotIn("v0.2.0  ", said.split("what moved:")[1])
+
+    def test_an_update_with_nothing_newer_still_moves_plugins_when_it_mends(self):
+        """R-PLG-15 — the mend path is the same window, so it carries the same steps."""
+        code, _said = run(
+            repo_root=INSTALL, current_version="0.2.0",
+            latest=lambda: ("v0.2.0", None),
+            unfit=lambda: "the virtualenv does not fit",
+            busy=lambda: [], pause=lambda: ([], []),
+            resume=lambda _names: [],
+            provision=lambda: None, carry=lambda: None,
+            plugins=lambda: self.order.append("plugins") or [],
+            relaunch=_stays_here)
+        self.assertEqual(0, code)
+        self.assertIn("plugins", self.order)
 
 
 class VersionTests(unittest.TestCase):
@@ -1036,7 +1180,7 @@ class TheReleaseFinishesItsOwnWindow(unittest.TestCase):
     def test_the_rest_of_the_window_is_handed_to_the_release_that_just_landed(self):
         asked = []
 
-        def handover(repo_root, stopped):
+        def handover(repo_root, stopped, was=None):
             asked.append((repo_root, list(stopped)))
             raise SystemExit(0)   # stands in for a process that has been replaced
 
@@ -1054,7 +1198,7 @@ class TheReleaseFinishesItsOwnWindow(unittest.TestCase):
         (self.install / ".src.outgoing").mkdir()
         (self.install / ".src.outgoing" / "kept.py").write_text("# the version it was\n")
 
-        code = self._run(lambda root, stopped: "No such file or directory: rundesk")
+        code = self._run(lambda root, stopped, was=None: "No such file or directory: rundesk")
         self.assertEqual(1, code)
         self.assertIn("would not start", self.said)
         self.assertIn("back on the version it was", self.said)
@@ -1074,7 +1218,7 @@ class TheReleaseFinishesItsOwnWindow(unittest.TestCase):
         real = updater._put_back
         updater._put_back = lambda swapped: ["src"]
         try:
-            code = self._run(lambda root, stopped: "Exec format error")
+            code = self._run(lambda root, stopped, was=None: "Exec format error")
         finally:
             updater._put_back = real
 
