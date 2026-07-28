@@ -21,6 +21,7 @@ import re
 import shutil
 import tempfile
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -1541,6 +1542,34 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
         for expected in ("configured agents", "running gateways", "live processes",
                          "active turns", "3", "2"):
             self.assertIn(expected, said)
+
+    def test_status_survives_a_backup_directory_that_does_not_answer(self):
+        """R-BKP-28 — backup storage may be cloud-backed or remote. Its outage must not
+        take every other install-health answer away with it."""
+        real_every = cli.backups.every
+        real_patience = cli.BACKUP_STATUS_PATIENCE
+        entered, release = threading.Event(), threading.Event()
+
+        def blocked(_where):
+            entered.set()
+            release.wait(1)
+            return []
+
+        cli.backups.every = blocked
+        cli.BACKUP_STATUS_PATIENCE = 0.02
+        began = time.monotonic()
+        try:
+            code, said = drive(["status"])
+        finally:
+            release.set()
+            cli.backups.every = real_every
+            cli.BACKUP_STATUS_PATIENCE = real_patience
+        self.assertTrue(entered.wait(0.1), "status never asked after the backups")
+        self.assertLess(time.monotonic() - began, 0.2, "status waited on backup storage")
+        self.assertEqual(0, code, said)
+        self.assertIn("backups", said)
+        self.assertIn("unavailable", said)
+        self.assertIn("fit to run", said, "other health was lost with backup health")
 
     def test_agents_lists_simultaneous_turns_without_prompts_or_arguments(self):
         """R-AGW-13 — concurrent conversations are distinct and only safe identity is shown."""
