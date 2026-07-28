@@ -8,6 +8,11 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **A shell does not move into a worktree it just created.** A command such as
+  `git worktree add <path> <branch> && sed …` runs the read in the original checkout, so
+  release preparation can inspect or edit a stale version while the new worktree is correct.
+  Start the next command with the new worktree as its working directory, then verify its
+  branch before editing.
 - **`~/.rundesk` is the owner's live install. Never touch it.** It is a running product with
   real agents, real channels and real history in it — not a fixture. **Never install,
   uninstall, update, migrate, start, stop, add, remove or write anything there**, and never
