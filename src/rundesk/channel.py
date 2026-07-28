@@ -415,18 +415,18 @@ def surface(kind: str) -> str:
 def preface(record: dict, agent: str, name: str, it: dict, otherwise: str = "") -> str:
     """What this agent is told about its situation, for this arrival (R-CH-22).
 
-    One piece of text, because a channel is already one place — see `INSTRUCTIONS`. An owner who
-    has written nothing gets the sentence rundesk would have said anyway, which is the only
-    default worth having: something that says where it is beats something that says
-    nothing, and an owner who disagrees says so by writing their own.
+    One piece of situational text, because a channel is already one place — see
+    `INSTRUCTIONS`. Rundesk's stable standing words in `otherwise` are kept in front when
+    this channel has words of its own (R-AGT-17); otherwise that argument remains the next
+    situational tier. An owner who has written nothing gets the sentence rundesk would
+    have said anyway.
 
-    `otherwise` is what to say when this channel says nothing — the agent's own standing
-    instructions, where it has any, and `by_default` below where it has none. Handed in rather
-    than looked up, because what an agent keeps is not this module's to know: this file is the
-    seam a *surface* is reached through and nothing else (R-AGT-16).
+    Handed in rather than looked up, because what an agent keeps is not this module's to
+    know: this file is the seam a *surface* is reached through and nothing else (R-AGT-16).
     """
     said = record.get(INSTRUCTIONS)
     said = said.strip() if isinstance(said, str) else ""
+    before = otherwise.strip() if said and isinstance(otherwise, str) else ""
     if not said:
         said = otherwise.strip() if isinstance(otherwise, str) and otherwise.strip() \
             else by_default(record, it)
@@ -436,7 +436,8 @@ def preface(record: dict, agent: str, name: str, it: dict, otherwise: str = "") 
         "user": str(it.get("user") or ""), "conversation": str(it.get("conversation") or ""),
         **parts_of(it),
     }
-    return _fill(said, filling)[:INSTRUCTIONS_MOST]
+    situated = _fill(said, filling)
+    return "\n\n".join(part for part in (before, situated) if part)[:INSTRUCTIONS_MOST]
 
 
 def by_default(record: dict, it: dict) -> str:
