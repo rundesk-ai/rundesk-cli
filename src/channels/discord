@@ -762,7 +762,10 @@ class Agent(discord.Client):
             # somebody is reading it — the next thing said starts the indicator again.
             self._stop_typing(held)
             await self._flush(it, held)
-            await self._post(it, str(it.get("text") or ""))
+            rest = str(it.get("text") or "")
+            while rest:
+                piece, rest = split_at(rest, LIMIT)
+                await self._post(it, piece)
             self._no_longer_last(held)
             # **And start again, because the turn has not ended.** The line above stops it
             # so nobody is told the agent is typing while they read what it just said — and
