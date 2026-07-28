@@ -678,18 +678,20 @@ def _situation(name: str, where: Path | None, said: str, otherwise: str) -> str:
 
 def remember(name: str, where: Path | None = None, provider: str | None = None,
              model: str | None = None, settings: dict | None = None,
-             instructions: str | None = None) -> dict:
+             instructions: str | None = None, replace_brain: bool = False,
+             forget_conversation: str | None = None) -> dict:
     """Keep what this agent should reach for when a turn does not say.
 
     What is not given is left exactly as it was, so naming a model later does not quietly
-    forget the brain. Two commands each naming a different half used to read one whole
-    file, merge only their own, and write it back — the later one erasing the other's with
-    both reporting success. Each names its own columns now, and the read, the decision and
-    the write are one transaction rather than one lock file.
+    forget the brain. When `replace_brain` names a provider that differs, omitted model
+    and settings are cleared because they belonged to the old provider. The comparison
+    and update share one transaction, so simultaneous changes are ordered rather than
+    making stale decisions that erase one another.
     """
     kept = records(name, where)
     kept.remember_agent(provider=provider, model=model, settings=settings,
-                        instructions=instructions)
+                        instructions=instructions, replace_brain=replace_brain,
+                        forget_conversation=forget_conversation)
     return kept.agent()
 
 
@@ -783,7 +785,7 @@ def diagnosed(name: str, where: Path | None = None, root: Path | None = None,
         # out first was the one place it did not (R-AGT-18).
         found.append(Complaint(str(store.path_for(directory(name, where))),
                                "nothing says which brain answers for this agent",
-                               f"rundesk add {name} --provider <provider>"))
+                               f"rundesk configure {name} --provider <provider>"))
     elif runnable is not None:
         try:
             runnable(named)
@@ -791,7 +793,8 @@ def diagnosed(name: str, where: Path | None = None, root: Path | None = None,
             # The detail is what is *about* the complaint and the sentence is what is
             # said, because a diagnosis reads "<what is wrong>: <where>" everywhere else.
             found.append(Complaint(str(why), "the brain this agent reaches for",
-                                   f"rundesk add {name} --provider <one that is installed>"))
+                                   f"rundesk configure {name} "
+                                   "--provider <one that is installed>"))
     return found
 
 

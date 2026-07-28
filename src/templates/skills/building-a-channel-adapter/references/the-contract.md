@@ -98,6 +98,7 @@ is what lets a credential in a file be found by the check that has to prove it.
 {"type": "ready"}
 {"type": "arrived",  "conversation": "1180", "user": "2207", "text": "what changed today?", "ref": "8841", "direct": false}
 {"type": "control",  "conversation": "1180", "user": "2207", "control": "stop", "ref": "8842"}
+{"type": "configure", "conversation": "1180", "user": "2207", "provider": "claude", "ref": "8844"}
 {"type": "query",    "conversation": "1180", "user": "2207", "query": "status", "ref": "8843"}
 {"type": "gone",     "why": "the socket closed"}
 ```
@@ -105,7 +106,7 @@ is what lets a credential in a file be found by the check that has to prove it.
 **stderr is yours.** Say what went wrong there; it is kept, and it is never mistaken for
 what you reported.
 
-That is the whole of what you say. Five kinds of record, and only `arrived` starts a brain turn.
+That is the whole of what you say. Six kinds of record, and only `arrived` starts a brain turn.
 
 **What each record needs**, and nothing else is required of you:
 
@@ -114,6 +115,7 @@ That is the whole of what you say. Five kinds of record, and only `arrived` star
 | `ready` | | |
 | `arrived` | `conversation`, `user` | `text` · `ref` · `direct` · `attachments` · `where` · `called` · `parts` |
 | `control` | `conversation`, `user`, `control` | `ref` |
+| `configure` | `conversation`, `user`, `provider`, `ref` | |
 | `query` | `conversation`, `user`, `query`, `ref` | |
 | `gone` | | `why` |
 
@@ -135,6 +137,15 @@ same `conversation`, `query`, and `ref`, plus `text`. Correlate that `ref` to th
 interaction that asked and keep the answer private where the platform supports private
 responses. Never offer a generic command or arguments: that would expose mutating gateway
 operations through a record whose contract promises read-only inspection.
+
+**A provider change is a configuration request, not a message or generic command.**
+Report `configure` with the provider as the owner typed it. Because this changes an
+agent-wide default, Rundesk accepts it only from a single-user channel; membership in a
+shared room is not agent administration. It proves the adapter can run, changes the
+default, and forgets this conversation's provider sessions in one transaction. It answers
+with `configure-result`, carrying the same `conversation` and `ref` plus private `text`
+for the interaction that asked. A turn already running keeps the provider it began with;
+the next message waits and starts fresh rather than steering the old provider.
 
 **`did` is what a tool did, and the list is closed.** It is one of exactly six words —
 `read`, `search`, `run`, `edit`, `list`, `make` — or it is absent, and absent is common.
@@ -239,6 +250,7 @@ both — so a photograph sent with nothing typed is an ordinary message and not 
 {"type": "answer", "conversation": "1180", "run": "7-a3f1", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png"}]}
 {"type": "state",  "conversation": "1180", "run": "7-a3f1", "state": "finished"}
 {"type": "query-result", "conversation": "1180", "query": "status", "ref": "8843", "text": "ava: RUNNING"}
+{"type": "configure-result", "conversation": "1180", "ref": "8844", "text": "Default provider changed to claude. The next message starts fresh."}
 ```
 
 Read a line, show what you can of it, keep reading. Your stdin stays open for the whole

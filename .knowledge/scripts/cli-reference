@@ -33,7 +33,7 @@ from rundesk import cli  # noqa: E402
 #: to learn what rundesk is for.
 GROUPS: list[tuple[str, str, tuple[str, ...]]] = [
     ("An agent, and its life", "Making one, taking it away, and seeing what you have.",
-     ("add", "remove", "agents", "doctor")),
+     ("add", "configure", "remove", "agents", "doctor")),
     ("Running one", "An agent runs in one gateway of its own — these name the agent, never the gateway.",
      ("start", "stop", "restart", "logs")),
     ("Reaching it", "The ways work arrives for an agent, and what became of each.",

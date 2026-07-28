@@ -404,6 +404,63 @@ class WhatOneTurnLooksLike(unittest.TestCase):
                          discord._as_a_line({"type": "usage", "input": 1200,
                                              "output": 340, "cached": 17000}))
 
+    def test_elapsed_time_is_compact_at_seconds_minutes_and_hours(self):
+        """R-DIS-24 — the duration stays readable beside compact token counts."""
+        self.assertEqual(["40s", "2m", "2h"],
+                         [discord._duration(one) for one in (40, 120, 7200)])
+
+    def test_elapsed_time_runs_from_taken_until_the_answer_is_ready(self):
+        """R-DIS-24 — a monotonic clock measures work, excluding Discord posting time."""
+        now = [100.0]
+        posted = []
+
+        class Turn:
+            async def _react(self, it, held, mark): pass
+            async def _typing(self, it): pass
+            async def _post(self, it, text, **kw): posted.append(text)
+            def _stop_typing(self, held): pass
+            def _no_longer_last(self, held): pass
+
+        held = discord.Live(clock=lambda: now[0])
+        asyncio.run(discord.Agent._state(
+            Turn(), {"state": "taken", "conversation": "c"}, held))
+        held.cost = "-# · 1.9k input · 94 output · 70k cached"
+        now[0] += 120
+        asyncio.run(discord.Agent._answer(
+            Turn(), {"type": "answer", "text": "done"}, held))
+        self.assertEqual(
+            "-# · 1.9k input · 94 output · 70k cached · 2m elapsed",
+            posted[0].splitlines()[0])
+
+    def test_repeated_taken_does_not_restart_elapsed_time(self):
+        """R-DIS-24 — duplicate state delivery cannot shorten the displayed work."""
+        now = [100.0]
+
+        class Turn:
+            async def _react(self, it, held, mark): pass
+            async def _typing(self, it): pass
+
+        held = discord.Live(clock=lambda: now[0])
+        asyncio.run(discord.Agent._state(Turn(), {"state": "taken"}, held))
+        now[0] += 40
+        asyncio.run(discord.Agent._state(Turn(), {"state": "taken"}, held))
+        self.assertEqual(100.0, held.started)
+
+    def test_elapsed_time_is_shown_when_usage_was_not_reported(self):
+        """R-DIS-24 — duration is useful even when a provider supplies no token counts."""
+        posted = []
+
+        class Turn:
+            async def _post(self, it, text, **kw): posted.append(text)
+            def _stop_typing(self, held): pass
+            def _no_longer_last(self, held): pass
+
+        held = discord.Live(clock=lambda: 140.0)
+        held.started = 100.0
+        asyncio.run(discord.Agent._answer(
+            Turn(), {"type": "answer", "text": "done"}, held))
+        self.assertEqual("-# · 40s elapsed", posted[0].splitlines()[0])
+
     def test_a_small_count_is_not_rounded_into_a_zero(self):
         """R-USE-7 — everything was shown in thousands, so a turn that answered in
         thirteen tokens reported `0k output`: a measurement, stated plainly, and wrong.
@@ -920,6 +977,76 @@ class WhatItOffersAndWhatItIsTold(unittest.TestCase):
             "type": "query", "conversation": "44", "user": "2207",
             "query": "status", "ref": "91",
         }, record)
+
+    def test_provider_is_deferred_and_reported_for_authorized_configuration(self):
+        """R-DIS-25 — the provider name crosses the seam; Discord changes nothing."""
+        class Response:
+            async def defer(self, ephemeral):
+                self.ephemeral = ephemeral
+
+        interaction = SimpleNamespace(
+            id=92, channel_id=44, user=SimpleNamespace(id=2207), response=Response()
+        )
+        client = SimpleNamespace(
+            chose=SimpleNamespace(allow=["2207"]), queries={},
+            _owns=lambda _interaction: True,
+        )
+        said = []
+        was, discord.sys.stdout = discord.sys.stdout, _Collects(said)
+        try:
+            asyncio.run(discord.Agent._provider_command(client)(
+                interaction, "claude"))
+        finally:
+            discord.sys.stdout = was
+        self.assertEqual({
+            "type": "configure", "conversation": "44", "user": "2207",
+            "provider": "claude", "ref": "92",
+        }, json.loads("".join(said)))
+        from rundesk import channel
+        self.assertIsNotNone(channel.understood("".join(said)))
+        self.assertTrue(interaction.response.ephemeral)
+        self.assertIs(interaction, client.queries["92"])
+
+    def test_provider_result_completes_the_exact_private_interaction(self):
+        """R-DIS-25 — success or refusal is private and correlated to its command."""
+        class Interaction:
+            async def edit_original_response(self, content):
+                self.content = content
+
+        first, interaction = Interaction(), Interaction()
+        client = SimpleNamespace(queries={"91": first, "92": interaction})
+        asyncio.run(discord.Agent._configuration_result(client, {
+            "type": "configure-result", "conversation": "44", "ref": "92",
+            "text": "Default provider changed to claude.",
+        }))
+        self.assertEqual("Default provider changed to claude.", interaction.content)
+        self.assertEqual({"91": first}, client.queries)
+        self.assertFalse(hasattr(first, "content"))
+
+    def test_shared_channel_provider_command_is_privately_refused_before_reporting(self):
+        """R-DIS-25 — room access is not authority over the agent-wide default."""
+        class Response:
+            async def send_message(self, text, ephemeral):
+                self.text, self.ephemeral = text, ephemeral
+
+        interaction = SimpleNamespace(
+            id=92, channel_id=44, user=SimpleNamespace(id=2207), response=Response()
+        )
+        client = SimpleNamespace(
+            chose=SimpleNamespace(allow=["2207", "3308"]), queries={},
+            _owns=lambda _interaction: True,
+        )
+        said = []
+        was, discord.sys.stdout = discord.sys.stdout, _Collects(said)
+        try:
+            asyncio.run(discord.Agent._provider_command(client)(
+                interaction, "claude"))
+        finally:
+            discord.sys.stdout = was
+        self.assertTrue(interaction.response.ephemeral)
+        self.assertIn("not available", interaction.response.text)
+        self.assertEqual({}, client.queries)
+        self.assertEqual([], said)
 
     def test_where_it_listens_is_its_own_option_and_never_rundesks(self):
         """R-CAD-13 — `--server` and `--dm` are Discord's words, parsed here."""

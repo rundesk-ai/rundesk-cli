@@ -422,6 +422,49 @@ class WhatAnAgentIsConfiguredWith(WithAnAgentsOwnRecords):
         kept.remember_agent()
         self.assertEqual("codex", kept.agent()["provider"])
 
+    def test_replacing_a_brain_clears_only_its_provider_specific_defaults(self):
+        """R-AGT-31, R-AGT-33 — one row changes atomically; the agent remains itself."""
+        kept = self.built()
+        kept.remember_agent(provider="codex", model="o3", instructions="be brief",
+                            settings={"effort": "high"})
+        kept.remember_agent(provider="claude", replace_brain=True)
+        self.assertEqual({
+            "provider": "claude", "model": None, "instructions": "be brief", "settings": {},
+        }, kept.agent())
+
+    def test_naming_the_current_brain_does_not_clear_newer_defaults(self):
+        """R-AGT-31 — replacement is decided under the store's write transaction."""
+        kept = self.built()
+        kept.remember_agent(provider="claude", model="opus",
+                            settings={"effort": "low"})
+        kept.remember_agent(provider="claude", replace_brain=True)
+        self.assertEqual("opus", kept.agent()["model"])
+        self.assertEqual({"effort": "low"}, kept.agent()["settings"])
+
+    def test_provider_and_conversation_sessions_change_in_one_transaction(self):
+        """R-CH-26 — a failed session reset rolls the provider change back too."""
+        kept = self.built()
+        kept.remember_agent(provider="codex", model="o3",
+                            settings={"effort": "high"})
+        kept.opened("c1", "discord", "discord", "thread", AT)
+        kept.remember_session("c1", "codex", "old-codex")
+        kept.remember_session("c1", "claude", "old-claude")
+        with kept._writing() as conn:
+            conn.execute(
+                "CREATE TRIGGER refuse_session_reset BEFORE DELETE ON session "
+                "BEGIN SELECT RAISE(FAIL, 'session reset refused'); END")
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            kept.remember_agent(
+                provider="claude", replace_brain=True, forget_conversation="c1")
+
+        self.assertEqual({
+            "provider": "codex", "model": "o3", "instructions": None,
+            "settings": {"effort": "high"},
+        }, kept.agent())
+        self.assertEqual("old-codex", kept.session("c1", "codex"))
+        self.assertEqual("old-claude", kept.session("c1", "claude"))
+
     def test_when_a_gateway_was_last_up_outlives_the_gateway_that_wrote_it(self):
         """It is read by the *next* gateway, working out how long it was down."""
         kept = self.built()

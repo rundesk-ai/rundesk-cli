@@ -46,6 +46,7 @@ it has not — what never differs is that the work runs and is answered.
 | ✅ | R-CH-23 | Only a channel's authorized users receive answers to gateway questions | `an authorized gateway query is answered without a brain turn`, `somebody not allowed receives no gateway information` |
 | ✅ | R-CH-24 | A gateway question starts no brain turn | `an authorized gateway query is answered without a brain turn` |
 | ✅ | R-CH-25 | A follow-up arriving while a turn finishes is either accepted as steering or becomes the next turn | `a follow up offered after provider input closed becomes the next turn` |
+| ✅ | R-CH-26 | A single-user channel can change the agent's default provider and start that conversation fresh | `an authorized provider command changes the default and starts fresh`, `a stranger cannot change the provider`, `an unrunnable provider is reported and changes nothing`, `provider change waits for the old turn then starts fresh`, `a shared channels members cannot change agent wide defaults`, `provider and conversation sessions change in one transaction` |
 
 ## Open questions
 

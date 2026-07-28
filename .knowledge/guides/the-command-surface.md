@@ -52,6 +52,7 @@ no room for.
 | Verb | What it is for |
 |---|---|
 | `add <agent>` | Make an agent and the one gateway that runs it. Never one without the other. |
+| `configure <agent>` | Change its durable provider, model, settings, or instructions. |
 | `remove <agent>` | Take both away, and the schedules and channels that were the agent's. |
 | `agents` | Every agent, and what each is doing right now. The table you look at first. |
 | `agents <agent>` | One agent: what it is, and where it keeps things. |

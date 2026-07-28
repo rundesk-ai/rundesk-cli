@@ -742,6 +742,27 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
             "query": "remove", "ref": "8841",
         })))
 
+    def test_provider_configuration_requires_a_correlated_whole_record(self):
+        """R-CAD-18 — the adapter supplies the value; Rundesk decides whether to act."""
+        whole = {
+            "type": "configure", "conversation": "one", "user": "u",
+            "provider": "claude", "ref": "8842",
+        }
+        self.assertIsNotNone(channel.understood(json.dumps(whole)))
+        for field in ("conversation", "user", "provider", "ref"):
+            for value in (None, "", 12):
+                broken = dict(whole)
+                if value is None:
+                    broken.pop(field)
+                else:
+                    broken[field] = value
+                self.assertIsNone(
+                    channel.understood(json.dumps(broken)), (field, value))
+
+    def test_a_provider_configuration_result_is_a_record_a_surface_may_receive(self):
+        """R-CAD-18 — request and correlated result are both in the closed protocol."""
+        self.assertIn("configure-result", channel.TELLING)
+
 
 class AddingAChannelProvesItself(DrivesAnAdapter):
     """R-CAD-9 — it connects, signs in and looks, before anything is written down."""

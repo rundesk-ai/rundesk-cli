@@ -153,11 +153,15 @@ rundesk agents                 every agent, and what each is doing
 rundesk agents <name>          one agent: what it is, and where it keeps things
 rundesk doctor <name>          what stands between an agent and a working turn
 rundesk add <name>             make an agent, and the gateway that runs it
+rundesk configure <name>       change its provider, model, settings, or instructions
 rundesk remove <name>          take one away for good
 ```
 
 `add` makes the agent *and* its gateway; `remove` takes both. There is no way to end up with
-one without the other.
+one without the other. `rundesk configure <name> --provider <provider>` changes an existing
+agent's default brain without replacing it; provider-specific model and settings are cleared
+unless replacements are supplied. The same verb changes `--model`, `--set`, and
+`--instructions` defaults.
 
 **Running them.**
 
@@ -174,6 +178,11 @@ rundesk ask <name> "…"         one turn, streamed back
 rundesk channels <name>        what it is reachable on — add, show, remove, instructions
 rundesk schedules <name>       what it runs on its own — add, on, off, remove, run
 ```
+
+On a single-user Discord channel, `/provider <provider>` changes the agent-wide default
+after Rundesk checks authorization and the adapter. The next message in that Discord
+conversation starts fresh; an already-running turn finishes with the provider it began
+with. Shared channels cannot change an agent-wide default.
 
 **Work that starts itself, and where its answer goes.** A schedule can run a program — a
 script, a command, anything with a full path — or ask a turn, and `--to <channel>` is how its
