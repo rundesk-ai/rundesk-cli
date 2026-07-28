@@ -232,8 +232,13 @@ class InstallTests(Sandbox):
         self.assertEqual((self.bindir / "rundesk").resolve(), target_after_first)
         self.assertEqual(len(list(self.bindir.iterdir())), 1, "installing twice left two of something")
 
-    def test_installing_schedules_daily_updates_for_three_in_the_morning(self):
+    def test_installing_schedules_daily_updates_for_the_configured_time(self):
         """R-UPD-42"""
+        data = self.home / ".rundesk" / "data"
+        data.mkdir(parents=True)
+        (data / "config.json").write_text(
+            '{"updates": {"at": "2:30"}}', encoding="utf-8"
+        )
         done = self.install()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         job = self.home / ".cache" / "rundesk-test-jobs" / \
@@ -241,7 +246,7 @@ class InstallTests(Sandbox):
         with open(job, "rb") as file:
             described = plistlib.load(file)
         self.assertEqual(
-            {"Hour": 3, "Minute": 0}, described["StartCalendarInterval"]
+            {"Hour": 2, "Minute": 30}, described["StartCalendarInterval"]
         )
         self.assertEqual(["update", "--automatic"], described["ProgramArguments"][1:])
 

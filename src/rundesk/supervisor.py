@@ -238,7 +238,6 @@ def describe(name: str, root: Path | None = None, logs: Path | None = None,
 BACKUP_LABEL = f"{PREFIX}-backup"
 UPDATE_LABEL = f"{PREFIX}-update"
 AUTOMATIC_UPDATE_LABEL = f"{PREFIX}-automatic-update"
-AUTOMATIC_UPDATE_HOUR = 3
 
 
 def backup_job_path(where: str | None = None) -> Path:
@@ -317,37 +316,39 @@ def automatic_update_job_path(where: str | None = None) -> Path:
     return Path(os.path.expanduser(where or jobs_home())) / f"{AUTOMATIC_UPDATE_LABEL}.plist"
 
 
-def describe_automatic_update(root: Path | None = None, logs: Path | None = None) -> dict:
+def describe_automatic_update(at: str, root: Path | None = None,
+                              logs: Path | None = None) -> dict:
     """The daily trigger. It only queues the crash-recoverable worker and then ends
     (R-UPD-42)."""
     root = root or ROOT
     logs = logs or gateway.logs_home()
+    hour, _, minute = at.partition(":")
     return {
         "Label": AUTOMATIC_UPDATE_LABEL,
         "ProgramArguments": [str(root / "rundesk"), "update", "--automatic"],
         "WorkingDirectory": str(root),
         "EnvironmentVariables": _environment(logs),
-        "StartCalendarInterval": {"Hour": AUTOMATIC_UPDATE_HOUR, "Minute": 0},
+        "StartCalendarInterval": {"Hour": int(hour), "Minute": int(minute)},
         "RunAtLoad": False,
         "StandardOutPath": str(logs / "automatic-update.out"),
         "StandardErrorPath": str(logs / "automatic-update.err"),
     }
 
 
-def write_automatic_update(root: Path | None = None, logs: Path | None = None,
+def write_automatic_update(at: str, root: Path | None = None, logs: Path | None = None,
                            where: str | None = None) -> Path:
     path = automatic_update_job_path(where)
     path.parent.mkdir(parents=True, exist_ok=True)
     (logs or gateway.logs_home()).mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as file:
-        plistlib.dump(describe_automatic_update(root, logs), file)
+        plistlib.dump(describe_automatic_update(at, root, logs), file)
     return path
 
 
-def install_automatic_update(root: Path | None = None, logs: Path | None = None,
+def install_automatic_update(at: str, root: Path | None = None, logs: Path | None = None,
                              where: str | None = None,
                              asking: Callable[..., Spoke] = ask) -> Spoke:
-    """Hand the 03:00 trigger to the machine without running an update now."""
+    """Hand the configured daily trigger to the machine without running an update now."""
     root = root or ROOT
     path = automatic_update_job_path(where)
     if path.exists():
@@ -356,10 +357,18 @@ def install_automatic_update(root: Path | None = None, logs: Path | None = None,
         loaded = asking("print", f"{domain()}/{AUTOMATIC_UPDATE_LABEL}")
         if not loaded.answered:
             return loaded
-        if loaded.ok:
+        try:
+            with open(path, "rb") as file:
+                current = plistlib.load(file)
+        except (OSError, ValueError):
+            current = None
+        if loaded.ok and current == describe_automatic_update(at, root, logs):
             return Spoke(True, "")
-    else:
-        path = write_automatic_update(root, logs, where)
+        if loaded.ok:
+            stopped = asking("bootout", f"{domain()}/{AUTOMATIC_UPDATE_LABEL}")
+            if not stopped.ok:
+                return stopped
+    path = write_automatic_update(at, root, logs, where)
     return asking("bootstrap", domain(), str(path))
 
 

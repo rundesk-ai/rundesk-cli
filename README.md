@@ -265,10 +265,17 @@ Discord without changing Rundesk core.
 
 ### Operations and data
 
-- Install, automatic 03:00 self-updates, version check, status, and doctor commands
+- Install, automatic daily self-updates, version check, status, and doctor commands
 - Manual backups, automatic daily backups, restore, and configurable backup location
 - Program and owner data kept in separate directories
 - Agent removal that preserves its home unless purge is explicitly requested
+
+Automatic updates default to 03:00 in the machine's local time. To choose another time,
+set it in `~/.rundesk/data/config.json`, then run `rundesk update` to apply the schedule:
+
+```json
+{"updates": {"at": "02:30"}}
+```
 - Generated command reference that cannot drift from the installed parser
 
 ## 📖 Documentation

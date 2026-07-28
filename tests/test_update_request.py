@@ -286,7 +286,7 @@ class DurableRequests(unittest.TestCase):
             def available(self):
                 return True
 
-            def install_automatic_update(self):
+            def install_automatic_update(self, at):
                 self.installed = True
                 return mock.Mock(ok=True, said="")
 

@@ -930,7 +930,7 @@ class TakingOneAway(WithSomethingToBackUp):
 
 
 class HowThisInstallIsConfigured(unittest.TestCase):
-    """`config.json` — the first thing kept there is how backups behave."""
+    """`config.json` — install-wide backup and update behavior."""
 
     def setUp(self):
         self.where = Path(tempfile.mkdtemp(prefix="rundesk-config-"))
@@ -979,6 +979,19 @@ class HowThisInstallIsConfigured(unittest.TestCase):
         that whatever is given to the machine does not depend on how it was typed."""
         self.wrote({"backups": {"at": "4:05"}})
         self.assertEqual("04:05", config.backups(self.where)["at"])
+
+    def test_the_automatic_update_time_is_the_owners_to_state(self):
+        """R-UPD-42"""
+        self.assertEqual({"at": config.UPDATE_AT}, config.updates(self.where))
+        self.wrote({"updates": {"at": "2:30"}})
+        self.assertEqual({"at": "02:30"}, config.updates(self.where))
+
+    def test_an_unreadable_automatic_update_time_is_refused(self):
+        """R-UPD-42 — silently retaining the old calendar would make config.json untrue."""
+        for said in ("after lunch", "24:00", "03:75", 3):
+            self.wrote({"updates": {"at": said}})
+            with self.assertRaises(config.Unreadable, msg=f"{said!r} was accepted"):
+                config.updates(self.where)
 
 
 if __name__ == "__main__":

@@ -48,6 +48,9 @@ KEEP_DAYS = 30
 #: nightly schedules an agent is likely to have.
 DAILY_AT = "04:00"
 
+#: When the machine checks for a new Rundesk release, on its own local clock.
+UPDATE_AT = "03:00"
+
 
 class Unreadable(Exception):
     """There is a config file and it could not be understood. Never treated as absent."""
@@ -97,8 +100,19 @@ def backups(where: Path | None = None) -> dict:
                          f"{type(said).__name__} where it must hold an object")
     return {
         "keep_days": _days(said.get("keep_days"), where),
-        "at": _at(said.get("at"), where),
+        "at": _at(said.get("at"), where, "backups"),
     }
+
+
+def updates(where: Path | None = None) -> dict:
+    """How automatic Rundesk updates are configured, with the default applied."""
+    said = read(where).get("updates")
+    if said is None:
+        said = {}
+    if not isinstance(said, dict):
+        raise Unreadable(f"{path(where)}: 'updates' holds "
+                         f"{type(said).__name__} where it must hold an object")
+    return {"at": _at(said.get("at"), where, "updates", UPDATE_AT)}
 
 
 def _days(said, where) -> int:
@@ -117,15 +131,21 @@ def _days(said, where) -> int:
     return said
 
 
-def _at(said, where) -> str:
+def _at(said, where, section: str, default: str = DAILY_AT) -> str:
     """A time of day the machine can be given, stated the way a person writes one."""
     if said is None:
-        return DAILY_AT
+        return default
     if not isinstance(said, str):
-        raise Unreadable(f"{path(where)}: 'at' must be a time of day, and is {said!r}")
+        raise Unreadable(
+            f"{path(where)}: '{section}.at' must be a time of day, and is {said!r}"
+        )
     hour, _, minute = said.partition(":")
     if not (hour.isdigit() and minute.isdigit()):
-        raise Unreadable(f"{path(where)}: 'at' must read as HH:MM, and is {said!r}")
+        raise Unreadable(
+            f"{path(where)}: '{section}.at' must read as HH:MM, and is {said!r}"
+        )
     if not (0 <= int(hour) <= 23 and 0 <= int(minute) <= 59):
-        raise Unreadable(f"{path(where)}: 'at' is not a time of day: {said!r}")
+        raise Unreadable(
+            f"{path(where)}: '{section}.at' is not a time of day: {said!r}"
+        )
     return f"{int(hour):02d}:{int(minute):02d}"

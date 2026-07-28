@@ -739,11 +739,11 @@ class AutomaticUpdates(WithAJobDirectory):
     def written(self):
         return plistlib.loads(
             supervisor.write_automatic_update(
-                self.root, self.logs, str(self.where)
+                "03:00", self.root, self.logs, str(self.where)
             ).read_bytes()
         )
 
-    def test_the_daily_trigger_runs_at_three_in_the_morning(self):
+    def test_the_daily_trigger_defaults_to_three_in_the_morning(self):
         """R-UPD-42"""
         said = self.written()
         self.assertEqual(
@@ -761,7 +761,7 @@ class AutomaticUpdates(WithAJobDirectory):
     def test_the_daily_trigger_cannot_be_mistaken_for_a_gateway(self):
         """R-UPD-42"""
         supervisor.write_automatic_update(
-            self.root, self.logs, str(self.where)
+            "03:00", self.root, self.logs, str(self.where)
         )
         supervisor.write("automatic-update", self.root, self.logs, str(self.where))
         self.assertEqual(
@@ -773,7 +773,7 @@ class AutomaticUpdates(WithAJobDirectory):
         """R-UPD-42"""
         path = supervisor.automatic_update_job_path(str(self.where))
         said = supervisor.install_automatic_update(
-            self.root, self.logs, str(self.where), self.machine
+            "03:00", self.root, self.logs, str(self.where), self.machine
         )
         self.assertTrue(said.ok)
         self.assertTrue(path.exists())
@@ -785,6 +785,32 @@ class AutomaticUpdates(WithAJobDirectory):
         self.assertTrue(removed.ok)
         self.assertFalse(path.exists())
         self.assertNotIn(supervisor.AUTOMATIC_UPDATE_LABEL, self.machine.holding)
+
+    def test_the_machine_is_given_the_owners_configured_time(self):
+        """R-UPD-42"""
+        said = supervisor.describe_automatic_update("21:45", self.root, self.logs)
+        self.assertEqual(
+            {"Hour": 21, "Minute": 45}, said["StartCalendarInterval"]
+        )
+
+    def test_changing_the_time_reloads_the_existing_daily_job(self):
+        """R-UPD-42 — rewriting only the file leaves launchd running the old calendar."""
+        supervisor.install_automatic_update(
+            "03:00", self.root, self.logs, str(self.where), self.machine
+        )
+        self.machine.asked.clear()
+
+        said = supervisor.install_automatic_update(
+            "02:30", self.root, self.logs, str(self.where), self.machine
+        )
+
+        self.assertTrue(said.ok)
+        self.assertEqual(["print", "bootout", "bootstrap"], self.machine.verbs())
+        with open(supervisor.automatic_update_job_path(str(self.where)), "rb") as file:
+            described = plistlib.load(file)
+        self.assertEqual(
+            {"Hour": 2, "Minute": 30}, described["StartCalendarInterval"]
+        )
 
 
 if __name__ == "__main__":

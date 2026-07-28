@@ -808,8 +808,9 @@ def _install_automatic_updates(machine) -> int:
     if not machine.available():
         return 0
     try:
-        said = machine.install_automatic_update()
-    except (machine.NoSupervisor, machine.NotOurs) as why:
+        at = config.updates()["at"]
+        said = machine.install_automatic_update(at)
+    except (config.Unreadable, machine.NoSupervisor, machine.NotOurs) as why:
         print(f"update: APPLIED, but automatic updates were not scheduled — {why}",
               file=sys.stderr)
         return 1

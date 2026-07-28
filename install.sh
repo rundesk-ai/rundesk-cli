@@ -511,17 +511,18 @@ if command -v launchctl >/dev/null 2>&1; then
   if ! python3 - "$REPO_ROOT" <<'AUTOMATIC'
 import sys
 sys.path.insert(0, sys.argv[1] + "/src")
-from rundesk import supervisor
+from rundesk import config, supervisor
 
-said = supervisor.install_automatic_update()
+at = config.updates()["at"]
+said = supervisor.install_automatic_update(at)
 if not said.ok:
     print(said.said or "the supervisor refused the daily update job", file=sys.stderr)
     raise SystemExit(1)
+print(f"scheduled automatic updates for {at}")
 AUTOMATIC
   then
     die "rundesk was installed, but automatic updates could not be scheduled."
   fi
-  echo "scheduled automatic updates for 03:00"
 fi
 
 # The skills this release ships, into the owner's library beside their own. Asked of the

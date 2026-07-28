@@ -1051,8 +1051,8 @@ class FakeMachine:
         self.did.append(("install_update_worker", None))
         return self.Spoke(not self.refuses, "the machine said no" if self.refuses else "")
 
-    def install_automatic_update(self):
-        self.did.append(("install_automatic_update", None))
+    def install_automatic_update(self, at):
+        self.did.append(("install_automatic_update", at))
         return self.Spoke(not self.refuses, "the machine said no" if self.refuses else "")
 
     def remove_backup(self):
