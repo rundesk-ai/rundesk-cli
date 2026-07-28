@@ -28,7 +28,7 @@ none of them is a copy of another:
 
 | Decided in | What it settles |
 |---|---|
-| `src/rundesk/__init__.py` — `data_home()`, `scripts_home()`, `skills_home()` | **the program and the data are two directories**: `app/` is what an update replaces and an uninstall takes whole, while owner commands and skills resolve below the data it never touches (R-INS-13, R-RM-8, R-PROC-22) |
+| `src/rundesk/__init__.py` — `data_home()`, `scripts_home()`, `skills_home()`, `plugins_home()` | **the program and the data are two directories**: `app/` is what an update replaces and an uninstall takes whole, while owner commands, skills and installed plugins resolve below the data it never touches (R-INS-13, R-RM-8, R-PROC-22, R-PLG-40) |
 | `src/rundesk/agent.py` — `agents_home()`, `directory()`, `paths()` | every directory that is one agent's own, off one list that making and diagnosing both read |
 | `src/rundesk/agent.py` — `templates_home()`, `sourced()` | where an owner's own templates stand and which file each page really comes from. **Below `agents_home()`**, so whatever redirects where agents live redirects it too, and outside anything a release ships, which is the whole of why an update cannot reach it (R-AGT-23) |
 | `src/rundesk/dependencies.py` — `wanted_at()`, `site_packages()` | what this install is made of and where it is kept, asked the same way by the installer, an update and a gateway |
@@ -110,6 +110,16 @@ file with it.
 - `src/rundesk/script.py` — the owner's shared integration commands. Resolves the script
   library below the install's data and lists only runnable top-level entries; `process.py`
   puts that directory first on every program's `PATH`.
+- `src/rundesk/plugin.py` — **software a third party publishes, installed from a versioned
+  release and shared by every agent.** Two directories per plugin, and the split is the design:
+  `app/` is the release an update replaces whole, `state/` is what it keeps and is never
+  replaced — `ROOT` and `data_home()` one level down. It is never loaded: a plugin contributes an
+  executable linked into `script.py`'s library and skills linked into `skill.py`'s, so what an
+  agent sees is what it always saw, and the only plugin code rundesk runs is a migration step.
+  Reuses rather than repeats — `migration` for its steps on its own version counter,
+  `updater.safe_extract` for a stranger's archive, `updater.tag_matches` for the rule that a tag
+  and a manifest name one version. **A plugin can never fail an update**: one that cannot be moved
+  is held back, unlinked and named, and the release still lands (R-PLG-15).
 - `src/rundesk/backup.py` — copies of everything the owner keeps, and putting one back. Knows
   nothing of gateways or of the machine's supervisor: what must be true before a restore may
   proceed arrives as callables, the way `updater.run` already takes them. What goes into one is
@@ -247,6 +257,11 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   it** — it was a document at the repository root that an agent had to be told to go and read,
   and the pointer named a path that existed on neither kind of install. As a skill it is handed
   to the agent instead. Each adapter skill carries its contract beside it in `references/`.
+- `src/templates/plugin/` — **what `rundesk plugins init` writes**, and a plugin that installs as
+  it stands rather than a page describing one. Its `lib/store.py` is the load-bearing part: a
+  plugin's records are reached by every agent at once, so it opens them in WAL with a busy timeout
+  and refuses a version it does not understand. The scaffold is read by the same `plugin.read` an
+  install uses, so `init` and `check` cannot disagree about what a plugin is.
 - `.knowledge/scripts/gate` — everything that has to be true before work here is finished, in one
   command. The suites are **found**, not listed, and it fails when CI stops delegating to the same
   discovery rule, so the local gate and CI cannot come apart. Runs everything rather than stopping at the first

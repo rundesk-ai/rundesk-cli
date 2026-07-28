@@ -143,15 +143,20 @@ def _now() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def logged(home, said: str, level: str = "INFO", clock=None) -> None:
+def logged(home, said: str, level: str = "INFO", clock=None, log: str = LOG) -> None:
     """Leave a line in the agent's own log, where somebody will actually look for it.
 
     An update that failed at three in the morning is read afterwards, not watched. A migration
     that reported only to whoever ran it would leave nothing behind for the person who finds
     the agent down — and this is the one moment where what happened to an agent's records is
     not yet in those records.
+
+    `log` is where, because the runner has a second kind of caller now: a plugin keeps one
+    set of records shared by every agent, and writing what happened to them into a file
+    called an agent's gateway log would put a stranger's migration in an account that is not
+    about it. The default is the agent's, so nothing that already called this changed.
     """
-    at = Path(home) / LOG
+    at = Path(home) / log
     said = WRITTEN_AS % {"at": (clock or _now)(), "level": level, "said": said}
     try:
         at.parent.mkdir(parents=True, exist_ok=True)
@@ -163,7 +168,7 @@ def logged(home, said: str, level: str = "INFO", clock=None) -> None:
         pass
 
 
-def carry(database, home, want: int, where=None, note=None, clock=None) -> int:
+def carry(database, home, want: int, where=None, note=None, clock=None, log: str = LOG) -> int:
     """Bring one agent's records up to date, and say what version they reached.
 
     Each step is one transaction that includes its own version stamp, so an update stopped
@@ -185,17 +190,18 @@ def carry(database, home, want: int, where=None, note=None, clock=None) -> int:
         due = between(reached, want, where)
         if due:
             logged(home, f"moving records from version {reached} to {want}: "
-                         + ", ".join(repr(one) for one in due), clock=clock)
+                         + ", ".join(repr(one) for one in due), clock=clock, log=log)
         for step in due:
             say(f"migrating {database.parent.name} to version {step.version}")
             try:
                 spent = _one(conn, step, Path(home))
             except Failed as stopped:
                 logged(home, f"{step} did not finish — records are still at version "
-                             f"{stopped.reached}: {stopped.why}", "ERROR", clock=clock)
+                             f"{stopped.reached}: {stopped.why}", "ERROR", clock=clock, log=log)
                 raise
             reached = step.version
-            logged(home, f"{step} finished — records are at version {reached}", clock=clock)
+            logged(home, f"{step} finished — records are at version {reached}",
+                   clock=clock, log=log)
             # Only now that the version has moved: what a step copied is safe to let go of,
             # and a crash before this point leaves both copies rather than neither.
             for gone in spent:

@@ -162,6 +162,7 @@ def run(
     resume: Callable[[list], list] | None = None,
     carry: Callable[[], str | None] | None = None,
     provision: Callable[[], str | None] | None = None,
+    plugins: Callable[[], list] | None = None,
     unfit: Callable[[], str | None] | None = None,
     relaunch: Callable[[Path, list], str | None] | None = None,
     preview: Callable[[], list] | None = None,
@@ -192,7 +193,7 @@ def run(
         # way out is to run the update again, so running it again has to be the thing that
         # mends it.
         return _mend(repo_root, current_version, check_only,
-                     unfit, busy, pause, resume, carry, provision)
+                     unfit, busy, pause, resume, carry, provision, plugins)
     if check_only:
         # **What it would do, before it does it** (R-UPD-34). Said here and nowhere else,
         # because this is the one path that promises to change nothing (R-UPD-8): the
@@ -209,7 +210,7 @@ def run(
         with _only_one(repo_root):
             return _replace_this_install(
                 repo_root, published, apply, busy, pause, resume, carry, provision,
-                relaunch,
+                relaunch, plugins,
             )
     except Busy as err:
         print(f"update: NOT APPLIED — {err}", file=sys.stderr)
@@ -247,7 +248,7 @@ def _relaunch(repo_root: Path, stopped: list) -> str | None:
 
 
 def carry_on(repo_root: Path, stopped: list, resume=None, carry=None,
-             provision=None, landed: str | None = None) -> int:
+             provision=None, landed: str | None = None, plugins=None) -> int:
     """Finish a window the release before this one opened (R-UPD-33).
 
     The public half of the handover: whoever runs this *is* the new code, so what it does
@@ -258,14 +259,14 @@ def carry_on(repo_root: Path, stopped: list, resume=None, carry=None,
     try:
         with _only_one(repo_root):
             return _bring_forward(repo_root, stopped, resume, carry, provision,
-                                  landed=landed)
+                                  landed=landed, plugins=plugins)
     except Busy as err:
         print(f"update: NOT APPLIED — {err}", file=sys.stderr)
         return 1
 
 
 def _mend(repo_root, current_version, check_only, unfit, busy, pause, resume,
-          carry, provision) -> int:
+          carry, provision, plugins=None) -> int:
     """Nothing newer to move to — so is what is already here actually usable?
 
     The same window, with nothing to lay down: what an install is made of and what its
@@ -295,6 +296,7 @@ def _mend(repo_root, current_version, check_only, unfit, busy, pause, resume,
                 # brought forward, which is the whole condition the handover exists for.
                 relaunch=lambda _root, _names: None,
                 busy=busy, pause=pause, resume=resume, carry=carry, provision=provision,
+                plugins=plugins,
             )
     except Busy as err:
         print(f"update: NOT APPLIED — {err}", file=sys.stderr)
@@ -311,6 +313,7 @@ def _replace_this_install(
     carry=None,
     provision=None,
     relaunch=None,
+    plugins=None,
 ) -> int:
     """The window itself: nothing an owner runs is up between the first line and the last.
 
@@ -396,7 +399,7 @@ def _replace_this_install(
             (resume or (lambda _names: []))(stopped)
             return 1
         return _bring_forward(repo_root, stopped, resume, carry, provision,
-                              landed=published)
+                              landed=published, plugins=plugins)
     # The release never landed, so there is nothing to bring forward and nothing to put
     # back — only whatever was stood down, which comes back onto the code it was already on.
     left_down = (resume or (lambda _names: []))(stopped)
@@ -411,7 +414,7 @@ def _replace_this_install(
 
 
 def _bring_forward(repo_root: Path, stopped: list, resume=None, carry=None,
-                   provision=None, landed: str | None = None) -> int:
+                   provision=None, landed: str | None = None, plugins=None) -> int:
     """What an install is made of, then what its agents keep, then everything back up.
 
     The one window where nothing is up and the new files are already down. Reached twice —
@@ -455,6 +458,13 @@ def _bring_forward(repo_root: Path, stopped: list, resume=None, carry=None,
     # every agent's records are in the shape it expects. Only here does the copy of what
     # was there go, because until this line it is the only way back (R-UPD-31).
     _keep(repo_root)
+    # **After the records and before anything comes back up, and it can never fail this**
+    # (R-PLG-15). A plugin is a stranger's release: it is moved forward in the same window,
+    # because a step of its own needs every gateway down exactly as rundesk's do — but what
+    # it does is reported in words, and one that cannot be moved is held back and named
+    # rather than taking an owner's agents down with it.
+    for line in (plugins or (lambda: []))():
+        print(f"        {line}")
     left_down = (resume or (lambda _names: []))(stopped)
     if left_down:
         print(
@@ -554,7 +564,7 @@ def _download_and_apply(repo_root: Path, tag: str) -> int:
         print(f"{tag}: unpacking {_size(archive)}", flush=True)
         try:
             with tarfile.open(archive) as tar:
-                _safe_extract(tar, unpacked)
+                safe_extract(tar, unpacked)
         except (tarfile.TarError, ValueError, OSError) as err:
             print(f"{tag}: FAILED — the download is not shaped like a release: {err}", file=sys.stderr)
             return 1
@@ -606,8 +616,12 @@ def _size(path: Path) -> str:
         return "the release"
 
 
-def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
+def safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
     """Refuse a member that would land outside `dest` — an archive is untrusted input.
+
+    **Public because a second caller needs exactly this**, not a second copy of it: a plugin
+    arrives as a stranger's archive too, and a traversal guard written twice is one that
+    stops being written the same way. `plugin.unpack` calls this one.
 
     Checking each member's own name is not enough. A link member's *target* is a second way
     out: an archive carrying a symlink to somewhere outside `dest`, followed by a file whose

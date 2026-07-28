@@ -230,7 +230,7 @@ class ArchiveTests(unittest.TestCase):
             dest.mkdir()
             with tarfile.open(nasty) as tar:
                 with self.assertRaises(ValueError):
-                    updater._safe_extract(tar, dest)
+                    updater.safe_extract(tar, dest)
             self.assertFalse((root / "escaped.txt").exists(), "the archive wrote outside its destination")
 
     def test_an_archive_cannot_write_through_a_link_that_points_outside(self):
@@ -261,7 +261,7 @@ class ArchiveTests(unittest.TestCase):
 
                     with tarfile.open(nasty) as tar:
                         with self.assertRaises(ValueError):
-                            updater._safe_extract(tar, dest)
+                            updater.safe_extract(tar, dest)
                     self.assertFalse((outside / "authorized_keys").exists(),
                                      "the archive wrote outside its destination through a link")
 

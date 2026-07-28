@@ -8,4 +8,4 @@ Add a row when you add a draft; `doc-lint` fails the build if one is missing.
 
 | Draft | Proposes | Reserved namespace |
 |---|---|---|
-| _(none — `agent-store` and `lifecycle-migration` graduated into `../prd/` on 2026-07-26)_ | | |
+| [lifecycle-plugin](./lifecycle-plugin.md) | software a third party publishes, installed from a versioned release, shared by every agent, and moved forward by the same update that moves rundesk | `PLG` |

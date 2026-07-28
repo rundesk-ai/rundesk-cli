@@ -38,6 +38,7 @@ from rundesk import config  # noqa: E402
 from rundesk import dependencies  # noqa: E402
 from rundesk import gateway as _gateway  # noqa: E402
 from rundesk import migration  # noqa: E402
+from rundesk import plugin  # noqa: E402
 from rundesk import process  # noqa: E402
 from rundesk import provider  # noqa: E402
 from rundesk import schedule as schedules  # noqa: E402
@@ -559,6 +560,46 @@ def build_parser() -> argparse.ArgumentParser:
         "--where", action="store_true",
         help="print the directory they are kept in, and nothing else")
 
+    # The same shape as `skills` and for the same reason its comment gives: no optional
+    # positional in front of the actions, so the bare form is the catalog and every action
+    # names what it acts on itself.
+    added = sub.add_parser(
+        "plugins", help="the plugins installed on this machine, shared by every agent")
+    added.add_argument("--where", action="store_true",
+                       help="print the directory they are kept in, and nothing else")
+    with_them = added.add_subparsers(dest="act", metavar="<action>")
+    landing = with_them.add_parser(
+        "install", help="install a plugin from a directory, an archive or a repository")
+    landing.add_argument("source", metavar="<source>",
+                         help="a path on this machine, or owner/repo[@tag]")
+    landing.add_argument("--confirm", action="store_true",
+                         help="install it — without this, what it declares is shown and "
+                              "nothing is written")
+    moved = with_them.add_parser("update", help="move plugins to what is published")
+    moved.add_argument("plugin", nargs="?", metavar="<plugin>",
+                       help="which one; every one when not named")
+    dropped = with_them.add_parser("remove", help="take a plugin off this machine")
+    dropped.add_argument("plugin", metavar="<plugin>", help="which one, by its name")
+    dropped.add_argument("--purge", action="store_true",
+                         help="take what it kept as well — without this, its records stay")
+    dropped.add_argument("--yes", action="store_true",
+                         help="do not ask first — for a script, never for a person")
+    handed = with_them.add_parser(
+        "grant", help="give an agent every skill a plugin ships")
+    handed.add_argument("name", metavar="<agent>", help="who is being given them")
+    handed.add_argument("plugin", metavar="<plugin>", help="which plugin's skills")
+    pulled = with_them.add_parser(
+        "revoke", help="take a plugin's skills away from an agent")
+    pulled.add_argument("name", metavar="<agent>", help="who is losing them")
+    pulled.add_argument("plugin", metavar="<plugin>", help="which plugin's skills")
+    checked = with_them.add_parser(
+        "check", help="say whether a directory is a plugin anybody could install")
+    checked.add_argument("path", metavar="<path>", help="where the manifest is")
+    started = with_them.add_parser("init", help="write a new plugin to build on")
+    started.add_argument("plugin", metavar="<name>", help="what it will be called")
+    started.add_argument("--at", metavar="<path>", default=".",
+                         help="where to write it (default: here)")
+
     # A group named the way `channels` and `schedules` are, with the one difference that
     # there is no word for *whose*: a backup is the install's and never an agent's. `skills`
     # above is the same shape for the same reason, and its comment is why there is no
@@ -663,6 +704,7 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
             resume=lambda names: _bring_all_back(names, gateways, machine, agents),
             provision=_provisioned,
             carry=lambda: _carry_every(agents),
+            plugins=lambda: _plugins_forward(__version__),
             # **This process's own version, never the one it was told about.** The release
             # that just landed is the code running this line, while `RUNDESK_UPDATE_VERSION`
             # in the environment is what the *previous* release reported before the window
@@ -709,6 +751,7 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
         ),
         provision=lambda: _provisioned(update_root),
         carry=lambda: _carry_every(agents),
+        plugins=lambda: _plugins_forward(current_version),
         unfit=lambda: gateways.fitness(update_root),
         preview=lambda: _what_an_update_would_do(agents, update_root),
     )
@@ -988,6 +1031,20 @@ def _what_an_update_would_do(agents, root: Path = REPO_ROOT) -> list:
     if behind:
         said.append(f"agents to move: {len(behind)} of {len(standing)}")
     return said
+
+
+def _plugins_forward(version: str) -> list:
+    """Move every installed plugin forward inside the update's window, and never fail it.
+
+    A plugin is a stranger's release, so this is the one step of an update whose failure is
+    reported rather than acted on: whatever it meets, it returns words and the update lands
+    (R-PLG-15). A machine with no plugins does nothing at all and says nothing.
+    """
+    try:
+        return plugin.bring_forward(version=version)
+    except Exception as trouble:      # noqa: BLE001 — a boundary; an update must land
+        # Not even a plugins directory that cannot be read may take an owner's agents down.
+        return [f"plugins: could not be brought forward — {trouble}"]
 
 
 def _carry_every(agents) -> str | None:
@@ -2095,10 +2152,14 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
     # Asked of every agent rather than kept anywhere, because "who has this" is otherwise
     # a question only a reverse scan can answer and a stored answer would go stale the
     # first time somebody removed a link by hand.
-    whose: dict = {name: skills.granted(agents.skills(name)) for name in agents.known()}
-    rows = [(name, "built-in" if name in ships else "yours",
-             ", ".join(sorted(who for who, mine in whose.items() if name in mine)) or "-")
-            for name in sorted(held)]
+    given: dict = {name: skills.granted(agents.skills(name)) for name in agents.known()}
+    # **Three answers, not two.** A skill is rundesk's, an owner's, or a plugin's — and the
+    # third is named, because "yours" about a file a stranger ships is both untrue and the
+    # opposite of useful: it is the one that a `plugins update` will replace.
+    rows = [(name, "built-in" if name in ships else
+             (plugin.whose(at) or "yours"),
+             ", ".join(sorted(who for who, mine in given.items() if name in mine)) or "-")
+            for name, at in sorted(held.items())]
     _as_table(("SKILL", "FROM", "AGENTS"), rows)
     return 0
 
@@ -2119,6 +2180,232 @@ def cmd_scripts(args: argparse.Namespace, scripts) -> int:
     ])
     print()
     print(f"kept in {where}")
+    return 0
+
+
+def cmd_plugins(args: argparse.Namespace, agents, plugins) -> int:
+    """What is installed, and putting one on this machine or taking one off.
+
+    A plugin is shared: installing one puts its command on every agent's PATH and its
+    skills in the library every agent's grants resolve through. So the catalog is about the
+    machine, and only granting names an agent.
+    """
+    where = plugins.home()
+    if getattr(args, "where", False):
+        print(where)
+        return 0
+    act = getattr(args, "act", None)
+    if act == "install":
+        return _install_a_plugin(args, plugins)
+    if act == "update":
+        return _update_plugins(args, plugins)
+    if act == "remove":
+        return _remove_a_plugin(args, plugins)
+    if act in ("grant", "revoke"):
+        return _plugin_skills(args, agents, plugins)
+    if act == "check":
+        return _check_a_plugin(args, plugins)
+    if act == "init":
+        return _write_a_plugin(args, plugins)
+
+    try:
+        held = plugins.installed(where)
+    except OSError as why:
+        print(f"plugins: could not be read — {why}", file=sys.stderr)
+        return 1
+    if not held:
+        print("no plugins")
+        print("        install one:  rundesk plugins install <owner/repo>")
+        return 0
+    try:
+        recorded = plugins.ledger(where)
+    except plugins.NotAPlugin as why:
+        # Unreadable provenance is a thing to say, never a reason to refuse the listing:
+        # what is installed is on disk, and the ledger only says where each came from.
+        print(f"plugins: {why}", file=sys.stderr)
+        recorded = {}
+    rows = []
+    for name, one in sorted(held.items()):
+        entry = recorded.get(name) or {}
+        rows.append((name, one.version, str(entry.get("source") or "-"),
+                     "held back" if one.quarantined else "ok"))
+    _as_table(("PLUGIN", "VERSION", "FROM", "STATE"), rows)
+    for name, one in sorted(held.items()):
+        if one.quarantined:
+            print()
+            print(f"{name}: HELD BACK — {one.why_unfit}")
+            print(f"        it is installed and no agent can reach it; "
+                  f"try: rundesk plugins update {name}")
+    print()
+    print(f"kept in {where}")
+    return 0
+
+
+def _install_a_plugin(args: argparse.Namespace, plugins) -> int:
+    """Show what a plugin declares, and land it only when somebody said so.
+
+    **Installing a plugin is installing software, and it reads like it.** What it will put
+    on every agent's PATH, what it will put in the library and what it will want in the
+    environment are printed first; `--confirm` is what proceeds. A plugin that has to reach
+    the network to say any of that says so before it does.
+    """
+    if not args.confirm:
+        return _what_it_declares(args.source, plugins)
+    try:
+        landed = plugins.install(args.source, note=_out_loud)
+    except (plugins.NotAPlugin, plugins.InTheWay) as why:
+        print(f"plugins: NOT INSTALLED — {why}", file=sys.stderr)
+        return 1
+    print(f"{landed.name} {landed.version} is installed")
+    for called, _path in landed.manifest.commands:
+        print(f"        every agent can now run:  {called}")
+    for one in landed.manifest.skills:
+        print(f"        in the skill library:     {Path(one).name}")
+    if landed.manifest.skills:
+        print(f"        give them to an agent:    rundesk plugins grant "
+              f"<agent> {landed.name}")
+    _missing_credentials(landed.manifest)
+    return 0
+
+
+def _what_it_declares(source: str, plugins) -> int:
+    """Read a plugin without installing it, and say what installing it would do."""
+    import tempfile as _tempfile
+    with _tempfile.TemporaryDirectory() as work:
+        try:
+            got = plugins._fetch(source, Path(work), _out_loud)
+            manifest = plugins.read(got.at)
+        except plugins.NotAPlugin as why:
+            print(f"plugins: NOT A PLUGIN — {why}", file=sys.stderr)
+            return 1
+        print(f"{manifest.name} {manifest.version}"
+              + (f" — {manifest.description}" if manifest.description else ""))
+        if got.tag:
+            print(f"        published as   {got.tag}")
+        if manifest.requires:
+            print(f"        needs rundesk  {manifest.requires}")
+        for called, path in manifest.commands:
+            print(f"        command        {called}  ({path})")
+        for one in manifest.skills:
+            print(f"        skill          {Path(one).name}")
+        steps = manifest.steps()
+        if steps:
+            print(f"        records        {len(steps)} step(s), to version "
+                  f"{manifest.wants()}")
+        for called, required, about in manifest.credentials:
+            print(f"        wants          {called}"
+                  + ("  (required)" if required else "")
+                  + (f"  — {about}" if about else ""))
+        print()
+        print("        nothing has been written. to install it:")
+        print(f"        rundesk plugins install {source} --confirm")
+    return 0
+
+
+def _missing_credentials(manifest) -> None:
+    """Name what a plugin needs and does not have, before an agent finds out mid-turn."""
+    absent = [name for name, required, _about in manifest.credentials
+              if required and not os.environ.get(name)]
+    if absent:
+        print(f"        it needs these in its environment: {', '.join(sorted(absent))}")
+
+
+def _update_plugins(args: argparse.Namespace, plugins) -> int:
+    """Move one plugin, or every one, to what is published."""
+    if args.plugin:
+        try:
+            what = plugins.update(args.plugin, note=_out_loud)
+        except plugins.Unknown as why:
+            print(f"plugins: {why}", file=sys.stderr)
+            return 1
+        print(what or f"{args.plugin}: up to date")
+        return 0
+    said = plugins.bring_forward(note=_out_loud)
+    if not said:
+        print("plugins: up to date")
+        return 0
+    for line in said:
+        print(line)
+    # Held back is not the same as failed to run, and the exit code has to tell them
+    # apart: a script that reads 0 believes every plugin is on every agent's PATH.
+    return 1 if any("held back" in line for line in said) else 0
+
+
+def _remove_a_plugin(args: argparse.Namespace, plugins) -> int:
+    """Take one off, keeping what it kept unless somebody asked for that to go too."""
+    if args.purge and not args.yes:
+        print(f"this deletes everything {args.plugin} kept, and there is no way back "
+              "except a backup")
+        if not _agreed():
+            print("nothing was removed")
+            return 1
+    try:
+        print(plugins.remove(args.plugin, purge=args.purge))
+    except plugins.Unknown as why:
+        print(f"plugins: {why}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _plugin_skills(args: argparse.Namespace, agents, plugins) -> int:
+    """Give an agent every skill one plugin ships, or take them all back.
+
+    One word rather than one grant per skill: a plugin that ships three skills ships them
+    because all three are how its command is used, and an owner granting two of them by
+    hand is an owner who will wonder why it half works.
+    """
+    held = plugins.installed().get(args.plugin)
+    if held is None or held.manifest is None:
+        print(f"plugins: there is no usable plugin called {args.plugin}", file=sys.stderr)
+        return 1
+    if not held.manifest.skills:
+        print(f"{args.plugin} ships no skills", file=sys.stderr)
+        return 1
+    whose = agents.skills(args.name)
+    moved = []
+    for one in held.manifest.skills:
+        name = Path(one).name
+        try:
+            if args.act == "grant":
+                skill.grant(whose, name)
+            else:
+                skill.revoke(whose, name)
+        except (skill.Unknown, skill.NotASkill, skill.InTheWay) as why:
+            print(f"{name}: {why}", file=sys.stderr)
+            return 1
+        moved.append(name)
+    was = "was given" if args.act == "grant" else "no longer has"
+    print(f"{args.name} {was} {', '.join(sorted(moved))}")
+    return 0
+
+
+def _check_a_plugin(args: argparse.Namespace, plugins) -> int:
+    """Say whether something is a plugin anybody could install, before publishing it."""
+    try:
+        manifest = plugins.read(Path(args.path))
+    except plugins.NotAPlugin as why:
+        print(f"{args.path}: NOT A PLUGIN — {why}", file=sys.stderr)
+        return 1
+    print(f"{manifest.name} {manifest.version}: this is a plugin")
+    print(f"        commands   {', '.join(name for name, _ in manifest.commands) or '-'}")
+    print(f"        skills     "
+          f"{', '.join(Path(one).name for one in manifest.skills) or '-'}")
+    print(f"        records    version {manifest.wants()}")
+    print(f"        tag it     v{manifest.version}")
+    return 0
+
+
+def _write_a_plugin(args: argparse.Namespace, plugins) -> int:
+    """Write a working plugin somebody can build on, rather than a page describing one."""
+    at = Path(args.at) / args.plugin
+    try:
+        plugins.scaffold(args.plugin, at)
+    except (plugins.NotAPlugin, plugins.InTheWay, OSError) as why:
+        print(f"plugins: NOT WRITTEN — {why}", file=sys.stderr)
+        return 1
+    print(f"{args.plugin} is at {at}")
+    print(f"        check it:    rundesk plugins check {at}")
+    print(f"        install it:  rundesk plugins install {at} --confirm")
     return 0
 
 
@@ -3617,7 +3904,7 @@ def _handed_on(argv: list[str], carries: set) -> tuple[list[str], list[str]]:
 
 
 def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
-         scripts=None) -> int:
+         scripts=None, plugins=None) -> int:
     """The command surface.
 
     What the commands act on is passed in rather than imported here, so this file knows
@@ -3629,6 +3916,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
     agents = agents if agents is not None else _agent
     skills = skills if skills is not None else skill
     scripts = scripts if scripts is not None else script
+    plugins = plugins if plugins is not None else plugin
     parser = build_parser()
     argv, handed_on = _handed_on(argv, _carries_a_tail(parser))
     args = parser.parse_args(argv)
@@ -3680,6 +3968,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         return cmd_skills(args, agents, skills)
     if args.command == "scripts":
         return cmd_scripts(args, scripts)
+    if args.command == "plugins":
+        return cmd_plugins(args, agents, plugins)
     if args.command == "channels":
         return cmd_channels(args, gateways, agents)
     if args.command == "schedules":

@@ -67,6 +67,32 @@ def skills_home() -> Path:
     return data_home() / "skills"
 
 
+def plugins_home() -> Path:
+    """Installed plugins — one directory each, shared by every agent on this machine.
+
+    The fourth thing derived below `data_home()`, and for the same two reasons the third
+    was: a redirected or scratch install cannot reach the live owner's plugins through it,
+    and backup and removal follow from the existing data boundary rather than from another
+    list of paths to keep in step.
+
+    **One install, every agent.** A plugin's command is linked into `scripts_home()` and its
+    skills into `skills_home()`, so what an agent sees is what it has always seen — a
+    directory first on its PATH, and a library its brain discovers. What is new is that
+    something other than the owner may now put a file in either, which is why a plugin
+    carries proof of what it owns and why nothing here ever replaces a file it did not lay
+    down.
+
+    **The override is read here rather than in `plugin.py`**, which is where the other two
+    read theirs, because this one has a second caller: `skill.ours` has to know whether a
+    grant that resolves out of the library lands in a plugin, and asking a resolver that
+    ignored the override would answer about the real machine while everything else answered
+    about a scratch one. That is not hypothetical — it is what the first draft did, and the
+    suite caught it by refusing to revoke a grant it had just made.
+    """
+    said = os.environ.get("RUNDESK_PLUGINS")
+    return Path(said) if said else data_home() / "plugins"
+
+
 def backups_home() -> Path:
     """Copies of what the owner keeps — the one directory removal may never reach.
 

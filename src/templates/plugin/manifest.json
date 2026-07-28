@@ -1,0 +1,39 @@
+{
+  "manifest": 1,
+
+  "name": "example",
+  "version": "0.1.0",
+  "description": "What this plugin lets an agent do, in one line.",
+  "homepage": "https://github.com/owner/rundesk-plugin-example",
+  "license": "MIT",
+
+  "requires": {
+    "rundesk": ">=0.0.0",
+    "python": ">=3.9"
+  },
+
+  "provides": {
+    "commands": [
+      { "name": "example", "path": "bin/example" }
+    ],
+    "skills": [
+      "skills/example"
+    ]
+  },
+
+  "credentials": [
+    {
+      "name": "EXAMPLE_TOKEN",
+      "required": true,
+      "about": "API token. Put it in ~/.config/example/env, never here."
+    },
+    {
+      "name": "EXAMPLE_SITE",
+      "required": false,
+      "about": "Base URL when self-hosted. Defaults to the public service."
+    }
+  ],
+
+  "migrations": "migrations",
+  "state": "shared"
+}

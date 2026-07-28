@@ -26,7 +26,7 @@ import re
 import shutil
 from pathlib import Path
 
-from rundesk import ROOT, skills_home
+from rundesk import ROOT, plugins_home, skills_home
 
 #: What a built-in is copied from. Beside the agent templates and read the same way — by
 #: looking, so a skill added to a release is laid down, brought forward and marked without
@@ -306,15 +306,21 @@ def ours(entry: Path, where: Path | None = None) -> bool:
     pointing somewhere else entirely, are both things rundesk did not put there and has no
     business taking away — revoking has to be incapable of deleting an owner's work rather
     than careful about it.
+
+    **Two roots, because a grant may run through a link.** A skill a plugin ships stands in
+    the library as a link into that plugin, so an agent granted it holds a link to a link
+    and `resolve()` lands under the plugins directory rather than under the library. Asking
+    only about the library there answers "rundesk did not put this here" about a link
+    rundesk put there itself, and `revoke` then refuses to take back what `grant` gave.
     """
     if not entry.is_symlink():
         return False
-    where = (where or home()).resolve()
+    roots = [(where or home()).resolve(), plugins_home().resolve()]
     try:
         target = entry.resolve()
     except OSError:
         return False
-    return where in target.parents
+    return any(root in target.parents for root in roots)
 
 
 def _standing(skills_dir: Path, name: str) -> Path:

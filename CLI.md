@@ -55,6 +55,13 @@ rundesk uninstall [--purge]                                                     
 
 # not yet grouped
 rundesk messages [--most <n>] [--since <id>] [--channel <channel>] [--conversation <where>] [--author <who>] [--source <how>] <agent>                                                                                  what was said, newest first
+rundesk plugins check <path>                                                                                                                                                                                           say whether a directory is a plugin anybody could install
+rundesk plugins grant <agent> <plugin>                                                                                                                                                                                 give an agent every skill a plugin ships
+rundesk plugins init [--at <path>] <name>                                                                                                                                                                              write a new plugin to build on
+rundesk plugins install [--confirm] <source>                                                                                                                                                                           install a plugin from a directory, an archive or a repository
+rundesk plugins remove [--purge] [--yes] <plugin>                                                                                                                                                                      take a plugin off this machine
+rundesk plugins revoke <agent> <plugin>                                                                                                                                                                                take a plugin's skills away from an agent
+rundesk plugins update <plugin>                                                                                                                                                                                        move plugins to what is published
 rundesk resume <agent>                                                                                                                                                                                                 carry one run on from where it stopped   [planned]
 rundesk scripts [--where]                                                                                                                                                                                              the integration commands every agent can invoke
 rundesk search [--most <n>] <agent> <words>                                                                                                                                                                            what was said, by the words in it
@@ -123,9 +130,11 @@ rundesk schedules ava off nightly
 --allow <user>                  who may reach this agent through it — at least one, always; repeatable
 --ask <prompt>                  what to ask this agent when it is due, in quotes — a turn rather than a program
 --at <moment>                   instead of --when: the one moment it runs, on this machine's own clock, as YYYY-MM-DDTHH:MM. It runs then and never again — a moment is given, never a phrase like 'tomorrow at nine'
+--at <path>                     where to write it (default: here)
 --author <who>                  only what this kind of author said — one of agent | rundesk | user
 --channel <channel>             only what was said on this channel, by the name it was added under
 --check                         say whether a newer release exists
+--confirm                       install it — without this, what it declares is shown and nothing is written
 --conversation <conversation>   which conversation to carry on — this terminal's, when left out
 --conversation <where>          only what was said in one place on it — the direct message or room, in the platform's own word for it
 --expired                       instead, the one-time schedules whose moment has gone — whether each ran, or whether it passed while nothing was running
@@ -154,12 +163,16 @@ rundesk schedules ava off nightly
 <agent>                         which agent — the name it was made under
 <backup>                        which one, by the name it is listed under
 <channel>                       what to call it, and what to name it by later
+<name>                          what it will be called
 <option>                        after `--`, whatever this kind of channel needs — carried to it exactly as typed, and never read here
+<path>                          where the manifest is
+<plugin>                        which one; every one when not named
 <program>                       after `--`, the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH
 <prompt>                        what to ask it, in quotes
 <run>                           which run — the id listed against each by `runs`
 <schedule>                      what to call it, and what to name it by later
 <skill>                         which skill, by the name it is under
+<source>                        a path on this machine, or owner/repo[@tag]
 <text>                          what to tell it, with {agent} {channel} {surface} {where} {called} {user} {conversation} filled in — empty takes it back off, and left out shows what is there
 <words>                         what to look for, in the words that were actually said
 ```

@@ -62,6 +62,8 @@ rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
   token usage without relying on a provider's private session format.
 - **Reusable capabilities.** Grant agents on-demand skills and place shared integration
   CLIs on every agent's `PATH`.
+- **Installable plugins.** Install a versioned plugin from a GitHub release and every agent
+  gets its command and its skills at once, updated and migrated by the same `rundesk update`.
 - **Self-improving by design.** Agents can turn repeated work into reusable skills and
   integration CLIs, so a capability developed once can be granted to every agent.
 - **Local and recoverable.** Rundesk keeps its program separate from your data, supports
@@ -103,7 +105,7 @@ Rundesk installs under `~/.rundesk` without editing your shell profile:
 ```text
 ~/.rundesk/
   app/          the installed Rundesk release
-  data/         your agents, skills, scripts, history, and configuration
+  data/         your agents, skills, scripts, plugins, history, and configuration
 ```
 
 Updates replace `app/`; uninstall leaves `data/` alone unless you explicitly ask to purge it.
@@ -283,12 +285,14 @@ Discord without changing Rundesk core.
 - Per-schedule provider, model, instructions, and delivery channel
 - No overlapping run of the same schedule and no late execution after downtime
 
-### Skills and integration CLIs
+### Skills, integration CLIs, and plugins
 
 - A shared skill library with per-agent grants
 - Built-in skills that update with Rundesk and owner-created skills that do not
 - A shared executable library placed on every agent's `PATH`
 - Companion guidance for building guarded, offline-tested service integrations
+- Third-party plugins installed from a versioned release, shared by every agent, each with
+  its own records and its own migrations — and never loaded into the gateway
 
 ### Operations and data
 
@@ -311,6 +315,7 @@ set it in `~/.rundesk/data/config.json`, then run `rundesk update` to apply the 
 - **[Provider adapter contract](src/templates/skills/building-a-provider-adapter/references/the-contract.md)** — put another coding CLI behind an agent
 - **[Channel adapter contract](src/templates/skills/building-a-channel-adapter/references/the-contract.md)** — reach an agent from another platform
 - **[Integration CLI guide](src/templates/skills/building-integration-clis/SKILL.md)** — give every agent a custom command
+- **[Plugin template](src/templates/plugin/README.md)** — publish a plugin others can install and update
 - **[Tested contracts](.knowledge/prd/README.md)** — every guarantee and the test that proves it
 - **[Roadmap](ROADMAP.md)** — what is built, what is next, and why
 - **[Architecture](.knowledge/CODEMAP.md)** — how the system is organized

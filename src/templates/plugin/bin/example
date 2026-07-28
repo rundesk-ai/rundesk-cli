@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""The launcher an agent actually types, and the only file whose name is a promise.
+
+`scripts/example` is a symlink rundesk stands here, pointing into this plugin's `app/bin/`.
+So the one thing this file must do before anything else is work out where it really is —
+`resolve()` follows that symlink, and every path below is derived from the answer. Nothing
+here reads the current working directory: an agent invokes this from wherever it happens to
+be standing, and that is never a fact about the plugin.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+#: This file, followed through the symlink in `scripts/` to where it truly stands:
+#: `<data>/plugins/example/app/bin/example`.
+HERE = Path(__file__).resolve()
+
+#: `<data>/plugins/example/app` — the release. Replaced whole by an update, so nothing
+#: written here survives one.
+APP = HERE.parent.parent
+
+#: `<data>/plugins/example/state` — one directory, shared by every agent on this machine,
+#: never touched by an update. Everything worth keeping goes here.
+STATE = APP.parent / "state"
+
+sys.path.insert(0, str(APP / "lib"))
+
+if __name__ == "__main__":
+    import example
+    raise SystemExit(example.main(sys.argv[1:], state=STATE))

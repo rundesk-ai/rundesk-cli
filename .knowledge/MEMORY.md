@@ -562,6 +562,21 @@ re-checked since, so treat these as true-when-found rather than as current.*
   list, so the runner has nothing to remove on the path the claim is about, and every case still
   passes. What actually holds "both copies survive a failed step" is the `ROLLBACK` in `_one`;
   probe *that* (turn it into a `COMMIT`) and the copying cases fail as they should.
+- **The gate fails on this repository's own isolation suites when you run it from inside a
+  rundesk agent.** `test_agent`, `test_skill`, `test_transcript` and `test_process` go red with
+  paths under the real `~/.rundesk`, which reads exactly like a broken change. It is not: a
+  gateway exports `RUNDESK_SKILL_LIBRARY`, `RUNDESK_SCRIPTS`, `RUNDESK_AGENTS_DIR` and
+  `RUNDESK_HOME` into every program it starts, and those are the overrides the suites redirect.
+  Run it with them cleared —
+  `env -u RUNDESK_SKILL_LIBRARY -u RUNDESK_SCRIPTS -u RUNDESK_AGENTS_DIR -u RUNDESK_HOME
+  python3 .knowledge/scripts/gate` — and compare against `origin/main` before believing any red.
+- **`scripts_home()` and `script.home()` are not the same question, and neither are
+  `skills_home()` and `skill.home()`.** The pair in `__init__.py` resolves below the data root;
+  the one in each module reads that module's override first. Anything writing *into* either
+  library has to go through the module, not the path — linking through `scripts_home()` ignored
+  `RUNDESK_SCRIPTS`, and a suite that had redirected everything else left a live symlink in the
+  developer's own script library, pointing into a temporary directory that was already gone.
+  `plugins_home()` reads its own override for this reason, because `skill.ours` needs it too.
 
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

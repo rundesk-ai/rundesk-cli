@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk import __version__  # noqa: E402
 from rundesk import cli  # noqa: E402
+from rundesk import plugin  # noqa: E402
 from rundesk import store  # noqa: E402
 from rundesk import update_request  # noqa: E402
 from rundesk import updater  # noqa: E402
@@ -100,7 +101,7 @@ from rundesk import gateway as real_gateway  # noqa: E402
 
 
 def run(argv: list[str], published: str | None = None,
-        written: pathlib.Path | None = None) -> tuple[int, str, str]:
+        written: pathlib.Path | None = None, skills=None) -> tuple[int, str, str]:
     """One CLI invocation, with everything it printed.
 
     Offline: whatever the command would ask the forge, it is told here instead. A
@@ -121,7 +122,7 @@ def run(argv: list[str], published: str | None = None,
             try:
                 code = cli.main(argv, gateways=FakeGateways(written=written),
                                 machine=FakeMachine(), agents=FakeAgents(),
-                                skills=FakeSkills(), scripts=FakeScripts())
+                                skills=skills or FakeSkills(), scripts=FakeScripts())
             except SystemExit as usage:
                 # What a shell sees, which is the subject of several cases here: argparse
                 # refuses a usage error by exiting rather than returning, and a test that
@@ -299,6 +300,14 @@ class SurfaceTests(unittest.TestCase):
         at = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-surface-"))
         self.addCleanup(shutil.rmtree, at, True)
         self.wrote = at / "said.log"
+        # **Somewhere disposable to stand, not only to write.** This walks every form the
+        # reference lists, and a verb whose destination defaults to the working directory
+        # then writes into the checkout — `plugins init an-agent` did exactly that, and
+        # left a half-written directory at the repository root that the next `git status`
+        # found and nobody could explain.
+        self.stood = os.getcwd()
+        os.chdir(at)
+        self.addCleanup(lambda: os.chdir(self.stood))
 
     def test_every_operation_the_reference_lists_is_answered_as_it_is_typed(self):
         """R-CMD-7 — read off the reference and typed exactly as written, options and all.
@@ -453,7 +462,7 @@ class BuiltCommandTests(unittest.TestCase):
         built = {"version", "update", "uninstall", "add", "configure", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
                  "channels", "runs", "usage", "search", "messages", "skills", "scripts",
-                 "backups"}
+                 "plugins", "backups"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 
@@ -3776,6 +3785,152 @@ class WhoSaidIt(unittest.TestCase):
         """Both present is the ordinary case for a channel message, and the name is the more
         specific of the two."""
         self.assertEqual("sam", cli._said_by({"who": "sam", "author": "user"}, "ava"))
+
+
+class PluginCommandTests(unittest.TestCase):
+    """What an owner types to install, list and take away a plugin.
+
+    The module underneath is proved in `test_plugin.py`; what is proved here is the
+    surface — that nothing is written without being asked, that what a plugin declares is
+    shown before it lands, and that a verb which did not do the work says so and exits
+    non-zero.
+    """
+
+    def setUp(self):
+        self.where = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-plugins-"))
+        self.addCleanup(shutil.rmtree, self.where, ignore_errors=True)
+        # **All three, never only the plugins directory.** Installing one links a command
+        # into the script library and a skill into the skill library, so redirecting one of
+        # the three leaves the other two pointing at whoever is running this suite — which
+        # is exactly how a live link into a temporary directory came to be left in a
+        # developer's own script library.
+        self.was = {name: os.environ.get(name) for name in
+                    ("RUNDESK_PLUGINS", "RUNDESK_SCRIPTS", "RUNDESK_SKILL_LIBRARY")}
+        os.environ["RUNDESK_PLUGINS"] = str(self.where / "plugins")
+        os.environ["RUNDESK_SCRIPTS"] = str(self.where / "scripts")
+        os.environ["RUNDESK_SKILL_LIBRARY"] = str(self.where / "skills")
+        (self.where / "scripts").mkdir(parents=True)
+        (self.where / "skills").mkdir(parents=True)
+        self.addCleanup(self._put_the_environment_back)
+
+    def _put_the_environment_back(self):
+        for name, value in self.was.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def a_plugin(self, name="example", version="1.0.0"):
+        at = self.where / "made" / name
+        (at / "bin").mkdir(parents=True)
+        command = at / "bin" / name
+        command.write_text("#!/bin/sh\necho hello\n", encoding="utf-8")
+        command.chmod(0o755)
+        (at / plugin.MANIFEST).write_text(json.dumps({
+            "manifest": 1, "name": name, "version": version,
+            "description": "does a thing",
+            "provides": {"commands": [{"name": name, "path": f"bin/{name}"}]},
+            "credentials": [{"name": "EXAMPLE_TOKEN", "required": True}],
+        }), encoding="utf-8")
+        return at
+
+    def test_a_machine_with_no_plugins_says_so_and_says_how_to_get_one(self):
+        """R-PLG-36 — an empty catalog is the ordinary case and never an error."""
+        code, out, _ = run(["plugins"])
+        self.assertEqual(0, code)
+        self.assertIn("no plugins", out)
+        self.assertIn("plugins install", out)
+
+    def test_where_plugins_are_kept_is_printed_and_nothing_else(self):
+        """R-PLG-36 — a path an owner may need is said by the command, never by prose."""
+        code, out, _ = run(["plugins", "--where"])
+        self.assertEqual(0, code)
+        self.assertEqual(str(self.where / "plugins"), out.strip())
+
+    def test_installing_without_confirming_shows_what_it_would_do_and_writes_nothing(self):
+        """R-PLG-37 — installing a plugin is installing software, and it reads like it."""
+        code, out, _ = run(["plugins", "install", str(self.a_plugin())])
+        self.assertEqual(0, code)
+        self.assertIn("example 1.0.0", out)
+        self.assertIn("command        example", out)
+        self.assertIn("EXAMPLE_TOKEN", out)
+        self.assertIn("nothing has been written", out)
+        self.assertFalse((self.where / "plugins" / "example").exists())
+
+    def test_confirming_is_what_installs_it(self):
+        """R-PLG-37 — and only that."""
+        code, out, _ = run(["plugins", "install", str(self.a_plugin()), "--confirm"])
+        self.assertEqual(0, code)
+        self.assertIn("example 1.0.0 is installed", out)
+        self.assertTrue((self.where / "plugins" / "example" / plugin.APP).is_dir())
+
+    def test_something_that_is_not_a_plugin_is_refused_and_exits_non_zero(self):
+        """R-PLG-38 — a script that reads 0 believes the work happened."""
+        code, _, err = run(["plugins", "install", str(self.where / "nothing")])
+        self.assertEqual(1, code)
+        self.assertIn("NOT A PLUGIN", err)
+
+    def test_what_is_installed_is_listed_with_its_version_and_where_it_came_from(self):
+        """R-PLG-36 — the catalog is about the machine, because a plugin is shared."""
+        made = self.a_plugin()
+        run(["plugins", "install", str(made), "--confirm"])
+        code, out, _ = run(["plugins"])
+        self.assertEqual(0, code)
+        self.assertIn("example", out)
+        self.assertIn("1.0.0", out)
+        self.assertIn("ok", out)
+
+    def test_checking_a_directory_says_whether_anybody_could_install_it(self):
+        """R-PLG-39 — answered before publishing rather than by somebody's first install."""
+        code, out, _ = run(["plugins", "check", str(self.a_plugin())])
+        self.assertEqual(0, code)
+        self.assertIn("this is a plugin", out)
+        self.assertIn("tag it     v1.0.0", out)
+
+    def test_checking_something_that_is_not_one_names_what_is_wrong_with_it(self):
+        """R-PLG-39 — and exits non-zero, so a release workflow can gate on it."""
+        code, _, err = run(["plugins", "check", str(self.where)])
+        self.assertEqual(1, code)
+        self.assertIn("NOT A PLUGIN", err)
+
+    def test_a_new_plugin_is_written_ready_to_install(self):
+        """R-PLG-35 — `init` and `check` cannot disagree about what a plugin is."""
+        code, out, _ = run(["plugins", "init", "weather", "--at", str(self.where)])
+        self.assertEqual(0, code)
+        self.assertIn("weather", out)
+        code, _, _ = run(["plugins", "check", str(self.where / "weather")])
+        self.assertEqual(0, code)
+
+    def test_removing_one_nobody_installed_says_so_rather_than_reporting_success(self):
+        """R-PLG-38 — a removal that removed nothing must never read as one that did."""
+        code, _, err = run(["plugins", "remove", "absent"])
+        self.assertEqual(1, code)
+        self.assertIn("no plugin called absent", err)
+
+    def test_a_skill_a_plugin_shipped_names_the_plugin_rather_than_saying_yours(self):
+        """R-PLG-41 — "yours" about a stranger's file is untrue and hides what replaces it."""
+        at = self.a_plugin()
+        (at / "skills" / "example").mkdir(parents=True)
+        (at / "skills" / "example" / "SKILL.md").write_text(
+            "---\nname: example\ndescription: Use when a task mentions example.\n---\n",
+            encoding="utf-8")
+        said = json.loads((at / plugin.MANIFEST).read_text())
+        said["provides"]["skills"] = ["skills/example"]
+        (at / plugin.MANIFEST).write_text(json.dumps(said), encoding="utf-8")
+        run(["plugins", "install", str(at), "--confirm"])
+        # The real library rather than the fake one the other surface tests use: what is
+        # being proved is where a name in it actually resolves to.
+        code, out, _ = run(["skills"], skills=cli.skill)
+        self.assertEqual(0, code)
+        self.assertRegex(out, r"example\s+example\s")
+        self.assertNotIn("yours", out)
+
+    def test_removing_one_takes_it_off_and_says_what_it_kept(self):
+        """R-PLG-33 — what it kept stays unless somebody asks for it to go."""
+        run(["plugins", "install", str(self.a_plugin()), "--confirm"])
+        code, out, _ = run(["plugins", "remove", "example"])
+        self.assertEqual(0, code)
+        self.assertIn("example is gone", out)
 
 
 if __name__ == "__main__":

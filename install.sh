@@ -180,6 +180,20 @@ print(" ".join(skill.take_back()))
 SKILLS
 )"
   [[ -n "$took" ]] && echo "took back the skills this release laid down: $took"
+  # A plugin's own directory is the owner's and stays, but the links it stood on every
+  # agent's PATH and in the library must not: they would point at a directory that an
+  # ordinary uninstall leaves and a purge takes, and a command that resolves to nothing is
+  # worse than one that is gone (R-PLG-16).
+  local pulled
+  pulled="$(python3 - "$root" <<'PLUGINS' 2>/dev/null || true
+import sys
+sys.path.insert(0, sys.argv[1] + "/src")
+from rundesk import plugin
+
+print(" ".join(plugin.take_back()))
+PLUGINS
+)"
+  [[ -n "$pulled" ]] && echo "took back what these plugins put on every agent's path: $pulled"
   return 0
 }
 
