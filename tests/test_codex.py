@@ -22,8 +22,11 @@ Run: python3 tests/test_codex.py
 
 from __future__ import annotations
 
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
+import json
 import os
 import re
 import sys
@@ -77,12 +80,96 @@ class Asked:
 
 
 class WhenItHandsWorkToAHelper(unittest.TestCase):
-    def test_both_ways_it_reports_a_subagent_are_reported_as_delegating(self):
-        """R-PRV-8, R-PRV-21 — measured 2026-07-27 against codex-cli 0.145.0. This brain
-        says it twice: the child's activity and the call that started it. Both are the
-        same thing to whoever is reading, and neither carried a verb."""
+    def test_one_delegation_is_reported_once(self):
+        """R-PRV-8, R-PRV-21 — Codex reports one spawn as both child activity and the
+        call that started it; counting both would claim that two subagents were made."""
         self.assertEqual("delegate", codex.DID.get("subAgentActivity"))
-        self.assertEqual("delegate", codex.DID.get("collabAgentToolCall"))
+        self.assertNotIn("collabAgentToolCall", codex.DID)
+        self.assertTrue(codex._quiet_activity(
+            {"type": "collabAgentToolCall", "tool": "spawnAgent"}))
+
+    def test_collaboration_bookkeeping_is_not_another_delegation(self):
+        """R-PRV-8 — waiting for or closing a helper does not hand work to a new one."""
+        for tool in ("spawnAgent", "sendInput", "resumeAgent", "wait", "closeAgent"):
+            self.assertTrue(codex._quiet_activity(
+                {"type": "collabAgentToolCall", "tool": tool}), tool)
+
+    def test_finish_waits_for_the_child_turn_not_the_spawn_call(self):
+        """R-PRV-8, R-PRV-25 — starting a child is not the child finishing its work."""
+        held = object.__new__(codex.Codex)
+        held.thread = "parent-thread"
+        held.turn = "parent-turn"
+        held.finished = threading.Event()
+        held.ok = None
+        held.why = None
+        held.tokens = None
+        held._tools = {}
+        held._helpers = {}
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            held._ended({
+                "type": "subAgentActivity", "kind": "started",
+                "id": "activity-1", "agentThreadId": "child-thread",
+                "agentPath": "/root/senior_code_reviewer",
+            })
+            held._began({
+                "type": "collabAgentToolCall", "tool": "spawnAgent",
+                "status": "inProgress", "id": "spawn-1",
+            })
+            held._ended({
+                "type": "collabAgentToolCall", "tool": "spawnAgent",
+                "status": "completed", "id": "spawn-1",
+            })
+            before_child = [json.loads(line) for line in output.getvalue().splitlines()]
+            held._heard("turn/completed", {
+                "threadId": "child-thread",
+                "turn": {"id": "child-turn", "status": "completed"},
+            })
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([{
+            "type": "tool", "id": "subagent:child-thread",
+            "name": "subAgentActivity", "did": "delegate",
+            "who": "senior_code_reviewer",
+        }], before_child)
+        self.assertEqual({
+            "type": "result", "id": "subagent:child-thread",
+            "ok": True, "summary": "completed",
+        }, records[-1])
+        self.assertEqual(2, len(records))
+        self.assertFalse(held.finished.is_set(), "the child completion ended its parent")
+
+    def test_failed_collaboration_bookkeeping_is_not_hidden(self):
+        """A helper still counts once, but a failed operation on it remains visible."""
+        held = object.__new__(codex.Codex)
+        held._tools = {}
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            held._ended({
+                "type": "collabAgentToolCall", "tool": "wait",
+                "status": "failed", "id": "wait-1",
+            })
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(
+            [{"type": "result", "id": "wait-1", "ok": False, "summary": "failed"}],
+            records)
+
+    def test_the_adapter_still_owns_its_cleanup(self):
+        """Helper filtering may not accidentally move the turn cleanup out of Codex."""
+        waited = []
+
+        class Input:
+            closed = True
+
+        class Process:
+            stdin = Input()
+
+            def wait(self, timeout):
+                waited.append(timeout)
+
+        held = object.__new__(codex.Codex)
+        held._proc = Process()
+        held.end()
+        self.assertEqual([10], waited)
 
     def test_a_child_agents_completion_does_not_end_the_parent_turn(self):
         """R-PRV-25 — child threads share the app-server stream. Their completion must
@@ -95,6 +182,7 @@ class WhenItHandsWorkToAHelper(unittest.TestCase):
         held.why = None
         held.tokens = None
         held._tools = {}
+        held._helpers = {}
 
         held._heard("turn/completed", {
             "threadId": "child-thread",

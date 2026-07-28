@@ -790,6 +790,10 @@ class _Shown:
             # rather than every message carrying a decision (R-CH-6).
             return
         it = {what: said[what] for what in self.AS_IT_HAPPENS[kind] if what in said}
+        if kind == "tool" and it.get("did") == "delegate" and "who" in said:
+            # The one narrow exception: a provider-supplied helper name may accompany the
+            # closed `delegate` verb. A `who` attached to any other tool remains private.
+            it["who"] = said["who"]
         if isinstance(it.get("summary"), str) and len(it["summary"]) > self.SUMMARY_CHARS:
             it["summary"] = it["summary"][: self.SUMMARY_CHARS] + "…"
         self._answering._tell(

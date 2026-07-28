@@ -876,6 +876,28 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
         self.assertEqual({"type", "conversation", "run", "id", "ok", "summary"},
                          set(surface.of("result")[0]))
 
+    async def test_a_safe_helper_name_leaves_but_unrelated_tool_fields_do_not(self):
+        """R-CH-13 — a helper name is deliberately allowed; provider extras stay private."""
+        brain = Brain(showing=[
+            {
+                "type": "tool", "id": "helper-1", "name": "subAgentActivity",
+                "did": "delegate", "who": "senior_code_reviewer",
+                "prompt": "private helper instructions", "agentPath": "/root/private",
+            },
+            {
+                "type": "tool", "id": "run-1", "name": "Bash",
+                "did": "run", "who": "private path",
+            },
+        ])
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        shown = surface.of("tool")[0]
+        self.assertEqual("senior_code_reviewer", shown["who"])
+        self.assertNotIn("prompt", shown)
+        self.assertNotIn("agentPath", shown)
+        self.assertNotIn("who", surface.of("tool")[1])
+
     async def test_a_summary_too_long_to_show_is_bounded_rather_than_dropped(self):
         """R-CH-13 — a brain may hand back everything a command printed. The first of it
         is worth showing and the rest is worth not pasting anywhere."""

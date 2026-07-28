@@ -214,14 +214,14 @@ QUERY_COMMANDS = (
 #: into this file forever. A verb with no mark here would silently show as the fallback,
 #: so the suite checks this covers the seam's list rather than trusting it to.
 DID = {"read": "📖", "search": "🔎", "run": "💻", "edit": "✏️", "list": "📁",
-       "make": "🎨", "delegate": "👥"}
-UNKNOWN = "⚙"
+       "make": "🎨", "delegate": "🤖"}
+UNKNOWN = "💭"
 
 #: The same verbs as a person would say them. A commentary is read as a sentence, and
 #: `edit` beside a pencil reads as an instruction rather than as something that happened.
 SHOWN = {"read": "read a file", "search": "searched", "run": "ran a command",
          "edit": "edited a file", "list": "listed files", "make": "made something",
-         "delegate": "handed work to a helper"}
+         "delegate": "Delegated to subagent"}
 
 
 def say(**it) -> None:
@@ -379,7 +379,9 @@ class Live:
     def __init__(self):
         self.anchor = None          # the message that asked, for the mark to attach to
         self.activity = ""          # the running commentary, as it stands
-        self.pending = ""           # what has happened since it was last written
+        self.activity_groups = []   # adjacent equal lines and how many times each occurred
+        self.pending = []           # what has happened since it was last written
+        self.tools = {}             # tool id -> broad verb/name, until its result arrives
         self.posted = None          # the message it is growing into, while it is the last
         self.typing = None
         self.pacing = None
@@ -868,10 +870,10 @@ class Agent(discord.Client):
             return
         if self.chose.activity == OFF:
             return
-        line = commentary(it)
+        line = _activity_line(it, held.tools)
         if not line:
             return
-        held.pending = (held.pending + "\n" + line).strip()
+        held.pending.extend(one for one in line.splitlines() if one.strip())
         if held.pacing is None or held.pacing.done():
             held.pacing = asyncio.ensure_future(self._paced(it, held))
 
@@ -879,6 +881,11 @@ class Agent(discord.Client):
         """A burst of tools is one write rather than ten (R-DIS-14)."""
         await asyncio.sleep(GROW_SECONDS if self.chose.activity == GROWS else POST_SECONDS)
         await self._flush(it, held)
+        # A record can arrive while Discord is awaiting the post/edit above. At that point
+        # `_doing` sees this task as still live, so it cannot own another one. Take
+        # responsibility for anything that arrived during the write before this task ends.
+        if held.pending:
+            held.pacing = asyncio.ensure_future(self._paced(it, held))
 
     async def _flush(self, it: dict, held: Live) -> None:
         """Write whatever has happened since the last time, the way this owner asked.
@@ -888,11 +895,11 @@ class Agent(discord.Client):
         to do — and which is why the message being edited is *never* the answer: a reply
         that rewrites itself in place is unreadable, and only the commentary may.
         """
-        said, held.pending = held.pending, ""
-        if not said:
+        pending, held.pending = held.pending, []
+        if not pending:
             return
         if self.chose.activity == POSTS:
-            await self._post(it, said)
+            await self._post(it, _render_activity(_group_activity([], pending)))
             return
         # **Only while it is still the last thing in the conversation.** A message that
         # something has been posted under is one the reader has already scrolled past, and
@@ -901,11 +908,9 @@ class Agent(discord.Client):
         # said starts a fresh one, and this grows only for as long as it is the newest
         # thing there (R-DIS-20).
         if held.posted is None:
-            held.activity = said
-        else:
-            held.activity = (held.activity + "\n" + said).strip()
-        if len(held.activity) > ACTIVITY_CHARS:
-            held.activity = "-# …\n" + held.activity[-ACTIVITY_CHARS:]
+            held.activity_groups = []
+        held.activity_groups = _group_activity(held.activity_groups, pending)
+        held.activity, held.activity_groups = _bounded_activity(held.activity_groups)
         if held.posted is None:
             # Which write this was, kept across the await. Something else may bury the
             # commentary while this is in flight, and a write that comes back afterwards
@@ -930,6 +935,11 @@ class Agent(discord.Client):
         """
         held.posted = None
         held.activity = ""
+        held.activity_groups = []
+        if held.pending and held.pending[-1] is not None:
+            # Activity already waiting to be written belongs before this visible message.
+            # It may still be posted afterwards, but what follows must start a new count.
+            held.pending.append(None)
         # Anything already in flight is no longer the newest, so its result is dropped
         # rather than becoming the message the next line grows into.
         held.writes += 1
@@ -1186,22 +1196,105 @@ def commentary(it: dict) -> str:
     return _as_a_line(it)
 
 
+def _activity_line(it: dict, tools: dict) -> str:
+    """One broad activity line, correlating only what needs a later state.
+
+    Tool arguments and results stay out. A delegation's id is enough to turn its successful
+    result into "subagent finished", while every other successful result remains quiet.
+    """
+    kind = it.get("type")
+    at = str(it.get("id") or "")
+    if kind == "tool":
+        did = it.get("did")
+        who = _helper_name(it.get("who")) if did == "delegate" else ""
+        if at:
+            tools[at] = {"did": did, "who": who}
+        if did == "delegate":
+            return f"-# 🤖 Delegated to subagent{': ' + who if who else ''}"
+        return commentary(it)
+    if kind == "result":
+        remembered = tools.pop(at, None) if at else None
+        if isinstance(remembered, dict):
+            did, who = remembered.get("did"), remembered.get("who") or ""
+        else:  # an in-memory turn begun by an older adapter shape during an update
+            did, who = remembered, ""
+        if did == "delegate" and it.get("ok") is True:
+            return f"-# 🤖 Subagent finished{': ' + who if who else ''}"
+    return commentary(it)
+
+
+def _group_activity(groups: list, lines: list) -> list:
+    """Add lines to adjacent groups, preserving every event as a count."""
+    grouped = list(groups)
+    may_join = True
+    for line in lines:
+        if line is None:
+            may_join = False
+            continue
+        category = _activity_category(line)
+        if may_join and grouped and _activity_category(grouped[-1][0]) == category:
+            # Names are useful on one helper, but listing every name defeats compact
+            # counting. Once the category repeats, its broad wording owns the count.
+            grouped[-1] = (category, grouped[-1][1] + 1)
+        else:
+            grouped.append((line, 1))
+        may_join = True
+    return grouped
+
+
+def _activity_category(line: str) -> str:
+    """The broad line counted even when one helper's safe name is shown."""
+    if line.startswith("-# 🤖 Delegated to subagent"):
+        return "-# 🤖 Delegated to subagent"
+    if line.startswith("-# 🤖 Subagent finished"):
+        return "-# 🤖 Subagent finished"
+    return line
+
+
+def _helper_name(raw) -> str:
+    """One safe, compact helper name — never its full provider path."""
+    named = str(raw or "").strip().replace("\\", "/").rsplit("/", 1)[-1]
+    return _plain_name(named)[-48:] if named else ""
+
+
+def _render_activity(groups: list) -> str:
+    """Render adjacent groups; one occurrence needs no visual noise."""
+    return "\n".join(
+        line if count == 1 else f"{line} **(x{count})**"
+        for line, count in groups)
+
+
+def _bounded_activity(groups: list) -> tuple:
+    """Keep whole recent groups inside one Discord commentary message."""
+    kept = list(groups)
+    clipped = False
+    while len(kept) > 1:
+        prefix = "-# …\n" if clipped else ""
+        if len(prefix + _render_activity(kept)) <= ACTIVITY_CHARS:
+            break
+        kept.pop(0)
+        clipped = True
+    shown = _render_activity(kept)
+    if clipped:
+        shown = "-# …\n" + shown
+    return shown, kept
+
+
 def _as_a_line(it: dict) -> str:
     """One record of what the agent did, as one line of Discord subtext."""
     kind = it.get("type")
     if kind == "think":
-        return "\n".join(f"-# 💭 {clip(line, 300)}"
-                         for line in str(it.get("text") or "").splitlines() if line.strip())
+        return "-# 💭 thinking" if str(it.get("text") or "").strip() else ""
     if kind == "tool":
         # **What it did, never what its brain calls it.** This showed `name` first, so a
         # commentary read `commandExecution` and `imageGeneration` — one vendor's
         # identifiers, in front of somebody who has never heard of that vendor and never
         # should. The verb is the whole reason the seam translates at all; a brain that
-        # gave none is doing something this vocabulary has no word for yet, and "working"
-        # is the honest thing to say about it.
+        # gave none is doing something this vocabulary has no word for yet, so it joins the
+        # broad thinking category rather than inventing a vendor-shaped label.
         did = it.get("did")
         mark = DID.get(did, UNKNOWN)
-        return f"-# {mark} {SHOWN.get(did, 'working')}"
+        return f"-# {mark} {SHOWN.get(did, 'thinking')}"
     if kind == "result":
         # Only when it went wrong. A running commentary of everything that worked is
         # noise, and what somebody watching wants is the thing that did not.

@@ -65,6 +65,12 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   both. **Run the gate as the only command in its shell** and read the exit the runner gives you,
   or grep the log for `^FAIL` before believing any summary, including your own: a run that printed
   `ok` against all 19 suites still exited 1 on a check above them.
+- **The gate inherits two things that break its isolation when run from an agent on Apple's system
+  Python.** `RUNDESK_AGENTS_DIR` makes `test_provider` see one extra variable, and Python creates
+  `Library/Caches/com.apple.python` under the install suite's scratch `HOME`. Run it with
+  `RUNDESK_AGENTS_DIR` unset and `PYTHONPYCACHEPREFIX` pointed at a fresh temporary directory; neither
+  changes product behavior, and the exact failures otherwise look like provider and installer
+  regressions.
 - **Waiting for the gate with `while pgrep -f "scripts/gate"` never ends, because the waiter
   matches itself.** The pattern is in the waiting shell's own command line, so `pgrep` finds it
   and every waiter keeps every other waiter alive — six were still spinning long after the runs
