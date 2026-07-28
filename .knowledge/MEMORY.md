@@ -8,6 +8,16 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **Antigravity's `-p` flag consumes its next argument; it is not the switch for a piped
+  prompt.** `agy -p --output-format stream-json` asks the model about `--output-format`, and
+  `agy ... -p ""` rejects an empty prompt. For the private stdin transport Rundesk requires,
+  pipe the prompt to `agy --output-format stream-json` with no `-p`; non-TTY stdin selects
+  print mode and keeps the prompt out of the process list.
+- **Ignored live-probe trees inside a worktree can make `test_cli.py` look hung.** A 620 KB
+  `.knowledge/tmp` probe tree containing a nested Git repository, vendor logs and captured
+  output left the suite traversing directories for more than fourteen minutes; moving the
+  exact probe tree to `/tmp` returned the suite to 27 seconds. Keep live captures outside
+  the checkout and commit only small sanitized fixtures.
 - **A shell does not move into a worktree it just created.** A command such as
   `git worktree add <path> <branch> && sed …` runs the read in the original checkout, so
   release preparation can inspect or edit a stale version while the new worktree is correct.

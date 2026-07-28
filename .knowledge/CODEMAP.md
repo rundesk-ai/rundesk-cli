@@ -69,8 +69,8 @@ file with it.
   has never heard of is the ordinary case. A vendor name appearing in this file is the seam already failing.
 - `src/providers/` — the brains that ship, one program each. Not modules: nothing imports them
   and they import nothing of ours, so a vendor's flags, stream shape, session file and usage arithmetic
-  live in one file and reach no further. Three so far — `codex`, `claude` and `grok` — and adding the
-  last two changed nothing above this line, which is the claim the seam was built to make. Each is
+  live in one file and reach no further. Four so far — `codex`, `claude`, `grok` and `antigravity` — and adding the
+  latter three changed nothing above this line, which is the claim the seam was built to make. Each is
   driven offline by a suite of its own against real captured output in `tests/samples/`.
 - `src/rundesk/channel.py` — the seam a surface is reached through, and nothing about any
   particular platform. The mirror of `provider.py`: resolves a channel — a shipped adapter, or a path to
@@ -202,6 +202,7 @@ provider. One file per contract, named for it:
 | `test_provider.py` | 34 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
 | `test_claude.py` | 42 | `provider-adapter` — the arithmetic and the postures one shipped brain decides on its own, driven against 184 captured lines rather than an account |
 | `test_grok.py` | 33 | `provider-adapter` — a brain that reports no tools, and the two flags of its that are accepted and enforce nothing |
+| `test_antigravity.py` | 18 | `provider-adapter` — piped prompt privacy, stream mapping, cumulative-resume usage, posture, skills and native-keyring environment, all offline |
 | `test_turn.py` | 54 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_activity.py` | 3 | live-turn concurrency, safe persisted fields, and update visibility |
 | `test_transcript.py` | 19 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
