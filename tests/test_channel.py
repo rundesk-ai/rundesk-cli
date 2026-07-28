@@ -593,12 +593,12 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
                          "the agent's own was passed over, or was not filled in")
 
     def test_what_this_channel_says_still_wins(self):
-        """R-CH-22, R-AGT-16 — nearest first. An owner who wrote something for one surface
-        meant it for that surface."""
+        """R-CH-22, R-AGT-16, R-AGT-17 — the channel's situation follows the stable
+        standing prefix instead of replacing it."""
         said = channel.preface({"kind": "discord", "instructions": "Keep it short in {where}."},
                                "ava", "dms", {"where": "#ops"},
-                               otherwise="what the agent says")
-        self.assertEqual("Keep it short in #ops.", said)
+                               otherwise="rundesk standing")
+        self.assertEqual("rundesk standing\n\nKeep it short in #ops.", said)
 
     def test_a_surface_reports_the_kinds_of_place_it_comes_in(self):
         """R-CAD-15 — a platform is rarely one place, and the core has no list of what
