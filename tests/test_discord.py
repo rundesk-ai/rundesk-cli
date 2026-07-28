@@ -25,6 +25,7 @@ import shutil
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -627,21 +628,103 @@ class WhatItOffersAndWhatItIsTold(unittest.TestCase):
         the meaning, so a surface cannot invent a gesture nothing acts on."""
         from rundesk import channel
 
-        for _name, _describes, gesture, _said in discord.COMMANDS:
+        for _name, _describes, gesture, _said in discord.CONTROL_COMMANDS:
             self.assertIn(gesture, channel.CONTROLS)
 
     def test_every_command_is_described_where_it_is_offered(self):
         """R-DIS-10 — a command nobody can tell the purpose of is one nobody uses."""
-        for name, describes, _gesture, said in discord.COMMANDS:
+        for name, describes, _gesture, said in discord.CONTROL_COMMANDS:
             self.assertTrue(name and describes and said, f"{name} is not fully described")
+        for name, describes, _query in discord.QUERY_COMMANDS:
+            self.assertTrue(name and describes, f"{name} is not fully described")
 
     def test_a_new_session_and_stopping_a_turn_are_different_gestures(self):
         """R-CH-9, R-CH-10 — one ends what is running and the other throws away where the
         conversation had got to."""
-        gestures = {name: gesture for name, _d, gesture, _s in discord.COMMANDS}
+        gestures = {
+            name: gesture for name, _d, gesture, _s in discord.CONTROL_COMMANDS
+        }
         self.assertEqual("forget", gestures["new"])
         self.assertEqual("stop", gestures["stop"])
         self.assertEqual("restart", gestures["restart"])
+
+    def test_read_only_gateway_information_is_offered_as_discord_commands(self):
+        """R-DIS-22"""
+        from rundesk import channel
+
+        queries = {name: query for name, _description, query in discord.QUERY_COMMANDS}
+        self.assertEqual(set(channel.QUERIES), set(queries.values()))
+        self.assertEqual({"status", "version", "agents", "help"}, set(queries))
+
+    def test_one_slash_interaction_belongs_to_exactly_one_configured_surface(self):
+        """R-DIS-23 — Discord delivers one bot's interaction to its simultaneous DM and
+        room gateway sessions; only the configured surface may report it to Rundesk."""
+        direct = SimpleNamespace(guild=None, channel=object(), channel_id=44)
+        dm = SimpleNamespace(
+            chose=SimpleNamespace(server=None, channel=None, dm=True)
+        )
+        rooms = SimpleNamespace(
+            chose=SimpleNamespace(server="99", channel="44", dm=False)
+        )
+        self.assertTrue(discord.Agent._owns(dm, direct))
+        self.assertFalse(discord.Agent._owns(rooms, direct))
+
+        room = SimpleNamespace(
+            guild=SimpleNamespace(id=99), channel=object(), channel_id=44
+        )
+        self.assertFalse(discord.Agent._owns(dm, room))
+        self.assertTrue(discord.Agent._owns(rooms, room))
+
+    def test_a_gateway_answer_completes_the_exact_deferred_interaction(self):
+        """R-DIS-22 — a read-only result stays ephemeral and correlated to the slash
+        interaction that asked; it is never posted into the public conversation."""
+        class Interaction:
+            def __init__(self):
+                self.content = None
+
+            async def edit_original_response(self, content):
+                self.content = content
+
+        asked = Interaction()
+        client = SimpleNamespace(queries={"query-1": asked})
+        asyncio.run(discord.Agent._query_result(client, {
+            "type": "query-result", "conversation": "44", "query": "status",
+            "ref": "query-1", "text": "ava: RUNNING",
+        }))
+        self.assertEqual("ava: RUNNING", asked.content)
+        self.assertEqual({}, client.queries)
+
+    def test_a_read_only_command_is_deferred_and_reported_for_authorization(self):
+        """R-DIS-22, R-CH-23 — Discord acknowledges promptly, while Rundesk remains the
+        authority that decides whether any gateway information comes back."""
+        class Response:
+            def __init__(self):
+                self.ephemeral = None
+
+            async def defer(self, ephemeral):
+                self.ephemeral = ephemeral
+
+        interaction = SimpleNamespace(
+            id=91, channel_id=44, user=SimpleNamespace(id=2207), response=Response()
+        )
+        client = SimpleNamespace(
+            chose=SimpleNamespace(allow=["2207"]), queries={},
+            _owns=lambda _interaction: True,
+        )
+        said = []
+        was, discord.sys.stdout = discord.sys.stdout, _Collects(said)
+        try:
+            callback = discord.Agent._query_command(client, "status")
+            asyncio.run(callback(interaction))
+        finally:
+            discord.sys.stdout = was
+        record = json.loads("".join(said))
+        self.assertTrue(interaction.response.ephemeral)
+        self.assertIs(interaction, client.queries["91"])
+        self.assertEqual({
+            "type": "query", "conversation": "44", "user": "2207",
+            "query": "status", "ref": "91",
+        }, record)
 
     def test_where_it_listens_is_its_own_option_and_never_rundesks(self):
         """R-CAD-13 — `--server` and `--dm` are Discord's words, parsed here."""

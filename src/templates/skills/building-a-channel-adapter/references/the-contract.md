@@ -98,13 +98,14 @@ is what lets a credential in a file be found by the check that has to prove it.
 {"type": "ready"}
 {"type": "arrived",  "conversation": "1180", "user": "2207", "text": "what changed today?", "ref": "8841", "direct": false}
 {"type": "control",  "conversation": "1180", "user": "2207", "control": "stop", "ref": "8842"}
+{"type": "query",    "conversation": "1180", "user": "2207", "query": "status", "ref": "8843"}
 {"type": "gone",     "why": "the socket closed"}
 ```
 
 **stderr is yours.** Say what went wrong there; it is kept, and it is never mistaken for
 what you reported.
 
-That is the whole of what you say. Four kinds of record, and only `arrived` really matters.
+That is the whole of what you say. Five kinds of record, and only `arrived` starts a brain turn.
 
 **What each record needs**, and nothing else is required of you:
 
@@ -113,6 +114,7 @@ That is the whole of what you say. Four kinds of record, and only `arrived` real
 | `ready` | | |
 | `arrived` | `conversation`, `user` | `text` · `ref` · `direct` · `attachments` · `where` · `called` · `parts` |
 | `control` | `conversation`, `user`, `control` | `ref` |
+| `query` | `conversation`, `user`, `query`, `ref` | |
 | `gone` | | `why` |
 
 **`usage` may name the model that answered.** `model` is there when the brain said which
@@ -125,6 +127,14 @@ is dropped exactly as their message would be, and you are told nothing either wa
 button or a command your surface shows to a whole room is safe to show, and will simply do
 nothing for anybody who may not use it. Do not build your own check for it, and do not
 promise the person anything you have not been told happened.
+
+**A query is read-only gateway information, never an arbitrary command.** The closed list
+is `status`, `version`, `agents`, and `help`. Rundesk authorizes it exactly as it authorizes
+a message or control, starts no brain turn, and answers with a `query-result` carrying the
+same `conversation`, `query`, and `ref`, plus `text`. Correlate that `ref` to the platform
+interaction that asked and keep the answer private where the platform supports private
+responses. Never offer a generic command or arguments: that would expose mutating gateway
+operations through a record whose contract promises read-only inspection.
 
 **`did` is what a tool did, and the list is closed.** It is one of exactly six words —
 `read`, `search`, `run`, `edit`, `list`, `make` — or it is absent, and absent is common.
@@ -228,6 +238,7 @@ both — so a photograph sent with nothing typed is an ordinary message and not 
 {"type": "said",   "conversation": "1180", "run": "7-a3f1", "text": "I'll look at the logs."}
 {"type": "answer", "conversation": "1180", "run": "7-a3f1", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png"}]}
 {"type": "state",  "conversation": "1180", "run": "7-a3f1", "state": "finished"}
+{"type": "query-result", "conversation": "1180", "query": "status", "ref": "8843", "text": "ava: RUNNING"}
 ```
 
 Read a line, show what you can of it, keep reading. Your stdin stays open for the whole

@@ -100,7 +100,7 @@ class Answering:
     """
 
     def __init__(self, name: str, channel_name: str, record: dict, sending,
-                 where=None, carry=None, note=None, restarting=None):
+                 where=None, carry=None, note=None, restarting=None, querying=None):
         self.name = name
         self.channel = channel_name
         self.record = record
@@ -112,6 +112,10 @@ class Answering:
         #: keeps a gateway up is the machine's and this file has never heard
         #: of a gateway (R-CH-16).
         self._restarting = restarting
+        #: Read-only gateway facts, resolved above this layer. Answering owns the
+        #: authorization boundary but knows neither how an agent nor its gateway is
+        #: represented (R-CAD-17).
+        self._querying = querying
         self.exchanges: dict = {}
         self.connected = False
         #: Everything on its way to the adapter, in the order it was decided. One queue
@@ -153,6 +157,8 @@ class Answering:
             await self._arrived(it)
         elif kind == "control":
             await self._control(it)
+        elif kind == "query":
+            await self._query(it)
 
     async def _arrived(self, it: dict) -> None:
         if not channel.allowed(self.record, it["user"]):
@@ -405,6 +411,29 @@ class Answering:
             held.forgotten = True
         self._forget(it["conversation"])
         self._note(f"channel '{self.channel}': a conversation was forgotten")
+
+    async def _query(self, it: dict) -> None:
+        """Answer a read-only gateway question without starting a brain turn (R-CAD-17).
+
+        Authorization stays in the same place as messages and controls. The adapter may
+        prefilter to avoid visible work, but only this decision is trusted.
+        """
+        if not channel.allowed(self.record, it["user"]):
+            return
+        if self._querying is None:
+            text = "This gateway does not provide that information."
+        else:
+            try:
+                text = str(self._querying(it["query"]))
+            except Exception as why:  # noqa: BLE001 — an inspection boundary
+                self._note(
+                    f"channel '{self.channel}': {it['query']} could not be read: {why}"
+                )
+                text = f"{it['query']}: unavailable"
+        self._tell(
+            type="query-result", conversation=it["conversation"],
+            query=it["query"], ref=it["ref"], text=text,
+        )
 
     def _forget(self, conversation: str) -> None:
         """Throw away where this conversation had got to, under every brain it has had.

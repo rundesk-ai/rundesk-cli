@@ -962,6 +962,35 @@ class AnAgentNeedsABrain(WithSomewhereToKeepAgents):
         self.assertEqual([], [one for one in found if "which brain" in one.said])
 
 
+class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
+    """R-CAD-17 — the agent layer answers without teaching the gateway about agents."""
+
+    def test_status_names_the_agent_and_its_gateway_state(self):
+        self.made()
+        said = agent._queried("ava", "status", self.where)
+        self.assertIn("ava: STOPPED", said)
+        self.assertIn("active turns: 0", said)
+
+    def test_version_tells_installed_code_from_the_running_gateway(self):
+        self.made()
+        said = agent._queried("ava", "version", self.where)
+        self.assertIn("Rundesk ", said)
+        self.assertIn("ava gateway: not running", said)
+
+    def test_agents_lists_every_configured_agent_in_name_order(self):
+        self.made("zebra")
+        self.made("ava")
+        said = agent._queried("ava", "agents", self.where).splitlines()
+        self.assertEqual(["ava: STOPPED (-)", "zebra: STOPPED (-)"], said)
+
+    def test_help_names_read_only_conversation_and_agent_commands(self):
+        self.made()
+        said = agent._queried("ava", "help", self.where)
+        self.assertIn("/status /version /agents", said)
+        self.assertIn("/stop /new", said)
+        self.assertIn("/restart", said)
+
+
 class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):
     """R-AGT-17 — rundesk's own words reach a turn whatever anybody else said."""
 
