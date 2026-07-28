@@ -65,11 +65,13 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   both. **Run the gate as the only command in its shell** and read the exit the runner gives you,
   or grep the log for `^FAIL` before believing any summary, including your own: a run that printed
   `ok` against all 19 suites still exited 1 on a check above them.
-- **The gate inherits two things that break its isolation when run from an agent on Apple's system
-  Python.** `RUNDESK_AGENTS_DIR` makes `test_provider` see one extra variable, and Python creates
-  `Library/Caches/com.apple.python` under the install suite's scratch `HOME`. Run it with
-  `RUNDESK_AGENTS_DIR` unset and `PYTHONPYCACHEPREFIX` pointed at a fresh temporary directory; neither
-  changes product behavior, and the exact failures otherwise look like provider and installer
+- **The gate inherits agent-turn variables that break its isolation, plus Apple's system Python
+  writes bytecode outside the checkout.** `RUNDESK_AGENTS_DIR`, `RUNDESK_SCRIPTS`,
+  `RUNDESK_SKILLS` and `RUNDESK_SKILL_LIBRARY` point isolation suites back at the live install,
+  producing failures in agent, skill, install, process and provider tests; Python can also create
+  `Library/Caches/com.apple.python` under the install suite's scratch `HOME`. Unset every ambient
+  `RUNDESK_*` turn variable and point `PYTHONPYCACHEPREFIX` at a fresh temporary directory before
+  running the gate; neither changes product behavior, and the failures otherwise look like real
   regressions.
 - **Waiting for the gate with `while pgrep -f "scripts/gate"` never ends, because the waiter
   matches itself.** The pattern is in the waiting shell's own command line, so `pgrep` finds it

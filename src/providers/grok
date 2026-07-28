@@ -21,7 +21,8 @@ Three flags decide whether this adapter is honest, and two of them are traps:
 **`--permission-mode dontAsk` is accepted and silently ignored.** It shipped once in the
 build this replaces: an agent given every write tool was then denied all of them, wrote
 nothing, explained itself in prose, and the turn reported success. Nothing in a test suite
-could see it. Only the tool list scopes this CLI, so only the tool list is used.
+could see it. The tool list scopes what the CLI may do; `bypassPermissions` lets those tools
+run headlessly instead of cancelling when nobody is there to approve them.
 
 **`--sandbox` is a no-op headless.** Under `read-only` it created a file through its own
 tool and through a shell redirect; under `strict` it read a planted marker well outside the
@@ -149,6 +150,13 @@ def opening(posture: str, model, resume, extra: dict, session: str, asked_at: st
     # turn read another's.
     argv += ["--no-memory"]
 
+    # Headless means there is nobody at a terminal to approve a tool. Without this, Grok
+    # emits `stopReason: Cancelled` with exit 0 as soon as a turn reaches one — a working
+    # posture that cannot inspect a file. This mode is measured to apply; `dontAsk` is not.
+    # What the turn may touch remains the tool list below: read gets three read tools and
+    # work deliberately gets every built-in.
+    argv += ["--permission-mode", "bypassPermissions"]
+
     # A conversation this brain already has, or a handle minted here before the first byte.
     # `--session-id` names a *new* conversation and refuses an id that already exists, so
     # the two are never passed together.
@@ -200,12 +208,18 @@ def records(line: str, seen: dict) -> list:
         # nothing in the stream ever restates it, so nothing it says is finished until the
         # turn is. Marking one `whole` would show a sentence that then changed underneath
         # whoever was reading it.
+        seen["thinking"] = False
         return [{"type": "text", "text": str(one.get("data") or "")}]
 
     if kind == "thought":
         # One field away from `text` on the same shape — which is why nothing here scans
         # for `data` without first deciding which kind it belongs to. Counting both would
-        # report what the model merely considered as what it said.
+        # report what the model merely considered as what it said. One contiguous block is
+        # one activity, not one per token-sized fragment; otherwise Discord says `thinking
+        # (x37)` about a single thought and the account stores the same fiction.
+        if seen.get("thinking"):
+            return []
+        seen["thinking"] = True
         return [{"type": "think", "text": str(one.get("data") or "")}]
 
     if kind == "end":
