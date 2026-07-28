@@ -1337,6 +1337,11 @@ class WhatTheOwnerIsTold(unittest.TestCase):
             with mock.patch.dict(
                     os.environ, {"RUNDESK_MAINTENANCE": str(marker)}, clear=False), \
                     mock.patch.object(discord, "say"):
+                # An install told no version says the shorter sentence, and this case is
+                # about the marker rather than the version — so it states which of the two
+                # it is arranging rather than inheriting whatever ran it (R-DIS-26).
+                for named in ("RUNDESK_VERSION", "RUNDESK_RELEASE_URL"):
+                    os.environ.pop(named, None)
                 it = self.Connects()
                 asyncio.run(discord.Agent.on_ready(it))
         self.assertIn("maintenance is complete", it.said[0].lower())
