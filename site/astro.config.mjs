@@ -1,10 +1,34 @@
 // @ts-check
+import { createRequire } from 'node:module';
 import { defineConfig } from 'astro/config';
+import mdx from '@astrojs/mdx';
 import starlight from '@astrojs/starlight';
+import starlightSidebarTopics from 'starlight-sidebar-topics';
+
+/**
+ * Pages live in `../docs`, which has no `node_modules` above it, so a bare
+ * `@astrojs/starlight/components` import from a page cannot resolve on its own.
+ * Pointing the specifier at this project's copy is what lets content sit outside
+ * the Astro project without each page reaching back into `site/` by path.
+ */
+const require = createRequire(import.meta.url);
+const starlightComponents = require.resolve('@astrojs/starlight/components');
 
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://docs.rundesk.ai',
+	vite: {
+		resolve: {
+			// Exact match only. A bare string alias is a prefix match, and it would
+			// also swallow Starlight's own `components/<Name>.astro` imports.
+			alias: [
+				{
+					find: /^@astrojs\/starlight\/components$/,
+					replacement: starlightComponents,
+				},
+			],
+		},
+	},
 	integrations: [
 		starlight({
 			title: 'Rundesk',
@@ -30,48 +54,100 @@ export default defineConfig({
 				baseUrl: 'https://github.com/rundesk-ai/rundesk-cli/edit/main/site/',
 			},
 			lastUpdated: true,
-			sidebar: [
-				{
-					label: 'Start here',
-					items: [
-						{ label: 'What Rundesk is', slug: 'start/what-rundesk-is' },
-						{ label: 'Install', slug: 'start/install' },
-						{ label: 'Your first agent', slug: 'start/first-agent' },
-					],
-				},
-				{
-					label: 'Concepts',
-					items: [
-						{ label: 'Agents and gateways', slug: 'concepts/agents' },
-						{ label: 'The agent home', slug: 'concepts/agent-home' },
-						{ label: 'Conversations and records', slug: 'concepts/conversations' },
-						{ label: 'Skills', slug: 'concepts/skills' },
-					],
-				},
-				{
-					label: 'Guides',
-					items: [
-						{ label: 'Put an agent on Discord', slug: 'guides/discord' },
-						{ label: 'Schedule work', slug: 'guides/schedules' },
-						{ label: 'Back up and restore', slug: 'guides/backups' },
-					],
-				},
-				{
-					label: 'Reference',
-					items: [
-						{ label: 'Providers', slug: 'reference/providers' },
-						{ label: 'CLI reference', slug: 'reference/cli' },
-					],
-				},
-				{
-					label: 'Extend',
-					items: [
-						{ label: 'Provider adapters', slug: 'extend/provider-adapters' },
-						{ label: 'Channel adapters', slug: 'extend/channel-adapters' },
-						{ label: 'Integration CLIs', slug: 'extend/integration-clis' },
-					],
-				},
+			pagination: true,
+			plugins: [
+				/**
+				 * One sidebar per area rather than one long list of everything.
+				 * `/` stays an overview with no sidebar; entering an area swaps the
+				 * left panel to that area alone.
+				 */
+				starlightSidebarTopics([
+					{
+						label: 'Start here',
+						link: '/start/what-rundesk-is/',
+						icon: 'rocket',
+						items: [
+							{
+								label: 'First steps',
+								items: [
+									{ label: 'What Rundesk is', slug: 'start/what-rundesk-is' },
+									{ label: 'Install', slug: 'start/install' },
+									{ label: 'Your first agent', slug: 'start/first-agent' },
+								],
+							},
+						],
+					},
+					{
+						label: 'Concepts',
+						link: '/concepts/agents/',
+						icon: 'open-book',
+						items: [
+							{
+								label: 'How Rundesk works',
+								items: [
+									{ label: 'Agents and gateways', slug: 'concepts/agents' },
+									{ label: 'The agent home', slug: 'concepts/agent-home' },
+									{
+										label: 'Conversations and records',
+										slug: 'concepts/conversations',
+									},
+									{ label: 'Skills', slug: 'concepts/skills' },
+								],
+							},
+						],
+					},
+					{
+						label: 'Guides',
+						link: '/guides/discord/',
+						icon: 'setting',
+						items: [
+							{
+								label: 'Everyday work',
+								items: [
+									{ label: 'Put an agent on Discord', slug: 'guides/discord' },
+									{ label: 'Schedule work', slug: 'guides/schedules' },
+									{ label: 'Back up and restore', slug: 'guides/backups' },
+								],
+							},
+						],
+					},
+					{
+						label: 'Reference',
+						link: '/reference/providers/',
+						icon: 'list-format',
+						items: [
+							{
+								label: 'The surface',
+								items: [
+									{ label: 'Providers', slug: 'reference/providers' },
+									{ label: 'CLI reference', slug: 'reference/cli' },
+								],
+							},
+						],
+					},
+					{
+						label: 'Extend',
+						link: '/extend/provider-adapters/',
+						icon: 'puzzle',
+						items: [
+							{
+								label: 'Write your own',
+								items: [
+									{ label: 'Provider adapters', slug: 'extend/provider-adapters' },
+									{ label: 'Channel adapters', slug: 'extend/channel-adapters' },
+									{ label: 'Integration CLIs', slug: 'extend/integration-clis' },
+								],
+							},
+						],
+					},
+				], {
+					// The overview belongs to no area — it is the page you land on
+					// before choosing one, so it gets no left panel at all.
+					exclude: ['/'],
+				}),
 			],
 		}),
+		// After Starlight, which is what its manual-MDX setup requires.
+		mdx(),
 	],
 });

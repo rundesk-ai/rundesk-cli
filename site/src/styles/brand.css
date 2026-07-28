@@ -10,6 +10,8 @@
 	--rd-ground: #010515;
 	--rd-ground-raised: #070c1e;
 	--rd-ground-edge: #131a30;
+
+	--sl-nav-height: 3.75rem;
 }
 
 /* Dark is the brand. Accent ramps run warm off the logo red; grays carry the
@@ -17,7 +19,7 @@
 :root[data-theme='dark'] {
 	--sl-color-accent-low: #3c0709;
 	--sl-color-accent: var(--rd-red-600);
-	/* Starlight drives links, primary buttons and the active sidebar pill off
+	/* Starlight drives links, primary buttons and the active sidebar item off
 	   accent-high. Its default is a pale tint, which reads as pink rather than
 	   as the logo. #ff4d4e is the banner red lifted just far enough to clear
 	   4.5:1 on the ground (5.9:1), so it holds both as text and as a fill. */
@@ -31,6 +33,9 @@
 	--sl-color-gray-5: #2a3149;
 	--sl-color-gray-6: #171d33;
 	--sl-color-black: var(--rd-ground);
+
+	--sl-color-bg-nav: color-mix(in srgb, var(--rd-ground) 82%, transparent);
+	--sl-color-bg-sidebar: transparent;
 }
 
 :root[data-theme='light'] {
@@ -49,6 +54,8 @@
 	--sl-color-black: #ffffff;
 }
 
+/* ---------------------------------------------------------------- chrome -- */
+
 /* The banner lockup is a red mark beside a white wordmark. Starlight tints the
    site title with the accent by default, which would make the whole thing red. */
 .site-title {
@@ -57,14 +64,130 @@
 	letter-spacing: -0.01em;
 }
 
-/* The mark is a circle; give it room to read at sidebar size. */
 .site-title img {
-	height: 1.75rem;
+	height: 1.6rem;
 	width: auto;
 }
 
-/* The home page is a documentation index, so its section tables carry the
-   navigation. Give them room to be scanned rather than read. */
+header.header {
+	backdrop-filter: blur(12px);
+	border-bottom: 1px solid var(--sl-color-gray-6);
+}
+
+/* --------------------------------------------------------------- sidebar -- */
+
+/* Starlight marks the current page with a filled accent block. At full brand red
+   that is the loudest thing on the page, and the reader's eye goes to where they
+   already are rather than to the prose. A rule and accent text say the same thing
+   at a fraction of the weight. */
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover,
+.sidebar-content a[aria-current='page']:focus {
+	background-color: color-mix(in srgb, var(--rd-red-500) 10%, transparent);
+	color: var(--sl-color-accent-high);
+	font-weight: 600;
+	border-radius: 0.25rem;
+}
+
+.sidebar-content ul li {
+	border-inline-start-color: var(--sl-color-gray-6);
+}
+
+/* Group headings are signposts, not content. Small caps at low contrast keeps
+   them scannable without competing with the links under them. */
+.sidebar-content details > summary .group-label > span,
+.sidebar-content .top-level > li > details > summary span {
+	font-size: var(--sl-text-xs);
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--sl-color-gray-3);
+	font-weight: 600;
+}
+
+/* The topic switcher sits above the page list, so it needs to read as a different
+   kind of thing — a rule below it separates choosing an area from moving inside one. */
+starlight-sidebar-topics-list,
+.sidebar-content > ul:first-child {
+	padding-bottom: 0.75rem;
+	margin-bottom: 0.5rem;
+	border-bottom: 1px solid var(--sl-color-gray-6);
+}
+
+/* ------------------------------------------------------------------ hero -- */
+
+/* Splash pages default to a very tall hero. The mark is the only image on the
+   overview and does not need half a screen to say what it is. */
+.hero {
+	padding-block: clamp(1.5rem, 6vw, 3.5rem);
+	gap: 2rem;
+}
+
+.hero img {
+	max-height: 13rem;
+	width: auto;
+	filter: drop-shadow(0 0 4rem rgb(253 48 49 / 0.22));
+}
+
+.hero h1 {
+	letter-spacing: -0.03em;
+	font-size: clamp(2.5rem, 8vw, 3.75rem);
+}
+
+.hero .tagline {
+	color: var(--sl-color-gray-2);
+	margin-top: 0.5rem;
+}
+
+/* ----------------------------------------------------------------- cards -- */
+
+/* Starlight tints each card's icon from a rotating hue, which on a one-accent
+   brand reads as six unrelated products. One colour, one system. */
+.card .icon {
+	color: var(--rd-red-500);
+	background: color-mix(in srgb, var(--rd-red-500) 12%, transparent);
+	border: 1px solid color-mix(in srgb, var(--rd-red-500) 22%, transparent);
+	border-radius: 0.5rem;
+	padding: 0.35rem;
+	font-size: 1.5rem;
+}
+
+.card {
+	border-color: var(--sl-color-gray-6);
+	background: var(--rd-ground-raised);
+	border-radius: 0.75rem;
+}
+
+.card .title {
+	font-size: var(--sl-text-lg);
+	letter-spacing: -0.01em;
+	align-items: center;
+}
+
+/* LinkCards carry the section index, so the whole card is the target and it has
+   to say so on hover. */
+.sl-link-card {
+	border-color: var(--sl-color-gray-6);
+	background: var(--rd-ground-raised);
+	border-radius: 0.75rem;
+	transition: border-color 150ms ease, transform 150ms ease;
+}
+
+.sl-link-card:hover {
+	border-color: color-mix(in srgb, var(--rd-red-500) 45%, transparent);
+	transform: translateY(-2px);
+}
+
+.sl-link-card .icon {
+	color: var(--rd-red-500);
+}
+
+/* ------------------------------------------------------------- long-form -- */
+
+.sl-markdown-content h2,
+.sl-markdown-content h3 {
+	letter-spacing: -0.02em;
+}
+
 .sl-markdown-content table {
 	width: 100%;
 }
@@ -72,4 +195,12 @@
 .sl-markdown-content th:first-child,
 .sl-markdown-content td:first-child {
 	white-space: nowrap;
+}
+
+/* Steps are the install path on the overview; the accent marker makes the
+   sequence readable at a glance rather than as four stacked paragraphs. */
+.sl-steps > li::before {
+	background: color-mix(in srgb, var(--rd-red-500) 14%, var(--rd-ground));
+	border-color: color-mix(in srgb, var(--rd-red-500) 35%, transparent);
+	color: var(--sl-color-white);
 }

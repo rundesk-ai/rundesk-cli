@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@astrojs/mdx':
+        specifier: ^7.0.4
+        version: 7.0.4(@astrojs/markdown-satteri@0.3.4)(astro@7.1.4(@astrojs/markdown-remark@7.2.1)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.3)(@types/node@24.13.3))
       '@astrojs/starlight':
         specifier: ^0.41.5
         version: 0.41.5(@astrojs/markdown-remark@7.2.1)(astro@7.1.4(@astrojs/markdown-remark@7.2.1)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.3)(@types/node@24.13.3))
@@ -17,6 +20,9 @@ importers:
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
+      starlight-sidebar-topics:
+        specifier: ^0.8.0
+        version: 0.8.0(@astrojs/starlight@0.41.5(@astrojs/markdown-remark@7.2.1)(astro@7.1.4(@astrojs/markdown-remark@7.2.1)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.3)(@types/node@24.13.3)))
 
 packages:
 
@@ -1715,6 +1721,12 @@ packages:
 
   space-separated-tokens@2.0.2:
     resolution: {integrity: sha512-PEGlAwrG8yXGXRjW32fGbg66JAlOAwbObuqVoJpv/mRgoWDQfgH1wDPvtzWyUSNAXBGSk8h755YDbbcEy3SH2Q==}
+
+  starlight-sidebar-topics@0.8.0:
+    resolution: {integrity: sha512-hE8+w2vNL13h6cq3UJGl05milJQ3+1BSlhaV5V4a993YzYczU6uLAj6jfUDKQ2mmgkdVWp8/UNDF4Je/rQXNQw==}
+    engines: {node: '>=22.12.0'}
+    peerDependencies:
+      '@astrojs/starlight': '>=0.38.0'
 
   stream-replace-string@2.0.0:
     resolution: {integrity: sha512-TlnjJ1C0QrmxRNrON00JvaFFlNh5TTG00APw23j74ET7gkQpTASi6/L2fuiav8pzK715HXtUeClpBTw2NPSn6w==}
@@ -4158,6 +4170,11 @@ snapshots:
   source-map@0.7.6: {}
 
   space-separated-tokens@2.0.2: {}
+
+  starlight-sidebar-topics@0.8.0(@astrojs/starlight@0.41.5(@astrojs/markdown-remark@7.2.1)(astro@7.1.4(@astrojs/markdown-remark@7.2.1)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.3)(@types/node@24.13.3))):
+    dependencies:
+      '@astrojs/starlight': 0.41.5(@astrojs/markdown-remark@7.2.1)(astro@7.1.4(@astrojs/markdown-remark@7.2.1)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.3)(@types/node@24.13.3))
+      picomatch: 4.0.5
 
   stream-replace-string@2.0.0: {}
 

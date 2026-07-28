@@ -184,14 +184,20 @@ file with it.
 
 ## Documentation site (docs/ + site/)
 
-`docs/` is the published documentation for `docs.rundesk.ai` — 16 pages of plain markdown
-across `start/`, `concepts/`, `guides/`, `reference/`, and `extend/`, plus an index. It has no
-build of its own and reads as markdown.
+`docs/` is the published documentation for `docs.rundesk.ai` — 15 prose pages of plain
+markdown across `start/`, `concepts/`, `guides/`, `reference/`, and `extend/`, plus
+`index.mdx`, the card-based overview a reader lands on. The prose pages have no build of their
+own and read as markdown.
 
 `site/` renders it: an Astro and Starlight project whose `src/content.config.ts` points a glob
 loader at `../docs` rather than using Starlight's `docsLoader()`, which cannot see outside its
-own project. Brand tokens in `site/src/styles/brand.css` are sampled from
-`assets/readme/rundesk-banner.png`.
+own project. Because pages sit outside the Astro project, a Vite alias in `astro.config.mjs`
+resolves `@astrojs/starlight/components` for the overview — exact-match, since a prefix alias
+would also swallow Starlight's own component imports.
+
+The five areas — Start here, Concepts, Guides, Reference, Extend — are declared through
+`starlight-sidebar-topics`, so each swaps the left panel to itself alone and `/` shows none.
+Brand tokens in `site/src/styles/brand.css` are sampled from `assets/readme/rundesk-banner.png`.
 
 `site/scripts/sync-cli-reference.mjs` copies `CLI.md` into `docs/reference/cli.md` on every
 `dev` and `build`. That file is git-ignored: `CLI.md` is already generated from the parser, and

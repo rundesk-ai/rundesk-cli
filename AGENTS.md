@@ -212,15 +212,22 @@ directories because they have different lifetimes: `docs/` is plain markdown tha
 no build and would survive its renderer being replaced; `site/` is an Astro and Starlight
 project that is allowed to be thrown away.
 
-- **`docs/**` is `.md` with YAML frontmatter. No MDX, ever.** A component in a page is
-  content that cannot move.
+- **Every page is `.md` with YAML frontmatter.** `docs/index.mdx` is the one exception: the
+  overview is a navigation surface built from cards, and cards are components. A prose page
+  that reaches for MDX is a prose page written wrong — a component in it is content that
+  cannot move.
 - **Nothing in `docs/` may depend on `site/`.** Internal links are site-absolute
   (`/start/install/`), so they resolve when published but not in a GitHub file view.
 - **`docs/reference/cli.md` is generated and git-ignored.** `site/scripts/sync-cli-reference.mjs`
   copies `CLI.md` into it on every `dev` and `build`. Never write it, never commit it; a
   wording problem there is a parser problem.
-- **The site documents the command and carries no marketing surface** — no hero, no pitch.
-  Product positioning lives on `rundesk.ai`, which is a different property.
+- **The site documents the command.** The overview carries the mark and a one-line tagline
+  because a reader needs to know where they have landed; it does not carry a pitch, a
+  comparison, or a call to buy. Product positioning lives on `rundesk.ai`, a different
+  property.
+- **One area per sidebar.** `site/astro.config.mjs` declares the areas through
+  `starlight-sidebar-topics`; `/` belongs to none and shows no left panel. A new page joins an
+  existing area or argues for a new one.
 - **`site/`'s dependencies are not Rundesk's.** They are `site/package.json`, they never enter
   `requirements.txt` or `.venv/`, and `install.sh` places none of them — it ships a release
   tarball, not a checkout. The standard-library rule above governs what reaches a user's
