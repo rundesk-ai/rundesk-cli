@@ -1,3 +1,7 @@
+<h1 align="center">
+  <img src="assets/readme/rundesk-banner.png" alt="Rundesk — Teammates that remember, adapt, and grow." width="100%">
+</h1>
+
 <p align="center">
   <a href="https://github.com/rundesk-ai/rundesk-cli/actions/workflows/build.yml?query=branch%3Amain"><img src="https://github.com/rundesk-ai/rundesk-cli/actions/workflows/build.yml/badge.svg?branch=main" alt="Build"></a>
   <a href="https://github.com/rundesk-ai/rundesk-cli/releases/latest"><img src="https://img.shields.io/github/v/release/rundesk-ai/rundesk-cli?style=flat-square" alt="Latest release"></a>
@@ -16,8 +20,6 @@
   &nbsp;·&nbsp;
   📖 <a href="#-documentation"><strong>Docs</strong></a>
 </p>
-
-# 🖥 Rundesk
 
 **Run AI coding agents as durable, named teammates on your own Mac — then reach them from
 your terminal, Discord, or a schedule.**
