@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-__version__ = "0.13.0"
+__version__ = "0.13.1"
 
 #: This install — the directory holding `rundesk`, `src/` and the virtualenv. Resolved
 #: rather than assumed, because the command is reached through a symlink on a PATH and

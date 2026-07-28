@@ -238,6 +238,7 @@ def describe(name: str, root: Path | None = None, logs: Path | None = None,
 BACKUP_LABEL = f"{PREFIX}-backup"
 UPDATE_LABEL = f"{PREFIX}-update"
 AUTOMATIC_UPDATE_LABEL = f"{PREFIX}-automatic-update"
+AUTOMATIC_UPDATE_LOGS_MARKER = ".automatic-update-owned"
 
 
 def backup_job_path(where: str | None = None) -> Path:
@@ -316,6 +317,28 @@ def automatic_update_job_path(where: str | None = None) -> Path:
     return Path(os.path.expanduser(where or jobs_home())) / f"{AUTOMATIC_UPDATE_LABEL}.plist"
 
 
+def _prepare_automatic_update_logs(logs: Path | None = None) -> Path:
+    """Make the job's log directory and remember when Rundesk owns an empty default one."""
+    logs = logs or gateway.logs_home()
+    logs.mkdir(parents=True, exist_ok=True)
+    marker = logs / AUTOMATIC_UPDATE_LOGS_MARKER
+    # A configured log directory belongs to its owner even while empty. The default is
+    # Rundesk's to remove only while it still contains nothing an owner could need.
+    if logs == data_home() / "logs" and not any(logs.iterdir()):
+        marker.write_text("created for automatic update logs\n", encoding="utf-8")
+    return logs
+
+
+def _release_automatic_update_logs(logs: Path | None = None) -> None:
+    logs = logs or gateway.logs_home()
+    marker = logs / AUTOMATIC_UPDATE_LOGS_MARKER
+    if not marker.is_file():
+        return
+    marker.unlink()
+    with contextlib.suppress(OSError):
+        logs.rmdir()
+
+
 def describe_automatic_update(at: str, root: Path | None = None,
                               logs: Path | None = None) -> dict:
     """The daily trigger. It only queues the crash-recoverable worker and then ends
@@ -339,7 +362,7 @@ def write_automatic_update(at: str, root: Path | None = None, logs: Path | None 
                            where: str | None = None) -> Path:
     path = automatic_update_job_path(where)
     path.parent.mkdir(parents=True, exist_ok=True)
-    (logs or gateway.logs_home()).mkdir(parents=True, exist_ok=True)
+    _prepare_automatic_update_logs(logs)
     with open(path, "wb") as file:
         plistlib.dump(describe_automatic_update(at, root, logs), file)
     return path
@@ -350,6 +373,7 @@ def install_automatic_update(at: str, root: Path | None = None, logs: Path | Non
                              asking: Callable[..., Spoke] = ask) -> Spoke:
     """Hand the configured daily trigger to the machine without running an update now."""
     root = root or ROOT
+    _prepare_automatic_update_logs(logs)
     path = automatic_update_job_path(where)
     if path.exists():
         if not ours(path, root):
@@ -373,15 +397,18 @@ def install_automatic_update(at: str, root: Path | None = None, logs: Path | Non
 
 
 def remove_automatic_update(where: str | None = None, root: Path | None = None,
-                            asking: Callable[..., Spoke] = ask) -> Spoke:
+                            asking: Callable[..., Spoke] = ask,
+                            logs: Path | None = None) -> Spoke:
     path = automatic_update_job_path(where)
     if not path.exists():
+        _release_automatic_update_logs(logs)
         return Spoke(True, "")
     if not ours(path, root):
         raise NotOurs("the automatic update job was not written by this install of rundesk")
     said = asking("bootout", f"{domain()}/{AUTOMATIC_UPDATE_LABEL}")
     with contextlib.suppress(OSError):
         os.remove(path)
+    _release_automatic_update_logs(logs)
     return said
 
 
