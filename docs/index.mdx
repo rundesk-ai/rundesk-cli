@@ -7,6 +7,10 @@ editUrl: false
 next: false
 prev: false
 hero:
+  # Starlight renders the hero title with `set:html`, so the wordmark itself can
+  # stand where the name would be. Served from `public/` rather than the asset
+  # pipeline, since frontmatter carries a string and not an import.
+  title: '<img class="rd-hero-word" src="/rundesk-wordmark.png" alt="rundesk" width="1106" height="222">'
   tagline: Teammates that remember, adapt, and grow. Run the coding CLI you already use as a durable, named agent on your own Mac.
   actions:
     - text: Get started
@@ -36,6 +40,9 @@ hero:
 ---
 
 import { Card, CardGrid, LinkCard, Steps } from '@astrojs/starlight/components';
+import Install from '@site/components/Install.astro';
+
+<Install />
 
 <div class="rd-pills">
 	<span class="rd-pill"><span class="rd-pill__dot"></span> macOS</span>

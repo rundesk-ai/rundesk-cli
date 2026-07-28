@@ -1,5 +1,6 @@
 // @ts-check
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import mdx from '@astrojs/mdx';
 import starlight from '@astrojs/starlight';
@@ -26,6 +27,9 @@ export default defineConfig({
 					find: /^@astrojs\/starlight\/components$/,
 					replacement: starlightComponents,
 				},
+				// Lets a page in `../docs` import this project's own components without
+				// spelling out a relative path back into `site/`.
+				{ find: '@site', replacement: fileURLToPath(new URL('./src', import.meta.url)) },
 			],
 		},
 	},

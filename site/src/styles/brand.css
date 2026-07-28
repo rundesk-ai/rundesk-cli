@@ -549,3 +549,138 @@ starlight-sidebar-topics-list,
 	color: var(--sl-color-gray-3);
 	font-weight: 700;
 }
+
+/* ============================================================= install == */
+
+/* The wordmark stands where the name would be, so the hero shows the branding
+   rather than describing it. Kept as an image with alt text, so a screen reader
+   and the page title still say "rundesk".
+
+   Scoped under `.hero` to outrank the `.hero img` rule that sizes the hero
+   illustration — without that it inherits a 13rem height and arrives twice the
+   size of the heading it replaced. */
+.hero .rd-hero-word {
+	display: block;
+	width: min(100%, 21rem);
+	height: auto;
+	max-height: none;
+}
+
+/* The command most people came for, framed as a panel rather than buried in the
+   page's other code blocks. */
+.rd-install {
+	margin-block: 0 1rem;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.75rem;
+	overflow: hidden;
+	background: color-mix(in srgb, var(--rd-ground) 90%, #000);
+}
+
+.rd-install__bar {
+	display: flex;
+	align-items: center;
+	gap: 1.25rem;
+	padding: 0 1.1rem;
+	height: 3rem;
+	border-bottom: 1px solid var(--sl-color-gray-6);
+	font-family: var(--__sl-font-mono, ui-monospace, monospace);
+	font-size: 0.75rem;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+}
+
+.rd-install__label {
+	color: var(--sl-color-gray-2);
+	font-weight: 700;
+}
+
+.rd-install__tab {
+	color: var(--sl-color-accent-high);
+	font-weight: 700;
+	align-self: stretch;
+	display: flex;
+	align-items: center;
+	border-bottom: 2px solid var(--rd-red-500);
+	margin-bottom: -1px;
+}
+
+.rd-install__grow {
+	flex: 1;
+}
+
+.rd-install__plat {
+	color: var(--sl-color-gray-3);
+	font-weight: 600;
+}
+
+.rd-install__body {
+	padding: 1.1rem 1.1rem 1.25rem;
+	font-family: var(--__sl-font-mono, ui-monospace, monospace);
+}
+
+.rd-install__note {
+	margin: 0 0 0.6rem;
+	font-size: 0.8rem;
+	font-style: italic;
+	color: var(--sl-color-gray-4);
+}
+
+.rd-install__line {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+}
+
+.rd-install__line code {
+	flex: 1;
+	min-width: 0;
+	overflow-x: auto;
+	white-space: nowrap;
+	background: none;
+	border: none;
+	padding: 0;
+	font-size: 0.9rem;
+	color: var(--sl-color-gray-1);
+}
+
+.rd-install__prompt {
+	color: var(--rd-red-500);
+	font-weight: 700;
+	margin-inline-end: 0.4rem;
+}
+
+.rd-install__copy {
+	flex: none;
+	padding: 0.4rem 0.75rem;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.4rem;
+	background: transparent;
+	color: var(--sl-color-gray-2);
+	font: inherit;
+	font-size: 0.72rem;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	cursor: pointer;
+	transition: border-color 140ms ease, color 140ms ease;
+}
+
+.rd-install__copy:hover {
+	border-color: color-mix(in srgb, var(--rd-red-500) 55%, transparent);
+	color: var(--sl-color-white);
+}
+
+.rd-install__copy[data-copied] {
+	border-color: #7ddba0;
+	color: #7ddba0;
+}
+
+.rd-install__caption {
+	margin-block: 0 2rem;
+	font-size: var(--sl-text-sm);
+	color: var(--sl-color-gray-3);
+}
+
+/* A flag broken across two lines reads as two flags. */
+.rd-install__caption code {
+	white-space: nowrap;
+}

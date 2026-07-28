@@ -199,7 +199,9 @@ The five areas — Start here, Concepts, Guides, Reference, Extend — are decla
 `starlight-sidebar-topics`, so each swaps the left panel to itself alone and `/` shows none.
 Two Starlight component overrides in `site/src/components/` move them where a reader expects:
 `Header.astro` hangs them under the site bar as a tab row, and `PageTitle.astro` prints the
-current area as an eyebrow above the title. Both wrap Starlight's default rather than replace
+current area as an eyebrow above the title. `Install.astro` is the overview's install panel —
+the one-liner with a prompt and a copy button; a `@site` Vite alias is what lets a page in
+`docs/` import it. Both wrap Starlight's default rather than replace
 it, and the plugin's own sidebar copy stays rendered but hidden, because it still owns working
 out which area is current.
 Brand tokens in `site/src/styles/brand.css` are sampled from `assets/readme/rundesk-banner.png`, and

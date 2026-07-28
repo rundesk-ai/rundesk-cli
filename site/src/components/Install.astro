@@ -1,0 +1,58 @@
+---
+/**
+ * The install one-liner, presented as the thing most people came for.
+ *
+ * A plain fenced block buries it among the other code on the page. A panel with
+ * its own frame, a prompt and a copy button says "this is the command" without a
+ * sentence having to.
+ */
+const command =
+	'curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash';
+---
+
+<div class="rd-install">
+	<div class="rd-install__bar">
+		<span class="rd-install__label">Install</span>
+		<span class="rd-install__tab" aria-current="true">One-liner</span>
+		<span class="rd-install__grow"></span>
+		<span class="rd-install__plat">macOS</span>
+	</div>
+	<div class="rd-install__body">
+		<p class="rd-install__note"># One command. Your shell profile is not touched.</p>
+		<div class="rd-install__line">
+			<code><span class="rd-install__prompt">$</span> {command}</code>
+			<button class="rd-install__copy" type="button" data-command={command}>
+				<span class="rd-install__copy-label">Copy</span>
+			</button>
+		</div>
+	</div>
+</div>
+
+<p class="rd-install__caption">
+	Everything lands under <code>~/.rundesk</code> — <code>app/</code> for the release,
+	<code>data/</code> for your agents. Updates replace the first and leave the second alone.
+	Remove it again with <code>--uninstall</code>.
+</p>
+
+<script>
+	for (const button of document.querySelectorAll<HTMLButtonElement>('.rd-install__copy')) {
+		const label = button.querySelector('.rd-install__copy-label');
+		button.addEventListener('click', async () => {
+			const command = button.dataset.command;
+			if (!command || !label) return;
+			try {
+				await navigator.clipboard.writeText(command);
+				// Say what happened. A button that looks identical after a click leaves
+				// the reader pasting into a terminal to find out whether it worked.
+				label.textContent = 'Copied';
+				button.dataset.copied = 'true';
+			} catch {
+				label.textContent = 'Press ⌘C';
+			}
+			setTimeout(() => {
+				label.textContent = 'Copy';
+				delete button.dataset.copied;
+			}, 2000);
+		});
+	}
+</script>
