@@ -442,6 +442,158 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         self.assertNotEqual("", discord.commentary(
             {"type": "think", "text": "the error is in the parser"}))
 
+    def test_thinking_is_a_broad_category_and_never_the_thought_itself(self):
+        """R-DIS-20 — activity is enough to show progress, not a reasoning transcript."""
+        shown = discord.commentary(
+            {"type": "think", "text": "the error is in the private parser"})
+        self.assertEqual("-# 💭 thinking", shown)
+        self.assertNotIn("private parser", shown)
+
+    def test_an_unknown_tool_uses_thinking_instead_of_a_gear(self):
+        """R-DIS-20 — an unmapped provider label stays broad without the disliked gear."""
+        shown = discord.commentary({"type": "tool", "name": "providerSpecificTool"})
+        self.assertEqual("-# 💭 thinking", shown)
+        self.assertNotIn("⚙", shown)
+
+    def test_one_activity_has_no_count(self):
+        """R-DIS-20 — a count starts only when something actually repeats."""
+        self.assertEqual("-# 💻 ran a command",
+                         discord._render_activity(
+                             discord._group_activity([], ["-# 💻 ran a command"])))
+
+    def test_consecutive_activity_is_one_line_with_a_count(self):
+        """R-DIS-20 — repeated activity remains legible and leaves room for the answer."""
+        groups = discord._group_activity([], [
+            "-# 💻 ran a command", "-# 💻 ran a command", "-# 💻 ran a command"])
+        self.assertEqual("-# 💻 ran a command **(x3)**",
+                         discord._render_activity(groups))
+
+    def test_only_consecutive_activity_is_counted(self):
+        """R-DIS-20 — a different category closes the group permanently."""
+        groups = discord._group_activity([], [
+            "-# 💻 ran a command", "-# 💻 ran a command",
+            "-# 📖 read a file", "-# 💻 ran a command"])
+        self.assertEqual(
+            "-# 💻 ran a command **(x2)**\n"
+            "-# 📖 read a file\n"
+            "-# 💻 ran a command",
+            discord._render_activity(groups))
+
+    def test_a_growing_message_counts_across_separate_writes(self):
+        """R-DIS-20 — the count grows by editing the active commentary message."""
+        edited = []
+
+        class Posted:
+            async def edit(self, content):
+                edited.append(content)
+
+        class Turn:
+            chose = type("Choice", (), {"activity": discord.GROWS})()
+
+            async def _post(self, it, text):
+                raise AssertionError("an editable commentary was posted again")
+
+        held = discord.Live()
+        held.posted = Posted()
+        held.activity_groups = [("-# 💻 ran a command", 1)]
+        held.activity = discord._render_activity(held.activity_groups)
+        held.pending = ["-# 💻 ran a command"]
+        asyncio.run(discord.Agent._flush(Turn(), {}, held))
+        self.assertEqual(["-# 💻 ran a command **(x2)**"], edited)
+
+    def test_activity_arriving_during_an_edit_gets_a_successor_write(self):
+        """R-DIS-20 — a Discord await may not strand the newest count until the answer."""
+        async def scenario():
+            editing = asyncio.Event()
+            release = asyncio.Event()
+            edited = []
+
+            class Posted:
+                async def edit(self, content):
+                    edited.append(content)
+                    editing.set()
+                    await release.wait()
+
+            class Turn:
+                chose = type("Choice", (), {"activity": discord.GROWS})()
+
+                async def _post(self, it, text):
+                    raise AssertionError("an editable commentary was posted again")
+
+                async def _flush(self, it, held):
+                    await discord.Agent._flush(self, it, held)
+
+                async def _paced(self, it, held):
+                    await discord.Agent._paced(self, it, held)
+
+            held = discord.Live()
+            held.posted = Posted()
+            held.activity_groups = [("-# 💻 ran a command", 1)]
+            held.pending = ["-# 💻 ran a command"]
+            held.pacing = asyncio.create_task(discord.Agent._paced(Turn(), {}, held))
+            await asyncio.wait_for(editing.wait(), timeout=2)
+            await discord.Agent._doing(
+                Turn(), {"type": "tool", "id": "3", "did": "run"}, held)
+            release.set()
+            first = held.pacing
+            await first
+            successor = held.pacing
+            self.assertIsNot(first, successor)
+            await successor
+            return edited, held
+
+        edited, held = asyncio.run(scenario())
+        self.assertEqual("-# 💻 ran a command **(x3)**", edited[-1])
+        self.assertEqual([], held.pending)
+
+    def test_an_intervening_message_breaks_a_count_that_has_not_flushed_yet(self):
+        """R-DIS-20 — a pending write may not merge activity across visible history."""
+        held = discord.Live()
+        held.pending = ["-# 💻 ran a command"]
+        discord.Agent._no_longer_last(None, held)
+        held.pending.append("-# 💻 ran a command")
+        self.assertEqual(
+            "-# 💻 ran a command\n-# 💻 ran a command",
+            discord._render_activity(discord._group_activity([], held.pending)))
+
+    def test_a_subagent_start_and_finish_are_two_broad_categories(self):
+        """R-DIS-20 — a result is correlated without publishing the helper's response."""
+        tools = {}
+        started = discord._activity_line(
+            {"type": "tool", "id": "helper-1", "did": "delegate"}, tools)
+        finished = discord._activity_line(
+            {"type": "result", "id": "helper-1", "ok": True,
+             "summary": "private helper response"}, tools)
+        self.assertEqual("-# 🤖 Delegated to subagent", started)
+        self.assertEqual("-# 🤖 Subagent finished", finished)
+        self.assertNotIn("private helper response", finished)
+
+    def test_a_safe_subagent_name_is_shown_without_its_provider_path(self):
+        """R-DIS-20 — one helper may be named without relaying its work or private path."""
+        tools = {}
+        started = discord._activity_line({
+            "type": "tool", "id": "helper-1", "did": "delegate",
+            "who": "/root/senior_code_reviewer",
+        }, tools)
+        finished = discord._activity_line({
+            "type": "result", "id": "helper-1", "ok": True,
+            "summary": "private response",
+        }, tools)
+        self.assertEqual("-# 🤖 Delegated to subagent: senior_code_reviewer", started)
+        self.assertEqual("-# 🤖 Subagent finished: senior_code_reviewer", finished)
+        self.assertNotIn("/root", started)
+        self.assertNotIn("private response", finished)
+
+    def test_named_subagents_still_collapse_as_one_broad_category(self):
+        """R-DIS-20 — names add detail only while they do not defeat compact counts."""
+        groups = discord._group_activity([], [
+            "-# 🤖 Delegated to subagent: Gibbs",
+            "-# 🤖 Delegated to subagent: Plato",
+        ])
+        self.assertEqual(
+            "-# 🤖 Delegated to subagent **(x2)**",
+            discord._render_activity(groups))
+
     def test_it_stops_saying_it_is_typing_the_moment_there_is_something_to_read(self):
         """R-DIS-6 — cancelled when the turn *ended*, which is one record too late: the
         answer is handed over first, so the renewal could fire once more in between and
@@ -542,12 +694,15 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         the next thing to show has to begin a message of its own."""
         held = discord.Live()
         held.posted, held.activity = object(), "-# 💻 ran a command"
+        held.activity_groups = [("-# 💻 ran a command", 1)]
         # Unbound on purpose: the decision uses nothing of the connection, which is what
         # makes it testable without one.
         discord.Agent._no_longer_last(None, held)
         self.assertIsNone(held.posted, "it would have gone on editing a buried message")
         self.assertEqual("", held.activity,
                          "a fresh message would have opened with the old one's lines")
+        self.assertEqual([], held.activity_groups,
+                         "the next message would have continued the old count")
 
     def test_a_write_that_lands_after_the_message_was_buried_is_dropped(self):
         """R-DIS-20 — the buried-message fix was written as though nothing happened

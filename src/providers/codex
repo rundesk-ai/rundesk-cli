@@ -92,11 +92,10 @@ DID = {
     "fileRead": "read",
     "listFiles": "list",
     "imageGeneration": "make",
-    # **Two of them, measured 2026-07-27 against codex-cli 0.145.0**, because this brain
-    # reports a delegation twice over: the activity of the child, and the call that
-    # started it. Both are the same thing to a reader, and neither had a verb.
+    # The child activity is canonical because it names the child thread whose eventual
+    # turn completion means the helper really finished. The spawn call completing only
+    # means Codex managed to start it (measured 2026-07-27 against codex-cli 0.145.0).
     "subAgentActivity": "delegate",
-    "collabAgentToolCall": "delegate",
 }
 
 #: Item kinds that are not tools: what the brain said, what it thought, and the echo of
@@ -137,6 +136,7 @@ class Codex:
         self.why = None
         self.tokens = None
         self._tools: dict = {}
+        self._helpers: dict = {}  # child thread -> synthetic tool id, until it really ends
         self._proc = subprocess.Popen(
             [CODEX, "app-server"], cwd=where,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -226,6 +226,7 @@ class Codex:
         # item still reports the delegation on the parent thread (R-PRV-25).
         belongs_to = params.get("threadId")
         if self.thread is not None and belongs_to is not None and belongs_to != self.thread:
+            self._child_ended(method, params)
             return
         if method == "turn/started":
             self.turn = (params.get("turn") or {}).get("id")
@@ -250,7 +251,8 @@ class Codex:
 
     def _began(self, item: dict) -> None:
         kind = item.get("type")
-        if not kind or kind in SPOKEN or kind == OURS:
+        if not kind or kind in SPOKEN or kind == OURS or kind == "subAgentActivity" \
+                or _quiet_activity(item):
             return
         at = str(item.get("id") or len(self._tools) + 1)
         self._tools[at] = kind
@@ -264,6 +266,17 @@ class Codex:
         kind = item.get("type")
         if not kind or kind == OURS:
             return  # the echo of what we sent; the run's account already holds it
+        if kind == "subAgentActivity":
+            self._helper_activity(item)
+            return
+        if _quiet_activity(item):
+            # Successful send/resume/wait/close records are bookkeeping for the one helper
+            # already announced by spawn. A failure is still something the owner needs to
+            # see, without pretending another helper was delegated first.
+            if item.get("status") == "failed":
+                say(type="result", id=str(item.get("id") or "1"), ok=False,
+                    summary=_summary(item))
+            return
         if kind in SPOKEN:
             # `whole`, because this arrives on the item having *completed*: what this
             # brain says is finished by the time it says it, never a piece of something
@@ -284,6 +297,37 @@ class Codex:
                 # can only mention it in a sentence, and the picture never arrives.
                 say(type="file", at=made)
 
+    def _helper_activity(self, item: dict) -> None:
+        """Start one visible helper lifecycle; incidental interactions remain quiet."""
+        state = item.get("kind")
+        thread = str(item.get("agentThreadId") or "")
+        if state == "started":
+            if thread and thread in self._helpers:
+                return
+            at = f"subagent:{thread}" if thread else str(item.get("id") or "subagent")
+            if thread:
+                self._helpers[thread] = at
+            say(type="tool", id=at, name="subAgentActivity", did="delegate",
+                who=str(item.get("agentPath") or "").rsplit("/", 1)[-1])
+        elif state in ("errored", "interrupted", "shutdown"):
+            self._finish_helper(thread, False, str(state))
+
+    def _child_ended(self, method: str, params: dict) -> None:
+        """Finish a helper without ever treating its turn as the parent's completion."""
+        thread = str(params.get("threadId") or "")
+        if method == "turn/completed":
+            became = params.get("turn") or {}
+            status = str(became.get("status") or "completed")
+            self._finish_helper(thread, status == "completed", status)
+        elif method == "turn/failed":
+            error = params.get("error") or {}
+            self._finish_helper(thread, False, str(error.get("message") or "failed"))
+
+    def _finish_helper(self, thread: str, ok: bool, summary: str) -> None:
+        at = self._helpers.pop(thread, None) if thread else None
+        if at is not None:
+            say(type="result", id=at, ok=ok, summary=summary)
+
     def end(self) -> None:
         if self._proc.stdin is not None and not self._proc.stdin.closed:
             try:
@@ -294,6 +338,17 @@ class Codex:
             self._proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             self._proc.terminate()
+
+
+def _quiet_activity(item: dict) -> bool:
+    """Provider bookkeeping that would over-count one delegation.
+
+    Child activity owns the visible lifecycle because it can be correlated with the child
+    turn. Spawn/send/resume/wait/close operate that same child; none means another helper
+    began or finished.
+    """
+    kind = item.get("type")
+    return kind == "collabAgentToolCall"
 
 
 #: Where this brain puts a thing it made, and the field it says so in. **Measured, not

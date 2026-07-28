@@ -281,6 +281,22 @@ class WhenItHandsWorkToAHelper(unittest.TestCase):
         self.assertEqual("delegate", claude.DID.get("Agent"))
         self.assertNotIn("Task", claude.DID)
 
+    def test_a_subagent_type_is_carried_as_its_compact_name(self):
+        """R-PRV-8 — Claude supplies a helper type without exposing its prompt."""
+        real = json.dumps({"type": "assistant", "session_id": "s", "message": {
+            "content": [{
+                "type": "tool_use", "id": "helper-1", "name": "Agent",
+                "input": {
+                    "subagent_type": "code-reviewer",
+                    "prompt": "private instructions must not be relayed",
+                },
+            }]
+        }})
+        self.assertEqual([{
+            "type": "tool", "id": "helper-1", "name": "Agent",
+            "did": "delegate", "who": "code-reviewer",
+        }], claude.records(real, {"session": "s"}))
+
 
 class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
     """The command line, which is where this brain's two traps live."""

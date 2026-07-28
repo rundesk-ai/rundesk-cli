@@ -303,6 +303,11 @@ def _assistant(one: dict, seen: dict) -> list:
             did = DID.get(it["name"])
             if did:
                 it["did"] = did
+            if did == "delegate":
+                inputs = block.get("input") if isinstance(block.get("input"), dict) else {}
+                who = str(inputs.get("subagent_type") or "").strip()
+                if who:
+                    it["who"] = who
             said.append(it)
     return said
 
