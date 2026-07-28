@@ -86,6 +86,10 @@ post text is a first-class channel, not a broken one.**
 what the *brain* declared. Offering somebody a way to interrupt a turn whose brain said
 `steer: false` offers something that cannot happen.
 
+**Gateway inspection is closed and read-only.** An adapter may report a `query` for
+`status`, `version`, `agents`, or `help`; Rundesk authorizes it and answers with the
+correlated `query-result`. Never turn a platform command into arbitrary CLI arguments.
+
 **A tool's verb is one of a closed list** — `read`, `search`, `run`, `edit`, `list`, `make`,
 `delegate` — or absent. Never render your own word for one; a channel that recognised a
 vendor's tool names would carry that vocabulary forever.

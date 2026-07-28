@@ -729,6 +729,19 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
         self.assertIsNotNone(channel.understood(json.dumps(
             {"type": "control", "conversation": "one", "user": "u", "control": "stop"})))
 
+    def test_a_gateway_query_is_closed_and_read_only(self):
+        """R-CAD-17 — an adapter may offer a known inspection, but cannot turn arbitrary
+        command words into gateway access."""
+        for query in channel.QUERIES:
+            self.assertIsNotNone(channel.understood(json.dumps({
+                "type": "query", "conversation": "one", "user": "u",
+                "query": query, "ref": "8841",
+            })))
+        self.assertIsNone(channel.understood(json.dumps({
+            "type": "query", "conversation": "one", "user": "u",
+            "query": "remove", "ref": "8841",
+        })))
+
 
 class AddingAChannelProvesItself(DrivesAnAdapter):
     """R-CAD-9 — it connects, signs in and looks, before anything is written down."""

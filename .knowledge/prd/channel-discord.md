@@ -43,6 +43,8 @@ so only a running commentary may grow.
 | ❌ | R-DIS-19 | A file the agent made is uploaded rather than described | src/channels/discord:470 — the upload is the platform's, and proved by hand; .knowledge/scripts/probe-discord says what to do and what to look for |
 | ✅ | R-DIS-20 | What an agent is doing is shown while it works only if the owner asked for it | `showing the work is off unless the owner asks`, `the commentary may grow but the answer may never`, `a long commentary is kept to what one message holds` |
 | ✅ | R-DIS-21 | Discord says which room and which person a message came from, in the words Discord shows | `discord says which room and which person a message came from`, `a direct message is named as one rather than as a channel`, `a thread is named under the channel it was opened in`, `a server with no name to show is not shown as blank` |
+| ✅ | R-DIS-22 | Read-only gateway information is offered as Discord's own commands | `read only gateway information is offered as discord commands`, `a gateway answer completes the exact deferred interaction`, `a read only command is deferred and reported for authorization` |
+| ✅ | R-DIS-23 | A Discord command is handled only by the channel whose configured place contains it | `one slash interaction belongs to exactly one configured surface` |
 
 ## Open questions
 

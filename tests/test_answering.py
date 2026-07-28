@@ -137,10 +137,10 @@ class CarriesAConversation(unittest.IsolatedAsyncioTestCase):
         records.opened(where_it_is, channel, "somewhere", conversation, AT)
         records.remember_session(where_it_is, brain, handle)
 
-    def answering(self, surface, brain, record=None) -> answering.Answering:
+    def answering(self, surface, brain, record=None, querying=None) -> answering.Answering:
         return answering.Answering(
             "ava", "ops", record if record is not None else self.record, surface,
-            where=self.where, carry=brain, note=self.told.append)
+            where=self.where, carry=brain, note=self.told.append, querying=querying)
 
     async def carry(self, held, *records, wait=True):
         """Hand these to the channel, and let whatever they started finish."""
@@ -473,6 +473,41 @@ class WhoMayBeAnswered(CarriesAConversation):
         self.assertFalse(held.exchanges["one"].task.done(), "a stranger stopped a turn")
         stop.set()
         await self._settled(held)
+
+
+class ReadOnlyGatewayQuestions(CarriesAConversation):
+    """R-CAD-17, R-CH-23, R-CH-24 — inspection without a brain turn."""
+
+    @staticmethod
+    def query(user="2207", named="status"):
+        return {
+            "type": "query", "conversation": "one", "user": user,
+            "query": named, "ref": "interaction-1",
+        }
+
+    async def test_an_authorized_gateway_query_is_answered_without_a_brain_turn(self):
+        """R-CH-23, R-CH-24"""
+        brain, surface = Brain(), Surface()
+        held = self.answering(
+            surface, brain, querying=lambda asked: f"{asked}: RUNNING"
+        )
+        await held.heard(self.query())
+        await self._settled(held)
+        self.assertEqual([], brain.asked)
+        self.assertEqual([{
+            "type": "query-result", "conversation": "one", "query": "status",
+            "ref": "interaction-1", "text": "status: RUNNING",
+        }], surface.of("query-result"))
+
+    async def test_somebody_not_allowed_receives_no_gateway_information(self):
+        """R-CH-23"""
+        surface = Surface()
+        held = self.answering(
+            surface, Brain(), querying=lambda _asked: "private gateway state"
+        )
+        await held.heard(self.query(user="9999"))
+        await self._settled(held)
+        self.assertEqual([], surface.of("query-result"))
 
 
 class WhatAMessageCannotChange(CarriesAConversation):

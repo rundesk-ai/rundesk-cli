@@ -21,9 +21,10 @@ because two adapters deciding them separately would eventually disagree about th
   not, so an adapter is never handed a part-written answer — which makes showing half a
   sentence impossible rather than merely discouraged (R-CH-7, R-CH-8).
 
-The contract is written for a stranger in `.knowledge/guides/write-a-channel-adapter.md`.
-**That guide is the specification and this file is an implementation of it** — where the
-two disagree, the guide is right.
+The contract is written for a stranger in
+`src/templates/skills/building-a-channel-adapter/references/the-contract.md`.
+**That reference is the specification and this file is an implementation of it** — where
+the two disagree, the reference is right.
 """
 
 from __future__ import annotations
@@ -40,10 +41,10 @@ from rundesk import gateway, process, provider
 #: disagree with the directory.
 ADAPTERS = Path(__file__).resolve().parent.parent / "channels"
 
-#: What an adapter reports, and the whole of it (R-CAD-1). Four, because there are four
-#: things a surface has to say: it is connected, somebody spoke, somebody made a gesture at
-#: a conversation rather than speaking into it, and it is no longer connected.
-ARRIVING = ("ready", "arrived", "control", "gone")
+#: What an adapter reports, and the whole of it (R-CAD-1, R-CAD-17). A query is kept
+#: apart from both a message and a control: it starts no brain turn and changes nothing,
+#: but still crosses the authorization boundary before Rundesk answers it.
+ARRIVING = ("ready", "arrived", "control", "query", "gone")
 
 #: What each of those must carry to mean anything. A record missing one of them is not a
 #: partial record to be patched up — it is one nothing can be done with, and passing it on
@@ -53,6 +54,7 @@ NEEDED = {
     "ready": (),
     "arrived": ("conversation", "user", "text"),
     "control": ("conversation", "user", "control"),
+    "query": ("conversation", "user", "query", "ref"),
     "gone": (),
 }
 
@@ -151,7 +153,8 @@ ATTACHED_BYTES = 32 * 1024 * 1024
 #: says "I will look at the logs" and then, a minute later, what it found, is writing the
 #: way a person does, and both arriving at once loses the first one's whole purpose. The
 #: last thing it says is still the `answer`, because that is the one somebody replies to.
-TELLING = ("state", "think", "tool", "result", "usage", "said", "answer")
+TELLING = ("state", "think", "tool", "result", "usage", "said", "answer",
+           "query-result")
 
 #: What a tool did, in the words a surface shows. **The provider seam's list, not a
 #: second copy of it** — a brain says what it did and a surface shows it, so the two must
@@ -183,6 +186,15 @@ STOP = "stop"
 FORGET = "forget"
 RESTART = "restart"
 CONTROLS = (STOP, FORGET, RESTART)
+
+#: Read-only questions a surface may ask Rundesk itself (R-CAD-17). Closed for the same
+#: reason controls are: an adapter may offer its own word for one of these, but it cannot
+#: turn arbitrary command-line input into gateway access.
+STATUS = "status"
+VERSION = "version"
+AGENTS = "agents"
+HELP = "help"
+QUERIES = (STATUS, VERSION, AGENTS, HELP)
 
 #: What is asked of an adapter to find out whether it can reach what it was pointed at.
 #: Unlike asking a brain what it can do, this one really does reach a network — that is the
@@ -299,7 +311,7 @@ def spoken(**it) -> bytes:
 
 
 def understood(said: bytes | str) -> dict | None:
-    """One line, as one of the four records we know — or nothing, if it is not one.
+    """One line, as one of the five records we know — or nothing, if it is not one.
 
     Nothing is refused here and nothing raises (R-CAD-1). A line we cannot read, a line
     that is not an object, a line of a kind we have never heard of, and a line of a kind we
@@ -307,9 +319,9 @@ def understood(said: bytes | str) -> dict | None:
     "keep it, act on nothing". The caller keeps the raw line either way, which is what
     makes an adapter's drift show up as something readable rather than as a silent gap.
 
-    A `control` naming a gesture that does not exist is refused for the same reason a
-    missing field is: acting on it would mean guessing which of two things somebody meant,
-    and one of them ends a turn.
+    A `control` or `query` naming something that does not exist is refused for the same
+    reason a missing field is: accepting an open vocabulary here would either guess at a
+    destructive gesture or expose an arbitrary gateway operation.
     """
     try:
         it = json.loads(said)
@@ -326,6 +338,8 @@ def understood(said: bytes | str) -> dict | None:
         if not it[wanted] and wanted != "text":
             return None
     if kind == "control" and it["control"] not in CONTROLS:
+        return None
+    if kind == "query" and it["query"] not in QUERIES:
         return None
     if kind == "arrived":
         it[ATTACHED] = attached(it.get(ATTACHED))
@@ -640,4 +654,3 @@ def allowed(record: dict, user: str) -> bool:
     if not isinstance(who, list):
         return False
     return bool(user) and user in who
-

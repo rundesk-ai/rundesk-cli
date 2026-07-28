@@ -21,11 +21,13 @@ reached back for an agent would end it.
 from __future__ import annotations
 
 import os
+import re
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from rundesk import data_home, gateway, migration, skill, store
+from rundesk import ROOT, __version__, data_home, gateway, migration, skill, store
 
 #: What a new agent's home is copied from. Ordinary Markdown files rather than text built
 #: in code, because they are what an owner reads first and edits next, and a rule about how
@@ -880,8 +882,79 @@ def _answering(name, one, record, where, carry, answers):
     """
     def made(sending, restarting=None, note=None):
         return answers.Answering(name, one, record, sending, where=where, carry=carry,
-                                 restarting=restarting, note=note)
+                                 restarting=restarting, note=note,
+                                 querying=lambda asked: _queried(name, asked, where))
     return made
+
+
+def _queried(name: str, asked: str, where: Path | None = None) -> str:
+    """A read-only answer about this install and its agents (R-CAD-17).
+
+    Kept here because this is the layer that knows agents have gateways. The channel
+    carries the question and authorizes it; the gateway remains unaware of agents.
+    """
+    if asked == "help":
+        return (
+            "Read-only queries: status, version, agents, help\n"
+            "Conversation controls: stop, forget\n"
+            "Agent control: restart"
+        )
+    if asked == "version":
+        standing = gateway.standing(name, resolved(name, where).run)
+        running = standing.version or "not running"
+        return f"Rundesk installed: {_installed_version()}\n{name} gateway: {running}"
+    if asked == "status":
+        standing = gateway.standing(name, resolved(name, where).run)
+        state = ("WEDGED" if standing.stale else "RUNNING") if standing.running else "STOPPED"
+        working = gateway.what_is_working(name, resolved(name, where).run) \
+            if standing.running else {}
+        turning = gateway.what_is_turning(name, resolved(name, where).run)
+        uptime = _query_uptime(standing.started) if standing.running else "-"
+        return (
+            f"{name}: {state}\n"
+            f"version: {standing.version or '-'}\n"
+            f"uptime: {uptime}\n"
+            f"processes: {len(working)}\n"
+            f"active turns: {len(turning)}"
+        )
+    if asked == "agents":
+        names = known(where)
+        if not names:
+            return "no agents"
+        rows = []
+        for one in names:
+            standing = gateway.standing(one, resolved(one, where).run)
+            state = ("WEDGED" if standing.stale else "RUNNING") \
+                if standing.running else "STOPPED"
+            rows.append(f"{one}: {state} ({standing.version or '-'})")
+        return "\n".join(rows)
+    raise ValueError(f"unknown read-only query: {asked}")
+
+
+def _installed_version(root: Path | None = None) -> str:
+    """The code on disk, which may be newer than this still-running gateway."""
+    root = root or ROOT
+    try:
+        source = (root / "src" / "rundesk" / "__init__.py").read_text(encoding="utf-8")
+    except OSError:
+        return "unknown"
+    found = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']\s*$', source, re.MULTILINE)
+    return found.group(1) if found else "unknown"
+
+
+def _query_uptime(started) -> str:
+    """A compact duration for a surface whose response has a small text limit."""
+    if not isinstance(started, (int, float)):
+        return "-"
+    seconds = max(0, int(time.time() - started))
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, _seconds = divmod(seconds, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
 
 
 def asking(name: str, where: Path | None = None, carry=None):

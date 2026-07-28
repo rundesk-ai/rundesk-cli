@@ -14,8 +14,9 @@ What it does, in the order somebody experiences it:
     taken up -> 👀 and typing        finished -> ✅ and the answer, whole
     stopped  -> ✋                   failed   -> ⚠️ and what failed
 
-The contract this implements is `.knowledge/guides/write-a-channel-adapter.md`. Where the
-two disagree, the guide is right.
+The contract this implements is
+`src/templates/skills/building-a-channel-adapter/references/the-contract.md`. Where the
+two disagree, the reference is right.
 
 The cost of the choice: `discord.py` is a dependency, pinned in `requirements.txt` and
 installed by `install.sh` into the install's own virtualenv. Python's standard library has
@@ -184,19 +185,28 @@ MARKS = {"finished": "✅", "stopped": "✋", "failed": "⚠️"}
 SEEN = "👀"
 
 #: What this agent offers as Discord's own commands, described where they are offered
-#: (R-DIS-10). Slash commands rather than words typed in chat, because they are
-#: discoverable, are described where they are offered, and cannot be said by accident.
+#: (R-DIS-10, R-DIS-22). Slash commands rather than words typed in chat, because they
+#: are discoverable, are described where they are offered, and cannot be said by accident.
 #:
 #: Each is Discord's own name for one of the gestures the seam defines — the platform
 #: picks the word its people will recognise, and the seam keeps the meaning. `/new` is
 #: what forgetting a conversation is called to somebody using it: they are not clearing
 #: state, they are starting again.
-COMMANDS = (
+CONTROL_COMMANDS = (
     ("stop", "Stop the turn running here", "stop", "✋ stopping this turn."),
     ("new", "Start a new session — the next message begins fresh", "forget",
      "🧹 this conversation starts fresh."),
     ("restart", "Restart this agent's gateway", "restart",
      "♻️ restarting the agent — it will be back in a moment."),
+)
+
+#: Read-only gateway questions (R-DIS-22). Their names are Discord's; the values are Rundesk's
+#: closed query vocabulary, so this never becomes an arbitrary command runner.
+QUERY_COMMANDS = (
+    ("status", "Show this agent gateway's current status", "status"),
+    ("version", "Show the installed and running Rundesk versions", "version"),
+    ("agents", "List configured agents and whether they are running", "agents"),
+    ("help", "Show the gateway commands available here", "help"),
 )
 
 #: What a tool did, in a mark. One per verb the seam defines, and never keyed on a
@@ -398,15 +408,23 @@ class Agent(discord.Client):
         #: Whether the owner has been told this agent came up. Once for this process,
         #: because coming up is what the message says happened (R-DIS-15).
         self.greeted = False
+        #: Deferred slash interactions waiting for an authorized read-only answer.
+        #: Bounded because the adapter lives for weeks and a broken gateway must not turn
+        #: one unanswered interaction into permanent memory.
+        self.queries: dict = {}
         self.tree = discord.app_commands.CommandTree(self)
 
     # -- coming up and going down ----------------------------------------------------
 
     async def setup_hook(self) -> None:
-        for name, describes, _control, _said in COMMANDS:
+        for name, describes, _control, _said in CONTROL_COMMANDS:
             self.tree.add_command(discord.app_commands.Command(
                 name=name, description=describes,
-                callback=self._made(name), nsfw=False))
+                callback=self._control_command(name), nsfw=False))
+        for name, describes, _query in QUERY_COMMANDS:
+            self.tree.add_command(discord.app_commands.Command(
+                name=name, description=describes,
+                callback=self._query_command(name), nsfw=False))
         # Offered globally *and* to the server it was pointed at: a guild's copy appears
         # at once, where a global one can take an hour to propagate (R-DIS-10).
         with contextlib.suppress(Exception):
@@ -415,18 +433,67 @@ class Agent(discord.Client):
             with contextlib.suppress(Exception):
                 await self.tree.sync(guild=discord.Object(id=int(self.chose.server)))
 
-    def _made(self, control: str):
+    def _control_command(self, control: str):
         async def ran(interaction: discord.Interaction) -> None:
+            if not self._owns(interaction):
+                return
             # Answered inside the three seconds Discord allows, and answered *only* that
             # it was heard (R-DIS-11, R-DIS-12). What the control did comes back as the
             # turn's own outcome — acknowledging it with the running turn's half-written
             # output is how a half-finished sentence gets published as the reply.
-            gesture, said = next((c, s) for n, _d, c, s in COMMANDS if n == control)
+            gesture, said = next(
+                (c, s) for n, _d, c, s in CONTROL_COMMANDS if n == control
+            )
             with contextlib.suppress(Exception):
                 await interaction.response.send_message(said, ephemeral=True)
             say(type="control", conversation=str(interaction.channel_id),
                 user=str(interaction.user.id), control=gesture)
         return ran
+
+    def _query_command(self, named: str):
+        async def ran(interaction: discord.Interaction) -> None:
+            if not self._owns(interaction):
+                return
+            # Advisory only; Rundesk checks again before answering. This prevents a
+            # deferred interaction from hanging forever for somebody Rundesk will
+            # correctly answer with silence.
+            if self.chose.allow and str(interaction.user.id) not in self.chose.allow:
+                with contextlib.suppress(Exception):
+                    await interaction.response.send_message(
+                        "This command is not available to you.", ephemeral=True
+                    )
+                return
+            query = next(query for name, _description, query in QUERY_COMMANDS
+                         if name == named)
+            ref = str(interaction.id)
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except Exception as why:  # noqa: BLE001 — a platform boundary
+                note(f"could not defer /{named}: {type(why).__name__}: {why}")
+                return
+            self.queries[ref] = interaction
+            while len(self.queries) > SEEN_KEPT:
+                self.queries.pop(next(iter(self.queries)))
+            say(type="query", conversation=str(interaction.channel_id),
+                user=str(interaction.user.id), query=query, ref=ref)
+        return ran
+
+    def _owns(self, interaction: discord.Interaction) -> bool:
+        """Whether this interaction belongs to this adapter's configured surface.
+
+        One bot may have a DM adapter and a room adapter connected together. Discord
+        delivers a slash command to both gateway sessions; only the scoped one may report
+        it, or one gesture executes twice (R-DIS-23).
+        """
+        direct = interaction.guild is None
+        if not direct and self.chose.server and str(interaction.guild.id) != \
+                str(self.chose.server):
+            return False
+        at = interaction.channel
+        belongs_to = getattr(at, "parent_id", None) \
+            if isinstance(at, discord.Thread) else interaction.channel_id
+        return within(direct, belongs_to, self.chose.channel, self.chose.dm,
+                      self.chose.server)
 
     async def on_ready(self) -> None:
         # Online for as long as the gateway running this agent is up (R-DIS-16). This
@@ -669,6 +736,8 @@ class Agent(discord.Client):
             await self._state(it, held)
         elif kind == "answer":
             await self._answer(it, held)
+        elif kind == "query-result":
+            await self._query_result(it)
         elif kind == "said":
             # A finished thing the agent said while it was still working, in a message of
             # its own. Not the answer and not anchored to anything: it is a remark, and
@@ -697,6 +766,19 @@ class Agent(discord.Client):
             held.typing = held.typing or asyncio.ensure_future(self._typing(it))
         elif kind in ("think", "tool", "result", "usage"):
             await self._doing(it, held)
+
+    async def _query_result(self, it: dict) -> None:
+        """Complete the exact deferred interaction that asked, and nowhere public."""
+        interaction = self.queries.pop(str(it.get("ref")), None)
+        if interaction is None:
+            note(f"no deferred interaction for {it.get('query')}")
+            return
+        try:
+            await interaction.edit_original_response(
+                content=clip(str(it.get("text") or "No information available."), LIMIT)
+            )
+        except Exception as why:  # noqa: BLE001 — a platform boundary
+            note(f"could not answer /{it.get('query')}: {type(why).__name__}: {why}")
 
     async def _state(self, it: dict, held: Live) -> None:
         state = it.get("state")
