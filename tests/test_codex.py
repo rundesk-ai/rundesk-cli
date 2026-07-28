@@ -29,7 +29,9 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -195,6 +197,69 @@ class WhenItHandsWorkToAHelper(unittest.TestCase):
             "turn": {"id": "parent-turn", "status": "completed"},
         })
         self.assertTrue(held.finished.is_set(), "the parent's own completion was ignored")
+
+
+class WhatCodexMade(unittest.TestCase):
+    """R-PRV-20, R-PRV-26 — files come from explicit provider output, never prose."""
+
+    PNG = b"\x89PNG\r\n\x1a\nsmall-test-image"
+
+    def setUp(self):
+        self.where = Path(tempfile.mkdtemp(prefix="rundesk-codex-files-"))
+        self.addCleanup(shutil.rmtree, self.where, True)
+
+    def records_for(self, item):
+        held = object.__new__(codex.Codex)
+        held._tools = {str(item.get("id") or "1"): item.get("type")}
+        output = io.StringIO()
+        before = os.environ.get("RUNDESK_CWD")
+        os.environ["RUNDESK_CWD"] = str(self.where)
+        try:
+            with contextlib.redirect_stdout(output):
+                held._ended(item)
+        finally:
+            if before is None:
+                os.environ.pop("RUNDESK_CWD", None)
+            else:
+                os.environ["RUNDESK_CWD"] = before
+        return [json.loads(line) for line in output.getvalue().splitlines()]
+
+    def test_image_content_returned_by_a_tool_is_reported_as_a_file(self):
+        """R-PRV-26 — dynamic tools return images as data URLs in contentItems."""
+        import base64
+
+        encoded = base64.b64encode(self.PNG).decode("ascii")
+        records = self.records_for({
+            "type": "dynamicToolCall", "id": "tool-1", "status": "completed",
+            "contentItems": [{"type": "inputImage",
+                              "imageUrl": f"data:image/png;base64,{encoded}"}],
+        })
+        files = [one for one in records if one["type"] == "file"]
+        self.assertEqual(1, len(files), records)
+        made = Path(files[0]["at"])
+        self.assertTrue(made.is_relative_to(self.where))
+        self.assertEqual(".png", made.suffix)
+        self.assertEqual(self.PNG, made.read_bytes())
+
+    def test_a_remote_or_malformed_image_reference_is_not_fetched_or_invented(self):
+        """R-PRV-20 — an explicit image content block is not permission to fetch a URL,
+        and malformed bytes are not a file."""
+        for image_url in ("https://example.invalid/private.png",
+                          "data:image/png;base64,not-valid-base64"):
+            records = self.records_for({
+                "type": "dynamicToolCall", "id": "tool-1", "status": "completed",
+                "contentItems": [{"type": "inputImage", "imageUrl": image_url}],
+            })
+            self.assertEqual([], [one for one in records if one["type"] == "file"])
+
+    def test_a_generated_images_saved_path_is_still_reported(self):
+        """R-PRV-20 — the existing image-generation path remains intact."""
+        source = self.where / "generated.png"
+        source.write_bytes(self.PNG)
+        files = codex._files(
+            {"type": "imageGeneration", "savedPath": str(source)}, str(self.where))
+        self.assertEqual(1, len(files))
+        self.assertEqual(self.PNG, Path(files[0]).read_bytes())
 
 
 class WhereStandingInstructionsGo(unittest.TestCase):

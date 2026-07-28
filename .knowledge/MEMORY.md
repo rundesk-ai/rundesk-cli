@@ -303,6 +303,11 @@ re-checked since, so treat these as true-when-found rather than as current.*
   tooling it reaches for write under `~/.cache`, `~/Library/Caches`, even `~/.rustup`. Removing
   rundesk cannot take those and does not try. Do not word a requirement as "everything an install
   puts on a machine", because it is not true; ours is what rundesk *is made of*.
+- **A scratch install still inherits `RUNDESK_SKILL_LIBRARY` and `RUNDESK_SKILLS`.** Redirecting
+  only install, data, agent, run, log and job directories let the scratch uninstall remove the
+  live built-in skill copies. Unset every ambient `RUNDESK_*` variable first, then set each
+  scratch path explicitly; restore with the live `rundesk skills --lay-down` if this already
+  happened.
 - A downloaded install is a directory of source with an `install.sh` in it, which is **exactly what a
   clone looks like** — so the guard protecting a developer's checkout refused to remove `~/.rundesk`
   and uninstalling silently left it. What tells them apart is whether the script sits in the

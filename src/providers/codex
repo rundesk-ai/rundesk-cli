@@ -43,6 +43,9 @@ lifecycle rather than one command. The measurements are in
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import os
 import shutil
@@ -358,6 +361,15 @@ def _quiet_activity(item: dict) -> bool:
 #: `imageGeneration` item; `.knowledge/scripts/probe-codex` asks the next version.
 MADE_AT = "savedPath"
 
+#: Image content a dynamic tool may return inline. Measured from the app-server 0.145.0
+#: schema: contentItems holds inputImage records whose imageUrl may be a data URL. Only
+#: formats Discord can upload unchanged are materialised.
+IMAGE_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+
 
 def _files(item: dict, workspace: str) -> list:
     """Anything this item says it made, brought to where the agent actually works.
@@ -367,19 +379,69 @@ def _files(item: dict, workspace: str) -> list:
     agent's own directories, and rightly: "the brain made it" is not a reason to reach
     into everything the brain can see. So it is copied in, which is this file's job,
     because where this vendor puts things is a Codex-shaped fact.
+
+    Dynamic tools report inline images instead of paths. Those are decoded into the same
+    workspace directory (R-PRV-26). Remote URLs are deliberately not fetched: a tool
+    returning a reference is not authority for the gateway to make a network request.
     """
-    at = item.get(MADE_AT)
-    if not isinstance(at, str) or not at or not os.path.isfile(at):
-        return []
+    found = []
     where = os.path.join(workspace, "made")
+    at = item.get(MADE_AT)
+    if isinstance(at, str) and at and os.path.isfile(at):
+        try:
+            os.makedirs(where, exist_ok=True)
+            landed = os.path.join(where, os.path.basename(at))
+            shutil.copyfile(at, landed)
+            found.append(landed)
+        except OSError as why:
+            sys.stderr.write(f"could not bring {at} into the workspace: {why}\n")
+    for content in item.get("contentItems") or []:
+        if not isinstance(content, dict) or content.get("type") != "inputImage":
+            continue
+        landed = _inline_image(content.get("imageUrl"), where)
+        if landed and landed not in found:
+            found.append(landed)
+    return found
+
+
+def _inline_image(image_url, where: str) -> str | None:
+    """One explicit inline image, or nothing for a reference or malformed content."""
+    if not isinstance(image_url, str):
+        return None
+    header, comma, encoded = image_url.partition(",")
+    if not comma or not header.startswith("data:") or not header.endswith(";base64"):
+        return None
+    mime = header[5:-7].lower()
+    extension = IMAGE_TYPES.get(mime)
+    if not extension:
+        return None
+    try:
+        payload = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if not payload:
+        return None
     try:
         os.makedirs(where, exist_ok=True)
-        landed = os.path.join(where, os.path.basename(at))
-        shutil.copyfile(at, landed)
+        digest = hashlib.sha256(payload).hexdigest()[:16]
+        for number in range(1000):
+            suffix = "" if number == 0 else f"-{number + 1}"
+            landed = os.path.join(where, f"tool-image-{digest}{suffix}{extension}")
+            try:
+                descriptor = os.open(landed, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                try:
+                    if not os.path.islink(landed) and Path(landed).read_bytes() == payload:
+                        return landed
+                except OSError:
+                    pass
+                continue
+            with os.fdopen(descriptor, "wb") as made:
+                made.write(payload)
+            return landed
     except OSError as why:
-        sys.stderr.write(f"could not bring {at} into the workspace: {why}\n")
-        return []
-    return [landed]
+        sys.stderr.write(f"could not bring an inline tool image into the workspace: {why}\n")
+    return None
 
 
 def _summary(item: dict) -> str:
