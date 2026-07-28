@@ -36,8 +36,11 @@ export default defineConfig({
 				'Run AI coding agents as durable, named teammates on your own Mac — then reach them from your terminal, Discord, or a schedule.',
 			tagline: 'Teammates that remember, adapt, and grow.',
 			logo: {
-				src: './src/assets/rundesk-mark.png',
+				// The lockup cut out of the repository banner, so the header carries the
+				// real letterforms rather than a webfont chosen to look near enough.
+				src: './src/assets/rundesk-lockup.png',
 				alt: 'Rundesk',
+				replacesTitle: true,
 			},
 			favicon: '/favicon.png',
 			customCss: ['./src/styles/brand.css'],

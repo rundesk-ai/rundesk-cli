@@ -202,7 +202,9 @@ Two Starlight component overrides in `site/src/components/` move them where a re
 current area as an eyebrow above the title. Both wrap Starlight's default rather than replace
 it, and the plugin's own sidebar copy stays rendered but hidden, because it still owns working
 out which area is current.
-Brand tokens in `site/src/styles/brand.css` are sampled from `assets/readme/rundesk-banner.png`.
+Brand tokens in `site/src/styles/brand.css` are sampled from `assets/readme/rundesk-banner.png`, and
+the header lockup in `site/src/assets/` is cut from that same banner rather than set in a webfont, so
+the site carries the real letterforms.
 
 `site/scripts/sync-cli-reference.mjs` copies `CLI.md` into `docs/reference/cli.md` on every
 `dev` and `build`. That file is git-ignored: `CLI.md` is already generated from the parser, and

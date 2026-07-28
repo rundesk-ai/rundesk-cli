@@ -58,16 +58,10 @@
 
 /* ---------------------------------------------------------------- chrome -- */
 
-/* The banner lockup is a red mark beside a white wordmark. Starlight tints the
-   site title with the accent by default, which would make the whole thing red. */
-.site-title {
-	color: var(--sl-color-white);
-	font-weight: 600;
-	letter-spacing: -0.01em;
-}
-
+/* The title is the lockup itself, so there is no text to colour — only a height
+   to hold it at. */
 .site-title img {
-	height: 1.6rem;
+	height: 1.55rem;
 	width: auto;
 }
 
