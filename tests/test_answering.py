@@ -690,6 +690,35 @@ class ASecondMessageWhileOneIsRunning(CarriesAConversation):
         self.assertEqual(["first", "second"],
                          [self.words(one["prompt"]) for one in brain.asked])
 
+    async def test_a_follow_up_offered_after_provider_input_closed_becomes_the_next_turn(self):
+        """R-CH-25 — a provider may finish accepting input before the outer turn finishes
+        publishing. Words offered in that window must not disappear into its dead queue."""
+        finish = asyncio.Event()
+
+        class InputAlreadyClosed(Brain):
+            async def __call__(self, name, prompt, named, **how):
+                self.asked.append({"name": name, "prompt": prompt, "provider": named, **how})
+                how["admitted"](self.outcome.run, {"steer": True})
+                self.started.set()
+                # The provider's input consumer is already gone, while the outer carry
+                # still has answer cleanup left to do.
+                await finish.wait()
+                return self.outcome
+
+        brain, surface = InputAlreadyClosed(), Surface()
+        held = self.answering(surface, brain)
+        await held.heard(self.arrived(text="first"))
+        await brain.started.wait()
+        await held.heard(self.arrived(text="must not be lost"))
+        finish.set()
+        await self._settled(held)
+        await asyncio.sleep(0.05)
+        await self._settled(held)
+        self.assertEqual(
+            ["first", "must not be lost"],
+            [self.words(one["prompt"]) for one in brain.asked],
+        )
+
     async def test_a_burst_arriving_before_the_turn_is_admitted_still_steers_it(self):
         """R-CH-9 — whether a brain can be steered is not known until the turn is
         admitted, and somebody typing quickly is faster than that. Held until the answer

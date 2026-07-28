@@ -50,6 +50,7 @@ is a whole brain with that work absent, rather than a broken one.
 | ✅ | R-PRV-22 | A brain says whether what it just said is finished or still being written | `every complete thing it said is marked as finished`, `a reply still being written is never called finished`, `the reply is reported once and never twice` |
 | ✅ | R-PRV-23 | An adapter is told the turn's standing instructions apart from the prompt, and adds them rather than replacing what its brain was built with | `standing instructions are told separately from the prompt`, `what a turn was told to stand on is written into the account`, `a turn can be given standing instructions from the command`, `a turn is always told rundesks own words whatever else it was told`, `standing instructions are given as developer instructions`, `what codex was built with is never replaced`, `a new conversation is told when it is opened`, `a conversation being carried on is not told again`, `a conversation that is gone is opened anew and told then` |
 | ✅ | R-PRV-24 | An adapter is told where the agent's skills stand, and decides for itself where its brain will find them | `an adapter is told where this agents skills stand`, `no vendor variable is put in front of an adapter` |
+| ✅ | R-PRV-25 | A child agent finishing does not end or answer its parent's turn | `a child agents completion does not end the parent turn` |
 
 ## Open questions
 
