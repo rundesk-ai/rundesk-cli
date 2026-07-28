@@ -746,17 +746,20 @@ def _queue_update(machine, origin: dict) -> int:
         return 1
     if not created:
         try:
-            running = machine.update_worker_loaded()
+            loaded = machine.update_worker_loaded()
         except machine.Unsure as why:
             print(f"update: NOT QUEUED — {why}", file=sys.stderr)
             return 1
-        if not running:
-            said = machine.install_update_worker()
-            if not said.ok:
-                why = said.said or "the supervisor refused the worker"
-                update_request.finish(row["id"], "failed", why)
-                print(f"update: NOT QUEUED — {why}", file=sys.stderr)
-                return 1
+        said = (
+            machine.kick_update_worker()
+            if loaded else machine.install_update_worker()
+        )
+        if not said.ok:
+            why = said.said or "the supervisor refused the worker"
+            update_request.finish(row["id"], "failed", why)
+            print(f"update: NOT QUEUED — {why}", file=sys.stderr)
+            return 1
+        if not loaded:
             print(f"update: RECOVERED — request {row['id']}; "
                   "its missing worker will run after active turns finish")
             print("        outcome: rundesk update --status")
@@ -791,6 +794,12 @@ def _queue_automatic_update(machine) -> int:
     if not created:
         try:
             if machine.update_worker_loaded():
+                said = machine.kick_update_worker()
+                if not said.ok:
+                    why = said.said or "the supervisor refused the worker"
+                    update_request.finish(row["id"], "failed", why)
+                    print(f"automatic update: NOT QUEUED — {why}", file=sys.stderr)
+                    return 1
                 return 0
         except machine.Unsure as why:
             print(f"automatic update: NOT QUEUED — {why}", file=sys.stderr)

@@ -471,6 +471,11 @@ def update_worker_loaded(asking: Callable[..., Spoke] = ask) -> bool:
     return said.ok
 
 
+def kick_update_worker(asking: Callable[..., Spoke] = ask) -> Spoke:
+    """Make a loaded one-shot worker run, without replacing a worker already running."""
+    return asking("kickstart", f"{domain()}/{UPDATE_LABEL}")
+
+
 def remove_update_worker(where: str | None = None, root: Path | None = None,
                          asking: Callable[..., Spoke] = ask) -> Spoke:
     """Remove only the update worker description written by this install.
