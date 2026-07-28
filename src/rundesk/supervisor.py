@@ -356,11 +356,38 @@ def install_update_worker(root: Path | None = None, logs: Path | None = None,
     return said
 
 
-def remove_update_worker(where: str | None = None,
+def update_worker_loaded(asking: Callable[..., Spoke] = ask) -> bool:
+    """Whether the machine still owns the one-shot update worker.
+
+    The durable request and the supervisor job are two halves of one update. A request may
+    still say ``running`` after an unrelated process has booted its worker out, so recovery
+    must ask launchd rather than infer ownership from the request or its plist (R-UPD-36,
+    R-UPD-37).
+    """
+    said = asking("print", f"{domain()}/{UPDATE_LABEL}")
+    if not said.answered:
+        raise Unsure("the machine did not say whether it holds the update worker")
+    return said.ok
+
+
+def remove_update_worker(where: str | None = None, root: Path | None = None,
                          asking: Callable[..., Spoke] = ask) -> Spoke:
+    """Remove only the update worker description written by this install.
+
+    The label is per user, not per scratch directory. Booting it out merely because an
+    isolated uninstall found launchd once terminated the live install's waiting worker and
+    left its durable request ``running`` forever. The plist is the ownership evidence, the
+    same way it is for a gateway: absent means there is nothing of this install to remove;
+    foreign means refuse before asking the machine (R-UPD-35, R-RM-9).
+    """
+    path = update_job_path(where)
+    if not path.exists():
+        return Spoke(True, "")
+    if not ours(path, root):
+        raise NotOurs("the update worker was not written by this install of rundesk")
     said = asking("bootout", f"{domain()}/{UPDATE_LABEL}")
     with contextlib.suppress(OSError):
-        os.remove(update_job_path(where))
+        os.remove(path)
     return said
 
 

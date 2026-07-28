@@ -48,6 +48,8 @@ class Machine:
         self.asked.append(args)
         verb, target = args[0], args[-1]
         name = target.rsplit(".", 1)[-1] if verb != "bootstrap" else None
+        if verb != "bootstrap" and target.endswith("/" + supervisor.UPDATE_LABEL):
+            name = supervisor.UPDATE_LABEL
         if verb in self.deaf:
             return supervisor.Spoke(False, "the machine did not answer in time", answered=False)
         if verb in self.refuse:
@@ -68,7 +70,11 @@ class Machine:
             return supervisor.Spoke(name in self.holding, "")
         if verb == "bootstrap":
             loaded = pathlib.Path(args[-1]).name[: -len(".plist")]
-            named = loaded[len(supervisor.PREFIX) + 1:]
+            named = (
+                supervisor.UPDATE_LABEL
+                if loaded == supervisor.UPDATE_LABEL
+                else loaded[len(supervisor.PREFIX) + 1:]
+            )
             if named in self.holding:
                 return supervisor.Spoke(False, "Bootstrap failed: 5: Input/output error")
             self.holding.add(named)
@@ -681,6 +687,47 @@ class TheExternalUpdateWorker(WithAJobDirectory):
         verbs = [asked[0] for asked in self.machine.asked]
         self.assertIn("bootstrap", verbs)
         self.assertIn("kickstart", verbs)
+
+    def test_the_loaded_worker_is_asked_of_the_machine_not_its_file(self):
+        supervisor.write_update_worker(self.root, self.logs, str(self.where))
+        self.assertFalse(supervisor.update_worker_loaded(self.machine))
+        supervisor.install_update_worker(
+            self.root, self.logs, str(self.where), self.machine
+        )
+        self.assertTrue(supervisor.update_worker_loaded(self.machine))
+
+    def test_removing_an_install_with_no_worker_never_boots_out_another_one(self):
+        said = supervisor.remove_update_worker(
+            str(self.where), self.root, self.machine
+        )
+        self.assertTrue(said.ok)
+        self.assertEqual([], self.machine.verbs())
+
+    def test_an_install_never_removes_another_installs_worker(self):
+        foreign = self.where / "foreign"
+        (foreign / "rundesk").parent.mkdir(parents=True)
+        (foreign / "rundesk").write_text("#!/usr/bin/env python3\n")
+        path = supervisor.write_update_worker(
+            foreign, self.logs, str(self.where)
+        )
+        with self.assertRaises(supervisor.NotOurs):
+            supervisor.remove_update_worker(
+                str(self.where), self.root, self.machine
+            )
+        self.assertTrue(path.exists())
+        self.assertEqual([], self.machine.verbs())
+
+    def test_an_install_removes_its_own_worker(self):
+        path = supervisor.write_update_worker(
+            self.root, self.logs, str(self.where)
+        )
+        self.machine.holding.add("ai.rundesk-update")
+        said = supervisor.remove_update_worker(
+            str(self.where), self.root, self.machine
+        )
+        self.assertTrue(said.ok)
+        self.assertFalse(path.exists())
+        self.assertIn("bootout", self.machine.verbs())
 
 
 if __name__ == "__main__":

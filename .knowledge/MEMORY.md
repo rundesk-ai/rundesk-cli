@@ -18,11 +18,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   uninstall, update, migrate, start, stop, add, remove or write anything there**, and never
   run a command that resolves there by default, which is most of them. This is not a thing to
   weigh against convenience: a scratch agent is free and a stopped gateway of theirs is not.
-  Test installs somewhere else — `RUNDESK_INSTALL_DIR` and `RUNDESK_BIN_DIR` for the install
-  itself, and **all four of** `RUNDESK_AGENTS_DIR`, `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR` and
-  `RUNDESK_JOBS_DIR` for what an agent keeps, or the command reaches the real one while
-  reporting success. Check `find $SCRATCH` has something in it before believing a run was
-  isolated, and check `ls ~/.rundesk` afterwards to be sure it did not.
+  Test installs somewhere else by **clearing every inherited `RUNDESK_*` variable first**,
+  then setting `RUNDESK_INSTALL_DIR`, `RUNDESK_BIN_DIR`, `RUNDESK_DATA_DIR`,
+  `RUNDESK_BACKUP_DIR`, `RUNDESK_AGENTS_DIR`, `RUNDESK_RUN_DIR`, `RUNDESK_LOG_DIR` and
+  `RUNDESK_JOBS_DIR` under scratch. Omitting `RUNDESK_DATA_DIR` while the rest were pointed
+  away let a scratch uninstall remove the live built-in skills; omitting the jobs boundary
+  let the gate boot out a waiting live update worker. Check `find $SCRATCH` has something in
+  it before believing a run was isolated, and check `ls ~/.rundesk` afterwards to be sure it
+  did not.
 
 - **`./install.sh --uninstall` deletes the *checkout's* `.venv`, whatever else you redirected.**
   `install.sh` removes `${SCRIPT_DIR}/.venv` along with the install's own, which is symmetric — the

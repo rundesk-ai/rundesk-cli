@@ -163,6 +163,9 @@ class DurableRequests(unittest.TestCase):
             def loaded(self, name):
                 return name == "ava"
 
+            def update_worker_loaded(self):
+                return False
+
             def install_update_worker(self):
                 return mock.Mock(ok=True, said="")
 
@@ -187,6 +190,9 @@ class DurableRequests(unittest.TestCase):
             def loaded(self, name):
                 return True
 
+            def update_worker_loaded(self):
+                return self.installed > 0
+
             def install_update_worker(self):
                 self.installed += 1
                 return mock.Mock(ok=True, said="")
@@ -196,6 +202,34 @@ class DurableRequests(unittest.TestCase):
         self.assertEqual(0, cli._queue_update(machine, origin))
         self.assertEqual(0, cli._queue_update(machine, origin))
         self.assertEqual(1, machine.installed)
+
+    def test_duplicate_agent_initiation_recovers_a_missing_worker(self):
+        """R-UPD-35, R-UPD-36, R-UPD-37"""
+        class Machine:
+            class Unsure(Exception):
+                pass
+
+            installed = 0
+
+            def available(self):
+                return True
+
+            def loaded(self, name):
+                return True
+
+            def update_worker_loaded(self):
+                return False
+
+            def install_update_worker(self):
+                self.installed += 1
+                return mock.Mock(ok=True, said="")
+
+        machine = Machine()
+        update_request.queue({"agent": "ava", "run": "one"})
+        update_request.claim()
+        self.assertEqual(0, cli._queue_update(machine, {"agent": "ava", "run": "two"}))
+        self.assertEqual(1, machine.installed)
+        self.assertEqual("running", update_request.read()["state"])
 
 
 if __name__ == "__main__":

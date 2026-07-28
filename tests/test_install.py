@@ -41,8 +41,17 @@ INSTALLER = REPO / "install.sh"
 def installer(*args: str, home: Path, bindir: Path, cwd: Path | None = None,
               script: Path | None = None, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """Run the installer somewhere it cannot reach the real machine."""
+    # An agent running this suite carries the live install's RUNDESK_DATA_DIR and friends.
+    # Overriding only the program and HOME still let a scratch uninstall take the live
+    # built-in skills back out of their library. Begin with none of Rundesk's locations;
+    # the scratch HOME and install below then derive every default downwards, while a case
+    # may still opt into one explicit location through extra_env.
+    isolated = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith("RUNDESK_")
+    }
     env = {
-        **os.environ,
+        **isolated,
         "HOME": str(home),
         "RUNDESK_BIN_DIR": str(bindir),
         "RUNDESK_INSTALL_DIR": str(home / ".rundesk"),
@@ -146,6 +155,25 @@ class RemovingWhatIsRunningTests(Sandbox):
         self.install(extra_env={"RUNDESK_JOBS_DIR": str(jobs)})
         self.uninstall(extra_env={"RUNDESK_JOBS_DIR": str(jobs)})
         self.assertTrue(theirs.exists(), "it removed a job belonging to something else")
+
+    def test_removing_a_scratch_install_leaves_another_installs_update_worker(self):
+        """R-UPD-35, R-RM-9"""
+        jobs = self.root / "jobs"
+        jobs.mkdir()
+        self.install(extra_env={"RUNDESK_JOBS_DIR": str(jobs)})
+        sys.path.insert(0, str(REPO / "src"))
+        from rundesk import supervisor
+        foreign = self.root / "foreign"
+        foreign.mkdir()
+        (foreign / "rundesk").write_text("#!/usr/bin/env python3\n")
+        worker = supervisor.write_update_worker(
+            foreign, self.root / "logs", str(jobs)
+        )
+
+        said = self.uninstall(extra_env={"RUNDESK_JOBS_DIR": str(jobs)})
+
+        self.assertNotEqual(0, said.returncode)
+        self.assertTrue(worker.exists(), "it removed another install's update worker")
 
 
 class InstallTests(Sandbox):
