@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import importlib.machinery
+import os
 import pathlib
 import re
 import tempfile
+import time
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "build.yml"
 RUNNER = ROOT / ".knowledge" / "scripts" / "ci-suites"
+LOCAL_GATE = ROOT / ".knowledge" / "scripts" / "gate"
 
 
 class FastPullRequestFeedback(unittest.TestCase):
@@ -61,6 +64,55 @@ class FastPullRequestFeedback(unittest.TestCase):
             _name, _code, log, timed_out = runner.run(script)
             self.assertTrue(timed_out)
             self.assertIn("Current thread", log.read_text(encoding="utf-8"))
+
+    def test_local_gate_timeout_names_check_and_contains_thread_diagnostics(self):
+        loader = importlib.machinery.SourceFileLoader("local_gate", str(LOCAL_GATE))
+        gate = loader.load_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            script = root / "hangs.py"
+            script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+            gate.ROOT = root
+            gate.CHECK_TIMEOUT_SECONDS = 0.1
+            passed, output, elapsed = gate.run(
+                "the deliberate hanging check", [gate.PY, str(script)])
+            self.assertFalse(passed)
+            self.assertLess(elapsed, 6)
+            self.assertIn("Current thread", output)
+            self.assertIn("the deliberate hanging check exceeded 0.1 seconds", output)
+
+    def test_local_gate_timeout_ends_a_stubborn_grandchild(self):
+        loader = importlib.machinery.SourceFileLoader("local_gate_group", str(LOCAL_GATE))
+        gate = loader.load_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            child_pid = root / "child.pid"
+            script = root / "hangs_with_child.py"
+            script.write_text(
+                "import pathlib, signal, subprocess, sys, time\n"
+                "child = subprocess.Popen([sys.executable, '-c', "
+                "\"import signal,time; signal.signal(signal.SIGABRT, signal.SIG_IGN); "
+                "time.sleep(30)\"])\n"
+                f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid))\n"
+                "time.sleep(30)\n",
+                encoding="utf-8",
+            )
+            gate.ROOT = root
+            gate.CHECK_TIMEOUT_SECONDS = 0.1
+            gate.ABORT_GRACE_SECONDS = 0.1
+            passed, _output, elapsed = gate.run(
+                "the process-tree check", [gate.PY, str(script)])
+            self.assertFalse(passed)
+            self.assertLess(elapsed, 2)
+            pid = int(child_pid.read_text(encoding="utf-8"))
+            for _ in range(100):
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail(f"timed-out check left grandchild {pid} running")
 
     def test_each_suite_is_assigned_to_exactly_one_shard(self):
         loader = importlib.machinery.SourceFileLoader("ci_shards", str(RUNNER))

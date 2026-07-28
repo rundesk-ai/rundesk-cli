@@ -42,6 +42,8 @@ _REAL_PATIENCE = (cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS
 
 #: The real removal, put back when the file is done with.
 _REAL_REMOVAL = cli._remove_this_install
+_REAL_BACKUP_DIR = os.environ.get("RUNDESK_BACKUP_DIR")
+_TEST_BACKUP_DIR = None
 
 
 def _never_the_real_installer(installer, asked):
@@ -65,7 +67,15 @@ _asked_of_the_installer: list = []
 
 
 def setUpModule():
+    global _TEST_BACKUP_DIR
     cli._remove_this_install = _never_the_real_installer
+    # The automatic surface walk invokes every operation, including the real backup
+    # listing. Without this boundary it reads the owner's backup directory, and under the
+    # aggregate gate that directory can be in use by another suite or a sync service —
+    # measured as a 180-second pathlib.iterdir hang. A surface test needs an empty place,
+    # never the owner's copies.
+    _TEST_BACKUP_DIR = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-backups-"))
+    os.environ["RUNDESK_BACKUP_DIR"] = str(_TEST_BACKUP_DIR)
     # Both turned down together. Turning the patience down alone left a wait that had room
     # for one look and a fraction of a second's margin on the second — so a case proving a
     # cycle waits passed on a quick machine and reported a failure on a loaded one.
@@ -75,6 +85,12 @@ def setUpModule():
 def tearDownModule():
     cli._remove_this_install = _REAL_REMOVAL
     cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS = _REAL_PATIENCE
+    if _REAL_BACKUP_DIR is None:
+        os.environ.pop("RUNDESK_BACKUP_DIR", None)
+    else:
+        os.environ["RUNDESK_BACKUP_DIR"] = _REAL_BACKUP_DIR
+    if _TEST_BACKUP_DIR is not None:
+        shutil.rmtree(_TEST_BACKUP_DIR, ignore_errors=True)
 from rundesk import agent as real_agent  # noqa: E402
 from rundesk import skill as real_skill  # noqa: E402
 from rundesk import channel  # noqa: E402
@@ -384,6 +400,11 @@ class BuiltCommandTests(unittest.TestCase):
         launchd jobs gone. It passed, because a successful removal is what it does."""
         self.assertIsNot(cli._remove_this_install, _REAL_REMOVAL,
                          "this file can reach the real uninstall")
+
+    def test_no_case_in_this_file_can_reach_the_owners_backups(self):
+        """The surface walk invokes bare `backups`; its listing must be the suite's."""
+        self.assertIsNotNone(_TEST_BACKUP_DIR)
+        self.assertEqual(_TEST_BACKUP_DIR, cli.backups_home())
 
     def test_uninstall_removes_rundesk_rather_than_explaining_how_to(self):
         """R-RM-1 — it printed instructions and exited zero, so a script reading the code

@@ -10,7 +10,9 @@ green. So the suites are **found**, not listed: a file added to `tests/` is in t
 the day it lands, here and in the workflow, which this also checks.
 
 It runs everything rather than stopping at the first failure. A gate you have to run
-seven times to learn what is broken is one people stop running.
+seven times to learn what is broken is one people stop running. Every check has the same
+three-minute ceiling as CI, and a timeout captures Python thread stacks before ending the
+check's whole process group.
 
 What it does **not** cover, and says so at the end: a real `./install.sh` and
 `./install.sh --uninstall`. That reaches the network and rebuilds the virtualenv this
@@ -24,6 +26,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import signal
 import subprocess
 import sys
 import time
@@ -37,6 +40,12 @@ WORKFLOW = ROOT / ".github" / "workflows" / "build.yml"
 #: answer for the environment it was actually asked about, and the two differ on exactly
 #: the machine where that matters — one with an install beside the checkout.
 PY = sys.executable
+
+#: A check may be slow under load, but it may not own the gate forever. This matches the
+#: per-suite CI ceiling: long enough for the measured 40-second floor with substantial
+#: headroom, short enough to name a wedged child while the run is still useful.
+CHECK_TIMEOUT_SECONDS = 180
+ABORT_GRACE_SECONDS = 5
 
 
 def suites() -> list[pathlib.Path]:
@@ -89,9 +98,64 @@ def checks() -> list[tuple[str, list[str]]]:
 
 
 def run(what: str, argv: list[str]) -> tuple[bool, str, float]:
+    """Run one check within a ceiling, taking its whole process group on timeout.
+
+    SIGABRT comes first because Python's faulthandler turns it into the stack evidence
+    needed to diagnose a hang. SIGKILL is the backstop for a child or grandchild that
+    ignores it. Each check has its own session so neither signal can reach the gate or a
+    neighbouring suite.
+    """
     began = time.monotonic()
-    done = subprocess.run(argv, cwd=str(ROOT), capture_output=True, text=True)
-    return done.returncode == 0, (done.stdout + done.stderr), time.monotonic() - began
+    process = subprocess.Popen(
+        argv,
+        cwd=str(ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env={**os.environ, "PYTHONFAULTHANDLER": "1"},
+        start_new_session=True,
+    )
+    timed_out = False
+    try:
+        said, _ = process.communicate(timeout=CHECK_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        try:
+            os.killpg(process.pid, signal.SIGABRT)
+        except ProcessLookupError:
+            pass
+        try:
+            said, _ = process.communicate(timeout=ABORT_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            said = ""
+        # A grandchild may ignore SIGABRT or close the captured pipe before it exits.
+        # End the whole group even when the leader already returned.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if process.poll() is None or not said:
+            try:
+                final, _ = process.communicate(timeout=ABORT_GRACE_SECONDS)
+                said = final or said
+            except subprocess.TimeoutExpired:
+                # A descendant that deliberately leaves the process group can retain the
+                # output pipe. It is no longer ours to signal by the group id, but it also
+                # must not recover an unbounded wait through the cleanup path.
+                if process.stdout:
+                    process.stdout.close()
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=ABORT_GRACE_SECONDS)
+                said += "\ngate: the timed-out check kept its output pipe open\n"
+        said += (
+            f"\ngate: {what} exceeded {CHECK_TIMEOUT_SECONDS} seconds; "
+            "its process group was ended\n"
+        )
+    return (not timed_out and process.returncode == 0,
+            said or "", time.monotonic() - began)
 
 
 def _at_once() -> int:
