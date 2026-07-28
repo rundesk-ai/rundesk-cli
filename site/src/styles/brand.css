@@ -65,6 +65,39 @@
 	width: auto;
 }
 
+/* `rundesk` is the product; this site is its documentation. The badge says which
+   one you are looking at, next to the mark where the question gets asked.
+
+   Hung off `.title-wrapper` rather than `.site-title`, so it sits beside the
+   lockup instead of inside the link back to the overview. */
+.title-wrapper {
+	align-items: center;
+	gap: 0.7rem;
+}
+
+.title-wrapper::after {
+	content: 'Docs';
+	flex: none;
+	padding: 0.1rem 0.45rem 0.14rem;
+	border: 1px solid var(--sl-color-gray-4);
+	border-radius: 0.25rem;
+	font-family: var(--__sl-font-mono, ui-monospace, monospace);
+	font-size: 0.66rem;
+	font-weight: 700;
+	letter-spacing: 0.16em;
+	text-transform: uppercase;
+	color: var(--sl-color-gray-3);
+	line-height: 1.5;
+}
+
+/* Below Starlight's mobile breakpoint the bar is tight enough that the badge is
+   the first thing that can go. */
+@media (max-width: 50rem) {
+	.title-wrapper::after {
+		display: none;
+	}
+}
+
 header.header {
 	backdrop-filter: blur(12px);
 	border-bottom: 1px solid var(--sl-color-gray-6);
