@@ -55,7 +55,7 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-34 | Asking what an update would do names what it would install and what it would move | `update check names every step it would run and installs nothing`, `asking what an update would do is asked of nothing but this machine` |
 | ✅ | R-UPD-35 | An agent-initiated update is completed by a supervisor-owned process outside every gateway | `the update worker is outside the gateway namespace`, `the machine owns the worker that may stop gateways`, `agent initiation queues the external worker and returns` |
 | ✅ | R-UPD-36 | An update request durably records pending, running, and final states | `pending running and final outcomes are durable`, `agent initiation queues the external worker and returns` |
-| ✅ | R-UPD-37 | Duplicate update requests share one worker request and cannot overlap | `duplicate requests share one pending update`, `duplicate agent initiation does not restart the worker` |
+| ✅ | R-UPD-37 | Duplicate update requests share one worker request and cannot overlap | `duplicate requests share one pending update`, `duplicate agent initiation kicks without reinstalling the worker` |
 | ✅ | R-UPD-38 | The external worker waits for active turns before running the guarded updater | `an update refuses while work is in flight`, `update busy reader includes provider turns`, `bootstrap child drives the old target with its new update logic`, `external worker waits for the origin run record to finish` |
 | ✅ | R-UPD-39 | Connected channel adapters do not themselves block an otherwise idle update | `a connected channel adapter does not block an idle update` |
 | ✅ | R-UPD-40 | A channel-triggered update outcome is delivered after its originating agent reconnects | `final outcome waits for its origin agent and is delivered once`, `a completed update is delivered after the channel reconnects` |
@@ -63,6 +63,7 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-42 | The machine queues one automatic Rundesk update every day at the configured local time, which defaults to three in the morning | `the daily trigger defaults to three in the morning`, `the automatic update time is the owners to state`, `the daily trigger queues the crash recoverable worker`, `installing schedules daily updates for the configured time` |
 | ✅ | R-UPD-43 | Gateways stopped for an update report maintenance, then report its completion when they return | `an update marks maintenance until the gateway is back`, `update maintenance is not announced as an unexplained outage`, `a gateway returning from an update says maintenance is complete` |
 | ✅ | R-UPD-44 | A successor update worker restores each gateway its predecessor stopped, without starting deliberately stopped gateways | `an interrupted update stays active for the supervisor to retry`, `a successor worker restores only a gateway marked for maintenance`, `a successor worker never starts a gateway on an unfit release` |
+| ✅ | R-UPD-45 | Triggering a pending update wakes its supervisor-owned worker | `duplicate agent initiation kicks a loaded stopped worker`, `a second daily trigger wakes without reinstalling the worker`, `a loaded one shot worker can be kicked again` |
 
 ## Open questions
 

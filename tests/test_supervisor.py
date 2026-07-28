@@ -701,6 +701,12 @@ class TheExternalUpdateWorker(WithAJobDirectory):
         )
         self.assertTrue(supervisor.update_worker_loaded(self.machine))
 
+    def test_a_loaded_one_shot_worker_can_be_kicked_again(self):
+        """R-UPD-45"""
+        supervisor.kick_update_worker(self.machine)
+        self.assertEqual("kickstart", self.machine.asked[-1][0])
+        self.assertNotIn("-k", self.machine.asked[-1])
+
     def test_removing_an_install_with_no_worker_never_boots_out_another_one(self):
         said = supervisor.remove_update_worker(
             str(self.where), self.root, self.machine

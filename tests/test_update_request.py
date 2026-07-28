@@ -195,13 +195,14 @@ class DurableRequests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("pending", update_request.read()["state"])
 
-    def test_duplicate_agent_initiation_does_not_restart_the_worker(self):
+    def test_duplicate_agent_initiation_kicks_without_reinstalling_the_worker(self):
         """R-UPD-37"""
         class Machine:
             class Unsure(Exception):
                 pass
 
             installed = 0
+            kicked = 0
 
             def available(self):
                 return True
@@ -216,11 +217,16 @@ class DurableRequests(unittest.TestCase):
                 self.installed += 1
                 return mock.Mock(ok=True, said="")
 
+            def kick_update_worker(self):
+                self.kicked += 1
+                return mock.Mock(ok=True, said="")
+
         machine = Machine()
         origin = {"agent": "ava", "run": "one"}
         self.assertEqual(0, cli._queue_update(machine, origin))
         self.assertEqual(0, cli._queue_update(machine, origin))
         self.assertEqual(1, machine.installed)
+        self.assertEqual(1, machine.kicked)
 
     def test_duplicate_agent_initiation_recovers_a_missing_worker(self):
         """R-UPD-35, R-UPD-36, R-UPD-37"""
@@ -249,6 +255,35 @@ class DurableRequests(unittest.TestCase):
         self.assertEqual(0, cli._queue_update(machine, {"agent": "ava", "run": "two"}))
         self.assertEqual(1, machine.installed)
         self.assertEqual("running", update_request.read()["state"])
+
+    def test_duplicate_agent_initiation_kicks_a_loaded_stopped_worker(self):
+        """R-UPD-36, R-UPD-37, R-UPD-45"""
+        class Machine:
+            class Unsure(Exception):
+                pass
+
+            kicked = 0
+
+            def available(self):
+                return True
+
+            def loaded(self, name):
+                return True
+
+            def update_worker_loaded(self):
+                return True
+
+            def kick_update_worker(self):
+                self.kicked += 1
+                return mock.Mock(ok=True, said="")
+
+        machine = Machine()
+        update_request.queue({"agent": "ava", "run": "one"})
+        self.assertEqual(0, cli._queue_update(
+            machine, {"agent": "ava", "run": "two"}
+        ))
+        self.assertEqual(1, machine.kicked)
+        self.assertEqual("pending", update_request.read()["state"])
 
     def test_the_daily_trigger_queues_the_crash_recoverable_worker(self):
         """R-UPD-42"""
@@ -298,13 +333,14 @@ class DurableRequests(unittest.TestCase):
             ))
         self.assertTrue(machine.installed)
 
-    def test_a_second_daily_trigger_does_not_overlap_an_active_update(self):
-        """R-UPD-37, R-UPD-42"""
+    def test_a_second_daily_trigger_wakes_without_reinstalling_the_worker(self):
+        """R-UPD-37, R-UPD-42, R-UPD-45"""
         class Machine:
             class Unsure(Exception):
                 pass
 
             installed = 0
+            kicked = 0
 
             def available(self):
                 return True
@@ -316,10 +352,15 @@ class DurableRequests(unittest.TestCase):
                 self.installed += 1
                 return mock.Mock(ok=True, said="")
 
+            def kick_update_worker(self):
+                self.kicked += 1
+                return mock.Mock(ok=True, said="")
+
         machine = Machine()
         update_request.queue({})
         self.assertEqual(0, cli._queue_automatic_update(machine))
         self.assertEqual(0, machine.installed)
+        self.assertEqual(1, machine.kicked)
 
     def test_maintenance_markers_survive_a_worker_and_clear_only_after_recovery(self):
         """R-UPD-43"""
