@@ -388,14 +388,18 @@ class WhereABrainIsAnswering(CarriesAConversation):
                          "the agent's own was passed over for rundesk's default sentence")
 
     async def test_what_this_channel_says_still_wins_over_the_agents(self):
-        """R-AGT-16, R-CH-22 — nearest first. An owner who wrote something for one surface
-        meant it for that surface."""
+        """R-AGT-16, R-AGT-17, R-CH-22 — nearest situational wording wins without
+        replacing Rundesk's stable standing prefix."""
         agents.remember("ava", self.where, instructions="what the agent says")
         brain, surface = Brain(), Surface()
         held = self.answering(surface, brain,
                               record=dict(self.record, instructions="Keep it short here."))
         await self.carry(held, self.arrived())
-        self.assertEqual("Keep it short here.", brain.asked[0]["preface"])
+        said = brain.asked[0]["preface"]
+        self.assertTrue(said.startswith(agents.standing("ava")))
+        self.assertIn("Keep it short here.", said)
+        self.assertNotIn("what the agent says", said)
+        self.assertLess(said.index("rundesk messages ava"), said.index("Keep it short here."))
 
     async def test_a_brain_is_told_which_surface_and_conversation_it_is_answering_in(self):
         """R-CH-21 — the surface, the channel the owner named, the place as that surface

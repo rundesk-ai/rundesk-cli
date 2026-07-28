@@ -196,17 +196,23 @@ class Answering:
 
     def _from(self, it: dict) -> str:
         """What this agent is told about the situation, before it reads the words
-        (R-CH-21, R-CH-22, R-AGT-16).
+        (R-CH-21, R-CH-22, R-AGT-16, R-AGT-17).
 
         Three things could say it and what is nearest wins: this channel's own, then the
-        agent's, then the one line rundesk says when nobody has said anything. The order lives
-        in `agent.told`, so nothing here decides it — this only says which two it is choosing
-        between and what the last resort is.
+        agent's, then the one line rundesk says when nobody has said anything. Rundesk's
+        stable standing words precede whichever situational tier wins.
         """
+        said = self.record.get(channel.INSTRUCTIONS)
+        if isinstance(said, str) and said.strip():
+            # The channel is the nearest situational tier. Pass only the invariant prefix:
+            # handing the agent-level situation too would make both tiers reach the turn.
+            otherwise = agents.standing(self.name)
+        else:
+            otherwise = agents.told(
+                self.name, self._where, otherwise=channel.by_default(self.record, it))
         return channel.preface(
             self.record, self.name, self.channel, it,
-            otherwise=agents.told(self.name, self._where,
-                                  otherwise=channel.by_default(self.record, it)))
+            otherwise=otherwise)
 
     async def told_what_a_schedule_did(self, named: str, became: str) -> None:
         """Say on this surface what one of this agent's schedules came to (R-SCH-31).
