@@ -428,19 +428,31 @@ class NeverTheSameWorkTwice(WithARunDirectory):
         await first
 
     async def test_different_work_runs_alongside_itself(self):
-        """R-GW-15 — the guard is on the same work, never on there being work."""
+        """R-GW-15 — the guard is on the same work, never on there being work.
+
+        Process creation is delayed on purpose. `running` is populated before `Program.start`
+        finishes, so counting its entries used to call `end_all` while every program still had
+        `_proc=None`; the no-op stop was followed by three processes starting and the test
+        waiting on them forever. A loaded macOS runner made that race repeatable.
+        """
+        starts = process.Program.start
+
+        async def slowly(program):
+            await asyncio.sleep(0.1)
+            await starts(program)
+
+        self.addCleanup(setattr, process.Program, "start", starts)
+        process.Program.start = slowly
         gw = self.made()
         gw.claim()
         running = [
             asyncio.ensure_future(gw.start(FOREVER, as_name=f"conversation-{i}", silence=None))
             for i in range(3)
         ]
-        deadline = time.time() + 5
-        while len(gw.running) < 3 and time.time() < deadline:
-            await asyncio.sleep(0.02)
+        await self._holding(gw)
         self.assertEqual(3, len(gw.running))
         await process.end_all(list(gw.running.values()))
-        await asyncio.gather(*running)
+        await asyncio.wait_for(asyncio.gather(*running), 10)
 
     async def test_work_that_finished_may_be_started_again(self):
         """R-GW-15 — a conversation gets a next turn; the guard is on running at once,
@@ -457,12 +469,10 @@ class NeverTheSameWorkTwice(WithARunDirectory):
         gw = self.made()
         gw.claim()
         running = [asyncio.ensure_future(gw.start(FOREVER, silence=None)) for _ in range(3)]
-        deadline = time.time() + 5
-        while len(gw.running) < 3 and time.time() < deadline:
-            await asyncio.sleep(0.02)
+        await self._holding(gw)
         self.assertEqual(3, len(gw.running))
         await process.end_all(list(gw.running.values()))
-        await asyncio.gather(*running)
+        await asyncio.wait_for(asyncio.gather(*running), 10)
 
 
 
