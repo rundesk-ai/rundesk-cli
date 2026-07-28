@@ -45,6 +45,13 @@ class WithALibrary(unittest.TestCase):
 
 
 class WhatTheLibraryHolds(WithALibrary):
+    def test_the_provider_given_library_is_the_one_a_nested_command_reports(self):
+        was = os.environ.get("RUNDESK_SKILL_LIBRARY")
+        os.environ["RUNDESK_SKILL_LIBRARY"] = str(self.library)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_SKILL_LIBRARY", was)
+                        if was is not None else os.environ.pop("RUNDESK_SKILL_LIBRARY", None))
+        self.assertEqual(self.library, skill.home())
+
     def test_a_directory_with_no_skill_file_is_not_a_skill(self):
         """R-AGT-27 — an owner half way through writing one has not broken anything, and
         a brain would not index it either."""
@@ -272,6 +279,42 @@ class BringingTheBuiltInsForward(WithALibrary):
         skill.lay_down(self.library, force=True)
         self.assertEqual(was, (theirs / "SKILL.md").read_text(),
                          "an update reached a skill the owner wrote")
+
+    def test_a_new_built_in_name_does_not_claim_an_owner_skill(self):
+        """R-AGT-30 — matching a newly shipped name is not proof of ownership."""
+        theirs = a_skill(self.library, "later-addition", says="an owner's work")
+        was = (theirs / "SKILL.md").read_text()
+        a_skill(self.release, "later-addition", says="the release's words")
+
+        self.assertEqual([], skill.lay_down(self.library, force=True))
+        self.assertEqual(was, (theirs / "SKILL.md").read_text(),
+                         "an update replaced an owner skill with a new built-in")
+
+    def test_take_back_leaves_a_shipped_name_the_install_did_not_lay_down(self):
+        """R-RM-7 — uninstall ownership is proved by a marker, not the release's names."""
+        theirs = a_skill(self.library, "later-addition", says="an owner's work")
+        a_skill(self.release, "later-addition", says="the release's words")
+
+        self.assertEqual([], skill.take_back(self.library))
+        self.assertTrue((theirs / "SKILL.md").is_file(),
+                        "uninstall took an owner skill it had preserved")
+
+    def test_every_known_historical_fingerprint_can_acquire_the_marker(self):
+        """R-AGT-30 — a direct update may skip releases without stranding a built-in."""
+        self.assertIn(
+            "eeea76bac1c12db493ad823b1d89d4d42740ab7b17173459b3c0705353332466",
+            skill.LEGACY["building-a-channel-adapter"],
+            "the v0.9 channel adapter can no longer be recognized by a direct update")
+        old = a_skill(self.library, "writing-skills", says="historical words")
+        fingerprint = skill._fingerprint(old)
+        was = skill.LEGACY
+        skill.LEGACY = {"writing-skills": ("another release", fingerprint)}
+        self.addCleanup(setattr, skill, "LEGACY", was)
+        a_skill(self.release, "writing-skills", says="current words")
+
+        self.assertEqual(["writing-skills"], skill.lay_down(self.library, force=True))
+        self.assertTrue((old / skill.OWNED).is_file())
+        self.assertIn("current words", (old / skill.NAMED).read_text())
 
     def test_a_library_that_cannot_be_written_to_does_not_break_the_install(self):
         """R-AGT-30 — an install that otherwise worked says what is wrong in words, and a

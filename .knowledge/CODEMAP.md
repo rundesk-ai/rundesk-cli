@@ -20,7 +20,7 @@ A map that mirrors the whole tree rots on the next commit; one that names the la
   reports it, the updater compares against it, and a release tag is expected to match it. Nothing else
   holds a copy. `ROOT` is the same idea for *where* this install is, resolved rather than assumed.
 
-### Where what an install keeps is decided (6 places)
+### Where what an install keeps is decided (7 places)
 
 An install's own directories are not mapped here — this is the source tree, and a layout written down
 twice is a layout that disagrees with itself. Each of these files *is* the answer for one part of it, and
@@ -28,7 +28,7 @@ none of them is a copy of another:
 
 | Decided in | What it settles |
 |---|---|
-| `src/rundesk/__init__.py` — `data_home()` | **the program and the data are two directories**: `app/` is what an update replaces and an uninstall takes whole, and everything below is the owner's, which is what makes removal structurally incapable of reaching it (R-INS-13, R-RM-8) |
+| `src/rundesk/__init__.py` — `data_home()`, `scripts_home()`, `skills_home()` | **the program and the data are two directories**: `app/` is what an update replaces and an uninstall takes whole, while owner commands and skills resolve below the data it never touches (R-INS-13, R-RM-8, R-PROC-22) |
 | `src/rundesk/agent.py` — `agents_home()`, `directory()`, `paths()` | every directory that is one agent's own, off one list that making and diagnosing both read |
 | `src/rundesk/agent.py` — `templates_home()`, `sourced()` | where an owner's own templates stand and which file each page really comes from. **Below `agents_home()`**, so whatever redirects where agents live redirects it too, and outside anything a release ships, which is the whole of why an update cannot reach it (R-AGT-23) |
 | `src/rundesk/dependencies.py` — `wanted_at()`, `site_packages()` | what this install is made of and where it is kept, asked the same way by the installer, an update and a gateway |
@@ -47,7 +47,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 17 modules)
+## Backend / Services (src/rundesk/ — 22 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -107,6 +107,9 @@ file with it.
   standing there before the brain runs, and a rule in a config file would describe what rundesk
   placed while the brain read on. Knows nothing of any brain: where a skill is *presented* is each
   adapter's, told through `RUNDESK_SKILLS`.
+- `src/rundesk/script.py` — the owner's shared integration commands. Resolves the script
+  library below the install's data and lists only runnable top-level entries; `process.py`
+  puts that directory first on every program's `PATH`.
 - `src/rundesk/backup.py` — copies of everything the owner keeps, and putting one back. Knows
   nothing of gateways or of the machine's supervisor: what must be true before a restore may
   proceed arrives as callables, the way `updater.run` already takes them. What goes into one is

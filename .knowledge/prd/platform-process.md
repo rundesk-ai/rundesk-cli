@@ -40,6 +40,8 @@ drive what such a program does — it decides that one runs, watches it, and end
 | ✅ | R-PROC-19 | rundesk chooses the directory a program it runs starts in | `a program starts where rundesk puts it`, `a program rundesk gives no directory starts where rundesk did`, `a gateway starts work in the workspace it is given` |
 | ✅ | R-PROC-21 | Whoever receives what a program says never ends that program | `a receiver that fails neither stops nor ends the program`, `a receiver that fails after being awaited is survived too`, `a receiver that refuses is recorded rather than lost` |
 | ✅ | R-PROC-20 | A program is told there is no more input without being ended | `a program is told there is no more coming without being ended`, `writing after there is no more coming is refused`, `telling a program with no input there is no more does nothing` |
+| ✅ | R-PROC-22 | A program Rundesk runs can invoke owner-provided integration commands by name | `an owner command is first on every programs path` |
+| ✅ | R-PROC-23 | A program Rundesk runs is told where owner-provided integration commands stand | `a program is told where owner commands stand` |
 
 ## Open questions
 

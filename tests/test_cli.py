@@ -103,7 +103,7 @@ def run(argv: list[str], published: str | None = None,
             try:
                 code = cli.main(argv, gateways=FakeGateways(written=written),
                                 machine=FakeMachine(), agents=FakeAgents(),
-                                skills=FakeSkills())
+                                skills=FakeSkills(), scripts=FakeScripts())
             except SystemExit as usage:
                 # What a shell sees, which is the subject of several cases here: argparse
                 # refuses a usage error by exiting rather than returning, and a test that
@@ -429,7 +429,8 @@ class BuiltCommandTests(unittest.TestCase):
         # which answer wins would depend on the order of the checks in `main`.
         built = {"version", "update", "uninstall", "add", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
-                 "channels", "runs", "usage", "search", "messages", "skills", "backups"}
+                 "channels", "runs", "usage", "search", "messages", "skills", "scripts",
+                 "backups"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 
@@ -703,6 +704,22 @@ class FakeSkills:
         if name not in self._given.get(whose.name, []):
             raise self.Unknown(f"this agent was never given {name}")
         self._given[whose.name].remove(name)
+
+
+class FakeScripts:
+    """The shared script directory without reaching the owner's real one."""
+
+    def __init__(self, held=()):
+        self._where = pathlib.Path("/nowhere/scripts")
+        self._held = {
+            name: self._where / name for name in held
+        }
+
+    def home(self):
+        return self._where
+
+    def commands(self):
+        return dict(self._held)
 
 
 class FakeAgents:
@@ -1023,19 +1040,41 @@ class FakeMachine:
         return self.backups_daily is not None
 
 
-def drive(argv, gateways=None, machine=None, agents=None):
+def drive(argv, gateways=None, machine=None, agents=None, scripts=None):
     """Run the command line and hand back what it printed and what it returned."""
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
             code = cli.main(argv, gateways=gateways or FakeGateways(),
-                            machine=machine or FakeMachine(), agents=agents or FakeAgents())
+                            machine=machine or FakeMachine(), agents=agents or FakeAgents(),
+                            scripts=scripts or FakeScripts())
         except SystemExit as usage:
             # What a shell sees. Argparse refuses by exiting rather than returning, and a
             # case proving something is refused by the grammar could not otherwise say
             # what the caller was left with.
             code = usage.code if isinstance(usage.code, int) else 1
     return code, out.getvalue() + err.getvalue()
+
+
+class TheSharedIntegrationCommands(unittest.TestCase):
+    def test_where_the_commands_stand_is_readable_without_guessing(self):
+        code, said = drive(["scripts", "--where"])
+        self.assertEqual(0, code)
+        self.assertEqual("/nowhere/scripts", said.strip())
+
+    def test_shared_commands_are_listed_by_the_name_an_agent_invokes(self):
+        code, said = drive(
+            ["scripts"], scripts=FakeScripts(("jira", "sentry")))
+        self.assertEqual(0, code)
+        self.assertIn("jira", said)
+        self.assertIn("sentry", said)
+        self.assertIn("/nowhere/scripts", said)
+
+    def test_no_shared_commands_says_where_to_write_one(self):
+        code, said = drive(["scripts"])
+        self.assertEqual(0, code)
+        self.assertIn("no scripts", said)
+        self.assertIn("/nowhere/scripts/<command>", said)
 
 
 class RepairingAnAgentWhoseRecordsWillNotOpen(unittest.TestCase):

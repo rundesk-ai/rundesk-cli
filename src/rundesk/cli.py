@@ -39,6 +39,7 @@ from rundesk import migration  # noqa: E402
 from rundesk import process  # noqa: E402
 from rundesk import provider  # noqa: E402
 from rundesk import schedule as schedules  # noqa: E402
+from rundesk import script  # noqa: E402
 from rundesk import skill  # noqa: E402
 from rundesk import store  # noqa: E402
 from rundesk import supervisor as _supervisor  # noqa: E402
@@ -535,6 +536,12 @@ def build_parser() -> argparse.ArgumentParser:
     taken = doing.add_parser("revoke", help="take a skill away from an agent")
     taken.add_argument("name", metavar="<agent>", help="who is losing it")
     taken.add_argument("skill", metavar="<skill>", help="which skill, by the name it is under")
+
+    commands = sub.add_parser(
+        "scripts", help="the integration commands every agent can invoke")
+    commands.add_argument(
+        "--where", action="store_true",
+        help="print the directory they are kept in, and nothing else")
 
     # A group named the way `channels` and `schedules` are, with the one difference that
     # there is no word for *whose*: a backup is the install's and never an agent's. `skills`
@@ -1599,9 +1606,9 @@ def _provisioned(root: Path = REPO_ROOT) -> str | None:
     same reason — the failure that cannot touch an owner's files happens first. Bringing a
     built-in forward is what makes it rundesk's rather than a copy an owner then owns, and
     it is the whole of "always the latest version" (R-AGT-30): the set is read off the
-    release each time, so there is no record of what was laid down before to get out of
-    step. A skill that could not be written is not an update that failed — `doctor` says
-    which one, and everything else is already forward.
+    release each time, while the ownership marker says which same-named directories may
+    safely be replaced. A skill that could not be written is not an update that failed —
+    `doctor` says which one, and everything else is already forward.
     """
     went_wrong = dependencies.provision(root)
     if went_wrong:
@@ -1883,6 +1890,25 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
              ", ".join(sorted(who for who, mine in whose.items() if name in mine)) or "-")
             for name in sorted(held)]
     _as_table(("SKILL", "FROM", "AGENTS"), rows)
+    return 0
+
+
+def cmd_scripts(args: argparse.Namespace, scripts) -> int:
+    """The owner's shared integration commands and where they stand."""
+    where = scripts.home()
+    if getattr(args, "where", False):
+        print(where)
+        return 0
+    held = scripts.commands()
+    if not held:
+        print("no scripts")
+        print(f"        write one:  {where}/<command>")
+        return 0
+    _as_table(("SCRIPT", "COMMAND"), [
+        (name, str(at)) for name, at in sorted(held.items())
+    ])
+    print()
+    print(f"kept in {where}")
     return 0
 
 
@@ -3355,7 +3381,8 @@ def _handed_on(argv: list[str], carries: set) -> tuple[list[str], list[str]]:
     return list(argv[:at]), list(argv[at + 1:])
 
 
-def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None) -> int:
+def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
+         scripts=None) -> int:
     """The command surface.
 
     What the commands act on is passed in rather than imported here, so this file knows
@@ -3366,6 +3393,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None)
     machine = machine if machine is not None else _supervisor
     agents = agents if agents is not None else _agent
     skills = skills if skills is not None else skill
+    scripts = scripts if scripts is not None else script
     parser = build_parser()
     argv, handed_on = _handed_on(argv, _carries_a_tail(parser))
     args = parser.parse_args(argv)
@@ -3413,6 +3441,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None)
         return cmd_backups(args, gateways, machine, agents)
     if args.command == "skills":
         return cmd_skills(args, agents, skills)
+    if args.command == "scripts":
+        return cmd_scripts(args, scripts)
     if args.command == "channels":
         return cmd_channels(args, gateways, agents)
     if args.command == "schedules":

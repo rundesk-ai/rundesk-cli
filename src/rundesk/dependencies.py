@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 #: What a declared requirement is called once it is installed, where the two differ.
@@ -283,16 +284,18 @@ def _build(root: Path, venv: Path, wanted: Path, asking,
     # The virtualenv's own installer first, as the shell that used to do this always has:
     # what a given Python ships with can be old enough to resolve differently, and an
     # install that resolves differently on two machines is two different products.
-    ready = asking([str(python), "-m", "pip", "install", "--quiet", "--upgrade", "pip"])
+    ready = asking([str(python), "-B", "-m", "pip", "install", "--quiet", "--no-cache-dir",
+                    "--no-compile", "--upgrade", "pip"])
     if ready:
         return f"could not prepare the virtualenv's installer: {ready}"
-    put = asking([str(python), "-m", "pip", "install", "--quiet", "-r", str(wanted)])
+    put = asking([str(python), "-B", "-m", "pip", "install", "--quiet", "--no-cache-dir",
+                  "--no-compile", "-r", str(wanted)])
     if put:
         return f"could not install what rundesk needs ({wanted}): {put}"
     # Installed is not the same as usable: pip will happily leave a set of packages that
     # cannot satisfy each other, and the failure then arrives as an import error deep inside
     # a dependency, under a supervisor, in a restart loop, hours later.
-    fits = asking([str(python), "-m", "pip", "check", "--quiet"])
+    fits = asking([str(python), "-B", "-m", "pip", "check", "--quiet"])
     if fits:
         return f"what rundesk needs was installed, but the versions do not fit together: {fits}"
     # Asked of the directory rather than taken on trust: pip reporting success and the
@@ -306,7 +309,17 @@ def _build(root: Path, venv: Path, wanted: Path, asking,
 def _run(command: list) -> str | None:
     """Run one program and say what went wrong, or None. The only place this reaches out."""
     try:
-        done = subprocess.run(command, capture_output=True, text=True, timeout=PIP_SECONDS)
+        # Apple Python redirects every imported module's bytecode into the owner's
+        # ~/Library/Caches, including ensurepip while a virtualenv is being made. Keep that
+        # interpreter scratch in scratch so an install and uninstall leave no hidden tree.
+        with tempfile.TemporaryDirectory(prefix="rundesk-python-cache-") as cache:
+            environment = {
+                **os.environ,
+                "PYTHONPYCACHEPREFIX": cache,
+                "PIP_NO_CACHE_DIR": "1",
+            }
+            done = subprocess.run(
+                command, capture_output=True, text=True, timeout=PIP_SECONDS, env=environment)
     except OSError as err:
         return str(err)
     except subprocess.TimeoutExpired:

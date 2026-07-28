@@ -70,7 +70,7 @@ Everything lands in **`~/.rundesk`** — one directory under your home, with the
 ```text
 ~/.rundesk/
   app/          rundesk itself — what an update replaces and an uninstall removes, whole
-  data/         everything you make — your agents, your skills, and what your gateways wrote
+  data/         everything you make — agents, skills, scripts, and what gateways wrote
 ```
 
 That split is the point: removing rundesk takes `app/` and is structurally incapable of
@@ -140,6 +140,21 @@ writing-skills  built-in  ava, winston
 **The brain finds it by itself.** Rundesk never puts a skill in a prompt — it costs one line
 of context until the turn it is actually needed, and the agent decides that, not us. Every
 agent starts with `writing-skills`, so you can ask one to write the next skill for you.
+
+### Give every agent a command
+
+Owner-created integration CLIs live in one shared directory, placed first on every
+agent's `PATH`:
+
+```sh
+rundesk scripts --where
+rundesk scripts
+```
+
+Put an executable there, then give an agent a companion skill describing when and how to
+use it. Every new agent receives `building-integration-clis`, which covers stable command
+shape, credential files, confirmation guards, and offline tests. Credentials stay outside
+the scripts and skills libraries.
 
 ## 💬 Reach it where you already are
 
@@ -213,6 +228,10 @@ can answer you in the terminal, on Discord and on a schedule, with a different m
 - Give it to the agents that should have it and nobody else: `rundesk skills grant ava deploy`
 - Built-in skills come with rundesk and move forward with it; yours are never touched
 
+**Scripts**
+- Put a custom integration CLI in the shared script library and every agent can invoke it by name
+- Keep credentials outside Rundesk data while a companion skill carries routing and safety rules
+
 **Channels**
 - Threads, reactions and typing on Discord; a plain surface still carries the whole turn
 - Work shown as it happens; the answer posted whole rather than rewriting itself
@@ -248,6 +267,7 @@ is worse than not removed. What your agents *wrote* is kept unless you ask for `
 - **[CLI.md](CLI.md)** — every operation and argument, generated from the command
 - **[Write a provider adapter](src/templates/skills/building-a-provider-adapter/references/the-contract.md)** — put your own brain behind an agent
 - **[Write a channel adapter](src/templates/skills/building-a-channel-adapter/references/the-contract.md)** — reach an agent from your own platform
+- **[Build an integration CLI](src/templates/skills/building-integration-clis/SKILL.md)** — give agents a custom command and the skill for using it
 - **[Contracts](.knowledge/prd/README.md)** — what rundesk guarantees, row by row, each naming the test that proves it
 - **[Roadmap](ROADMAP.md)** — what's built, what's next, and why in that order
 - **[Architecture](.knowledge/CODEMAP.md)** — where everything lives

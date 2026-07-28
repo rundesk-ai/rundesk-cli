@@ -556,10 +556,14 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
         """R-PRV-1 — which variable a brain wants is that brain's adapter's business.
         Set here, the vendor would be in the core, which is the seam failing."""
         told = self.told(model="whatever", resume="a-handle")
-        self.assertEqual(
-            sorted(["HOME", "PATH", "RUNDESK_HOME", "TERM", "LANG", "RUNDESK_CWD",
+        expected = ["HOME", "PATH", "RUNDESK_HOME", "TERM", "LANG", "RUNDESK_CWD",
                     "RUNDESK_PROVIDER_HOME", "RUNDESK_SKILLS", "RUNDESK_RUN",
-                    "RUNDESK_POSTURE", "RUNDESK_MODEL", "RUNDESK_RESUME"]),
+                    "RUNDESK_POSTURE", "RUNDESK_MODEL", "RUNDESK_RESUME",
+                    "RUNDESK_SCRIPTS", "RUNDESK_SKILL_LIBRARY"]
+        if os.environ.get("RUNDESK_AGENTS_DIR"):
+            expected.append("RUNDESK_AGENTS_DIR")
+        self.assertEqual(
+            sorted(expected),
             sorted(told))
 
 
