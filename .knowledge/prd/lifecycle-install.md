@@ -1,7 +1,7 @@
 ---
 id: INS
 name: Getting rundesk onto a machine
-last_verified: 2026-07-24
+last_verified: 2026-07-28
 ---
 
 ## What this is
@@ -34,3 +34,4 @@ answers; keeping it current and taking it away are their own contracts.
 | ✅ | R-INS-13 | Everything rundesk's install is made of lives in one directory under the person's home, kept apart from what the owner keeps | `the install lives under the persons home`, `an install writes nothing outside the places it says` , `a downloaded install puts the program in its own directory`, `installing over the layout from before leaves what the owner keeps` |
 | ✅ | R-INS-14 | An install changes nothing a person owns beyond placing the command | `an install does not change the path it only says so`, `an install refuses a directory too important to be one programs`, `an install refuses to replace a checkout it did not create`, `an install refuses to replace a command of the same name` |
 | ✅ | R-INS-15 | An install with no copy of the source takes the newest published version, not the newest work | `an install without a checkout takes the newest release not the branch`, `release lookup failures leave the existing install alone`, `a valid release response installs only its exact tag` |
+| ✅ | R-INS-16 | Every proposed release must work for a new owner and preserve an existing owner's data and gateway behavior when upgrading from the latest release | `every pull request verifies fresh installs and upgrades from the latest release`, .github/workflows/build.yml:upgrade-existing-install — the latest tag is upgraded on macOS and Ubuntu |

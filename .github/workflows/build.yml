@@ -18,9 +18,9 @@ concurrency:
   group: build-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# Four jobs, each answering one question, so a red tick says what is broken before you
+# Five jobs, each answering one question, so a red tick says what is broken before you
 # open it: are the docs and contracts sound, does the code do what it claims, does this
-# checkout install, and does what is *published* install.
+# checkout install, can the latest release upgrade to it, and does what is *published* install.
 
 jobs:
   # ------------------------------------------------------------------ the knowledge base
@@ -208,12 +208,101 @@ jobs:
           test ! -d .venv || { echo "::error::what the install put in place was left behind"; exit 1; }
           test -f rundesk || { echo "::error::uninstalling deleted the checkout"; exit 1; }
 
+  # ------------------------------------------------------------------ upgrading an existing install
+  # Fresh-install coverage cannot protect an owner who already has agents, schedules,
+  # configuration and gateway state. Every proposed release is therefore laid over the
+  # newest tagged release and must keep that owner's data usable on both supported systems.
+  upgrade-existing-install:
+    name: upgrade latest release to this checkout — ${{ matrix.os }}
+    timeout-minutes: 10
+    runs-on: ${{ matrix.os }}
+    env:
+      RUNDESK_BIN_DIR: ${{ runner.temp }}/bin
+      RUNDESK_INSTALL_DIR: ${{ runner.temp }}/existing-install
+      RUNDESK_JOBS_DIR: ${{ runner.temp }}/jobs
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: An existing owner starts on the newest tagged release
+        run: |
+          set -euo pipefail
+          previous="$(git describe --tags --abbrev=0 HEAD^)"
+          old="$RUNNER_TEMP/previous-release"
+          mkdir -p "$old"
+          git archive "$previous" | tar -x -C "$old"
+          "$old/install.sh"
+          "$RUNDESK_BIN_DIR/rundesk" add existing --provider codex
+          "$RUNDESK_BIN_DIR/rundesk" schedules existing add heartbeat \
+            --when "0 6 * * *" --ask "report that the gateway is healthy"
+          printf '%s\n' '{"backups":{"keep_days":45,"at":"04:30"}}' \
+            > "$RUNDESK_INSTALL_DIR/data/config.json"
+          cp "$RUNDESK_INSTALL_DIR/data/config.json" "$RUNNER_TEMP/config.before"
+          printf '%s\n' "kept by the owner" \
+            > "$RUNDESK_INSTALL_DIR/data/agents/existing/home/owner-kept.txt"
+          echo "PREVIOUS_ROOT=$old" >> "$GITHUB_ENV"
+
+      - name: The proposed release follows the real update handoff
+        run: |
+          set -euo pipefail
+          proposed="$RUNNER_TEMP/proposed-release"
+          mkdir -p "$proposed"
+          git archive HEAD | tar -x -C "$proposed"
+          PROPOSED="$proposed" python - <<'UPGRADE'
+          import os
+          import sys
+          from pathlib import Path
+
+          proposed = Path(os.environ["PROPOSED"])
+          sys.path.insert(0, str(proposed / "src"))
+          from rundesk import updater
+
+          updater._copy_over(proposed, Path(os.environ["PREVIOUS_ROOT"]))
+          UPGRADE
+          "$PREVIOUS_ROOT/rundesk" update --after-replacing ""
+
+      - name: Existing behavior and owner data still work
+        run: |
+          set -euo pipefail
+          cmp "$RUNNER_TEMP/config.before" "$RUNDESK_INSTALL_DIR/data/config.json"
+          grep -qx "kept by the owner" \
+            "$RUNDESK_INSTALL_DIR/data/agents/existing/home/owner-kept.txt"
+          "$RUNDESK_BIN_DIR/rundesk" version
+          "$RUNDESK_BIN_DIR/rundesk" status
+          "$RUNDESK_BIN_DIR/rundesk" agents | grep -q '^existing '
+          "$RUNDESK_BIN_DIR/rundesk" schedules existing | grep -q 'heartbeat'
+          "$RUNDESK_BIN_DIR/rundesk" serve existing &
+          serving=$!
+          for _ in $(seq 30); do
+            "$RUNDESK_BIN_DIR/rundesk" agents | grep -qE '^existing +RUNNING' && break
+            sleep 1
+          done
+          if ! "$RUNDESK_BIN_DIR/rundesk" agents | grep -qE '^existing +RUNNING'; then
+            echo "::error::the existing gateway did not run after the upgrade"
+            kill "$serving" 2>/dev/null || true
+            exit 1
+          fi
+          kill "$serving"
+          wait "$serving" || { echo "::error::the existing gateway did not stop cleanly"; exit 1; }
+          if command -v launchctl >/dev/null 2>&1; then
+            test -f "$RUNDESK_JOBS_DIR/ai.rundesk-automatic-update.plist" ||
+              { echo "::error::the upgrade did not schedule automatic updates"; exit 1; }
+          fi
+
   # One stable required check for branch protection. Matrix job names may grow as supported
   # environments do; this name stays fixed and succeeds only when every required job did.
   required-pr-gate:
     name: required PR gate
     if: always()
-    needs: [knowledge, tests, install-this-checkout]
+    needs: [knowledge, tests, install-this-checkout, upgrade-existing-install]
     runs-on: ubuntu-latest
     steps:
       - name: Every required job passed
@@ -221,10 +310,12 @@ jobs:
           KNOWLEDGE: ${{ needs.knowledge.result }}
           TESTS: ${{ needs.tests.result }}
           INSTALL: ${{ needs.install-this-checkout.result }}
+          UPGRADE: ${{ needs.upgrade-existing-install.result }}
         run: |
           test "$KNOWLEDGE" = success
           test "$TESTS" = success
           test "$INSTALL" = success
+          test "$UPGRADE" = success
 
   # ------------------------------------------------------------------ installing what is published (R-INS-1)
   # The claim the whole product rests on, and the one every other job is blind to: a machine
