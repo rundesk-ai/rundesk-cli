@@ -217,9 +217,9 @@ jobs:
     timeout-minutes: 10
     runs-on: ${{ matrix.os }}
     env:
-      RUNDESK_BIN_DIR: ${{ runner.temp }}/bin
-      RUNDESK_INSTALL_DIR: ${{ runner.temp }}/existing-install
-      RUNDESK_JOBS_DIR: ${{ runner.temp }}/jobs
+      RUNDESK_BIN_DIR: ${{ github.workspace }}/.compat/bin
+      RUNDESK_INSTALL_DIR: ${{ github.workspace }}/.compat/existing-install
+      RUNDESK_JOBS_DIR: ${{ github.workspace }}/.compat/jobs
     strategy:
       fail-fast: false
       matrix:
