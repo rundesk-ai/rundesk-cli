@@ -1,308 +1,288 @@
 <p align="center">
-  <a href="https://github.com/rundesk-ai/rundesk-cli/actions/workflows/build.yml"><img src="https://github.com/rundesk-ai/rundesk-cli/actions/workflows/build.yml/badge.svg" alt="Build"></a>
+  <a href="https://github.com/rundesk-ai/rundesk-cli/actions/workflows/build.yml?query=branch%3Amain"><img src="https://github.com/rundesk-ai/rundesk-cli/actions/workflows/build.yml/badge.svg?branch=main" alt="Build"></a>
   <a href="https://github.com/rundesk-ai/rundesk-cli/releases/latest"><img src="https://img.shields.io/github/v/release/rundesk-ai/rundesk-cli?style=flat-square" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square" alt="Python 3.9+">
-  <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux-lightgrey?style=flat-square" alt="macOS and Linux">
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square" alt="macOS">
   <img src="https://img.shields.io/badge/build%20step-none-green?style=flat-square" alt="No build step">
 </p>
 <p align="center">
-    ✅ <a href="#-what-rundesk-does"><strong>What it does</strong></a>
-    &nbsp;·&nbsp;
-    🚀 <a href="#-install"><strong>Install</strong></a>
-    &nbsp;·&nbsp;
-    💬 <a href="#-reach-it-where-you-already-are"><strong>Channels</strong></a>
-    &nbsp;·&nbsp;
-    🧠 <a href="#-bring-your-own-brain"><strong>Brains</strong></a>
-    &nbsp;·&nbsp;
-    📖 <a href="#-documentation"><strong>Docs</strong></a>
+  ✨ <a href="#-highlights"><strong>Highlights</strong></a>
+  &nbsp;·&nbsp;
+  🚀 <a href="#-quick-start"><strong>Quick start</strong></a>
+  &nbsp;·&nbsp;
+  🧠 <a href="#-provider-adapters"><strong>Providers</strong></a>
+  &nbsp;·&nbsp;
+  💬 <a href="#-channel-adapters"><strong>Channels</strong></a>
+  &nbsp;·&nbsp;
+  📖 <a href="#-documentation"><strong>Docs</strong></a>
 </p>
 
-# 🖥 rundesk
+# 🖥 Rundesk
 
-**Your AI coding agent, always running — and reachable on the channels you already use.**
+**Run AI coding agents as durable, named teammates on your own Mac — then reach them from
+your terminal, Discord, or a schedule.**
 
-## 💡 The problem
+Rundesk keeps the coding CLI you already use running with its own workspace, rules, memory,
+skills, conversations, and history. It does not replace Codex, Claude Code, Grok, or Google
+Antigravity; it gives those tools a dependable home and a common operating layer.
 
-Your coding agent lives in a terminal window. Close the window and it's gone: the context, the
-conversation, everything it knew. It can't work overnight, you can't check on it from
-somewhere else, and there's no record of what it did.
-
-## ✅ What rundesk does
-
-rundesk keeps that agent running as a named thing on your machine, with its own home and its
-own memory — and lets you reach it from a chat channel instead of a terminal.
-
-**It doesn't replace your agent.** It runs the CLI you already have — Codex, Claude Code,
-Google Antigravity, or
-one you wrote — so you keep its tools, its permissions and its login exactly as they are.
-
-|  |  |
-|---|---|
-| 🏠 **It has a home** | Its own workspace, memory and rules, kept apart from every other agent |
-| 💬 **You can message it** | Reach it on Discord from anywhere, and watch it work as it goes |
-| ⏰ **It works while you don't** | Schedules that run on the clock — never late, never twice |
-| ♻️ **It stays up** | Your machine restarts it after a crash or a reboot |
-| 📝 **It remembers** | Every turn recorded — what was asked, what it did, what it cost |
-| 📦 **Nothing to manage** | One directory under your home. No server to host, no build step |
-
-## ⚡ How you use it
+## ⚡ It's this simple
 
 ```sh
 rundesk add ava --provider codex
-rundesk ask ava "what changed in this repo today?"
+rundesk ask ava "review this repository and tell me the highest-risk open issue"
 ```
 
-That's a working agent. Two more commands and it's always on and reachable:
+That creates a working agent and starts a continuing conversation. Keep it available after
+the terminal closes:
 
 ```sh
-rundesk start ava                                                  # keep it running
-rundesk channels ava add discord --kind discord --allow <your-id>  # and message it
+rundesk start ava
 ```
 
-## 🚀 Install
+Or put the same agent on Discord:
+
+```sh
+rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
+```
+
+## ✨ Highlights
+
+- **Bring your own coding agent.** Use the shipped Codex, Claude Code, Grok, or Google
+  Antigravity adapter, or point Rundesk at a provider adapter you wrote.
+- **One identity, one home.** Every agent has its own workspace, rules, memory, skills,
+  conversations, and logs.
+- **Always available.** macOS `launchd` keeps each agent's gateway running and brings it
+  back after a crash or reboot.
+- **Terminal, chat, and scheduled work.** Continue the same agent from the command line,
+  Discord, recurring cron schedules, or one-time scheduled turns.
+- **A durable account of every turn.** Inspect messages, tool activity, outcomes, and
+  token usage without relying on a provider's private session format.
+- **Reusable capabilities.** Grant agents on-demand skills and place shared integration
+  CLIs on every agent's `PATH`.
+- **Local and recoverable.** Rundesk keeps its program separate from your data, supports
+  manual and daily backups, and never requires a hosted Rundesk server.
+
+## 💡 Why Rundesk?
+
+Coding agents are excellent at a turn of work, but their native home is usually one terminal
+session. Rundesk adds the parts needed to operate them over time:
+
+- a stable identity and workspace for each agent;
+- an always-on gateway owned by the operating system;
+- conversations that resume across turns and surfaces;
+- schedules that run once, never overlap, and do not run late after downtime;
+- access controls for chat channels;
+- normalized history and usage across different provider CLIs; and
+- updates, backups, diagnostics, and removal with explicit ownership boundaries.
+
+The provider and channel seams are programs, not in-process plugins. A custom adapter can be
+written in any language and receives the same scheduling, lifecycle, history, and channel
+behavior as a shipped adapter.
+
+## 🚀 Quick start
+
+### Requirements
+
+- macOS
+- Python 3.9 or newer
+- At least one [supported provider CLI](#-provider-adapters), installed and signed in
+
+### Install
 
 ```sh
 curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash
 ```
 
-Everything lands in **`~/.rundesk`** — one directory under your home, with the program in
-`app/` and everything you make beside it:
+Rundesk installs under `~/.rundesk` without editing your shell profile:
 
 ```text
 ~/.rundesk/
-  app/          rundesk itself — what an update replaces and an uninstall removes, whole
-  data/         everything you make — agents, skills, scripts, and what gateways wrote
+  app/          the installed Rundesk release
+  data/         your agents, skills, scripts, history, and configuration
 ```
 
-That split is the point: removing rundesk takes `app/` and is structurally incapable of
-reaching `data/`, rather than remembering a list of things to spare. Your shell profile is
-left alone too; if the command isn't on your `PATH`, the installer shows you the line to add
-rather than editing a file you own.
+Updates replace `app/`; uninstall leaves `data/` alone unless you explicitly ask to purge it.
 
-### Make an agent
+### Create and check an agent
 
 ```sh
-rundesk add ava --provider codex     # a brain this machine already has
-rundesk doctor ava                   # what stands between ava and a working turn
+rundesk add ava --provider codex
+rundesk doctor ava
+rundesk ask ava "summarize what changed in this repository today"
 ```
 
-### Ask it something
-
-```sh
-rundesk ask ava "summarise what's still failing in CI"
-```
-
-Answers stream to your terminal. Ask again and it remembers — same conversation, same session.
+Answers stream to the terminal. The next `ask` resumes the same terminal conversation; use
+`--fresh` to start again, `--read-only` for a constrained turn, or `--steer` with Codex to
+add instructions while a turn is running.
 
 ### Keep it running
 
 ```sh
-rundesk start ava        # your machine keeps it up, and brings it back after a reboot
-rundesk agents           # every agent, and what each is doing
-rundesk logs ava         # everything it's said
+rundesk start ava
+rundesk agents
+rundesk logs ava
 ```
 
-```
-AGENT    STATE    PID    UPTIME  LAUNCHD JOB  VERSION  WORK
-ava      RUNNING  4192   2h14m   LOADED       0.5.0    2 (a-conversation, another)
-codex    STOPPED  -      -       NOT LOADED   -        -
-```
+Each agent has its own gateway. Restarting or stopping one does not disturb the others, and
+stopping a gateway ends the provider and every child process it started.
 
-### Give it work that starts itself
+### Schedule work
+
+Run a recurring turn:
 
 ```sh
-rundesk schedules ava add nightly --when "0 3 * * *" -- rundesk ask ava "what changed today?"
-rundesk schedules ava
+rundesk schedules ava add nightly \
+  --when "0 3 * * *" \
+  --ask "review today's changes and report anything risky"
 ```
 
-```
-SCHEDULE  STATE  WHEN       NEXT              LAST RUN          OUTCOME
-nightly   ON     0 3 * * *  2026-07-27 03:00  2026-07-26 03:00  finished
-```
-
-### Teach it how you do something
-
-A skill is a folder with a `SKILL.md` in it — what to do, and one line saying when it applies.
-Write it once into the library, then give it to the agents that should have it:
+Run once and post the outcome to an existing channel:
 
 ```sh
-mkdir -p "$(rundesk skills --where)/release-notes"
-$EDITOR "$(rundesk skills --where)/release-notes/SKILL.md"
-rundesk skills grant ava release-notes
-rundesk skills
+rundesk schedules ava add release-check \
+  --at "2026-07-29T09:00" \
+  --ask "verify the release and summarize the result" \
+  --to discord-dms
 ```
 
-```
-SKILL           FROM      AGENTS
-release-notes   yours     ava
-writing-skills  built-in  ava, winston
-```
+Schedules can start an agent turn or an executable by full path. Rundesk records the
+outcome either way.
 
-**The brain finds it by itself.** Rundesk never puts a skill in a prompt — it costs one line
-of context until the turn it is actually needed, and the agent decides that, not us. Every
-agent starts with `writing-skills`, so you can ask one to write the next skill for you.
+## 🧠 Provider adapters
 
-### Give every agent a command
+Rundesk ships four first-class provider adapters. Each uses the provider CLI and login
+already established on your machine; Rundesk does not copy provider credentials.
 
-Owner-created integration CLIs live in one shared directory, placed first on every
-agent's `PATH`:
+| Provider CLI | `--provider` | First-class support |
+|---|---|---|
+| [OpenAI Codex CLI](https://learn.chatgpt.com/docs/codex/cli) | `codex` | Continuing conversations, model selection, tool activity, per-turn usage, and live steering |
+| [Anthropic Claude Code](https://code.claude.com/docs/en/overview) | `claude` | Continuing conversations, model selection, tool activity, and per-turn usage |
+| [xAI Grok CLI](https://docs.x.ai/build/cli/headless-scripting) | `grok` | Continuing conversations, model selection, tool activity, and per-turn usage |
+| [Google Antigravity CLI](https://antigravity.google/docs/cli/install) | `antigravity` | Continuing conversations, model selection, tool activity, and per-turn usage |
+
+Switch the default provider when creating an agent:
 
 ```sh
-rundesk scripts --where
-rundesk scripts
+rundesk add claude-agent --provider claude
+rundesk add grok-agent --provider grok
+rundesk add antigravity-agent --provider antigravity
 ```
 
-Put an executable there, then give an agent a companion skill describing when and how to
-use it. Every new agent receives `building-integration-clis`, which covers stable command
-shape, credential files, confirmation guards, and offline tests. Credentials stay outside
-the scripts and skills libraries.
+Or choose a different provider or model for one turn or schedule without changing the
+agent's default.
 
-## 💬 Reach it where you already are
+### Custom providers are first-class
 
 ```sh
-rundesk channels ava add discord --kind discord --allow <your-user-id>
+rundesk add ava --provider /opt/my-provider --model fast-1 --set effort=high
 ```
 
-One command sets up both direct messages and rooms. **Nothing to look up** — the adapter signs
-in and asks Discord which servers your bot is in, so you never copy an ID out of a URL.
+A provider adapter is an executable that exchanges newline-delimited JSON records with
+Rundesk. It can be a Python program, compiled binary, or shell script. Custom providers use
+the same agent homes, schedules, channels, turn records, usage reporting, and lifecycle as
+the adapters above.
 
-Then just message it. It opens a thread, marks your message seen, shows its work as it goes, and
-posts the answer whole when it's finished.
+→ **[Write a provider adapter](src/templates/skills/building-a-provider-adapter/references/the-contract.md)**
 
-Three things worth knowing:
+## 💬 Channel adapters
 
-- **You must say who may use it.** There's deliberately no way to say "anybody" — an agent that
-  answers whoever speaks to it, on a machine where it runs tools, is a mistake and not a mode.
-- **Your token is never an argument.** It's read from an environment variable or a file you
-  already control. Anything on a command line is readable through the process list.
-- **Adding a channel proves it works first.** It connects, signs in, and checks it can see what
-  it was pointed at. If it can't, nothing is saved and you're told why.
+### Discord
 
-Tell it where it is, so it doesn't answer a room of forty people the way it answers a DM:
+Discord is the shipped first-class channel adapter:
+
+```sh
+rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
+```
+
+The command securely asks for the bot token when needed, proves the connection before
+saving anything, and creates separate `discord-dms` and `discord-rooms` channels by default.
+You can also narrow it to direct messages, one server, or one channel.
+
+On Discord, Rundesk supports:
+
+- direct messages and server rooms;
+- a dedicated thread when the agent is mentioned in a room;
+- explicit per-channel user allowlists;
+- typing, state reactions, and optional live activity;
+- long answers and generated files as attachments;
+- inbound message attachments; and
+- stopping or forgetting a conversation from chat.
 
 ```sh
 rundesk channels ava instructions discord-rooms \
-    "You are {agent} in {where.channel}, and {called} is asking. Anyone can read this — keep it short."
+  "You are {agent} in {where.channel}. Others can read this, so keep it concise."
 ```
 
-## 🧠 Bring your own brain
+Channel instructions keep public-room behavior separate from private conversations.
 
-```sh
-rundesk add ava --provider /opt/my-brain --model fast-1 --set effort=high
-```
+### Custom channels are first-class
 
-A brain is **a program rundesk runs**, not code it loads — so it can be written in any language,
-and a shell script is enough. rundesk hands it the working directory, the model and the prompt,
-and reads back one JSON record per line.
+Like a provider adapter, a channel adapter is an executable rather than code Rundesk loads.
+It owns the vocabulary and behavior of its platform while Rundesk owns access control, turn
+state, history, and delivery. A custom channel gets the same agent and turn lifecycle as
+Discord without changing Rundesk core.
 
-Nothing about your brain leaks into rundesk — there is no list of providers and no list of models
-anywhere in the codebase. A brain nobody here has heard of is first-class rather than degraded:
-[a stranger wrote one from the guide alone](src/templates/skills/building-a-provider-adapter/references/the-contract.md) and it
-passed the same test suite the shipped one does, without a line of rundesk changing.
+→ **[Write a channel adapter](src/templates/skills/building-a-channel-adapter/references/the-contract.md)**
 
-Channels work exactly the same way, which is why the same agent — same memory, same workspace —
-can answer you in the terminal, on Discord and on a schedule, with a different model each time.
+## 🧰 Everything Rundesk supports
 
-### Google Antigravity
+### Agents and gateways
 
-Install Google's official `agy` CLI and sign in once on the machine using its normal browser
-flow, then select the shipped adapter:
+- Named agents with isolated homes, workspaces, rules, memory, and skills
+- Private provider homes when the provider supports one; native-keyring and machine-login
+  providers keep their state under the provider's own rules
+- Diagnostics before a broken agent becomes an unattended failure
+- One independently managed gateway per agent
+- Clean start, stop, restart, update, uninstall, and optional purge operations
 
-```sh
-agy models
-rundesk add ava --provider antigravity
-```
+### Conversations and records
 
-Antigravity supports personal Google accounts in supported regions. Its current CLI keeps the
-login in the native OS keyring and documents no unattended token or isolated config-home mode,
-so Rundesk invokes that signed-in machine client directly; it never reads or copies Google
-credentials. A `read` turn uses plan mode plus the OS sandbox and cannot approve writes. A
-`work` turn launches with the sandbox enabled and auto-approves the tools needed to complete
-the work, including an explicit unsandboxed request if the model makes one.
+- Continuing or fresh conversations from terminal, channel, or schedule
+- Read-only and working postures, translated into each provider's native controls
+- Messages, tool activity, outcomes, errors, and token usage recorded per turn
+- Message filters and full-text search across an agent's conversations
 
-Discord is only transport: it receives Rundesk's normalized activity and answer records, not
-the Google login. See the [measured adapter notes](.knowledge/research/2026-07-28-antigravity-cli-as-a-brain.md)
-for the exact 1.1.8 behavior and guardrails.
+### Schedules
 
-→ **[Write a provider adapter](src/templates/skills/building-a-provider-adapter/references/the-contract.md)** ·
-**[Write a channel adapter](src/templates/skills/building-a-channel-adapter/references/the-contract.md)**
+- Standard five-field cron schedules
+- One-time schedules at an exact local timestamp
+- Agent turns or arbitrary executables by full path
+- Per-schedule provider, model, instructions, and delivery channel
+- No overlapping run of the same schedule and no late execution after downtime
 
-## 🧰 Everything it does
+### Skills and integration CLIs
 
-**Agents**
-- One name, one home — rules, memory, workspace and skills, kept apart from every other agent
-- Its own private provider home when the provider supports one; native-keyring providers use
-  the owner's machine login without copying it
-- `doctor` tells you what's missing before you need it at three in the morning
+- A shared skill library with per-agent grants
+- Built-in skills that update with Rundesk and owner-created skills that do not
+- A shared executable library placed on every agent's `PATH`
+- Companion guidance for building guarded, offline-tested service integrations
 
-**Staying up**
-- One gateway per agent, so restarting one never disturbs another
-- Owns everything it starts — ending it ends the provider and every tool it spawned
-- Comes back after a crash or a reboot; a gateway that *can't* run stops cleanly instead of looping
+### Operations and data
 
-**Schedules**
-- Never late, never overlapping, and exactly once for the minute it's due — across restarts and
-  across the hour the clock goes back
-- A program that can't be found is refused when you write the schedule, not at 3am
-
-**Skills**
-- Write one once; every brain that agent reaches finds it **by itself** — nothing is pasted
-  into a prompt, so a skill costs a line of context until the moment it is actually used
-- Give it to the agents that should have it and nobody else: `rundesk skills grant ava deploy`
-- Built-in skills come with rundesk and move forward with it; yours are never touched
-
-**Scripts**
-- Put a custom integration CLI in the shared script library and every agent can invoke it by name
-- Keep credentials outside Rundesk data while a companion skill carries routing and safety rules
-
-**Channels**
-- Threads, reactions and typing on Discord; a plain surface still carries the whole turn
-- Work shown as it happens; the answer posted whole rather than rewriting itself
-- Stop or forget a conversation from the chat itself
-
-**History**
-- Every turn recorded — what was asked, what the brain did, how it ended, what it cost
-- Kept apart from what the brain printed, so diagnostics can be deleted and the record survives
-
-## 📟 Every command
-
-```sh
-rundesk --help
-```
-
-Read off the command itself, so it can never disagree with what you have installed. The full
-reference is **[CLI.md](CLI.md)**, generated from the parser.
-
-```sh
-rundesk version --check    # what you have, and whether it's current
-rundesk update             # move to the newest release
-rundesk update --status    # outcome of an agent-initiated update
-rundesk status             # how rundesk itself is on this machine
-rundesk remove ava         # take an agent away  (--purge takes its home too)
-rundesk uninstall          # take rundesk off this machine
-```
-
-Removing rundesk stops every agent first, and refuses outright if one won't stop — half-removed
-is worse than not removed. What your agents *wrote* is kept unless you ask for `--purge`.
+- Install, version check, self-update, status, and doctor commands
+- Manual backups, automatic daily backups, restore, and configurable backup location
+- Program and owner data kept in separate directories
+- Agent removal that preserves its home unless purge is explicitly requested
+- Generated command reference that cannot drift from the installed parser
 
 ## 📖 Documentation
 
-- **[CLI.md](CLI.md)** — every operation and argument, generated from the command
-- **[Write a provider adapter](src/templates/skills/building-a-provider-adapter/references/the-contract.md)** — put your own brain behind an agent
-- **[Write a channel adapter](src/templates/skills/building-a-channel-adapter/references/the-contract.md)** — reach an agent from your own platform
-- **[Build an integration CLI](src/templates/skills/building-integration-clis/SKILL.md)** — give agents a custom command and the skill for using it
-- **[Contracts](.knowledge/prd/README.md)** — what rundesk guarantees, row by row, each naming the test that proves it
-- **[Roadmap](ROADMAP.md)** — what's built, what's next, and why in that order
-- **[Architecture](.knowledge/CODEMAP.md)** — where everything lives
+- **[CLI reference](CLI.md)** — every command and argument, generated from the parser
+- **[Provider adapter contract](src/templates/skills/building-a-provider-adapter/references/the-contract.md)** — put another coding CLI behind an agent
+- **[Channel adapter contract](src/templates/skills/building-a-channel-adapter/references/the-contract.md)** — reach an agent from another platform
+- **[Integration CLI guide](src/templates/skills/building-integration-clis/SKILL.md)** — give every agent a custom command
+- **[Tested contracts](.knowledge/prd/README.md)** — every guarantee and the test that proves it
+- **[Roadmap](ROADMAP.md)** — what is built, what is next, and why
+- **[Architecture](.knowledge/CODEMAP.md)** — how the system is organized
 
 ## 🧪 Tests
 
-No runner to install, nothing reaches the network, and no provider is ever started:
+The test suite is offline: it does not start a real provider or reach the network.
 
 ```sh
-python3 .knowledge/scripts/gate     # every suite, both doc linters, and a real install
-python3 tests/test_store.py         # or any one on its own
+python3 .knowledge/scripts/gate
 ```
 
-Every ✅ in the [contracts](.knowledge/prd/README.md) names the test that proves it, and the build
-fails if a row names a test that doesn't exist.
+The gate discovers every suite, checks the documentation evidence, validates the shell
+surface, and performs a real install and uninstall.

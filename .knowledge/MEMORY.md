@@ -100,6 +100,10 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `RUNDESK_*` turn variable and point `PYTHONPYCACHEPREFIX` at a fresh temporary directory before
   running the gate; neither changes product behavior, and the failures otherwise look like real
   regressions.
+- **`install.sh --help` is an install, not help.** The installer has no help branch, ignores the
+  argument and repoints the live launcher at the current checkout. Read the script before invoking
+  it; validate install/uninstall only with every install, data, bin, jobs and backup path redirected
+  into one scratch root.
 - **Waiting for the gate with `while pgrep -f "scripts/gate"` never ends, because the waiter
   matches itself.** The pattern is in the waiting shell's own command line, so `pgrep` finds it
   and every waiter keeps every other waiter alive — six were still spinning long after the runs
