@@ -1,0 +1,14 @@
+---
+/**
+ * The page title, with the area it belongs to as an eyebrow above it.
+ *
+ * A reader arriving from search lands mid-site with no idea which of the five
+ * areas they are standing in. The sidebar says so, but only once they look at it.
+ */
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+
+const current = Astro.locals.starlightSidebarTopics?.topics?.find((topic) => topic.isCurrent);
+---
+
+{current && <p class="rd-eyebrow">{current.label}</p>}
+<Default><slot /></Default>

@@ -197,6 +197,11 @@ would also swallow Starlight's own component imports.
 
 The five areas — Start here, Concepts, Guides, Reference, Extend — are declared through
 `starlight-sidebar-topics`, so each swaps the left panel to itself alone and `/` shows none.
+Two Starlight component overrides in `site/src/components/` move them where a reader expects:
+`Header.astro` hangs them under the site bar as a tab row, and `PageTitle.astro` prints the
+current area as an eyebrow above the title. Both wrap Starlight's default rather than replace
+it, and the plugin's own sidebar copy stays rendered but hidden, because it still owns working
+out which area is current.
 Brand tokens in `site/src/styles/brand.css` are sampled from `assets/readme/rundesk-banner.png`.
 
 `site/scripts/sync-cli-reference.mjs` copies `CLI.md` into `docs/reference/cli.md` on every

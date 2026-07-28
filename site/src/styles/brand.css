@@ -11,7 +11,9 @@
 	--rd-ground-raised: #070c1e;
 	--rd-ground-edge: #131a30;
 
-	--sl-nav-height: 3.75rem;
+	--sl-nav-height: 6.5rem;
+	--rd-bar-height: 3.5rem;
+	--rd-areas-height: 3rem;
 }
 
 /* Dark is the brand. Accent ramps run warm off the logo red; grays carry the
@@ -83,10 +85,11 @@ header.header {
 .sidebar-content a[aria-current='page'],
 .sidebar-content a[aria-current='page']:hover,
 .sidebar-content a[aria-current='page']:focus {
-	background-color: color-mix(in srgb, var(--rd-red-500) 10%, transparent);
+	background-color: transparent;
 	color: var(--sl-color-accent-high);
 	font-weight: 600;
-	border-radius: 0.25rem;
+	border-inline-start: 2px solid var(--sl-color-accent-high);
+	margin-inline-start: -1px;
 }
 
 .sidebar-content ul li {
@@ -140,21 +143,23 @@ starlight-sidebar-topics-list,
 
 /* ----------------------------------------------------------------- cards -- */
 
-/* Starlight tints each card's icon from a rotating hue, which on a one-accent
-   brand reads as six unrelated products. One colour, one system. */
-.card .icon {
-	color: var(--rd-red-500);
-	background: color-mix(in srgb, var(--rd-red-500) 12%, transparent);
-	border: 1px solid color-mix(in srgb, var(--rd-red-500) 22%, transparent);
-	border-radius: 0.5rem;
-	padding: 0.35rem;
-	font-size: 1.5rem;
-}
-
+/* Starlight cycles `--sl-card-border` and `--sl-card-bg` through orange, purple,
+   green, red and blue by `nth-child`, and draws the icon as a tile in whichever
+   it landed on. Six cards then read as six unrelated products. Emptying the two
+   properties removes the tile and the rotation together — overriding the icon
+   rule directly would not, because Starlight's sits in `@layer
+   starlight.components` and only the properties it reads are reachable. */
 .card {
+	--sl-card-border: transparent;
+	--sl-card-bg: transparent;
 	border-color: var(--sl-color-gray-6);
 	background: var(--rd-ground-raised);
 	border-radius: 0.75rem;
+}
+
+.card .icon {
+	color: var(--rd-red-500);
+	font-size: 1.7rem;
 }
 
 .card .title {
@@ -217,11 +222,7 @@ starlight-sidebar-topics-list,
    the article drops several hundred pixels down the page. A background layer has
    no such effect because it never enters the stacking order at all. */
 :root[data-theme='dark'] body {
-	background-image:
-		radial-gradient(60rem 32rem at 78% -6%, rgb(253 48 49 / 0.13), transparent 62%),
-		radial-gradient(44rem 26rem at 2% 4%, rgb(90 60 255 / 0.07), transparent 58%),
-		repeating-linear-gradient(to right, rgb(255 255 255 / 0.018) 0 1px, transparent 1px 3.5rem),
-		repeating-linear-gradient(to bottom, rgb(255 255 255 / 0.018) 0 1px, transparent 1px 3.5rem);
+	background-image: radial-gradient(70rem 34rem at 82% -10%, rgb(253 48 49 / 0.1), transparent 60%);
 	background-attachment: fixed;
 	background-repeat: no-repeat;
 }
@@ -379,11 +380,6 @@ starlight-sidebar-topics-list,
 	box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 0.45);
 }
 
-.card:hover .icon {
-	background: color-mix(in srgb, var(--rd-red-500) 20%, transparent);
-	border-color: color-mix(in srgb, var(--rd-red-500) 45%, transparent);
-}
-
 .sl-link-card:hover {
 	box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 0.45);
 }
@@ -415,4 +411,110 @@ starlight-sidebar-topics-list,
 	vertical-align: -0.04em;
 	border-radius: 999px;
 	background: linear-gradient(180deg, var(--rd-red-500), transparent);
+}
+
+/* ============================================================== areas == */
+
+/* Two rows in one fixed header: the site bar, then the area switcher. The
+   reader's two questions — which area, and where in it — get two different
+   places to be answered rather than one stacked list. */
+.rd-header {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+}
+
+.rd-header__bar {
+	display: flex;
+	align-items: center;
+	height: var(--rd-bar-height);
+	flex: none;
+}
+
+/* Starlight's header is a full-width grid. As a flex item it would size to its
+   content instead, pinning the search box and the social links into the left
+   third and leaving the rest of the bar empty. */
+.rd-header__bar > * {
+	flex: 1 1 auto;
+	width: 100%;
+}
+
+.rd-areas {
+	height: var(--rd-areas-height);
+	display: flex;
+	align-items: stretch;
+	overflow-x: auto;
+	scrollbar-width: none;
+	margin-inline: -1rem;
+	padding-inline: 1rem;
+}
+
+.rd-areas::-webkit-scrollbar {
+	display: none;
+}
+
+.rd-areas ul {
+	display: flex;
+	align-items: stretch;
+	gap: 1.75rem;
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+
+/* Monospace across the chrome. On a tool you drive from a terminal it reads as
+   part of the product rather than as decoration. */
+.rd-areas a {
+	display: flex;
+	align-items: center;
+	height: 100%;
+	white-space: nowrap;
+	font-family: var(--__sl-font-mono, ui-monospace, monospace);
+	font-size: 0.8rem;
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	color: var(--sl-color-gray-3);
+	text-decoration: none;
+	border-bottom: 2px solid transparent;
+	transition: color 140ms ease, border-color 140ms ease;
+}
+
+.rd-areas a:hover {
+	color: var(--sl-color-white);
+}
+
+.rd-areas a[aria-current='page'] {
+	color: var(--sl-color-white);
+	border-bottom-color: var(--rd-red-500);
+}
+
+/* The plugin still owns working out which area is current, so its sidebar copy
+   stays rendered and is hidden rather than removed. */
+.sidebar-content .starlight-sidebar-topics {
+	display: none;
+}
+
+/* -------------------------------------------------------------- eyebrow -- */
+
+.rd-eyebrow {
+	margin: 0 0 0.4rem;
+	font-family: var(--__sl-font-mono, ui-monospace, monospace);
+	font-size: 0.7rem;
+	font-weight: 700;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--sl-color-accent-high);
+}
+
+/* ------------------------------------------------------- monospace chrome -- */
+
+.right-sidebar h2,
+.sidebar-content details > summary .group-label > span,
+.sidebar-content .top-level > li > details > summary span {
+	font-family: var(--__sl-font-mono, ui-monospace, monospace);
+	font-size: 0.7rem;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--sl-color-gray-3);
+	font-weight: 700;
 }

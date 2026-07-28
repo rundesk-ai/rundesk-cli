@@ -55,6 +55,10 @@ export default defineConfig({
 			},
 			lastUpdated: true,
 			pagination: true,
+			components: {
+				Header: './src/components/Header.astro',
+				PageTitle: './src/components/PageTitle.astro',
+			},
 			plugins: [
 				/**
 				 * One sidebar per area rather than one long list of everything.
@@ -65,7 +69,6 @@ export default defineConfig({
 					{
 						label: 'Start here',
 						link: '/start/what-rundesk-is/',
-						icon: 'rocket',
 						items: [
 							{
 								label: 'First steps',
@@ -80,7 +83,6 @@ export default defineConfig({
 					{
 						label: 'Concepts',
 						link: '/concepts/agents/',
-						icon: 'open-book',
 						items: [
 							{
 								label: 'How Rundesk works',
@@ -99,7 +101,6 @@ export default defineConfig({
 					{
 						label: 'Guides',
 						link: '/guides/discord/',
-						icon: 'setting',
 						items: [
 							{
 								label: 'Everyday work',
@@ -114,7 +115,6 @@ export default defineConfig({
 					{
 						label: 'Reference',
 						link: '/reference/providers/',
-						icon: 'list-format',
 						items: [
 							{
 								label: 'The surface',
@@ -128,7 +128,6 @@ export default defineConfig({
 					{
 						label: 'Extend',
 						link: '/extend/provider-adapters/',
-						icon: 'puzzle',
 						items: [
 							{
 								label: 'Write your own',
