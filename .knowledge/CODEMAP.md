@@ -191,7 +191,7 @@ provider. One file per contract, named for it:
 |---|---|---|
 | `test_gateway.py` | 178 | `platform-gateway` — real processes, real signals, waits turned down |
 | `test_agent.py` | 80 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
-| `test_cli.py` | 208 | `command-surface` — walks every verb off the parser, so one wired nowhere is caught |
+| `test_cli.py` | 228 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
 | `test_process.py` | 97 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 75 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
 | `test_update_request.py` | 9 | `lifecycle-update` — durable self-update handoff, duplicate requests, external ownership, and outcome delivery |
@@ -210,7 +210,7 @@ provider. One file per contract, named for it:
 | `test_channel.py` | 65 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
 | `test_answering.py` | 64 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
 | `test_discord.py` | 69 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up |
-| `test_ci.py` | 6 | the build topology — one PR run, bounded discovery, retained logs, and the supported matrix |
+| `test_ci.py` | 11 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, and the supported matrix |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and
 `.knowledge/scripts/check-evidence` fails the build when a row names one that does not exist.

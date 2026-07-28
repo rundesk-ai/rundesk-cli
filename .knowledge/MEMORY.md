@@ -18,6 +18,12 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   output left the suite traversing directories for more than fourteen minutes; moving the
   exact probe tree to `/tmp` returned the suite to 27 seconds. Keep live captures outside
   the checkout and commit only small sanitized fixtures.
+- **Fake command collaborators do not isolate direct global resolvers.** `test_cli` walks
+  every operation with fake gateways, agents, skills and a machine, but bare `backups`
+  calls `backups_home()` directly; the aggregate gate left it reading the owner's backup
+  directory until the new ceiling captured a 180-second `pathlib.iterdir` stack. Whenever
+  a command reaches a directory outside an injected collaborator, redirect that resolver
+  for the whole surface suite and assert the scratch boundary before walking every verb.
 - **A shell does not move into a worktree it just created.** A command such as
   `git worktree add <path> <branch> && sed …` runs the read in the original checkout, so
   release preparation can inspect or edit a stale version while the new worktree is correct.
