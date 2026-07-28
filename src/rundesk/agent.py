@@ -21,12 +21,13 @@ reached back for an agent would end it.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from rundesk import __version__, data_home, gateway, migration, skill, store
+from rundesk import ROOT, __version__, data_home, gateway, migration, skill, store
 
 #: What a new agent's home is copied from. Ordinary Markdown files rather than text built
 #: in code, because they are what an owner reads first and edits next, and a rule about how
@@ -894,14 +895,14 @@ def _queried(name: str, asked: str, where: Path | None = None) -> str:
     """
     if asked == "help":
         return (
-            "Read-only: /status /version /agents\n"
-            "Conversation: /stop /new\n"
-            "Agent: /restart"
+            "Read-only queries: status, version, agents, help\n"
+            "Conversation controls: stop, forget\n"
+            "Agent control: restart"
         )
     if asked == "version":
         standing = gateway.standing(name, resolved(name, where).run)
         running = standing.version or "not running"
-        return f"Rundesk {__version__}\n{name} gateway: {running}"
+        return f"Rundesk installed: {_installed_version()}\n{name} gateway: {running}"
     if asked == "status":
         standing = gateway.standing(name, resolved(name, where).run)
         state = ("WEDGED" if standing.stale else "RUNNING") if standing.running else "STOPPED"
@@ -928,6 +929,17 @@ def _queried(name: str, asked: str, where: Path | None = None) -> str:
             rows.append(f"{one}: {state} ({standing.version or '-'})")
         return "\n".join(rows)
     raise ValueError(f"unknown read-only query: {asked}")
+
+
+def _installed_version(root: Path | None = None) -> str:
+    """The code on disk, which may be newer than this still-running gateway."""
+    root = root or ROOT
+    try:
+        source = (root / "src" / "rundesk" / "__init__.py").read_text(encoding="utf-8")
+    except OSError:
+        return "unknown"
+    found = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']\s*$', source, re.MULTILINE)
+    return found.group(1) if found else "unknown"
 
 
 def _query_uptime(started) -> str:

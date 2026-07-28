@@ -973,8 +973,17 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
 
     def test_version_tells_installed_code_from_the_running_gateway(self):
         self.made()
-        said = agent._queried("ava", "version", self.where)
-        self.assertIn("Rundesk ", said)
+        install = self.root / "install"
+        package = install / "src" / "rundesk"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text('__version__ = "8.7.6"\n')
+        original = agent.ROOT
+        agent.ROOT = install
+        try:
+            said = agent._queried("ava", "version", self.where)
+        finally:
+            agent.ROOT = original
+        self.assertIn("Rundesk installed: 8.7.6", said)
         self.assertIn("ava gateway: not running", said)
 
     def test_agents_lists_every_configured_agent_in_name_order(self):
@@ -986,9 +995,10 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
     def test_help_names_read_only_conversation_and_agent_commands(self):
         self.made()
         said = agent._queried("ava", "help", self.where)
-        self.assertIn("/status /version /agents", said)
-        self.assertIn("/stop /new", said)
-        self.assertIn("/restart", said)
+        self.assertIn("status, version, agents, help", said)
+        self.assertIn("stop, forget", said)
+        self.assertIn("restart", said)
+        self.assertNotIn("/", said, "the agent layer invented a platform's command syntax")
 
 
 class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):
