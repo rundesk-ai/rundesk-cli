@@ -11,8 +11,8 @@
 	--rd-ground-raised: #070c1e;
 	--rd-ground-edge: #131a30;
 
-	--sl-nav-height: 7rem;
-	--rd-bar-height: 3.5rem;
+	--sl-nav-height: 7.5rem;
+	--rd-bar-height: 4rem;
 	--rd-areas-height: 3.5rem;
 }
 
@@ -74,6 +74,7 @@
 header.header {
 	backdrop-filter: blur(12px);
 	border-bottom: 1px solid var(--sl-color-gray-6);
+	padding-block: 0;
 }
 
 /* --------------------------------------------------------------- sidebar -- */
@@ -212,9 +213,11 @@ starlight-sidebar-topics-list,
 
 /* ========================================================== atmosphere == */
 
-/* A flat near-black page reads as unfinished rather than as restrained. Two
-   blooms in the brand red give the ground depth, plus a hairline grid so it
-   reads as a surface rather than as an absence.
+/* A flat near-black page reads as unfinished rather than as restrained. One
+   bloom in the brand red gives the ground depth and a hairline grid makes it a
+   surface rather than an absence. The grid runs the full page rather than fading
+   out, because a background layer cannot be masked — kept faint enough to be a
+   texture behind prose rather than a thing to read.
 
    These are background layers on `body`, not fixed pseudo-elements. A fixed
    pseudo-element with a z-index establishes a stacking context that paints over
@@ -222,7 +225,10 @@ starlight-sidebar-topics-list,
    the article drops several hundred pixels down the page. A background layer has
    no such effect because it never enters the stacking order at all. */
 :root[data-theme='dark'] body {
-	background-image: radial-gradient(70rem 34rem at 82% -10%, rgb(253 48 49 / 0.1), transparent 60%);
+	background-image:
+		radial-gradient(70rem 34rem at 82% -10%, rgb(253 48 49 / 0.1), transparent 60%),
+		repeating-linear-gradient(to right, rgb(255 255 255 / 0.017) 0 1px, transparent 1px 4rem),
+		repeating-linear-gradient(to bottom, rgb(255 255 255 / 0.017) 0 1px, transparent 1px 4rem);
 	background-attachment: fixed;
 	background-repeat: no-repeat;
 }
@@ -439,6 +445,30 @@ starlight-sidebar-topics-list,
 	width: 100%;
 }
 
+/* Starlight lets the search sit wherever the title stops, so it lands
+   left-of-centre and moves when the title does. Three columns with the outer two
+   equal pins it to the middle of the viewport whatever is either side of it. */
+.rd-header__bar > .header {
+	display: grid;
+	grid-template-columns: 1fr minmax(0, 30rem) 1fr;
+	align-items: center;
+	gap: 1rem;
+}
+
+.rd-header__bar > .header > :nth-child(2) {
+	justify-self: center;
+	width: 100%;
+}
+
+.rd-header__bar > .header > :nth-child(2) site-search,
+.rd-header__bar > .header > :nth-child(2) button[data-open-modal] {
+	width: 100%;
+}
+
+.rd-header__bar > .header > :nth-child(3) {
+	justify-self: end;
+}
+
 /* The nav is its own band, not a line of links tucked under the wordmark: it
    spans the header's full width, carries its own ground and its own rule, and
    the active tab's underline sits on that rule. Without the band it reads as an
@@ -452,8 +482,8 @@ starlight-sidebar-topics-list,
 	scrollbar-width: none;
 	background: color-mix(in srgb, var(--rd-ground-raised) 60%, transparent);
 	border-top: 1px solid var(--sl-color-gray-6);
-	margin-inline: calc(var(--sl-content-pad-x, 1rem) * -1);
-	padding-inline: var(--sl-content-pad-x, 1rem);
+	margin-inline: calc(var(--sl-nav-pad-x, 1rem) * -1);
+	padding-inline: var(--sl-nav-pad-x, 1rem);
 }
 
 .rd-areas::-webkit-scrollbar {
