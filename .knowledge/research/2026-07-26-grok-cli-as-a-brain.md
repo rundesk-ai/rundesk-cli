@@ -1,42 +1,41 @@
 # Research: The Grok CLI as an agent's brain
 
-**Last updated:** 2026-07-26
+**Last updated:** 2026-07-27
 **Question it answers:** What does the installed Grok CLI actually do when it is driven headlessly, and which of it has to be absorbed by an adapter?
 
 ## What they do
 
-Everything here is true of `grok 0.2.111` (`grok-4.5-build`) on macOS 25.5.0 — the build every
-capture below was driven against, recorded in `cli-versions.lock`.[9] Two labels are used and
+The golden and original probes use `grok 0.2.111` (`grok-4.5-build`) on macOS 25.5.0, recorded in
+`cli-versions.lock`; the ACP probes use the installed 0.2.112 build.[9][14] Two labels are used and
 never blurred. **Measured** means a probe ran against a real account and its output was kept; the
 golden stream in `tests/samples/` is 79 lines of that output,[1] and `.knowledge/scripts/probe-grok`
 is a re-runnable probe that settled four more things on 2026-07-26.[12] **Assumed** means it was
-read off a flag surface, a help string or a vendor write-up and never exercised. Grok used to have
-far more of the second kind than either other brain; after the probe, one row is left.
+read off a flag surface, a help string or a vendor write-up and never exercised.
 
-| Need | What `grok 0.2.111` does |
+| Need | What the measured Grok builds do |
 |---|---|
 | Run one turn without a person | Measured: `grok -p "<prompt>" --output-format streaming-json`, JSONL on stdout. The prompt is the **value of a flag**, not a positional, so nothing can swallow it — and it is therefore visible in the process list.[1][3][10] Measured since: `--prompt-file <path>` carries a turn identically, so it need not be.[12] |
-| Say what happened as it works | Measured: three line kinds and no more — `thought`, `text`, `end`.[1] |
-| Say what tools it ran | Measured: **nothing at all.** There are no tool events in this stream, in either output format. It runs a command and describes the result in prose.[2][6] |
+| Say what happened as it works | Measured: one-shot `streaming-json` has only `thought`, `text`, `end`; ACP adds message, thought, tool-call and tool-result events.[1][13][14] |
+| Say what tools it ran | Measured: **not in one-shot output, but fully in ACP.** `tool_call` carries a stable id, name and input; `tool_call_update` carries the same id, status, output and locations.[13][14] |
 | Say which conversation this was | Measured: `end.sessionId`. The golden was captured with no `--session-id` passed and came back with `019f95ad-a32b-7922-a669-e6e26f978901`, so the CLI mints one when the caller does not.[1][10] |
-| Carry a conversation on | Measured: `--resume <id>` carries context across two separate processes — turn two's whole input named neither candidate and it answered correctly, where a control session that never heard turn one could not.[12] |
+| Carry a conversation on | Measured: `--resume <id>` carries context in one-shot mode; ACP `session/load` carries the exact session into a new adapter process without replaying its history as new output.[12][14] |
 | Say what a turn cost | Measured: on the `end` line, `usage.{input_tokens, cache_read_input_tokens, output_tokens, reasoning_tokens, total_tokens}` plus `total_cost_usd` and a `modelUsage` map — and **per turn, not cumulative**: three one-word replies on one session reported `output_tokens` of 31, 21 and 21.[1][12] |
 | Say which model answered | Measured: the first key of `end.modelUsage` — `grok-4.5-build`, with `modelCalls: 1`.[1] |
 | Keep one agent's sign-in from another's | Measured: `GROK_HOME`. A fresh directory fails the turn closed — exit 1, `Error: Not signed in`, naming `grok login --device-code` — and the CLI fills it with `config.toml`, `sessions/`, `logs/`, `agent_id` and its own lockfiles.[12] |
 | Choose how much of the machine it may touch | Measured: the `--tools` list, and only the `--tools` list. Two flags that look like they would help do not — see below.[4] Re-measured 2026-07-27 on 0.2.112: with `--tools read_file,list_dir,grep` a turn could not create a file, with the fuller list it could, and **with the flag left off entirely it could** — so omitting `--tools` is how this CLI says every built-in. Note `-p/--single` is the single-turn form; piping a prompt on stdin fails with `Device not configured (os error 6)`. |
-| Be sent to mid-turn | Nothing measured. No steering surface is known, and there is no tool event to hang one off.[2] |
+| Be sent to mid-turn | ACP keeps stdin open and supports a long-lived session, but sending another prompt during an active turn is not measured.[13] |
 
-### Three line kinds, and one of them is the whole turn
+### The one-shot format has three line kinds
 
 Measured, counted off the golden's 79 lines.[1] The mapping column is the Node build's own,
 recorded in `grok-events.json`.[2]
 
 | Line | Lines in the golden | Maps to | Why, or why nothing exists |
 |---|--:|---|---|
-| `thought` | 41 | reasoning | `{"type":"thought","data":"<fragment>"}` — streamed a token at a time, and the **only** sign this brain gives that a turn is in progress, since it reports no tool work |
+| `thought` | 41 | reasoning | `{"type":"thought","data":"<fragment>"}` — streamed a token at a time, and the only progress signal in this one-shot format |
 | `text` | 37 | the reply | `{"type":"text","data":"<fragment>"}` — identical shape to `thought`, one field apart |
 | `end` | 1 | cost, then the end of the turn | `sessionId` is the resume handle; `stopReason === "EndTurn"` is the outcome |
-| *(tool calls, tool results, todos, questions)* | 0 | — | **no source exists in this CLI** |
+| *(tool calls, tool results, todos, questions)* | 0 | — | **no source exists in this output format; ACP supplies tool calls and results** |
 
 **Text arrives as fragments and never whole.** Measured: 37 `text` chunks concatenate to 215
 characters, and nothing in the stream restates them.[1] There is no equivalent of Claude's whole
@@ -47,7 +46,7 @@ to avoid either.
 same shape, so anything scanning raw lines for `data` counts what the model merely thought
 about as if it had said it.[5][6]
 
-### No tool events at all — the finding, not a gap in the capture
+### One-shot output hides tools; ACP reports them
 
 Measured at 0.2.111, and deliberately: read tools were granted, a file was planted, and the CLI
 was asked to read it. **It reported the file's contents, with `num_turns: 2`, and the stream
@@ -59,6 +58,18 @@ Its tool names, when it does run them, are its own and match no other provider's
 `list_dir`, `grep`, `run_terminal_command`, `ask_user_question`, `spawn_subagent`, `todo_write`,
 `edit_file`, `create_file`.[2][3] `ask_user_question` is worth noticing precisely because it
 exists in that vocabulary and would still produce no event.
+
+Measured at 0.2.112: that absence belongs to the **one-shot output format**, not the agent.
+`grok agent stdio` speaks the documented ACP JSON-RPC interface and streams
+`agent_thought_chunk`, `agent_message_chunk`, `tool_call`, `tool_call_update` and a terminal
+`turn_completed` update.[13][14] A controlled working turn created, read, edited and counted a
+file; ACP named the tools `write`, `read_file`, `search_replace` and `run_terminal_command`, gave
+each a stable `toolCallId`, then paired it with `status: completed` and `rawOutput` on the same
+id.[14]
+
+The intermediate tool update carries a broad `kind` and `locations`; the terminal update carries
+the outcome. No path or command has to be parsed out of prose, and no post-turn Markdown export
+has to be scraped.[14]
 
 ### Usage: the split matches Claude's, and there is no cache-write figure
 
@@ -80,6 +91,11 @@ unlike Codex, where the cache is folded inside the input count.[1][2]
 Measured: **there is no cache-*creation* field.** Grok reports what it read from cache and says
 nothing about what it wrote into it — so on this brain the cache-write tier that costs above
 standard input on the other two is simply not visible.[1]
+
+ACP labels the fields differently and includes cached reads inside `inputTokens`: a measured turn
+reported 26,797 input, 24,448 cached and 81 output, with 26,878 total.[14] The adapter therefore
+subtracts cached reads once to preserve the seam's fresh/cached split; applying the one-shot rule
+to ACP would double-count 24,448 tokens.
 
 Measured: `modelUsage` restates the same three numbers for the one model, and its `costUSD`
 equals `total_cost_usd` exactly.[1] Unmeasured: whether `reasoning_tokens` (151) sits inside
@@ -224,8 +240,8 @@ a genuinely *separate account* — and that is a thing to ask for rather than a 
 
 Measured: `--prompt-file <path>` is on this build's help, appears in none of the carried-over
 evidence, and carries a whole turn — the same trivial ask answered `ORANGE` through a file as it
-does through `-p`.[12] What somebody asks their agent is readable through the process list and
-kept in a shell's history, so this is the form an adapter should use; `-p` remains the fallback.
+does through `-p`.[12] ACP goes further: `session/prompt` sends the prompt as JSON-RPC over stdin,
+so no prompt value or temporary prompt file is needed.[13][14]
 
 ### Context files: it reads both, from its own directory only, and a git init fences it
 
@@ -264,10 +280,11 @@ is indexed once. A bare `skills/` is discovered by nobody.[4]
 
 ### Questions, approvals, mid-turn input
 
-Nothing measured. The clarify probe that established how a headless question arrives, and that an
-answer lands by resuming, covered Claude and Codex only.[11] For Grok the equivalent behaviour is
-unknown, and `ask_user_question` being in its tool vocabulary is not evidence of anything, since
-no tool it calls appears in the stream.
+ACP is a long-lived bidirectional connection, and `--always-approve` completed controlled file and
+terminal calls without stopping for a person.[13][14] What remains unmeasured is whether a
+headless `ask_user_question` arrives as an ACP interaction, and whether a second prompt can steer
+an active turn. The earlier headless-question probe covered Claude and Codex, not Grok; a tool
+existing in Grok's vocabulary is not evidence of either.[11]
 
 ### Flag traps
 
@@ -282,9 +299,9 @@ no tool it calls appears in the stream.
 
 ## What we can borrow
 
-- **A brain that reports nothing about its tools is a whole brain, not a broken one.** Grok is the
-  proof case for that claim in the contract — three of the seven record kinds are all it can
-  honestly produce, and the surface simply shows less. Nothing should be invented to fill the gap.
+- **Choose the integration stream that preserves what happened.** Grok's one-shot JSONL hides
+  tools that ACP reports with stable ids and terminal outcomes; an adapter must not call the
+  lossy stream the whole truth.[13][14]
 - **Report `input_tokens` as fresh and `cache_read_input_tokens` as cached, unchanged.** The split
   already matches the shape our seam asks for, and the counts are now measured to be a turn's own,
   so no subtraction is needed and none should be invented.
@@ -295,8 +312,8 @@ no tool it calls appears in the stream.
   Claude file conversations under the working directory, so standing a turn in its own agent's
   home already separates them — and it costs nothing, needs no second login, and is what a person
   does by hand. Moving the home is for a different *account*, which is a thing to be asked for.
-- **Write the prompt to a file.** `--prompt-file` works, so what somebody asked their agent never
-  has to appear in the process list.
+- **Send the prompt over ACP stdin.** What somebody asked their agent never has to appear in the
+  process list or a temporary file.[13][14]
 - **Omit `cached` rather than guessing it, if the field is ever missing.** An absent value means
   *could not tell*, which is different from zero — and on this brain the cache-write side genuinely
   cannot be told at all.
@@ -306,7 +323,7 @@ no tool it calls appears in the stream.
   `--permission-mode` outside the one value that is applied.
 - **`git init` in an agent's own directory, for this brain, is worth 2,729 tokens a turn.**
 - **Grok is the cheap brain.** At 5,842 tokens of baseline against Claude's 24,252, it is the one
-  to reach for when a turn is small and its lack of tool visibility does not matter.
+  to reach for when a turn is small; ACP no longer trades away tool visibility.
 
 ## What to avoid
 
@@ -335,22 +352,22 @@ no tool it calls appears in the stream.
 
 ## Verdict for us
 
-**Grok is the honest floor, and that is its whole value to the seam.** It is the brain that proves
-the contract in [the provider adapter contract](../../src/templates/skills/building-a-provider-adapter/references/the-contract.md)
-degrades rather than breaks: `tools: false`, `steer: false`, `usage: true`, `model: true`, and now
-`resume: true` — claimed because the round trip was run and controlled, not because a flag exists.
-A turn on it is a stream of fragments and a cost, and that is a complete turn.
+**Grok now uses the full provider seam its ACP stream can prove.** The adapter reports
+`tools: true`, `resume: true`, `usage: true`, `model: true` and `steer: false`: calls and terminal
+results come from structured ACP updates, while steering remains unmeasured.[13][14] The one-shot
+format is still a useful proof that a lossy vendor stream must not be mistaken for the agent's
+whole activity.
 
-**We take the invocation, the three line kinds, the usage split, the resume handle and the private
-home as settled.** What remains read off a flag is standing instructions: `--rules` has still never
+**We take the ACP invocation, update mapping, usage split, resume handle and private home as
+settled.** What remains read off a flag is standing instructions: `--rules` has still never
 been shown to land, and whether it is re-read on a resume or bound once is unknown. That is not a
 detail — it is a way for an adapter to look correct and be wrong, which is exactly the failure
 `--permission-mode dontAsk` already produced once in the Node build.
 
-**Two flags are non-negotiable on every turn, for opposite reasons.** `--no-memory`, because
+**Two transport choices are non-negotiable on every turn, for opposite reasons.** `--no-memory`, because
 without it a conversation reads conversations it was never given and a resume handle stops meaning
-anything. And `--prompt-file`, because the prompt otherwise sits in the process list for the life
-of the turn.
+anything. And ACP stdin, because the prompt otherwise sits in the process list for the life of the
+turn.
 
 **The `dontAsk` bug is the lesson we carry over, not the flag.** A vendor CLI accepted an argument,
 ignored it, and let the turn report success. Nothing in a test suite could see it because the
@@ -361,7 +378,7 @@ extends to what an adapter says a brain is doing.
 This feeds a `provider-` component that is not declared yet — adding one is the owner's call
 (`AGENTS.md`, the component ontology) — and it is held to
 [`../prd/provider-adapter.md`](../prd/provider-adapter.md), where `R-PRV-7` (an adapter that runs
-no tools reports none), `R-PRV-9`, `R-PRV-15` and `R-PRV-18` are the rows this brain exercises
+no tools reports none), `R-PRV-8`, `R-PRV-9`, `R-PRV-15` and `R-PRV-18` are the rows this brain exercises
 hardest. Re-drive the capture and update `tests/samples/cli-versions.lock` in the same change when
 the version moves.
 
@@ -383,8 +400,8 @@ go in a file — all measured, all in `What they do` above.[12] What remains:
 Beyond those:
 
 - Whether `reasoning_tokens` is inside `output_tokens` or beside it.
-- Whether this brain can be asked a question or sent to mid-turn at all, and what a headless
-  question looks like when it arrives — the clarify probe never covered it.
+- Whether this brain can ask a headless question or be steered during an active ACP turn, and what
+  either interaction looks like.
 - What `--permission-mode plan` does headless, given the same flag ignores `dontAsk`.
 - Whether a cached subscription token survives a long-running headless agent, or whether
   `XAI_API_KEY` is mandatory for anything always-on.
@@ -407,3 +424,5 @@ Beyond those:
 10. `../rundesk/probes/capture.ts` — the exact invocation the golden was captured with — (internal)
 11. `../rundesk/docs/clarify.md` — the headless-question probe, which covered Claude and Codex only — (internal)
 12. `.knowledge/scripts/probe-grok` against `grok 0.2.111` on macOS 25.5.0, 2026-07-26 — (internal)
+13. SpaceXAI, “Headless & Scripting” — https://docs.x.ai/build/cli/headless-scripting
+14. Controlled ACP tool and resume probes against `grok 0.2.112`, 2026-07-27 — (internal)

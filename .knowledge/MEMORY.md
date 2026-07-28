@@ -124,6 +124,10 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   and the agent's records read as unavailable. Grok found this by being told to look something
   up and reporting what it actually got. Reproduce with
   `env PATH=/usr/bin:/bin ./rundesk doctor <agent>`; it is not a bug in the store.
+- **A provider adapter probed directly from inside another provider's turn inherits that
+  turn's `RUNDESK_RESUME`.** The adapter then tries to load an opaque session belonging to
+  the wrong brain and fails with `session/load: Path not found`; unset `RUNDESK_RESUME` for
+  a fresh direct probe, or set it only to a handle that adapter reported.
 - **`until gh run view …; do :; done` spends five thousand API calls in a couple of minutes
   and locks you out of GitHub for the rest of the hour.** The loop body is empty, so it asks
   as fast as the network answers — four of those while watching a release exhausted the
@@ -137,6 +141,11 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   The command prints its supported release fields and exits before anything chained after it
   runs. Use `tagName,name,publishedAt,url` and compare `tagName` with
   `gh release list --limit 1` when whether it is latest matters.
+- **zsh expands an unquoted `?ref=main` in a `gh api` endpoint as a filename glob.** The
+  request never reaches GitHub and fails with `no matches found`; quote the whole endpoint.
+- **macOS `tar` has no GNU `--wildcards` option.** Extracting one member from a generated
+  archive fails before reading it; list the archive, select the exact member name, then pass
+  that name back to `tar -x`.
 - **`unittest -k "a or b"` runs nothing and says `NO TESTS RAN`, which in a teeth probe reads
   exactly like "the test passed".** `-k` takes a substring, not an expression — an `or` matches
   no test name at all. Two probes in a run of six reported the code was fine when neither had
