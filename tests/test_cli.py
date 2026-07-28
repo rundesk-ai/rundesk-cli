@@ -450,7 +450,7 @@ class BuiltCommandTests(unittest.TestCase):
     def test_the_planned_list_and_the_built_commands_do_not_overlap(self):
         # A command that is both "coming soon" and handled would answer twice, and
         # which answer wins would depend on the order of the checks in `main`.
-        built = {"version", "update", "uninstall", "add", "ask", "doctor", "agents",
+        built = {"version", "update", "uninstall", "add", "configure", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
                  "channels", "runs", "usage", "search", "messages", "skills", "scripts",
                  "backups"}
@@ -933,8 +933,12 @@ class FakeAgents:
             raise self.refuses
         return self._chosen.get(name, {})
 
-    def remember(self, name, provider=None, model=None, settings=None, instructions=None):
+    def remember(self, name, provider=None, model=None, settings=None, instructions=None,
+                 replace_brain=False, forget_conversation=None):
         keeping = self._chosen.setdefault(name, {})
+        replacing = bool(replace_brain and provider != keeping.get("provider"))
+        if replacing:
+            keeping.update(provider=provider, model=model, settings=settings or {})
         for what, value in (("provider", provider), ("model", model), ("settings", settings),
                             ("instructions", instructions)):
             if value is not None:
@@ -1433,6 +1437,96 @@ class MakingAnAgent(unittest.TestCase):
         code, said = drive(["add", "ava"], agents=agents)
         self.assertEqual(0, code, said)
         self.assertIn("ALREADY MADE", said)
+
+    def test_add_does_not_reconfigure_an_existing_agent(self):
+        """R-AGT-31 — creation and changing durable defaults are distinct verbs."""
+        agents = FakeAgents(made=["ava"])
+        agents.remember("ava", provider="codex")
+        code, said = drive(["add", "ava", "--provider", "claude"], agents=agents)
+        self.assertEqual(1, code)
+        self.assertIn("rundesk configure ava", said)
+        self.assertEqual("codex", agents.chosen("ava")["provider"])
+
+
+class ConfiguringAnAgent(unittest.TestCase):
+    """`configure` changes durable defaults without replacing the agent."""
+
+    def test_changing_an_existing_agents_brain_clears_the_old_brains_defaults(self):
+        """R-AGT-31, R-AGT-33 — identity stays put, provider-specific choices do not."""
+        agents = FakeAgents(made=["ava"])
+        agents.remember("ava", provider="codex", model="o3",
+                        settings={"effort": "high"}, instructions="stay curious")
+        code, said = drive(["configure", "ava", "--provider", "claude"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("CONFIGURED", said)
+        self.assertEqual({
+            "provider": "claude", "model": None, "settings": {},
+            "instructions": "stay curious",
+        }, agents.chosen("ava"))
+        self.assertEqual([], agents.added,
+                         "changing a brain recreated the agent instead of updating it")
+
+    def test_model_and_settings_can_be_changed_without_changing_provider(self):
+        """R-AGT-31 — configure owns every durable brain default, not only provider."""
+        agents = FakeAgents(made=["ava"])
+        agents.remember("ava", provider="claude")
+        code, said = drive(
+            ["configure", "ava", "--model", "opus", "--set", "effort=high"],
+            agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual("claude", agents.chosen("ava")["provider"])
+        self.assertEqual("opus", agents.chosen("ava")["model"])
+        self.assertEqual({"effort": "high"}, agents.chosen("ava")["settings"])
+
+    def test_an_empty_settings_object_clears_existing_settings(self):
+        """R-AGT-31 — a valid empty object is a requested value, not an absent option."""
+        agents = FakeAgents(made=["ava"])
+        agents.remember("ava", provider="claude", settings={"effort": "high"})
+        code, said = drive(
+            ["configure", "ava", "--set", "{}"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("CONFIGURED", said)
+        self.assertEqual({}, agents.chosen("ava")["settings"])
+
+    def test_a_new_provider_can_receive_replacement_model_and_settings_atomically(self):
+        """R-AGT-31 — intentional new defaults travel with the provider change."""
+        agents = FakeAgents(made=["ava"])
+        agents.remember("ava", provider="codex", model="o3",
+                        settings={"effort": "high"}, instructions="stay curious")
+        code, said = drive([
+            "configure", "ava", "--provider", "claude", "--model", "opus",
+            "--set", "effort=low",
+        ], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual({
+            "provider": "claude", "model": "opus", "settings": {"effort": "low"},
+            "instructions": "stay curious",
+        }, agents.chosen("ava"))
+
+    def test_an_unrunnable_new_brain_changes_nothing(self):
+        """R-AGT-32 — validation happens before any agent state is mutated."""
+        agents = FakeAgents(made=["ava"])
+        agents.remember("ava", provider="codex", model="o3", settings={"effort": "high"})
+        before = dict(agents.chosen("ava"))
+        code, said = drive(
+            ["configure", "ava", "--provider", "definitely-not-a-rundesk-adapter"],
+            agents=agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT CONFIGURED", said)
+        self.assertEqual(before, agents.chosen("ava"))
+        self.assertEqual([], agents.added)
+
+    def test_malformed_settings_change_nothing(self):
+        """R-AGT-32 — configuration syntax is checked before the atomic write."""
+        agents = FakeAgents(made=["ava"])
+        agents.remember("ava", provider="codex", model="o3", settings={"effort": "high"})
+        before = dict(agents.chosen("ava"))
+        code, said = drive(
+            ["configure", "ava", "--provider", "claude", "--set", "{bad"],
+            agents=agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT CONFIGURED", said)
+        self.assertEqual(before, agents.chosen("ava"))
 
     def test_making_an_agent_with_no_name_is_answered_in_our_words(self):
         """R-CMD-5 — argparse's usage dump says which token is missing; it does not say
@@ -3619,15 +3713,14 @@ class MakingAnAgentNeedsABrain(unittest.TestCase):
         self.assertIn("NO BRAIN", said)
         self.assertIn("--provider", said, "it refused without saying what to type")
 
-    def test_making_an_agent_that_has_one_already_does_not_ask_again(self):
-        """Making one that exists is how an owner repairs a home (R-AGT-4), and a repair
-        that demanded the brain again would be a repair nobody could run from memory."""
+    def test_add_points_an_existing_agent_to_configure_instead(self):
+        """R-AGT-31 — add creates; durable changes have one separate, discoverable verb."""
         agents = FakeAgents()
         code, said = drive(["add", "ava", "--provider", "codex"], agents=agents)
         self.assertEqual(0, code, said)
         code, said = drive(["add", "ava", "--provider", "codex"], agents=agents)
-        self.assertNotIn("NO BRAIN", said)
-        self.assertEqual(0, code, said)
+        self.assertEqual(1, code)
+        self.assertIn("rundesk configure ava", said)
 
 
 class WhoSaidIt(unittest.TestCase):

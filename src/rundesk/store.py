@@ -554,27 +554,46 @@ class Store:
         kept["settings"] = json.loads(kept["settings"])
         return kept
 
-    def remember_agent(self, provider=None, model=None, instructions=None, settings=None):
+    def remember_agent(self, provider=None, model=None, instructions=None, settings=None,
+                       replace_brain=False, forget_conversation=None):
         """Change what an entry point falls back to when it names no brain of its own.
 
         Only what is named is changed, so setting a model does not quietly clear a provider.
+        Replacing the brain is one atomic write of its provider-specific values: a model or
+        setting understood by the old provider must not silently reach the new one
+        (R-AGT-33).
         """
-        sets, values = [], []
-        for column, given in (
-            ("provider", provider),
-            ("model", model),
-            ("instructions", instructions),
-        ):
-            if given is not None:
-                sets.append(f"{column} = ?")
-                values.append(given)
-        if settings is not None:
-            sets.append("settings = ?")
-            values.append(json.dumps(settings, sort_keys=True))
-        if not sets:
-            return
         with self._writing() as conn:
-            conn.execute(f"UPDATE agent SET {', '.join(sets)} WHERE id = 1", values)
+            # Compare under the same write lock as the update. Two simultaneous configure
+            # commands must be ordered writes, not stale decisions that can erase the
+            # model or settings the later command just kept (R-AGT-31, R-AGT-33).
+            current = conn.execute(
+                "SELECT provider FROM agent WHERE id = 1"
+            ).fetchone()[0]
+            replacing = bool(replace_brain and provider != current)
+            sets, values = [], []
+            for column, given in (("provider", provider), ("model", model)):
+                if replacing:
+                    sets.append(f"{column} = ?")
+                    values.append(given)
+                elif given is not None:
+                    sets.append(f"{column} = ?")
+                    values.append(given)
+            if instructions is not None:
+                sets.append("instructions = ?")
+                values.append(instructions)
+            if replacing or settings is not None:
+                sets.append("settings = ?")
+                values.append(json.dumps(settings or {}, sort_keys=True))
+            if not sets:
+                if forget_conversation is None:
+                    return
+            else:
+                conn.execute(f"UPDATE agent SET {', '.join(sets)} WHERE id = 1", values)
+            if forget_conversation is not None:
+                conn.execute(
+                    "DELETE FROM session WHERE conversation_id = ?",
+                    (forget_conversation,))
 
     def seen(self, at: str | None = None) -> None:
         """That a gateway of this name was up at this moment, so a later one can measure.

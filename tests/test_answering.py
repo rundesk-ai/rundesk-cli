@@ -529,6 +529,137 @@ class WhatAMessageCannotChange(CarriesAConversation):
         self.assertEqual("a-brain", brain.asked[0]["provider"])
         self.assertEqual("small", brain.asked[0]["model"])
 
+    async def test_a_running_turn_keeps_its_brain_and_the_next_uses_the_new_default(self):
+        """R-AGT-31 — defaults are settled once when a turn is admitted."""
+        agents.remember("ava", self.where, provider="a-brain", model="old",
+                        settings={"effort": "high"})
+        release = asyncio.Event()
+        brain, surface = Brain(holds=release), Surface()
+        held = self.answering(surface, brain)
+
+        await held.heard(self.arrived(conversation="first"))
+        await asyncio.wait_for(brain.started.wait(), timeout=1)
+        agents.remember("ava", self.where, provider="new-brain",
+                        replace_brain=True)
+        release.set()
+        await self._settled(held)
+        await self.carry(held, self.arrived(conversation="second"))
+
+        self.assertEqual(
+            [("a-brain", "old", {"effort": "high"}),
+             ("new-brain", None, {})],
+            [(one["provider"], one["model"], one["settings"])
+             for one in brain.asked])
+
+    async def test_an_authorized_provider_command_changes_the_default_and_starts_fresh(self):
+        """R-CH-26 — configuration is authorized, agent-wide, and session-safe."""
+        self.keeping("one", "old-session", brain="a-brain")
+        executable = self.where / "new-provider"
+        executable.write_text("#!/bin/sh\n", encoding="utf-8")
+        executable.chmod(0o755)
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.heard({
+            "type": "configure", "conversation": "one", "user": "2207",
+            "provider": str(executable), "ref": "command-1",
+        })
+        await self._settled(held)
+        self.assertEqual(str(executable), agents.chosen("ava", self.where)["provider"])
+        self.assertIsNone(self.kept("one", brain="a-brain"))
+        self.assertIn("next message starts fresh",
+                      surface.of("configure-result")[0]["text"])
+
+    async def test_a_stranger_cannot_change_the_provider(self):
+        """R-CH-26 — seeing the command is not authority to change the agent."""
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.heard({
+            "type": "configure", "conversation": "one", "user": "9999",
+            "provider": "claude", "ref": "command-1",
+        })
+        self.assertEqual("a-brain", agents.chosen("ava", self.where)["provider"])
+        self.assertEqual([], surface.of("configure-result"))
+
+    async def test_an_unrunnable_provider_is_reported_and_changes_nothing(self):
+        """R-CH-26 — the private result reports refusal without corrupting the default."""
+        agents.remember("ava", self.where, provider="a-brain", model="old-model",
+                        settings={"effort": "high"})
+        self.keeping("one", "old-a", brain="a-brain")
+        self.keeping("one", "old-b", brain="other-brain")
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.heard({
+            "type": "configure", "conversation": "one", "user": "2207",
+            "provider": "definitely-not-a-provider", "ref": "command-1",
+        })
+        await self._settled(held)
+        self.assertEqual({
+            "provider": "a-brain", "model": "old-model", "instructions": None,
+            "settings": {"effort": "high"},
+        }, agents.chosen("ava", self.where))
+        self.assertEqual("old-a", self.kept("one", brain="a-brain"))
+        self.assertEqual("old-b", self.kept("one", brain="other-brain"))
+        result = surface.of("configure-result")
+        self.assertEqual("command-1", result[0]["ref"])
+        self.assertIn("not changed", result[0]["text"])
+
+    async def test_provider_change_waits_for_the_old_turn_then_starts_fresh(self):
+        """R-CH-26 — post-change words never steer the old provider."""
+        release = asyncio.Event()
+        executable = self.where / "new-provider"
+        executable.write_text("#!/bin/sh\n", encoding="utf-8")
+        executable.chmod(0o755)
+        self.keeping("one", "old-a", brain="a-brain")
+        self.keeping("one", "old-b", brain=str(executable))
+        sessions_seen = []
+
+        class KeepsIts(Brain):
+            async def __call__(mine, name, prompt, named, **how):
+                records = agents.records("ava", how["where"])
+                conversation = store.conversation_id(how["on"], how["conversation"])
+                sessions_seen.append(records.session(conversation, named))
+                said = await super().__call__(name, prompt, named, **how)
+                records.remember_session(conversation, named, f"new-{len(mine.asked)}")
+                return said
+
+        brain, surface = KeepsIts(
+            holds=release, can={"steer": True}), Surface()
+        held = self.answering(surface, brain)
+        await held.heard(self.arrived(text="before switch"))
+        await asyncio.wait_for(brain.started.wait(), timeout=1)
+        await held.heard({
+            "type": "configure", "conversation": "one", "user": "2207",
+            "provider": str(executable), "ref": "command-1",
+        })
+        await held.heard(self.arrived(text="after switch", ref="8842"))
+        self.assertEqual([], brain.steered,
+                         "post-change words were steered into the old provider")
+        release.set()
+        await self._settled(held)
+        await asyncio.sleep(0.05)
+
+        self.assertEqual(
+            ["a-brain", str(executable)],
+            [one["provider"] for one in brain.asked])
+        self.assertEqual("after switch", self.words(brain.asked[1]["prompt"]))
+        self.assertEqual(["old-a", None], sessions_seen)
+        self.assertIsNone(self.kept("one", brain="a-brain"))
+
+    async def test_a_shared_channels_members_cannot_change_agent_wide_defaults(self):
+        """R-CH-26 — room membership is not agent administration."""
+        record = {"kind": "somewhere", "allow": ["owner", "guest"], "settings": {}}
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain, record=record)
+        await self.carry(held, self.arrived(user="guest"))
+        self.assertEqual(1, len(brain.asked), "a permitted guest could not send a message")
+        for user in ("owner", "guest"):
+            await held.heard({
+                "type": "configure", "conversation": "one", "user": user,
+                "provider": "claude", "ref": f"command-{user}",
+            })
+        self.assertEqual("a-brain", agents.chosen("ava", self.where)["provider"])
+        self.assertEqual([], surface.of("configure-result"))
+
 
 class OneConversationIsOneSession(CarriesAConversation):
     """R-CH-3, R-CH-14 — a session of its own, found again afterwards."""

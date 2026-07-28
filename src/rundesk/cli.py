@@ -163,6 +163,8 @@ EXAMPLES: list[tuple[str, list[tuple[str, str]]]] = [
     ("an agent", [
         ("rundesk add ava --provider codex",
          "an agent called ava, answered by the codex this machine already has"),
+        ("rundesk configure ava --provider claude",
+         "change ava's default brain without replacing the agent"),
         ("rundesk add ava --provider /opt/my-brain --model fast-1 --set effort=high",
          "one answered by a brain you wrote, told which model and how hard to think"),
         ("rundesk start ava",
@@ -319,12 +321,18 @@ def build_parser() -> argparse.ArgumentParser:
     born.add_argument("name", nargs="?", metavar="<agent>",
                       help="what to call it, and what to name it by later")
     _brain(born, "which brain answers for it when a turn does not say")
-    # Where an agent's own standing instructions are written, for the same reason its brain
-    # is written here: `add` is what an owner types to say what an agent *is*, and running it
-    # again on one that exists is how they change their mind (R-AGT-4). Empty takes them off.
+    # Standing instructions may be supplied at creation; `configure` changes them later.
     born.add_argument("--instructions", dest="says", metavar="<text>",
                       help="what every turn for this agent is told before it reads a prompt, "
                            "where neither the schedule nor the surface said — empty takes it off")
+
+    configured = sub.add_parser(
+        "configure", help="change an existing agent's durable defaults")
+    configured.add_argument("name", nargs="?", metavar="<agent>", help="which agent")
+    _brain(configured, "which brain answers by default")
+    configured.add_argument(
+        "--instructions", dest="says", metavar="<text>",
+        help="what every turn is told by default — empty takes it off")
 
     # One turn, here, in this terminal. It runs here rather than inside the agent's
     # gateway because there is nothing to ask a gateway with — the same reason a schedule
@@ -1454,6 +1462,13 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
         print(f"{name}: INVALID NAME — {why}", file=sys.stderr)
         return 1
     knew = agents.exists(name)
+    if knew and any((args.provider, args.model, getattr(args, "settings", None),
+                     getattr(args, "says", None) is not None)):
+        print(f"{name}: ALREADY MADE — use configure to change its defaults",
+              file=sys.stderr)
+        print(f"        like this:  rundesk configure {name} --provider <provider>",
+              file=sys.stderr)
+        return 1
     # **An agent with no brain cannot take a turn**, so it is not a thing to make. Asked here
     # rather than left to the first `ask`: a half-made agent that reports MADE and then
     # refuses everything is worse than a refusal now, and an owner who has to be told twice
@@ -1464,6 +1479,17 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
         print(f"        like this:  rundesk add {name} --provider <provider>",
               file=sys.stderr)
         print("        a shipped one, or the path to a program you wrote", file=sys.stderr)
+        return 1
+    # Validate everything we can before making, adopting or changing anything. Provider
+    # settings are deliberately opaque, but their shape and the adapter's executability
+    # are ours to prove. A refusal leaves the previous whole configuration intact
+    # (R-AGT-32).
+    try:
+        settings = _given(getattr(args, "settings", None))
+        if args.provider:
+            provider.program(args.provider)
+    except (ValueError, provider.NotRunnable) as why:
+        print(f"{name}: NOT SET — {why}", file=sys.stderr)
         return 1
     wrote = agents.standing_before(name)
     # Whether or not the agent already exists. An adoption that was refused leaves the
@@ -1497,11 +1523,7 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
         print(f"        stop it and ask again: rundesk stop {name} && rundesk add {name}",
               file=sys.stderr)
         return 1
-    try:
-        chose = _chose(args, agents, name)
-    except ValueError as why:
-        print(f"{name}: NOT SET — {why}", file=sys.stderr)
-        return 1
+    chose = _chose(args, agents, name, settings)
     if knew and not made and not moved and not chose:
         print(f"{name}: ALREADY MADE — its home is as you left it")
         return 0
@@ -1516,23 +1538,56 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
     return 0
 
 
-def _chose(args: argparse.Namespace, agents, name: str) -> str:
+def cmd_configure(args: argparse.Namespace, agents) -> int:
+    """Change an existing agent's durable defaults without replacing it (R-AGT-31)."""
+    name = args.name
+    if not name:
+        print("configure: NAME REQUIRED — say which agent to change", file=sys.stderr)
+        return 1
+    try:
+        agents.checked(name)
+    except agents.NotAnAgentName as why:
+        print(f"{name}: INVALID NAME — {why}", file=sys.stderr)
+        return 1
+    if not agents.exists(name):
+        print(f"{name}: NO AGENT — make it first with rundesk add", file=sys.stderr)
+        return 1
+    if not any((args.provider, args.model, getattr(args, "settings", None) is not None,
+                getattr(args, "says", None) is not None)):
+        print(f"{name}: NOTHING TO CHANGE — name a provider, model, setting, or instructions",
+              file=sys.stderr)
+        return 1
+    try:
+        settings = _given(getattr(args, "settings", None))
+        if args.provider:
+            provider.program(args.provider)
+        chose = _chose(args, agents, name, settings)
+    except (ValueError, provider.NotRunnable, store.Unreadable, store.TooNew,
+            store.Behind, migration.Failed) as why:
+        print(f"{name}: NOT CONFIGURED — {why}", file=sys.stderr)
+        return 1
+    print(f"{name}: CONFIGURED")
+    print(f"        reaches for: {chose}")
+    return 0
+
+
+def _chose(args: argparse.Namespace, agents, name: str, settings: dict) -> str:
     """Keep whichever of provider, model and settings was named, and say what it is now.
 
-    Nothing named changes nothing, so `add` on an existing agent stays the repair it has
-    always been. What was not named is left as it was, because naming a model later must
-    not quietly forget the brain.
+    What was not named is left as it was, because naming a model later must not quietly
+    forget the brain. Changing providers clears its old provider-specific defaults.
     """
-    settings = _given(getattr(args, "settings", None))
     # `None` is "not named" and `""` is "take it off", which is why this asks whether it was
     # given rather than whether it is truthy: an owner clearing what an agent is told has
     # said something, and reading that as silence would leave the old text in place.
     says = getattr(args, "says", None)
-    if not (args.provider or args.model or settings or says is not None):
+    settings_were_given = getattr(args, "settings", None) is not None
+    if not (args.provider or args.model or settings_were_given or says is not None):
         return ""
     keeping = agents.remember(name, provider=args.provider, model=args.model,
-                              settings=settings or None,
-                              instructions=says)
+                              settings=settings if settings_were_given else None,
+                              instructions=says,
+                              replace_brain=bool(args.provider))
     said = keeping.get("provider") or "no brain yet"
     return f"{said} ({keeping['model']})" if keeping.get("model") else said
 
@@ -3588,6 +3643,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         return cmd_agents(args, gateways, machine, agents)
     if args.command == "add":
         return cmd_add(args, gateways, agents)
+    if args.command == "configure":
+        return cmd_configure(args, agents)
     if args.command == "doctor":
         return cmd_doctor(args, gateways, agents)
     if args.command == "ask":

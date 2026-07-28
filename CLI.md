@@ -13,6 +13,7 @@ file and the command disagree. *Why* the surface is shaped this way is
 ```sh
 # an agent, and its life
 rundesk add [--provider <provider>] [--model <model>] [--set <key=value>] [--instructions <text>] <agent>                                                                                                              make an agent, and the gateway that runs it
+rundesk configure [--provider <provider>] [--model <model>] [--set <key=value>] [--instructions <text>] <agent>                                                                                                        change an existing agent's durable defaults
 rundesk remove <agent>                                                                                                                                                                                                 take an agent away for good
 rundesk agents                                                                                                                                                                                                         every agent this install has, and what each is doing
 rundesk agents <agent>                                                                                                                                                                                                 what one agent is, and where it keeps things
@@ -71,6 +72,8 @@ owner makes, as they are actually typed.
 ```sh
 # an agent called ava, answered by the codex this machine already has
 rundesk add ava --provider codex
+# change ava's default brain without replacing the agent
+rundesk configure ava --provider claude
 # one answered by a brain you wrote, told which model and how hard to think
 rundesk add ava --provider /opt/my-brain --model fast-1 --set effort=high
 # have the machine keep it running, and bring it back when it falls over

@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rundesk import agent as agents
-from rundesk import channel, store, turn
+from rundesk import channel, migration, provider, store, turn
 
 #: How many messages may be waiting for a conversation whose brain cannot be steered.
 #: Small on purpose: somebody typing while an agent works is answering the conversation,
@@ -98,8 +98,9 @@ class Exchange:
         self.saying: asyncio.Queue | None = None
         self.waiting: list = []
         self.stopped = False
-        #: Somebody asked for this conversation to be forgotten while a turn was running
-        #: in it. The turn is left to finish, and what it learned is not kept.
+        #: Somebody asked for this conversation to start fresh while a turn was running
+        #: in it. The turn is left to finish, what it learned is not kept, and later words
+        #: wait for the next turn rather than steering the old provider.
         self.forgotten = False
 
 
@@ -169,6 +170,8 @@ class Answering:
             await self._arrived(it)
         elif kind == "control":
             await self._control(it)
+        elif kind == "configure":
+            await self._configure(it)
         elif kind == "query":
             await self._query(it)
 
@@ -383,7 +386,7 @@ class Answering:
             # not be able to hand themselves the whole gateway.
             held.waiting.pop(0)
             self._note(f"channel '{self.channel}': more was said than could be kept waiting")
-        if held.can.get("steer") and held.saying is not None:
+        if not held.forgotten and held.can.get("steer") and held.saying is not None:
             # Words only. Standing instructions were given to this turn when it started
             # and a brain does not read them twice — repeating them with every steer is
             # the owner's paragraph landing again in the middle of an answer.
@@ -451,6 +454,36 @@ class Answering:
         self._tell(
             type="query-result", conversation=it["conversation"],
             query=it["query"], ref=it["ref"], text=text,
+        )
+
+    async def _configure(self, it: dict) -> None:
+        """Change an agent default only after the channel authorization boundary."""
+        if not channel.may_configure(self.record, it["user"]):
+            return
+        named = it["provider"]
+        try:
+            provider.program(named)
+            conversation = store.conversation_id(
+                self.channel, it["conversation"])
+            agents.remember(
+                self.name, self._where, provider=named, replace_brain=True,
+                forget_conversation=conversation)
+            held = self.exchanges.get(it["conversation"])
+            if held is not None and held.task is not None and not held.task.done():
+                # The active turn keeps what it settled; when it ends, forget again so
+                # its old provider session cannot undo the fresh start (R-CH-26).
+                held.forgotten = True
+            text = f"Default provider changed to {named}. The next message starts fresh."
+            self._note(
+                f"channel '{self.channel}': default provider changed to {named}")
+        except (provider.NotRunnable, store.Unreadable, store.TooNew,
+                store.Behind, migration.Failed) as why:
+            text = f"Provider was not changed: {why}"
+        except Exception as why:  # noqa: BLE001 — a persisted configuration boundary
+            text = f"Provider was not changed: {why}"
+        self._tell(
+            type="configure-result", conversation=it["conversation"],
+            ref=it["ref"], text=text,
         )
 
     def _forget(self, conversation: str) -> None:

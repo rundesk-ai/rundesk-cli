@@ -44,7 +44,7 @@ ADAPTERS = Path(__file__).resolve().parent.parent / "channels"
 #: What an adapter reports, and the whole of it (R-CAD-1, R-CAD-17). A query is kept
 #: apart from both a message and a control: it starts no brain turn and changes nothing,
 #: but still crosses the authorization boundary before Rundesk answers it.
-ARRIVING = ("ready", "arrived", "control", "query", "gone")
+ARRIVING = ("ready", "arrived", "control", "configure", "query", "gone")
 
 #: What each of those must carry to mean anything. A record missing one of them is not a
 #: partial record to be patched up — it is one nothing can be done with, and passing it on
@@ -54,6 +54,7 @@ NEEDED = {
     "ready": (),
     "arrived": ("conversation", "user", "text"),
     "control": ("conversation", "user", "control"),
+    "configure": ("conversation", "user", "provider", "ref"),
     "query": ("conversation", "user", "query", "ref"),
     "gone": (),
 }
@@ -154,7 +155,7 @@ ATTACHED_BYTES = 32 * 1024 * 1024
 #: way a person does, and both arriving at once loses the first one's whole purpose. The
 #: last thing it says is still the `answer`, because that is the one somebody replies to.
 TELLING = ("state", "think", "tool", "result", "usage", "said", "answer",
-           "query-result")
+           "configure-result", "query-result")
 
 #: What a tool did, in the words a surface shows. **The provider seam's list, not a
 #: second copy of it** — a brain says what it did and a surface shows it, so the two must
@@ -311,7 +312,7 @@ def spoken(**it) -> bytes:
 
 
 def understood(said: bytes | str) -> dict | None:
-    """One line, as one of the five records we know — or nothing, if it is not one.
+    """One line, as one of the six records we know — or nothing, if it is not one.
 
     Nothing is refused here and nothing raises (R-CAD-1). A line we cannot read, a line
     that is not an object, a line of a kind we have never heard of, and a line of a kind we
@@ -655,3 +656,14 @@ def allowed(record: dict, user: str) -> bool:
     if not isinstance(who, list):
         return False
     return bool(user) and user in who
+
+
+def may_configure(record: dict, user: str) -> bool:
+    """Whether this channel unambiguously belongs to the one person asking.
+
+    A provider is an agent-wide default, so membership in a shared room's allow-list is
+    not authority to change it for every channel and schedule. Until channels keep a
+    distinct owner, only a single-user channel can safely carry configuration (R-CH-26).
+    """
+    who = record.get("allow")
+    return isinstance(who, list) and len(who) == 1 and bool(user) and who[0] == user

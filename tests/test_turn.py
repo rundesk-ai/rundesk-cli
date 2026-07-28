@@ -696,7 +696,7 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
 
     def test_asking_an_agent_carries_a_turn_and_prints_the_answer(self):
         """R-PRV-2, R-RUN-1 — one agent, one adapter, one turn, this terminal."""
-        code, said, why = self.ask("add", "ava", "--provider", self.brain("plain"))
+        code, said, why = self.ask("configure", "ava", "--provider", self.brain("plain"))
         self.assertEqual(0, code, why)
         code, said, why = self.ask("ask", "ava", "what changed?")
         self.assertEqual(0, code, why)
@@ -708,7 +708,7 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
         holding its own instructions would have to be read on the way past — and the seam
         that keeps every kind of work the same would be the thing that broke. It belongs
         to the command the schedule names."""
-        self.ask("add", "ava", "--provider", self.brain("nosy"))
+        self.ask("configure", "ava", "--provider", self.brain("nosy"))
         code, said, why = self.ask("ask", "ava", "what changed?",
                                    "--instructions", "You are running unattended overnight.")
         self.assertEqual(0, code, why)
@@ -724,7 +724,7 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
     def test_a_turn_is_always_told_rundesks_own_words_whatever_else_it_was_told(self):
         """R-PRV-3, R-PRV-23 — unset rather than empty, so an adapter reading it can
         trust that there is something to act on."""
-        self.ask("add", "ava", "--provider", self.brain("nosy"))
+        self.ask("configure", "ava", "--provider", self.brain("nosy"))
         _, said, _ = self.ask("ask", "ava", "what changed?")
         # Never unset now: rundesk itself always has something to say, so what an adapter
         # reads is ours alone rather than nothing (R-AGT-17). What is *absent* is anybody
@@ -735,7 +735,7 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
     def test_the_answer_goes_where_it_can_be_piped_and_the_rest_does_not(self):
         """R-CMD-4 — what comes out of `rundesk ask … > answer.txt` has to be the answer
         and not a commentary around it."""
-        self.ask("add", "ava", "--provider", self.brain("plain"))
+        self.ask("configure", "ava", "--provider", self.brain("plain"))
         _, said, why = self.ask("ask", "ava", "what changed?")
         self.assertNotIn("in,", said, "what it cost was printed among the answer")
         self.assertIn("in,", why, "what it cost was not said at all")
@@ -743,7 +743,7 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
     def test_a_turn_is_written_down_whether_or_not_anyone_is_watching(self):
         """R-RUN-4, R-RUN-10 — the terminal is a view of the turn and the account is the
         turn, and only one of the two is still there in the morning."""
-        self.ask("add", "ava", "--provider", self.brain("plain"))
+        self.ask("configure", "ava", "--provider", self.brain("plain"))
         _, _, why = self.ask("ask", "ava", "what changed?")
         run = [one['id'] for one in reversed(self.kept().runs())][0]
         self.assertIn(run, why, "it never said which run this was")
@@ -761,7 +761,7 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
     def test_a_brain_named_for_one_turn_is_used_for_that_turn_only(self):
         """R-RUN-3 — what a turn resolved is the turn's, and an agent's default is a
         convenience rather than an identity."""
-        self.ask("add", "ava", "--provider", self.brain("quiet"))
+        self.ask("configure", "ava", "--provider", self.brain("quiet"))
         self.ask("ask", "ava", "one", "--provider", self.brain("plain"))
         first, second = [one['id'] for one in reversed(self.kept().runs())][0], None
         self.assertIn("plain", self.settled(first)["provider"])
@@ -771,7 +771,7 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
 
     def test_what_an_owner_set_reaches_the_brain_and_is_written_down(self):
         """R-PRV-16, R-RUN-9 — carried unread, and never carried without being recorded."""
-        self.ask("add", "ava", "--provider", self.brain("nosy"))
+        self.ask("configure", "ava", "--provider", self.brain("nosy"))
         self.ask("ask", "ava", "hi", "--set", "effort=high", "--set", '{"flags":["-q"]}')
         run = [one['id'] for one in reversed(self.kept().runs())][0]
         self.assertEqual({"effort": "high", "flags": ["-q"]},
@@ -782,7 +782,7 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
 
     def test_a_setting_that_is_not_a_setting_is_refused_before_a_brain_is_started(self):
         """R-CMD-4 — refused in our words, and refused before anything runs."""
-        self.ask("add", "ava", "--provider", self.brain("plain"))
+        self.ask("configure", "ava", "--provider", self.brain("plain"))
         code, _, why = self.ask("ask", "ava", "hi", "--set", "nonsense")
         self.assertEqual(1, code)
         self.assertIn("nonsense", why)
@@ -790,7 +790,7 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
 
     def test_asking_the_same_agent_again_carries_the_conversation_on(self):
         """R-RUN-11 — what a person at a terminal means by asking again."""
-        self.ask("add", "ava", "--provider", self.brain("plain"))
+        self.ask("configure", "ava", "--provider", self.brain("plain"))
         self.ask("ask", "ava", "one")
         self.ask("ask", "ava", "two")
         second = [one['id'] for one in reversed(self.kept().runs())][1]
@@ -798,7 +798,7 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
 
     def test_asking_for_a_fresh_start_carries_nothing_on(self):
         """R-RUN-14"""
-        self.ask("add", "ava", "--provider", self.brain("plain"))
+        self.ask("configure", "ava", "--provider", self.brain("plain"))
         self.ask("ask", "ava", "one")
         self.ask("ask", "ava", "two", "--fresh")
         second = [one['id'] for one in reversed(self.kept().runs())][1]
@@ -806,7 +806,7 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
 
     def test_a_turn_asked_to_only_look_says_so_to_the_brain(self):
         """R-PRV-18 — a posture in rundesk's words, carried to the brain to act on."""
-        self.ask("add", "ava", "--provider", self.brain("nosy"))
+        self.ask("configure", "ava", "--provider", self.brain("nosy"))
         self.ask("ask", "ava", "hi", "--read-only")
         run = [one['id'] for one in reversed(self.kept().runs())][0]
         self.assertEqual("read", self.settled(run)["posture"])
@@ -820,7 +820,7 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
 
     def test_a_turn_whose_cost_was_never_reported_says_that_rather_than_nothing(self):
         """R-USE-7 — zero and unknown are different answers."""
-        self.ask("add", "ava", "--provider", self.brain("quiet"))
+        self.ask("configure", "ava", "--provider", self.brain("quiet"))
         _, _, why = self.ask("ask", "ava", "hi")
         self.assertIn("never reported", why)
 

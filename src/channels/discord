@@ -33,6 +33,7 @@ import json
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 
 # The install's own virtualenv, found the way the launcher finds it. A channel adapter is
@@ -383,7 +384,7 @@ def within(direct: bool, belongs_to, listens_in, dms: bool, a_server=None) -> bo
 class Live:
     """One conversation, and what this agent is showing in it right now."""
 
-    def __init__(self):
+    def __init__(self, clock=None):
         self.anchor = None          # the message that asked, for the mark to attach to
         self.activity = ""          # the running commentary, as it stands
         self.activity_groups = []   # adjacent equal lines and how many times each occurred
@@ -395,6 +396,8 @@ class Live:
         self.marked = False
         self.cost = ""           # what the turn cost, shown with the answer
         self.writes = 0          # which write is the newest, across an await
+        self.clock = time.monotonic if clock is None else clock
+        self.started = None
 
 
 class Agent(discord.Client):
@@ -434,6 +437,9 @@ class Agent(discord.Client):
             self.tree.add_command(discord.app_commands.Command(
                 name=name, description=describes,
                 callback=self._query_command(name), nsfw=False))
+        self.tree.add_command(discord.app_commands.Command(
+            name="provider", description="Change this agent's default provider",
+            callback=self._provider_command(), nsfw=False))
         # Offered globally *and* to the server it was pointed at: a guild's copy appears
         # at once, where a global one can take an hour to propagate (R-DIS-10).
         with contextlib.suppress(Exception):
@@ -485,6 +491,31 @@ class Agent(discord.Client):
                 self.queries.pop(next(iter(self.queries)))
             say(type="query", conversation=str(interaction.channel_id),
                 user=str(interaction.user.id), query=query, ref=ref)
+        return ran
+
+    def _provider_command(self):
+        @discord.app_commands.describe(
+            provider="Provider name or executable adapter path")
+        async def ran(interaction: discord.Interaction, provider: str) -> None:
+            if not self._owns(interaction):
+                return
+            if len(self.chose.allow) != 1 or \
+                    str(interaction.user.id) != self.chose.allow[0]:
+                with contextlib.suppress(Exception):
+                    await interaction.response.send_message(
+                        "This command is not available to you.", ephemeral=True)
+                return
+            ref = str(interaction.id)
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except Exception as why:  # noqa: BLE001 — a platform boundary
+                note(f"could not defer /provider: {type(why).__name__}: {why}")
+                return
+            self.queries[ref] = interaction
+            while len(self.queries) > SEEN_KEPT:
+                self.queries.pop(next(iter(self.queries)))
+            say(type="configure", conversation=str(interaction.channel_id),
+                user=str(interaction.user.id), provider=provider, ref=ref)
         return ran
 
     def _owns(self, interaction: discord.Interaction) -> bool:
@@ -760,6 +791,8 @@ class Agent(discord.Client):
             await self._answer(it, held)
         elif kind == "query-result":
             await self._query_result(it)
+        elif kind == "configure-result":
+            await self._configuration_result(it)
         elif kind == "said":
             # A finished thing the agent said while it was still working, in a message of
             # its own. Not the answer and not anchored to anything: it is a remark, and
@@ -805,9 +838,27 @@ class Agent(discord.Client):
         except Exception as why:  # noqa: BLE001 — a platform boundary
             note(f"could not answer /{it.get('query')}: {type(why).__name__}: {why}")
 
+    async def _configuration_result(self, it: dict) -> None:
+        """Complete the exact private interaction that requested a provider change."""
+        interaction = self.queries.pop(str(it.get("ref")), None)
+        if interaction is None:
+            note("no deferred interaction for provider configuration")
+            return
+        try:
+            await interaction.edit_original_response(
+                content=clip(str(it.get("text") or "Provider was not changed."), LIMIT)
+            )
+        except Exception as why:  # noqa: BLE001 — a platform boundary
+            note(f"could not answer /provider: {type(why).__name__}: {why}")
+
     async def _state(self, it: dict, held: Live) -> None:
         state = it.get("state")
         if state == "taken":
+            # The adapter owns the visible duration and starts it when the seam says the
+            # turn was taken. A monotonic clock cannot jump when the wall clock does, and
+            # a repeated record cannot restart the measurement (R-DIS-24).
+            if held.started is None:
+                held.started = held.clock()
             # 👀 the moment it is heard, and typing straight after. This is the mark that
             # matters most: everything else can be late, and this one is the difference
             # between an agent that is working and one that is broken (R-DIS-5).
@@ -1016,14 +1067,18 @@ class Agent(discord.Client):
         self._stop_typing(held)
         self._no_longer_last(held)
         whole = str(it.get("text") or "")
-        if held.cost:
-            whole = f"{held.cost}\n{whole}"
+        footer = held.cost
+        if held.started is not None:
+            elapsed = f"{_duration(held.clock() - held.started)} elapsed"
+            footer = f"{footer} · {elapsed}" if footer else f"-# · {elapsed}"
+        if footer:
+            whole = f"{footer}\n{whole}"
         files = [one["at"] for one in (it.get("attachments") or [])
                  if isinstance(one, dict) and isinstance(one.get("at"), str)]
         # Past a certain length an answer is a document rather than a message, and a
         # dozen numbered fragments is not something anybody reads (R-DIS-13).
         if len(whole) > LIMIT * ATTACH_AFTER:
-            await self._post(it, f"{held.cost}\n-# the answer is long, so it is attached"
+            await self._post(it, f"{footer}\n-# the answer is long, so it is attached"
                              .strip(), anchor=held.anchor, files=files, text_as=whole)
             return
         rest, anchor = whole, held.anchor
@@ -1331,6 +1386,16 @@ def _as_a_line(it: dict) -> str:
                  if isinstance(it.get(what), int)]
         return f"-# · {' · '.join(parts)}" if parts else ""
     return ""
+
+
+def _duration(seconds: float) -> str:
+    """A compact elapsed duration that remains readable in Discord subtext."""
+    whole = max(0, int(seconds))
+    if whole < 60:
+        return f"{whole}s"
+    if whole < 3600:
+        return f"{whole // 60}m"
+    return f"{whole // 3600}h"
 
 
 def _amount(tokens: int) -> str:

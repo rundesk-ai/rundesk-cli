@@ -45,6 +45,8 @@ so only a running commentary may grow.
 | ✅ | R-DIS-21 | Discord says which room and which person a message came from, in the words Discord shows | `discord says which room and which person a message came from`, `a direct message is named as one rather than as a channel`, `a thread is named under the channel it was opened in`, `a server with no name to show is not shown as blank` |
 | ✅ | R-DIS-22 | Read-only gateway information is offered as Discord's own commands | `read only gateway information is offered as discord commands`, `a gateway answer completes the exact deferred interaction`, `a read only command is deferred and reported for authorization` |
 | ✅ | R-DIS-23 | A Discord command is handled only by the channel whose configured place contains it | `one slash interaction belongs to exactly one configured surface` |
+| ✅ | R-DIS-24 | A completed Discord answer shows compact elapsed time beside any reported token cost | `elapsed time is compact at seconds minutes and hours`, `elapsed time runs from taken until the answer is ready`, `repeated taken does not restart elapsed time`, `elapsed time is shown when usage was not reported` |
+| ✅ | R-DIS-25 | A single-user Discord channel offers a provider change and privately reports its result | `provider is deferred and reported for authorized configuration`, `provider result completes the exact private interaction`, `shared channel provider command is privately refused before reporting` |
 
 ## Open questions
 

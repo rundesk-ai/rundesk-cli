@@ -168,13 +168,38 @@ already established on your machine; Rundesk does not copy provider credentials.
 | [xAI Grok CLI](https://docs.x.ai/build/cli/headless-scripting) | `grok` | Continuing conversations, model selection, tool activity, and per-turn usage |
 | [Google Antigravity CLI](https://antigravity.google/docs/cli/install) | `antigravity` | Continuing conversations, model selection, tool activity, and per-turn usage |
 
-Switch the default provider when creating an agent:
+Choose a default provider while creating an agent:
 
 ```sh
 rundesk add claude-agent --provider claude
 rundesk add grok-agent --provider grok
 rundesk add antigravity-agent --provider antigravity
 ```
+
+Use `configure` on an existing agent to change its default without replacing its
+identity, home, memory, conversations, channels, schedules, or history:
+
+```sh
+rundesk configure ava --provider claude
+```
+
+Rundesk first checks that the new adapter can run, then changes the default atomically.
+Because models and settings are provider-specific, old values are cleared unless you
+supply replacements with `--model` and `--set`. A turn already underway finishes with
+the provider it started with; subsequent turns use the new default.
+
+Use the same command to change only the model, provider settings, or standing instructions:
+
+```sh
+rundesk configure ava --model opus
+rundesk configure ava --set effort=high
+rundesk configure ava --instructions "Keep answers concise."
+```
+
+On a single-user Discord channel, that user can run `/provider <provider>` to change the
+same agent-wide default. Rundesk validates the adapter, keeps any turn already running on
+its original provider, and starts the next message in that Discord conversation fresh.
+Shared channels cannot change an agent-wide default.
 
 Or choose a different provider or model for one turn or schedule without changing the
 agent's default.

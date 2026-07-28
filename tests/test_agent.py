@@ -24,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import agent, gateway, store, updater  # noqa: E402
+from rundesk import agent, gateway, skill, store, updater  # noqa: E402
 
 
 #: The two files SQLite keeps beside a database, which are its bookkeeping and not the
@@ -368,6 +368,75 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
 
         self.assertNotIn(store.NAME, agent.add("ava", self.where))
         self.assertEqual("codex", kept.agent()["provider"])
+
+    def test_changing_a_brain_preserves_everything_the_agent_already_owns(self):
+        """R-AGT-31 — configuration is one row, not a replacement agent."""
+        agent.add("ava", self.where)
+        kept = agent.records("ava", self.where)
+        kept.remember_agent(provider="codex", model="o3", settings={"effort": "high"})
+        kept.remember_channel(
+            "ops", "discord", ["2207"], "2026-07-26T09:00:00Z")
+        kept.remember_schedule(
+            "nightly", "0 3 * * *", "2026-07-26T09:00:00Z",
+            command=["/bin/echo", "hi"])
+        conversation = store.conversation_id("ops", "thread")
+        kept.opened(
+            conversation, "ops", "discord", "thread", "2026-07-26T09:00:00Z")
+        message = kept.arrived(
+            conversation, "2026-07-26T09:01:00Z", "please remember", who="owner")
+        run = kept.began(
+            "channel", "codex", "safe", "2026-07-26T09:01:01Z",
+            conversation_id=conversation, trigger_message_id=message,
+            model="o3", settings={"effort": "high"})
+        kept.recorded(
+            run, 1, "2026-07-26T09:01:02Z", "think",
+            event={"type": "think", "text": "working"})
+        kept.answered(
+            conversation, run, "2026-07-26T09:01:03Z", "remembered")
+        kept.remember_session(conversation, "codex", "session-123")
+        library = self.where / "skill-library"
+        page = library / "kept-skill" / "SKILL.md"
+        page.parent.mkdir(parents=True)
+        page.write_text(
+            "---\nname: kept-skill\ndescription: Use when proving preservation.\n---\n",
+            encoding="utf-8")
+        skill.grant(agent.skills("ava", self.where), "kept-skill", library)
+        grant = agent.skills("ava", self.where) / "kept-skill"
+        note = agent.home("ava", self.where) / "MEMORY.md"
+        note.write_text("remember this\n", encoding="utf-8")
+        before = {
+            "channels": kept.channels(),
+            "schedules": kept.schedules(),
+            "conversations": kept.conversations(),
+            "skills": sorted(path.name for path in agent.skills("ava", self.where).iterdir()),
+            "skill-target": grant.readlink(),
+            "memory": note.read_text(encoding="utf-8"),
+            "directory": agent.directory("ava", self.where),
+            "messages": kept.messages(conversation),
+            "runs": kept.runs(conversation_id=conversation),
+            "records": kept.records(run),
+            "session": kept.session(conversation, "codex"),
+        }
+
+        agent.remember(
+            "ava", self.where, provider="claude", replace_brain=True)
+
+        self.assertEqual(before, {
+            "channels": kept.channels(),
+            "schedules": kept.schedules(),
+            "conversations": kept.conversations(),
+            "skills": sorted(path.name for path in agent.skills("ava", self.where).iterdir()),
+            "skill-target": grant.readlink(),
+            "memory": note.read_text(encoding="utf-8"),
+            "directory": agent.directory("ava", self.where),
+            "messages": kept.messages(conversation),
+            "runs": kept.runs(conversation_id=conversation),
+            "records": kept.records(run),
+            "session": kept.session(conversation, "codex"),
+        })
+        self.assertEqual(
+            {"provider": "claude", "model": None, "instructions": None, "settings": {}},
+            kept.agent())
 
     def test_what_a_home_holds_is_what_there_is_a_template_for(self):
         """R-AGT-2 — a template added later lands in a new agent's home without anything
