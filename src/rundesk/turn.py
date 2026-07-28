@@ -334,8 +334,7 @@ async def carry(
         # the end because it is only whole then: a reply arrives a fragment at a time, and
         # a row per fragment is a history nobody can read back and a search that matches
         # half a sentence.
-        writing.answered("".join(one.get("text", "") for one in said
-                                 if one.get("type") == "text"))
+        writing.answered(_reply(said))
         # Built here rather than at the end, so the word written down and the word handed
         # back are the same word: `Outcome.became` is the one place it is worked out, and a
         # second copy of that expression would drift into a run recorded as finished and a
@@ -609,6 +608,40 @@ async def _saying(program, prompt: str, writing, steering, trouble: list) -> Non
     # never ends, waiting on somebody who has already stopped speaking.
     with contextlib.suppress(BaseException):
         await program.close_input()
+
+
+def _reply(said: list) -> str:
+    """Everything the brain said, as the one thing it said (R-PRV-22).
+
+    **A finished thought ends a paragraph; a fragment does not.** Every `text` record used
+    to be concatenated with nothing between it and the next, which is right for fragments
+    and wrong for whole thoughts — a brain that says several complete things as it works
+    had the last word of one run into the first word of the next, so an account read back
+    `caught it running.The worker`. The seam already carries the distinction, because an
+    adapter marks a finished thought `whole` for exactly this; nothing here read it.
+
+    Fragments are still joined with nothing, because a reply arriving a piece at a time is
+    one sentence and not several.
+    """
+    parts, piece = [], ""
+    for one in said:
+        if one.get("type") != "text":
+            continue
+        text = str(one.get("text") or "")
+        if not one.get("whole"):
+            piece += text
+            continue
+        # A whole thought closes whatever fragments were still open, then stands alone.
+        if piece:
+            parts.append(piece)
+            piece = ""
+        parts.append(text)
+    if piece:
+        parts.append(piece)
+    # Stripped of the blank lines a brain put at its own edges, never of the ones inside a
+    # thought: what is between paragraphs here is rundesk's, and what is within one is the
+    # brain's and is left exactly as it said it.
+    return "\n\n".join(kept for kept in (part.strip("\n") for part in parts) if kept.strip())
 
 
 def _handle(said: list) -> str | None:

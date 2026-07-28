@@ -38,6 +38,7 @@ worth having if what it did can be read back afterwards.
 | ❌ | R-RUN-15 | No credential a brain was given appears in a run's account | src/rundesk/turn.py:118 — nothing puts one there; no test |
 | ✅ | R-RUN-16 | A run says what admitted it, and it is one of the declared ways work is admitted | `every way work is admitted is named here`, `work admitted from somewhere nobody declared is refused`, `a run refused for its source is not written at all`, `a turn the clock started says so in the account` |
 | ✅ | R-RUN-17 | An interrupted execution and the run continuing it name each other in their accounts | `a recovery run names the execution it continues`, `a successor continues the interrupted provider session once` |
+| ✅ | R-RUN-18 | Two finished thoughts are two paragraphs in the one reply, and a reply arriving in fragments is still one sentence | `two finished thoughts do not run into each other`, `a reply arriving a piece at a time is still one sentence`, `fragments still open are closed by the thought that follows`, `what a brain put inside one thought is left exactly as it said it`, `nothing but text records reach the reply`, `a turn that said nothing replies with nothing` |
 
 ## Open questions
 
