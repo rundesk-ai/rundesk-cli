@@ -6,15 +6,13 @@ stdin, reads whole records off stdout and ends it — nothing here is imported b
 and nothing here imports rundesk. Every fact about this vendor lives in this file.
 
 The contract is `.knowledge/guides/write-a-provider-adapter.md`. What is measured about
-this CLI is `.knowledge/research/2026-07-26-grok-cli-as-a-brain.md`, and the stream it is
-measured against is `tests/samples/grok-stream.jsonl` — 79 real lines, three line kinds.
+this CLI is `.knowledge/research/2026-07-26-grok-cli-as-a-brain.md`.
 
-**This brain reports no tools at all, and that is the finding rather than a gap.** Measured
-at 0.2.111: read tools granted, a file planted, the CLI asked to read it — it reported the
-contents with `num_turns: 2` and the stream carried only `text` and `thought`. So four of
-the seven record kinds have no source here, and none of them is invented. An adapter that
-runs no tools reports none, which is a whole brain with that work absent rather than a
-broken one.
+Grok's one-shot `streaming-json` is deliberately not used. Measured at 0.2.112: a turn
+that ran `list_dir` emitted only `thought`, `text` and `end`, while the same session's ACP
+updates carried `tool_call` and `tool_call_update` records with a stable id, input, status
+and output. `grok agent stdio` is the vendor's documented integration surface and preserves
+those records while keeping the prompt off the process list.
 
 Three flags decide whether this adapter is honest, and two of them are traps:
 
@@ -42,25 +40,40 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import stat
 import subprocess
 import sys
 import threading
-import uuid
 
 GROK = os.environ.get("RUNDESK_GROK_BIN", "grok")
 
 #: What this brain can do, and only what was measured of it.
 #:
-#: `tools` is false because this CLI emits no tool events in either output format — it runs
-#: a command and describes the result in prose. Saying true and reporting none would be a
-#: turn that looks broken; saying false is the truth, and a surface simply shows less.
+#: `tools` is true because the ACP stream reports each call and its terminal update with
+#: the same `toolCallId`. The one-shot streaming format still reports none; using it would
+#: make this claim false.
 #:
 #: `resume` is true because the round trip was run and controlled, not because a flag
 #: exists: turn two, told only "the second one", named a codeword from turn one that a
 #: control session could not. Claiming it on a flag would cost the next turn its context
 #: silently.
-CAN = {"tools": False, "resume": True, "usage": True, "model": True, "steer": False}
+CAN = {"tools": True, "resume": True, "usage": True, "model": True, "steer": False}
+
+#: What a Grok tool did, in Rundesk's words rather than the vendor's. This is deliberately
+#: not the whole tool list: an unknown tool still gets a `tool` record, with no `did`, so a
+#: new built-in never gets assigned a meaning somebody guessed.
+DID = {
+    "read_file": "read",
+    "list_dir": "list",
+    "grep": "search",
+    "search": "search",
+    "web_search": "search",
+    "run_terminal_command": "run",
+    "edit_file": "edit",
+    "search_replace": "edit",
+    # Measured creating a new file; existing-file changes used `search_replace`.
+    "write": "make",
+    "create_file": "make",
+}
 
 #: Which tools a turn may reach for, per posture (R-PRV-18). The tool list is the only
 #: thing measured to scope this CLI, so this is the whole of how a posture is honoured.
@@ -87,7 +100,7 @@ LOGGED_OUT = "not signed in"
 
 #: How a turn ends when nothing went wrong. Anything else — a limit, an interruption, an
 #: error — is a turn that did not finish, and is reported as one.
-FINISHED = "EndTurn"
+FINISHED = "end_turn"
 
 #: How much of anything this brain hands back is passed on, and how many of its last
 #: complaints are kept to explain a turn that stopped without saying it had.
@@ -136,14 +149,14 @@ def _flags(extra: dict) -> list:
     return list(given)
 
 
-def opening(posture: str, model, resume, extra: dict, session: str, asked_at: str) -> list:
+def opening(posture: str, model, extra: dict) -> list:
     """Everything after the program's name, and why each part of it is there.
 
     Kept in one function with no side effects so a test can read the whole command line
     without starting anything — which is what holds the two silent traps above to what was
     measured rather than to what somebody remembered.
     """
-    argv = ["--output-format", "streaming-json"]
+    argv = ["--no-auto-update"]
 
     # Not optional, and not a preference. Without it this brain answers from conversations
     # it was never handed, which makes a resume handle mean nothing and lets one agent's
@@ -156,11 +169,6 @@ def opening(posture: str, model, resume, extra: dict, session: str, asked_at: st
     # What the turn may touch remains the tool list below: read gets three read tools and
     # work deliberately gets every built-in.
     argv += ["--permission-mode", "bypassPermissions"]
-
-    # A conversation this brain already has, or a handle minted here before the first byte.
-    # `--session-id` names a *new* conversation and refuses an id that already exists, so
-    # the two are never passed together.
-    argv += ["--resume", resume] if resume else ["--session-id", session]
 
     if model:
         argv += ["-m", model]
@@ -179,21 +187,20 @@ def opening(posture: str, model, resume, extra: dict, session: str, asked_at: st
         # conversation is cached against unchanged.
         argv += ["--rules", preface]
 
-    # The prompt goes in a file rather than in `-p`, because a flag's value is readable
-    # through the process list for the life of the turn. Measured: the file form carries a
-    # whole turn identically.
-    argv += ["--prompt-file", asked_at]
-
     argv += _flags(extra)
+    # ACP is the vendor's integration surface. `--always-approve` belongs after `agent`
+    # and before its transport; the root permission mode above is kept too because it is
+    # the exact headless policy measured to prevent a tool turn ending as Cancelled.
+    argv += ["agent", "--always-approve", "stdio"]
     return argv
 
 
 def records(line: str, seen: dict) -> list:
     """One line of this brain's stream, as the records rundesk understands — or none.
 
-    Pure, so the whole mapping is driven offline against a captured stream. Three kinds
-    exist and there is no fourth; anything else is dropped and kept in the raw beside the
-    run, so a vendor growing a tool event shows up as drift somebody can read.
+    Pure, so the mapping is driven offline against captured ACP notifications. Anything
+    else is dropped and kept in the raw beside the run, so vendor drift remains evidence
+    rather than becoming a meaning invented here.
     """
     try:
         one = json.loads(line)
@@ -201,67 +208,135 @@ def records(line: str, seen: dict) -> list:
         return []
     if not isinstance(one, dict):
         return []
-    kind = one.get("type")
+    if one.get("method") not in (
+            "session/update", "_x.ai/session/update", "_x.ai/session_notification"):
+        return []
+    update = (one.get("params") or {}).get("update")
+    if not isinstance(update, dict):
+        return []
+    kind = update.get("sessionUpdate")
 
-    if kind == "text":
+    if kind == "agent_message_chunk":
         # A fragment, and never `whole`: this brain writes its reply a token at a time and
         # nothing in the stream ever restates it, so nothing it says is finished until the
         # turn is. Marking one `whole` would show a sentence that then changed underneath
         # whoever was reading it.
         seen["thinking"] = False
-        return [{"type": "text", "text": str(one.get("data") or "")}]
+        return [{"type": "text", "text": _content(update)}]
 
-    if kind == "thought":
-        # One field away from `text` on the same shape — which is why nothing here scans
-        # for `data` without first deciding which kind it belongs to. Counting both would
-        # report what the model merely considered as what it said. One contiguous block is
-        # one activity, not one per token-sized fragment; otherwise Discord says `thinking
-        # (x37)` about a single thought and the account stores the same fiction.
+    if kind == "agent_thought_chunk":
+        # One contiguous block is one activity, not one per token-sized fragment. A tool
+        # or spoken chunk resets it, so reasoning on each side of visible work remains two
+        # phases rather than disappearing behind the first one.
         if seen.get("thinking"):
             return []
         seen["thinking"] = True
-        return [{"type": "think", "text": str(one.get("data") or "")}]
+        return [{"type": "think", "text": _content(update)}]
 
-    if kind == "end":
-        return _ended(one, seen)
+    if kind == "tool_call":
+        return _tool(update, seen)
+    if kind == "tool_call_update":
+        return _result(update, seen)
+    if kind == "turn_completed":
+        return _ended(update, seen)
 
     return []
 
 
+def _content(update: dict) -> str:
+    content = update.get("content")
+    if isinstance(content, dict):
+        return str(content.get("text") or "")
+    return str(content or "")
+
+
+def _tool(update: dict, seen: dict) -> list:
+    """A tool as it starts, once, with the vendor name translated where measured."""
+    at = str(update.get("toolCallId") or "")
+    if not at:
+        return []
+    tools = seen.setdefault("tools", {})
+    if at in tools:
+        return []
+    name = str(update.get("title") or "")
+    tools[at] = name
+    seen["thinking"] = False
+    said = {"type": "tool", "id": at, "name": name}
+    if name in DID:
+        said["did"] = DID[name]
+    return [said]
+
+
+def _result(update: dict, seen: dict) -> list:
+    """A tool's one terminal update, paired to the call by Grok's stable id."""
+    status = update.get("status")
+    if status not in ("completed", "failed", "cancelled"):
+        return []
+    at = str(update.get("toolCallId") or "")
+    if not at:
+        return []
+    results = seen.setdefault("results", set())
+    if at in results:
+        return []
+    results.add(at)
+    said = []
+    if at not in seen.setdefault("tools", {}):
+        said.extend(_tool(update, seen))
+    seen["thinking"] = False
+    said.append({"type": "result", "id": at, "ok": status == "completed",
+                 "summary": _summary(update.get("rawOutput"))})
+    return said
+
+
+def _summary(value) -> str:
+    """A bounded account of a result; surfaces still keep successful results quiet."""
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, sort_keys=True)[:SUMMARY_CHARS]
+        except (TypeError, ValueError):
+            pass
+    return str(value or "")[:SUMMARY_CHARS]
+
+
 def _ended(one: dict, seen: dict) -> list:
     """What the turn cost and that it is over — the only line either is taken from."""
-    seen["ended"] = True
-    seen["session"] = one.get("sessionId") or seen.get("session")
+    if seen.get("ended"):
+        return []
     counted = one.get("usage") or {}
 
-    # Measured: `input_tokens` excludes `cache_read_input_tokens` — 13,373 + 5,248 + 192 is
-    # exactly `total_tokens` — so the split this seam asks for is already the split this
-    # brain reports, and nothing is subtracted. Measured too: the counts are a turn's own
-    # and not the conversation's running total, so nothing is subtracted for that either.
+    # ACP's camel-case `inputTokens` includes `cachedReadTokens`, unlike the one-shot
+    # stream's snake-case input count. Measured on the same 0.2.112 build: 26,797 input,
+    # 24,448 cached and 81 output made 26,878 total, so fresh is their difference.
     #
     # There is no cache-*creation* figure at all. It is left out rather than guessed: an
     # absent number means we could not tell, which is different from zero.
-    usage = {"type": "usage", "input": _n(counted, "input_tokens"),
-             "output": _n(counted, "output_tokens"),
-             "cached": _n(counted, "cache_read_input_tokens")}
-    named = _model(one)
+    cached = _n(counted, "cachedReadTokens")
+    usage = {"type": "usage", "input": max(0, _n(counted, "inputTokens") - cached),
+             "output": _n(counted, "outputTokens"), "cached": cached}
+    named = _model(counted)
     if named:
         usage["model"] = named
 
-    stopped = one.get("stopReason")
-    ended = {"type": "done", "ok": stopped == FINISHED, "session": seen.get("session") or ""}
+    return [usage, _finished(one.get("stop_reason"), seen)]
+
+
+def _finished(stopped, seen: dict) -> dict:
+    """The terminal record, also usable when ACP omits its optional usage update."""
+    seen["ended"] = True
+    ended = {"type": "done", "ok": stopped == FINISHED,
+             "session": seen.get("session") or ""}
     if stopped != FINISHED:
         ended["why"] = f"the turn ended as {stopped}" if stopped else "the turn did not finish"
-    return [usage, ended]
+    return ended
 
 
-def _model(one: dict) -> str:
+def _model(counted: dict) -> str:
     """Which model answered, as this brain reported it rather than as it was asked for.
 
     A silent substitution would show up here and nowhere else, which is the whole reason
     this is read back rather than echoed from `RUNDESK_MODEL`.
     """
-    used = one.get("modelUsage")
+    used = counted.get("modelUsage")
     if not isinstance(used, dict):
         return ""
     for named in used:
@@ -272,22 +347,6 @@ def _model(one: dict) -> str:
 def _n(counted: dict, what: str) -> int:
     value = counted.get(what)
     return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
-
-
-def _asked_at(home, asked: str) -> str:
-    """Where this turn's prompt is written for the brain to read.
-
-    In the adapter's own private home when there is one, readable by nobody else, and
-    removed when the turn is over. The point of the file is that the prompt is not an
-    argument; leaving it world-readable would give that back.
-    """
-    where = home or os.environ.get("TMPDIR") or "/tmp"
-    os.makedirs(where, exist_ok=True)
-    at = os.path.join(where, f"asked-{os.getpid()}.txt")
-    with open(at, "w", encoding="utf-8") as f:
-        f.write(asked)
-    os.chmod(at, stat.S_IRUSR | stat.S_IWUSR)
-    return at
 
 
 #: Where this brain looks for skills, relative to the directory a turn stands in.
@@ -368,7 +427,6 @@ def _present(where: str) -> None:
 def carry() -> int:
     """One turn, from what rundesk set to what this brain said about it."""
     where = os.environ.get("RUNDESK_CWD") or os.getcwd()
-    home = os.environ.get("RUNDESK_PROVIDER_HOME")
     posture = os.environ.get("RUNDESK_POSTURE") or FULLY
     if posture not in ALLOWED and posture != FULLY:
         posture = FULLY
@@ -384,17 +442,7 @@ def carry() -> int:
         say(type="done", ok=False, why="nothing was asked")
         return 1
 
-    session = str(uuid.uuid4())
-    try:
-        asked_at = _asked_at(home, asked)
-    except OSError as gone:
-        went_wrong(f"this turn's prompt could not be written down: {gone}")
-        say(type="done", ok=False, why="this turn's prompt could not be written down")
-        return 1
-
-    argv = [GROK] + opening(posture, os.environ.get("RUNDESK_MODEL"),
-                            os.environ.get("RUNDESK_RESUME"), _settings(), session,
-                            asked_at)
+    argv = [GROK] + opening(posture, os.environ.get("RUNDESK_MODEL"), _settings())
 
     # **`GROK_HOME` is deliberately not set, and the working directory is why.** Measured:
     # this brain files its conversations under the directory a turn was run in —
@@ -404,34 +452,75 @@ def carry() -> int:
     # by that alone. Relocating the *home* on top of it adds nothing except a second login
     # to create, and the shipped codex adapter has never set its own either.
     #
-    # What a private home is still used for here is the prompt file below, which is this
-    # adapter's own bookkeeping and has nothing to do with credentials. An owner who wants
-    # a genuinely separate identity passes one through `--set`, which reaches this brain
-    # unread like any other flag.
+    # An owner who wants a genuinely separate identity passes one through `--set`, which
+    # reaches this brain unread like any other flag.
     _present(where)
 
-    env = dict(os.environ)
-    try:
-        return _turn(argv, where, env, session)
-    finally:
-        try:
-            os.unlink(asked_at)
-        except OSError:
-            pass
+    return _turn(argv, where, dict(os.environ), asked, os.environ.get("RUNDESK_RESUME"))
 
 
-def _turn(argv: list, where: str, env: dict, session: str) -> int:
-    """Run the brain, and report what it said as it says it."""
+class _ACP:
+    """The one sequential ACP conversation a Rundesk turn needs."""
+
+    def __init__(self, brain, raw, seen: dict):
+        self.brain = brain
+        self.raw = raw
+        self.seen = seen
+        self.next_id = 0
+
+    def request(self, method: str, params: dict, emit: bool = True) -> dict:
+        self.next_id += 1
+        wanted = self.next_id
+        self._send({"jsonrpc": "2.0", "id": wanted, "method": method, "params": params})
+        for line in self.brain.stdout:
+            if self.raw:
+                self.raw.write(line)
+                self.raw.flush()
+            try:
+                message = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(message, dict):
+                continue
+            if emit:
+                for it in records(line, self.seen):
+                    say(**it)
+            # No client-side filesystem or terminal service was advertised. Refuse any
+            # extension request explicitly instead of leaving Grok waiting forever.
+            if message.get("method") and "id" in message:
+                self._send({"jsonrpc": "2.0", "id": message["id"],
+                            "error": {"code": -32601, "message": "method not supported"}})
+                continue
+            if message.get("id") != wanted:
+                continue
+            if isinstance(message.get("error"), dict):
+                detail = str(message["error"].get("message") or message["error"])
+                raise RuntimeError(f"{method}: {detail}")
+            result = message.get("result")
+            return result if isinstance(result, dict) else {}
+        raise RuntimeError(f"Grok closed its ACP stream during {method}")
+
+    def _send(self, message: dict) -> None:
+        if self.brain.stdin is None:
+            raise RuntimeError("Grok's ACP input is not available")
+        self.brain.stdin.write(json.dumps(message) + "\n")
+        self.brain.stdin.flush()
+
+
+def _turn(argv: list, where: str, env: dict, asked: str, resume) -> int:
+    """Run one ACP session, and report what it said as it says it."""
     raw = _raw()
-    seen = {"session": session, "ended": False}
+    seen = {"session": str(resume or ""), "ended": False}
     trouble = []
     try:
         brain = subprocess.Popen(
             argv, cwd=where, env=env, text=True, bufsize=1,
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except OSError as gone:
         went_wrong(f"the Grok CLI would not start: {gone}")
         say(type="done", ok=False, why="the Grok CLI would not start")
+        if raw:
+            raw.close()
         return 1
 
     # Drained for the brain's whole life, in its own thread. A second pipe with nothing
@@ -439,27 +528,88 @@ def _turn(argv: list, where: str, env: dict, session: str) -> int:
     # later as a brain that simply went quiet, and sends you looking anywhere but here.
     draining = threading.Thread(target=_drained, args=(brain.stderr, trouble), daemon=True)
     draining.start()
+    acp = _ACP(brain, raw, seen)
+    try:
+        initialized = acp.request("initialize", {
+            "protocolVersion": 1,
+            # Advertising client filesystem or terminal services makes Grok send requests
+            # back and wait for us to execute them. Rundesk wants Grok's own scoped tools,
+            # which are what `--tools` above controls, so the client offers none.
+            "clientCapabilities": {},
+        })
+        _authenticate(acp, initialized)
 
-    for line in brain.stdout:
-        if raw:
-            raw.write(line)
-            raw.flush()
-        for it in records(line, seen):
-            say(**it)
+        session_params = {"cwd": where, "mcpServers": []}
+        if resume:
+            session_params["sessionId"] = str(resume)
+            # Loading replays the saved turn as ordinary session updates, including its
+            # text and `turn_completed`. They belong in the raw evidence, not in this new
+            # turn's live records; emitting them repeats the prior reply and marks this
+            # turn finished before its prompt is even sent.
+            acp.request("session/load", session_params, emit=False)
+            session = str(resume)
+        else:
+            made = acp.request("session/new", session_params)
+            session = str(made.get("sessionId") or "")
+            if not session:
+                raise RuntimeError("Grok created no ACP session")
+        seen["session"] = session
 
-    brain.stdout.close()
-    draining.join(timeout=GOING_SECONDS)
-    if raw:
-        raw.close()
-
-    code = brain.wait()
-    if not seen["ended"]:
-        said = " ".join(trouble).lower()
-        if LOGGED_OUT in said:
+        completed = acp.request("session/prompt", {
+            "sessionId": session,
+            "prompt": [{"type": "text", "text": asked}],
+        })
+        if not seen["ended"]:
+            # `turn_completed` carries the measured usage. If a compatible ACP server
+            # returns only the prompt response, finish honestly without inventing zeros.
+            say(**_finished(completed.get("stopReason"), seen))
+        return 0
+    except (BrokenPipeError, OSError, RuntimeError) as gone:
+        said = " ".join(trouble + [str(gone)]).lower()
+        if LOGGED_OUT in said or "authenticate" in said:
             went_wrong(f"this machine has no Grok login — run:\n  {GROK} login --device-code")
-        say(type="done", ok=False, why=_why(trouble, code))
-        return code or 1
-    return code
+        if not seen["ended"]:
+            say(type="done", ok=False, why=str(gone)[:SUMMARY_CHARS])
+        return 1
+    finally:
+        if brain.stdin is not None and not brain.stdin.closed:
+            try:
+                brain.stdin.close()
+            except OSError:
+                pass
+        try:
+            brain.wait(timeout=GOING_SECONDS)
+        except subprocess.TimeoutExpired:
+            brain.terminate()
+            try:
+                brain.wait(timeout=GOING_SECONDS)
+            except subprocess.TimeoutExpired:
+                brain.kill()
+                brain.wait()
+        if brain.stdout is not None:
+            brain.stdout.close()
+        draining.join(timeout=GOING_SECONDS)
+        if raw:
+            raw.close()
+
+
+def _authenticate(acp: _ACP, initialized: dict) -> None:
+    """Use the login Grok itself advertises, without reading or copying a credential."""
+    methods = initialized.get("authMethods")
+    if not isinstance(methods, list) or not methods:
+        return
+    offered = {
+        str(one.get("id")) for one in methods
+        if isinstance(one, dict) and one.get("id")
+    }
+    preferred = str((initialized.get("_meta") or {}).get("defaultAuthMethodId") or "")
+    if preferred not in offered:
+        preferred = "cached_token" if "cached_token" in offered else ""
+    if not preferred and os.environ.get("XAI_API_KEY") and "xai.api_key" in offered:
+        preferred = "xai.api_key"
+    if not preferred:
+        raise RuntimeError("Grok offered no usable authentication method")
+    acp.request("authenticate", {"methodId": preferred, "_meta": {"headless": True}})
 
 
 def _drained(stream, keep: list) -> None:
@@ -475,15 +625,6 @@ def _drained(stream, keep: list) -> None:
         if len(keep) > TROUBLE_KEPT:
             del keep[0]
     stream.close()
-
-
-def _why(trouble: list, code: int) -> str:
-    """One actionable line about a turn that stopped without saying it had."""
-    for said in reversed(trouble):
-        first = said.strip().splitlines()[0].strip() if said.strip() else ""
-        if first:
-            return first[:SUMMARY_CHARS]
-    return f"the Grok CLI stopped without finishing the turn (exit {code})"
 
 
 def _raw():
