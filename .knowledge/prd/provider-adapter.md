@@ -52,6 +52,7 @@ is a whole brain with that work absent, rather than a broken one.
 | ✅ | R-PRV-24 | An adapter is told where the agent's skills stand, and decides for itself where its brain will find them | `an adapter is told where this agents skills stand`, `no vendor variable is put in front of an adapter` |
 | ✅ | R-PRV-25 | A child agent finishing does not end or answer its parent's turn | `a child agents completion does not end the parent turn`, `finish waits for the child turn not the spawn call` |
 | ✅ | R-PRV-26 | Image content returned by a tool is reported as a file | `image content returned by a tool is reported as a file` |
+| ✅ | R-PRV-27 | A posture an adapter does not recognise narrows the turn and is said out loud, rather than widening it | `a posture this adapter does not know falls to the narrowest one`, `falling closed is said out loud rather than done quietly`, `the two postures the seam has are passed through untouched` |
 
 ## Open questions
 

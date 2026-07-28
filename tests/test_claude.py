@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import re
@@ -364,6 +365,42 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
         after = argv[argv.index("--allowedTools") + 1]
         self.assertNotIn(" ", after, "the allowlist would swallow the flag after it")
         self.assertIn(",", after)
+
+    def test_a_posture_this_adapter_does_not_know_falls_to_the_narrowest_one(self):
+        """R-PRV-27. The failure that matters is which way an unknown posture falls. `work`
+        on this brain is `--dangerously-skip-permissions`, so falling open turns a typo — or
+        a posture the seam gains before this adapter learns it — into a full permission
+        bypass on an unattended schedule, with nothing said about it."""
+        for unknown in ("reed", "plan", "READ", "read-only", "worrk", "none"):
+            said = claude.posture_for(unknown)
+            self.assertEqual("read", said, f"{unknown!r} should fall closed, not open")
+            argv = self.opening(posture=said)
+            self.assertIn("--allowedTools", argv)
+            self.assertNotIn("--dangerously-skip-permissions", argv)
+
+    def test_falling_closed_is_said_out_loud_rather_than_done_quietly(self):
+        """A turn that lost tools it expected must be explicable. The narrowing goes to the
+        stream that is ours, so it reaches whoever reads the run rather than only the log."""
+        was, sys.stderr = sys.stderr, io.StringIO()
+        try:
+            claude.posture_for("reed")
+            said = sys.stderr.getvalue()
+        finally:
+            sys.stderr = was
+        self.assertIn("reed", said)
+        self.assertIn("read", said)
+
+    def test_the_two_postures_the_seam_has_are_passed_through_untouched(self):
+        """The guard on the one above: failing closed must not narrow a posture that is
+        perfectly good. An absent or empty posture is the seam's stated default, `work`,
+        which is a decision rather than a mistake and is not narrowed either. Blank counts
+        as absent, as it does for standing instructions two tests below — a variable set to
+        spaces is a variable nobody set."""
+        self.assertEqual("work", claude.posture_for("work"))
+        self.assertEqual("read", claude.posture_for("read"))
+        self.assertEqual("work", claude.posture_for(None))
+        self.assertEqual("work", claude.posture_for(""))
+        self.assertEqual("work", claude.posture_for("   \t "))
 
     def test_standing_instructions_are_added_and_never_substituted(self):
         """R-PRV-23. Measured: `--system-prompt` takes about 6,100 tokens of what this

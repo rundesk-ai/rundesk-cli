@@ -32,7 +32,11 @@ with fresh; cache *reads* are the cheap volume and go on their own. Summing them
 
 **A posture is the allowlist, not the mode.** `--permission-mode` is a prompting policy —
 measured: under `plan` with no allowlist this CLI reached for `Write` and wrote a file
-outside the repository, and `plan` never returned. What holds is which tools exist.
+outside the repository, and `plan` never returned. The allowlist is what this adapter sets,
+but it is a *pre-approval* list rather than the tool list, and the thing that actually
+refuses a write is the vendor's permission system behind it — re-measured 2026-07-28, and
+written out in full at `ALLOWED`, because the previous wording here claimed the list was
+the whole of the guard and it is not.
 """
 
 from __future__ import annotations
@@ -78,23 +82,44 @@ DID = {
     "Edit": "edit",
     "Write": "edit",
     "NotebookEdit": "edit",
-    # **Measured, because the name is not the one the documentation suggests.** A
-    # subagent spawn arrives as `Agent`, not `Task`; probed 2026-07-27 against 2.1.220.
-    # Its own steps stream through the parent as ordinary tool calls, so without a verb
-    # here the only thing marking a delegation at all was this vendor's word for it.
+    # **Measured, because delegation answers to two different names and both are right.**
+    # A subagent spawn *arrives on the stream* as `Agent`, so that is the name a `did`
+    # mapping must key on; the *permission* surface calls the same thing `Task`, so that is
+    # the name `ALLOWED` must carry. Re-probed 2026-07-28 against 2.1.220: the init line
+    # advertises `Task` and no `Agent`, and the `tool_use` block for a spawn says `Agent`.
+    # Renaming either to match the other looks like a tidy-up and silently breaks it.
     "Agent": "delegate",
 }
 
-#: Which tools a turn may reach for, per posture (R-PRV-18). The allowlist is the only
-#: thing measured to hold, so this is the whole of how a posture is honoured.
+#: Which tools a turn is granted without being asked, per posture (R-PRV-18).
 #:
-#: `read` is deliberately not "everything except writes": a tool that is never granted
-#: cannot be called, and a list of what is allowed cannot be outgrown by a tool added next
-#: year the way a list of what is forbidden can.
+#: **This is a pre-approval list, not the tool list, and it is not the whole of how a
+#: posture is honoured.** Measured 2026-07-28 against 2.1.220, correcting what was written
+#: here before: the brain is offered every tool it has whatever this says, and a tool
+#: missing from this list is not withheld — it is merely not pre-approved, so calling it
+#: raises a permission request that nothing answers headlessly and is therefore refused.
+#:
+#: What that means in each direction, all of it measured rather than reasoned:
+#:
+#: - A tool that needs no permission runs under `read` whether or not it is named here.
+#:   `Skill` is not on this list and a granted skill invokes fine; read-only `Bash` is not
+#:   on this list and runs. So `read` permits arbitrary *read-only* shell.
+#: - Containment against writes comes from the vendor's permission system and its sandbox,
+#:   not from this list: under `read` a `Write` is denied, a `Write` from a delegated
+#:   subagent is denied, and a shell redirection is blocked by the sandbox's own guard.
+#: - `read` means read *this machine*, not read this workspace: `Read` reaches a file
+#:   outside the agent's home and returns it.
+#:
+#: The list is still worth having — it is what keeps a permission request from being raised
+#: for the ordinary read tools, and `Task` is here so a delegated read is not refused — but
+#: nothing should be inferred from a tool's absence from it.
 ALLOWED = {
     "read": ("Read", "NotebookRead", "Glob", "LS", "Grep", "WebSearch", "WebFetch",
              "ToolSearch", "Task"),
 }
+
+#: The narrowest posture there is, and where an unrecognised one lands (R-PRV-27).
+READ = "read"
 
 #: The posture that is not a list. `work` grants everything this brain has rather than the
 #: fourteen tools somebody thought of: an allowlist cannot be complete, so every tool the CLI
@@ -202,8 +227,11 @@ def opening(posture: str, model, resume, extra: dict, session: str) -> list:
     # release, and every tool an MCP server brings, is one a working turn would be refused.
     # Measured 2026-07-27 against 2.1.220: with the work list passed and `TodoWrite` asked
     # for, the turn was refused it; with the bypass and no list at all, a `Write` that is on
-    # no list succeeded. `read` keeps its list and was measured to still refuse `Write`,
-    # which is the guard that makes widening `work` defensible.
+    # no list succeeded. `read` keeps its list and was measured again on 2026-07-28 to still
+    # refuse `Write` — directly and through a delegated subagent — which is the guard that
+    # makes widening `work` defensible. What holds that guard is the vendor's permission
+    # system rather than the list itself; see `ALLOWED` for what the list does and does not
+    # do, and for the read-only shell it does not stop.
     #
     # Passed as one comma-separated value rather than as many words: `--allowedTools` is
     # variadic and would otherwise swallow whatever came next — measured again while probing
@@ -444,17 +472,39 @@ def _present(where: str) -> None:
         went_wrong(f"this agent's skills could not be presented: {gone}")
 
 
+def posture_for(named) -> str:
+    """Which posture this turn runs under, given what the seam said (R-PRV-27).
+
+    **A posture this adapter has no answer for fails closed, to `read`.** It used to fall
+    back to `work`, on the reasoning that `work` is the seam's own default — but `work`
+    here is `--dangerously-skip-permissions`, so a typo, a posture the seam gains before
+    this adapter learns it, or a mangled environment turned the *narrowest* intent into a
+    full permission bypass, silently and on an unattended schedule. The two failures are
+    not equal: falling closed costs a turn some tools and says so, and falling open costs
+    the machine its guard and says nothing.
+
+    An empty or absent posture is not unrecognised — the seam's stated default is `work`,
+    and that is a decision rather than a mistake.
+
+    A pure function with the environment passed in, so the whole decision is testable
+    without starting a brain. Asked against both of the postures there are rather than
+    against `ALLOWED`, which no longer holds one of them: reading membership of the list
+    would have sent `work` down the unrecognised branch.
+    """
+    posture = (named or "").strip() or FULLY
+    if posture != FULLY and posture not in ALLOWED:
+        went_wrong(f"this adapter does not know the posture {posture!r}, so this turn ran "
+                   f"as {READ!r} — the narrowest posture it has, rather than the most "
+                   f"permissive one. Tools beyond reading were refused.")
+        return READ
+    return posture
+
+
 def carry() -> int:
     """One turn, from what rundesk set to what this brain said about it."""
     where = os.environ.get("RUNDESK_CWD") or os.getcwd()
     home = os.environ.get("RUNDESK_PROVIDER_HOME")
-    # Anything this adapter has no answer for falls back to `work`, which is the seam's own
-    # default. Asked against both of the postures there are rather than against `ALLOWED`,
-    # which no longer holds one of them: reading membership of the list would have sent
-    # `work` down the "unrecognised" branch and quietly given every turn the read tools.
-    posture = os.environ.get("RUNDESK_POSTURE") or FULLY
-    if posture not in ALLOWED and posture != FULLY:
-        posture = FULLY
+    posture = posture_for(os.environ.get("RUNDESK_POSTURE"))
 
     if shutil.which(CLAUDE) is None and not (os.sep in CLAUDE and os.access(CLAUDE, os.X_OK)):
         went_wrong(f"there is no {CLAUDE} on this machine's path — install the Claude Code "
