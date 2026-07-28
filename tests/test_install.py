@@ -50,15 +50,31 @@ def installer(*args: str, home: Path, bindir: Path, cwd: Path | None = None,
         key: value for key, value in os.environ.items()
         if not key.startswith("RUNDESK_")
     }
+    requested = dict(extra_env or {})
+    inherited_path = requested.pop("PATH", isolated.get("PATH", ""))
+    fake_tools = home / ".cache" / "rundesk-test-bin"
+    fake_tools.mkdir(parents=True, exist_ok=True)
+    launchctl = fake_tools / "launchctl"
+    launchctl.write_text(
+        "#!/bin/sh\n"
+        "# Scratch installs own no live jobs; every mutation is accepted and every query\n"
+        "# answers absent, which keeps this suite outside the real launchd domain.\n"
+        "[ \"${1:-}\" = print ] && exit 1\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    launchctl.chmod(0o755)
     env = {
         **isolated,
         "HOME": str(home),
+        "PATH": f"{fake_tools}{os.pathsep}{inherited_path}",
         "RUNDESK_BIN_DIR": str(bindir),
         "RUNDESK_INSTALL_DIR": str(home / ".rundesk"),
+        "RUNDESK_JOBS_DIR": str(home / ".cache" / "rundesk-test-jobs"),
         # Never the real requirements file: installing it here would reach the network and
         # take a minute, in a suite that must do neither.
         "RUNDESK_REQUIREMENTS": str(home / "no-requirements.txt"),
-        **(extra_env or {}),
+        **requested,
     }
     return subprocess.run(
         ["bash", str(script or INSTALLER), *args],
@@ -189,7 +205,7 @@ class InstallTests(Sandbox):
         required = set(re.findall(r"command -v (\S+)", INSTALLER.read_text()))
         self.assertEqual(
             required,
-            {"python3", "curl", "tar"},
+            {"python3", "curl", "tar", "launchctl"},
             "the installer requires something a stock machine may not have",
         )
 
@@ -215,6 +231,29 @@ class InstallTests(Sandbox):
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual((self.bindir / "rundesk").resolve(), target_after_first)
         self.assertEqual(len(list(self.bindir.iterdir())), 1, "installing twice left two of something")
+
+    def test_installing_schedules_daily_updates_for_three_in_the_morning(self):
+        """R-UPD-42"""
+        done = self.install()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        job = self.home / ".cache" / "rundesk-test-jobs" / \
+            "ai.rundesk-automatic-update.plist"
+        with open(job, "rb") as file:
+            described = plistlib.load(file)
+        self.assertEqual(
+            {"Hour": 3, "Minute": 0}, described["StartCalendarInterval"]
+        )
+        self.assertEqual(["update", "--automatic"], described["ProgramArguments"][1:])
+
+    def test_uninstalling_removes_the_daily_update_job(self):
+        """R-UPD-42"""
+        self.install()
+        job = self.home / ".cache" / "rundesk-test-jobs" / \
+            "ai.rundesk-automatic-update.plist"
+        self.assertTrue(job.exists())
+        gone = self.uninstall()
+        self.assertEqual(gone.returncode, 0, gone.stdout + gone.stderr)
+        self.assertFalse(job.exists())
 
     def test_the_installed_command_is_reachable_by_name_from_any_directory(self):
         self.install()

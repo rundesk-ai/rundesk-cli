@@ -53,7 +53,7 @@ rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
 - **One identity, one home.** Every agent has its own workspace, rules, memory, skills,
   conversations, and logs.
 - **Always available.** macOS `launchd` keeps each agent's gateway running and brings it
-  back after a crash or reboot.
+  back after a crash, reboot, or automatic update.
 - **Terminal, chat, and scheduled work.** Continue the same agent from the command line,
   Discord, recurring cron schedules, or one-time scheduled turns.
 - **A durable account of every turn.** Inspect messages, tool activity, outcomes, and
@@ -265,7 +265,7 @@ Discord without changing Rundesk core.
 
 ### Operations and data
 
-- Install, version check, self-update, status, and doctor commands
+- Install, automatic 03:00 self-updates, version check, status, and doctor commands
 - Manual backups, automatic daily backups, restore, and configurable backup location
 - Program and owner data kept in separate directories
 - Agent removal that preserves its home unless purge is explicitly requested

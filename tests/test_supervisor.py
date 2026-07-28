@@ -50,6 +50,9 @@ class Machine:
         name = target.rsplit(".", 1)[-1] if verb != "bootstrap" else None
         if verb != "bootstrap" and target.endswith("/" + supervisor.UPDATE_LABEL):
             name = supervisor.UPDATE_LABEL
+        if verb != "bootstrap" and target.endswith(
+                "/" + supervisor.AUTOMATIC_UPDATE_LABEL):
+            name = supervisor.AUTOMATIC_UPDATE_LABEL
         if verb in self.deaf:
             return supervisor.Spoke(False, "the machine did not answer in time", answered=False)
         if verb in self.refuse:
@@ -73,6 +76,8 @@ class Machine:
             named = (
                 supervisor.UPDATE_LABEL
                 if loaded == supervisor.UPDATE_LABEL
+                else supervisor.AUTOMATIC_UPDATE_LABEL
+                if loaded == supervisor.AUTOMATIC_UPDATE_LABEL
                 else loaded[len(supervisor.PREFIX) + 1:]
             )
             if named in self.holding:
@@ -728,6 +733,58 @@ class TheExternalUpdateWorker(WithAJobDirectory):
         self.assertTrue(said.ok)
         self.assertFalse(path.exists())
         self.assertIn("bootout", self.machine.verbs())
+
+
+class AutomaticUpdates(WithAJobDirectory):
+    def written(self):
+        return plistlib.loads(
+            supervisor.write_automatic_update(
+                self.root, self.logs, str(self.where)
+            ).read_bytes()
+        )
+
+    def test_the_daily_trigger_runs_at_three_in_the_morning(self):
+        """R-UPD-42"""
+        said = self.written()
+        self.assertEqual(
+            {"Hour": 3, "Minute": 0}, said["StartCalendarInterval"]
+        )
+        self.assertEqual(["update", "--automatic"], said["ProgramArguments"][1:])
+
+    def test_the_daily_trigger_only_runs_when_the_calendar_fires(self):
+        """R-UPD-42 — it queues a recoverable worker and ends, so keeping it alive would
+        turn one daily event into an update loop."""
+        said = self.written()
+        self.assertFalse(said["RunAtLoad"])
+        self.assertNotIn("KeepAlive", said)
+
+    def test_the_daily_trigger_cannot_be_mistaken_for_a_gateway(self):
+        """R-UPD-42"""
+        supervisor.write_automatic_update(
+            self.root, self.logs, str(self.where)
+        )
+        supervisor.write("automatic-update", self.root, self.logs, str(self.where))
+        self.assertEqual(
+            ["automatic-update"],
+            supervisor.described(str(self.where), self.root),
+        )
+
+    def test_installing_and_removing_the_daily_trigger_changes_only_its_job(self):
+        """R-UPD-42"""
+        path = supervisor.automatic_update_job_path(str(self.where))
+        said = supervisor.install_automatic_update(
+            self.root, self.logs, str(self.where), self.machine
+        )
+        self.assertTrue(said.ok)
+        self.assertTrue(path.exists())
+        self.assertIn(supervisor.AUTOMATIC_UPDATE_LABEL, self.machine.holding)
+
+        removed = supervisor.remove_automatic_update(
+            str(self.where), self.root, self.machine
+        )
+        self.assertTrue(removed.ok)
+        self.assertFalse(path.exists())
+        self.assertNotIn(supervisor.AUTOMATIC_UPDATE_LABEL, self.machine.holding)
 
 
 if __name__ == "__main__":

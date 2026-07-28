@@ -134,6 +134,7 @@ if not supervisor.available():
     raise SystemExit(0)          # nothing of the kind on this machine
 taken, stubborn = supervisor.take_all_back()
 supervisor.remove_update_worker()
+supervisor.remove_automatic_update()
 for name in taken:
     print(f"stopped gateway '{name}' and removed its job")
 if stubborn:
@@ -502,6 +503,26 @@ echo "linked $BINDIR/rundesk -> $SHIM"
 # reports done and leaves something that cannot run is the worst of both.
 "$BINDIR/rundesk" version >/dev/null 2>&1 || die "rundesk was installed but would not run."
 echo "checked that it runs"
+
+# The machine, not a gateway, owns the daily trigger. It only queues the same guarded
+# worker used by an agent-initiated update, so it remains alive while every gateway is
+# deliberately down and can recover that window if its own process is interrupted.
+if command -v launchctl >/dev/null 2>&1; then
+  if ! python3 - "$REPO_ROOT" <<'AUTOMATIC'
+import sys
+sys.path.insert(0, sys.argv[1] + "/src")
+from rundesk import supervisor
+
+said = supervisor.install_automatic_update()
+if not said.ok:
+    print(said.said or "the supervisor refused the daily update job", file=sys.stderr)
+    raise SystemExit(1)
+AUTOMATIC
+  then
+    die "rundesk was installed, but automatic updates could not be scheduled."
+  fi
+  echo "scheduled automatic updates for 03:00"
+fi
 
 # The skills this release ships, into the owner's library beside their own. Asked of the
 # installed command rather than done in shell, because which skills a release ships is

@@ -21,11 +21,14 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import os
 import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -1146,6 +1149,19 @@ class WhatTheOwnerIsTold(unittest.TestCase):
         self.assertEqual(1, len(it.greeted))
         self.assertTrue(it.closed)
 
+    def test_update_maintenance_is_not_announced_as_an_unexplained_outage(self):
+        """R-UPD-43"""
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / "maintenance"
+            marker.touch()
+            with mock.patch.dict(
+                    os.environ, {"RUNDESK_MAINTENANCE": str(marker)}, clear=False):
+                it = self.Stand()
+                asyncio.run(discord.Agent.going(it))
+        self.assertIn("maintenance", it.greeted[0].lower())
+        self.assertIn("update", it.greeted[0].lower())
+        self.assertNotIn("offline", it.greeted[0].lower())
+
     def test_going_down_cancels_what_a_conversation_was_still_running(self):
         """R-CH-11 — nothing of this channel's is left running once it goes."""
         held = discord.Live()
@@ -1185,6 +1201,19 @@ class WhatTheOwnerIsTold(unittest.TestCase):
             discord.say = was
         self.assertEqual(1, len(it.said))
         self.assertEqual([], second.said, "the second adapter greeted as well")
+
+    def test_a_gateway_returning_from_an_update_says_maintenance_is_complete(self):
+        """R-UPD-43"""
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / "maintenance"
+            marker.touch()
+            with mock.patch.dict(
+                    os.environ, {"RUNDESK_MAINTENANCE": str(marker)}, clear=False), \
+                    mock.patch.object(discord, "say"):
+                it = self.Connects()
+                asyncio.run(discord.Agent.on_ready(it))
+        self.assertIn("maintenance is complete", it.said[0].lower())
+        self.assertFalse(marker.exists(), "completed maintenance stayed attached to the gateway")
 
     def test_only_one_adapter_of_a_gateway_says_the_goodbye(self):
         """R-DIS-15 — the same on the way out, and for a worse reason than tidiness: two

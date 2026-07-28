@@ -237,6 +237,8 @@ def describe(name: str, root: Path | None = None, logs: Path | None = None,
 #: The install's own job, in a namespace beside the gateways rather than inside it.
 BACKUP_LABEL = f"{PREFIX}-backup"
 UPDATE_LABEL = f"{PREFIX}-update"
+AUTOMATIC_UPDATE_LABEL = f"{PREFIX}-automatic-update"
+AUTOMATIC_UPDATE_HOUR = 3
 
 
 def backup_job_path(where: str | None = None) -> Path:
@@ -309,6 +311,69 @@ def keeps_backups(where: str | None = None) -> bool:
 
 def update_job_path(where: str | None = None) -> Path:
     return Path(os.path.expanduser(where or jobs_home())) / f"{UPDATE_LABEL}.plist"
+
+
+def automatic_update_job_path(where: str | None = None) -> Path:
+    return Path(os.path.expanduser(where or jobs_home())) / f"{AUTOMATIC_UPDATE_LABEL}.plist"
+
+
+def describe_automatic_update(root: Path | None = None, logs: Path | None = None) -> dict:
+    """The daily trigger. It only queues the crash-recoverable worker and then ends
+    (R-UPD-42)."""
+    root = root or ROOT
+    logs = logs or gateway.logs_home()
+    return {
+        "Label": AUTOMATIC_UPDATE_LABEL,
+        "ProgramArguments": [str(root / "rundesk"), "update", "--automatic"],
+        "WorkingDirectory": str(root),
+        "EnvironmentVariables": _environment(logs),
+        "StartCalendarInterval": {"Hour": AUTOMATIC_UPDATE_HOUR, "Minute": 0},
+        "RunAtLoad": False,
+        "StandardOutPath": str(logs / "automatic-update.out"),
+        "StandardErrorPath": str(logs / "automatic-update.err"),
+    }
+
+
+def write_automatic_update(root: Path | None = None, logs: Path | None = None,
+                           where: str | None = None) -> Path:
+    path = automatic_update_job_path(where)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    (logs or gateway.logs_home()).mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as file:
+        plistlib.dump(describe_automatic_update(root, logs), file)
+    return path
+
+
+def install_automatic_update(root: Path | None = None, logs: Path | None = None,
+                             where: str | None = None,
+                             asking: Callable[..., Spoke] = ask) -> Spoke:
+    """Hand the 03:00 trigger to the machine without running an update now."""
+    root = root or ROOT
+    path = automatic_update_job_path(where)
+    if path.exists():
+        if not ours(path, root):
+            raise NotOurs("the automatic update job was not written by this install of rundesk")
+        loaded = asking("print", f"{domain()}/{AUTOMATIC_UPDATE_LABEL}")
+        if not loaded.answered:
+            return loaded
+        if loaded.ok:
+            return Spoke(True, "")
+    else:
+        path = write_automatic_update(root, logs, where)
+    return asking("bootstrap", domain(), str(path))
+
+
+def remove_automatic_update(where: str | None = None, root: Path | None = None,
+                            asking: Callable[..., Spoke] = ask) -> Spoke:
+    path = automatic_update_job_path(where)
+    if not path.exists():
+        return Spoke(True, "")
+    if not ours(path, root):
+        raise NotOurs("the automatic update job was not written by this install of rundesk")
+    said = asking("bootout", f"{domain()}/{AUTOMATIC_UPDATE_LABEL}")
+    with contextlib.suppress(OSError):
+        os.remove(path)
+    return said
 
 
 def describe_update_worker(root: Path | None = None, logs: Path | None = None) -> dict:
