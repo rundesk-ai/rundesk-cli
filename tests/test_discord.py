@@ -736,7 +736,19 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         """R-DIS-9 — what somebody watching wants is the thing that did not work."""
         said = discord._as_a_line(
             {"type": "result", "id": "1", "ok": False, "summary": "no such file"})
-        self.assertIn("no such file", said)
+        self.assertEqual("-# ⚠ tool failed", said)
+
+    def test_a_tool_failure_never_publishes_its_private_details(self):
+        """R-DIS-20 — activity says what failed without relaying a command or path."""
+        tools = {}
+        discord._activity_line({"type": "tool", "id": "1", "did": "run"}, tools)
+        said = discord._activity_line({
+            "type": "result", "id": "1", "ok": False,
+            "summary": "rg secret /Users/owner/private/project",
+        }, tools)
+        self.assertEqual("-# ⚠ command failed", said)
+        self.assertNotIn("/Users/owner", said)
+        self.assertNotIn("secret", said)
 
     def test_every_verb_the_seam_defines_has_a_mark_of_its_own(self):
         """R-PRV-8, R-CAD-4 — the list of what a tool did is the seam's and is closed. A
@@ -746,6 +758,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
 
         self.assertEqual(set(provider.DID), set(discord.DID),
                          "this surface and the seam disagree about what a tool can do")
+        self.assertEqual(set(provider.DID), set(discord.FAILED),
+                         "a tool verb has no broad failure wording")
         self.assertEqual(len(set(discord.DID.values())), len(discord.DID),
                          "two verbs share a mark, so a reader cannot tell them apart")
         self.assertNotIn(discord.UNKNOWN, discord.DID.values(),
