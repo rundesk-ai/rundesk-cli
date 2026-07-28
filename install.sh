@@ -21,6 +21,10 @@
 # of names to spare, and a list is a thing that stops being true the day something is added.
 set -euo pipefail
 
+# Apple's system Python redirects bytecode into ~/Library/Caches. An install must not write
+# an undeclared tree in the owner's home merely by importing Rundesk to lay its skills down.
+export PYTHONDONTWRITEBYTECODE=1
+
 # Not overridable, and deliberately so. An install pointed at one repository updates itself
 # from whichever one `rundesk update` is compiled to ask — there is nowhere on disk that
 # remembers where a copy came from, so the two must be the same repository or an install

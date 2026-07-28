@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-__version__ = "0.10.1"
+__version__ = "0.11.0"
 
 #: This install — the directory holding `rundesk`, `src/` and the virtualenv. Resolved
 #: rather than assumed, because the command is reached through a symlink on a PATH and
@@ -50,6 +50,21 @@ def data_home() -> Path:
         return Path(said)
     install = os.environ.get("RUNDESK_INSTALL_DIR")
     return Path(install if install else Path.home() / ".rundesk") / "data"
+
+
+def scripts_home() -> Path:
+    """The owner's commands that every agent may invoke.
+
+    Derived below `data_home()` so a redirected or scratch install cannot accidentally
+    reach the live owner's commands, and so backup and removal behavior follow from the
+    existing data boundary rather than from another list of paths (R-PROC-22, R-PROC-23).
+    """
+    return data_home() / "scripts"
+
+
+def skills_home() -> Path:
+    """The owner's library of skills, beside the shared integration commands."""
+    return data_home() / "skills"
 
 
 def backups_home() -> Path:

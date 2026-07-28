@@ -20,12 +20,13 @@ brain went on reading whatever else it found.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import re
 import shutil
 from pathlib import Path
 
-from rundesk import ROOT, data_home
+from rundesk import ROOT, skills_home
 
 #: What a built-in is copied from. Beside the agent templates and read the same way — by
 #: looking, so a skill added to a release is laid down, brought forward and marked without
@@ -34,6 +35,34 @@ SHIPPED = ROOT / "src" / "templates" / "skills"
 
 #: The file that makes a directory a skill. Every brain measured looks for this name.
 NAMED = "SKILL.md"
+
+#: The proof that a directory in the owner's library is ours to replace or remove.
+#: A name matching what a release ships is not proof: a later release can introduce a
+#: name the owner already used, and that coincidence does not transfer ownership.
+OWNED = ".rundesk-built-in"
+
+#: Exact fingerprints of the built-ins shipped immediately before ownership markers
+#: existed. This is a one-release bridge for installs already on 0.10: only an untouched
+#: directory can acquire the marker. A modified built-in is left alone, and a newly shipped
+#: name can never appear here and claim an owner's work by coincidence.
+LEGACY = {
+    "building-a-channel-adapter": (
+        "eeea76bac1c12db493ad823b1d89d4d42740ab7b17173459b3c0705353332466",
+        "65c4e1f28f278ea29ac5e59317eb94ff99b6b43c1aeab855045f6823ac82db9b",
+    ),
+    "building-a-provider-adapter": (
+        "699c7b9408c743115eb32fdf4e4c242201ff5dbabc34833510e26f4aac025ab1",),
+    "managing-backups": (
+        "dbe161e30d98c0f1cef541de6b63791005f794c8f2c27d4811a4d630b55f096a",),
+    "reporting-a-rundesk-bug": (
+        "4a00da98050dd3debbcba46c52c48f1fdbfa7684605c3bfb9c7fcd378c29d87b",),
+    "using-rundesk": (
+        "fee454e2f180769ab22f8c0a44274467ddc9d7036b17e717250f851236a08c30",),
+    "writing-pull-requests": (
+        "e0053196a485e2553b7a47bf7b35ed3583c3553c83b5e6c38db86be85ae739d1",),
+    "writing-skills": (
+        "ba4d002a005251f87f0343c9305823d2a2052584dfb92fe7a0586b99f23e28a2",),
+}
 
 #: What a name may be, and it is the tightest of the three brains rather than ours: grok
 #: refuses anything else outright, and a name a loader rejects is a skill that is silently
@@ -57,7 +86,7 @@ def home() -> Path:
     cost. Downwards rather than beside, so a suite pointed at a scratch root cannot reach
     the owner's library through it.
     """
-    return data_home() / "skills"
+    return Path(os.environ.get("RUNDESK_SKILL_LIBRARY") or skills_home())
 
 
 def shipped() -> tuple[str, ...]:
@@ -155,9 +184,9 @@ def lay_down(where: Path | None = None, force: bool = False) -> list[str]:
     work. An update brings every shipped skill forward, because a built-in is rundesk's
     file and the point of it being ours is that it can improve.
 
-    **That is the whole of "always the latest version"** — no record of what was laid down
-    last time, no comparison, nothing to get out of step. The set is whatever the release
-    ships, read off the directory each time.
+    **That is the whole of "always the latest version"** — the set is whatever the release
+    ships, read off the directory each time. A marker records only ownership, never a
+    version: it is the evidence that replacing a same-named directory is allowed.
 
     An owner who wants their own version of a built-in copies it under another name, which
     is then theirs and is never a name this touches.
@@ -167,6 +196,8 @@ def lay_down(where: Path | None = None, force: bool = False) -> list[str]:
     for name in shipped():
         target = where / name
         if target.exists() and not force:
+            continue
+        if target.exists() and not _owned(target, name):
             continue
         try:
             where.mkdir(parents=True, exist_ok=True)
@@ -179,6 +210,7 @@ def lay_down(where: Path | None = None, force: bool = False) -> list[str]:
             coming = where / f".{name}.coming"
             shutil.rmtree(coming, ignore_errors=True)
             shutil.copytree(SHIPPED / name, coming)
+            (coming / OWNED).write_text("rundesk built-in\n", encoding="utf-8")
             if target.exists():
                 shutil.rmtree(target)
             os.replace(coming, target)
@@ -192,6 +224,29 @@ def lay_down(where: Path | None = None, force: bool = False) -> list[str]:
     return moved
 
 
+def _owned(at: Path, name: str) -> bool:
+    """Whether Rundesk has evidence that this skill is its own."""
+    if (at / OWNED).is_file():
+        return True
+    expected = LEGACY.get(name, ())
+    if not expected or not at.is_dir() or at.is_symlink():
+        return False
+    return _fingerprint(at) in expected
+
+
+def _fingerprint(at: Path) -> str:
+    """The exact file tree of one legacy skill, or an empty fingerprint if unreadable."""
+    found = hashlib.sha256()
+    try:
+        files = sorted(one for one in at.rglob("*") if one.is_file() and one.name != OWNED)
+        for one in files:
+            found.update(str(one.relative_to(at)).encode("utf-8") + b"\0")
+            found.update(one.read_bytes() + b"\0")
+    except OSError:
+        return ""
+    return found.hexdigest()
+
+
 def take_back(where: Path | None = None) -> list[str]:
     """Take the skills this release laid down back out of the library, and say which went.
 
@@ -202,10 +257,9 @@ def take_back(where: Path | None = None) -> list[str]:
     and with it the whole install directory, standing after an uninstall that reported having
     left nothing.
 
-    **Whatever the owner wrote stays.** The set taken is the set this release ships, read off
-    the same directory `lay_down` reads, so a skill of their own — including one that is a
-    copy of a built-in under another name, which is exactly what the built-ins tell them to
-    make — is not a name this touches.
+    **Whatever the owner wrote stays.** A directory is taken only when its name is in the set
+    this release ships *and* its marker proves Rundesk laid it down. A skill of their own —
+    including one that happens to have a newly shipped name — is not touched.
 
     An empty library goes too. A directory left holding nothing is not something the owner
     keeps, and it is the difference between an install directory that can be removed and one
@@ -217,7 +271,7 @@ def take_back(where: Path | None = None) -> list[str]:
     gone = []
     for name in shipped():
         standing = where / name
-        if not standing.is_dir() or standing.is_symlink():
+        if not standing.is_dir() or standing.is_symlink() or not _owned(standing, name):
             continue
         try:
             shutil.rmtree(standing)

@@ -84,6 +84,16 @@ no room for.
 | `update` | Move to the newest published release. |
 | `uninstall` | Take rundesk off this machine. |
 
+### What every agent can use
+
+| Verb | What it is for |
+|---|---|
+| `skills` | The guidance on this machine, and which agents were given each one. |
+| `scripts` | The owner's shared integration commands, and where to put one. |
+
+A script is executable capability shared by every agent. A skill is the per-agent
+instruction that makes the command discoverable and safe to use.
+
 ## Naming, so two things never read as one
 
 A name means the same thing everywhere it appears, and a thing you name is named the same way as its

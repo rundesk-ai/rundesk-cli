@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -101,14 +102,50 @@ class TheEnvironmentAProgramIsGiven(Quickened):
 
     def test_the_environment_carries_what_a_program_needs_to_find_itself(self):
         """R-PROC-1"""
-        built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
+        with unittest.mock.patch.dict(
+                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}):
+            built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
         self.assertEqual("/tmp/rundesk-home", built["RUNDESK_HOME"])
-        self.assertEqual("/usr/bin", built["PATH"])
+        self.assertEqual("/tmp/rundesk-data/scripts:/usr/bin", built["PATH"])
         # The two reasons this is a function rather than a literal: a provider that
         # believes a person is watching renders for one, and a program told nothing
         # about text falls back to ASCII and dies on the first accented character.
         self.assertEqual("dumb", built["TERM"])
         self.assertIn("UTF-8", built["LANG"])
+
+    def test_an_owner_command_is_first_on_every_programs_path(self):
+        """R-PROC-22 — a provider and every shell it starts inherit one stable command
+        name, independent of the directory the agent happens to be working in."""
+        with unittest.mock.patch.dict(
+                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}):
+            built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin:/bin")
+        self.assertEqual(
+            ["/tmp/rundesk-data/scripts", "/usr/bin", "/bin"],
+            built["PATH"].split(os.pathsep))
+
+    def test_a_program_is_told_where_owner_commands_stand(self):
+        """R-PROC-23 — a skill can locate support files without hard-coding where this
+        install keeps its data."""
+        with unittest.mock.patch.dict(
+                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}):
+            built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
+        self.assertEqual("/tmp/rundesk-data/scripts", built["RUNDESK_SCRIPTS"])
+        self.assertEqual("/tmp/rundesk-data/skills", built["RUNDESK_SKILL_LIBRARY"])
+
+    def test_a_nested_rundesk_keeps_the_script_library_it_was_given(self):
+        """R-PROC-22, R-PROC-23 — redirects survive more than one agent turn."""
+        with unittest.mock.patch.dict(
+                os.environ, {"RUNDESK_SCRIPTS": "/tmp/redirected/scripts"}, clear=True):
+            built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
+        self.assertEqual("/tmp/redirected/scripts", built["RUNDESK_SCRIPTS"])
+        self.assertEqual("/tmp/redirected/scripts", built["PATH"].split(os.pathsep)[0])
+
+    def test_a_nested_rundesk_keeps_the_skill_library_it_was_given(self):
+        """R-AGT-30, R-PROC-23 — companion skills land in the active library."""
+        with unittest.mock.patch.dict(
+                os.environ, {"RUNDESK_SKILL_LIBRARY": "/tmp/redirected/skills"}, clear=True):
+            built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
+        self.assertEqual("/tmp/redirected/skills", built["RUNDESK_SKILL_LIBRARY"])
 
     def test_the_environment_says_where_agents_are_kept(self):
         """R-SCH-27 — a program rundesk starts may itself be rundesk, and everything of an

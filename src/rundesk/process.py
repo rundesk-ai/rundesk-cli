@@ -53,6 +53,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
+from rundesk import scripts_home, skills_home
+
 #: How a program ended. Told apart because each sends a reader somewhere different:
 #: `FINISHED` needs nothing, `FAILED` is the program's own doing, `ENDED` and `SILENT`
 #: are ours (R-PROC-8, R-PROC-9, R-PROC-13).
@@ -1121,10 +1123,20 @@ def environment(home: Path, path: str | None = None,
     addition here is a decision rather than a convenience: a gateway must not hand every
     secret it holds to every program it runs.
     """
+    inherited_path = path if path is not None else os.environ.get("PATH", "")
+    # Forwarded when this is itself a nested Rundesk. Recomputing from the deliberately
+    # restricted environment loses a redirected data root one agent turn down.
+    commands = os.environ.get("RUNDESK_SCRIPTS") or str(scripts_home())
+    library = os.environ.get("RUNDESK_SKILL_LIBRARY") or str(skills_home())
     said = {
         "HOME": str(Path.home()),
-        "PATH": path if path is not None else os.environ.get("PATH", ""),
+        # The owner's integration commands are ordinary CLIs rather than a provider
+        # feature. Putting their directory first lets every brain's own shell find the
+        # same command by name while leaving the rest of its PATH intact (R-PROC-22).
+        "PATH": commands + (os.pathsep + inherited_path if inherited_path else ""),
         "RUNDESK_HOME": str(home),
+        "RUNDESK_SCRIPTS": commands,
+        "RUNDESK_SKILL_LIBRARY": library,
         # Provider CLIs render differently when they believe a person is watching, and
         # nobody is: this is the gateway.
         "TERM": "dumb",

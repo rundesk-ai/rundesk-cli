@@ -477,6 +477,7 @@ class DependencyTests(Sandbox):
         for name in shipped:
             (library / name).mkdir(parents=True)
             (library / name / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
+            (library / name / ".rundesk-built-in").write_text("rundesk built-in\n")
 
         gone = installer("--uninstall", home=self.home, bindir=self.bindir,
                          cwd=made, script=made / "install.sh")
@@ -516,6 +517,7 @@ class DependencyTests(Sandbox):
                            if (one / "SKILL.md").is_file()):
             (library / name).mkdir()
             (library / name / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
+            (library / name / ".rundesk-built-in").write_text("rundesk built-in\n")
 
         gone = installer("--uninstall", home=self.home, bindir=self.bindir,
                          cwd=made, script=made / "install.sh")
@@ -633,6 +635,20 @@ class OneDirectoryTests(Sandbox):
             {".rundesk", ".config", ".cache", ".local"},
             "an install left something in the person's home it never mentioned",
         )
+
+    def test_the_installed_command_does_not_write_an_apple_python_cache(self):
+        """The launcher suppresses bytecode before importing Rundesk's modules."""
+        done = self.install()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        ran = subprocess.run(
+            [str(self.bindir / "rundesk"), "scripts", "--where"],
+            env={**os.environ, "HOME": str(self.home),
+                 "RUNDESK_INSTALL_DIR": str(self.home / ".rundesk")},
+            capture_output=True, text=True,
+        )
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertFalse((self.home / "Library" / "Caches" / "com.apple.python").exists(),
+                         "running Rundesk wrote Apple Python's cache into the owner's home")
 
     def test_an_install_does_not_change_the_path_it_only_says_so(self):
         # Deliberate, for now: editing someone's shell profile behind their back is a change

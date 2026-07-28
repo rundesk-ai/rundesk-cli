@@ -11,6 +11,7 @@ Run: python3 tests/test_dependencies.py
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -212,8 +213,27 @@ class Provisioning(WithAnInstallOfItsOwn):
         did = [" ".join(one[1:]) for one in self.ran]
         self.assertIn("-m venv " + str(self.root / ".venv"), did)
         self.assertTrue(any("pip install" in one for one in did), "it installed nothing")
+        installs = [one for one in did if "pip install" in one]
+        self.assertTrue(
+            all("-B -m pip" in one and "--no-cache-dir" in one and "--no-compile" in one
+                for one in installs),
+            "dependency installation writes a cache outside Rundesk's install")
         self.assertTrue(any("pip check" in one for one in did),
                         "it never asked whether what it installed fits together")
+
+    def test_python_and_pip_scratch_stays_out_of_the_owners_home(self):
+        seen = {}
+        real = dependencies.subprocess.run
+
+        def run(command, **options):
+            seen.update(options["env"])
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        dependencies.subprocess.run = run
+        self.addCleanup(setattr, dependencies.subprocess, "run", real)
+        self.assertIsNone(dependencies._run(["python3", "-m", "pip", "--version"]))
+        self.assertEqual("1", seen["PIP_NO_CACHE_DIR"])
+        self.assertNotEqual(str(Path.home()), seen["PYTHONPYCACHEPREFIX"])
 
     def test_what_was_working_is_put_back_when_the_build_fails(self):
         """R-UPD-28 — the files have already landed by the time this runs, so a virtualenv
