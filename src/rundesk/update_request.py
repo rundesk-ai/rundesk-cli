@@ -191,10 +191,10 @@ def summary(row: dict) -> str:
     version = f" ({row['version']})" if row.get("version") else ""
     result = str(row.get("result") or "").strip()
     said = f"Rundesk update {state}{version}" + (f": {result}" if result else "")
-    # **Only what succeeded is linked** (R-UPD-46, R-UPD-47). The version on a failed or rolled-back
-    # request is the one that answered afterwards, which for a rollback is the release the
-    # owner was already on — and a release note offered beside "rolled back" reads as the
-    # target having landed, which is the one thing this outcome exists to deny.
+    # **Only what succeeded is linked** (R-UPD-46, R-UPD-47). The version on a failed or
+    # rolled-back request is the one that answered afterwards, which for a rollback is the
+    # release the owner was already on — a release note offered beside "rolled back" reads
+    # as the target having landed, which is the one thing this outcome exists to deny.
     if row.get("state") == "succeeded":
         where = updater.release_url(row.get("version"))
         if where:
