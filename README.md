@@ -32,7 +32,8 @@ somewhere else, and there's no record of what it did.
 rundesk keeps that agent running as a named thing on your machine, with its own home and its
 own memory — and lets you reach it from a chat channel instead of a terminal.
 
-**It doesn't replace your agent.** It runs the CLI you already have — Codex, Claude Code, or
+**It doesn't replace your agent.** It runs the CLI you already have — Codex, Claude Code,
+Google Antigravity, or
 one you wrote — so you keep its tools, its permissions and its login exactly as they are.
 
 |  |  |
@@ -202,6 +203,27 @@ passed the same test suite the shipped one does, without a line of rundesk chang
 Channels work exactly the same way, which is why the same agent — same memory, same workspace —
 can answer you in the terminal, on Discord and on a schedule, with a different model each time.
 
+### Google Antigravity
+
+Install Google's official `agy` CLI and sign in once on the machine using its normal browser
+flow, then select the shipped adapter:
+
+```sh
+agy models
+rundesk add ava --provider antigravity
+```
+
+Antigravity supports personal Google accounts in supported regions. Its current CLI keeps the
+login in the native OS keyring and documents no unattended token or isolated config-home mode,
+so Rundesk invokes that signed-in machine client directly; it never reads or copies Google
+credentials. A `read` turn uses plan mode plus the OS sandbox and cannot approve writes. A
+`work` turn launches with the sandbox enabled and auto-approves the tools needed to complete
+the work, including an explicit unsandboxed request if the model makes one.
+
+Discord is only transport: it receives Rundesk's normalized activity and answer records, not
+the Google login. See the [measured adapter notes](.knowledge/research/2026-07-28-antigravity-cli-as-a-brain.md)
+for the exact 1.1.8 behavior and guardrails.
+
 → **[Write a provider adapter](src/templates/skills/building-a-provider-adapter/references/the-contract.md)** ·
 **[Write a channel adapter](src/templates/skills/building-a-channel-adapter/references/the-contract.md)**
 
@@ -209,7 +231,8 @@ can answer you in the terminal, on Discord and on a schedule, with a different m
 
 **Agents**
 - One name, one home — rules, memory, workspace and skills, kept apart from every other agent
-- Its own private provider home, so two agents never share a session or a config
+- Its own private provider home when the provider supports one; native-keyring providers use
+  the owner's machine login without copying it
 - `doctor` tells you what's missing before you need it at three in the morning
 
 **Staying up**

@@ -3,7 +3,9 @@
 claude=2.1.219
 codex=codex-cli 0.144.6
 grok=0.2.111
+antigravity=agy 1.1.8
 node=v22.23.1
+captured_antigravity=2026-07-28
 captured=2026-07-24
 platform=darwin 25.5.0
 
@@ -14,5 +16,6 @@ platform=darwin 25.5.0
 probed_claude=2.1.220
 probed_codex=codex-cli 0.145.0
 probed_grok=0.2.111
+probed_antigravity=agy 1.1.8
 probed=2026-07-26
 probed_platform=darwin 25.5.0
