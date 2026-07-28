@@ -206,6 +206,47 @@ tidy_the_old_layout() {
   echo "took the program out of $INSTALL_DIR; your agents and what your gateways wrote stayed put"
 }
 
+# ---------------------------------------------------------------- what was asked for
+# **Read before anything is touched** (R-INS-17). Every option this script understands is
+# named here, and one it does not understand is refused where a refusal still costs
+# nothing. `--help` fell through to the install path: it replaced the launcher symlink with
+# whatever checkout it was run from and then failed part-way down, so asking what the
+# installer does was a way to change the machine.
+usage() {
+  cat <<'USAGE'
+rundesk installer — put the `rundesk` command on your PATH, or take it off again.
+
+Usage:
+  ./install.sh                      install, or bring this install up to this checkout
+  ./install.sh --uninstall          take the program off, and keep what the owner keeps
+  ./install.sh --uninstall --purge  take the program off, and the owner's data with it
+  ./install.sh --help               print this and change nothing
+
+Environment:
+  RUNDESK_INSTALL_DIR   where rundesk lives (default ~/.rundesk)
+  RUNDESK_BIN_DIR       where the `rundesk` command is placed
+  RUNDESK_BACKUP_DIR    where copies of what the owner keeps are kept; never deleted here
+USAGE
+}
+
+case "${1:-}" in
+  "") ;;
+  -h|--help)
+    # Nothing after it is read: `--help --uninstall` is somebody asking what this does,
+    # and answering it by removing rundesk would be the same failure in a second costume.
+    usage
+    exit 0
+    ;;
+  --uninstall)
+    case "${2:-}" in
+      ""|--purge) ;;
+      *) die "unknown option '$2'; try: ./install.sh --help" ;;
+    esac
+    [[ $# -le 2 ]] || die "unknown option '$3'; try: ./install.sh --help"
+    ;;
+  *) die "unknown option '$1'; try: ./install.sh --help" ;;
+esac
+
 # ---------------------------------------------------------------- uninstall
 if [[ "${1:-}" == "--uninstall" ]]; then
   check_install_dir

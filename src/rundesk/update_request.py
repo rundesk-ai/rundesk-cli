@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 
 from rundesk import data_home
+from rundesk import updater
 
 ACTIVE = {"pending", "running"}
 FINAL = {"succeeded", "rolled_back", "failed"}
@@ -185,7 +186,17 @@ def delivered(request_id: str) -> None:
 
 
 def summary(row: dict) -> str:
+    """One outcome, as `rundesk update --status` prints it and as an agent delivers it."""
     state = str(row.get("state") or "unknown").replace("_", " ")
     version = f" ({row['version']})" if row.get("version") else ""
     result = str(row.get("result") or "").strip()
-    return f"Rundesk update {state}{version}" + (f": {result}" if result else "")
+    said = f"Rundesk update {state}{version}" + (f": {result}" if result else "")
+    # **Only what succeeded is linked** (R-UPD-46, R-UPD-47). The version on a failed or rolled-back
+    # request is the one that answered afterwards, which for a rollback is the release the
+    # owner was already on — and a release note offered beside "rolled back" reads as the
+    # target having landed, which is the one thing this outcome exists to deny.
+    if row.get("state") == "succeeded":
+        where = updater.release_url(row.get("version"))
+        if where:
+            said += f"\nwhat changed: {where}"
+    return said

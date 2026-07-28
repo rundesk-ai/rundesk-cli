@@ -663,6 +663,11 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
             resume=lambda names: _bring_all_back(names, gateways, machine, agents),
             provision=_provisioned,
             carry=lambda: _carry_every(agents),
+            # **This process's own version, never the one it was told about.** The release
+            # that just landed is the code running this line, while `RUNDESK_UPDATE_VERSION`
+            # in the environment is what the *previous* release reported before the window
+            # opened — linking that would name the version an owner has just left (R-UPD-46).
+            landed=__version__,
         )
         if code == 0 and not os.environ.get("RUNDESK_UPDATE_WORKER"):
             return _install_automatic_updates(machine)
@@ -3385,7 +3390,15 @@ def _spent(one: dict) -> str:
     """
     if not one["tokens_reported"]:
         return "not reported"
-    return f"{one['tokens_in'] or 0} in / {one['tokens_out'] or 0} out"
+    # **Cached input is shown where the provider reported it** (R-USE-12). It is billed and
+    # routinely dwarfs the fresh input beside it — one agent's fifty-six runs carried 101,510
+    # fresh and 4,684,800 cached — so a row naming only the other two hid the whole of what
+    # the run actually cost, and hid which conversations should have been started again.
+    # Absent stays absent rather than becoming zero: a provider that reports no cache and one
+    # that read nothing from it are different facts (R-USE-6).
+    cached = one.get("tokens_cached")
+    held = "" if cached is None else f" / {cached} cached"
+    return f"{one['tokens_in'] or 0} in{held} / {one['tokens_out'] or 0} out"
 
 
 def cmd_usage(args: argparse.Namespace, gateways, agents) -> int:

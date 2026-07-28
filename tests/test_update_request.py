@@ -362,6 +362,32 @@ class DurableRequests(unittest.TestCase):
         self.assertEqual(0, machine.installed)
         self.assertEqual(1, machine.kicked)
 
+    def test_a_succeeded_outcome_links_the_release_that_is_now_installed(self):
+        """R-UPD-46 — the summary `rundesk update --status` prints and the one an agent
+        delivers are the same words, so the link belongs to it rather than to either."""
+        queued, _ = update_request.queue({"agent": "ava", "run": "one"})
+        update_request.claim()
+        row = update_request.finish(
+            queued["id"], "succeeded", "updated", "rundesk 0.15.0"
+        )
+        said = update_request.summary(row)
+        self.assertIn("succeeded", said)
+        self.assertIn(
+            "https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.15.0", said
+        )
+
+    def test_a_failed_or_rolled_back_outcome_never_links_a_release_as_landed(self):
+        """R-UPD-47 — the version on a rolled-back request is the release the owner was
+        already on, and a release note offered beside "rolled back" reads as the target
+        having landed after all."""
+        for state in ("failed", "rolled_back"):
+            queued, _ = update_request.queue({"agent": "ava", "run": state})
+            update_request.claim()
+            row = update_request.finish(
+                queued["id"], state, "put back", "rundesk 0.14.0"
+            )
+            self.assertNotIn("releases/tag", update_request.summary(row), state)
+
     def test_maintenance_markers_survive_a_worker_and_clear_only_after_recovery(self):
         """R-UPD-43"""
         run_home = pathlib.Path(self.temporary.name) / "run"

@@ -192,6 +192,58 @@ class RemovingWhatIsRunningTests(Sandbox):
         self.assertTrue(worker.exists(), "it removed another install's update worker")
 
 
+class WhatWasAskedForTests(Sandbox):
+    """R-INS-17 — the installer answers for its own options before it touches anything.
+
+    `--help` fell straight through to the install path: it provisioned dependencies,
+    repointed the `rundesk` launcher at whatever checkout it was run from, and only then
+    failed on a later step. Asking a program what it does is the one request that must
+    never be able to change the machine, and every case here proves it by looking at the
+    machine afterwards rather than at the exit code alone.
+    """
+
+    def untouched(self, said, *, expected: int):
+        self.assertEqual(expected, said.returncode, said.stdout + said.stderr)
+        self.assertFalse(
+            (self.bindir / "rundesk").exists(),
+            "the launcher was placed by a command that installs nothing",
+        )
+        self.assertFalse(
+            (self.home / ".rundesk").exists(),
+            "an install directory was made by a command that installs nothing",
+        )
+
+    def test_asking_the_installer_for_help_prints_usage_and_installs_nothing(self):
+        said = installer("--help", home=self.home, bindir=self.bindir)
+        self.untouched(said, expected=0)
+        self.assertIn("Usage:", said.stdout)
+        self.assertIn("--uninstall", said.stdout)
+
+    def test_an_option_the_installer_does_not_know_is_refused_before_anything_changes(self):
+        said = installer("--dry-run", home=self.home, bindir=self.bindir)
+        self.untouched(said, expected=1)
+        self.assertIn("unknown option '--dry-run'", said.stderr)
+
+    def test_help_is_answered_even_when_something_destructive_follows_it(self):
+        """`--help --uninstall` is somebody asking what this does; answering by removing
+        rundesk would be the same failure wearing a second costume."""
+        said = installer("--help", "--uninstall", home=self.home, bindir=self.bindir)
+        self.untouched(said, expected=0)
+        self.assertIn("Usage:", said.stdout)
+
+    def test_an_unknown_option_after_uninstall_is_refused_rather_than_ignored(self):
+        """`--uninstall --purgge` read as an ordinary uninstall and kept the data the owner
+        had just asked to be rid of — a typo answered with a different command."""
+        self.install()
+        said = self.uninstall("--purgge")
+        self.assertEqual(1, said.returncode, said.stdout + said.stderr)
+        self.assertIn("unknown option '--purgge'", said.stderr)
+        self.assertTrue(
+            (self.bindir / "rundesk").exists(),
+            "a refused option still removed the command",
+        )
+
+
 class InstallTests(Sandbox):
     def test_installing_needs_nothing_already_present_beyond_the_machines_own(self):
         # The whole reason this is Python: a machine with python3 — which macOS ships — has

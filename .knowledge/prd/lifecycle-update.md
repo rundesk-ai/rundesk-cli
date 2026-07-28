@@ -64,6 +64,8 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-43 | Gateways stopped for an update report maintenance, then report its completion when they return | `an update marks maintenance until the gateway is back`, `update maintenance is not announced as an unexplained outage`, `a gateway returning from an update says maintenance is complete` |
 | ✅ | R-UPD-44 | A successor update worker restores each gateway its predecessor stopped, without starting deliberately stopped gateways | `an interrupted update stays active for the supervisor to retry`, `a successor worker restores only a gateway marked for maintenance`, `a successor worker never starts a gateway on an unfit release` |
 | ✅ | R-UPD-45 | Triggering a pending update wakes its supervisor-owned worker | `duplicate agent initiation kicks a loaded stopped worker`, `a second daily trigger wakes without reinstalling the worker`, `a loaded one shot worker can be kicked again` |
+| ✅ | R-UPD-46 | An update that landed names the release now installed and links what changed in it | `a version is linked to the release that carries it`, `the link is built from the repository this install updates itself from`, `the whole of what the command prints is accepted`, `an applied update names the release it landed and links it`, `a succeeded outcome links the release that is now installed`, `every adapter is told the version that actually came up` |
+| ✅ | R-UPD-47 | An update that did not land never names a release as installed | `something that is not a release version gets no link rather than a wrong one`, `an update that did not land never names a release as applied`, `a failed or rolled back outcome never links a release as landed` |
 
 ## Open questions
 
