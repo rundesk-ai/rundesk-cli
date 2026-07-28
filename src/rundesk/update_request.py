@@ -24,6 +24,45 @@ def path() -> Path:
     return data_home() / "update-request.json"
 
 
+def maintenance_path(name: str, run_home: Path) -> Path:
+    """The update marker shared by one gateway and its channel adapters.
+
+    It lives with runtime state rather than owner data. A worker that is restarted after
+    standing a gateway down can therefore find exactly which supervised gateway it owes
+    back to the owner, without confusing one they deliberately stopped with maintenance.
+    """
+    # The adapter receives this exact path, so the filename is an internal identity rather
+    # than a second opinion about which gateway names are valid. Encoding also keeps a dot
+    # or non-ASCII name from becoming another path component (R-UPD-43, R-UPD-44).
+    identity = name.encode("utf-8").hex()
+    return run_home / f".{identity}.update-maintenance"
+
+
+def begin_maintenance(name: str, run_home: Path) -> Path:
+    target = maintenance_path(name, run_home)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(f".{os.getpid()}.tmp")
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            os.chmod(temporary, 0o600)
+            handle.write("Rundesk is installing an update.\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            temporary.unlink()
+    return target
+
+
+def finish_maintenance(name: str, run_home: Path) -> None:
+    maintenance_path(name, run_home).unlink(missing_ok=True)
+
+
+def maintaining(name: str, run_home: Path) -> bool:
+    return maintenance_path(name, run_home).is_file()
+
+
 def _lock_path() -> Path:
     return data_home() / "update-request.lock"
 

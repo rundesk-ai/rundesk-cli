@@ -137,7 +137,20 @@ class FastPullRequestFeedback(unittest.TestCase):
 
     def test_one_stable_check_collects_every_required_pr_job(self):
         self.assertIn("required-pr-gate:", self.workflow)
-        self.assertIn("needs: [knowledge, tests, install-this-checkout]", self.workflow)
+        self.assertIn(
+            "needs: [knowledge, tests, install-this-checkout, upgrade-existing-install]",
+            self.workflow,
+        )
+
+    def test_every_pull_request_verifies_fresh_installs_and_upgrades_from_the_latest_release(self):
+        """R-INS-16"""
+        self.assertIn("install-this-checkout:", self.workflow)
+        upgrade = self.workflow.split("  upgrade-existing-install:", 1)[1]
+        self.assertIn("git describe --tags --abbrev=0 HEAD^", upgrade)
+        self.assertIn("updater._copy_over", upgrade)
+        self.assertIn('update --after-replacing ""', upgrade)
+        self.assertIn("owner-kept.txt", upgrade)
+        self.assertIn("serve existing", upgrade)
 
     def test_published_release_canary_does_not_race_tag_publication(self):
         condition = self.workflow.split("  install-published-release:", 1)[1]

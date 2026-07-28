@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from rundesk import __version__  # noqa: E402
 from rundesk import cli  # noqa: E402
 from rundesk import store  # noqa: E402
+from rundesk import update_request  # noqa: E402
 from rundesk import updater  # noqa: E402
 
 
@@ -517,7 +518,7 @@ class BehindOrCurrentTests(unittest.TestCase):
                          "update offers a way to choose a version")
         hidden = {one for x in actions if x.help is argparse.SUPPRESS
                   for one in x.option_strings}
-        self.assertEqual(hidden, {updater.CONTINUING, "--worker"},
+        self.assertEqual(hidden, {updater.CONTINUING, "--worker", "--automatic"},
                          "update accepts something nobody declared and nobody can see")
 
 
@@ -1048,6 +1049,10 @@ class FakeMachine:
 
     def install_update_worker(self):
         self.did.append(("install_update_worker", None))
+        return self.Spoke(not self.refuses, "the machine said no" if self.refuses else "")
+
+    def install_automatic_update(self, at):
+        self.did.append(("install_automatic_update", at))
         return self.Spoke(not self.refuses, "the machine said no" if self.refuses else "")
 
     def remove_backup(self):
@@ -3127,6 +3132,11 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
         def __init__(self, name, running=True, pid=1, version="0.1.0"):
             self.name, self.running, self.pid, self.version = name, running, pid, version
 
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.run_home = pathlib.Path(self.temporary.name)
+
     def _machine(self, loaded=(), available=True, stops=True):
         outer = self
 
@@ -3166,6 +3176,9 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
         asked = {}
 
         class Gateways:
+            def home(self):
+                return outer.run_home
+
             def remembered(self, where=None):
                 return []   # nothing here is a name that survives only as history
 
@@ -3203,6 +3216,83 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
         self.assertEqual(["alpha", "beta"], stopped)
         self.assertEqual([("stop", "alpha"), ("stop", "beta")], machine.asked,
                          "it stopped a gateway that was not running")
+
+    def test_an_update_marks_maintenance_until_the_gateway_is_back(self):
+        """R-UPD-43"""
+        machine = self._machine(loaded=("alpha",))
+        agents = FakeAgents()
+        stopped, refused = cli._stand_all_down(
+            self._gateways([self.Standing("alpha")]), machine, agents
+        )
+        self.assertEqual((["alpha"], None), (stopped, refused))
+        self.assertTrue(
+            update_request.maintaining("alpha", self.run_home),
+            "the shutdown looked like an unexplained outage",
+        )
+
+        cli._bring_all_back(
+            ["alpha"], self._gateways([self.Standing("alpha")]), machine, agents
+        )
+        self.assertTrue(
+            update_request.maintaining("alpha", self.run_home),
+            "the returning channel lost the marker before it could report completion",
+        )
+
+    def test_a_gateway_the_update_could_not_stop_is_not_left_in_maintenance(self):
+        """R-UPD-43"""
+        machine = self._machine(loaded=("alpha",), stops=False)
+        cli._stand_all_down(
+            self._gateways([self.Standing("alpha")]), machine, FakeAgents()
+        )
+        self.assertFalse(update_request.maintaining("alpha", self.run_home))
+
+    def test_a_successor_worker_restores_only_a_gateway_marked_for_maintenance(self):
+        """R-UPD-44"""
+        outer = self
+
+        class Gateways:
+            asked = 0
+
+            def home(self):
+                return outer.run_home
+
+            def every(self):
+                return []
+
+            def remembered(self):
+                return []
+
+            def fitness(self, root=None):
+                return None
+
+            def standing(self, name, where=None):
+                self.asked += 1
+                return outer.Standing(name, running=self.asked > 1)
+
+        machine = self._machine(loaded=("alpha", "deliberately-stopped"))
+        machine.described = lambda root=None: ["alpha", "deliberately-stopped"]
+        update_request.begin_maintenance("alpha", self.run_home)
+
+        self.assertEqual(
+            [], cli._recover_update_gateways(Gateways(), machine, FakeAgents())
+        )
+        self.assertIn(("start", "alpha"), machine.asked)
+        self.assertNotIn(("start", "deliberately-stopped"), machine.asked)
+        self.assertTrue(update_request.maintaining("alpha", self.run_home))
+
+    def test_a_successor_worker_never_starts_a_gateway_on_an_unfit_release(self):
+        """R-UPD-44"""
+        gateways = self._gateways([self.Standing("alpha", running=False)])
+        gateways.fitness = lambda root=None: "dependencies are incomplete"
+        machine = self._machine(loaded=("alpha",))
+        machine.described = lambda root=None: ["alpha"]
+        update_request.begin_maintenance("alpha", self.run_home)
+
+        self.assertEqual(
+            ["alpha"],
+            cli._recover_update_gateways(gateways, machine, FakeAgents()),
+        )
+        self.assertNotIn(("start", "alpha"), machine.asked)
 
     def test_an_external_update_acts_on_jobs_owned_by_the_target_install(self):
         """R-UPD-21 — the worker runs from the release checkout while the supervised

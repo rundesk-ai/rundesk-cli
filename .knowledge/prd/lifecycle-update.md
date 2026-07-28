@@ -1,7 +1,7 @@
 ---
 id: UPD
 name: Staying current
-last_verified: 2026-07-27
+last_verified: 2026-07-28
 ---
 
 ## What this is
@@ -60,6 +60,9 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-39 | Connected channel adapters do not themselves block an otherwise idle update | `a connected channel adapter does not block an idle update` |
 | ✅ | R-UPD-40 | A channel-triggered update outcome is delivered after its originating agent reconnects | `final outcome waits for its origin agent and is delivered once`, `a completed update is delivered after the channel reconnects` |
 | ✅ | R-UPD-41 | A channel-triggered update resumes its originating work after the agent reconnects | `a completed update resumes its originating work after reconnect` |
+| ✅ | R-UPD-42 | The machine queues one automatic Rundesk update every day at the configured local time, which defaults to three in the morning | `the daily trigger defaults to three in the morning`, `the automatic update time is the owners to state`, `the daily trigger queues the crash recoverable worker`, `installing schedules daily updates for the configured time` |
+| ✅ | R-UPD-43 | Gateways stopped for an update report maintenance, then report its completion when they return | `an update marks maintenance until the gateway is back`, `update maintenance is not announced as an unexplained outage`, `a gateway returning from an update says maintenance is complete` |
+| ✅ | R-UPD-44 | A successor update worker restores each gateway its predecessor stopped, without starting deliberately stopped gateways | `an interrupted update stays active for the supervisor to retry`, `a successor worker restores only a gateway marked for maintenance`, `a successor worker never starts a gateway on an unfit release` |
 
 ## Open questions
 

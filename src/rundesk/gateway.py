@@ -1365,6 +1365,12 @@ class Gateway:
         """What one adapter is told that belongs to this gateway lifetime."""
         said = dict(one.env)
         said["RUNDESK_GATEWAY"] = self._instance
+        # One exact path, so an adapter never has to know the runtime layout or guess why
+        # it is being ended. The updater removes it only after this gateway is back
+        # (R-UPD-43).
+        said["RUNDESK_MAINTENANCE"] = str(
+            update_request.maintenance_path(self.name, self.where)
+        )
         return said
 
     async def _write_to(self, held: str, record: bytes) -> None:

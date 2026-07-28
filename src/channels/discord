@@ -526,7 +526,15 @@ class Agent(discord.Client):
         # up together cannot both win it.
         if not self.greeted and self._claim("online"):
             self.greeted = True
-            await self._tell_the_owner("🟢 **Gateway online** — rundesk is up and listening.")
+            if _maintenance():
+                await self._tell_the_owner(
+                    "🟢 **Gateway online** — maintenance is complete; rundesk is listening."
+                )
+                _finish_maintenance()
+            else:
+                await self._tell_the_owner(
+                    "🟢 **Gateway online** — rundesk is up and listening."
+                )
 
     def _claim(self, what: str) -> bool:
         """True for exactly one adapter of this gateway, and false for every other.
@@ -603,7 +611,12 @@ class Agent(discord.Client):
         if self._claim("offline"):
             with contextlib.suppress(BaseException):
                 await asyncio.wait_for(
-                    self._tell_the_owner("🔴 **Gateway offline** — rundesk has shut down."),
+                    self._tell_the_owner(
+                        "🛠️ **Gateway maintenance** — rundesk is installing an update "
+                        "and will be back shortly."
+                        if _maintenance() else
+                        "🔴 **Gateway offline** — rundesk has shut down."
+                    ),
                     TELLING_SECONDS)
         for held in self.live.values():
             for task in (held.typing, held.pacing):
@@ -1394,6 +1407,18 @@ async def check(chose) -> int:
             ("dm", chose.dm), ("token_from", chose.token_from),
             ("activity", chose.activity)) if value})
     return 0
+
+
+def _maintenance() -> bool:
+    marker = os.environ.get("RUNDESK_MAINTENANCE")
+    return bool(marker and Path(marker).is_file())
+
+
+def _finish_maintenance() -> None:
+    marker = os.environ.get("RUNDESK_MAINTENANCE")
+    if marker:
+        with contextlib.suppress(OSError):
+            Path(marker).unlink()
 
 
 async def _room(client, chose):

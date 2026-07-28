@@ -73,6 +73,8 @@ class DurableRequests(unittest.TestCase):
         ]
         with mock.patch.object(cli, "_in_flight", side_effect=[["ava/turn:one"], []]), \
                 mock.patch.object(cli.time, "sleep"), \
+                mock.patch.object(cli, "_recover_update_gateways", return_value=[]), \
+                mock.patch.object(cli, "_install_automatic_updates", return_value=0), \
                 mock.patch.object(cli.subprocess, "run", side_effect=completed) as ran:
             code = cli._run_update_worker(mock.Mock(), mock.Mock(), mock.Mock())
         self.assertEqual(0, code)
@@ -107,6 +109,8 @@ class DurableRequests(unittest.TestCase):
         agents = Agents()
         with mock.patch.object(cli, "_in_flight", side_effect=lambda *_: []), \
                 mock.patch.object(cli.time, "sleep") as slept, \
+                mock.patch.object(cli, "_recover_update_gateways", return_value=[]), \
+                mock.patch.object(cli, "_install_automatic_updates", return_value=0), \
                 mock.patch.object(cli.subprocess, "run", side_effect=completed):
             self.assertEqual(0, cli._run_update_worker(
                 mock.Mock(), mock.Mock(), agents
@@ -126,6 +130,8 @@ class DurableRequests(unittest.TestCase):
             mock.Mock(returncode=0, stdout="rundesk 0.9.7\n", stderr=""),
         ]
         with mock.patch.object(cli, "_in_flight", return_value=[]), \
+                mock.patch.object(cli, "_recover_update_gateways", return_value=[]), \
+                mock.patch.object(cli, "_install_automatic_updates", return_value=0), \
                 mock.patch.object(cli.subprocess, "run", side_effect=completed) as ran:
             self.assertEqual(0, cli._run_update_worker(
                 mock.Mock(), mock.Mock(), mock.Mock()
@@ -134,6 +140,19 @@ class DurableRequests(unittest.TestCase):
         self.assertEqual(str(cli.REPO_ROOT / "rundesk"), update.args[0][0])
         self.assertEqual(str(target), update.kwargs["env"]["RUNDESK_UPDATE_ROOT"])
         self.assertEqual("0.9.6", update.kwargs["env"]["RUNDESK_UPDATE_VERSION"])
+
+    def test_an_interrupted_update_stays_active_for_the_supervisor_to_retry(self):
+        """R-UPD-44"""
+        update_request.queue({})
+        with mock.patch.object(cli, "_in_flight", return_value=[]), \
+                mock.patch.object(
+                    cli.subprocess, "run",
+                    side_effect=cli.subprocess.TimeoutExpired(["rundesk", "update"], 1),
+                ):
+            self.assertEqual(1, cli._run_update_worker(
+                mock.Mock(), mock.Mock(), mock.Mock()
+            ))
+        self.assertEqual("running", update_request.read()["state"])
 
     def test_bootstrap_child_drives_the_old_target_with_its_new_update_logic(self):
         target = pathlib.Path(self.temporary.name) / "installed"
@@ -230,6 +249,86 @@ class DurableRequests(unittest.TestCase):
         self.assertEqual(0, cli._queue_update(machine, {"agent": "ava", "run": "two"}))
         self.assertEqual(1, machine.installed)
         self.assertEqual("running", update_request.read()["state"])
+
+    def test_the_daily_trigger_queues_the_crash_recoverable_worker(self):
+        """R-UPD-42"""
+        class Machine:
+            class Unsure(Exception):
+                pass
+
+            def available(self):
+                return True
+
+            def install_update_worker(self):
+                self.installed = True
+                return mock.Mock(ok=True, said="")
+
+        machine = Machine()
+        self.assertEqual(0, cli._queue_automatic_update(machine))
+        self.assertTrue(machine.installed)
+        self.assertEqual("pending", update_request.read()["state"])
+        self.assertEqual({}, update_request.read()["origin"])
+
+    def test_a_successful_manual_update_installs_the_daily_trigger(self):
+        """R-UPD-42"""
+        args = mock.Mock(
+            after_replacing=None, worker=False, automatic=False,
+            status=False, check=False,
+        )
+
+        class Machine:
+            class NoSupervisor(Exception):
+                pass
+
+            class NotOurs(Exception):
+                pass
+
+            def available(self):
+                return True
+
+            def install_automatic_update(self, at):
+                self.installed = True
+                return mock.Mock(ok=True, said="")
+
+        machine = Machine()
+        with mock.patch.dict(os.environ, {"RUNDESK_RUN": ""}, clear=False), \
+                mock.patch.object(cli.updater, "run", return_value=0):
+            self.assertEqual(0, cli.cmd_update(
+                args, mock.Mock(), machine, mock.Mock()
+            ))
+        self.assertTrue(machine.installed)
+
+    def test_a_second_daily_trigger_does_not_overlap_an_active_update(self):
+        """R-UPD-37, R-UPD-42"""
+        class Machine:
+            class Unsure(Exception):
+                pass
+
+            installed = 0
+
+            def available(self):
+                return True
+
+            def update_worker_loaded(self):
+                return True
+
+            def install_update_worker(self):
+                self.installed += 1
+                return mock.Mock(ok=True, said="")
+
+        machine = Machine()
+        update_request.queue({})
+        self.assertEqual(0, cli._queue_automatic_update(machine))
+        self.assertEqual(0, machine.installed)
+
+    def test_maintenance_markers_survive_a_worker_and_clear_only_after_recovery(self):
+        """R-UPD-43"""
+        run_home = pathlib.Path(self.temporary.name) / "run"
+        marker = update_request.begin_maintenance("ava", run_home)
+        self.assertTrue(marker.is_file())
+        self.assertTrue(update_request.maintaining("ava", run_home))
+        update_request.finish_maintenance("ava", run_home)
+        self.assertFalse(marker.exists())
 
 
 if __name__ == "__main__":

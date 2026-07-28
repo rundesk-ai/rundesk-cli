@@ -296,6 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
     moved.add_argument(updater.CONTINUING, dest="after_replacing", metavar="<names>",
                        default=None, help=argparse.SUPPRESS)
     moved.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    moved.add_argument("--automatic", action="store_true", help=argparse.SUPPRESS)
     moved.add_argument("--status", action="store_true",
                        help="show the last queued update and its final outcome")
 
@@ -642,14 +643,19 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
         # records is what the release that shipped it says it should be (R-UPD-33). The
         # window is already open and every gateway named here is already down.
         waiting = [one for one in args.after_replacing.split(",") if one]
-        return updater.carry_on(
+        code = updater.carry_on(
             REPO_ROOT, waiting,
             resume=lambda names: _bring_all_back(names, gateways, machine, agents),
             provision=_provisioned,
             carry=lambda: _carry_every(agents),
         )
+        if code == 0 and not os.environ.get("RUNDESK_UPDATE_WORKER"):
+            return _install_automatic_updates(machine)
+        return code
     if args.worker:
         return _run_update_worker(gateways, machine, agents)
+    if getattr(args, "automatic", False) is True:
+        return _queue_automatic_update(machine)
     if args.status:
         try:
             row = update_request.read()
@@ -674,7 +680,7 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
         if origin.get("agent"):
             return _queue_update(machine, origin)
     update_root, current_version = _update_install()
-    return updater.run(
+    code = updater.run(
         update_root, current_version, check_only=False,
         busy=lambda: _in_flight(gateways, agents),
         pause=lambda: _stand_all_down(gateways, machine, agents, update_root),
@@ -686,6 +692,10 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
         unfit=lambda: gateways.fitness(update_root),
         preview=lambda: _what_an_update_would_do(agents, update_root),
     )
+    if code == 0:
+        scheduled = _install_automatic_updates(machine)
+        return scheduled if scheduled else code
+    return code
 
 
 UPDATE_WAIT_SECONDS = 30 * 60
@@ -766,12 +776,59 @@ def _queue_update(machine, origin: dict) -> int:
     return 0
 
 
+def _queue_automatic_update(machine) -> int:
+    """Turn the daily calendar event into the same recoverable request agents use
+    (R-UPD-42)."""
+    if not machine.available():
+        print("automatic update: NOT QUEUED — this machine has no usable supervisor",
+              file=sys.stderr)
+        return 1
+    try:
+        row, created = update_request.queue({})
+    except update_request.Unreadable as why:
+        print(f"automatic update: NOT QUEUED — {why}", file=sys.stderr)
+        return 1
+    if not created:
+        try:
+            if machine.update_worker_loaded():
+                return 0
+        except machine.Unsure as why:
+            print(f"automatic update: NOT QUEUED — {why}", file=sys.stderr)
+            return 1
+    said = machine.install_update_worker()
+    if not said.ok:
+        why = said.said or "the supervisor refused the worker"
+        update_request.finish(row["id"], "failed", why)
+        print(f"automatic update: NOT QUEUED — {why}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _install_automatic_updates(machine) -> int:
+    if not machine.available():
+        return 0
+    try:
+        at = config.updates()["at"]
+        said = machine.install_automatic_update(at)
+    except (config.Unreadable, machine.NoSupervisor, machine.NotOurs) as why:
+        print(f"update: APPLIED, but automatic updates were not scheduled — {why}",
+              file=sys.stderr)
+        return 1
+    if not said.ok:
+        why = said.said or "the supervisor refused the daily job"
+        print(f"update: APPLIED, but automatic updates were not scheduled — {why}",
+              file=sys.stderr)
+        return 1
+    return 0
+
+
 def _run_update_worker(gateways, machine, agents) -> int:
     """Wait outside every gateway, run the ordinary guarded updater, persist its outcome."""
     target_root = Path(os.environ.get("RUNDESK_UPDATE_ROOT") or REPO_ROOT)
     environment = dict(os.environ)
     for key in ("RUNDESK_RUN", "RUNDESK_RESUME"):
         environment.pop(key, None)
+    environment["RUNDESK_UPDATE_WORKER"] = "1"
     try:
         request = update_request.claim()
     except update_request.Unreadable as why:
@@ -821,11 +878,30 @@ def _run_update_worker(gateways, machine, agents) -> int:
             "rolled_back" if "roll" in result.lower() and "back" in result.lower()
             else "failed"
         )
+        left_down = _recover_update_gateways(gateways, machine, agents, target_root)
+        if left_down:
+            result += "\nupdate worker: gateways still offline: " + ", ".join(left_down)
+            state = "failed"
+        scheduled = _install_automatic_updates(machine)
+        if scheduled:
+            result += "\nupdate worker: automatic updates could not be scheduled"
+            state = "failed"
         update_request.finish(request["id"], state, result, version)
-        return done.returncode
-    except (OSError, subprocess.TimeoutExpired) as why:
+        return 0 if state == "succeeded" else 1
+    except subprocess.TimeoutExpired as why:
+        # Unknown is not failed. The child was killed somewhere inside the guarded window,
+        # so its durable request remains active and launchd starts this worker again. That
+        # successor reconciles the install before it considers any marked gateway safe to
+        # start (R-UPD-44).
+        print(f"update worker: interrupted — retrying: {why}", file=sys.stderr)
+        return 1
+    except OSError as why:
+        left_down = _recover_update_gateways(gateways, machine, agents, target_root)
+        result = str(why)
+        if left_down:
+            result += "; gateways still offline: " + ", ".join(left_down)
         update_request.finish(
-            request["id"], "failed", str(why),
+            request["id"], "failed", result,
             _reported_version(target_root, environment),
         )
         return 1
@@ -986,8 +1062,17 @@ def _stand_all_down(gateways, machine, agents,
                 f"        hand it to the machine:  rundesk start {it.name}\n"
                 f"        or stop it yourself, then update"
             )
+        run_home = agents.resolved(it.name).run or gateways.home()
+        try:
+            update_request.begin_maintenance(it.name, run_home)
+        except OSError as why:
+            return stopped, (
+                f"maintenance could not be recorded for '{it.name}': {why}; "
+                "it was not taken down"
+            )
         said = machine.stop(it.name, root=root)
         if not said.ok or not _gone(it.name, gateways, agents):
+            update_request.finish_maintenance(it.name, run_home)
             return stopped, f"'{it.name}' would not stop, so nothing was replaced under it"
         stopped.append(it.name)
     return stopped, None
@@ -1016,6 +1101,39 @@ def _bring_all_back(names: list, gateways, machine, agents,
         unfit = gateways.fitness(root)
         if unfit:
             print(f"update: what rundesk is made of no longer fits: {unfit}", file=sys.stderr)
+    return down
+
+
+def _recover_update_gateways(gateways, machine, agents,
+                             root: Path = REPO_ROOT) -> list[str]:
+    """Repay gateways a previous worker marked before it stopped.
+
+    The marker is the distinction between maintenance and an owner deliberately stopping
+    a gateway. It outlives a worker crash, so a replacement can finish the promise without
+    starting anything the update did not take down (R-UPD-44).
+    """
+    marked = []
+    for name in _every_name(gateways, machine, agents, root):
+        run_home = agents.resolved(name).run or gateways.home()
+        if update_request.maintaining(name, run_home):
+            marked.append((name, run_home))
+    # A half-installed release is not safe to serve. Leaving the request active lets the
+    # supervisor-owned worker reconcile it; starting gateways first would trade uptime for
+    # a process running code known not to fit together.
+    if gateways.fitness(root):
+        return [name for name, _run_home in marked]
+    down = []
+    for name, run_home in marked:
+        if _standing(name, gateways, agents).running:
+            continue
+        try:
+            kept = machine.loaded(name)
+            said = machine.start(name, root=root) if kept else None
+        except (machine.NoSupervisor, machine.NotOurs, machine.Unsure):
+            said = None
+        if said is None or not said.ok or _came_up(name, gateways, agents) is None:
+            down.append(name)
+            continue
     return down
 
 
