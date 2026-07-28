@@ -27,6 +27,7 @@ import importlib.util
 import os
 import re
 import sys
+import threading
 import unittest
 from pathlib import Path
 
@@ -82,6 +83,30 @@ class WhenItHandsWorkToAHelper(unittest.TestCase):
         same thing to whoever is reading, and neither carried a verb."""
         self.assertEqual("delegate", codex.DID.get("subAgentActivity"))
         self.assertEqual("delegate", codex.DID.get("collabAgentToolCall"))
+
+    def test_a_child_agents_completion_does_not_end_the_parent_turn(self):
+        """R-PRV-25 — child threads share the app-server stream. Their completion must
+        not publish the parent's partial commentary as its final answer."""
+        held = object.__new__(codex.Codex)
+        held.thread = "parent-thread"
+        held.turn = "parent-turn"
+        held.finished = threading.Event()
+        held.ok = None
+        held.why = None
+        held.tokens = None
+        held._tools = {}
+
+        held._heard("turn/completed", {
+            "threadId": "child-thread",
+            "turn": {"id": "child-turn", "status": "completed"},
+        })
+        self.assertFalse(held.finished.is_set(), "a child completion ended its parent")
+
+        held._heard("turn/completed", {
+            "threadId": "parent-thread",
+            "turn": {"id": "parent-turn", "status": "completed"},
+        })
+        self.assertTrue(held.finished.is_set(), "the parent's own completion was ignored")
 
 
 class WhereStandingInstructionsGo(unittest.TestCase):

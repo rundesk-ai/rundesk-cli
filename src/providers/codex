@@ -218,6 +218,15 @@ class Codex:
         self.finished.set()
 
     def _heard(self, method, params: dict) -> None:
+        # Codex multiplexes child-agent threads onto this same app-server stream. A
+        # child's completion is not this turn's completion: accepting the first
+        # `turn/completed` ended the parent the moment a reviewer finished and published
+        # whatever commentary the parent had written so far as its answer. Keep the
+        # parent thread's own lifecycle, usage, prose and tools; its `subAgentActivity`
+        # item still reports the delegation on the parent thread (R-PRV-25).
+        belongs_to = params.get("threadId")
+        if self.thread is not None and belongs_to is not None and belongs_to != self.thread:
+            return
         if method == "turn/started":
             self.turn = (params.get("turn") or {}).get("id")
         elif method == "turn/completed":

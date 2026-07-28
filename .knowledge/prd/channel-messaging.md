@@ -45,6 +45,7 @@ it has not — what never differs is that the work runs and is answered.
 | ✅ | R-CH-20 | Nothing an agent's surface does for somebody it may not answer is visible or costly | `nothing of this channels is still running afterwards`, `a turn waiting behind another never starts during a shutdown` |
 | ✅ | R-CH-23 | Only a channel's authorized users receive answers to gateway questions | `an authorized gateway query is answered without a brain turn`, `somebody not allowed receives no gateway information` |
 | ✅ | R-CH-24 | A gateway question starts no brain turn | `an authorized gateway query is answered without a brain turn` |
+| ✅ | R-CH-25 | A follow-up arriving while a turn finishes is either accepted as steering or becomes the next turn | `a follow up offered after provider input closed becomes the next turn` |
 
 ## Open questions
 

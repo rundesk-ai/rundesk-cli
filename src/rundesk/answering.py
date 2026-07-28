@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from dataclasses import dataclass
 from pathlib import Path
 
 from rundesk import agent as agents
@@ -65,6 +66,17 @@ AFTER_UPDATE = (
     "Verify the installed version and update outcome, then continue and finish the user's "
     "original request. Do not stop at reporting status or repeat completed actions."
 )
+
+
+@dataclass
+class Waiting:
+    """A follow-up retained until a running brain actually accepts it."""
+
+    text: str
+    user: str
+    ref: str | None
+    preface: str
+
 
 class Exchange:
     """One conversation, and the turn running in it if there is one."""
@@ -353,23 +365,23 @@ class Answering:
         One that cannot is not asked to — holding words for a brain that will never read
         them again is a turn that never ends — so they wait and become the next turn.
         """
-        if held.can.get("steer") and held.saying is not None:
-            # Words only. Standing instructions were given to this turn when it started
-            # and a brain does not read them twice — repeating them with every steer is
-            # the owner's paragraph landing again in the middle of an answer.
-            held.saying.put_nowait(_asked(it))
-            return
-        # Whether the brain can be steered is not known until the turn is admitted, and a
-        # burst arrives faster than that. So it waits here and is drained into the running
-        # turn the moment the answer comes back — otherwise the first message of every
-        # burst is steered and the rest become turns of their own, which is the same
-        # conversation answered twice over.
-        held.waiting.append((_asked(it), it["user"], it.get("ref"), self._from(it)))
+        # Retained even when offered for steering. The running task can outlive the
+        # provider-input consumer during answer cleanup; putting words on that dead
+        # consumer and forgetting them lost the message. It leaves this list only when
+        # `_saying` confirms the provider requested it, or when `_next` admits it as the
+        # next turn (R-CH-25).
+        waiting = Waiting(_asked(it), it["user"], it.get("ref"), self._from(it))
+        held.waiting.append(waiting)
         if len(held.waiting) > WAITING:
             # Bounded, and said. One person typing faster than an agent can answer must
             # not be able to hand themselves the whole gateway.
             held.waiting.pop(0)
             self._note(f"channel '{self.channel}': more was said than could be kept waiting")
+        if held.can.get("steer") and held.saying is not None:
+            # Words only. Standing instructions were given to this turn when it started
+            # and a brain does not read them twice — repeating them with every steer is
+            # the owner's paragraph landing again in the middle of an answer.
+            self._offer(held, waiting)
 
     async def _control(self, it: dict) -> None:
         """A gesture aimed at the conversation, not an answer to it (R-CH-9, R-CH-10).
@@ -544,6 +556,7 @@ class Answering:
             self._say(channel.FINISHED if outcome.ok else channel.FAILED, held,
                       ref=held.ref, why=None if outcome.ok else _why(outcome))
         finally:
+            held.saying.put_nowait(None)
             held.saying = None
             held.can = {}
             if held.forgotten:
@@ -562,10 +575,12 @@ class Answering:
         """
         if self._stopping or not held.waiting:
             return
-        text, user, ref, preface = held.waiting.pop(0)
-        held.ref = ref
+        waiting = held.waiting.pop(0)
+        held.ref = waiting.ref
         held.stopped = False
-        held.task = asyncio.ensure_future(self._one(held, text, user, preface))
+        held.task = asyncio.ensure_future(
+            self._one(held, waiting.text, waiting.user, waiting.preface)
+        )
 
     def _took(self, held: Exchange, run: str, can: dict) -> None:
         """The run this conversation became and what its brain can do, the moment both
@@ -580,10 +595,23 @@ class Answering:
         # Anything said while this turn was being admitted goes into it rather than
         # queueing behind it (R-CH-9).
         if held.can.get("steer") and held.saying is not None:
-            while held.waiting:
-                text, _user, _ref, _preface = held.waiting.pop(0)
-                held.saying.put_nowait(text)
+            for waiting in list(held.waiting):
+                self._offer(held, waiting)
         self._say(channel.RUNNING, held)
+
+    @staticmethod
+    def _offer(held: Exchange, waiting: Waiting) -> None:
+        """Offer retained words and remove them only after the consumer sent them."""
+        def pending() -> bool:
+            return any(candidate is waiting for candidate in held.waiting)
+
+        def accepted() -> None:
+            for index, candidate in enumerate(held.waiting):
+                if candidate is waiting:
+                    held.waiting.pop(index)
+                    return
+
+        held.saying.put_nowait((waiting.text, pending, accepted))
 
     def _answer(self, held: Exchange, outcome) -> None:
         """What the agent said, handed over once and whole (R-CH-8).
@@ -794,10 +822,18 @@ async def _saying(queue: asyncio.Queue):
     generator that never ended would hold a brain's input open after its work was over.
     """
     while True:
-        word = await queue.get()
-        if word is None:
+        offered = await queue.get()
+        if offered is None:
             return
+        word, pending, accepted = offered
+        if not pending():
+            continue
         yield word
+        # Reached only when the consumer asks for another word, which happens after it
+        # finished sending this one. If its send failed because the provider had already
+        # closed input, the async-for loop exits and this retained message becomes the
+        # next turn instead (R-CH-25).
+        accepted()
 
 
 def _within(at: Path, inside: Path) -> bool:
