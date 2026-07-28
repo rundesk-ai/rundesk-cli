@@ -196,12 +196,36 @@ src/channels/               the surfaces that ship, one program each; run, never
 src/migrations/             one step forward each, named for the version it brings data up to
 src/templates/              what a new agent's home is copied from
 tests/                      unittest, run directly, offline
+docs/                       the published documentation — plain markdown, one file per page
+site/                       what renders docs/ into docs.rundesk.ai; ships to nobody's machine
 install.sh                  install, and --uninstall [--purge]
 requirements.txt            what is needed beyond the standard library, pinned
 .venv/                      where the install puts it — made by install.sh, git-ignored
 .github/workflows/          the gate, and what a version tag publishes
 .knowledge/                 the knowledge system, its two linters, and the gate
 ```
+
+## The documentation site
+
+`docs/` is the published documentation and `site/` is what renders it. They are separate
+directories because they have different lifetimes: `docs/` is plain markdown that reads with
+no build and would survive its renderer being replaced; `site/` is an Astro and Starlight
+project that is allowed to be thrown away.
+
+- **`docs/**` is `.md` with YAML frontmatter. No MDX, ever.** A component in a page is
+  content that cannot move.
+- **Nothing in `docs/` may depend on `site/`.** Internal links are site-absolute
+  (`/start/install/`), so they resolve when published but not in a GitHub file view.
+- **`docs/reference/cli.md` is generated and git-ignored.** `site/scripts/sync-cli-reference.mjs`
+  copies `CLI.md` into it on every `dev` and `build`. Never write it, never commit it; a
+  wording problem there is a parser problem.
+- **The site documents the command and carries no marketing surface** — no hero, no pitch.
+  Product positioning lives on `rundesk.ai`, which is a different property.
+- **`site/`'s dependencies are not Rundesk's.** They are `site/package.json`, they never enter
+  `requirements.txt` or `.venv/`, and `install.sh` places none of them — it ships a release
+  tarball, not a checkout. The standard-library rule above governs what reaches a user's
+  machine, and nothing in `site/` does.
+- Keep the docs true in the same task that changes behavior, exactly as `.knowledge/` requires.
 
 ## Build, test & run
 

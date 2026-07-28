@@ -307,6 +307,10 @@ set it in `~/.rundesk/data/config.json`, then run `rundesk update` to apply the 
 
 ## 📖 Documentation
 
+**[docs.rundesk.ai](https://docs.rundesk.ai)** — install, concepts, guides, reference, and how
+to extend Rundesk. The pages live in [`docs/`](docs/) and are plain markdown; `site/` renders
+them.
+
 - **[CLI reference](CLI.md)** — every command and argument, generated from the parser
 - **[Provider adapter contract](src/templates/skills/building-a-provider-adapter/references/the-contract.md)** — put another coding CLI behind an agent
 - **[Channel adapter contract](src/templates/skills/building-a-channel-adapter/references/the-contract.md)** — reach an agent from another platform

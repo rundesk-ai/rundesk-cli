@@ -1,0 +1,21 @@
+{
+  "name": "rundesk-docs",
+  "type": "module",
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "npm run sync:cli && astro dev",
+    "start": "npm run sync:cli && astro dev",
+    "sync:cli": "node scripts/sync-cli-reference.mjs",
+    "prebuild": "npm run sync:cli",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.5",
+    "astro": "^7.0.2",
+    "sharp": "^0.34.5"
+  },
+  "private": true,
+  "description": "Renders docs/ into docs.rundesk.ai"
+}

@@ -1,0 +1,75 @@
+/* Rundesk brand tokens.
+   Sampled from assets/readme/rundesk-banner.png in rundesk-cli:
+   accent #FD3031, ground #010515, wordmark #FFFFFF. */
+
+:root {
+	--rd-red-500: #fd3031;
+	--rd-red-400: #ff5758;
+	--rd-red-600: #d81f20;
+	--rd-red-700: #a51516;
+	--rd-ground: #010515;
+	--rd-ground-raised: #070c1e;
+	--rd-ground-edge: #131a30;
+}
+
+/* Dark is the brand. Accent ramps run warm off the logo red; grays carry the
+   banner's blue cast so the chrome sits on the same ground as the mark. */
+:root[data-theme='dark'] {
+	--sl-color-accent-low: #3c0709;
+	--sl-color-accent: var(--rd-red-600);
+	/* Starlight drives links, primary buttons and the active sidebar pill off
+	   accent-high. Its default is a pale tint, which reads as pink rather than
+	   as the logo. #ff4d4e is the banner red lifted just far enough to clear
+	   4.5:1 on the ground (5.9:1), so it holds both as text and as a fill. */
+	--sl-color-accent-high: #ff4d4e;
+
+	--sl-color-white: #ffffff;
+	--sl-color-gray-1: #eceef5;
+	--sl-color-gray-2: #c0c4d4;
+	--sl-color-gray-3: #8a90a6;
+	--sl-color-gray-4: #545b73;
+	--sl-color-gray-5: #2a3149;
+	--sl-color-gray-6: #171d33;
+	--sl-color-black: var(--rd-ground);
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #ffd7d7;
+	--sl-color-accent: var(--rd-red-600);
+	--sl-color-accent-high: #a51516;
+
+	--sl-color-white: #0b0f1e;
+	--sl-color-gray-1: #171d33;
+	--sl-color-gray-2: #333b56;
+	--sl-color-gray-3: #5c6480;
+	--sl-color-gray-4: #8a90a6;
+	--sl-color-gray-5: #d3d7e3;
+	--sl-color-gray-6: #eef0f6;
+	--sl-color-gray-7: #f6f7fb;
+	--sl-color-black: #ffffff;
+}
+
+/* The banner lockup is a red mark beside a white wordmark. Starlight tints the
+   site title with the accent by default, which would make the whole thing red. */
+.site-title {
+	color: var(--sl-color-white);
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+
+/* The mark is a circle; give it room to read at sidebar size. */
+.site-title img {
+	height: 1.75rem;
+	width: auto;
+}
+
+/* The home page is a documentation index, so its section tables carry the
+   navigation. Give them room to be scanned rather than read. */
+.sl-markdown-content table {
+	width: 100%;
+}
+
+.sl-markdown-content th:first-child,
+.sl-markdown-content td:first-child {
+	white-space: nowrap;
+}

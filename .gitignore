@@ -19,3 +19,12 @@ dist/
 # What a CI step captures a suite into, so a leaked process cannot hold the runner open.
 suite.log
 suite-logs/
+
+# The documentation site's build layer. Nothing here reaches a user's machine —
+# install.sh ships a release tarball, not a checkout.
+site/node_modules/
+site/.astro/
+
+# Copied out of CLI.md, which is itself generated from the parser. Committing it
+# would create a third copy of the command surface, free to disagree with the other two.
+docs/reference/cli.md

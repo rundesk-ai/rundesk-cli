@@ -182,6 +182,25 @@ file with it.
 
 - No UI. The command line is the whole surface.
 
+## Documentation site (docs/ + site/)
+
+`docs/` is the published documentation for `docs.rundesk.ai` — 16 pages of plain markdown
+across `start/`, `concepts/`, `guides/`, `reference/`, and `extend/`, plus an index. It has no
+build of its own and reads as markdown.
+
+`site/` renders it: an Astro and Starlight project whose `src/content.config.ts` points a glob
+loader at `../docs` rather than using Starlight's `docsLoader()`, which cannot see outside its
+own project. Brand tokens in `site/src/styles/brand.css` are sampled from
+`assets/readme/rundesk-banner.png`.
+
+`site/scripts/sync-cli-reference.mjs` copies `CLI.md` into `docs/reference/cli.md` on every
+`dev` and `build`. That file is git-ignored: `CLI.md` is already generated from the parser, and
+a committed copy would be a third version of the command surface free to disagree with the
+other two.
+
+Nothing here reaches a user's machine. `install.sh` downloads a release tarball, so `site/`'s
+dependencies live only in a checkout and a Pages build.
+
 ## Tests (tests/ — 25 files, ~1500 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
