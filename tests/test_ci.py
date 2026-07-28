@@ -98,12 +98,16 @@ class FastPullRequestFeedback(unittest.TestCase):
                 encoding="utf-8",
             )
             gate.ROOT = root
-            gate.CHECK_TIMEOUT_SECONDS = 0.1
+            # Leave enough time for a loaded macOS runner to start the fixture and write
+            # the grandchild handshake. The check is about ending an existing process
+            # tree, not whether a fresh Python interpreter starts within 100 ms.
+            gate.CHECK_TIMEOUT_SECONDS = 1
             gate.ABORT_GRACE_SECONDS = 0.1
             passed, _output, elapsed = gate.run(
                 "the process-tree check", [gate.PY, str(script)])
             self.assertFalse(passed)
-            self.assertLess(elapsed, 2)
+            self.assertLess(elapsed, 3)
+            self.assertTrue(child_pid.is_file(), "the fixture never spawned its grandchild")
             pid = int(child_pid.read_text(encoding="utf-8"))
             for _ in range(100):
                 try:
