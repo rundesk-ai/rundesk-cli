@@ -19,9 +19,11 @@ import contextlib
 import getpass
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -80,6 +82,11 @@ CYCLE_PATIENCE = 20.0
 #: a correct cycle came to be reported as one that never restarted, on one platform and
 #: not the other.
 LOOK_AGAIN_SECONDS = 0.2
+
+#: How long install health waits for backup storage to answer. A cloud-backed directory
+#: can block inside the operating system indefinitely; status remains useful without it
+#: and reports that one answer as unavailable (R-BKP-28).
+BACKUP_STATUS_PATIENCE = 1.0
 
 #: What a command that exists but is not built yet exits with. Not 0, which a script
 #: would take as done; not 1, which is reserved for a command that ran and failed; and
@@ -2463,9 +2470,26 @@ def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
 
 
 def _how_backups_stand(machine) -> str:
-    """Whether the machine takes one every day, and how many there are to fall back on."""
-    found = backups.every(backups_home())
-    held = f"{len(found)} kept" if found else "none yet"
+    """Whether daily copies run and how many exist, without waiting forever (R-BKP-28)."""
+    answered: queue.Queue = queue.Queue(maxsize=1)
+
+    def count() -> None:
+        try:
+            answered.put(len(backups.every(backups_home())))
+        except BaseException:                           # pragma: no cover - defensive boundary
+            answered.put(None)
+
+    # A Python thread cannot interrupt an operating-system `opendir`, but a daemon does
+    # not keep this one-shot CLI process alive. Status can answer while the blocked call
+    # is abandoned with the process instead of turning one unavailable filesystem into
+    # an unavailable health command.
+    threading.Thread(target=count, name="rundesk-backup-status", daemon=True).start()
+    try:
+        count_kept = answered.get(timeout=BACKUP_STATUS_PATIENCE)
+    except queue.Empty:
+        count_kept = None
+    held = ("unavailable" if count_kept is None else
+            (f"{count_kept} kept" if count_kept else "none yet"))
     try:
         daily = machine.keeps_backups()
     except Exception:                                    # pragma: no cover - defensive
