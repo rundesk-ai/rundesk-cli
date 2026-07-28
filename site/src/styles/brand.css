@@ -11,9 +11,9 @@
 	--rd-ground-raised: #070c1e;
 	--rd-ground-edge: #131a30;
 
-	--sl-nav-height: 6.5rem;
+	--sl-nav-height: 7rem;
 	--rd-bar-height: 3.5rem;
-	--rd-areas-height: 3rem;
+	--rd-areas-height: 3.5rem;
 }
 
 /* Dark is the brand. Accent ramps run warm off the logo red; grays carry the
@@ -415,9 +415,9 @@ starlight-sidebar-topics-list,
 
 /* ============================================================== areas == */
 
-/* Two rows in one fixed header: the site bar, then the area switcher. The
-   reader's two questions — which area, and where in it — get two different
-   places to be answered rather than one stacked list. */
+/* Two bands in one fixed header: the site bar, then the navigation. The reader's
+   two questions — which area, and where in it — get two different places to be
+   answered rather than one stacked list. */
 .rd-header {
 	display: flex;
 	flex-direction: column;
@@ -439,14 +439,21 @@ starlight-sidebar-topics-list,
 	width: 100%;
 }
 
+/* The nav is its own band, not a line of links tucked under the wordmark: it
+   spans the header's full width, carries its own ground and its own rule, and
+   the active tab's underline sits on that rule. Without the band it reads as an
+   afterthought below the logo rather than as the site's navigation. */
 .rd-areas {
 	height: var(--rd-areas-height);
+	flex: none;
 	display: flex;
 	align-items: stretch;
 	overflow-x: auto;
 	scrollbar-width: none;
-	margin-inline: -1rem;
-	padding-inline: 1rem;
+	background: color-mix(in srgb, var(--rd-ground-raised) 60%, transparent);
+	border-top: 1px solid var(--sl-color-gray-6);
+	margin-inline: calc(var(--sl-content-pad-x, 1rem) * -1);
+	padding-inline: var(--sl-content-pad-x, 1rem);
 }
 
 .rd-areas::-webkit-scrollbar {
@@ -456,7 +463,7 @@ starlight-sidebar-topics-list,
 .rd-areas ul {
 	display: flex;
 	align-items: stretch;
-	gap: 1.75rem;
+	gap: 2rem;
 	list-style: none;
 	padding: 0;
 	margin: 0;
@@ -470,7 +477,7 @@ starlight-sidebar-topics-list,
 	height: 100%;
 	white-space: nowrap;
 	font-family: var(--__sl-font-mono, ui-monospace, monospace);
-	font-size: 0.8rem;
+	font-size: 0.875rem;
 	font-weight: 600;
 	letter-spacing: 0.01em;
 	color: var(--sl-color-gray-3);
