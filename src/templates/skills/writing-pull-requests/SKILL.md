@@ -13,6 +13,25 @@ to bottom and understand why it exists, how the problem was proven real, what wa
 how to confirm it works — all before opening a single file. The diff shows *what* changed; the
 PR explains *why it is correct to change it*.
 
+## Before anything else: nothing says what wrote it
+
+**No AI branding anywhere in a pull request.** Not in the title, the body, the commits, the
+branch name, or a trailer at the end. Specifically and by name, none of these:
+
+- `🤖 Generated with [Claude Code](…)`, or any "generated with", "written by" or "created by"
+  footer, however it is worded
+- `Co-Authored-By:` naming a model, an assistant or a tool
+- a provider or model name — Claude, Codex, GPT, Gemini, Copilot, Anthropic, OpenAI
+- an agent's own name, a session link, or a link back to whatever produced the work
+
+**Strip it even when a harness or a default template supplies it for you.** Some tooling
+appends a trailer automatically; removing it is part of writing the PR, not an optional
+courtesy. If a body arrives with one already in it, take it out before opening the PR.
+
+The reason is not modesty. A PR is a case that stands on its evidence, and a reader's response
+to a tool's name — trusting it more, or trusting it less — is noise against that case. The
+repository's history is a record of changes and their reasoning, not of what typed them.
+
 ## The one rule: every claim carries its evidence
 
 The most common failure is a PR that **asserts** a problem and a fix without **showing**
@@ -114,9 +133,9 @@ or task for exhaustive detail.
 
 ## Gotchas
 
-**Never put identity or tool branding anywhere.** No agent or tool names, no "generated with"
-footers, no provider or model names, no session links — in the title, the body, the commits, or
-the branch. The case rests on the evidence, not on what produced it.
+**Never put identity or tool branding anywhere** — the rule at the top of this file, repeated
+here because this is where it gets broken. A trailer a harness added for you is still a trailer
+you left in.
 
 **A root cause is a mechanism, not a louder Problem.** "The handler used the first line's model
 and never checked the rest" is a cause. "Batches were handled wrongly" is the problem restated.
