@@ -1,6 +1,6 @@
 ---
-name: managing-backups
-description: How rundesk keeps copies of everything your owner has, and what putting one back really does. Use whenever anyone asks to back something up, take or list copies, restore, roll back, undo a removal, recover a lost agent or its history, or asks whether something can be got back — and before you do anything destructive, because taking a copy first is cheap and putting one back is not.
+name: managing-rundesk-backups
+description: How rundesk keeps copies of everything your owner has here, and what putting one back really does. Use whenever anyone asks about rundesk's own backups — taking or listing one, restoring, rolling back, undoing a removal, recovering a lost agent or its history — and before you do anything destructive to a rundesk install, because taking a copy first is cheap and putting one back is not. Not for backing up anything else on the machine.
 ---
 
 # Managing backups

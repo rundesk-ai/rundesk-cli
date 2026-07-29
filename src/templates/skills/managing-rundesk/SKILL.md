@@ -1,9 +1,9 @@
 ---
-name: using-rundesk
-description: How to operate rundesk — the thing running you — including your own history, schedules, channels, runs and costs, and the handful of commands that would end your own turn. Use whenever a question is about you rather than about the work: what you did, what you are scheduled to do, where you can be reached, what something cost, or when anyone asks you to change how you are running.
+name: managing-rundesk
+description: How to operate rundesk — the thing running you — including your own history, your agents, the channels you are reached on, what runs have cost, and the handful of commands that would end your own turn. Use whenever a question is about you or this install rather than about the work: what you did, where you can be reached, what something cost, how an agent is made or configured, or when anyone asks you to change how you are running. Schedules and backups have skills of their own.
 ---
 
-# Using rundesk
+# Managing rundesk
 
 *This skill ships with rundesk and is replaced whenever rundesk updates. To make a version of
 your own, copy it under a different name — that copy is yours and is never touched.*
@@ -46,7 +46,14 @@ rundesk channels <you>              where you can be reached
 rundesk usage <you>                 what your turns have cost
 rundesk logs <you>                  what your gateway has been saying, when something failed
 rundesk skills                      every skill here, and which you were given
+rundesk config                      how this install is configured, and what defaulted
 ```
+
+**Two of these have a skill of their own.** `managing-rundesk-schedules` is what an agent runs
+on its own and what a schedule is *for*; `managing-rundesk-backups` is copies and what putting
+one back really does. Reach for those rather than working either out from the commands, and if
+you were not given one, say so — `rundesk skills grant <you> <name>` is the line your owner
+types.
 
 For the exact arguments, ask the command — `rundesk <verb> --help` is generated from the
 command itself and cannot be out of date. **Where anything disagrees with the command, the
@@ -87,6 +94,12 @@ rather than returning nothing. Use `runs` instead when you see that.
 
 **A schedule that names you runs a whole turn**, with its own conversation and its own memory.
 Work you did on one is not in front of you now.
+
+**A schedule is the owner's clock, not your queue.** It exists to put something in front of them
+at a moment they chose — a reminder, a check, a report they asked for. Never add one to move your
+own work out of the turn you are in, to finish something later, or because a turn is getting
+long: work you want done in the background is your own delegation, and the clock is not it.
+`managing-rundesk-schedules` is the rest of it.
 
 ## The rest
 

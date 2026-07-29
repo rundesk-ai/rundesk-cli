@@ -404,6 +404,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="how rundesk itself is on this machine")
 
+    sub.add_parser("config", help="how this install is configured, and where each value came from")
+
     listed = sub.add_parser("schedules", help="what an agent runs on its own, and when")
     # The agent is the word after the verb, like every other verb here. As an option it
     # was also in the list `--run`'s remainder swallowed, so `--gateway beta` typed after
@@ -1566,6 +1568,12 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
             return 1
     try:
         made = agents.add(name)
+    except config.Unreadable as why:
+        # A configuration that cannot be read is never treated as absent: the skills this
+        # agent would be given are stated there, and making it without them would be an
+        # owner's decision silently ignored.
+        print(f"{name}: NOT MADE — {why}", file=sys.stderr)
+        return 1
     except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
         # Repairing an agent whose records this rundesk will not read must say so rather
         # than raise: the one thing an owner does when an agent is broken is make it again,
@@ -1889,8 +1897,63 @@ def _provisioned(root: Path = REPO_ROOT) -> str | None:
     went_wrong = dependencies.provision(root)
     if went_wrong:
         return went_wrong
+    # A section this release added, into a file written before it existed. Values already
+    # there are never touched, so this cannot be how an owner's configuration is lost
+    # (R-UPD-48).
+    config.ensure()
     skill.lay_down(force=True)
+    # Then what this release stopped shipping under the name an earlier one used. After the
+    # lay-down rather than before, because a grant is only carried once the name it is
+    # carried to is actually standing in the library (R-AGT-35).
+    skill.retire(holding=tuple(_agent.skills(name) for name in _agent.known()))
     return None
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    """What this install is configured with, and whether each value was stated or defaulted.
+
+    **The command exists because the file is allowed to be silent.** Every section may be
+    empty and every value may be absent, and an owner reading it then has no way to tell
+    what is actually in force — which is how a backup they believed was kept for a year is
+    discovered, once, to have been kept for thirty days. So this answers with the value and
+    where it came from, and it is the only place the two are shown together.
+
+    **What was written and is not understood is said here too, and nowhere else.** `ensure`
+    preserves an unknown key faithfully and every reader defaults straight past it, so a
+    mistyped `keepDays` is a value an owner stated, can see in their own file, and which
+    nothing on the machine has ever read — the same silence this command was built to end,
+    arriving by the one route printing the known keys cannot show.
+    """
+    at = config.path()
+    try:
+        stated = config.read()
+        now = {"backups": config.backups(), "updates": config.updates(),
+               "skills": config.skills()}
+    except config.Unreadable as why:
+        print(f"config: UNREADABLE — {why}", file=sys.stderr)
+        print("        every value below it is refused rather than defaulted",
+              file=sys.stderr)
+        return 1
+    print(at if at.is_file() else f"{at} (not written yet — every default applies)")
+    ignored = []
+    for section in config.SECTIONS:
+        print(f"\n  {section}")
+        said = stated.get(section) or {}
+        for key, value in sorted(now[section].items()):
+            shown = " ".join(value) if isinstance(value, tuple) else value
+            print(f"    {key:<10} {shown}"
+                  f"{'' if key in said else '   (default)'}")
+        ignored += [f"{section}.{key}" for key in sorted(said)
+                    if key not in now[section]]
+    # A whole section this release has never heard of, which is the same silence one key
+    # wide. Sorted rather than left in the file's order, because what is shown is never
+    # decided by how somebody's editor happened to write it.
+    ignored += [one for one in sorted(stated) if one not in config.SECTIONS]
+    if ignored:
+        print(f"\n  read by nothing on this machine: {', '.join(ignored)}")
+        print("    each was written, is kept exactly as it is, and no default it looks "
+              "like is taken from it")
+    return 0
 
 
 def cmd_backups(args: argparse.Namespace, gateways, machine, agents) -> int:
@@ -2148,7 +2211,17 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
     if getattr(args, "lay_down", False):
         # The installer's, and deliberately not an owner's verb: what a release ships is
         # not a thing anybody should have to ask for.
-        print(" ".join(skills.lay_down()))
+        laid = skills.lay_down()
+        # Then what an earlier release shipped under a name this one no longer uses. The
+        # installer is the *other* way an owner upgrades — re-running the documented
+        # `curl … | bash` over an existing install is not a rarity — and `skill.retire` was
+        # otherwise reached only from `rundesk update`. Without this, that owner is left
+        # with both names standing and every old grant resolving to text no release will
+        # bring forward again, which is exactly what R-AGT-35 exists to stop. After the
+        # lay-down, because a grant is only carried once the name it goes to is standing;
+        # and a no-op on a fresh install, where nothing of ours is under an old name.
+        skills.retire(holding=tuple(agents.skills(name) for name in agents.known()))
+        print(" ".join(laid))
         return 0
     act = getattr(args, "act", None)
     if act in ("grant", "revoke"):
@@ -2184,7 +2257,12 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
     # a question only a reverse scan can answer and a stored answer would go stale the
     # first time somebody removed a link by hand.
     whose: dict = {name: skills.granted(agents.skills(name)) for name in agents.known()}
-    rows = [(name, "built-in" if name in ships else "yours",
+    # **What put it there, not whose it is.** `rundesk` is one this release ships and an
+    # update brings forward; `custom` is one somebody wrote, which nothing here ever
+    # touches. Said this way because the column has more answers coming — a skill that
+    # arrived with a plugin, or with a tool — and "yours" against "built-in" is a pair with
+    # nowhere for a third to stand.
+    rows = [(name, "rundesk" if name in ships else "custom",
              ", ".join(sorted(who for who, mine in whose.items() if name in mine)) or "-")
             for name in sorted(held)]
     _as_table(("SKILL", "FROM", "AGENTS"), rows)
@@ -4045,6 +4123,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         return cmd_restart(args, gateways, machine, agents)
     if args.command == "status":
         return cmd_status(args, gateways, machine, agents)
+    if args.command == "config":
+        return cmd_config(args)
     if args.command == "backups":
         return cmd_backups(args, gateways, machine, agents)
     if args.command == "skills":

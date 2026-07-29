@@ -15,7 +15,7 @@ What it does, in the order somebody experiences it:
     stopped  -> ✋                   failed   -> ⚠️ and what failed
 
 The contract this implements is
-`src/templates/skills/building-a-channel-adapter/references/the-contract.md`. Where the
+`docs/extending/channel-adapters/references/the-contract.md`. Where the
 two disagree, the reference is right.
 
 The cost of the choice: `discord.py` is a dependency, pinned in `requirements.txt` and
