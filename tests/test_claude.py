@@ -128,26 +128,51 @@ class WhatTheGoldenSaysBack(unittest.TestCase):
         for one in spoken:
             self.assertIs(True, one.get(provider.WHOLE), f"{one['text'][:40]!r} was not whole")
 
-    def test_what_a_turn_cost_is_read_from_one_line_and_nowhere_else(self):
-        """Three lines in this stream carry a full usage block — `message_start`,
-        `message_delta` and `result`. Counting the framing ones as well is how a turn ends
-        up reporting many times what it cost."""
+    def test_what_a_turn_cost_is_reported_once_and_never_added_up(self):
+        """Several lines in this stream carry a full usage block — `message_start`,
+        `message_delta`, every `assistant` line and `result`. Counting them is how a turn
+        ends up reporting many times what it cost, so one record leaves the adapter and
+        the output total on it is the `result` line's: output is the one quantity never
+        sent twice, so adding it up is exactly what the turn wrote."""
         counted = only(self.said, "usage")
-        self.assertEqual(1, len(counted), "usage was taken from more than the result line")
+        self.assertEqual(1, len(counted), "usage was reported more than once")
         self.assertEqual(1510, counted[0]["output"])
 
     def test_four_billed_quantities_are_reported_in_four_slots(self):
-        """R-USE-13. The captured turn carries 20 fresh, 17,453 written into the cache and
-        302,567 read back from it — three prices, and this vendor is the only shipped brain
-        that reports all three. Summing any two of them into one slot reports a number that
-        is real and misleading; this used to add the first two, so 20 fresh tokens were
-        recorded as 17,473 input."""
+        """R-USE-13. This vendor prices fresh input, cache writes and cache reads
+        differently, and is the only shipped brain that reports all three. Summing any two
+        of them into one slot reports a number that is real and misleading; this used to
+        add the first two, so 2 fresh tokens were recorded as 90 input."""
         counted = only(self.said, "usage")[0]
-        self.assertEqual(20, counted["input"], "cache writes are folded into fresh input")
-        self.assertEqual(17453, counted["written"], "what was written to cache is not kept")
-        self.assertEqual(302567, counted["cached"], "the cheap volume is not being kept apart")
-        self.assertNotEqual(20 + 17453, counted["input"])
-        self.assertNotEqual(20 + 17453 + 302567, counted["input"])
+        self.assertEqual(2, counted["input"], "cache writes are folded into fresh input")
+        self.assertEqual(88, counted["written"], "what was written to cache is not kept")
+        self.assertEqual(34200, counted["cached"], "the cheap volume is not being kept apart")
+        self.assertNotEqual(2 + 88, counted["input"])
+        self.assertNotEqual(2 + 88 + 34200, counted["input"])
+
+    def test_the_input_side_is_where_the_turn_ended_not_every_request_added_up(self):
+        """R-USE-14. A prompt is sent again on every request of a turn, so the `result`
+        line's input side is that prefix counted once per request: this captured turn adds
+        up to 302,567 cached where the conversation it ended on was 34,200, and a measured
+        58-request turn reported 15,424,940. Nobody can read the first number as anything
+        — it describes a bill, not a turn — so the size the turn reached is what is
+        reported, taken from the last `assistant` line rather than summed."""
+        counted = only(self.said, "usage")[0]
+        self.assertEqual(34200, counted["cached"], "the resent prefix is being added up")
+        self.assertNotEqual(302567, counted["cached"])
+        self.assertNotEqual(17453, counted["written"])
+
+    def test_a_subagents_own_conversation_is_not_where_this_turn_ended(self):
+        """R-USE-14. A subagent runs a conversation of its own and this vendor marks its
+        lines with `parent_tool_use_id`. Reading one as the size of this turn would report
+        a child's context as the parent's, which is a different conversation entirely."""
+        _said, seen = carried()
+        ended_on = seen.get("ended_on")
+        claude.records(json.dumps(
+            {"type": "assistant", "parent_tool_use_id": "toolu_1", "session_id": "s",
+             "message": {"content": [], "usage": {"cache_read_input_tokens": 999999}}}), seen)
+        self.assertEqual(ended_on, seen.get("ended_on"),
+                         "a subagent's line was taken as where this turn ended")
 
     def test_account_state_a_brain_volunteers_is_reported_as_a_limit(self):
         """R-PRV-28. The captured stream carries one of these and this adapter used to drop

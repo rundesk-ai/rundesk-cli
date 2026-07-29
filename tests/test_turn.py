@@ -76,6 +76,7 @@ sys.stdin.read()
 sys.stderr.write("a warning worth keeping\\n")
 sys.stderr.flush()
 sys.stdout.write(json.dumps({"type": "constellation", "shape": "orion"}) + "\\n")
+sys.stdout.write(json.dumps({"type": "text", "text": "answered"}) + "\\n")
 sys.stdout.write(json.dumps({"type": "done", "ok": True}) + "\\n")
 sys.stdout.flush()
 '''
@@ -88,6 +89,32 @@ if "--capabilities" in sys.argv:
     sys.exit(0)
 sys.stdin.read()
 sys.stdout.write(json.dumps({"type": "done", "ok": False}) + "\\n")
+sys.stdout.flush()
+'''
+
+#: A turn that claims it worked and answers nobody — a resumed session was measured doing
+#: exactly this, reporting four zeros and `ok` one second after it started.
+SILENT = '''
+import json, sys
+if "--capabilities" in sys.argv:
+    print("{}")
+    sys.exit(0)
+sys.stdin.read()
+sys.stdout.write(json.dumps(
+    {"type": "usage", "input": 0, "output": 0, "cached": 0, "written": 0}) + "\\n")
+sys.stdout.write(json.dumps({"type": "done", "ok": True, "session": "s"}) + "\\n")
+sys.stdout.flush()
+'''
+
+#: The same, saying only whitespace — which a surface posts nothing for.
+BLANK = '''
+import json, sys
+if "--capabilities" in sys.argv:
+    print("{}")
+    sys.exit(0)
+sys.stdin.read()
+sys.stdout.write(json.dumps({"type": "text", "text": "   \\n"}) + "\\n")
+sys.stdout.write(json.dumps({"type": "done", "ok": True}) + "\\n")
 sys.stdout.flush()
 '''
 
@@ -145,7 +172,8 @@ time.sleep(30)
 '''
 
 BRAINS = {"plain": PLAIN, "quiet": QUIET, "nosy": NOSY, "strange": STRANGE,
-          "failing": FAILING, "steerable": STEERABLE, "finishes": FINISHES, "goes_on": GOES_ON}
+          "failing": FAILING, "steerable": STEERABLE, "finishes": FINISHES,
+          "goes_on": GOES_ON, "silent": SILENT, "blank": BLANK}
 
 
 class WithAnAgentToRunTurnsFor(unittest.IsolatedAsyncioTestCase):
@@ -379,6 +407,27 @@ class WhatATurnRecords(WithAnAgentToRunTurnsFor):
         said = await self.ask("strange")
         self.assertEqual(b"a warning worth keeping\n",
                          transcript.read(self.logs(), said.run, transcript.ERRORS))
+
+    async def test_a_turn_that_answered_nobody_is_not_a_turn_that_worked(self):
+        """R-RUN-21 — measured: a resumed session reported `done ok:true` with a usage
+        record of four zeros one second after it started, and said nothing else at all.
+        The run was written down as `finished` and the message that asked for it was
+        marked answered, so the person who asked was told their question had been dealt
+        with, the question was consumed, and nothing had happened to it. A program exiting
+        well is not an answer."""
+        said = await self.ask("silent")
+        self.assertFalse(said.ok, "a turn that said nothing was reported as working")
+        self.assertEqual("failed", self.settled(said.run)["outcome"])
+        self.assertEqual(turn.NOTHING_SAID, said.why,
+                         "nothing told the person why they got no answer")
+
+    async def test_whitespace_is_not_an_answer_either(self):
+        """R-RUN-21 — a surface posts nothing for it, so a turn that produced only
+        whitespace produced nothing, and reporting it as finished is the same lie in a
+        shape that is harder to see."""
+        said = await self.ask("blank")
+        self.assertFalse(said.ok)
+        self.assertEqual(turn.NOTHING_SAID, said.why)
 
     async def test_a_turn_that_failed_is_recorded_as_one(self):
         """R-RUN-4 — a brain that says the turn did not work is believed, whatever its

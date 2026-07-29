@@ -69,6 +69,11 @@ TROUBLE_KEPT = 20
 SENT = "sent"
 LOST = "lost"
 
+#: What a turn that produced nothing is told to say for itself. Prose rather than one of the
+#: closed words, because no brain classified this — rundesk noticed it, and a word from that
+#: set would claim an adapter reported something it did not (R-RUN-19).
+NOTHING_SAID = "the turn ended without an answer"
+
 
 @dataclass(frozen=True)
 class Said:
@@ -358,7 +363,16 @@ async def carry(
             kept.remember_session(where_it_is, brain, handle)
         tokens = _tokens(said)
         ended = _ended(said)
-        ok = result.ok and ended is not False
+        # A turn that said nothing is not a turn that worked. Measured: a resumed session
+        # reported `done ok:true` with a usage record of four zeros one second after it
+        # started, and said nothing else at all. The run was written down as `finished`
+        # and the message that asked for it was marked answered — so the person who asked
+        # was told their question had been dealt with, the question was consumed, and
+        # nothing had happened to it. A program exiting well is not an answer, and this is
+        # the only place that can tell the two apart before a surface acts on it.
+        answered = _answered(said)
+        ok = result.ok and ended is not False and answered
+        why = _why(said) or (None if answered else NOTHING_SAID)
         # What the brain finally said, as one thing said in the conversation. Written at
         # the end because it is only whole then: a reply arrives a fragment at a time, and
         # a row per fragment is a history nobody can read back and a search that matches
@@ -369,7 +383,7 @@ async def carry(
         # second copy of that expression would drift into a run recorded as finished and a
         # schedule reporting it as failed, or the other way round.
         outcome = Outcome(run=run, ok=ok, reason=result.reason, said=said, tokens=tokens,
-                          handle=handle if carried else None, why=_why(said),
+                          handle=handle if carried else None, why=why,
                           because=_because(said),
                           trouble=[one for one in trouble if one.strip()][-TROUBLE_KEPT:])
         # How it finished, in one word. A turn is `finished` only when the program ended
@@ -377,7 +391,7 @@ async def carry(
         # a process that exited zero is a failed turn, and the two used to be told apart
         # by two fields that a reader had to combine correctly to get right.
         kept.ended(run, store.stamped(now), outcome.became, exit_code=result.code,
-                   why=_why(said), tokens=tokens, because=outcome.because)
+                   why=why, tokens=tokens, because=outcome.because)
         settled.append(outcome.became)
     return outcome
 
@@ -702,6 +716,22 @@ def _handle(said: list) -> str | None:
             handle = one.get("session")
             return handle if isinstance(handle, str) and handle else None
     return None
+
+
+def _answered(said: list) -> bool:
+    """Whether the person who asked got anything back.
+
+    A file counts and a tool call does not. Something delivered is an answer even when
+    nothing was typed about it; reading a file and thinking about it is work nobody
+    receives. Whitespace is not an answer either — a surface posts nothing for it, so a
+    turn that produced only whitespace is a turn that produced nothing.
+    """
+    for one in said:
+        if one.get("type") == "file":
+            return True
+        if one.get("type") == "text" and str(one.get("text") or "").strip():
+            return True
+    return False
 
 
 def _why(said: list) -> str | None:

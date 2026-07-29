@@ -1420,12 +1420,20 @@ def _amount(tokens: int) -> str:
     reported `0k output` — which is a measurement, stated plainly, and wrong. Small
     numbers are shown as themselves, and only what is genuinely in thousands is
     abbreviated.
+
+    A cache read is counted once per request, so a turn that made forty of them
+    reported `15425k cached` — a unit nobody carries that far, and one a reader has
+    to divide in their head before it means anything. Thousands stop at a thousand
+    of them. Millions keep a decimal because rounding one away is half a million
+    tokens, which is a real amount of somebody's money.
     """
     if tokens < 1000:
         return str(tokens)
     if tokens < 10000:
         return f"{tokens / 1000:.1f}k".replace(".0k", "k")
-    return f"{round(tokens / 1000)}k"
+    if round(tokens / 1000) < 1000:
+        return f"{round(tokens / 1000)}k"
+    return f"{tokens / 1000000:.1f}M".replace(".0M", "M")
 
 
 async def check(chose) -> int:
