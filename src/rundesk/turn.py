@@ -62,6 +62,18 @@ CHANNEL = "channel"
 #: whole of it is in the run's own file; this is the tail worth putting in front of a person.
 TROUBLE_KEPT = 20
 
+#: What a steerable turn is told about later words before it starts. Native steering
+#: transports differ: some insert guidance into active work, while others cancel one
+#: provider request and begin another in the same session. The seam promises one meaning
+#: either way (R-PRV-19), and this standing instruction keeps that meaning without hiding
+#: words inside an adapter. It is appended to `preface`, so R-RUN-9/R-PRV-10 put the exact
+#: instruction in the account before the brain receives it.
+STEERING_PREFACE = (
+    "A message received while you are still working is mid-turn guidance within the "
+    "original request, not automatically a new standalone task. Address it, then continue "
+    "working toward the original request unless it explicitly stops or replaces that work."
+)
+
 #: The two rundesk puts into a turn itself, and the one it records about a turn going wrong.
 #: `SENT` is a thing *said* and becomes a message; `LOST` is a record, and is the only one of
 #: rundesk's own that `store.RECORD_KINDS` knows — using any other name here would be stored
@@ -239,6 +251,9 @@ async def carry(
         raise CannotResume(
             "the interrupted turn could not be resumed because no provider session was saved"
         )
+
+    if can["steer"]:
+        preface = "\n\n".join(one for one in (preface.strip(), STEERING_PREFACE) if one)
 
     at_now = store.stamped(now)
     if preface:

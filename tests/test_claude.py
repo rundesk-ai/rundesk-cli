@@ -663,10 +663,8 @@ class WhatThisBrainCanDo(unittest.TestCase):
         self.assertEqual("initialize", said[0]["request"]["subtype"])
         self.assertEqual("count to ten", said[1]["message"]["content"])
         self.assertEqual("interrupt", said[2]["request"]["subtype"])
-        guidance = said[3]["message"]["content"]
-        self.assertIn("actually, stop at three", guidance)
-        self.assertIn("Continue working toward the user's original request", guidance,
-                      "the replacement became a standalone task instead of steering")
+        self.assertEqual("actually, stop at three", said[3]["message"]["content"],
+                         "the adapter silently changed what the run recorded")
 
     def test_an_interrupted_result_is_not_the_end_and_its_usage_is_not_lost(self):
         control = claude.Control()

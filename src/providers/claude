@@ -536,25 +536,6 @@ def _message(word: str) -> dict:
     }, "parent_tool_use_id": None, "session_id": ""}
 
 
-def _steering(word: str) -> str:
-    """Keep a replacement request inside the work whose native request was interrupted.
-
-    Claude's control protocol can cancel an active request, but unlike Rundesk's steering
-    seam it has no operation that inserts words into that request. Sent bare, a side
-    question becomes a standalone replacement and its answer can end the original work.
-    This framing restores the seam's meaning while leaving explicit stop/replacement
-    instructions in charge.
-    """
-    return (
-        "The user sent the following message while you were still working on their "
-        "original request. Treat it as mid-turn guidance within that work, not "
-        "automatically as a new standalone task.\n\n"
-        f"{word}\n\n"
-        "Continue working toward the user's original request after addressing this "
-        "guidance, unless their message explicitly stops or replaces that work."
-    )
-
-
 class Control:
     """Claude's small bidirectional control protocol, kept vendor-side.
 
@@ -1046,7 +1027,7 @@ def _fed(stream, words: Words, stopping: threading.Event, control: Control) -> N
             if later and not control.request(stream, "interrupt"):
                 went_wrong("Claude did not complete the native mid-turn interrupt")
                 return
-            _write(stream, _message(_steering(word) if later else word))
+            _write(stream, _message(word))
             first = False
     except (OSError, ValueError):
         pass  # the result raced the last word; the provider has already finished
