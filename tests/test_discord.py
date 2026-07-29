@@ -1213,6 +1213,58 @@ class _Collects:
         pass
 
 
+class _Surface:
+    """A Discord client as `_room_named` and `_where_to_write` use one.
+
+    **It records rather than refuses.** A fake that raises to prove a guard held proves
+    nothing: the adapter reaches for a person inside `contextlib.suppress(Exception)`, so a
+    raised `AssertionError` is swallowed and the call returns `None` either way — the same
+    answer a held guard gives. Every reach is written down instead, and the test asserts on
+    what came back and on what was never opened, which a deleted guard cannot fake.
+    """
+
+    def __init__(self, dm, allow, channel=None, conversation="the-conversation"):
+        self.guilds = ()
+        self.chose = SimpleNamespace(dm=dm, allow=list(allow), server=None)
+        self.channel = channel
+        self.conversation = conversation
+        self.channels_asked = []
+        self.people_asked = []
+        self.dms_opened = []
+
+    async def wait_until_ready(self):
+        return None
+
+    async def _room_named(self, said):
+        """The real one, so driving `_where_to_write` still tests the resolution itself."""
+        return await discord.Agent._room_named(self, said)
+
+    async def fetch_channel(self, where):
+        self.channels_asked.append(where)
+        if self.channel is None:
+            raise RuntimeError("not a channel")
+        return self.channel
+
+    async def fetch_user(self, where):
+        self.people_asked.append(where)
+        return _Person(self, where)
+
+    def get_channel(self, where):
+        return self.conversation
+
+
+class _Person:
+    """Someone a DM could be opened with — who records that it was."""
+
+    def __init__(self, surface, who):
+        self.surface = surface
+        self.id = who
+
+    async def create_dm(self):
+        self.surface.dms_opened.append(self.id)
+        return f"dm-with-{self.id}"
+
+
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class WhichRoomAWordMeans(unittest.TestCase):
     """R-CAD-16 — a schedule names a place, and this is what turns that word into a room."""
@@ -1247,112 +1299,80 @@ class WhichRoomAWordMeans(unittest.TestCase):
         schedules that worked used a DM *channel* id; Markus's used a *user* id and silently
         posted nowhere. Both words must resolve on a DM surface.
         """
-        opened = []
-        fetched = []
-
-        class Person:
-            id = 279024636254224384
-
-            async def create_dm(self):
-                opened.append(self.id)
-                return f"dm-with-{self.id}"
-
-        class Surface:
-            guilds = ()
-
-            class chose:
-                dm = True
-                allow = ["279024636254224384"]
-                server = None
-
-            async def wait_until_ready(self):
-                return None
-
-            async def fetch_channel(self, where):
-                raise RuntimeError("not a channel")
-
-            async def fetch_user(self, where):
-                fetched.append(where)
-                return Person()
-
-        found = asyncio.run(
-            discord.Agent._room_named(Surface(), "279024636254224384"))
+        surface = _Surface(dm=True, allow=["279024636254224384"])
+        found, why = asyncio.run(
+            discord.Agent._room_named(surface, "279024636254224384"))
         self.assertEqual("dm-with-279024636254224384", found)
-        self.assertEqual([279024636254224384], fetched)
-        self.assertEqual([279024636254224384], opened)
+        self.assertIsNone(why)
+        self.assertEqual([279024636254224384], surface.people_asked)
+        self.assertEqual([279024636254224384], surface.dms_opened)
 
     def test_a_dm_channel_id_still_resolves_as_a_channel(self):
-        """R-CAD-16 — the working Winston shape: place is the DM channel snowflake."""
-        seen = []
+        """R-CAD-16 — the working Winston shape: place is the DM channel snowflake.
 
-        class Surface:
-            guilds = ()
-
-            class chose:
-                dm = True
-                allow = ["279024636254224384"]
-                server = None
-
-            async def wait_until_ready(self):
-                return None
-
-            async def fetch_channel(self, where):
-                seen.append(where)
-                return f"channel-{where}"
-
-            async def fetch_user(self, where):
-                raise AssertionError("user lookup must not run when the channel exists")
-
-        found = asyncio.run(
-            discord.Agent._room_named(Surface(), "1529678042396622928"))
+        The channel is tried first and answers, so nobody is looked up and no DM is opened:
+        asserted on the empty records rather than on a fake that refuses to be called, which
+        the adapter's `suppress(Exception)` would swallow.
+        """
+        surface = _Surface(dm=True, allow=["279024636254224384"],
+                           channel="channel-1529678042396622928")
+        found, why = asyncio.run(
+            discord.Agent._room_named(surface, "1529678042396622928"))
         self.assertEqual("channel-1529678042396622928", found)
-        self.assertEqual([1529678042396622928], seen)
+        self.assertIsNone(why)
+        self.assertEqual([1529678042396622928], surface.channels_asked)
+        self.assertEqual([], surface.people_asked)
+        self.assertEqual([], surface.dms_opened)
 
     def test_a_user_id_is_not_opened_as_a_dm_from_a_room_channel(self):
-        """A failed room id must not become a private message (R-CH-4, R-CAD-16)."""
+        """A failed room id must not become a private message (R-CH-4, R-CAD-16).
 
-        class Surface:
-            guilds = ()
-
-            class chose:
-                dm = False
-                allow = ["279024636254224384"]
-                server = None
-
-            async def wait_until_ready(self):
-                return None
-
-            async def fetch_channel(self, where):
-                raise RuntimeError("not a channel")
-
-            async def fetch_user(self, where):
-                raise AssertionError("room channels do not open DMs from bare ids")
-
-        found = asyncio.run(discord.Agent._room_named(Surface(), "279024636254224384"))
-        self.assertIsNone(found)
+        Driven through `_where_to_write`, because the guarantee is about where the report
+        landed, not about which method ran: a room channel handed a user snowflake writes in
+        the conversation it came from and opens no private message with anybody. If the
+        surface check were deleted the id is on the allow list, so a DM *would* open — this
+        fails on the DM that came back and on the DM that was opened.
+        """
+        surface = _Surface(dm=False, allow=["279024636254224384"])
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            where = asyncio.run(discord.Agent._where_to_write(
+                surface, {"place": "279024636254224384", "conversation": "77"}))
+        self.assertEqual("the-conversation", where)
+        self.assertEqual([], surface.people_asked)
+        self.assertEqual([], surface.dms_opened)
+        self.assertIn("could not find '279024636254224384'", said.getvalue())
 
     def test_a_dm_place_refuses_a_user_who_is_not_allowed(self):
-        """Schedules must not open DMs with people the channel does not authorize."""
+        """Schedules must not open DMs with people the channel does not authorize.
 
-        class Surface:
-            guilds = ()
+        The refusal is observable twice: the report goes to the conversation instead, and
+        the owner is told the id was declined rather than missing — "could not find" is the
+        sentence a typo produces, and sending an owner on a wrong-id hunt is the
+        misdiagnosis this path exists to end.
+        """
+        surface = _Surface(dm=True, allow=["111"])
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            where = asyncio.run(discord.Agent._where_to_write(
+                surface, {"place": "279024636254224384", "conversation": "77"}))
+        self.assertEqual("the-conversation", where)
+        self.assertEqual([], surface.people_asked)
+        self.assertEqual([], surface.dms_opened)
+        self.assertIn("is not on this channel's allowed list", said.getvalue())
+        self.assertNotIn("could not find", said.getvalue())
 
-            class chose:
-                dm = True
-                allow = ["111"]
-                server = None
+    def test_a_room_that_is_simply_missing_is_not_reported_as_a_refusal(self):
+        """The other half of the refusal note: a word nobody can find still says so.
 
-            async def wait_until_ready(self):
-                return None
-
-            async def fetch_channel(self, where):
-                raise RuntimeError("not a channel")
-
-            async def fetch_user(self, where):
-                raise AssertionError("unauthorized users are not fetched")
-
-        found = asyncio.run(discord.Agent._room_named(Surface(), "279024636254224384"))
-        self.assertIsNone(found)
+        Without this the refusal sentence could swallow every failure and the two would be
+        indistinguishable again, in the other direction.
+        """
+        surface = _Surface(dm=True, allow=["279024636254224384"])
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            where = asyncio.run(discord.Agent._where_to_write(
+                surface, {"place": "#no-such-room", "conversation": "77"}))
+        self.assertEqual("the-conversation", where)
+        self.assertIn("could not find '#no-such-room'", said.getvalue())
+        self.assertNotIn("allowed list", said.getvalue())
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")

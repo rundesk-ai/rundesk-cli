@@ -1107,14 +1107,18 @@ class Agent(discord.Client):
         (R-CAD-16). A place we cannot find falls back to the conversation rather than failing,
         because a report in the wrong room beats a report nowhere; it is said out loud so
         nobody has to wonder which happened.
+
+        **A refusal is not a typo, and must not read like one.** "Could not find" points an
+        owner at a wrong-id hunt; when the id was found and declined, saying so is the
+        difference between a one-line fix and the misdiagnosis this path exists to end.
         """
         place = it.get("place")
         if place:
-            found = await self._room_named(str(place))
+            found, why = await self._room_named(str(place))
             if found is not None:
                 return found
-            note(f"could not find '{place}' on this surface — "
-                 f"saying it in the conversation instead")
+            note(why or f"could not find '{place}' on this surface — "
+                        f"saying it in the conversation instead")
         at = it.get("conversation")
         if at is None:
             return None
@@ -1142,6 +1146,9 @@ class Agent(discord.Client):
         cannot work. `_tell_the_owner` already opens a DM from a user id; schedule delivery
         used only `fetch_channel`, so a user-id `--in` logged "could not find" and posted
         nowhere. On a DM channel, try channel first (already-known DM), then authorized user.
+
+        Answers with the room and, when there is none, why — so the one caller can tell a
+        word it could not find from a person it declined to message.
         """
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(self.wait_until_ready(), READY_SECONDS)
@@ -1150,24 +1157,26 @@ class Agent(discord.Client):
             with contextlib.suppress(Exception):
                 found = await self.fetch_channel(int(digits))
                 if found is not None:
-                    return found
+                    return found, None
             # Only on the direct-message surface, and only for someone this channel already
             # authorizes: a room channel must not open a private message because a snowflake
             # failed as a room, and a schedule must not DM a stranger (R-CH-4, R-CAD-16).
             if getattr(self.chose, "dm", False):
                 allowed = {str(one) for one in (self.chose.allow or ())}
-                if digits in allowed:
-                    with contextlib.suppress(Exception):
-                        person = await self.fetch_user(int(digits))
-                        return await person.create_dm()
-            return None
+                if digits not in allowed:
+                    return None, (f"'{said}' is not on this channel's allowed list — "
+                                  f"saying it in the conversation instead")
+                with contextlib.suppress(Exception):
+                    person = await self.fetch_user(int(digits))
+                    return await person.create_dm(), None
+            return None, None
         for guild in self.guilds:
             if self.chose.server and str(guild.id) != str(self.chose.server):
                 continue
             for room in getattr(guild, "text_channels", ()):
                 if room_matches(said, getattr(room, "name", "")):
-                    return room
-        return None
+                    return room, None
+        return None, None
 
     async def _post(self, it: dict, content: str, anchor=None, files=(), text_as=None):
         """One message, and never at the turn's expense: a delivery that fails is written
