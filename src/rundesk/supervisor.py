@@ -215,8 +215,16 @@ def _environment(logs: Path, run: Path | None = None, agents: Path | None = None
     The roots are carried as well as the directories that default from them. An install
     pointed elsewhere keeps its data there, so a job carrying only one of the two leaves the
     other's fallback wrong.
+
+    **The prefix is carried for the same reason and matters more**, because a job is the one
+    place rundesk starts itself with no shell in between. A job named apart and then run
+    without its prefix is a process that resolves the *default* labels: the second install's
+    own automatic update then asks the machine to take away `ai.rundesk-update`, which is the
+    first install's, from a job called `ai.rundesk-station-automatic-update`. That is the
+    defect this whole prefix exists to prevent, reintroduced one process hop later
+    (R-INS-18).
     """
-    return {
+    said = {
         "PATH": path_for_a_job(),
         "HOME": str(Path.home()),
         "RUNDESK_RUN_DIR": str(run or gateway.home()),
@@ -236,6 +244,15 @@ def _environment(logs: Path, run: Path | None = None, agents: Path | None = None
         # look for after trouble is the one that stopped being written to.
         "RUNDESK_BACKUP_DIR": str(backups_home()),
     }
+    # **Named only when this install was told one.** Writing the default in unconditionally
+    # would put a new key in every description, and `install_automatic_update` compares the
+    # description it would write against the one the machine already holds — so an upgrade
+    # from an install that predates the prefix would find them different, take its own
+    # automatic update away and put it back, for a variable whose absence already means
+    # exactly what writing it would say. Unset stays byte-identical to what shipped.
+    if os.environ.get("RUNDESK_JOB_PREFIX"):
+        said["RUNDESK_JOB_PREFIX"] = prefix()
+    return said
 
 
 def describe(name: str, root: Path | None = None, logs: Path | None = None,

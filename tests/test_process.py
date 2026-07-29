@@ -180,6 +180,24 @@ class TheEnvironmentAProgramIsGiven(Quickened):
         built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
         self.assertNotIn("RUNDESK_AGENTS_DIR", built)
 
+    def test_a_program_is_told_what_this_install_calls_its_jobs(self):
+        """R-INS-18 — a program rundesk starts may itself be rundesk, and `rundesk update`
+        inside a turn is a supported path. A launchd label belongs to the *person* rather
+        than to an install, so nothing a directory is pointed at moves it: a child that
+        resolved the default would ask after the first install's gateway and boot out the
+        first install's update worker, from a turn the second install started."""
+        with unittest.mock.patch.dict(
+                os.environ, {"RUNDESK_JOB_PREFIX": "ai.rundesk-station"}, clear=True):
+            built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
+        self.assertEqual("ai.rundesk-station", built["RUNDESK_JOB_PREFIX"])
+
+    def test_nothing_is_said_about_job_names_when_this_install_uses_the_ones_that_ship(self):
+        """R-PROC-1 — forwarded rather than defaulted, for the reason above: unset already
+        resolves to what rundesk ships, through the same code."""
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
+        self.assertNotIn("RUNDESK_JOB_PREFIX", built)
+
 
 class FindingTheProgram(Quickened):
     async def test_a_program_named_rather_than_located_is_refused(self):

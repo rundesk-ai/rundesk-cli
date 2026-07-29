@@ -56,8 +56,30 @@ registration away leaves the other install's plist on disk, so nothing looks wro
 
 ## Throwing it away
 
+**Uninstall it first, and delete the directory second.** The plists live in `$station/jobs`, so `rm -rf`
+takes the *files* and leaves every registration standing: the station's gateways keep running, and
+`ai.rundesk-station.<name>`, `ai.rundesk-station-update` and `ai.rundesk-station-automatic-update` stay
+bootstrapped in your launchd domain, `KeepAlive`-retrying a program under `/tmp` that is no longer there.
+That is the orphan this whole page is about, made by hand.
+
 ```sh
-rm -rf /tmp/rundesk-station
+env -u RUNDESK_HOME -u RUNDESK_AGENTS_DIR -u RUNDESK_SCRIPTS -u RUNDESK_SKILL_LIBRARY \
+    -u RUNDESK_RUN -u RUNDESK_CWD -u RUNDESK_POSTURE -u RUNDESK_PREFACE -u RUNDESK_RAW \
+    RUNDESK_INSTALL_DIR="$station" \
+    RUNDESK_DATA_DIR="$station/data" \
+    RUNDESK_BACKUP_DIR="$station/backups" \
+    RUNDESK_BIN_DIR="$station/bin" \
+    RUNDESK_JOBS_DIR="$station/jobs" \
+    RUNDESK_JOB_PREFIX=ai.rundesk-station \
+    ./install.sh --uninstall
+
+rm -rf "$station"
+launchctl list | grep rundesk       # the same lines you started with, and no station ones
 ```
+
+**The same variables, spelled out again on purpose.** Removal finds a job by the prefix it was told, so
+an uninstall run from a shell that forgot `RUNDESK_JOB_PREFIX` finds nothing of the station's, reports
+success, and leaves every station registration behind — with the directory gone, there is then nothing
+left that even names them.
 
 Only the station root. The live install is `~/.rundesk`, and nothing here should ever name it.
