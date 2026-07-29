@@ -1285,8 +1285,9 @@ class WhatTheOwnerIsTold(unittest.TestCase):
                     os.environ, {"RUNDESK_MAINTENANCE": str(marker)}, clear=False):
                 it = self.Stand()
                 asyncio.run(discord.Agent.going(it))
-        self.assertIn("maintenance", it.greeted[0].lower())
         self.assertIn("update", it.greeted[0].lower())
+        self.assertIn("back shortly", it.greeted[0].lower(),
+                      "the owner was not told the gateway is coming back")
         self.assertNotIn("offline", it.greeted[0].lower())
 
     def test_going_down_cancels_what_a_conversation_was_still_running(self):
@@ -1329,7 +1330,7 @@ class WhatTheOwnerIsTold(unittest.TestCase):
         self.assertEqual(1, len(it.said))
         self.assertEqual([], second.said, "the second adapter greeted as well")
 
-    def test_a_gateway_returning_from_an_update_says_maintenance_is_complete(self):
+    def test_a_gateway_returning_from_an_update_says_the_update_landed(self):
         """R-UPD-43"""
         with tempfile.TemporaryDirectory() as temporary:
             marker = Path(temporary) / "maintenance"
@@ -1344,7 +1345,7 @@ class WhatTheOwnerIsTold(unittest.TestCase):
                     os.environ.pop(named, None)
                 it = self.Connects()
                 asyncio.run(discord.Agent.on_ready(it))
-        self.assertIn("maintenance is complete", it.said[0].lower())
+        self.assertIn("new rundesk update installed", it.said[0].lower())
         self.assertFalse(marker.exists(), "completed maintenance stayed attached to the gateway")
 
     def test_a_gateway_returning_from_an_update_links_the_version_now_listening(self):
@@ -1368,7 +1369,7 @@ class WhatTheOwnerIsTold(unittest.TestCase):
             "[v0.15.0](https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.15.0)",
             it.said[0],
         )
-        self.assertIn("maintenance", it.said[0].lower())
+        self.assertIn("update installed", it.said[0].lower())
 
     def test_a_gateway_told_only_a_version_still_names_it(self):
         """An install with no link to offer says which release is listening in plain text.

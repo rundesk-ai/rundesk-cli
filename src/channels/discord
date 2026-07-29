@@ -564,10 +564,10 @@ class Agent(discord.Client):
                 # told which release is now listening, and the only one that can link it.
                 landed = _running_release()
                 await self._tell_the_owner(
-                    f"🟢 **Gateway online** — maintenance to {landed} is complete; "
-                    "rundesk is listening."
+                    f"🟢 **I'm back** — new rundesk update installed, "
+                    f"release notes for {landed}"
                     if landed else
-                    "🟢 **Gateway online** — maintenance is complete; rundesk is listening."
+                    "🟢 **I'm back** — new rundesk update installed."
                 )
                 _finish_maintenance()
             else:
@@ -653,8 +653,8 @@ class Agent(discord.Client):
             with contextlib.suppress(BaseException):
                 await asyncio.wait_for(
                     self._tell_the_owner(
-                        "🛠️ **Gateway maintenance** — rundesk is installing an update "
-                        "and will be back shortly."
+                        "🛠️ **Installing an update** — I'm installing the new rundesk "
+                        "update, be back shortly."
                         if _maintenance() else
                         "🔴 **Gateway offline** — rundesk has shut down."
                     ),
