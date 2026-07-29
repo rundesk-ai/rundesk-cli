@@ -14,7 +14,8 @@ so only a running commentary may grow.
 
 ## Why it exists
 
-- The owner sees at a glance whether a message was seen, is being worked on, or is finished.
+- The owner sees at a glance whether a message was seen, is being worked on, or is finished, and
+  which question an answer belongs to.
 - An agent in a shared server stays quiet until it is spoken to.
 - Steering an agent uses Discord's own commands, which are discoverable, rather than words typed in chat.
 
@@ -49,6 +50,7 @@ so only a running commentary may grow.
 | ✅ | R-DIS-25 | A single-user Discord channel offers a provider change and privately reports its result | `provider is deferred and reported for authorized configuration`, `provider result completes the exact private interaction`, `shared channel provider command is privately refused before reporting` |
 | ✅ | R-DIS-26 | A gateway returning from update maintenance names the version now listening and links its release | `a gateway returning from an update links the version now listening`, `a gateway told only a version still names it` |
 | ✅ | R-DIS-27 | An ordinary gateway startup adds no update wording and no release link | `an ordinary startup adds no update wording and no release link` |
+| ✅ | R-DIS-28 | An answer is a reply to the message that asked, unless that message is not in the conversation the turn is in | `an answer in a direct message is a reply to the message that asked`, `an answer in a channel is a reply to the message that asked`, `an answer does not quote a message from somewhere else`, `only the first piece of a split answer carries the anchor`, `the anchor is read off the attribute a message actually has` |
 
 ## Open questions
 
