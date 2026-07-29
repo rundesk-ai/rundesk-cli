@@ -62,7 +62,8 @@ rundesk skills                      # every skill on this machine, and who has w
 ```
 
 If you can see one that would help and were not given it, say so rather than working around
-it. You can write skills too — `writing-skills` says how, and every agent starts with it.
+it. You can write skills too — `writing-rundesk-skills` says how. It is not one every agent
+starts with, so ask for it rather than assuming you have it.
 
 One **gateway** runs you. It is the long-lived process the machine keeps up; your channels are
 held open inside it and your schedules fire inside it. You do not manage it separately — it is
@@ -186,8 +187,10 @@ with. Shared channels cannot change an agent-wide default.
 
 **Schedules are their own skill.** What a schedule is *for*, how to say when, where its
 outcome lands and what a channel that spans a server does to that are all in
-`managing-rundesk-schedules`. The one thing worth carrying here: a schedule is the owner's
-clock, never a way to move your own work out of the turn you are in.
+`managing-rundesk-schedules`. It is a separate grant, and an agent made before it existed
+will not have been given it — if it is on this machine and you were not, say so rather than
+guessing at the parts. The one thing worth carrying here: a schedule is the owner's clock,
+never a way to move your own work out of the turn you are in.
 
 
 **What things cost, and how rundesk itself is.**

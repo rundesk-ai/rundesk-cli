@@ -1607,7 +1607,7 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
 
 
 def cmd_configure(args: argparse.Namespace, agents) -> int:
-    """Change an existing agent's durable defaults without replacing it (R-AGT-35)."""
+    """Change an existing agent's durable defaults without replacing it (R-AGT-31)."""
     name = args.name
     if not name:
         print("configure: NAME REQUIRED — say which agent to change", file=sys.stderr)
@@ -1911,6 +1911,12 @@ def cmd_config(args: argparse.Namespace) -> int:
     what is actually in force — which is how a backup they believed was kept for a year is
     discovered, once, to have been kept for thirty days. So this answers with the value and
     where it came from, and it is the only place the two are shown together.
+
+    **What was written and is not understood is said here too, and nowhere else.** `ensure`
+    preserves an unknown key faithfully and every reader defaults straight past it, so a
+    mistyped `keepDays` is a value an owner stated, can see in their own file, and which
+    nothing on the machine has ever read — the same silence this command was built to end,
+    arriving by the one route printing the known keys cannot show.
     """
     at = config.path()
     try:
@@ -1923,6 +1929,7 @@ def cmd_config(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 1
     print(at if at.is_file() else f"{at} (not written yet — every default applies)")
+    ignored = []
     for section in config.SECTIONS:
         print(f"\n  {section}")
         said = stated.get(section) or {}
@@ -1930,6 +1937,16 @@ def cmd_config(args: argparse.Namespace) -> int:
             shown = " ".join(value) if isinstance(value, tuple) else value
             print(f"    {key:<10} {shown}"
                   f"{'' if key in said else '   (default)'}")
+        ignored += [f"{section}.{key}" for key in sorted(said)
+                    if key not in now[section]]
+    # A whole section this release has never heard of, which is the same silence one key
+    # wide. Sorted rather than left in the file's order, because what is shown is never
+    # decided by how somebody's editor happened to write it.
+    ignored += [one for one in sorted(stated) if one not in config.SECTIONS]
+    if ignored:
+        print(f"\n  read by nothing on this machine: {', '.join(ignored)}")
+        print("    each was written, is kept exactly as it is, and no default it looks "
+              "like is taken from it")
     return 0
 
 
@@ -2188,7 +2205,17 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
     if getattr(args, "lay_down", False):
         # The installer's, and deliberately not an owner's verb: what a release ships is
         # not a thing anybody should have to ask for.
-        print(" ".join(skills.lay_down()))
+        laid = skills.lay_down()
+        # Then what an earlier release shipped under a name this one no longer uses. The
+        # installer is the *other* way an owner upgrades — re-running the documented
+        # `curl … | bash` over an existing install is not a rarity — and `skill.retire` was
+        # otherwise reached only from `rundesk update`. Without this, that owner is left
+        # with both names standing and every old grant resolving to text no release will
+        # bring forward again, which is exactly what R-AGT-35 exists to stop. After the
+        # lay-down, because a grant is only carried once the name it goes to is standing;
+        # and a no-op on a fresh install, where nothing of ours is under an old name.
+        skills.retire(holding=tuple(agents.skills(name) for name in agents.known()))
+        print(" ".join(laid))
         return 0
     act = getattr(args, "act", None)
     if act in ("grant", "revoke"):

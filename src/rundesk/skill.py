@@ -323,9 +323,17 @@ def retire(where: Path | None = None, holding: tuple[Path, ...] = ()) -> list[st
     `agent._given_what_ships` refuses to backfill, and the reason this cannot simply grant
     the new built-in to everybody.
 
-    **Nothing of the owner's is moved.** A directory standing under the old name without
-    the ownership marker is theirs, whatever it is called, so neither it nor any grant of
-    it is touched — a rename in a release must not be able to take away work somebody did.
+    **Nothing of the owner's is moved, at either end of the rename.** A directory standing
+    under the old name without the ownership marker is theirs, whatever it is called, so
+    neither it nor any grant of it is touched — a rename in a release must not be able to
+    take away work somebody did. The *new* name is asked the same question, and it is the
+    destructive half: a release introduces names nobody was ever warned off, so an owner
+    can already have written a skill called what this one renames a built-in to. A
+    directory of that name merely *standing* is not the rename having landed. Read as one,
+    `lay_down` correctly leaves their work alone while this deletes the built-in, hands
+    every agent holding it a link to their unrelated file under the name the built-in had,
+    and no later release can put it back — nothing ships the old name again, and `lay_down`
+    goes on skipping the new one for as long as their directory stands.
 
     `holding` is each agent's own skills directory, passed in rather than discovered here:
     `agent` reads this module, so this module cannot read it back.
@@ -336,8 +344,9 @@ def retire(where: Path | None = None, holding: tuple[Path, ...] = ()) -> list[st
     gone_for_good = [(one, None) for one in RETIRED]
     for old, new in sorted(RENAMED.items()) + gone_for_good:
         was = where / old
-        if new is not None and new not in standing_now:
-            continue     # the new name never landed, so a grant has nowhere to be carried
+        if new is not None and not _landed(standing_now.get(new), new):
+            continue     # nothing of ours stands under the new name, so a grant has
+                         # nowhere to be carried and the old one is not ours to take
         if not was.is_dir() or was.is_symlink() or not _owned(was, old):
             continue     # nothing of ours under that name
         for mine in holding:
@@ -361,6 +370,18 @@ def retire(where: Path | None = None, holding: tuple[Path, ...] = ()) -> list[st
             continue
         retired.append(old)
     return retired
+
+
+def _landed(standing: Path | None, name: str) -> bool:
+    """Whether the skill a rename carries a grant to is standing, and is rundesk's own.
+
+    Both halves, because either alone is the wrong question. A name that is absent is a
+    lay-down that did not happen; a name that is present and is the owner's is a
+    coincidence, and reading it as the rename having landed is what makes the retirement
+    delete a built-in nobody can get back. Ownership is the same evidence `lay_down` and
+    `take_back` ask for, so all three agree about which directories are rundesk's.
+    """
+    return standing is not None and _owned(standing, name)
 
 
 def granted(skills_dir: Path) -> list[str]:

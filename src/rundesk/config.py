@@ -16,10 +16,13 @@ sections at the top level rather than keys — one section per thing configured,
 added later neither collides with what is here nor makes the reader guess what owns what.
 
 **An owner writes this file by hand**, which is the whole reason it is JSON in the open
-rather than a row in a database. So nothing here ever writes it back: a reader that rewrites
-what it parsed is a reader that eventually reformats somebody's comments away, and a
-half-written file read at the wrong moment is how the value they set silently becomes the
-default.
+rather than a row in a database. So no *reader* here ever writes it back: a reader that
+rewrites what it parsed is a reader that eventually reformats somebody's comments away, and
+a half-written file read at the wrong moment is how the value they set silently becomes the
+default. Exactly two functions write, and neither reads a value to do it — `ensure` adds the
+sections this release knows and touches nothing already there, and `take_back` removes a
+file nobody ever stated anything in. Both say why in their own docstrings; a third writer
+would need the same argument made again.
 
 **Missing is not the same as unreadable.** A file that is not there is an owner who never
 wrote one, and every default applies. A file that is there and cannot be understood is

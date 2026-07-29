@@ -379,6 +379,26 @@ class WhatARenameDoes(WithALibrary):
             self.assertNotIn(old, really_shipped,
                              f"{old} is both retired and still shipped")
 
+    def test_no_shipped_instruction_names_a_skill_this_release_retired(self):
+        """R-AGT-35 — the rename has to reach the words as well as the directory.
+
+        Every file here is copied onto an owner's machine and read by a brain as an
+        instruction. One naming a skill this release renamed away sends the agent to
+        `rundesk skills grant <me> <old name>`, which answers `there is no skill called
+        <old name>` — on every install, from the day it lands. Asserted against the real
+        templates and the real declaration, because those are what ship.
+        """
+        gone = set(REALLY_RENAMED) | set(REALLY_RETIRED)
+        shipped_text = sorted(
+            one for one in (REALLY_SHIPPED.parent).rglob("*.md") if one.is_file())
+        self.assertTrue(shipped_text, "no shipped instruction text was found to check")
+        named = []
+        for page in shipped_text:
+            for number, line in enumerate(page.read_text(encoding="utf-8").splitlines(), 1):
+                named += [f"{page.name}:{number} names `{one}`"
+                          for one in sorted(gone) if f"`{one}`" in line]
+        self.assertEqual([], named)
+
     def test_a_renamed_built_in_is_taken_out_of_the_library(self):
         """R-AGT-35 — left there it is not a broken link but a working one, pointing at
         text the release has replaced."""
@@ -422,6 +442,37 @@ class WhatARenameDoes(WithALibrary):
         self.assertEqual("a month of work\n", (theirs / skill.NAMED).read_text().splitlines()[-1]
                          + "\n")
         self.assertEqual(["reporting-a-bug"], skill.granted(self.mine))
+
+    def test_a_skill_the_owner_wrote_under_the_new_name_is_not_the_rename_landing(self):
+        """R-AGT-29, R-AGT-35 — the destructive half of the same rule, and the only case
+        here where getting it wrong cannot be undone.
+
+        A release introduces names nobody was ever warned off, so an owner can already
+        have written a skill called what a built-in is being renamed *to*. `lay_down`
+        asks whose that directory is and correctly leaves it alone. Asking only whether
+        the name stands reads their work as the rename having landed: the built-in is
+        deleted, every agent holding it is handed a link to their unrelated file under
+        the name the built-in had, and no later release puts it back — nothing ships the
+        old name again and `lay_down` skips the new one for as long as their directory
+        stands.
+        """
+        a_skill(self.release, "reporting-a-bug", says="the manual")
+        skill.lay_down(self.library)
+        theirs = a_skill(self.library, "filing-issues", says="a month of work")
+        skill.grant(self.mine, "reporting-a-bug", self.library)
+        shutil.rmtree(self.release / "reporting-a-bug")
+        a_skill(self.release, "filing-issues", says="the new words")
+        skill.lay_down(self.library, force=True)   # skips theirs, which is the point
+
+        self.assertEqual([], skill.retire(self.library, holding=(self.mine,)))
+
+        self.assertIn("the manual",
+                      (self.library / "reporting-a-bug" / skill.NAMED).read_text(),
+                      "the built-in was deleted with nothing of ours standing in its place")
+        self.assertIn("a month of work", (theirs / skill.NAMED).read_text())
+        self.assertEqual(["reporting-a-bug"], skill.granted(self.mine))
+        self.assertIn("the manual", (self.mine / "reporting-a-bug" / skill.NAMED).read_text(),
+                      "the agent's grant was repointed at a skill the owner wrote")
 
     def test_nothing_is_carried_until_the_new_name_is_in_the_library(self):
         """R-AGT-35 — a library that could not be written to leaves the new name absent,

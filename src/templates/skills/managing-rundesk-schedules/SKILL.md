@@ -33,8 +33,9 @@ is owed about something they asked for. The test is not whether the work happens
 whether the owner gets something at the end of it.
 
 **How it reaches them.** A schedule can run a program — a script, a command, anything with a full
-path — or ask a turn, and `--to <channel>` is how its outcome reaches a surface, named by the
-channel it was added under rather than by anything about the platform:
+path — or ask a turn. `--to <channel>` is which surface its outcome reaches, named by the
+channel it was added under rather than by anything about the platform, and `--in <where>` is
+which place on that surface:
 
 ```sh
 rundesk schedules <name> add nightly --when "0 6 * * *" \
@@ -102,6 +103,22 @@ it safe for checking that a job does what somebody expects before the night it m
 the work and answer, and the gateway delivers the outcome through the channel already held
 open. So a schedule needs no knowledge of the platform at all.
 
+**Two messages go out, and the first one is not yours.** A schedule that asks a turn is
+announced before you start: rundesk posts *"💻 Working on 'nightly' — I will report back when
+it is done"* in its own words, where the report will land, and what you found arrives as a
+**reply to that message**. A run that failed, was cancelled or never got going still answers
+its own notice, so nothing is left hanging. A schedule that starts a *program* announces
+nothing — it has no report to anchor.
+
+That notice is rundesk's, not yours. It is not written into your record, so it is not in
+`rundesk messages` — if somebody replies to it, the words they are answering are not
+something you will find you said.
+
+**On a scheduled turn you are heard once, at the end.** What is delivered is the last whole
+thought your brain finished, not your working on the way there. Nobody is watching a schedule
+run, so progress prose is dropped rather than posted. Put the whole answer in the last thing
+you say.
+
 **Find out where it will actually land before you promise anything.** Look first:
 
 ```sh
@@ -119,13 +136,28 @@ every room in 'Acme', 'Side Project'  the same, across more than one server
 direct messages to <bot>              a direct message
 ```
 
-**A channel that spans a server has no one room to post in**, so the outcome goes to whichever
-conversation on it was *most recently active* — a different room on a different morning, or a
-thread somebody opened. If an owner asks for a daily post in one named room and the channel
-points at "every room", **say so rather than setting it up**: what they want is a channel added
-confined to that room, which only they can do, and then there is exactly one place it can go.
-Promising a room you cannot guarantee is the failure mode here, and it will not show up until
-the morning it lands somewhere else.
+**A channel that spans a server has no one room to post in**, so a schedule that says nothing
+about where lands in whichever conversation on it was most recently active *when the run
+started* — a different room on a different morning, or a thread somebody opened. The notice and
+the report go to the same place, resolved once at the start, so a long run cannot announce
+itself in one room and report in another.
+
+**`--in <where>` is what fixes that, and it is yours to set.** Give the room in the surface's
+own words — for Discord a room name or id — and both messages land there every time, whatever
+the channel spans, even if nothing has been said in that room yet. Nobody has to add a second
+channel for it:
+
+```sh
+rundesk schedules <name> add nightly --when "0 6 * * *" \
+    --ask "summarise what changed yesterday" --to ops --in "#operations"
+rundesk schedules <name> edit nightly --in "#operations"    # or --in "" to follow the
+                                                            # conversation again
+```
+
+So when an owner asks for a daily post in one named room and the channel points at "every
+room", set `--in` rather than promising the channel will happen to land there. Promising a room
+you cannot guarantee is the failure mode here, and it will not show up until the morning it
+lands somewhere else.
 
 You can see which places on a channel have actually been used — the `WHERE` column names each:
 

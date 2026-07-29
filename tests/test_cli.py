@@ -717,6 +717,16 @@ class FakeSkills:
         return sorted(self._given.get(whose.name, ()))
 
     def lay_down(self, where=None, force=False):
+        self.laid = True
+        return list(self._ships)
+
+    def retire(self, where=None, holding=()):
+        # Recorded rather than acted on: what retiring *does* is `tests/test_skill.py`'s,
+        # and what the surface asks for is this file's.
+        self.retired_holding = tuple(holding)
+        return []
+
+    def take_back(self, where=None):
         return list(self._ships)
 
     def grant(self, whose, name):
@@ -1123,6 +1133,28 @@ class WhatThisInstallIsConfiguredWith(unittest.TestCase):
         self.assertNotIn("(default)", stated)
         self.assertIn("(default)", defaulted)
 
+    def test_a_key_nothing_reads_is_said_rather_than_left_out(self):
+        """R-CMD-11 — the silence this command exists to end, arriving by the one route
+        printing the known keys cannot show.
+
+        `ensure` keeps an unknown key exactly as it was and every reader defaults straight
+        past it, so a mistyped `keepDays` is a value an owner stated, can see in their own
+        file, and which nothing on the machine has ever read. Omitting it is telling them
+        their configuration is in force when it is not — the same failure as reporting
+        defaults for an unreadable file, one key wide.
+        """
+        (self.where / "config.json").write_text(
+            '{"backups": {"keepDays": 365}, "backupz": {"at": "05:00"}}\n', encoding="utf-8")
+
+        code, said = drive(["config"])
+
+        self.assertEqual(0, code)
+        self.assertIn("backups.keepDays", said)
+        self.assertIn("backupz", said)
+        self.assertIn("keep_days  30", said)
+        self.assertIn("(default)", next(one for one in said.splitlines()
+                                        if "keep_days" in one and "keepDays" not in one))
+
     def test_an_unreadable_configuration_is_refused_rather_than_reported_as_defaults(self):
         """R-CMD-11, R-STO-13 — printing defaults for a file that exists and cannot be
         read is telling an owner their configuration is in force when it is not."""
@@ -1132,6 +1164,31 @@ class WhatThisInstallIsConfiguredWith(unittest.TestCase):
 
         self.assertEqual(1, code)
         self.assertIn("UNREADABLE", said)
+
+
+class WhatTheInstallerDoesToTheLibrary(unittest.TestCase):
+    """`rundesk skills --lay-down` — the installer's own verb, and an upgrade route."""
+
+    def test_laying_down_also_retires_what_this_release_renamed(self):
+        """R-AGT-35 — re-running the documented `curl … | bash` over an existing install is
+        how an owner upgrades without ever typing `rundesk update`, and `skill.retire` was
+        otherwise reached from that one command only. Left out, they finish with both names
+        standing in the library and every old grant still resolving — to text no release
+        will bring forward again, which is the failure the requirement exists to stop.
+        """
+        skills = FakeSkills(ships=("managing-rundesk",))
+        agents = FakeAgents(made=("ava", "bo"))
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(["skills", "--lay-down"], gateways=FakeGateways(),
+                            machine=FakeMachine(), agents=agents, skills=skills,
+                            scripts=FakeScripts())
+
+        self.assertEqual(0, code, err.getvalue())
+        self.assertIn("managing-rundesk", out.getvalue())
+        self.assertEqual(tuple(agents.skills(name) for name in agents.known()),
+                         getattr(skills, "retired_holding", None),
+                         "the installer laid the new names down and retired nothing")
 
 
 class TheSharedIntegrationCommands(unittest.TestCase):

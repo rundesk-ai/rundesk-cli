@@ -212,5 +212,5 @@ person can paste it. Do not reach the tracker another way.
 
 **Link the work back.** A pull request that fixes one carries `Closes #<n>` — one keyword per
 issue, and the issue closes itself on merge. A bare `#<n>` closes nothing, and a fix that ships
-with its issue still open reads to everybody as work never done. `writing-pull-requests` has the
-rest of that side.
+with its issue still open reads to everybody as work never done. `writing-rundesk-pull-requests`
+has the rest of that side, if you were given it.
