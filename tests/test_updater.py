@@ -190,10 +190,17 @@ class ReleaseNotesTests(unittest.TestCase):
             apply=lambda root, tag: 0, relaunch=_stays_here,
         )
         self.assertEqual(0, code, said)
-        self.assertIn("update: applied — now on 0.2.0", said)
+        # The number carries the link rather than a line beside it (#108), so an outcome
+        # summarising this run has nothing left to append and cannot say it twice.
         self.assertIn(
-            "https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.2.0", said
+            "update: applied — now on "
+            "[0.2.0](https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.2.0)",
+            said,
         )
+        self.assertEqual(1, said.count(
+            "https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.2.0"),
+            "the release was named more than once")
+        self.assertNotIn("what changed:", said)
 
     def test_an_update_that_did_not_land_never_names_a_release_as_applied(self):
         """The one claim this must not make. What could not be brought forward is put back,

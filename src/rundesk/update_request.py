@@ -188,15 +188,24 @@ def delivered(request_id: str) -> None:
 def summary(row: dict) -> str:
     """One outcome, as `rundesk update --status` prints it and as an agent delivers it."""
     state = str(row.get("state") or "unknown").replace("_", " ")
-    version = f" ({row['version']})" if row.get("version") else ""
     result = str(row.get("result") or "").strip()
-    said = f"Rundesk update {state}{version}" + (f": {result}" if result else "")
     # **Only what succeeded is linked** (R-UPD-46, R-UPD-47). The version on a failed or
     # rolled-back request is the one that answered afterwards, which for a rollback is the
     # release the owner was already on — a release note offered beside "rolled back" reads
     # as the target having landed, which is the one thing this outcome exists to deny.
-    if row.get("state") == "succeeded":
-        where = updater.release_url(row.get("version"))
-        if where:
-            said += f"\nwhat changed: {where}"
-    return said
+    #
+    # **Behind the number, and exactly once** (#108). This used to append the release note
+    # as a line of its own, directly under the line the update had already printed — so a
+    # worker-run update handed the owner the same URL on two consecutive lines. Two things
+    # fixed it: the number carries the link rather than a line beside it, and the link is
+    # added here only when the transcript this is wrapping does not already carry that URL.
+    #
+    # Compared against the URL itself, never against the wording around it, so this never
+    # becomes a dependency on how the updater happens to phrase its own output.
+    named = row.get("version")
+    version = f" ({named})" if named else ""
+    if named and row.get("state") == "succeeded":
+        where = updater.release_url(named)
+        if where and where not in result:
+            version = f" ({updater.linked(named)})"
+    return f"Rundesk update {state}{version}" + (f": {result}" if result else "")
