@@ -54,7 +54,7 @@ rundesk backups restore [--yes] <backup>                                        
 rundesk uninstall [--purge]                                                                                                                                                                                            remove rundesk from this machine
 
 # not yet grouped
-rundesk messages [--most <n>] [--since <id>] [--channel <channel>] [--conversation <where>] [--author <who>] [--source <how>] <agent>                                                                                  what was said, newest first
+rundesk messages [--most <n>] [--since <id>] [--channel <channel>] [--conversation <where>] [--author <kind>] [--who <identity>] [--source <how>] <agent>                                                              what was said, newest first
 rundesk resume <agent>                                                                                                                                                                                                 carry one run on from where it stopped   [planned]
 rundesk scripts [--where]                                                                                                                                                                                              the integration commands every agent can invoke
 rundesk search [--most <n>] <agent> <words>                                                                                                                                                                            what was said, by the words in it
@@ -123,7 +123,7 @@ rundesk schedules ava off nightly
 --allow <user>                  who may reach this agent through it — at least one, always; repeatable
 --ask <prompt>                  what to ask this agent when it is due, in quotes — a turn rather than a program
 --at <moment>                   instead of --when: the one moment it runs, on this machine's own clock, as YYYY-MM-DDTHH:MM. It runs then and never again — a moment is given, never a phrase like 'tomorrow at nine'
---author <who>                  only what this kind of author said — one of agent | rundesk | user
+--author <kind>                 only what this kind of author said — one of agent | rundesk | user
 --channel <channel>             only what was said on this channel, by the name it was added under
 --check                         say whether a newer release exists
 --conversation <conversation>   which conversation to carry on — this terminal's, when left out
@@ -149,6 +149,7 @@ rundesk schedules ava off nightly
 --token-stdin                   read the credential this channel needs from standard input, one line; asked for at the terminal when left out
 --when <cron>                   when it runs, over and over, as five cron fields — minute, hour, day, month, weekday
 --where                         print the directory they are kept in, and nothing else
+--who <identity>                only what this one person said, as the WHO column names them
 --yes                           do not ask first — for a script, never for a person
 -n, --lines <lines>             how many of the last lines to show, from each source
 <agent>                         which agent — the name it was made under

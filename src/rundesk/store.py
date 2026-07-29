@@ -965,7 +965,7 @@ class Store:
         return [_plain(row) for row in rows]
 
     def latest(self, limit: int = 50, since=None, channel=None, author=None,
-               source=None, conversation=None) -> list:
+               source=None, conversation=None, who=None) -> list:
         """The newest things said, across every conversation this agent has had.
 
         **The question `search` cannot answer.** Searching needs a word, and the case this
@@ -1004,6 +1004,14 @@ class Store:
         if author is not None:
             where.append("m.author = ?")
             values.append(author)
+        if who is not None:
+            # Identity, not kind. `author` says *what sort of* speaker this was and is one
+            # of a closed set; this is the surface's own name for one person, so it is not
+            # checked against anything — an id nobody has simply matches nothing, which is
+            # a true answer, and refusing it would mean keeping a list of everyone who has
+            # ever spoken to this agent (R-STO-27).
+            where.append("m.who = ?")
+            values.append(str(who))
         if source is not None:
             # Asked of the run this message belongs to, which it reaches two ways: an
             # agent's answer carries `run_id`, and what a person said is what a run points
@@ -1136,6 +1144,33 @@ class Store:
             )
             if recoverable:
                 self._mark(conn, run_id, ended_at, RECOVERABLE)
+
+    def abandoned(self, ended_at: str, why: str, keep=()) -> int:
+        """Settle every run still marked as running that nothing is doing (R-GW-23).
+
+        A run is marked running when it starts, and a gateway that dies, is stopped or is
+        replaced by an update never gets to write the end of it — so the row stayed
+        `running` for ever. `rundesk runs` went on reporting a turn in flight more than a
+        day after its transcript stopped being written, and its cost stayed `not reported`,
+        which quietly undercounts every total read off it.
+
+        `keep` is what is genuinely still in flight, named by the caller because only it
+        can tell: this asks nothing about processes. Everything else is settled as
+        `stopped` rather than `failed` — the turn ended without saying so, which is the
+        same news `interrupted` already writes and not evidence that anything broke.
+
+        Returns how many were settled, so a caller can say so once rather than per row.
+        """
+        kept = tuple(str(one) for one in keep)
+        holes = ",".join("?" for _ in kept)
+        with self._writing() as conn:
+            done = conn.execute(
+                "UPDATE run SET ended_at = ?, outcome = ?, why = ?"
+                " WHERE ended_at IS NULL"
+                + (f" AND id NOT IN ({holes})" if kept else ""),
+                (ended_at, "stopped", why, *kept),
+            )
+            return int(done.rowcount or 0)
 
     def recoverable(self, channel: str) -> list:
         """Interrupted channel runs this surface may claim, oldest first (R-GW-22)."""

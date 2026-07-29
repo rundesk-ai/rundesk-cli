@@ -415,7 +415,24 @@ class Answering:
             if held is None or held.task is None or held.task.done():
                 return
             held.stopped = True
+            # **What was said behind this turn is stopped with it** (R-CH-9). A turn ending
+            # promotes whatever queued behind it, and a cancelled turn ends like any other —
+            # so a stop drained the backlog instead of ending it and the agent carried on a
+            # second later with the next message, leaving no way to actually stop short of
+            # one stop per queued message, each racing the turn it had just started.
+            #
+            # This conversation's only: `held` is one conversation's exchange, so a stop in
+            # one room ends that room's turn and backlog and leaves every other room's
+            # running turn and waiting messages untouched. Anything said *after* the stop
+            # queues afresh and is answered, because a person who stops and then says
+            # something new is asking for the new thing.
+            dropped, held.waiting = len(held.waiting), []
             held.task.cancel()
+            if dropped:
+                self._note(
+                    f"channel '{self.channel}': a stop ended the turn and dropped "
+                    f"{dropped} waiting message{'' if dropped == 1 else 's'}"
+                )
             return
         # Forgetting is about where the conversation had got to, and it ends no turn: a
         # person asking to start again is not asking to throw away the answer they are
@@ -577,6 +594,7 @@ class Answering:
                 resume_on_interrupt=lambda: (
                     self._stopping and not held.stopped and recovery_of is None
                 ),
+                stopped_by_owner=lambda: held.stopped,
                 **({"posture": recovery_of["posture"]} if recovery_of else {}),
             )
         except asyncio.CancelledError:
@@ -650,7 +668,7 @@ class Answering:
                     held.waiting.pop(index)
                     return
 
-        held.saying.put_nowait((waiting.text, pending, accepted))
+        held.saying.put_nowait((waiting.text, waiting.user, pending, accepted))
 
     def _answer(self, held: Exchange, outcome) -> None:
         """What the agent said, handed over once and whole (R-CH-8).
@@ -868,10 +886,12 @@ async def _saying(queue: asyncio.Queue):
         offered = await queue.get()
         if offered is None:
             return
-        word, pending, accepted = offered
+        word, who, pending, accepted = offered
         if not pending():
             continue
-        yield word
+        # Said with who said it, so a word steered into a running turn is written down
+        # under the same identity as the message that started it (R-STO-27).
+        yield turn.Said(word, who)
         # Reached only when the consumer asks for another word, which happens after it
         # finished sending this one. If its send failed because the provider had already
         # closed input, the async-for loop exits and this retained message becomes the

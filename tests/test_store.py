@@ -1587,6 +1587,29 @@ class ReadingBackWhatWasSaid(WithAnAgentsOwnRecords):
         self.assertEqual({"user"}, {one["author"] for one in found})
         self.assertEqual(2, len({one["space"] for one in found}))
 
+    def test_what_a_listing_shows_can_be_narrowed_to_one_person(self):
+        """R-STO-27 — reported (#106): `--author` filters on author *kind* while the WHO
+        column shows identity, so `--author user` returned rows displaying a platform id
+        and neither could answer "what did this one person say". Kind and identity are two
+        questions, and each now has its own way of being asked."""
+        kept = self.built()
+        kept.opened("room", "rooms", "rooms", "88213", AT)
+        tim = kept.arrived("room", AT, "ship it", who="tim")
+        kept.arrived("room", LATER, "not yet", who="sam")
+        kept.arrived("room", LATER, "standing instructions", author="rundesk")
+        found = kept.latest(who="tim")
+        self.assertEqual([tim], [one["id"] for one in found])
+        self.assertEqual(["user"], [one["author"] for one in found],
+                         "narrowing by identity changed what kind of author came back")
+
+    def test_narrowing_by_a_person_nobody_has_been_is_empty_rather_than_refused(self):
+        """Unlike `author` and `source`, this is not a closed set: it is whatever a surface
+        calls one person. Refusing an unknown one would mean keeping a list of everyone who
+        has ever spoken to this agent, and an id nobody has matching nothing is a true
+        answer to a question with no rows in it."""
+        kept, _ = self.furnished()
+        self.assertEqual([], kept.latest(who="nobody-by-that-name"))
+
     def test_a_narrowing_that_matches_nothing_is_empty_rather_than_everything(self):
         """The edge that turns a filter into a lie. A place nobody has spoken in must not
         fall back to the whole listing, which is how a scoped question answers a broad one."""

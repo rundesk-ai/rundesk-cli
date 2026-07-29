@@ -759,6 +759,50 @@ class StoppingWhatIsRunning(CarriesAConversation):
         stop.set()
         await self._settled(held)
 
+    async def test_a_stop_ends_the_backlog_and_does_not_promote_the_next_message(self):
+        """R-CH-9 — a turn ending starts whatever queued behind it, and a cancelled turn
+        ends like any other, so a stop drained the queue instead of ending it: the agent
+        went quiet for a beat and carried on with the next message. There was no way to
+        actually stop — *n* waiting messages needed *n* stops, each racing the turn it had
+        just started."""
+        stop = asyncio.Event()
+        brain, surface = Brain(holds=stop), Surface()
+        held = self.answering(surface, brain)
+        await held.heard(self.arrived(conversation="one", text="first"))
+        await brain.started.wait()
+        await held.heard(self.arrived(conversation="one", text="second"))
+        await asyncio.sleep(0.02)
+        await held.heard({"type": "control", "conversation": "one", "user": "2207",
+                          "control": "stop"})
+        await asyncio.sleep(0.1)
+        self.assertEqual([channel.TAKEN, channel.RUNNING, channel.STOPPED], surface.states,
+                         "the message waiting behind the stopped turn was started anyway")
+        self.assertEqual([], held.exchanges["one"].waiting)
+        stop.set()
+        await self._settled(held)
+
+    async def test_a_stop_leaves_another_conversations_backlog_alone(self):
+        """R-CH-9 — the gesture is aimed at one conversation. Ending every backlog on the
+        channel would make a stop in one room throw away what somebody had queued in
+        another."""
+        stop = asyncio.Event()
+        brain, surface = Brain(holds=stop), Surface()
+        held = self.answering(surface, brain)
+        await held.heard(self.arrived(conversation="one", text="first"))
+        await held.heard(self.arrived(conversation="two", text="first"))
+        await asyncio.sleep(0.02)
+        await held.heard(self.arrived(conversation="one", text="second"))
+        await held.heard(self.arrived(conversation="two", text="second"))
+        await asyncio.sleep(0.02)
+        await held.heard({"type": "control", "conversation": "one", "user": "2207",
+                          "control": "stop"})
+        await asyncio.sleep(0.05)
+        self.assertEqual([], held.exchanges["one"].waiting)
+        self.assertEqual(1, len(held.exchanges["two"].waiting),
+                         "a stop in one conversation dropped another's waiting message")
+        stop.set()
+        await self._settled(held)
+
     async def test_a_stopped_turn_is_marked_as_stopped_rather_than_failed(self):
         """R-CAD-3 — "it stopped" and "it broke" are different news about the same
         silence, and only one of them means somebody should look at something."""
@@ -809,8 +853,27 @@ class ASecondMessageWhileOneIsRunning(CarriesAConversation):
         stop.set()
         await self._settled(held)
         self.assertEqual(["actually, stop at three"],
-                         [self.words(one) for one in brain.steered])
+                         [self.words(one.text) for one in brain.steered])
         self.assertEqual(1, len(brain.asked), "it started a second turn as well")
+
+    async def test_a_word_steered_into_a_running_turn_carries_who_said_it(self):
+        """R-STO-27 — what a person says mid-turn is a message of its own and is written
+        down as one, so it needs the identity the message that started the turn already
+        carries. Reported (#106): the same person appeared throughout one conversation
+        twice over — by their platform identity when they began a turn, and as the bare
+        word `user` whenever they spoke into one already running."""
+        stop = asyncio.Event()
+        brain = Brain(holds=stop, can={"steer": True})
+        held = self.answering(Surface(), brain)
+        await held.heard(self.arrived(text="count to ten", user="2207"))
+        await brain.started.wait()
+        await asyncio.sleep(0.02)
+        await held.heard(self.arrived(text="stop at three", user="2207"))
+        await asyncio.sleep(0.02)
+        stop.set()
+        await self._settled(held)
+        self.assertEqual(["2207"], [one.who for one in brain.steered],
+                         "a word said into a running turn reached it unattributed")
 
     async def test_a_brain_that_cannot_be_steered_answers_the_second_message_after(self):
         """A brain that will never read again must not be held open for words, so they
@@ -872,7 +935,7 @@ class ASecondMessageWhileOneIsRunning(CarriesAConversation):
         await self._settled(held)
         self.assertEqual(1, len(brain.asked), "a burst became several turns")
         self.assertEqual(["and also this", "and this"],
-                         [self.words(one) for one in brain.steered])
+                         [self.words(one.text) for one in brain.steered])
 
     async def test_the_mark_stays_on_the_message_that_asked(self):
         """R-DIS-8 — a second message sent while a turn runs took the mark that belonged
