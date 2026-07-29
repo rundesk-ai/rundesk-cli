@@ -34,6 +34,7 @@ account: how much of a plan is left is that provider's question, not this one's.
 | ❌ | R-USE-11 | Nothing about a provider's plan or remaining allowance is claimed | src/rundesk/turn.py:236 — nothing asks a brain about a plan, so nothing proves it is not asked |
 | ✅ | R-USE-12 | What one run cost names the cached input its provider reported, apart from fresh input | `a runs listing shows the cached input a provider reported`, `a run whose provider reported no cache at all claims none` |
 | ✅ | R-USE-13 | Tokens written into a provider's cache are recorded apart from fresh input, and are absent where the provider does not report the split | `four billed quantities are reported in four slots`, `a brain that does not report cache writes claims none`, `what one run cost names the cache writes its provider reported`, `a total sums the cache writes that were reported`, `rows written before there was a column for cache writes stay unknown` |
+| ✅ | R-USE-14 | A turn's input is the size it ended at, never the same prompt counted once per request | `the input side is where the turn ended not every request added up`, `a subagents own conversation is not where this turn ended`, `what a turn cost is reported once and never added up` |
 
 ## Open questions
 

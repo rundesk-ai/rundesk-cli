@@ -41,6 +41,7 @@ worth having if what it did can be read back afterwards.
 | ✅ | R-RUN-18 | Two finished thoughts are two paragraphs in the one reply, and a reply arriving in fragments is still one sentence | `two finished thoughts do not run into each other`, `a reply arriving a piece at a time is still one sentence`, `fragments still open are closed by the thought that follows`, `what a brain put inside one thought is left exactly as it said it`, `nothing but text records reach the reply`, `a turn that said nothing replies with nothing` |
 | ✅ | R-RUN-19 | Why a turn stopped is one of a closed set of words, kept beside the brain's own sentence and never inferred from it | `a turn stopped for a reason the seam has a word for records that word`, `a word this rundesk does not know is dropped rather than stored`, `a run whose brain classified nothing keeps its prose and no word`, `what a run came to names the reason it stopped`, `rows written before there was a column for a reason stay unknown` |
 | ✅ | R-RUN-20 | A turn that ended without saying so says which of the two silences it was — a person stopping it, or the gateway going | `a turn a person stopped is not recorded as a gateway outage`, `a cancelled turn does not stay running for ever` |
+| ✅ | R-RUN-21 | A turn that answered nobody is recorded as failed and says so, whatever the brain and its exit code claimed | `a turn that answered nobody is not a turn that worked`, `whitespace is not an answer either` |
 
 ## Open questions
 

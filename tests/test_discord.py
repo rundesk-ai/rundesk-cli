@@ -471,6 +471,15 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         self.assertIn("13 output", said)
         self.assertNotIn("0k output", said)
 
+    def test_a_count_in_the_millions_is_not_shown_in_thousands(self):
+        """R-DIS-17 — a cache read is counted once per request, so a turn that made forty
+        of them reported `15425k cached`: a unit nobody carries that far, which a reader
+        has to divide in their head before it means anything. The decimal stays, because
+        rounding one away is half a million tokens."""
+        self.assertEqual(["999k", "1M", "1.4M", "15.4M"],
+                         [discord._amount(one)
+                          for one in (999_499, 999_500, 1_400_000, 15_424_940)])
+
     def test_a_turn_that_reported_no_cost_says_nothing_about_it(self):
         """An absent number is not a zero, and inventing one is claiming a measurement."""
         self.assertEqual("", discord._as_a_line({"type": "usage"}))

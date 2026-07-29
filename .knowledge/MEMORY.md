@@ -567,5 +567,13 @@ re-checked since, so treat these as true-when-found rather than as current.*
   passes. What actually holds "both copies survive a failed step" is the `ROLLBACK` in `_one`;
   probe *that* (turn it into a `COMMIT`) and the copying cases fail as they should.
 
+- **`test_process` fails three cases when the gate is run by an agent rundesk is running.**
+  A gateway exports a dozen `RUNDESK_*` variables into the turn's environment — `RUNDESK_HOME`,
+  `RUNDESK_AGENTS_DIR`, `RUNDESK_CWD` and the rest — and those cases assert on a environment
+  built from a fixture's own paths, so they read the live install's instead and the diff looks
+  like a real defect in what a program is handed. It is not: clear the `RUNDESK_*` names and
+  all 101 pass. CI never sees it, because CI is not an agent. Check `env | grep RUNDESK`
+  before spending a diagnosis on it.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

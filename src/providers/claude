@@ -27,9 +27,12 @@ fragments do not survive it: a fragment is held to the end of the turn either wa
 completed thought can be shown the moment the next one lands. Claude says several complete
 things as it works, so this is the brain that is *better* read whole.
 
-**Usage comes from the `result` line and nowhere else.** `message_start` and
-`message_delta` each carry a full usage block too, and counting them is how a turn ends up
-reporting three times what it cost.
+**Usage is read, never added up.** `message_start` and `message_delta` carry a full usage
+block too, and *counting* them is how a turn ends up reporting three times what it cost.
+The output total comes from the `result` line, which is the one quantity that is genuinely
+a sum. The input side is taken from the last `assistant` line — the size the turn ended at
+— because the `result` line adds the same resent prefix up once per request, and a turn of
+58 requests reported 15,424,940 cached tokens for a conversation of 353,942.
 
 **Fresh and cached are never added together.** A captured turn shows 20 fresh tokens
 against 302,567 cache reads. Cache *creation* is billed above standard input, so it belongs
@@ -367,6 +370,13 @@ def _assistant(one: dict, seen: dict) -> list:
     """What the brain said and what it reached for, from the line that carries both whole."""
     said = []
     seen["session"] = one.get("session_id") or seen.get("session")
+    # Where the turn got to, kept as a level and never added up. This line carries the
+    # whole message again each time it grows, so the last one to arrive is the size the
+    # turn ended at. A subagent's line is its own conversation and not this one, which
+    # `parent_tool_use_id` is how this vendor says.
+    counted = one.get("message", {}).get("usage")
+    if isinstance(counted, dict) and one.get("parent_tool_use_id") is None:
+        seen["ended_on"] = counted
     for block in one.get("message", {}).get("content", []):
         if not isinstance(block, dict):
             continue
@@ -465,11 +475,21 @@ def _ended(one: dict, seen: dict) -> list:
     # recorded, and shown in a chat footer, as 5,552. A cache write bills *above* standard
     # input and a cache read at roughly a tenth of it, which is the same reasoning that
     # already kept reads apart, applied in the other direction.
+    #
+    # **The input side is where the turn ended, not every request added up.** A prompt is
+    # sent again on every request of a turn, so the `result` line's cache reads are that
+    # prefix counted once per request: a measured turn of 58 requests reported 15,424,940
+    # cached where the conversation it ended on was 353,942. Nobody can read the first
+    # number as anything — it describes a bill, not a turn — so the three input quantities
+    # are taken from the last message instead, which is the size the turn actually reached.
+    # **Output stays the total**, because output is the one quantity never sent twice:
+    # every token is generated once, so adding them up is exactly what the turn wrote.
+    at_end = seen["ended_on"] if isinstance(seen.get("ended_on"), dict) else counted
     usage = {"type": "usage",
-             "input": _n(counted, "input_tokens"),
+             "input": _n(at_end, "input_tokens"),
              "output": _n(counted, "output_tokens"),
-             "cached": _n(counted, "cache_read_input_tokens"),
-             "written": _n(counted, "cache_creation_input_tokens")}
+             "cached": _n(at_end, "cache_read_input_tokens"),
+             "written": _n(at_end, "cache_creation_input_tokens")}
     if seen.get("model"):
         usage["model"] = seen["model"]
 
