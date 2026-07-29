@@ -176,6 +176,7 @@ prompt = sys.stdin.read()
 told = {what: os.environ.get(what) for what in (
     "RUNDESK_CWD", "RUNDESK_PROVIDER_HOME", "RUNDESK_SKILLS", "RUNDESK_MODEL",
     "RUNDESK_RUN", "RUNDESK_RESUME", "RUNDESK_POSTURE", "RUNDESK_SETTINGS",
+    "RUNDESK_CONTINUITY",
 )}
 say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
 say(type="text", text=json.dumps({"told": told, "where": os.getcwd(), "prompt": prompt}))
@@ -538,6 +539,19 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
         said = json.loads(turn.of("text")[0]["text"])
         self.assertEqual(str(self.where / "cwd" / "skills"), said["told"]["RUNDESK_SKILLS"])
 
+    async def test_an_adapter_is_told_which_files_the_agent_lives_by(self):
+        """R-PRV-29 — an adapter that carried these four names would be holding a copy of
+        rundesk's layout, and renaming one here would silently stop being reported by
+        every adapter at once. Told rather than inferred, exactly as skills are."""
+        turn = await self.carry(self.stand_in("nosy"))
+        said = json.loads(turn.of("text")[0]["text"])
+        told = dict(pair.split("=", 1)
+                    for pair in said["told"]["RUNDESK_CONTINUITY"].split(","))
+        self.assertEqual(provider.CONTINUITY, told)
+        for verb in told.values():
+            self.assertIn(verb, provider.DID,
+                          "a file is named for a verb no surface can show")
+
     async def test_the_prompt_arrives_on_the_stream_meant_for_it(self):
         """R-PRV-4 — never on a command line, where the process list and the shell's
         history would both keep a copy of whatever was asked."""
@@ -594,7 +608,7 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
         expected = ["HOME", "PATH", "RUNDESK_HOME", "TERM", "LANG", "RUNDESK_CWD",
                     "RUNDESK_PROVIDER_HOME", "RUNDESK_SKILLS", "RUNDESK_RUN",
                     "RUNDESK_POSTURE", "RUNDESK_MODEL", "RUNDESK_RESUME",
-                    "RUNDESK_SCRIPTS", "RUNDESK_SKILL_LIBRARY"]
+                    "RUNDESK_SCRIPTS", "RUNDESK_SKILL_LIBRARY", "RUNDESK_CONTINUITY"]
         if os.environ.get("RUNDESK_AGENTS_DIR"):
             expected.append("RUNDESK_AGENTS_DIR")
         self.assertEqual(

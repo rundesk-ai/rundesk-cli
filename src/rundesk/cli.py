@@ -1811,6 +1811,12 @@ class _Shown:
             sys.stdout.flush()
         elif kind == "tool":
             did = said.get("did") or "using"
+            if did in provider.CONTINUITY.values():
+                # What changed, and not which tool changed it (R-PRV-29). These four name
+                # a file rather than an act, so the vendor's own word beside one reads as
+                # `rules Write` — and which tool wrote it is the half nobody wanted.
+                print(f"        · updated {did}", file=sys.stderr)
+                return
             print(f"        · {did} {said.get('name') or ''}".rstrip(), file=sys.stderr)
         elif kind == "result" and not said.get("ok"):
             print("        · that did not work", file=sys.stderr)
