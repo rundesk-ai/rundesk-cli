@@ -64,8 +64,10 @@ TROUBLE_KEPT = 20
 
 #: The two rundesk puts into a turn itself, and the one it records about a turn going wrong.
 #: `SENT` is a thing *said* and becomes a message; `LOST` is a record, and is the only one of
-#: rundesk's own that `store.RECORD_KINDS` knows — using any other name here would be stored
-#: as `unknown`, which is why there are no other names here to use.
+#: rundesk's own that `store.RECORD_KINDS` knows. Anything else rundesk writes is stored as
+#: `unknown` with its own words beside it — which is deliberate for `recovery` and `RETRY`
+#: below, both lifecycle bookkeeping about an execution rather than a new shape of owner data,
+#: and is a mistake for anything that is neither.
 SENT = "sent"
 LOST = "lost"
 
