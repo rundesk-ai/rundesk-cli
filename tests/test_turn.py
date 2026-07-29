@@ -929,6 +929,28 @@ class WhatOneReplyIsMadeOf(unittest.TestCase):
                 {"type": "text", "text": "Then a finished thought.", "whole": True}]
         self.assertEqual("half a sentence\n\nThen a finished thought.", turn._reply(said))
 
+    def test_fragments_on_each_side_of_a_tool_call_are_two_thoughts(self):
+        """The seam for a brain that never marks anything finished. Joined with nothing, a
+        grok turn reads back `caught it running.The worker` — the very shape the case above
+        exists to prevent, arriving by the other door."""
+        said = [{"type": "text", "text": "caught it "},
+                {"type": "text", "text": "running."},
+                {"type": "tool", "name": "Bash", "id": "one"},
+                {"type": "result", "id": "one", "ok": True},
+                {"type": "text", "text": "The worker (PID 72422) "},
+                {"type": "text", "text": "is blocked."}]
+        self.assertEqual("caught it running.\n\nThe worker (PID 72422) is blocked.",
+                         turn._reply(said))
+
+    def test_a_tool_a_brain_never_announced_still_ends_the_thought(self):
+        """An adapter may hear of a tool only once it is over, and report the terminal
+        update alone. The seam has to be found there too, or the thoughts on each side of
+        work nobody saw start fuse back together."""
+        said = [{"type": "text", "text": "looking"},
+                {"type": "result", "id": "one", "ok": True},
+                {"type": "text", "text": "found it"}]
+        self.assertEqual("looking\n\nfound it", turn._reply(said))
+
     def test_nothing_but_text_records_reach_the_reply(self):
         """A turn says more than it replies with: what it thought and what a tool returned
         are kept, and are not what somebody asked for."""
@@ -984,11 +1006,30 @@ class WhatATurnClosesOn(unittest.TestCase):
     def test_a_reply_no_brain_ever_called_finished_is_still_the_close(self):
         """An adapter that never marks a thought `whole` says one thing in fragments, and
         that one thing is what it closed on — not nothing, which is what reading only
-        `whole` records would deliver."""
+        `whole` records would deliver. Nothing was said before further tool calls here, so
+        there is no working to drop and the whole of it is the close."""
         said = [{"type": "text", "text": "one "},
                 {"type": "text", "text": "whole "},
                 {"type": "text", "text": "sentence"}]
         self.assertEqual("one whole sentence", turn._close(said))
+
+    def test_a_brain_that_never_marks_a_thought_finished_still_drops_its_working(self):
+        """**The guarantee on the two adapters that cannot mark a thought `whole`** —
+        `grok`, which refuses it on purpose, and `antigravity`, whose deltas carry it only
+        on a terminal fallback nothing reaching here ever takes. Read on `whole` alone this
+        close is the entire turn, narration and all, and a schedule on either brain still
+        delivers its working. Going to work is the seam that makes it the report."""
+        said = [{"type": "text", "text": "I'll start by reading "},
+                {"type": "text", "text": "the repository instructions."},
+                {"type": "tool", "name": "Read", "id": "one"},
+                {"type": "result", "id": "one", "ok": True},
+                {"type": "text", "text": "Selected candidate: the first one."},
+                {"type": "tool", "name": "Bash", "id": "two"},
+                {"type": "result", "id": "two", "ok": True},
+                {"type": "text", "text": "Done. "},
+                {"type": "text", "text": "One report."}]
+        self.assertEqual("Done. One report.", turn._close(said))
+        self.assertNotEqual(turn._reply(said), turn._close(said))
 
     def test_what_a_brain_said_after_its_last_finished_thought_is_the_close(self):
         """A brain cut off part-way through writing its next thought still said that much,

@@ -2547,6 +2547,20 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
                          "be brief", "ops", "#operations", "asks a turn"):
             self.assertIn(expected, said, f"showing a schedule never said {expected!r}")
 
+    def test_a_place_a_schedule_has_no_channel_for_still_reads_back(self):
+        """R-SCH-42 — `add` permits `--in` without `--to`, so the word sits in the row doing
+        nothing. Saying only "nobody" would positively assert it was not there, in the one
+        command that exists so an owner never has to open that database — and a later
+        `--to` would then switch on delivery into a place `show` never disclosed."""
+        kept = self.agents.records("gateway")
+        kept.remember_schedule("orphan", "0 5 * * *", store.stamped(), prompt="check",
+                               place="#operations")
+        code, said = drive(["schedules", "gateway", "show", "orphan"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("#operations", said, "a place in the row was never shown")
+        self.assertIn("nobody", said, "it claimed a surface it has not got")
+
     def test_a_schedule_that_is_not_there_is_said_rather_than_shown_as_empty(self):
         """R-SCH-42 — the same answer `channels show` gives, and never an empty table, which
         reads as a schedule that holds nothing."""
@@ -2697,6 +2711,21 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         self.assertEqual(1, code, said)
         self.assertIn("no channel called", said)
         self.assertIsNone(self.schedules_of("gateway")[0]["channel"])
+
+    def test_a_prompt_that_is_nothing_but_space_is_refused_by_a_change_too(self):
+        """R-SCH-44 — `add` strips before it decides, so `--ask "   "` there is a schedule
+        naming neither a program nor a prompt and is refused. A change that did not strip
+        accepted it, and the schedule stayed enabled and fired nightly asking a brain a
+        blank line, with `show` rendering an empty `asks` row that reads as a display
+        fault."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "nightly", "when": "0 3 * * *", "ask": "what changed?"}]})
+        code, said = drive(["schedules", "gateway", "edit", "nightly", "--ask", "   "],
+                           gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("NOT CHANGED", said)
+        self.assertEqual("what changed?", self.schedules_of("gateway")[0]["prompt"],
+                         "a change that was refused wrote a blank prompt anyway")
 
     def test_a_program_named_rather_than_located_is_refused_by_a_change_too(self):
         """R-PROC-2, R-SCH-43 — a gateway runs with almost no PATH, so a bare name resolves

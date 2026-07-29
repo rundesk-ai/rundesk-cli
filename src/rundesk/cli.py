@@ -3269,14 +3269,37 @@ def _show_schedule(args: argparse.Namespace, kept) -> int:
             one for one in (row.get("provider"), row.get("model")) if one)
             or "whatever the agent uses"))
         rows.append(("instructions", str(row.get("instructions") or "nothing of its own")))
-    rows.append(("reports to", (
-        str(row["channel"]) + (f", in {row['place']}" if row.get("place") else "")
-    ) if row.get("channel") else "nobody — it is in the account either way"))
+    place = str(row.get("place") or "")
+    if row.get("channel"):
+        rows.append(("reports to",
+                     str(row["channel"]) + (f", in {place}" if place else "")))
+    elif place:
+        # **A place with no surface to be a place on.** `add` permits `--in` without `--to`,
+        # so the word is sitting in the row doing nothing — and a line saying only "nobody"
+        # would positively assert it was not there, in the one command that exists so an
+        # owner never has to open that database. Said here, a later `--to` switches on
+        # delivery into a place they were shown rather than one they were told was absent.
+        rows.append(("reports to", f"nobody — and {place} is kept, reaching nothing until "
+                                   f"a channel is named"))
+    else:
+        rows.append(("reports to", "nobody — it is in the account either way"))
     rows.append(("last run", f"{ran} — {row.get('last_outcome') or '?'}" if ran
                  else "never"))
     rows.append(("added", str(row.get("created_at") or "-")))
     _as_table(("WHAT", "IS"), rows)
     return 1 if refused else 0
+
+
+def _typed(one):
+    """What an owner typed, without the space around it — and still `None` when they did not
+    type it at all.
+
+    The three states a change has to keep apart: absent leaves a field alone, empty says it
+    off, and whitespace is empty (R-SCH-44). `add` has always stripped; a change that did
+    not accepted `--ask "   "`, which `add` refuses outright, and left the schedule enabled
+    and firing nightly asking a brain a blank line.
+    """
+    return one if one is None else one.strip()
 
 
 def _edit_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
@@ -3301,10 +3324,15 @@ def _edit_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
         print(f"{args.name}/{args.schedule}: NOT FOUND — no schedule by that name",
               file=sys.stderr)
         return 1
+    # Stripped as it arrives, the way `add` already does — every decision below is then
+    # asked of what was meant rather than of what was typed around it (R-SCH-44).
+    when, moment = _typed(args.when), _typed(args.moment)
+    prompt, to = _typed(args.prompt), _typed(args.channel)
     given = {
-        "cron": args.when, "at": args.moment, "prompt": args.prompt,
-        "provider": args.provider, "model": args.model, "instructions": args.says,
-        "channel": args.channel, "place": args.place,
+        "cron": when, "at": moment, "prompt": prompt,
+        "provider": _typed(args.provider), "model": _typed(args.model),
+        "instructions": _typed(args.says),
+        "channel": to, "place": _typed(args.place),
     }
     if runs:
         given["command"] = runs
@@ -3315,17 +3343,17 @@ def _edit_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
         print(f"        what it is now:  rundesk schedules {args.name} show "
               f"{args.schedule}", file=sys.stderr)
         return 1
-    if args.when and args.moment:
+    if when and moment:
         print(f"{args.name}/{args.schedule}: NOT CHANGED — a schedule states a repeating "
               f"time or a single moment, never both", file=sys.stderr)
         return 1
-    if args.prompt and runs:
+    if prompt and runs:
         print(f"{args.name}/{args.schedule}: NOT CHANGED — a schedule starts a program or "
               f"asks a turn, never both", file=sys.stderr)
         return 1
-    if args.moment:
+    if moment:
         try:
-            made = schedule.Schedule(args.schedule, None, at=args.moment.strip())
+            made = schedule.Schedule(args.schedule, None, at=moment)
         except schedule.NotASchedule as why:
             print(f"{args.name}/{args.schedule}: NOT CHANGED — {why}", file=sys.stderr)
             print(f"        say a moment ahead of now, as {schedule.SAID_AS}",
@@ -3348,19 +3376,18 @@ def _edit_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
                   f"started this schedule, and a single moment is spent once it has "
                   f"(R-SCH-38), so it could never run", file=sys.stderr)
             print(f"        add a new schedule for that moment:  rundesk schedules "
-                  f"{args.name} add <name> --at {args.moment}", file=sys.stderr)
+                  f"{args.name} add <name> --at {moment}", file=sys.stderr)
             return 1
         named["at"] = made.stated.strftime(schedule.A_MINUTE)
-    if args.when:
+    if when:
         try:
-            schedule.Schedule(args.schedule, args.when.strip())
+            schedule.Schedule(args.schedule, when)
         except schedule.NotASchedule as why:
             print(f"{args.name}/{args.schedule}: NOT CHANGED — {why}", file=sys.stderr)
             return 1
-        named["cron"] = args.when.strip()
-    if args.channel and kept.channel(args.channel.strip()) is None:
+    if to and kept.channel(to) is None:
         print(f"{args.name}/{args.schedule}: NOT CHANGED — this agent has no channel "
-              f"called '{args.channel.strip()}'", file=sys.stderr)
+              f"called '{to}'", file=sys.stderr)
         print(f"        what it has:  rundesk channels {args.name}", file=sys.stderr)
         return 1
     if runs and not process.located(runs[0]):

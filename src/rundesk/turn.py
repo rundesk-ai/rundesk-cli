@@ -736,6 +736,12 @@ async def _saying(program, prompt: str, writing, steering, trouble: list) -> Non
         await program.close_input()
 
 
+#: Going to work, in the brain's own records. An adapter reports the call and it reports the
+#: call's one terminal update; both are here because a tool already over by the time this
+#: process heard of it arrives as a `result` alone, and the seam must still be found.
+WENT_TO_WORK = ("tool", "result")
+
+
 def _thoughts(said: list) -> list:
     """What the brain said, split where it finished a thought.
 
@@ -749,13 +755,33 @@ def _thoughts(said: list) -> list:
     Fragments are still joined with nothing, because a reply arriving a piece at a time is
     one sentence and not several.
 
+    **A brain that never marks anything finished still finishes a thought by going to
+    work.** `whole` alone is not a seam every adapter has: of the four that ship, `grok`
+    refuses it on purpose — it writes its reply a token at a time and nothing in the stream
+    ever restates it — and `antigravity` streams its response as deltas, marking `whole`
+    only on a terminal fallback taken when nothing streamed at all. Read on `whole` alone,
+    every turn either of them takes is one thought, so `caught it running.The worker` comes
+    straight back for them and a scheduled turn's close is everything it said. What both do
+    report is the moment the brain stopped talking and called a tool, and that is the same
+    seam said another way: a thought said *before* further tool calls is working narration.
+    So the split is defined for every adapter that ships, and a brain that streamed straight
+    through without ever going to work said one thing — which is both its reply and its
+    close, and is right, because there was no working to drop.
+
     One split, read two ways: everything as one reply, and the last of them on its own. Two
     walks of the same records would agree until one of them was changed, and then a turn
     would deliver a thought that is not the one its account says it ended on.
     """
     parts, piece = [], ""
     for one in said:
-        if one.get("type") != "text":
+        kind = one.get("type")
+        if kind in WENT_TO_WORK:
+            # Whatever was open is finished: the brain left off saying it to do something.
+            if piece:
+                parts.append(piece)
+                piece = ""
+            continue
+        if kind != "text":
             continue
         text = str(one.get("text") or "")
         if not one.get("whole"):
@@ -792,11 +818,21 @@ def _close(said: list) -> str:
     the blank lines inside it are the brain's. What is dropped is a thought said *before*
     further tool calls, which is working narration and is what this exists to drop.
 
+    **On every adapter, including the two that never mark a thought finished.** `_thoughts`
+    ends an open run of fragments where the brain went to work, so `grok` and `antigravity`
+    close on their last uninterrupted run rather than on the whole turn. What that costs is
+    stated there: a brain of theirs that narrates and answers in one breath, with no tool
+    call between, delivers both — there is no seam in what it said, and inventing one would
+    cut a sentence in half.
+
     The turn is not lost with it: every record the brain reported is in the run's own
     transcript, exactly as it arrived (R-PRV-5). It is not in the run's account, which keeps
-    what a turn *did* and never what it said — and that transcript may be destroyed to
-    reclaim space (R-STO-5, R-RUN-23), so what is dropped here is dropped for good once it
-    has been.
+    what a turn *did* and never what it said — and that transcript is bounded to its own
+    tail on every turn (R-RUN-22) and may be destroyed entirely to reclaim space (R-STO-5,
+    R-RUN-23). The trim is the near one: it keeps the end and discards the head, which is
+    exactly the early narration dropped here, and it runs the minute the turn ends rather
+    than in seven days. So what is dropped here is dropped for good as soon as a run is long
+    enough, and runs this long are what motivated the change.
     """
     thoughts = _thoughts(said)
     return thoughts[-1] if thoughts else ""
