@@ -88,6 +88,11 @@ rather than returning nothing. Use `runs` instead when you see that.
 **A schedule that names you runs a whole turn**, with its own conversation and its own memory.
 Work you did on one is not in front of you now.
 
+**A schedule is the owner's clock, not your queue.** It exists to put something in front of them
+at a moment they chose — a reminder, a check, a report they asked for. Never add one to move your
+own work out of the turn you are in, to finish something later, or because a turn is getting
+long: work you want done in the background is your own delegation, and the clock is not it.
+
 ## The rest
 
 [`references/the-manual.md`](./references/the-manual.md) is everything else rundesk does,

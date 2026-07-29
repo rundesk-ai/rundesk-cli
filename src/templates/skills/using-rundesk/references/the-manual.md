@@ -184,10 +184,29 @@ after Rundesk checks authorization and the adapter. The next message in that Dis
 conversation starts fresh; an already-running turn finishes with the provider it began
 with. Shared channels cannot change an agent-wide default.
 
-**Work that starts itself, and where its answer goes.** A schedule can run a program — a
-script, a command, anything with a full path — or ask a turn, and `--to <channel>` is how its
-outcome reaches a surface, named by the channel it was added under rather than by anything
-about the platform:
+**A schedule is the owner's clock, and what it produces is theirs.** Every one of them should
+answer two questions: *what does the owner get, and when*. There are only two shapes — a
+one-time reminder or check at a moment they chose, and a recurring report they asked for. A
+schedule with no owner-facing outcome is a schedule nobody asked for.
+
+**It is not a way to move your own work out of a turn.** This is the reading to refuse, and it
+is easy to fall into because everything below is mechanism: scheduling a run to finish what the
+current turn started, scheduling because a turn is getting long, scheduling as a queue or a
+retry for yourself. None of those produces a deliverable, and each one hides work from the
+conversation that asked for it — the person waiting gets an answer that says the real answer is
+coming later, from somewhere they cannot see. **Work you want done in the background is your own
+delegation** — a subagent, a background task, whatever the brain running you offers. The clock
+is not it.
+
+The one thing that sits close to that line and is *not* the same: a **one-time schedule as a
+safety net** for something that will outlive this turn — a queued update, a restart, a check on a
+state that has not settled yet. That is allowed, because what it produces is a report the owner
+is owed about something they asked for. The test is not whether the work happens later; it is
+whether the owner gets something at the end of it.
+
+**How it reaches them.** A schedule can run a program — a script, a command, anything with a full
+path — or ask a turn, and `--to <channel>` is how its outcome reaches a surface, named by the
+channel it was added under rather than by anything about the platform:
 
 ```sh
 rundesk schedules <name> add nightly --when "0 6 * * *" \

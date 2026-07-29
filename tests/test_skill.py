@@ -19,6 +19,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk import skill
 
+#: What this release really declares and really ships, taken at import — every class below
+#: points `skill.SHIPPED` at a scratch directory, so by the time a test runs neither can be
+#: read off the module any more.
+REALLY_RENAMED = dict(skill.RENAMED)
+REALLY_SHIPPED = skill.SHIPPED
+
 
 def a_skill(at: Path, name: str, described: str = None, says: str = "") -> Path:
     """One skill on disk, in the shape every brain reads."""
@@ -325,6 +331,111 @@ class BringingTheBuiltInsForward(WithALibrary):
         blocked.chmod(0o500)
         self.addCleanup(blocked.chmod, 0o700)
         self.assertEqual([], skill.lay_down(blocked))
+
+
+class WhatARenameDoes(WithALibrary):
+    """A built-in this release ships under a name an earlier one did not use.
+
+    The failure this guards is quiet rather than loud: `lay_down` alone leaves the old
+    directory standing with the old text in it and every grant of it still resolving, so
+    an agent reads superseded instructions and nothing anywhere says so.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.release = self.where / "app" / "src" / "templates" / "skills"
+        self.release.mkdir(parents=True)
+        was_shipped, was_renamed = skill.SHIPPED, skill.RENAMED
+        skill.SHIPPED = self.release
+        skill.RENAMED = {"reporting-a-bug": "filing-issues"}
+        self.addCleanup(setattr, skill, "SHIPPED", was_shipped)
+        self.addCleanup(setattr, skill, "RENAMED", was_renamed)
+
+    def _both_names(self):
+        """The old built-in laid down, then the release renaming it."""
+        a_skill(self.release, "reporting-a-bug", says="the old words")
+        skill.lay_down(self.library)
+        shutil.rmtree(self.release / "reporting-a-bug")
+        a_skill(self.release, "filing-issues", says="the new words")
+        skill.lay_down(self.library)
+
+    def test_every_rename_names_a_skill_this_release_ships(self):
+        """R-AGT-35 — a rename pointing at a name nobody ships carries every grant of the
+        old one into nothing. Asserted against the real directory rather than the scratch
+        one, because the value being checked is the declaration this release makes."""
+        really_shipped = tuple(sorted(
+            one.name for one in REALLY_SHIPPED.iterdir()
+            if (one / skill.NAMED).is_file()))
+        for old, new in REALLY_RENAMED.items():
+            self.assertIn(new, really_shipped,
+                          f"{old} was renamed to {new}, which this release does not ship")
+            self.assertNotIn(old, really_shipped,
+                             f"{old} is both retired and still shipped")
+
+    def test_a_renamed_built_in_is_taken_out_of_the_library(self):
+        """R-AGT-35 — left there it is not a broken link but a working one, pointing at
+        text the release has replaced."""
+        self._both_names()
+        self.assertEqual(["reporting-a-bug"], skill.retire(self.library))
+        self.assertFalse((self.library / "reporting-a-bug").exists())
+        self.assertIn("the new words",
+                      (self.library / "filing-issues" / skill.NAMED).read_text())
+
+    def test_a_grant_of_a_renamed_built_in_becomes_a_grant_of_the_new_name(self):
+        """R-AGT-35 — an agent that held it goes on holding it, under the name it now has."""
+        self._both_names()
+        skill.grant(self.mine, "reporting-a-bug", self.library)
+
+        skill.retire(self.library, holding=(self.mine,))
+
+        self.assertEqual(["filing-issues"], skill.granted(self.mine))
+        self.assertTrue((self.mine / "filing-issues" / skill.NAMED).is_file(),
+                        "the carried grant does not resolve to the new skill")
+
+    def test_a_rename_never_hands_the_new_skill_to_an_agent_without_the_old(self):
+        """R-AGT-35 — a grant is carried, never handed out. Nothing records that a grant
+        was taken away, so anything that gave the new name to everybody would hand back,
+        on every update, the skill an owner had just revoked."""
+        self._both_names()
+
+        skill.retire(self.library, holding=(self.mine,))
+
+        self.assertEqual([], skill.granted(self.mine))
+
+    def test_a_skill_the_owner_wrote_under_the_old_name_is_never_retired(self):
+        """R-AGT-29, R-AGT-35 — a rename in a release must be incapable of taking away
+        work somebody did, whatever they happened to call it."""
+        a_skill(self.release, "filing-issues")
+        skill.lay_down(self.library)
+        theirs = a_skill(self.library, "reporting-a-bug", says="a month of work")
+        skill.grant(self.mine, "reporting-a-bug", self.library)
+
+        self.assertEqual([], skill.retire(self.library, holding=(self.mine,)))
+
+        self.assertEqual("a month of work\n", (theirs / skill.NAMED).read_text().splitlines()[-1]
+                         + "\n")
+        self.assertEqual(["reporting-a-bug"], skill.granted(self.mine))
+
+    def test_nothing_is_carried_until_the_new_name_is_in_the_library(self):
+        """R-AGT-35 — a library that could not be written to leaves the new name absent,
+        and a grant carried into nothing is a skill the agent no longer has."""
+        a_skill(self.release, "reporting-a-bug")
+        skill.lay_down(self.library)
+        skill.grant(self.mine, "reporting-a-bug", self.library)
+
+        self.assertEqual([], skill.retire(self.library, holding=(self.mine,)))
+
+        self.assertEqual(["reporting-a-bug"], skill.granted(self.mine))
+        self.assertTrue((self.library / "reporting-a-bug").is_dir())
+
+    def test_uninstalling_takes_a_renamed_built_in_too(self):
+        """R-RM-7 — one this release no longer ships by name is still a piece of rundesk,
+        and leaving it keeps the whole install directory standing."""
+        self._both_names()
+
+        self.assertEqual(["filing-issues", "reporting-a-bug"],
+                         sorted(skill.take_back(self.library)))
+        self.assertFalse(self.library.exists(), "the library was left standing")
 
 
 class WhatEachShippedAdapterPlaces(WithALibrary):

@@ -55,6 +55,7 @@ provider's own tools still reach whatever their owner reaches.
 | ✅ | R-AGT-32 | An invalid new default brain configuration leaves the agent unchanged | `an unrunnable new brain changes nothing`, `malformed settings change nothing` |
 | ✅ | R-AGT-33 | Defaults specific to the previous brain do not silently reach the new one | `changing an existing agents brain clears the old brains defaults` |
 | ✅ | R-AGT-34 | What rundesk says about a turn the clock started reaches it whatever an owner wrote, and an owner's words are added to it | `what rundesk says about a scheduled turn is there whatever the owner wrote`, `what an owner says about a scheduled turn is added to rundesks own`, `a schedule told what to do is still told nobody is watching` |
+| ✅ | R-AGT-35 | A built-in a release renames is taken out of the library, and an agent holding it holds the new name instead | `every rename names a skill this release ships`, `a renamed built in is taken out of the library`, `a grant of a renamed built in becomes a grant of the new name`, `a rename never hands the new skill to an agent without the old`, `a skill the owner wrote under the old name is never retired`, `nothing is carried until the new name is in the library`, `uninstalling takes a renamed built in too` |
 
 ## Open questions
 

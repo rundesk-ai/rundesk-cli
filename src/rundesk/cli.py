@@ -1599,7 +1599,7 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
 
 
 def cmd_configure(args: argparse.Namespace, agents) -> int:
-    """Change an existing agent's durable defaults without replacing it (R-AGT-31)."""
+    """Change an existing agent's durable defaults without replacing it (R-AGT-35)."""
     name = args.name
     if not name:
         print("configure: NAME REQUIRED — say which agent to change", file=sys.stderr)
@@ -1884,6 +1884,10 @@ def _provisioned(root: Path = REPO_ROOT) -> str | None:
     if went_wrong:
         return went_wrong
     skill.lay_down(force=True)
+    # Then what this release stopped shipping under the name an earlier one used. After the
+    # lay-down rather than before, because a grant is only carried once the name it is
+    # carried to is actually standing in the library (R-AGT-35).
+    skill.retire(holding=tuple(_agent.skills(name) for name in _agent.known()))
     return None
 
 

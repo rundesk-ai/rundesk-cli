@@ -64,6 +64,13 @@ LEGACY = {
         "ba4d002a005251f87f0343c9305823d2a2052584dfb92fe7a0586b99f23e28a2",),
 }
 
+#: Built-ins an earlier release shipped under another name, and the name each became.
+#: A rename cannot be read off the directory the way everything else here is: the old name
+#: is simply absent from what ships, which is indistinguishable from a name that never
+#: shipped at all. So it is declared, for the same reason `LEGACY` is — the directory
+#: cannot tell you a thing that only history knows.
+RENAMED = {"reporting-a-rundesk-bug": "filing-rundesk-issues"}
+
 #: What a name may be, and it is the tightest of the three brains rather than ours: grok
 #: refuses anything else outright, and a name a loader rejects is a skill that is silently
 #: absent rather than one that fails.
@@ -269,7 +276,7 @@ def take_back(where: Path | None = None) -> list[str]:
     if not where.is_dir():
         return []
     gone = []
-    for name in shipped():
+    for name in tuple(shipped()) + tuple(sorted(RENAMED)):
         standing = where / name
         if not standing.is_dir() or standing.is_symlink() or not _owned(standing, name):
             continue
@@ -283,6 +290,57 @@ def take_back(where: Path | None = None) -> list[str]:
     with contextlib.suppress(OSError):
         where.rmdir()          # only when nothing of the owner's is in it
     return gone
+
+
+def retire(where: Path | None = None, holding: tuple[Path, ...] = ()) -> list[str]:
+    """Take out a built-in this release renamed, carry every grant of it to the new name.
+
+    **Left alone, a rename is worse than a broken link.** `lay_down` puts the new name in
+    the library and touches nothing else, so the old directory stands there with the old
+    text in it and every grant of it still resolves. Nothing dangles, nothing is reported,
+    and an agent goes on reading superseded instructions for as long as the machine lasts.
+
+    **A grant is carried, never handed out.** Only an agent already holding the old name
+    is given the new one. An owner who revoked it keeps it revoked — the same reason
+    `agent._given_what_ships` refuses to backfill, and the reason this cannot simply grant
+    the new built-in to everybody.
+
+    **Nothing of the owner's is moved.** A directory standing under the old name without
+    the ownership marker is theirs, whatever it is called, so neither it nor any grant of
+    it is touched — a rename in a release must not be able to take away work somebody did.
+
+    `holding` is each agent's own skills directory, passed in rather than discovered here:
+    `agent` reads this module, so this module cannot read it back.
+    """
+    where = where or home()
+    standing_now = library(where)
+    retired = []
+    for old, new in sorted(RENAMED.items()):
+        was = where / old
+        if new not in standing_now:
+            continue     # the new name never landed, so a grant has nowhere to be carried
+        if not was.is_dir() or was.is_symlink() or not _owned(was, old):
+            continue     # nothing of ours under that name
+        for mine in holding:
+            grant_at = mine / old
+            if not ours(grant_at, where):
+                continue
+            try:
+                # The new grant is made before the old one goes: an agent that loses power
+                # between the two is left holding both names rather than neither, and the
+                # next update takes the spare.
+                grant(mine, new, where)
+                grant_at.unlink()
+            except (Unknown, NotASkill, InTheWay, OSError):
+                continue
+        try:
+            shutil.rmtree(was)
+        except OSError:
+            # A library that cannot be written to is said by a diagnosis, not raised out of
+            # the middle of an update that has otherwise already gone forward.
+            continue
+        retired.append(old)
+    return retired
 
 
 def granted(skills_dir: Path) -> list[str]:
