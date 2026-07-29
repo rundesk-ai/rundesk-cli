@@ -112,13 +112,17 @@ class WhatTheGoldenSaysBack(unittest.TestCase):
         self.assertEqual(1, len(counted), "usage was taken from more than the result line")
         self.assertEqual(1510, counted[0]["output"])
 
-    def test_fresh_tokens_are_never_added_to_cached_ones(self):
-        """20 fresh against 302,567 cache reads on the captured turn. Cache creation is
-        billed above standard input and cache reads at a fraction of it, so summing them
-        reports 320,020 tokens at one price — real, and misleading."""
+    def test_four_billed_quantities_are_reported_in_four_slots(self):
+        """R-USE-13. The captured turn carries 20 fresh, 17,453 written into the cache and
+        302,567 read back from it — three prices, and this vendor is the only shipped brain
+        that reports all three. Summing any two of them into one slot reports a number that
+        is real and misleading; this used to add the first two, so 20 fresh tokens were
+        recorded as 17,473 input."""
         counted = only(self.said, "usage")[0]
-        self.assertEqual(20 + 17453, counted["input"], "what was new is not input + cache write")
+        self.assertEqual(20, counted["input"], "cache writes are folded into fresh input")
+        self.assertEqual(17453, counted["written"], "what was written to cache is not kept")
         self.assertEqual(302567, counted["cached"], "the cheap volume is not being kept apart")
+        self.assertNotEqual(20 + 17453, counted["input"])
         self.assertNotEqual(20 + 17453 + 302567, counted["input"])
 
     def test_the_model_that_answered_is_named(self):

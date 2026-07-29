@@ -861,7 +861,7 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
              "can": {"steer": True}, "settings": {"effort": "high"}, "resumed": True,
              "started_at": AT, "ended_at": None, "outcome": None, "why": None,
              "exit_code": None, "tokens_in": None, "tokens_out": None,
-             "tokens_cached": None, "tokens_reported": False},
+             "tokens_cached": None, "tokens_written": None, "tokens_reported": False},
             kept.run(named))
         self.assertEqual([named], [one["id"] for one in kept.runs(conversation_id="c1")])
         self.assertIsNone(kept.run("404-zzzz"))
@@ -957,8 +957,11 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
         told = self.a_run(kept)
         kept.ended(told, LATER, "done",
                    tokens={"input": 120, "output": 30, "cached": 10, "reported": True})
+        # `written` totals 0 rather than being absent: neither run reported the split, and
+        # a SUM over rows that all said nothing is a floor of nothing. What must not become
+        # zero is the *per-run* value, which stays NULL — see test_migration.
         self.assertEqual({"runs": 2, "reported": 1, "unreported": 1, "input": 120,
-                          "output": 30, "cached": 10}, kept.usage())
+                          "output": 30, "cached": 10, "written": 0}, kept.usage())
 
     def test_a_runs_account_is_read_back_in_the_order_the_work_happened(self):
         """`seq` is the order and a clock is not, so an account written by a machine whose

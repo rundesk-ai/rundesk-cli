@@ -1771,6 +1771,10 @@ def _cost(tokens: dict) -> str:
         return "what it cost was never reported"
     said = (f"{tokens.get('input', 0)} in, {tokens.get('output', 0)} out, "
             f"{tokens.get('cached', 0)} cached")
+    # Only where the brain reported the split. Most do not, and a `0 written` on every one
+    # of them would read as "wrote nothing to the cache" rather than "does not say".
+    if tokens.get("written") is not None:
+        said += f", {tokens['written']} written"
     return f"{said}, {tokens['model']}" if tokens.get("model") else said
 
 
@@ -3398,7 +3402,14 @@ def _spent(one: dict) -> str:
     # that read nothing from it are different facts (R-USE-6).
     cached = one.get("tokens_cached")
     held = "" if cached is None else f" / {cached} cached"
-    return f"{one['tokens_in'] or 0} in{held} / {one['tokens_out'] or 0} out"
+    # **Cache writes are shown apart from fresh input** (R-USE-13), on the same rule as the
+    # line above and for the opposite reason: a write is billed *above* fresh input, so a
+    # run that folded them together priced its most expensive tokens as its cheapest. Absent
+    # on every brain that does not report the split, and on every row written before there
+    # was a column for it — where the two cannot be separated after the fact.
+    written = one.get("tokens_written")
+    made = "" if written is None else f" / {written} written"
+    return f"{one['tokens_in'] or 0} in{held}{made} / {one['tokens_out'] or 0} out"
 
 
 def cmd_usage(args: argparse.Namespace, gateways, agents) -> int:
@@ -3422,9 +3433,10 @@ def cmd_usage(args: argparse.Namespace, gateways, agents) -> int:
             "-" if spent["input"] is None else str(spent["input"]),
             "-" if spent["output"] is None else str(spent["output"]),
             "-" if spent["cached"] is None else str(spent["cached"]),
+            "-" if spent["written"] is None else str(spent["written"]),
             str(spent["unreported"]),
         ))
-    _as_table(("AGENT", "RUNS", "IN", "OUT", "CACHED", "NOT REPORTED"), rows)
+    _as_table(("AGENT", "RUNS", "IN", "OUT", "CACHED", "WRITTEN", "NOT REPORTED"), rows)
     return 0
 
 

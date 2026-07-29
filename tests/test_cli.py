@@ -3567,6 +3567,48 @@ class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
         self.assertIn("7 in / 3 out", said)
         self.assertNotIn("cached", said)
 
+    def test_what_one_run_cost_names_the_cache_writes_its_provider_reported(self):
+        """R-USE-13 — a cache write bills *above* fresh input where a read bills at a
+        fraction of it, so a row that folded writes into `in` priced the most expensive
+        tokens of the turn as its cheapest."""
+        kept = self.agents.records("ava")
+        run = kept.began("terminal", "claude", "work", "2026-07-26T09:00:00Z")
+        kept.ended(run, "2026-07-26T09:00:01Z", "finished", exit_code=0,
+                   tokens={"input": 2, "output": 5, "cached": 15273, "written": 5550,
+                           "reported": True})
+        code, said = drive(["runs", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("2 in / 15273 cached / 5550 written / 5 out", said)
+
+    def test_a_brain_that_does_not_report_cache_writes_claims_none(self):
+        """R-USE-6 again, one field along. Most brains report no such split — grok,
+        antigravity and codex have no cache-creation field at all — and a `0 written` on
+        every one of them would say they wrote nothing to a cache rather than that they do
+        not say."""
+        kept = self.agents.records("ava")
+        run = kept.began("terminal", "grok", "work", "2026-07-26T09:00:00Z")
+        kept.ended(run, "2026-07-26T09:00:01Z", "finished", exit_code=0,
+                   tokens={"input": 7, "output": 3, "cached": 2, "reported": True})
+        code, said = drive(["runs", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("7 in / 2 cached / 3 out", said)
+        self.assertNotIn("written", said)
+
+    def test_a_total_sums_the_cache_writes_that_were_reported(self):
+        """R-USE-13 at the totals. The sum is knowingly a floor: every brain that does not
+        report the split, and every row written before there was a column, contributes
+        nothing rather than a guess."""
+        self.furnished()
+        kept = self.agents.records("ava")
+        run = kept.began("terminal", "claude", "work", "2026-07-26T09:00:03Z")
+        kept.ended(run, "2026-07-26T09:00:04Z", "finished", exit_code=0,
+                   tokens={"input": 2, "output": 5, "cached": 1, "written": 5550,
+                           "reported": True})
+        code, said = drive(["usage", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("WRITTEN", said)
+        self.assertIn("5550", said)
+
     def test_an_agent_that_has_run_nothing_says_so_and_says_what_to_do(self):
         """A listing that printed an empty table would read as a failure to answer."""
         code, said = drive(["runs", "ava"], agents=self.agents)
@@ -3598,7 +3640,7 @@ class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
         code, said = drive(["usage", "ava"], agents=self.agents)
         self.assertEqual(0, code, said)
         row = [one for one in said.splitlines() if one.startswith("ava")][0]
-        self.assertEqual(["ava", "3", "5", "0", "0", "2"], row.split(),
+        self.assertEqual(["ava", "3", "5", "0", "0", "0", "2"], row.split(),
                          "the count of runs that said nothing is not beside the total")
 
     def test_an_agent_that_has_run_nothing_has_no_totals_to_give(self):
@@ -3606,7 +3648,7 @@ class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
         code, said = drive(["usage", "ava"], agents=self.agents)
         self.assertEqual(0, code, said)
         row = [one for one in said.splitlines() if one.startswith("ava")][0]
-        self.assertEqual(["ava", "0", "-", "-", "-", "0"], row.split())
+        self.assertEqual(["ava", "0", "-", "-", "-", "-", "0"], row.split())
 
     def test_what_was_said_is_found_by_the_words_in_it(self):
         """R-STO-7 — whichever surface it arrived on, and whoever said it."""

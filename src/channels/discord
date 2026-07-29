@@ -1392,7 +1392,12 @@ def _as_a_line(it: dict) -> str:
             return "-# ⚠ tool failed"
         return ""
     if kind == "usage":
-        parts = [f"{_amount(it[what])} {what}" for what in ("input", "output", "cached")
+        # Every slot the seam has. A brain that does not report one leaves it out here too,
+        # which is what the isinstance guard has always been for — `written` is simply the
+        # fourth, and is added at the end rather than in billing order so a footer somebody
+        # is used to reading does not rearrange itself under them.
+        parts = [f"{_amount(it[what])} {what}"
+                 for what in ("input", "output", "cached", "written")
                  if isinstance(it.get(what), int)]
         return f"-# · {' · '.join(parts)}" if parts else ""
     return ""

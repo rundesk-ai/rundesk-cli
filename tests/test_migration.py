@@ -642,6 +642,41 @@ class CarryingTheShapeThatShippedForward(WithStepsOfThisCasesOwn):
              one["created_at"]))
         self.assertIsNone(one["at"], "a schedule that recurs was given a single moment")
 
+    def test_rows_written_before_there_was_a_column_for_cache_writes_stay_unknown(self):
+        """R-USE-13. A run recorded before `002` has its cache writes already added into
+        `tokens_in`, and nothing kept the split — not the row and not the transcript — so
+        it cannot be recovered afterwards. NULL is the only honest value, and is the one the
+        rest of this schema already uses for it: a cost that never arrived is absent rather
+        than zero, because unknown and nil are different facts (R-USE-6).
+
+        Filling these with 0 would say the split *is* known and was none, which is the one
+        thing it is not — and a total summing that would quietly claim to know more than it
+        does."""
+        self.built_at_the_first_shape()
+        conn = self.raw()
+        try:
+            conn.execute("UPDATE run SET tokens_in = 5552, tokens_out = 5,"
+                         " tokens_cached = 15273, tokens_reported = 1 WHERE id = 'run-1'")
+        finally:
+            conn.close()
+        one = self.carried().execute(
+            "SELECT tokens_in, tokens_written FROM run WHERE id = 'run-1'").fetchone()
+        self.assertEqual(5552, one["tokens_in"], "a folded total was rewritten after the fact")
+        self.assertIsNone(one["tokens_written"],
+                          "an unrecoverable split was recorded as though it were known")
+
+    def test_a_run_written_after_the_column_exists_records_its_cache_writes(self):
+        """The guard on the one above: leaving old rows alone must not leave the column
+        inert. What is written once the step has run is kept and read back."""
+        self.built_at_the_first_shape()
+        conn = self.carried()
+        conn.execute("INSERT INTO run (id, source, provider, posture, started_at,"
+                     " tokens_in, tokens_written) VALUES ('run-2', 'terminal', 'claude',"
+                     " 'work', ?, 2, 5550)", (AT,))
+        one = conn.execute(
+            "SELECT tokens_in, tokens_written FROM run WHERE id = 'run-2'").fetchone()
+        self.assertEqual((2, 5550), (one["tokens_in"], one["tokens_written"]))
+
     def test_a_run_still_names_the_schedule_that_started_it_after_the_shape_changes(self):
         """The loss this step exists not to cause. With foreign keys on — which is how the
         runner opens every step — dropping the table a run references performs an implicit
