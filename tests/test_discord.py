@@ -38,6 +38,10 @@ sys.path.insert(0, str(ROOT / "src"))
 for _packages in sorted((ROOT / ".venv" / "lib").glob("python3.*/site-packages")):
     sys.path.insert(0, str(_packages))
 
+#: The seam itself, because which fields reach this surface is decided there and rendered
+#: here — and a list kept in two places is a list that disagrees with itself (R-CH-13).
+from rundesk import answering  # noqa: E402
+
 
 def _adapter():
     """The adapter, loaded from its path — it is a program, not a module."""
@@ -517,6 +521,60 @@ class WhatOneTurnLooksLike(unittest.TestCase):
     def test_what_a_turn_cost_is_shown_as_one_line(self):
         """R-DIS-17 — a run already carries its own cost. This reports it and computes
         nothing."""
+        self.assertEqual("-# · 1.2k input · 340 output · 17k cached",
+                         discord._as_a_line({"type": "usage", "input": 1200,
+                                             "output": 340, "cached": 17000}))
+
+    def test_the_footer_shows_the_cache_writes_the_seam_hands_over(self):
+        """R-DIS-17, R-CH-13 — the two lists that have to agree, asked in one place. The
+        footer has named `written` as its fourth slot since v0.17.0 while the seam's
+        allowlist did not name it at all, so each suite went on passing and the line an
+        owner reads was short a quantity they were billed for. Driven through the real
+        allowlist rather than a hand-written record, because a record written here would
+        prove only the half of it this file owns."""
+        crossed = []
+        seam = answering._Shown(
+            SimpleNamespace(record={}, _tell=lambda **it: crossed.append(it)),
+            SimpleNamespace(conversation="4242", run="run-1"))
+        seam({"type": "usage", "input": 1200, "output": 340, "cached": 17000,
+              "written": 1500})
+        self.assertEqual("-# · 1.2k input · 340 output · 17k cached · 1.5k written",
+                         discord._as_a_line(crossed[0]))
+
+    def test_the_footer_leads_with_how_big_the_conversation_is(self):
+        """R-DIS-29, R-USE-15 — the footer is read to decide one thing: whether to start a
+        fresh conversation. `2 input` is what a warm turn's fresh tokens are and says
+        nothing about a session; the size it ended on does, and goes first. What the turn
+        itself wrote stays beside it, and the breakdown stays in `rundesk runs`."""
+        self.assertEqual(
+            "-# · 122k session · 837 output",
+            discord._as_a_line({"type": "usage", "session": 122435, "input": 2,
+                                "output": 837, "cached": 121446, "written": 987}))
+
+    def test_the_whole_footer_an_owner_reads_is_the_size_what_was_written_and_the_clock(self):
+        """R-DIS-29, R-DIS-24 — end to end, from the record the adapter sent to the line
+        above the answer, because each half of this passes on its own while the line
+        somebody actually reads is wrong."""
+        posted = []
+
+        class Turn:
+            async def _post(self, it, text, **kw): posted.append(text)
+            def _stop_typing(self, held): pass
+            def _no_longer_last(self, held): pass
+
+        held = discord.Live(clock=lambda: 128.0)
+        held.started = 100.0
+        asyncio.run(discord.Agent._doing(
+            Turn(), {"type": "usage", "session": 122435, "output": 837}, held))
+        asyncio.run(discord.Agent._answer(
+            Turn(), {"type": "answer", "text": "done"}, held))
+        self.assertEqual("-# · 122k session · 837 output · 28s elapsed",
+                         posted[0].splitlines()[0])
+
+    def test_a_brain_that_does_not_report_a_conversation_size_gets_the_footer_it_always_got(self):
+        """R-DIS-29, R-USE-16 — a brain that cannot say how big its conversation is keeps
+        every slot it used to show rather than being cut down to `output` alone. Adding a
+        quantity for one brain may not take three away from another."""
         self.assertEqual("-# · 1.2k input · 340 output · 17k cached",
                          discord._as_a_line({"type": "usage", "input": 1200,
                                              "output": 340, "cached": 17000}))
