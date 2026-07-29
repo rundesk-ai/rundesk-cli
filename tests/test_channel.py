@@ -532,7 +532,7 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
         self.assertEqual(channel.SAID_MOST, len(long["called"]))
 
     def test_adapter_context_uses_communication_agnostic_variables(self):
-        """R-CH-21, R-AGT-35 — adapters describe a hierarchy without platform nouns."""
+        """R-CH-21, R-AGT-37 — adapters describe a hierarchy without platform nouns."""
         arrived = channel.understood(json.dumps({
             "type": "arrived", "conversation": "thread-42", "user": "2207",
             "text": "hi", "called": "Tim", "where": "#ops on Acme",
@@ -907,8 +907,8 @@ class WhatTheSurfaceIsNeverGiven(DrivesAnAdapter):
         from rundesk import provider
 
         self.assertIs(channel.DID, provider.DID)
-        self.assertEqual(("read", "search", "run", "edit", "list", "make", "delegate"),
-                         channel.DID)
+        self.assertEqual(("read", "search", "run", "edit", "list", "make", "delegate",
+                          "memory", "rules", "profile", "identity"), channel.DID)
 
     def test_what_the_agent_did_is_shown_while_it_is_happening(self):
         """R-CH-6 — a tool it ran, a thought it closed. These are worth watching, and

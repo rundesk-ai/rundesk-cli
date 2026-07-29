@@ -56,6 +56,7 @@ rundesk backups restore [--yes] <backup>                                        
 rundesk uninstall [--purge]                                                                                                                                                                                             remove rundesk from this machine
 
 # not yet grouped
+rundesk config                                                                                                                                                                                                          how this install is configured, and where each value came from
 rundesk messages [--most <n>] [--since <id>] [--channel <channel>] [--conversation <where>] [--author <kind>] [--who <identity>] [--source <how>] <agent>                                                               what was said, newest first
 rundesk resume <agent>                                                                                                                                                                                                  carry one run on from where it stopped   [planned]
 rundesk scripts [--where]                                                                                                                                                                                               the integration commands every agent can invoke

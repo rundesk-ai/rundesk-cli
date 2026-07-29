@@ -8,6 +8,18 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **Running `./rundesk` from a checkout tests new code against the live install's data, and
+  nothing warns you.** An agent's shell is a gateway's child, so it already carries
+  `RUNDESK_AGENTS_DIR`, `RUNDESK_HOME`, `RUNDESK_SCRIPTS` and `RUNDESK_RUN` — the *owner's*.
+  Measured: `./rundesk agents` from a checkout listed the machine's real agents and their PIDs;
+  the same command with those variables unset and pointed at a scratch root listed none.
+  `env | grep RUNDESK` before believing otherwise. The launchd half is worse, because a
+  directory cannot move it: a label belongs to the person, so a second install's `--uninstall`
+  boots out `ai.rundesk-automatic-update` — the live one — and leaves the other install's plist
+  on disk looking well (#146). Set `RUNDESK_JOB_PREFIX` for anything that touches a job, and
+  check `launchctl list | grep rundesk` before and after. The whole recipe is
+  [`guides/testing-against-a-station.md`](./guides/testing-against-a-station.md).
+
 - **A run's account holds no record of what its brain *said*, so "the account keeps every
   raw event" is false for text.** `store.RECORD_KINDS` has no `text` member and
   `turn._Account.add` returns before writing one — including its `raw` — because what was
@@ -256,6 +268,27 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   adding it — which is the guard working, not a broken test. Add the variable to `describe()`'s
   `EnvironmentVariables` in the same change; a supervised gateway resolving a different place
   from the command that wrote its job is the failure it exists to prevent.
+- **A Markdown link out of `.knowledge` passes `doc-lint` and fails the gate.** `doc-lint
+  .knowledge` resolves a catalog link against the real checkout, so
+  `[docs/extending/](../../docs/extending/)` in `guides/README.md` is fine — and then
+  `test_doc_lint.py`, which is the gate's *teeth* check, copies `.knowledge` into a scratch
+  tree **on its own**, with no sibling `docs/`, `src/` or `tests/`. The link is now missing,
+  doc-lint reports a problem it is supposed to report nothing for, and the failure reads
+  `[FAIL] an internal source needs no link (exit=1, wanted_ok=True)` — which names a rule
+  about *sources* and says nothing about your catalog link, in a check whose other 43 cases
+  pass. Name a path outside `.knowledge` in backticks; never link it. Standalone doc-lint
+  cannot catch this, so run `.knowledge/scripts/test_doc_lint.py` before believing a green
+  linter.
+- **`skill.home()` resolves to the owner's live library when *every* `RUNDESK_*` variable is
+  unset — unsetting them is the opposite of isolation here.** It is
+  `RUNDESK_SKILL_LIBRARY or skills_home()`, and the fallback is `~/.rundesk/data/skills`,
+  which is the live install. So a scratch script that carefully scrubs the environment and
+  then calls any `skill` function without an explicit `where=` is pointed straight at the
+  owner's eighteen built-ins, and `retire`/`take_back` delete them. Scrub the inherited
+  variables and then **set `RUNDESK_DATA_DIR`, `RUNDESK_SKILL_LIBRARY` and
+  `RUNDESK_AGENTS_DIR` under a scratch root before importing the module**, and assert
+  `str(scratch) in str(skill.home())` as the first line that runs. Checking `env | grep
+  RUNDESK` is empty proves the danger, not the safety.
 - **A backticked anything in an Evidence cell is read as the name of a test.** That is the whole
   mechanism keeping a ✅ honest, and it does not care that the row is ❌ or that the backticks are
   around a filename, a path or a script. Write those plainly in a note — `check-evidence` fails the
@@ -662,6 +695,13 @@ re-checked since, so treat these as true-when-found rather than as current.*
   renames somebody else's citations too. Replace only on lines that are not in
   `git show origin/main:<file>`, then check what is left with
   `grep -rn 'R-XXX-n' src tests .knowledge` — what remains should be exactly main's.
+
+- **A multi-line `from rundesk import (...)` in `agent.py` fails `test_store`.** The guard
+  `TheOnlyWayIn.test_the_product_reaches_what_an_agent_keeps` matches
+  `^\s*from\s+rundesk\s+import\s+[^\n]*\bstore\b` on one line, so wrapping the import puts
+  `store` on a continuation line and the case reads it as an agent with nowhere to keep
+  anything. Add a second `from rundesk import <name>` line instead of wrapping — which is
+  what `cli.py` does anyway.
 
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

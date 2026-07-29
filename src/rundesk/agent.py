@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rundesk import ROOT, __version__, data_home, gateway, instructions, migration, skill, store
+from rundesk import config
 
 #: What a new agent's home is copied from. Ordinary Markdown files rather than text built
 #: in code, because they are what an owner reads first and edits next, and a rule about how
@@ -414,7 +415,12 @@ def _what_is_wrong_with_its_skills(name: str, where: Path | None = None) -> list
                 str(standing), f"the skill {called} was granted and {why}",
                 f"rundesk update"))
     held = skill.library()
-    for called in skill.shipped():
+    try:
+        wanted = config.skills(where)["granted"]
+    except config.Unreadable as why:
+        # The one place an owner hears it without having to be making an agent at the time.
+        return found + [Complaint(config.NAMED, str(why), f"edit {config.path(where)}")]
+    for called in wanted:
         if called in held and called not in skill.granted(mine):
             found.append(Complaint(
                 called, "this agent has not been given a skill this release ships",
@@ -434,11 +440,17 @@ def _given_what_ships(name: str, where: Path | None = None) -> list[str]:
     update, the skill an owner had just removed. An agent made before a built-in existed
     is told by a diagnosis, with the line to type.
 
+    **Which skills, and not simply every one that ships.** A release ships more than every
+    agent should carry — how to write a skill, how to write a pull request — and a skill an
+    agent will never reach for is not free: its description is read by the brain on every
+    turn. So the set is `config.skills()["granted"]`, which an owner states once in
+    `config.json` and which defaults to the four an agent needs to work with rundesk itself.
+
     A library that has nothing in it yet is a checkout somebody is working in rather than
     an install, and is not a half-made agent.
     """
     given = []
-    for called in skill.shipped():
+    for called in config.skills(where)["granted"]:
         try:
             skill.grant(skills(name, where), called)
         except (skill.Unknown, skill.NotASkill, skill.InTheWay, OSError):
@@ -636,7 +648,7 @@ def told(name: str, where: Path | None = None, said: str = "",
     """What a turn for this agent is told about its situation, before it reads a prompt.
 
     **Rundesk's own words first, then every applicable layer** (R-AGT-16, R-AGT-17,
-    R-AGT-34, R-AGT-35). `regardless` is Rundesk's trigger-specific context. The agent
+    R-AGT-34, R-AGT-37). `regardless` is Rundesk's trigger-specific context. The agent
     owner's stored instructions follow, then `said`, which is what this turn or schedule
     added. Empty layers disappear; no supplied instruction replaces one before it.
     """

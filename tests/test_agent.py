@@ -1169,7 +1169,7 @@ class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):
         # `app/`, and a checkout install symlinks the source, so `~/.rundesk` holds neither.
         # Every agent was told, on every turn, to read something it could not find. What it
         # names now travels with the agent instead of being somewhere to go and look.
-        self.assertIn("using-rundesk", said)
+        self.assertIn("managing-rundesk", said)
         self.assertNotIn("~/.rundesk", said)
 
 

@@ -199,7 +199,7 @@ class Answering:
 
     def _from(self, it: dict) -> str:
         """What this agent is told about the situation, before it reads the words
-        (R-CH-21, R-CH-22, R-AGT-16, R-AGT-17, R-AGT-35).
+        (R-CH-21, R-CH-22, R-AGT-16, R-AGT-17, R-AGT-37).
 
         Rundesk's core and channel instructions come first. A channel or adapter may
         override only the channel layer or append to it; the agent owner's instructions

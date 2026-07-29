@@ -160,6 +160,30 @@ STOP
 # the set this release ships.
 #
 # Run while the program is still here, since it is the program that knows which those are.
+# The configuration file, but only where nobody ever wrote anything into it. An empty
+# skeleton is what this install put there and goes out with it (R-RM-7); one stated value
+# anywhere makes it the owner's and it stays. Left behind unconditionally, a fresh install
+# and an uninstall would leave a directory standing (R-RM-8).
+take_back_config() {
+  local root="" candidate
+  for candidate in "$APP_DIR" "$INSTALL_DIR" "${SCRIPT_DIR:-}"; do
+    if [[ -n "$candidate" && -f "$candidate/src/rundesk/config.py" ]]; then
+      root="$candidate"; break
+    fi
+  done
+  [[ -n "$root" ]] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "$root" <<'CONFIG' 2>/dev/null || true
+import sys
+sys.path.insert(0, sys.argv[1] + "/src")
+from rundesk import config
+
+if config.take_back():
+    print("took back the configuration nothing was written into")
+CONFIG
+  return 0
+}
+
 take_back_skills() {
   local root="" candidate
   for candidate in "$APP_DIR" "$INSTALL_DIR" "${SCRIPT_DIR:-}"; do
@@ -227,6 +251,10 @@ Environment:
   RUNDESK_INSTALL_DIR   where rundesk lives (default ~/.rundesk)
   RUNDESK_BIN_DIR       where the `rundesk` command is placed
   RUNDESK_BACKUP_DIR    where copies of what the owner keeps are kept; never deleted here
+  RUNDESK_JOB_PREFIX    what this install calls its launchd jobs (default ai.rundesk).
+                        A label belongs to the person, not to the install, so a second
+                        install on one machine sets this or its removal takes the first
+                        install's automatic updates away with it
 USAGE
 }
 
@@ -283,6 +311,7 @@ Stop it and try again, or see what is running with: rundesk status"
   fi
   # Before the program goes, because it is the program that knows which skills are its own.
   take_back_skills
+  take_back_config
   for dir in /usr/local/bin "$HOME/.local/bin" "${RUNDESK_BIN_DIR:-}"; do
     [[ -n "$dir" && -L "$dir/rundesk" ]] || continue
     target="$(readlink "$dir/rundesk")"
@@ -545,6 +574,23 @@ echo "linked $BINDIR/rundesk -> $SHIM"
 # reports done and leaves something that cannot run is the worst of both.
 "$BINDIR/rundesk" version >/dev/null 2>&1 || die "rundesk was installed but would not run."
 echo "checked that it runs"
+
+# The file this install is configured through, put there so an owner can find it. Written
+# with every section this release knows and nothing inside them: the shape is what makes it
+# discoverable, and leaving the values out is what keeps every default in code, where a
+# later release can improve one and have it reach an install that never stated its own.
+# Nothing already in the file is touched, so running the installer again is not a way to
+# lose what somebody configured.
+if added="$(python3 - "$REPO_ROOT" <<'CONFIG' 2>/dev/null || true
+import sys
+sys.path.insert(0, sys.argv[1] + "/src")
+from rundesk import config
+
+print(" ".join(config.ensure()))
+CONFIG
+)" && [[ -n "$added" ]]; then
+  echo "wrote the sections you can configure: $added"
+fi
 
 # The machine, not a gateway, owns the daily trigger. It only queues the same guarded
 # worker used by an agent-initiated update, so it remains alive while every gateway is

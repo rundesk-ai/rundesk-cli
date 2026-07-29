@@ -1,4 +1,4 @@
-"""Build Rundesk's core and trigger instructions for an agent brain (R-AGT-35)."""
+"""Build Rundesk's core and trigger instructions for an agent brain (R-AGT-37)."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ and your channels. **Anything else on this machine offering
 "schedules" is not this**, whatever it is called: `rundesk --help` is the authority,
 and a question about your schedules is answered by `rundesk schedules {agent}`.
 
-Everything else rundesk does is in your `using-rundesk` skill, and `rundesk --help` always
+Everything else rundesk does is in your `managing-rundesk` skill, and `rundesk --help` always
 works.
 
 Always read the AGENTS.md, MEMORY.md, SOUL.md and USER.md in your home directory. Your home directory and workspace does not have a git repository.

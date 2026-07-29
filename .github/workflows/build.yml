@@ -272,7 +272,31 @@ jobs:
       - name: Existing behavior and owner data still work
         run: |
           set -euo pipefail
-          cmp "$RUNNER_TEMP/config.before" "$RUNDESK_INSTALL_DIR/data/config.json"
+          # **Not byte-identical any more, and deliberately.** An upgrade adds a section
+          # this release knows to a file written before it existed (R-UPD-48). What has to
+          # hold is the thing the `cmp` here was really asking: nothing an owner stated
+          # moved. The sections are read off the code rather than listed, or this check
+          # goes stale the day one is added.
+          PROPOSED="$RUNNER_TEMP/proposed-release" python3 - <<'CONFIG'
+          import json, os, sys
+          from pathlib import Path
+
+          # The tree being proposed, not this checkout's working directory: the step above
+          # unpacked it, and it is what the install now running was replaced with.
+          sys.path.insert(0, str(Path(os.environ["PROPOSED"], "src")))
+          from rundesk import config
+
+          was = json.loads(Path(os.environ["RUNNER_TEMP"], "config.before").read_text())
+          now = json.loads(Path(os.environ["RUNDESK_INSTALL_DIR"], "data/config.json").read_text())
+          for section, said in was.items():
+              if now.get(section) != said:
+                  raise SystemExit(
+                      f"::error::the upgrade changed '{section}': {said!r} -> {now.get(section)!r}")
+          missing = [one for one in config.SECTIONS if one not in now]
+          if missing:
+              raise SystemExit(f"::error::the upgrade left out {', '.join(missing)}")
+          print(f"configuration carried: {sorted(was)} kept, {sorted(set(now) - set(was))} added")
+          CONFIG
           grep -qx "kept by the owner" \
             "$RUNDESK_INSTALL_DIR/data/agents/existing/home/owner-kept.txt"
           "$RUNDESK_BIN_DIR/rundesk" version

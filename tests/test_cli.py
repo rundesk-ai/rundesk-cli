@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk import __version__  # noqa: E402
 from rundesk import cli  # noqa: E402
+from rundesk import config  # noqa: E402
 from rundesk import store  # noqa: E402
 from rundesk import update_request  # noqa: E402
 from rundesk import updater  # noqa: E402
@@ -453,7 +454,7 @@ class BuiltCommandTests(unittest.TestCase):
         built = {"version", "update", "uninstall", "add", "configure", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
                  "channels", "runs", "usage", "search", "messages", "skills", "scripts",
-                 "backups"}
+                 "backups", "config"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 
@@ -716,6 +717,16 @@ class FakeSkills:
         return sorted(self._given.get(whose.name, ()))
 
     def lay_down(self, where=None, force=False):
+        self.laid = True
+        return list(self._ships)
+
+    def retire(self, where=None, holding=()):
+        # Recorded rather than acted on: what retiring *does* is `tests/test_skill.py`'s,
+        # and what the surface asks for is this file's.
+        self.retired_holding = tuple(holding)
+        return []
+
+    def take_back(self, where=None):
         return list(self._ships)
 
     def grant(self, whose, name):
@@ -1086,6 +1097,99 @@ def drive(argv, gateways=None, machine=None, agents=None, scripts=None):
             # what the caller was left with.
             code = usage.code if isinstance(usage.code, int) else 1
     return code, out.getvalue() + err.getvalue()
+
+
+class WhatThisInstallIsConfiguredWith(unittest.TestCase):
+    """`rundesk config` — the answer to a file that is allowed to say nothing."""
+
+    def setUp(self):
+        self.where = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-config-"))
+        self.addCleanup(shutil.rmtree, self.where, ignore_errors=True)
+        was = os.environ.get("RUNDESK_DATA_DIR")
+        os.environ["RUNDESK_DATA_DIR"] = str(self.where)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", was)
+                        if was is not None else os.environ.pop("RUNDESK_DATA_DIR", None))
+
+    def test_what_an_install_is_configured_with_is_answerable(self):
+        """R-CMD-11 — every section may be empty and every value absent, so without this
+        an owner has no way to learn what is actually in force."""
+        code, said = drive(["config"])
+        self.assertEqual(0, code)
+        for section in config.SECTIONS:
+            self.assertIn(section, said)
+        self.assertIn("keep_days", said)
+        self.assertIn("granted", said)
+
+    def test_a_value_that_was_stated_is_told_apart_from_one_that_defaulted(self):
+        """R-CMD-11 — the whole point: a backup an owner believed was kept for a year is
+        discovered to have been kept for thirty days exactly once, and too late."""
+        (self.where / "config.json").write_text(
+            '{"backups": {"keep_days": 400}}\n', encoding="utf-8")
+
+        code, said = drive(["config"])
+
+        self.assertEqual(0, code)
+        stated = next(one for one in said.splitlines() if "keep_days" in one)
+        defaulted = next(one for one in said.splitlines() if "granted" in one)
+        self.assertNotIn("(default)", stated)
+        self.assertIn("(default)", defaulted)
+
+    def test_a_key_nothing_reads_is_said_rather_than_left_out(self):
+        """R-CMD-11 — the silence this command exists to end, arriving by the one route
+        printing the known keys cannot show.
+
+        `ensure` keeps an unknown key exactly as it was and every reader defaults straight
+        past it, so a mistyped `keepDays` is a value an owner stated, can see in their own
+        file, and which nothing on the machine has ever read. Omitting it is telling them
+        their configuration is in force when it is not — the same failure as reporting
+        defaults for an unreadable file, one key wide.
+        """
+        (self.where / "config.json").write_text(
+            '{"backups": {"keepDays": 365}, "backupz": {"at": "05:00"}}\n', encoding="utf-8")
+
+        code, said = drive(["config"])
+
+        self.assertEqual(0, code)
+        self.assertIn("backups.keepDays", said)
+        self.assertIn("backupz", said)
+        self.assertIn("keep_days  30", said)
+        self.assertIn("(default)", next(one for one in said.splitlines()
+                                        if "keep_days" in one and "keepDays" not in one))
+
+    def test_an_unreadable_configuration_is_refused_rather_than_reported_as_defaults(self):
+        """R-CMD-11, R-STO-13 — printing defaults for a file that exists and cannot be
+        read is telling an owner their configuration is in force when it is not."""
+        (self.where / "config.json").write_text("{ not json\n", encoding="utf-8")
+
+        code, said = drive(["config"])
+
+        self.assertEqual(1, code)
+        self.assertIn("UNREADABLE", said)
+
+
+class WhatTheInstallerDoesToTheLibrary(unittest.TestCase):
+    """`rundesk skills --lay-down` — the installer's own verb, and an upgrade route."""
+
+    def test_laying_down_also_retires_what_this_release_renamed(self):
+        """R-AGT-35 — re-running the documented `curl … | bash` over an existing install is
+        how an owner upgrades without ever typing `rundesk update`, and `skill.retire` was
+        otherwise reached from that one command only. Left out, they finish with both names
+        standing in the library and every old grant still resolving — to text no release
+        will bring forward again, which is the failure the requirement exists to stop.
+        """
+        skills = FakeSkills(ships=("managing-rundesk",))
+        agents = FakeAgents(made=("ava", "bo"))
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(["skills", "--lay-down"], gateways=FakeGateways(),
+                            machine=FakeMachine(), agents=agents, skills=skills,
+                            scripts=FakeScripts())
+
+        self.assertEqual(0, code, err.getvalue())
+        self.assertIn("managing-rundesk", out.getvalue())
+        self.assertEqual(tuple(agents.skills(name) for name in agents.known()),
+                         getattr(skills, "retired_holding", None),
+                         "the installer laid the new names down and retired nothing")
 
 
 class TheSharedIntegrationCommands(unittest.TestCase):
@@ -1545,6 +1649,21 @@ class ConfiguringAnAgent(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("INVALID NAME", said)
         self.assertEqual([], agents.added, "it refused the name and made one anyway")
+
+    def test_a_job_prefix_that_cannot_be_one_stops_the_command(self):
+        """R-INS-18 — the variable a second install isolates itself with becomes a file
+        name and a launchd target, so one that could escape the jobs directory has to be
+        answered in our words before a command runs rather than planting a job."""
+        before = os.environ.get("RUNDESK_JOB_PREFIX")
+        os.environ["RUNDESK_JOB_PREFIX"] = "../elsewhere"
+        self.addCleanup(
+            lambda: os.environ.__setitem__("RUNDESK_JOB_PREFIX", before)
+            if before is not None else os.environ.pop("RUNDESK_JOB_PREFIX", None))
+        code, said = drive(["agents"])
+        self.assertEqual(1, code)
+        self.assertIn("RUNDESK_JOB_PREFIX", said)
+        self.assertIn("INVALID", said)
+        self.assertNotIn("Traceback", said)
 
     def test_adopting_a_gateway_that_has_no_agent_brings_what_it_wrote_in(self):
         """R-AGW-1 — one place afterwards, rather than two that disagree."""
@@ -4145,6 +4264,41 @@ class WhoSaidIt(unittest.TestCase):
         """Both present is the ordinary case for a channel message, and the name is the more
         specific of the two."""
         self.assertEqual("sam", cli._said_by({"who": "sam", "author": "user"}, "ava"))
+
+
+class WhatATurnLooksLikeOnATerminal(unittest.TestCase):
+    """R-PRV-29 — the second surface. Discord is not the only place a verb is read."""
+
+    def _watched(self, said: dict) -> str:
+        held = io.StringIO()
+        with contextlib.redirect_stderr(held):
+            cli._Shown()(said)
+        return held.getvalue().strip()
+
+    def test_a_tool_is_shown_by_its_verb_and_its_brains_name(self):
+        """Unchanged, and asserted so the case below is a difference rather than the only
+        behaviour there is. A terminal is the owner's own machine, so the vendor's word for
+        a tool is useful here in a way it never is in a room full of people."""
+        self.assertEqual("· run Bash",
+                         self._watched({"type": "tool", "name": "Bash", "did": "run"}))
+
+    def test_changing_what_the_agent_lives_by_reads_as_a_sentence_here_too(self):
+        """R-PRV-29 — this surface prints the seam's word raw, so a verb chosen only for
+        how it renders in Discord arrives here as `rules Write`. What changed is the whole
+        of the news; which tool wrote it is the half nobody wanted."""
+        from rundesk import provider
+
+        for name, verb in provider.CONTINUITY.items():
+            with self.subTest(name):
+                said = self._watched({"type": "tool", "name": "Write", "did": verb})
+                self.assertEqual(f"· updated {verb}", said)
+                self.assertNotIn("Write", said)
+
+    def test_a_tool_with_no_verb_at_all_still_says_something(self):
+        """R-PRV-8 — an adapter that gave no verb did something this vocabulary has no word
+        for, and the line still has to read."""
+        self.assertEqual("· using mcp__weather",
+                         self._watched({"type": "tool", "name": "mcp__weather"}))
 
 
 if __name__ == "__main__":

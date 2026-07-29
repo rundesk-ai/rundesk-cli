@@ -1159,4 +1159,17 @@ def environment(home: Path, path: str | None = None,
     known = str(agents) if agents is not None else os.environ.get("RUNDESK_AGENTS_DIR")
     if known:
         said["RUNDESK_AGENTS_DIR"] = known
+    # **What this install calls its launchd jobs**, for the same reason and with more at
+    # stake. `rundesk update` from inside a turn is a supported path (R-UPD), so a program
+    # started here really does ask the machine about labels — and a label belongs to the
+    # *person*, not to an install, so nothing a directory can be pointed at moves it. A
+    # child that resolved the default would ask after `ai.rundesk.<agent>` and boot out
+    # `ai.rundesk-update`, both of them the *first* install's, from a turn the second
+    # install started (R-INS-18).
+    #
+    # Forwarded when it was said rather than defaulted here, exactly as the root above is:
+    # unset already resolves to what rundesk ships, through the same code.
+    prefix = os.environ.get("RUNDESK_JOB_PREFIX")
+    if prefix:
+        said["RUNDESK_JOB_PREFIX"] = prefix
     return said

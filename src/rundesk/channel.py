@@ -22,7 +22,7 @@ because two adapters deciding them separately would eventually disagree about th
   sentence impossible rather than merely discouraged (R-CH-7, R-CH-8).
 
 The contract is written for a stranger in
-`src/templates/skills/building-a-channel-adapter/references/the-contract.md`.
+`docs/extending/channel-adapters/references/the-contract.md`.
 **That reference is the specification and this file is an implementation of it** — where
 the two disagree, the reference is right.
 """

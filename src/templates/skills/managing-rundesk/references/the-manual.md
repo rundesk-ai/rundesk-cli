@@ -1,4 +1,4 @@
-# Using rundesk
+# Managing rundesk
 
 You are an agent running inside rundesk. This file is rundesk's, not yours and not your
 owner's — it is replaced on every update, so what is here is current.
@@ -62,7 +62,8 @@ rundesk skills                      # every skill on this machine, and who has w
 ```
 
 If you can see one that would help and were not given it, say so rather than working around
-it. You can write skills too — `writing-skills` says how, and every agent starts with it.
+it. You can write skills too — `writing-rundesk-skills` says how. It is not one every agent
+starts with, so ask for it rather than assuming you have it.
 
 One **gateway** runs you. It is the long-lived process the machine keeps up; your channels are
 held open inside it and your schedules fire inside it. You do not manage it separately — it is
@@ -184,102 +185,13 @@ after Rundesk checks authorization and the adapter. The next message in that Dis
 conversation starts fresh; an already-running turn finishes with the provider it began
 with. Shared channels cannot change an agent-wide default.
 
-**Work that starts itself, and where its answer goes.** A schedule can run a program — a
-script, a command, anything with a full path — or ask a turn, and `--to <channel>` is how its
-outcome reaches a surface, named by the channel it was added under rather than by anything
-about the platform:
+**Schedules are their own skill.** What a schedule is *for*, how to say when, where its
+outcome lands and what a channel that spans a server does to that are all in
+`managing-rundesk-schedules`. It is a separate grant, and an agent made before it existed
+will not have been given it — if it is on this machine and you were not, say so rather than
+guessing at the parts. The one thing worth carrying here: a schedule is the owner's clock,
+never a way to move your own work out of the turn you are in.
 
-```sh
-rundesk schedules <name> add nightly --when "0 6 * * *" \
-    --ask "summarise what changed yesterday" --to ops
-rundesk schedules <name> add tidy --when "0 4 * * *" -- /usr/local/bin/tidy --quiet
-```
-
-**Say when one of two ways, never both.** `--when` is a repeating time, in the five cron
-fields. `--at` is a single moment: it runs then and never again.
-
-```sh
-rundesk schedules <name> add tidy-up --at "2026-07-28T09:00" -- /usr/local/bin/tidy
-rundesk schedules <name> add report --at "2026-07-28T09:00" \
-    --ask "how did the migration go?" --to ops
-```
-
-Everything else is the same either way — a program or a turn, `--to` and `--in`, `--provider`,
-`--instructions`, `on` and `off`, running it by hand.
-
-**You supply a moment, not a phrase.** *"Remind me tomorrow at nine"* is yours to turn into
-`--at "2026-07-28T09:00"` — work out the date, use the machine's own local time, and check what
-you resolved before you write it. rundesk refuses a phrase, refuses a moment carrying a time
-zone, and refuses one that has already gone. That is deliberate: a schedule that guessed at
-language would guess in the dark, with nobody there to notice.
-
-**A moment that goes by while the gateway is down does not run late.** It is not a reminder
-that waits for you; it is work the clock starts, and a clock that has passed has passed. If it
-matters that something happens, the gateway has to be up.
-
-**Expired is not gone.** Once its moment has passed, a one-time schedule leaves
-`rundesk schedules <name>` — that listing is work that can still happen — and stays in the
-record:
-
-```sh
-rundesk schedules <name> --expired
-```
-
-That says which kind of over each one is: an outcome where the clock reached it and it ran, or
-**`never ran`** where its moment passed while nothing was running. If somebody asks whether last
-Tuesday's job happened, that column is the answer — do not read "it is not in the listing" as
-"it ran". A schedule that is over can still be run by hand, turned off, and removed.
-
-**There is no way to change a schedule — remove it and add it again.** The verbs are `add`,
-`on`, `off`, `remove` and `run`, and no more. So "move the morning report to nine" is
-`rundesk schedules <name> remove morning` then `add` with the new time, keeping every other
-option the same — read the old one with `rundesk schedules <name>` *before* removing it, or
-you will be reconstructing it from memory. `off` is what you want when somebody means "stop
-it for now": it keeps the schedule and what it last did, and `on` puts it back. A moment that
-has been used cannot be reused — add another schedule rather than trying to revive one.
-
-**Running one by hand does not use its moment up.** `rundesk schedules <name> run <schedule>`
-does the work now and changes nothing about when it falls due on its own, which is what makes
-it safe for checking that a job does what somebody expects before the night it matters.
-
-**You never post it yourself.** There is no command that sends a message, deliberately: you do
-the work and answer, and the gateway delivers the outcome through the channel already held
-open. So a schedule needs no knowledge of the platform at all.
-
-**Find out where it will actually land before you promise anything.** Look first:
-
-```sh
-rundesk channels <name>                  every channel, and what each one points at
-rundesk channels <name> show <channel>   one of them, in full
-```
-
-Read the **`POINTS AT`** column. It is written by the surface itself when the channel was
-added, and it is the whole answer:
-
-```text
-#operations in the 'Acme' server      confined to one room — a schedule lands there, always
-every room in the 'Acme' server       NOT one room. See below
-every room in 'Acme', 'Side Project'  the same, across more than one server
-direct messages to <bot>              a direct message
-```
-
-**A channel that spans a server has no one room to post in**, so the outcome goes to whichever
-conversation on it was *most recently active* — a different room on a different morning, or a
-thread somebody opened. If an owner asks for a daily post in one named room and the channel
-points at "every room", **say so rather than setting it up**: what they want is a channel added
-confined to that room, which only they can do, and then there is exactly one place it can go.
-Promising a room you cannot guarantee is the failure mode here, and it will not show up until
-the morning it lands somewhere else.
-
-You can see which places on a channel have actually been used — the `WHERE` column names each:
-
-```sh
-rundesk messages <name> --channel ops
-```
-
-A schedule that fires with no channel configured still runs and is still recorded — it is
-reported by `rundesk schedules <name>` and readable with `rundesk messages <name> --source
-schedule`.
 
 **What things cost, and how rundesk itself is.**
 
@@ -289,38 +201,9 @@ rundesk status                 how rundesk is on this machine
 rundesk version                what is installed, and whether it is current
 ```
 
-**Copies of everything, and putting one back.**
-
-```sh
-rundesk backups                what copies there are, with dates and sizes
-rundesk backups add            take one now
-```
-
-A backup holds everything your owner keeps — every agent, its home and workspace, everything
-it has been told and has said, the skills library and this install's configuration. It does
-**not** hold rundesk itself, because a release can be downloaded again and a copy of it would
-be a second copy of something already published. Copies live beside the program and the data,
-in a directory that surviving an uninstall is the whole point of, and each one carries a
-manifest saying what it holds and what it deliberately left out.
-
-Taking one is safe and is a reasonable thing to do before anything irreversible — before an
-update, or before you are asked to remove an agent. It is quick, it never interrupts a turn,
-and it never writes over a copy that is already there.
-
-**Putting one back is not yours to decide.** `rundesk backups restore <backup> --yes`
-replaces
-*everything* your owner keeps: an agent removed since that copy was taken comes back, and one
-made since it was taken goes away — including, possibly, you. It stands every gateway down to
-do it. Treat it exactly like `remove` and `uninstall` below: if your owner asks for a restore,
-tell them the command and let them run it, unless they have asked you for that exact thing and
-named the exact copy.
-
-**`--yes` is not optional for you and is not permission.** The command asks "continue?"
-and reads the answer from a terminal you do not have, so without the flag it takes the
-silence as *no*, changes nothing, and exits 0 — and you report a restore that never
-happened. It replaces the prompt, never your owner's decision. If you do run it, `rundesk backups` first and tell them which copy you
-mean and what it says it holds, because the one thing nobody can undo is restoring the wrong
-one on top of the right one.
+**Backups are their own skill.** What a copy holds, when taking one is worth it, and why
+putting one back is never yours to decide are in `managing-rundesk-backups`. Reach for it
+before anything irreversible.
 
 **A credential is never typed as an argument.** Anything on a command line is readable through
 the process list and is written into shell history. Where a channel needs a token, rundesk

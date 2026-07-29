@@ -321,6 +321,249 @@ class AnAnswerRepliesToTheQuestion(unittest.TestCase):
         self.assertEqual([held.anchor] + [None] * (len(quoted) - 1), quoted)
 
 
+class _Wrote:
+    """A room that remembers, for every message written into it, whether it was a reply and
+    whether it told Discord to mention the person being replied to.
+
+    Carries `id` because a real channel does, and because that is what the anchor guard
+    compares an anchor against. What it hands back is shaped like a real posted message —
+    `channel` and `to_reference` — because a schedule's start notice is held and then
+    quoted by the report that follows it."""
+
+    def __init__(self, id=4242, refusing=False):
+        self.id, self.refusing = id, refusing
+        self.wrote = []          # (content, whether it quoted, whether it mentioned)
+
+    async def send(self, content, reference=None, mention_author=False, files=None):
+        if self.refusing:
+            raise RuntimeError("403 Forbidden (error code: 50013): Missing Permissions")
+        self.wrote.append((content, reference is not None, mention_author))
+        posted = SimpleNamespace(id=len(self.wrote), channel=self)
+        posted.to_reference = lambda fail_if_not_exists=True: SimpleNamespace(
+            message=posted, fail_if_not_exists=fail_if_not_exists)
+
+        async def edit(content=None):
+            return posted
+
+        posted.edit = edit
+        return posted
+
+    @property
+    def mentioned(self):
+        return [one for _content, _quoted, one in self.wrote]
+
+
+def _writing_surface(room, activity=None):
+    """The adapter's whole writing side, with only the room it writes into replaced.
+
+    Built here rather than as a class body because every method on it is the *real* one:
+    what is under test is which of the messages this surface writes reaches Discord asking
+    for a mention, and a stand-in `_post` would answer that question for itself."""
+
+    class Surface:
+        _post = discord.Agent._post
+        told = discord.Agent.told
+        _answer = discord.Agent._answer
+        _state = discord.Agent._state
+        _doing = discord.Agent._doing
+        _paced = discord.Agent._paced
+        _flush = discord.Agent._flush
+        _holding = discord.Agent._holding
+        _no_longer_last = discord.Agent._no_longer_last
+        _stop_typing = discord.Agent._stop_typing
+
+        def __init__(self):
+            self.live, self.seen, self.started = {}, {}, {}
+            self.chose = SimpleNamespace(
+                activity=discord.POSTS if activity is None else activity)
+
+        async def _where_to_write(self, it):
+            return room
+
+        async def _typing(self, it):
+            return
+
+        async def _react(self, it, held, mark, instead_of=None):
+            return
+
+    return Surface()
+
+
+def _asking(where=4242):
+    """A person's message, standing in a place — the shape of a real one and no more."""
+    return AnAnswerRepliesToTheQuestion._message(where)
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class TheAnswerMentionsWhoAsked(unittest.TestCase):
+    """R-DIS-31 — a message that mentions you is drawn by *your own* Discord client with a
+    tint across the whole row, which is a thing no bot can draw for itself. Applied to the
+    answer alone, the thing an owner asked for is the only coloured thing on the page; tint
+    the commentary too and nothing is tinted.
+
+    Proved through the real `_post`, because `mention_author` is the whole requirement and a
+    stand-in `_post` would be answering the question for itself."""
+
+    @staticmethod
+    def _answered(surface, text, held):
+        asyncio.run(discord.Agent._answer(
+            surface, {"type": "answer", "conversation": "4242", "text": text}, held))
+
+    def _held(self, anchor=None, clock=None):
+        held = discord.Live(clock=clock)
+        held.anchor = anchor
+        return held
+
+    def test_an_answer_in_a_direct_message_mentions_the_person_who_asked(self):
+        """R-DIS-28, R-DIS-31 — the reply is what carries the mention, so the answer is both
+        a reply to the question and the one message in the conversation an owner's own client
+        colours in."""
+        room = _Wrote()
+        self._answered(_writing_surface(room), "here is what I found",
+                       self._held(_asking(4242)))
+        self.assertEqual([("here is what I found", True, True)], room.wrote)
+
+    def test_only_the_first_piece_of_a_split_answer_mentions_anybody(self):
+        """R-DIS-13, R-DIS-31 — one reply is one notification however many messages it takes.
+        Mentioning on every piece is five pings for one answer, which is worse than the
+        undifferentiated wall this exists to fix."""
+        room = _Wrote()
+        whole = "\n".join("line %d" % i for i in range(400))
+        self._answered(_writing_surface(room), whole, self._held(_asking(4242)))
+        self.assertGreater(len(room.wrote), 1, "the answer was not long enough to split")
+        self.assertEqual([True] + [False] * (len(room.wrote) - 1), room.mentioned)
+        self.assertEqual(
+            whole.replace("\n", ""),
+            "".join(content for content, _q, _m in room.wrote).replace("\n", ""),
+            "the answer was not delivered whole")
+
+    def test_an_answer_attached_as_a_file_still_mentions_who_asked(self):
+        """R-DIS-13, R-DIS-31 — past a certain length an answer is a document rather than a
+        message, and the one line saying so is still the answer arriving."""
+        room = _Wrote()
+        self._answered(_writing_surface(room),
+                       "x" * (discord.LIMIT * discord.ATTACH_AFTER + 1),
+                       self._held(_asking(4242)))
+        self.assertEqual([True], room.mentioned)
+        self.assertIn("attached", room.wrote[0][0])
+
+    def test_an_answer_with_no_message_to_reply_to_mentions_nobody(self):
+        """R-DIS-31 — the mention follows the anchor. There is nobody to mention where there
+        is no question being replied to, and a room must not be pinged by an answer nobody
+        standing in it asked for."""
+        room = _Wrote()
+        self._answered(_writing_surface(room), "here is what I found", self._held(None))
+        self.assertEqual([("here is what I found", False, False)], room.wrote)
+
+    def test_an_answer_whose_question_is_in_another_room_mentions_nobody(self):
+        """R-DIS-28, R-DIS-31 — being named in a channel opens a thread while the question
+        stays in the channel above it, so the anchor is dropped rather than costing the whole
+        message. A mention that outlived the reply carrying it would ping somebody with a
+        message they cannot see the question for."""
+        room = _Wrote(id=90001)
+        self._answered(_writing_surface(room), "here is what I found",
+                       self._held(_asking(555)))
+        self.assertEqual([("here is what I found", False, False)], room.wrote)
+
+    def test_a_remark_said_mid_turn_mentions_nobody(self):
+        """R-CH-19, R-DIS-31 — a finished thought said while the work goes on is not the
+        answer, and a turn that thought out loud four times would be four notifications
+        before the reply arrived."""
+        room = _Wrote()
+        surface = _writing_surface(room)
+
+        async def carry():
+            await discord.Agent.told(surface, {
+                "type": "said", "conversation": "4242", "text": "I'll look at the logs."})
+            await asyncio.sleep(0)
+
+        asyncio.run(carry())
+        self.assertEqual([("I'll look at the logs.", False, False)], room.wrote)
+
+    def test_a_scheduled_report_mentions_nobody_though_it_is_a_reply(self):
+        """R-DIS-30, R-DIS-31, R-SCH-46 — a schedule's report is a reply, but the message it
+        replies to is rundesk's own start notice rather than a person's. So there is nobody
+        there to mention and the pair stays untinted — the case with real teeth, because a
+        mention here would have the agent ping itself on every scheduled run."""
+        room = _Wrote()
+        surface = _writing_surface(room)
+
+        async def carry():
+            for one in ({"schedule": "nightly", "began": True,
+                         "text": "💻 Working on 'nightly' …"},
+                        {"schedule": "nightly", "text": "nothing broke overnight"}):
+                await discord.Agent.told(
+                    surface, dict({"type": "said", "conversation": "4242"}, **one))
+            await asyncio.sleep(0)
+
+        asyncio.run(carry())
+        (_notice, notice_quoted, _n), (found, report_quoted, _r) = room.wrote
+        self.assertFalse(notice_quoted, "the notice quoted something of its own")
+        self.assertTrue(report_quoted, "the report stopped replying to its notice")
+        self.assertEqual("nothing broke overnight", found)
+        self.assertEqual([False, False], room.mentioned)
+
+    def test_the_commentary_and_the_mark_on_a_failure_mention_nobody(self):
+        """R-DIS-20, R-DIS-31 — what the agent is doing while it works, and the line saying
+        what failed, are both bookkeeping. Neither is the answer, so neither is coloured."""
+        room = _Wrote()
+        surface = _writing_surface(room)
+
+        async def carry():
+            await discord.Agent.told(surface, {
+                "type": "think", "conversation": "4242", "text": "weighing it up"})
+            await discord.Agent.told(surface, {
+                "type": "state", "conversation": "4242", "state": "failed",
+                "why": "the brain stopped answering"})
+            await asyncio.sleep(0)
+
+        asyncio.run(carry())
+        self.assertGreaterEqual(len(room.wrote), 2, "neither message was written")
+        self.assertNotIn(True, room.mentioned)
+
+    def test_a_quiet_channel_still_posts_one_message_and_it_is_the_mentioned_answer(self):
+        """R-CH-27, R-DIS-31 — an owner who asked not to be shown the work gets exactly one
+        message for the turn. That message is the answer, so it is the one that mentions —
+        the whole value of the tint is on the surface where there is least to tell apart."""
+        room = _Wrote()
+        surface = _writing_surface(room, activity=discord.OFF)
+        held = surface.live.setdefault("4242", discord.Live())
+        held.anchor = _asking(4242)
+
+        async def carry():
+            for one in ({"type": "think", "text": "weighing it up"},
+                        {"type": "tool", "name": "Read"},
+                        {"type": "answer", "text": "here is what I found"}):
+                await discord.Agent.told(
+                    surface, dict({"conversation": "4242"}, **one))
+            await asyncio.sleep(0)
+
+        asyncio.run(carry())
+        self.assertEqual([("here is what I found", True, True)], room.wrote)
+
+    def test_a_mentioned_answer_that_cannot_be_delivered_is_said_and_the_turn_goes_on(self):
+        """R-CH-12, R-DIS-31 — a delivery that fails is written to our own stderr and the
+        turn carries on. Asking for a mention is one more thing Discord may refuse, and it
+        must not become the first way a refusal ends a turn."""
+        room = _Wrote(refusing=True)
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self._answered(_writing_surface(room), "here is what I found",
+                           self._held(_asking(4242)))
+        self.assertEqual([], room.wrote)
+        self.assertIn("could not write", said.getvalue())
+
+    def test_a_message_nobody_asked_to_mention_does_not(self):
+        """R-DIS-31 — `_post` is shared by every message this surface writes, so not
+        mentioning is what it does unless a caller says otherwise. Written as a case because
+        the default is the whole of what keeps the answer the only tinted thing."""
+        room = _Wrote()
+        asyncio.run(discord.Agent._post(
+            _writing_surface(room), {"conversation": "4242"}, "-# ⚠ something went wrong",
+            anchor=_asking(4242)))
+        self.assertEqual([("-# ⚠ something went wrong", True, False)], room.wrote)
+
+
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class AScheduledRunReportsUnderItsOwnNotice(unittest.TestCase):
     """R-DIS-30, R-SCH-46 — an owner scrolling a busy direct message sees that a schedule
@@ -585,7 +828,7 @@ class WhereAMessageCameFrom(unittest.TestCase):
                          discord._place(at, False, True))
 
     def test_discord_maps_its_places_to_the_shared_channel_hierarchy(self):
-        """R-DIS-21, R-AGT-35 — Discord nouns do not leak into shared variable names."""
+        """R-DIS-21, R-AGT-37 — Discord nouns do not leak into shared variable names."""
         thread = self.Thread("release", 42)
         thread.parent = self.Where("ops", 1180)
         at = self.message(thread, self.Where("Acme", 99), shown="Tim")
@@ -914,26 +1157,26 @@ class WhatOneTurnLooksLike(unittest.TestCase):
 
     def test_one_activity_has_no_count(self):
         """R-DIS-20 — a count starts only when something actually repeats."""
-        self.assertEqual("-# 💻 ran a command",
+        self.assertEqual("-# 💻 ran command",
                          discord._render_activity(
-                             discord._group_activity([], ["-# 💻 ran a command"])))
+                             discord._group_activity([], ["-# 💻 ran command"])))
 
     def test_consecutive_activity_is_one_line_with_a_count(self):
         """R-DIS-20 — repeated activity remains legible and leaves room for the answer."""
         groups = discord._group_activity([], [
-            "-# 💻 ran a command", "-# 💻 ran a command", "-# 💻 ran a command"])
-        self.assertEqual("-# 💻 ran a command **(x3)**",
+            "-# 💻 ran command", "-# 💻 ran command", "-# 💻 ran command"])
+        self.assertEqual("-# 💻 ran command **(x3)**",
                          discord._render_activity(groups))
 
     def test_only_consecutive_activity_is_counted(self):
         """R-DIS-20 — a different category closes the group permanently."""
         groups = discord._group_activity([], [
-            "-# 💻 ran a command", "-# 💻 ran a command",
-            "-# 📖 read a file", "-# 💻 ran a command"])
+            "-# 💻 ran command", "-# 💻 ran command",
+            "-# 📖 read file", "-# 💻 ran command"])
         self.assertEqual(
-            "-# 💻 ran a command **(x2)**\n"
-            "-# 📖 read a file\n"
-            "-# 💻 ran a command",
+            "-# 💻 ran command **(x2)**\n"
+            "-# 📖 read file\n"
+            "-# 💻 ran command",
             discord._render_activity(groups))
 
     def test_a_growing_message_counts_across_separate_writes(self):
@@ -952,11 +1195,11 @@ class WhatOneTurnLooksLike(unittest.TestCase):
 
         held = discord.Live()
         held.posted = Posted()
-        held.activity_groups = [("-# 💻 ran a command", 1)]
+        held.activity_groups = [("-# 💻 ran command", 1)]
         held.activity = discord._render_activity(held.activity_groups)
-        held.pending = ["-# 💻 ran a command"]
+        held.pending = ["-# 💻 ran command"]
         asyncio.run(discord.Agent._flush(Turn(), {}, held))
-        self.assertEqual(["-# 💻 ran a command **(x2)**"], edited)
+        self.assertEqual(["-# 💻 ran command **(x2)**"], edited)
 
     def test_activity_arriving_during_an_edit_gets_a_successor_write(self):
         """R-DIS-20 — a Discord await may not strand the newest count until the answer."""
@@ -985,8 +1228,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
 
             held = discord.Live()
             held.posted = Posted()
-            held.activity_groups = [("-# 💻 ran a command", 1)]
-            held.pending = ["-# 💻 ran a command"]
+            held.activity_groups = [("-# 💻 ran command", 1)]
+            held.pending = ["-# 💻 ran command"]
             held.pacing = asyncio.create_task(discord.Agent._paced(Turn(), {}, held))
             await asyncio.wait_for(editing.wait(), timeout=2)
             await discord.Agent._doing(
@@ -1000,17 +1243,17 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             return edited, held
 
         edited, held = asyncio.run(scenario())
-        self.assertEqual("-# 💻 ran a command **(x3)**", edited[-1])
+        self.assertEqual("-# 💻 ran command **(x3)**", edited[-1])
         self.assertEqual([], held.pending)
 
     def test_an_intervening_message_breaks_a_count_that_has_not_flushed_yet(self):
         """R-DIS-20 — a pending write may not merge activity across visible history."""
         held = discord.Live()
-        held.pending = ["-# 💻 ran a command"]
+        held.pending = ["-# 💻 ran command"]
         discord.Agent._no_longer_last(None, held)
-        held.pending.append("-# 💻 ran a command")
+        held.pending.append("-# 💻 ran command")
         self.assertEqual(
-            "-# 💻 ran a command\n-# 💻 ran a command",
+            "-# 💻 ran command\n-# 💻 ran command",
             discord._render_activity(discord._group_activity([], held.pending)))
 
     def test_a_subagent_start_and_finish_are_two_broad_categories(self):
@@ -1021,8 +1264,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         finished = discord._activity_line(
             {"type": "result", "id": "helper-1", "ok": True,
              "summary": "private helper response"}, tools)
-        self.assertEqual("-# 🤖 Delegated to subagent", started)
-        self.assertEqual("-# 🤖 Subagent finished", finished)
+        self.assertEqual("-# 🤖 delegated to subagent", started)
+        self.assertEqual("-# 🤖 subagent finished", finished)
         self.assertNotIn("private helper response", finished)
 
     def test_a_safe_subagent_name_is_shown_without_its_provider_path(self):
@@ -1036,19 +1279,19 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             "type": "result", "id": "helper-1", "ok": True,
             "summary": "private response",
         }, tools)
-        self.assertEqual("-# 🤖 Delegated to subagent: senior_code_reviewer", started)
-        self.assertEqual("-# 🤖 Subagent finished: senior_code_reviewer", finished)
+        self.assertEqual("-# 🤖 delegated to subagent: senior_code_reviewer", started)
+        self.assertEqual("-# 🤖 subagent finished: senior_code_reviewer", finished)
         self.assertNotIn("/root", started)
         self.assertNotIn("private response", finished)
 
     def test_named_subagents_still_collapse_as_one_broad_category(self):
         """R-DIS-20 — names add detail only while they do not defeat compact counts."""
         groups = discord._group_activity([], [
-            "-# 🤖 Delegated to subagent: Gibbs",
-            "-# 🤖 Delegated to subagent: Plato",
+            "-# 🤖 delegated to subagent: Gibbs",
+            "-# 🤖 delegated to subagent: Plato",
         ])
         self.assertEqual(
-            "-# 🤖 Delegated to subagent **(x2)**",
+            "-# 🤖 delegated to subagent **(x2)**",
             discord._render_activity(groups))
 
     def test_it_stops_saying_it_is_typing_the_moment_there_is_something_to_read(self):
@@ -1150,8 +1393,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         the new line appears above whatever came after it, where nobody is looking. So
         the next thing to show has to begin a message of its own."""
         held = discord.Live()
-        held.posted, held.activity = object(), "-# 💻 ran a command"
-        held.activity_groups = [("-# 💻 ran a command", 1)]
+        held.posted, held.activity = object(), "-# 💻 ran command"
+        held.activity_groups = [("-# 💻 ran command", 1)]
         # Unbound on purpose: the decision uses nothing of the connection, which is what
         # makes it testable without one.
         discord.Agent._no_longer_last(None, held)
@@ -1243,6 +1486,68 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         from rundesk import provider
 
         self.assertEqual(set(provider.DID), set(discord.SHOWN))
+
+    def test_activity_is_written_clipped_rather_than_as_prose(self):
+        """R-DIS-20 — a turn puts dozens of these in a column of subtext beside a column
+        of marks. At that width an article is a word carrying nothing, and one line
+        starting with a capital reads as the start of a sentence the rest are not."""
+        for verb, said in discord.SHOWN.items():
+            with self.subTest(verb):
+                self.assertNotRegex(said, r"\b(a|an|the)\b",
+                                    "an article in a line nobody reads as a sentence")
+                self.assertEqual(said[:1], said[:1].lower(),
+                                 "one line capitalised and the rest not")
+
+    def test_the_two_lines_a_delegation_is_bracketed_by_are_written_once(self):
+        """R-DIS-20 — each is said three times: the line, the heading a repeat is counted
+        under, and the prefix a helper's name is appended to. Three copies drifting apart
+        is a count that stops matching the line above it, with nothing to see in a diff."""
+        started = discord._activity_line(
+            {"type": "tool", "id": "h", "did": "delegate"}, {})
+        self.assertEqual(f"-# {discord.DELEGATED}", started)
+        self.assertEqual(started, discord._activity_category(started))
+        self.assertEqual(discord.SHOWN["delegate"],
+                         discord.DELEGATED[len(discord.DID["delegate"]) + 1:])
+
+    def test_changing_what_it_keeps_of_its_own_is_told_apart_from_any_other_edit(self):
+        """R-PRV-29 — the whole point of the four verbs. Shown beside `edit` they would be
+        the same pencil, and a reader could not tell a working file from the file the
+        agent lives by."""
+        from rundesk import provider
+
+        for verb in provider.CONTINUITY.values():
+            with self.subTest(verb):
+                said = discord.commentary({"type": "tool", "name": "Write", "did": verb})
+                self.assertIn(discord.DID[verb], said)
+                self.assertNotIn(discord.DID["edit"], said)
+                self.assertNotIn("Write", said, "a vendor's own word reached a reader")
+
+    def test_what_it_keeps_of_its_own_is_spoken_of_in_the_first_person(self):
+        """R-DIS-20 — an activity line is the agent saying what it just did. "Updated its
+        memory" reads as a process writing to a store; the agent changed what it will know
+        next time, and it is the one saying so."""
+        from rundesk import provider
+
+        for name, verb in provider.CONTINUITY.items():
+            with self.subTest(verb):
+                said = f" {discord.SHOWN[verb]} "
+                self.assertNotIn(" its ", said)
+                if name == "USER.md":
+                    # The one that is not the agent's. `USER.md` is what it knows about the
+                    # owner, so "my" would be a claim on the wrong person's file.
+                    self.assertNotIn(" my ", said)
+                else:
+                    self.assertIn(" my ", said)
+
+    def test_the_owners_own_file_is_not_called_the_agents_preferences(self):
+        """R-PRV-29 — `USER.md`'s own first line is "what you know about the user", and it
+        holds who they are and what they are building as well as how they want answering.
+        A verb naming the narrowest part of a file stops being true the first time the
+        widest part is what changed."""
+        from rundesk import provider
+
+        self.assertEqual("profile", provider.CONTINUITY["USER.md"])
+        self.assertEqual("updated profile", discord.SHOWN["profile"])
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")

@@ -15,7 +15,7 @@ What it does, in the order somebody experiences it:
     stopped  -> ✋                   failed   -> ⚠️ and what failed
 
 The contract this implements is
-`src/templates/skills/building-a-channel-adapter/references/the-contract.md`. Where the
+`docs/extending/channel-adapters/references/the-contract.md`. Where the
 two disagree, the reference is right.
 
 The cost of the choice: `discord.py` is a dependency, pinned in `requirements.txt` and
@@ -209,21 +209,47 @@ QUERY_COMMANDS = (
 #: into this file forever. A verb with no mark here would silently show as the fallback,
 #: so the suite checks this covers the seam's list rather than trusting it to.
 DID = {"read": "📖", "search": "🔎", "run": "💻", "edit": "✏️", "list": "📁",
-       "make": "🎨", "delegate": "🤖"}
+       "make": "🎨", "delegate": "🤖",
+       # What the agent changed of its own (R-PRV-29). Marked apart from `edit` because
+       # they are apart: a file the agent was working on and a file the agent lives by
+       # are the same pencil and different news.
+       "memory": "🧠", "rules": "📜", "profile": "👤", "identity": "✨"}
 UNKNOWN = "💭"
 
 #: The same verbs as a person would say them. A commentary is read as a sentence, and
 #: `edit` beside a pencil reads as an instruction rather than as something that happened.
-SHOWN = {"read": "read a file", "search": "searched", "run": "ran a command",
-         "edit": "edited a file", "list": "listed files", "make": "made something",
-         "delegate": "Delegated to subagent"}
+#:
+#: **No articles, and no capitals.** These are read as a column of subtext beside a row of
+#: marks, dozens of them in a turn, and at that width "a" is a word carrying nothing: a
+#: reader skims the verb and the noun. Clipped for the same reason a log line is.
+#:
+#: Three of the continuity four are said in the first person, because they are the agent's
+#: own. "Updated its memory" reads as a process writing to a store; the agent changed what
+#: it will know next time, and it is the one saying so. `profile` is not one of them —
+#: `USER.md` is what the agent knows about the *owner*, so "my" would be a claim on the
+#: wrong person's file.
+SHOWN = {"read": "read file", "search": "searched", "run": "ran command",
+         "edit": "edited file", "list": "listed files", "make": "made something",
+         "delegate": "delegated to subagent",
+         "memory": "updated my memory", "rules": "updated my rules",
+         "profile": "updated profile", "identity": "updated my identity"}
+
+#: The two lines a delegation is bracketed by, written once. Both are said in three places
+#: — the line itself, the prefix a repeat is counted under, and the prefix a name is
+#: appended to — and a delegation counted under a heading that no longer matches the line
+#: above it is a silent break with nothing to see in a diff.
+DELEGATED = f"{DID['delegate']} {SHOWN['delegate']}"
+FINISHED_HELPER = f"{DID['delegate']} subagent finished"
 
 #: What a failed tool says without relaying its arguments or result. Those remain in the
 #: run account; Discord activity is broad, because a command or path may be private
 #: (R-DIS-9, R-DIS-20).
 FAILED = {"read": "file read failed", "search": "search failed", "run": "command failed",
           "edit": "file edit failed", "list": "file listing failed",
-          "make": "creation failed", "delegate": "subagent failed"}
+          "make": "creation failed", "delegate": "subagent failed",
+          "memory": "could not update my memory", "rules": "could not update my rules",
+          "profile": "could not update profile",
+          "identity": "could not update my identity"}
 
 
 def say(**it) -> None:
@@ -1098,6 +1124,17 @@ class Agent(discord.Client):
         and so an owner can tell an answer from a scheduled report arriving beside it; only
         the first piece carries the anchor, because a quote on every piece buries what it
         is quoting.
+
+        **And it mentions whoever asked** (R-DIS-31). A message that mentions you is drawn
+        by *your own* client with a tint across the whole row — the avatar and the name
+        inside it — which is a thing no bot can draw for itself and the only way the report
+        somebody is waiting for stops looking like the bookkeeping in front of it. So it is
+        this one message and nothing else rundesk posts: commentary, a remark said mid-turn,
+        a state mark and a schedule's start notice all go through `_post` too, and a surface
+        where everything is tinted has tinted nothing. The mention follows the anchor for
+        the same reason the tint is worth having — where the answer replies to a person's
+        message it names them, and where it replies to nothing it names nobody, so a room
+        is not pinged by an answer nobody there asked for.
         """
         # The cost first, then the answer, in one message (R-DIS-17). At the top rather
         # than the bottom because a long answer pushes anything after it off a phone
@@ -1117,12 +1154,16 @@ class Agent(discord.Client):
         # dozen numbered fragments is not something anybody reads (R-DIS-13).
         if len(whole) > LIMIT * ATTACH_AFTER:
             await self._post(it, f"{footer}\n-# the answer is long, so it is attached"
-                             .strip(), anchor=held.anchor, files=files, text_as=whole)
+                             .strip(), anchor=held.anchor, files=files, text_as=whole,
+                             mention=held.anchor is not None)
             return
         rest, anchor = whole, held.anchor
         while rest:
             piece, rest = split_at(rest, LIMIT)
-            await self._post(it, piece, anchor=anchor,
+            # **Once, on the piece carrying the anchor** (R-DIS-13, R-DIS-31). The mention
+            # is the reply, so it goes exactly where the reply goes: a long answer that
+            # mentioned on every piece would be five notifications for one reply.
+            await self._post(it, piece, anchor=anchor, mention=anchor is not None,
                              files=files if not rest else [])
             anchor = None
 
@@ -1206,9 +1247,16 @@ class Agent(discord.Client):
                     return room, None
         return None, None
 
-    async def _post(self, it: dict, content: str, anchor=None, files=(), text_as=None):
+    async def _post(self, it: dict, content: str, anchor=None, files=(), text_as=None,
+                    mention=False):
         """One message, and never at the turn's expense: a delivery that fails is written
-        to our own stderr and the turn goes on (R-CH-12)."""
+        to our own stderr and the turn goes on (R-CH-12).
+
+        **`mention` is off unless a caller asks for it, and only `_answer` does** (R-DIS-31).
+        Everything this surface writes comes through here — the running commentary, a remark
+        said mid-turn, a state mark, a schedule's start notice — and the tint an owner is
+        being given is worth something only while it means *this is the answer*.
+        """
         channel = await self._where_to_write(it)
         if channel is None:
             note(f"nowhere to write in {it.get('place') or it.get('conversation')}")
@@ -1246,11 +1294,17 @@ class Agent(discord.Client):
         # is lost to a line on our own stderr. The asker deleting their question is enough,
         # and a turn here runs for minutes. Off, Discord drops the quote and still posts.
         quoting = None if anchor is None else anchor.to_reference(fail_if_not_exists=False)
+        # **The mention is the reply's, so there is no mention without one** (R-DIS-31).
+        # `mention_author` is Discord's `allowed_mentions.replied_user`, which names the
+        # author of the message being replied to — so it can only reach somebody through
+        # `quoting`, and the guard above drops an anchor standing in another room. Asked of
+        # `quoting` rather than of `anchor` for exactly that: an answer whose question is
+        # somewhere else quotes nobody and must therefore mention nobody.
         try:
             said = await channel.send(
                 content,
                 reference=quoting,
-                mention_author=False,
+                mention_author=bool(mention) and quoting is not None,
                 files=sending or None,
             )
             note(f"wrote {len(content)} chars and {len(sending)} files")
@@ -1396,7 +1450,7 @@ def _activity_line(it: dict, tools: dict) -> str:
         if at:
             tools[at] = {"did": did, "who": who}
         if did == "delegate":
-            return f"-# 🤖 Delegated to subagent{': ' + who if who else ''}"
+            return f"-# {DELEGATED}{': ' + who if who else ''}"
         return commentary(it)
     if kind == "result":
         remembered = tools.pop(at, None) if at else None
@@ -1407,7 +1461,7 @@ def _activity_line(it: dict, tools: dict) -> str:
         if it.get("ok") is False:
             return f"-# ⚠ {FAILED.get(did, 'tool failed')}"
         if did == "delegate" and it.get("ok") is True:
-            return f"-# 🤖 Subagent finished{': ' + who if who else ''}"
+            return f"-# {FINISHED_HELPER}{': ' + who if who else ''}"
     return commentary(it)
 
 
@@ -1432,10 +1486,10 @@ def _group_activity(groups: list, lines: list) -> list:
 
 def _activity_category(line: str) -> str:
     """The broad line counted even when one helper's safe name is shown."""
-    if line.startswith("-# 🤖 Delegated to subagent"):
-        return "-# 🤖 Delegated to subagent"
-    if line.startswith("-# 🤖 Subagent finished"):
-        return "-# 🤖 Subagent finished"
+    if line.startswith(f"-# {DELEGATED}"):
+        return f"-# {DELEGATED}"
+    if line.startswith(f"-# {FINISHED_HELPER}"):
+        return f"-# {FINISHED_HELPER}"
     return line
 
 
