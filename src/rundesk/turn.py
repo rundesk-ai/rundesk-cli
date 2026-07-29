@@ -62,16 +62,6 @@ CHANNEL = "channel"
 #: whole of it is in the run's own file; this is the tail worth putting in front of a person.
 TROUBLE_KEPT = 20
 
-#: What Rundesk says alongside a word that reaches work already in flight. Kept apart from
-#: the person's text in both the input record and the account: an adapter may need the
-#: context to preserve R-PRV-19, but changing the person's recorded words would violate
-#: R-RUN-9/R-PRV-10 precisely where the audit is meant to explain what happened.
-STEERING_CONTEXT = (
-    "This is mid-turn guidance within the original request. After addressing it, continue "
-    "working toward and finish the original request unless this guidance explicitly stops "
-    "or replaces that work."
-)
-
 #: The two rundesk puts into a turn itself, and the one it records about a turn going wrong.
 #: `SENT` is a thing *said* and becomes a message; `LOST` is a record, and is the only one of
 #: rundesk's own that `store.RECORD_KINDS` knows — using any other name here would be stored
@@ -652,9 +642,10 @@ async def _saying(program, prompt: str, writing, steering, trouble: list) -> Non
             said = Said.of(word)
             writing.add(event={"type": SENT, "text": said.text, "mid": True,
                                "who": said.who})
-            writing.add(event={"type": SENT, "text": STEERING_CONTEXT, "mid": True,
+            writing.add(event={"type": SENT, "text": provider.STEERING_CONTEXT, "mid": True,
                                "author": "rundesk"})
-            await program.send(provider.spoken(said.text, context=STEERING_CONTEXT))
+            await program.send(provider.spoken(
+                said.text, context=provider.STEERING_CONTEXT))
     except process.NotListening:
         pass  # it finished while somebody was still typing, which is nobody's fault
     except asyncio.CancelledError:

@@ -92,6 +92,15 @@ CAPABILITIES = ("tools", "resume", "model", "usage", "steer")
 #: One kind, because there is one thing to say to a running brain: more words.
 SAY = "say"
 
+#: What Rundesk says alongside a word that reaches work already in flight. Kept apart from
+#: the person's text in the input record and the account: replacement-style transports
+#: need this to preserve R-PRV-19, while cooperative ones may ignore it.
+STEERING_CONTEXT = (
+    "This is mid-turn guidance within the original request. After addressing it, continue "
+    "working toward and finish the original request unless this guidance explicitly stops "
+    "or replaces that work."
+)
+
 #: How much of the machine a turn may touch, in rundesk's words rather than any vendor's
 #: (R-PRV-18). Two, because a posture nobody can act on is not worth carrying: an adapter
 #: maps these onto whatever its own brain understands, or ignores them.

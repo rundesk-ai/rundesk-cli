@@ -212,9 +212,27 @@ sys.stdout.flush()
 sys.exit(1)
 '''
 
+#: Refuses the production steering shape unless later words carry Rundesk's context apart
+#: from the person's text. This gives the conformance driver teeth: a more generous driver
+#: would let a custom adapter pass here and fail only when a real turn steered it.
+STEER_CONTEXT = '''
+import json, sys
+
+if "--capabilities" in sys.argv:
+    print(json.dumps({"steer": True}))
+    sys.exit(0)
+
+said = [json.loads(line) for line in sys.stdin if line.strip()]
+later = said[1] if len(said) > 1 else {}
+ok = later.get("text") == "and one more thing" and bool(later.get("context"))
+print(json.dumps({"type": "done", "ok": ok}), flush=True)
+sys.exit(0 if ok else 1)
+'''
+
 STAND_INS = {
     "plain": PLAIN, "bare": BARE, "strange": STRANGE, "counting": COUNTING,
     "spawner": SPAWNER, "nosy": NOSY, "shouting": SHOUTING, "failing": FAILING,
+    "steer-context": STEER_CONTEXT,
 }
 
 
@@ -307,7 +325,8 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
                 await program.send(provider.spoken(prompt))
                 for word in steering or []:
                     await asyncio.sleep(0.2)
-                    await program.send(provider.spoken(word))
+                    await program.send(provider.spoken(
+                        word, context=provider.STEERING_CONTEXT))
             await program.close_input()
         except process.NotListening:
             pass  # it answered and left while we were still writing; not a failure
@@ -406,6 +425,13 @@ class TheContract(DrivesAnAdapter):
         turn = await self.carry(self.under_test(), steering=["and one more thing"])
         self.assertIsNotNone(turn.done, "it did not finish a turn run the way it asked for")
         self.assertTrue(turn.done.get("ok"), f"the turn failed: {turn.errors}")
+
+    async def test_the_conformance_driver_uses_the_real_mid_turn_record_shape(self):
+        """R-PRV-19 — the suite an adapter author runs must send the same optional context
+        production sends, or an adapter can pass here and reject a real steer."""
+        turn = await self.carry(
+            self.stand_in("steer-context"), steering=["and one more thing"])
+        self.assertTrue(turn.done and turn.done.get("ok"), turn.errors)
 
     async def test_an_adapter_works_where_it_is_told_and_not_where_it_pleases(self):
         """R-PRV-3, R-PRV-14 — an agent's workspace is its own, and an adapter reaching
