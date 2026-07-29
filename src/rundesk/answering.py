@@ -792,12 +792,18 @@ class Answering:
 
 
 class _Shown:
-    """What the agent did, shown while it is still doing it (R-CH-6).
+    """What the agent did and said, shown while it is still doing it (R-CH-6).
 
-    **Prose is not passed on here.** `text` is what the brain *says*, and it arrives a
-    fragment at a time; it is collected by the turn and handed over whole at the end. What
-    is passed on is what the agent *did* — a tool it ran, a thought it closed, what it
-    cost — each of which is whole the moment it exists (R-CH-7).
+    **A part-written reply is not passed on here.** `text` arrives a fragment at a time;
+    it is collected by the turn and handed over whole at the end. What is passed on is
+    what is whole the moment it exists (R-CH-7) — a tool it ran, a thought it closed,
+    what it cost, and a complete thing said with more of the turn still to come.
+
+    **An owner who turned activity off turned all of it off**, prose included, and such a
+    channel posts one message for the turn: its answer (R-CH-6, R-CH-27). A quiet room that
+    answers late does look broken, which is why this is on unless somebody said so — but
+    somebody who said so chose silence over reassurance, and prose is the most text a turn
+    makes.
 
     Only ever the brain's own records: what rundesk makes of a turn does not come through
     here, and a watcher waiting for one of rundesk's own kinds would wait for ever.
@@ -816,7 +822,8 @@ class _Shown:
     #: tool's own arguments, a file it read, a command's whole output and whatever a
     #: vendor decides to attach next year are exactly the things that must not be posted
     #: into a chat room because somebody added a key. `text` is absent for a different
-    #: reason: prose is handed over whole at the end (R-CH-7).
+    #: reason: what is said is decided a record at a time by `_spoke`, because whether a
+    #: thing said is a remark or the answer is knowable only from what follows it (R-CH-19).
     AS_IT_HAPPENS = {
         "think": ("text",),
         "tool": ("id", "name", "did"),
@@ -835,16 +842,14 @@ class _Shown:
     def __call__(self, said: dict) -> None:
         kind = said.get("type")
         if kind == "text":
+            # Always, whether or not this channel is shown the turn: what was said is the
+            # material the answer is made of, and only whether the earlier ones are posted
+            # depends on the owner's choice.
             self._spoke(said)
             return
         if kind not in self.AS_IT_HAPPENS:
             return
-        if not self._answering.record.get("activity", True):
-            # What the agent *is doing* is what an owner may turn off, and what it *says*
-            # is not. A room that goes quiet for four minutes and then answers looks
-            # broken, so this is on unless somebody said otherwise — but a room where it
-            # is noise is one where they said so once, and every turn in it is quiet
-            # rather than every message carrying a decision (R-CH-6).
+        if not self._shown():
             return
         it = {what: said[what] for what in self.AS_IT_HAPPENS[kind] if what in said}
         if kind == "tool" and it.get("did") == "delegate" and "who" in said:
@@ -856,6 +861,10 @@ class _Shown:
         self._answering._tell(
             type=kind, conversation=self._held.conversation, run=self._held.run, **it)
 
+    def _shown(self) -> bool:
+        """Whether this channel is shown the turn while it runs (R-CH-6)."""
+        return bool(self._answering.record.get("activity", True))
+
     def _spoke(self, said: dict) -> None:
         """A thing the brain said, shown now if it is finished and there is more coming.
 
@@ -863,13 +872,20 @@ class _Shown:
         means showing a sentence that changes under somebody reading it. A *complete*
         thing said while the turn runs is shown as soon as the next one arrives — which
         is what makes the last one the answer, and is only knowable once there is a next.
+
+        **Unless the owner turned activity off**, in which case none of them is posted and
+        the turn's one message is its answer (R-CH-27). What is said mid-turn is the most
+        text a turn produces, so leaving it out of that choice overrode it on the record
+        that mattered most. Kept either way: what was said is still written into the
+        account and into the run's records, and this decides only what is posted.
         """
         text = str(said.get("text") or "")
         if not said.get(self.WHOLE):
             self._held.spoken.append(("fragment", text))
             return
+        posts = self._shown()
         for was, older in list(self._held.spoken):
-            if was == "whole" and older.strip():
+            if posts and was == "whole" and older.strip():
                 self._answering._tell(type="said", conversation=self._held.conversation,
                                       run=self._held.run, text=older.strip())
             self._held.spoken.remove((was, older))
