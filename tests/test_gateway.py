@@ -31,7 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import activity, gateway, process, schedule, store  # noqa: E402
+from rundesk import activity, config, gateway, process, schedule, store  # noqa: E402
 
 PY = sys.executable
 
@@ -3050,6 +3050,11 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         self.addCleanup(shutil.rmtree, self.agents_at, True)
         self.addCleanup(os.environ.pop, "RUNDESK_AGENTS_DIR", None)
         os.environ["RUNDESK_AGENTS_DIR"] = str(self.agents_at)
+        self.data_at = Path(tempfile.mkdtemp(prefix="rundesk-data-"))
+        self.addCleanup(shutil.rmtree, self.data_at, True)
+        self.addCleanup(os.environ.pop, "RUNDESK_DATA_DIR", None)
+        os.environ["RUNDESK_DATA_DIR"] = str(self.data_at)
+        config.ensure(self.data_at)
         self.agents = agents
         agents.add("ava", self.agents_at)
         self.records = agents.records("ava", self.agents_at)
