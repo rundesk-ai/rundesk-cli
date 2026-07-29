@@ -404,6 +404,44 @@ class WhatOneTurnLooksLike(unittest.TestCase):
                          discord._as_a_line({"type": "usage", "input": 1200,
                                              "output": 340, "cached": 17000}))
 
+    def test_the_footer_leads_with_how_big_the_conversation_is(self):
+        """R-DIS-28, R-USE-15 — the footer is read to decide one thing: whether to start a
+        fresh conversation. `2 input` is what a warm turn's fresh tokens are and says
+        nothing about a session; the size it ended on does, and goes first. What the turn
+        itself wrote stays beside it, and the breakdown stays in `rundesk runs`."""
+        self.assertEqual(
+            "-# · 122k session · 837 output",
+            discord._as_a_line({"type": "usage", "session": 122435, "input": 2,
+                                "output": 837, "cached": 121446, "written": 987}))
+
+    def test_the_whole_footer_an_owner_reads_is_the_size_what_was_written_and_the_clock(self):
+        """R-DIS-28, R-DIS-24 — end to end, from the record the adapter sent to the line
+        above the answer, because each half of this passes on its own while the line
+        somebody actually reads is wrong."""
+        posted = []
+
+        class Turn:
+            async def _post(self, it, text, **kw): posted.append(text)
+            def _stop_typing(self, held): pass
+            def _no_longer_last(self, held): pass
+
+        held = discord.Live(clock=lambda: 128.0)
+        held.started = 100.0
+        asyncio.run(discord.Agent._doing(
+            Turn(), {"type": "usage", "session": 122435, "output": 837}, held))
+        asyncio.run(discord.Agent._answer(
+            Turn(), {"type": "answer", "text": "done"}, held))
+        self.assertEqual("-# · 122k session · 837 output · 28s elapsed",
+                         posted[0].splitlines()[0])
+
+    def test_a_brain_that_does_not_report_a_conversation_size_gets_the_footer_it_always_got(self):
+        """R-DIS-28, R-USE-16 — a brain that cannot say how big its conversation is keeps
+        every slot it used to show rather than being cut down to `output` alone. Adding a
+        quantity for one brain may not take three away from another."""
+        self.assertEqual("-# · 1.2k input · 340 output · 17k cached",
+                         discord._as_a_line({"type": "usage", "input": 1200,
+                                             "output": 340, "cached": 17000}))
+
     def test_elapsed_time_is_compact_at_seconds_minutes_and_hours(self):
         """R-DIS-24 — the duration stays readable beside compact token counts."""
         self.assertEqual(["40s", "2m", "2h"],

@@ -174,6 +174,62 @@ class WhatTheGoldenSaysBack(unittest.TestCase):
         self.assertEqual(ended_on, seen.get("ended_on"),
                          "a subagent's line was taken as where this turn ended")
 
+    def test_a_turn_says_how_big_the_conversation_it_ended_on_was(self):
+        """R-USE-15. The question a footer is read to answer is "how big is this session
+        now", and no billed quantity answers it: fresh input is 2 here, and on any warm
+        turn. This vendor describes one prompt in three pieces, so putting the three back
+        together is the prompt it ended on — 2 fresh, 88 written, 34,200 read back."""
+        counted = only(self.said, "usage")[0]
+        self.assertEqual(34290, counted["session"])
+        self.assertEqual(counted["input"] + counted["written"] + counted["cached"],
+                         counted["session"], "the three pieces are not the whole prompt")
+
+    def test_a_turn_making_several_requests_reports_the_level_it_ended_at_and_not_the_sum(self):
+        """R-USE-15. This captured turn made several requests, and there are two ways to
+        add one up that both look like a session and are bills: the `result` line's own
+        input side counts the resent prefix once per request (320,040 here, and 15,424,940
+        on a measured 58-request turn), and adding every `assistant` line does it again
+        (569,147). A number of that size cannot even move downwards when a conversation is
+        compacted, which is the one behaviour the quantity exists to have."""
+        counted = only(self.said, "usage")[0]
+        self.assertEqual(34290, counted["session"])
+        self.assertNotEqual(20 + 17453 + 302567, counted["session"], "this is the bill")
+        self.assertNotEqual(36 + 53756 + 515355, counted["session"],
+                            "every request's prompt was added together")
+        self.assertLess(counted["session"], 320040)
+
+    def test_a_compacted_conversation_is_reported_smaller_than_the_one_before_it(self):
+        """R-USE-15. A gauge goes down when the thing it measures does, and a running total
+        cannot — which is the whole difference between the two. Compaction is when this
+        actually happens to somebody, so it is what the case drives."""
+        sizes = []
+        for read_back in (300000, 40000):
+            seen = {"session": "s", "model": None, "ended": False}
+            claude.records(json.dumps(
+                {"type": "assistant", "parent_tool_use_id": None, "session_id": "s",
+                 "message": {"content": [], "usage": {
+                     "input_tokens": 4, "cache_creation_input_tokens": 900,
+                     "cache_read_input_tokens": read_back}}}), seen)
+            said = claude.records(json.dumps(
+                {"type": "result", "session_id": "s", "is_error": False,
+                 "usage": {"output_tokens": 120}}), seen)
+            sizes.append(only(said, "usage")[0]["session"])
+        self.assertEqual([300904, 40904], sizes)
+        self.assertLess(sizes[1], sizes[0], "a compacted conversation did not get smaller")
+
+    def test_a_brain_that_reports_none_of_the_pieces_of_a_prompt_claims_no_size_for_the_conversation(self):
+        """R-USE-16. Absent means "could not tell", which is a different claim from nought
+        — and the four billed slots are unaffected, because a turn that reported no input
+        at all did report an output of 120."""
+        seen = {"session": "s", "model": None, "ended": False}
+        said = claude.records(json.dumps(
+            {"type": "result", "session_id": "s", "is_error": False,
+             "usage": {"output_tokens": 120}}), seen)
+        counted = only(said, "usage")[0]
+        self.assertNotIn("session", counted, "a conversation size was invented from nothing")
+        self.assertEqual(120, counted["output"])
+        self.assertEqual(0, counted["input"])
+
     def test_account_state_a_brain_volunteers_is_reported_as_a_limit(self):
         """R-PRV-28. The captured stream carries one of these and this adapter used to drop
         it — on reasoning that was right as far as it went, that it is account state rather

@@ -18,6 +18,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   -u RUNDESK_SKILLS -u RUNDESK_PROVIDER_HOME -u RUNDESK_RUN -u RUNDESK_POSTURE
   -u RUNDESK_RESUME -u RUNDESK_PREFACE -u RUNDESK_RAW -u RUNDESK_CWD` and it is green.
   Do not spend an hour hunting a regression in these four first.
+- **A new field on a provider record reaches no surface until it is named in
+  `_Shown.AS_IT_HAPPENS`.** It is an allowlist of exactly which of each record's fields
+  cross the channel seam (R-CH-13), so an adapter can report a quantity, a channel can
+  render it, both suites can be green, and a chat footer still shows nothing — nothing
+  errors and nothing is logged. `written` is the standing proof: it has been in the
+  Discord footer's slot list since v0.17.0 and has never once arrived, because that list
+  does not name it. Add the field there in the same change, and prove it end to end
+  (`test_answering.py` drives the seam; a case that only calls the adapter proves half).
 - **Antigravity's `-p` flag consumes its next argument; it is not the switch for a piped
   prompt.** `agy -p --output-format stream-json` asks the model about `--output-format`, and
   `agy ... -p ""` rejects an empty prompt. For the private stdin transport Rundesk requires,

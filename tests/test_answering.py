@@ -1074,6 +1074,20 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
         self.assertEqual({"type", "conversation", "run", "id", "ok", "summary"},
                          set(surface.of("result")[0]))
 
+    async def test_how_big_the_conversation_is_reaches_a_surface_with_what_it_cost(self):
+        """R-USE-15, R-CH-13 — the field is named here or it never leaves, and a footer
+        showing it would be dead the day it was written. A brain's own bookkeeping around
+        it still stays where it was said."""
+        brain = Brain(showing=[{"type": "usage", "input": 2, "output": 837,
+                                "cached": 121446, "session": 122435,
+                                "prompt_cache_key": "a private key"}])
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        shown = surface.of("usage")[0]
+        self.assertEqual(122435, shown["session"])
+        self.assertNotIn("prompt_cache_key", shown)
+
     async def test_a_safe_helper_name_leaves_but_unrelated_tool_fields_do_not(self):
         """R-CH-13 — a helper name is deliberately allowed; provider extras stay private."""
         brain = Brain(showing=[
