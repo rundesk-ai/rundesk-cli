@@ -36,6 +36,7 @@ You are told everything through the environment:
 |---|---|
 | `RUNDESK_CWD` | the agent's own home — **stand here**, so what your brain loads is what the agent keeps |
 | `RUNDESK_SKILLS` | the skills this agent was given; link them where your brain looks |
+| `RUNDESK_CONTINUITY` | `NAME=verb,…` — the files the agent lives by, and what changing one is called |
 | `RUNDESK_PROVIDER_HOME` | yours alone, and it lasts — for what you must remember between turns |
 | `RUNDESK_RUN` | this run's id |
 | `RUNDESK_POSTURE` | `read` or `work` — how much of the machine this turn may touch |
@@ -58,10 +59,18 @@ Only `done` is required. **stderr is yours** — say what went wrong there.
 
 ## The traps that actually cost something
 
-**`did` is a closed list: `read`, `search`, `run`, `edit`, `list`, `make`, `delegate`.** If what
-your tool did is none of them, leave `did` out — `name` still carries your own word. Do not
-stretch one to fit; say so instead and the list grows by a release. A channel never sees your
-vendor's names, which is the whole point.
+**`did` is a closed list: `read`, `search`, `run`, `edit`, `list`, `make`, `delegate`, and the
+four continuity verbs below.** If what your tool did is none of them, leave `did` out — `name`
+still carries your own word. Do not stretch one to fit; say so instead and the list grows by a
+release. A channel never sees your vendor's names, which is the whole point.
+
+**An agent editing what it lives by is worth telling apart, and matching the name is the wrong
+way to do it.** `RUNDESK_CONTINUITY` hands you `AGENTS.md=rules,MEMORY.md=memory,…`; when a
+write lands on one of those *standing directly in `RUNDESK_CWD`*, report that verb instead of
+`edit`. Resolve both sides before comparing, and never match on the file's name alone — every
+checkout on the machine has an `AGENTS.md`, and reporting one of those as the agent rewriting
+its own rules is worse than the plain `edit`, because it is untrue. Ignoring the variable
+entirely is a whole adapter; you simply report `edit` as before.
 
 **Never map `RUNDESK_PREFACE` onto anything that replaces the system prompt.** Use the *append*
 form your brain offers. Sending an owner's paragraph to a replacing flag does not add a

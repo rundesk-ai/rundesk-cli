@@ -32,13 +32,13 @@ class WithADataDirectory(unittest.TestCase):
 
 class WhatInstallingWrites(WithADataDirectory):
     def test_installing_writes_the_configuration_an_owner_can_read(self):
-        """R-INS-18 — a file an owner is expected to open and never sees is a file nobody
+        """R-INS-19 — a file an owner is expected to open and never sees is a file nobody
         edits, and every value in it is then folklore."""
         self.assertEqual(list(config.SECTIONS), config.ensure(self.where))
         self.assertEqual(list(config.SECTIONS), list(json.loads(self.at.read_text())))
 
     def test_a_section_is_written_empty_so_a_default_can_still_improve(self):
-        """R-INS-18 — written with real values, a file pins them: a later release that
+        """R-INS-19 — written with real values, a file pins them: a later release that
         improves a default never reaches the install, and the file looks correct doing it."""
         config.ensure(self.where)
 
@@ -49,7 +49,7 @@ class WhatInstallingWrites(WithADataDirectory):
         self.assertEqual(config.GRANTED, config.skills(self.where)["granted"])
 
     def test_installing_again_changes_nothing_an_owner_configured(self):
-        """R-INS-18, R-AGT-4 — running the installer again is a repair, and it must not be
+        """R-INS-19, R-AGT-4 — running the installer again is a repair, and it must not be
         how somebody loses what they set."""
         self.at.write_text('{"backups": {"keep_days": 400}}\n', encoding="utf-8")
 

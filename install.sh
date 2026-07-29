@@ -251,6 +251,10 @@ Environment:
   RUNDESK_INSTALL_DIR   where rundesk lives (default ~/.rundesk)
   RUNDESK_BIN_DIR       where the `rundesk` command is placed
   RUNDESK_BACKUP_DIR    where copies of what the owner keeps are kept; never deleted here
+  RUNDESK_JOB_PREFIX    what this install calls its launchd jobs (default ai.rundesk).
+                        A label belongs to the person, not to the install, so a second
+                        install on one machine sets this or its removal takes the first
+                        install's automatic updates away with it
 USAGE
 }
 

@@ -1649,6 +1649,21 @@ class ConfiguringAnAgent(unittest.TestCase):
         self.assertIn("INVALID NAME", said)
         self.assertEqual([], agents.added, "it refused the name and made one anyway")
 
+    def test_a_job_prefix_that_cannot_be_one_stops_the_command(self):
+        """R-INS-18 — the variable a second install isolates itself with becomes a file
+        name and a launchd target, so one that could escape the jobs directory has to be
+        answered in our words before a command runs rather than planting a job."""
+        before = os.environ.get("RUNDESK_JOB_PREFIX")
+        os.environ["RUNDESK_JOB_PREFIX"] = "../elsewhere"
+        self.addCleanup(
+            lambda: os.environ.__setitem__("RUNDESK_JOB_PREFIX", before)
+            if before is not None else os.environ.pop("RUNDESK_JOB_PREFIX", None))
+        code, said = drive(["agents"])
+        self.assertEqual(1, code)
+        self.assertIn("RUNDESK_JOB_PREFIX", said)
+        self.assertIn("INVALID", said)
+        self.assertNotIn("Traceback", said)
+
     def test_adopting_a_gateway_that_has_no_agent_brings_what_it_wrote_in(self):
         """R-AGW-1 — one place afterwards, rather than two that disagree."""
         agents = FakeAgents(wrote=["gateway.log", "gateway.json"])
@@ -4245,6 +4260,41 @@ class WhoSaidIt(unittest.TestCase):
         """Both present is the ordinary case for a channel message, and the name is the more
         specific of the two."""
         self.assertEqual("sam", cli._said_by({"who": "sam", "author": "user"}, "ava"))
+
+
+class WhatATurnLooksLikeOnATerminal(unittest.TestCase):
+    """R-PRV-29 — the second surface. Discord is not the only place a verb is read."""
+
+    def _watched(self, said: dict) -> str:
+        held = io.StringIO()
+        with contextlib.redirect_stderr(held):
+            cli._Shown()(said)
+        return held.getvalue().strip()
+
+    def test_a_tool_is_shown_by_its_verb_and_its_brains_name(self):
+        """Unchanged, and asserted so the case below is a difference rather than the only
+        behaviour there is. A terminal is the owner's own machine, so the vendor's word for
+        a tool is useful here in a way it never is in a room full of people."""
+        self.assertEqual("· run Bash",
+                         self._watched({"type": "tool", "name": "Bash", "did": "run"}))
+
+    def test_changing_what_the_agent_lives_by_reads_as_a_sentence_here_too(self):
+        """R-PRV-29 — this surface prints the seam's word raw, so a verb chosen only for
+        how it renders in Discord arrives here as `rules Write`. What changed is the whole
+        of the news; which tool wrote it is the half nobody wanted."""
+        from rundesk import provider
+
+        for name, verb in provider.CONTINUITY.items():
+            with self.subTest(name):
+                said = self._watched({"type": "tool", "name": "Write", "did": verb})
+                self.assertEqual(f"· updated {verb}", said)
+                self.assertNotIn("Write", said)
+
+    def test_a_tool_with_no_verb_at_all_still_says_something(self):
+        """R-PRV-8 — an adapter that gave no verb did something this vocabulary has no word
+        for, and the line still has to read."""
+        self.assertEqual("· using mcp__weather",
+                         self._watched({"type": "tool", "name": "mcp__weather"}))
 
 
 if __name__ == "__main__":

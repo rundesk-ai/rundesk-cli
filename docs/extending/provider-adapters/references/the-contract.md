@@ -74,6 +74,7 @@ rundesk add ava --provider /opt/my-brain   # yours
 | `RUNDESK_RAW` | somewhere to append everything your *brain* said, if you want to keep it |
 | `RUNDESK_PREFACE` | standing instructions for this turn's situation, or unset — see below |
 | `RUNDESK_SKILLS` | the skills this agent was given — present them where your brain looks |
+| `RUNDESK_CONTINUITY` | `NAME=verb,…` — which files beside the agent are the ones it lives by, and what changing one is called |
 
 The first four are always set. `RUNDESK_MODEL`, `RUNDESK_RESUME` and `RUNDESK_SETTINGS` are
 **absent** rather than empty when there is nothing to say, so `${RUNDESK_MODEL:-default}`
@@ -239,11 +240,30 @@ recognised your vendor's names would be carrying your vocabulary forever, so it 
 them.
 
 The list is closed and short on purpose — `read`, `search`, `run`, `edit`, `list`, `make`,
-`delegate`.
+`delegate`, and the four continuity verbs below.
 If what your tool did is not one of those, **leave `did` out**: `name` still carries your own word
 for it, and a reader that shows nothing is better than one taught to believe a word that
 means something else here. Do not stretch one to fit; tell us instead, and the list can
 grow by a release rather than by every adapter guessing differently.
+
+**An agent editing a file it lives by is not the same news as an agent editing a file it was
+working on, and both reach you as `edit`.** `RUNDESK_CONTINUITY` hands you the pairing —
+`AGENTS.md=rules,MEMORY.md=memory,SOUL.md=identity,USER.md=profile` — so which files
+these are stays rundesk's to change and never becomes a copy of its layout you are holding.
+When a write lands on one of them, report that verb in place of `edit`.
+
+Two things about it are the whole of getting it right:
+
+- **Match where the file stands, not what it is called.** It qualifies when the resolved path
+  sits *directly in `RUNDESK_CWD`*. Resolve both sides before comparing — a home reached
+  through a symlink is still the same home. Every checkout on the machine has an `AGENTS.md`,
+  and reporting one of those as the agent rewriting its own rules is worse than the plain
+  `edit` it would otherwise get, because it is untrue.
+- **Writes only.** Reading these is what a turn does before it answers anything; reported as
+  activity it would say the agent rewrote itself on every single turn.
+
+Ignoring the variable is a whole adapter. You report `edit`, exactly as before, and nothing
+downstream needs to know.
 
 **`delegate` is for handing work to a helper, and it is worth mapping.** A brain that
 spawns a subagent usually streams the helper's own steps up through the same turn, so

@@ -83,8 +83,12 @@ what the *brain* declared. Offering somebody a way to interrupt a turn whose bra
 correlated `query-result`. Never turn a platform command into arbitrary CLI arguments.
 
 **A tool's verb is one of a closed list** — `read`, `search`, `run`, `edit`, `list`, `make`,
-`delegate` — or absent. Never render your own word for one; a channel that recognised a
-vendor's tool names would carry that vocabulary forever.
+`delegate`, `memory`, `rules`, `profile`, `identity` — or absent. Never render your own word
+for one; a channel that recognised a vendor's tool names would carry that vocabulary forever.
+
+**The last four are the agent rewriting a file it lives by**, and each wants its own mark.
+Folding them back into `edit` throws away the only part a reader wanted: `MEMORY.md`,
+`AGENTS.md`, `USER.md` and `SOUL.md` are what an agent *is* between turns.
 
 **Never a credential as a command-line argument.** Read it from an environment variable or a
 file the owner already controls, and report only *where* it was found.

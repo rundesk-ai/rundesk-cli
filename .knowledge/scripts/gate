@@ -97,6 +97,25 @@ def checks() -> list[tuple[str, list[str]]]:
     return listed
 
 
+def clean_of_the_live_install() -> dict[str, str]:
+    """The environment a check is given: this one, with the live install taken out of it.
+
+    **An agent runs this gate from inside rundesk**, which hands every program it starts
+    the owner's own `RUNDESK_AGENTS_DIR`, `RUNDESK_SKILL_LIBRARY`, `RUNDESK_SCRIPTS` and
+    the rest. A suite that reads one of them is then answering about the owner's machine
+    rather than about its own fixture — and each of those is read *before* the data root a
+    fixture redirects, so a fallback carefully pointed at scratch never gets the chance.
+    Four cases across two suites failed this way, for an agent and for nobody else, which
+    is the worst shape a failure can have: green for the person who wrote it.
+
+    Taken out rather than pointed somewhere, because a suite that needs one sets it itself.
+    """
+    return {
+        **{key: value for key, value in os.environ.items() if not key.startswith("RUNDESK_")},
+        "PYTHONFAULTHANDLER": "1",
+    }
+
+
 def run(what: str, argv: list[str]) -> tuple[bool, str, float]:
     """Run one check within a ceiling, taking its whole process group on timeout.
 
@@ -112,7 +131,7 @@ def run(what: str, argv: list[str]) -> tuple[bool, str, float]:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        env={**os.environ, "PYTHONFAULTHANDLER": "1"},
+        env=clean_of_the_live_install(),
         start_new_session=True,
     )
     timed_out = False

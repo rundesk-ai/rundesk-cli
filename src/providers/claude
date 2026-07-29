@@ -107,6 +107,13 @@ DID = {
     "Agent": "delegate",
 }
 
+#: Where this brain names the file a write is about, per tool. Measured against 2.1.220:
+#: `Edit` and `Write` both take `file_path`, and `NotebookEdit` takes `notebook_path` —
+#: three tools, two words, and no way to tell which without looking. A tool that names its
+#: target somewhere else is simply not recognised, which costs the reported verb nothing:
+#: it stays the plain `edit` it would have been.
+EDITED_AT = ("file_path", "notebook_path")
+
 #: Which tools a turn is granted without being asked, per posture (R-PRV-18).
 #:
 #: **This is a pre-approval list, not the tool list, and it is not the whole of how a
@@ -403,6 +410,8 @@ def _assistant(one: dict, seen: dict) -> list:
             it = {"type": "tool", "id": str(block.get("id") or ""),
                   "name": str(block.get("name") or "")}
             did = DID.get(it["name"])
+            if did == "edit":
+                did = _continuity(block.get("input")) or did
             if did:
                 it["did"] = did
             if did == "delegate":
@@ -412,6 +421,45 @@ def _assistant(one: dict, seen: dict) -> list:
                     it["who"] = who
             said.append(it)
     return said
+
+
+def _continuity(inputs) -> str:
+    """What of its own an agent just changed, when that is what it changed (R-PRV-29).
+
+    An agent's continuity files are what it *is* between turns, so one of them being
+    rewritten is different news from a file it was working on being rewritten — and both
+    arrive here as the same `edit`. Which files those are is not this adapter's to know:
+    `RUNDESK_CONTINUITY` names them, so renaming one is a change in one place rather than
+    a verb that quietly stops being reported.
+
+    **Matched on where the file stands, never on what it is called.** Every checkout on the
+    machine has an `AGENTS.md`; an agent editing one has not rewritten its own rules, and
+    reporting that it did is worse than the plain `edit` it would otherwise get, because it
+    is untrue. What qualifies is the resolved path sitting directly in the agent's own
+    working directory — resolved on both sides, so a symlinked home is still the same home
+    and a link leading out of it is honestly not one of these files.
+
+    The path itself never leaves this function. What crosses the seam is one word, which is
+    what lets a surface say what changed without being told where anything lives.
+    """
+    if not isinstance(inputs, dict):
+        return ""
+    known = {}
+    for pair in (os.environ.get("RUNDESK_CONTINUITY") or "").split(","):
+        name, _, verb = pair.partition("=")
+        if name.strip() and verb.strip():
+            known[name.strip()] = verb.strip()
+    if not known:
+        return ""
+    where = os.path.realpath(os.environ.get("RUNDESK_CWD") or os.getcwd())
+    for named in EDITED_AT:
+        at = inputs.get(named)
+        if not isinstance(at, str) or not at.strip():
+            continue
+        at = os.path.realpath(os.path.join(where, at))
+        if os.path.dirname(at) == where:
+            return known.get(os.path.basename(at), "")
+    return ""
 
 
 def _returned(one: dict) -> list:

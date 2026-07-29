@@ -1819,6 +1819,12 @@ class _Shown:
             sys.stdout.flush()
         elif kind == "tool":
             did = said.get("did") or "using"
+            if did in provider.CONTINUITY.values():
+                # What changed, and not which tool changed it (R-PRV-29). These four name
+                # a file rather than an act, so the vendor's own word beside one reads as
+                # `rules Write` — and which tool wrote it is the half nobody wanted.
+                print(f"        · updated {did}", file=sys.stderr)
+                return
             print(f"        · {did} {said.get('name') or ''}".rstrip(), file=sys.stderr)
         elif kind == "result" and not said.get("ok"):
             print("        · that did not work", file=sys.stderr)
@@ -4078,6 +4084,15 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         except gateways.NotAName as why:
             print(f"{named}: INVALID NAME — {why}", file=sys.stderr)
             return 1
+    # What this install calls its jobs is *this process's* environment rather than a
+    # collaborator's decision, so it is read from the module and not from the supervisor
+    # passed in — and read once here, before a command runs, because a prefix that could
+    # escape the jobs directory must stop the command rather than plant a job somewhere.
+    try:
+        _supervisor.prefix()
+    except _supervisor.NotAPrefix as why:
+        print(f"RUNDESK_JOB_PREFIX: INVALID — {why}", file=sys.stderr)
+        return 1
     if args.command in PLANNED:
         return cmd_not_available(args.command, getattr(args, "act", None))
     if args.command == "version":
