@@ -516,6 +516,41 @@ class CarryingAConversationOn(WithAnAgentToRunTurnsFor):
                          "the lookup is wrong, so finding nothing proved nothing")
 
 
+class WhatFourSlotsOfUsageAddUpTo(unittest.TestCase):
+    """R-USE-13. `_tokens` is the whole of the arithmetic and is asked directly — no agent,
+    no brain, and no fixture whose own numbers could make a wrong sum look right."""
+
+    def test_tokens_written_into_a_cache_are_recorded_apart_from_fresh_input(self):
+        """The other direction of R-USE-4, and the one that was wrong. A cache write bills
+        *above* standard input where a read bills at a fraction of it, so folding writes
+        into `input` recorded the most expensive tokens of a turn under its cheapest label.
+        These are the figures from the real turn it was found on: 2 fresh, 5,550 written."""
+        said = [{"type": "usage", "input": 2, "output": 5,
+                 "cached": 15273, "written": 5550}]
+        self.assertEqual({"reported": True, "input": 2, "output": 5,
+                          "cached": 15273, "written": 5550}, turn._tokens(said))
+
+    def test_a_brain_that_does_not_report_cache_writes_has_none_invented(self):
+        """R-USE-6, one field along. Only `claude` measurably reports a cache-creation
+        count — grok, antigravity and codex have no such field — and summing an absent one
+        into zero would say they wrote nothing to a cache rather than that they do not
+        say."""
+        said = [{"type": "usage", "input": 7, "output": 3, "cached": 2}]
+        self.assertNotIn("written", turn._tokens(said))
+
+    def test_what_several_usage_records_written_add_up_to_is_summed_like_the_rest(self):
+        """A turn may report more than once. `written` sums the same way its three
+        neighbours do, rather than taking the last one and losing the others."""
+        said = [{"type": "usage", "input": 1, "written": 100},
+                {"type": "usage", "input": 2, "written": 250}]
+        self.assertEqual(350, turn._tokens(said)["written"])
+
+    def test_a_turn_that_reported_no_usage_at_all_invents_no_slot(self):
+        """R-USE-7 — unchanged by the fourth field, and the guard that it did not become a
+        default of zero on the way in."""
+        self.assertEqual({"reported": False}, turn._tokens([{"type": "text", "text": "x"}]))
+
+
 class WhatOneReplyIsMadeOf(unittest.TestCase):
     """R-PRV-22 read from the other end: an adapter marks a finished thought `whole`, and
     what a person reads back is where that marking has to land.

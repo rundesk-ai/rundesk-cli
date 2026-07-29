@@ -1100,10 +1100,11 @@ class Store:
             conn.execute(
                 "UPDATE run SET ended_at = ?, outcome = ?, exit_code = ?, why = ?,"
                 " tokens_in = ?, tokens_out = ?, tokens_cached = ?,"
-                " tokens_reported = ? WHERE id = ?",
+                " tokens_written = ?, tokens_reported = ? WHERE id = ?",
                 (
                     ended_at, outcome, exit_code, why,
                     tokens.get("input"), tokens.get("output"), tokens.get("cached"),
+                    tokens.get("written"),
                     1 if tokens.get("reported") else 0,
                     run_id,
                 ),
@@ -1218,7 +1219,12 @@ class Store:
                 " SUM(tokens_reported) AS reported,"
                 " SUM(COALESCE(tokens_in, 0)) AS input,"
                 " SUM(COALESCE(tokens_out, 0)) AS output,"
-                " SUM(COALESCE(tokens_cached, 0)) AS cached FROM run"
+                " SUM(COALESCE(tokens_cached, 0)) AS cached,"
+                # Summed the same way as the three beside it, so a total is what was
+                # reported and nothing else. Rows from before the column, and every brain
+                # that does not report the split, contribute nothing rather than a guess —
+                # `written` is one place where the sum is knowingly a floor.
+                " SUM(COALESCE(tokens_written, 0)) AS written FROM run"
             ).fetchone()
         kept = _plain(row)
         kept["reported"] = int(kept["reported"] or 0)

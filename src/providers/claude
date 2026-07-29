@@ -358,12 +358,17 @@ def _ended(one: dict, seen: dict) -> list:
     seen["session"] = one.get("session_id") or seen.get("session")
     counted = one.get("usage") or {}
 
-    # Fresh is what was new: what was sent plus what was written into the cache, which is
-    # billed above standard input. Cached is what was re-read, and is reported apart
-    # because it is most of the volume at a fraction of the price.
-    fresh = _n(counted, "input_tokens") + _n(counted, "cache_creation_input_tokens")
-    usage = {"type": "usage", "input": fresh, "output": _n(counted, "output_tokens"),
-             "cached": _n(counted, "cache_read_input_tokens")}
+    # **Four quantities, four slots, none of them added together.** This vendor bills fresh
+    # input, cache writes, cache reads and output at three different rates, and this used to
+    # report the first two as one number — so a turn whose fresh input was 2 tokens was
+    # recorded, and shown in a chat footer, as 5,552. A cache write bills *above* standard
+    # input and a cache read at roughly a tenth of it, which is the same reasoning that
+    # already kept reads apart, applied in the other direction.
+    usage = {"type": "usage",
+             "input": _n(counted, "input_tokens"),
+             "output": _n(counted, "output_tokens"),
+             "cached": _n(counted, "cache_read_input_tokens"),
+             "written": _n(counted, "cache_creation_input_tokens")}
     if seen.get("model"):
         usage["model"] = seen["model"]
 

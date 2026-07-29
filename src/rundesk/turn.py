@@ -683,7 +683,10 @@ def _tokens(said: list) -> dict:
     and never adjusted (R-USE-2) — the arithmetic that turns a conversation's running
     total into a turn's share belongs in the adapter, which is the only thing that knows
     its brain reports one. Cache writes are kept apart from cache reads because they are
-    billed apart (R-USE-4).
+    billed apart (R-USE-4) — and apart from fresh input too, for the same reason and in the
+    other direction (R-USE-13): a write bills *above* standard input where a read bills at a
+    fraction of it, so the three cannot share two slots without one of them being priced as
+    something it is not.
     """
     counted = [one for one in said if one.get("type") == "usage"]
     if not counted:
@@ -693,7 +696,7 @@ def _tokens(said: list) -> dict:
     # ones omits `cached`, and summing that into nothing would say it read nothing from
     # the cache — which is the same lie as a cost of nothing, one level down. What nobody
     # measured is absent here too.
-    for what in ("input", "output", "cached"):
+    for what in ("input", "output", "cached", "written"):
         values = [one[what] for one in counted
                   if isinstance(one.get(what), int) and not isinstance(one.get(what), bool)]
         if values:
