@@ -58,7 +58,7 @@ UPDATE_AT = "03:00"
 #: what an agent needs to work *with rundesk* — everything else is granted when somebody
 #: decides that agent does that job.
 GRANTED = (
-    "using-rundesk",
+    "managing-rundesk",
     "managing-rundesk-schedules",
     "managing-rundesk-backups",
     "filing-rundesk-issues",

@@ -1,4 +1,4 @@
-# Using rundesk
+# Managing rundesk
 
 You are an agent running inside rundesk. This file is rundesk's, not yours and not your
 owner's — it is replaced on every update, so what is here is current.

@@ -71,6 +71,7 @@ LEGACY = {
 #: cannot tell you a thing that only history knows.
 RENAMED = {
     "reporting-a-rundesk-bug": "filing-rundesk-issues",
+    "using-rundesk": "managing-rundesk",
     "managing-backups": "managing-rundesk-backups",
     "writing-pull-requests": "writing-rundesk-pull-requests",
     "writing-skills": "writing-rundesk-skills",

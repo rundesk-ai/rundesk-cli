@@ -1,9 +1,9 @@
 ---
-name: using-rundesk
-description: How to operate rundesk — the thing running you — including your own history, schedules, channels, runs and costs, and the handful of commands that would end your own turn. Use whenever a question is about you rather than about the work: what you did, what you are scheduled to do, where you can be reached, what something cost, or when anyone asks you to change how you are running.
+name: managing-rundesk
+description: How to operate rundesk — the thing running you — including your own history, your agents, the channels you are reached on, what runs have cost, and the handful of commands that would end your own turn. Use whenever a question is about you or this install rather than about the work: what you did, where you can be reached, what something cost, how an agent is made or configured, or when anyone asks you to change how you are running. Schedules and backups have skills of their own.
 ---
 
-# Using rundesk
+# Managing rundesk
 
 *This skill ships with rundesk and is replaced whenever rundesk updates. To make a version of
 your own, copy it under a different name — that copy is yours and is never touched.*

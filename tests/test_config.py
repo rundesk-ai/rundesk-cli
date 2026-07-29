@@ -106,9 +106,9 @@ class WhichSkillsANewAgentGets(WithADataDirectory):
 
     def test_which_skills_a_new_agent_gets_is_the_owners_to_state(self):
         """R-AGT-36 — an owner running agents that do one job says so once."""
-        self.at.write_text('{"skills": {"granted": ["using-rundesk"]}}\n', encoding="utf-8")
+        self.at.write_text('{"skills": {"granted": ["managing-rundesk"]}}\n', encoding="utf-8")
 
-        self.assertEqual(("using-rundesk",), config.skills(self.where)["granted"])
+        self.assertEqual(("managing-rundesk",), config.skills(self.where)["granted"])
 
     def test_an_empty_list_is_honoured_rather_than_read_as_saying_nothing(self):
         """R-AGT-36 — somebody who wants agents made with no skills has stated something,
@@ -120,14 +120,14 @@ class WhichSkillsANewAgentGets(WithADataDirectory):
     def test_something_that_is_not_a_list_of_names_is_refused(self):
         """R-AGT-36 — never defaulted around: an owner who wrote a string meant something,
         and granting four skills instead is a decision made on their behalf in silence."""
-        self.at.write_text('{"skills": {"granted": "using-rundesk"}}\n', encoding="utf-8")
+        self.at.write_text('{"skills": {"granted": "managing-rundesk"}}\n', encoding="utf-8")
 
         with self.assertRaises(config.Unreadable):
             config.skills(self.where)
 
     def test_a_section_that_is_not_an_object_is_refused(self):
         """R-AGT-36 — the same, one level up."""
-        self.at.write_text('{"skills": ["using-rundesk"]}\n', encoding="utf-8")
+        self.at.write_text('{"skills": ["managing-rundesk"]}\n', encoding="utf-8")
 
         with self.assertRaises(config.Unreadable):
             config.skills(self.where)

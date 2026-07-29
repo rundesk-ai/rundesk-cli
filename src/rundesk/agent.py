@@ -646,7 +646,7 @@ and your channels. **Anything else on this machine offering \
 "schedules" or "tasks" is not this**, whatever it is called: `rundesk --help` is the authority, \
 and a question about your schedules is answered by `rundesk schedules {name}`.
 
-Everything else rundesk does is in your `using-rundesk` skill, and `rundesk --help` always \
+Everything else rundesk does is in your `managing-rundesk` skill, and `rundesk --help` always \
 works."""
 
 

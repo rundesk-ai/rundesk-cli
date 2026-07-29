@@ -246,7 +246,7 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   nobody has; the gate fails when it and the command disagree.
 - `src/templates/skills/` — **the skills this release ships.** Copied into the owner's library
   by the install and brought forward by an update, so a built-in is always the version installed
-  (R-AGT-30). `using-rundesk` is how to operate rundesk, written for **an agent running inside
+  (R-AGT-30). `managing-rundesk` is how to operate rundesk, written for **an agent running inside
   it** — it was a document at the repository root that an agent had to be told to go and read,
   and the pointer named a path that existed on neither kind of install. As a skill it is handed
   to the agent instead. **Not every shipped skill reaches every agent**: which a new one is given
