@@ -64,8 +64,10 @@ TROUBLE_KEPT = 20
 
 #: The two rundesk puts into a turn itself, and the one it records about a turn going wrong.
 #: `SENT` is a thing *said* and becomes a message; `LOST` is a record, and is the only one of
-#: rundesk's own that `store.RECORD_KINDS` knows — using any other name here would be stored
-#: as `unknown`, which is why there are no other names here to use.
+#: rundesk's own that `store.RECORD_KINDS` knows. Anything else rundesk writes is stored as
+#: `unknown` with its own words beside it — which is deliberate for `recovery` and `RETRY`
+#: below, both lifecycle bookkeeping about an execution rather than a new shape of owner data,
+#: and is a mistake for anything that is neither.
 SENT = "sent"
 LOST = "lost"
 
@@ -73,6 +75,13 @@ LOST = "lost"
 #: closed words, because no brain classified this — rundesk noticed it, and a word from that
 #: set would claim an adapter reported something it did not (R-RUN-19).
 NOTHING_SAID = "the turn ended without an answer"
+
+#: What is written into the account when a resumed session was handed the turn and gave it
+#: straight back. A record of rundesk's own, kept exactly as `recovery` beside it is: this is
+#: lifecycle bookkeeping about an execution and not a new shape of owner data, so it is stored
+#: as a record nobody's schema knows rather than as a column (R-RUN-24).
+RETRY = "retry"
+NEVER_RAN = "the resumed session ended without running the turn"
 
 
 @dataclass(frozen=True)
@@ -302,43 +311,10 @@ async def carry(
             # Appended before the provider starts, so another interruption still leaves a
             # truthful audit trail linking both executions (R-RUN-17).
             writing.add(event={"type": "recovery", "run": recovery_of})
-        # Written before the brain is started, because what is sent is what the account
-        # has to show — and an account written afterwards is one that can be written to
-        # match whatever happened. A steered turn records it as it sends it instead, so
-        # that everything said mid-turn lands in the order it was said.
-        #
-        # **One gate, asked once.** This used to be decided here by what the brain can do
-        # and again inside `_run` by whether the caller had anything to steer with. The two
-        # look interchangeable right up until the caller has nothing to add — which is
-        # every ordinary `rundesk ask` — and then the record was skipped here and never
-        # written there, so a turn reached a brain with nothing in its account to show for
-        # it (R-RUN-9, R-PRV-10).
-        if not can["steer"]:
-            writing.add(event={"type": SENT, "text": prompt})
-
-        said: list = []
+        # What the brain said, and what it said went wrong — the turn's, not one attempt's.
         # Kept as well as written down, so what went wrong can be shown to whoever asked.
+        said: list = []
         trouble: list = []
-        program = process.Program(
-            [str(at)],
-            env=provider.environment(
-                home=whose["run"], cwd=whose["home"], provider_home=home,
-                skills=whose["skills"], run=run,
-                model=model, resume=resume, posture=posture, settings=settings,
-                raw=transcript.printed(whose["logs"], run), preface=preface,
-            ),
-            # **The agent's home, not its workspace.** A brain loads the rules it is to
-            # follow because they *stand in the directory it stands in* — that is the whole
-            # mechanism, and it is what the scaffolded `AGENTS.md` says out loud. Standing
-            # it one directory lower put every one of those files out of its reach: the
-            # agent was asked who it was and answered, truthfully, that there was nothing
-            # here to tell it. `workspace/` is still where it works, by instruction, which
-            # is what that file also says.
-            cwd=whose["home"],
-            takes_input=True,
-            errors_apart=True,
-            on_error=_noting(writing, trouble),
-        )
         source_name = source or (CHANNEL if asked_by else TERMINAL)
 
         def provider_started(pid: int) -> None:
@@ -353,18 +329,85 @@ async def carry(
             if started is not None:
                 started(pid)
 
-        try:
-            result = await _run(
-                program, prompt, writing, said, watching,
-                steer=can["steer"], steering=steering, started=provider_started,
+        async def attempt(carrying: str | None, steer_with) -> process.Result:
+            """Start the brain once for this turn, and write down what it says.
+
+            One turn may start a brain twice — see below — and everything a start needs
+            lives here so the second one is the same start rather than a copy of it that
+            drifts. `said`, `trouble` and the account are the turn's and are added to by
+            each attempt, because they are the account of the *turn*.
+            """
+            program = process.Program(
+                [str(at)],
+                env=provider.environment(
+                    home=whose["run"], cwd=whose["home"], provider_home=home,
+                    skills=whose["skills"], run=run,
+                    model=model, resume=carrying, posture=posture, settings=settings,
+                    raw=transcript.printed(whose["logs"], run), preface=preface,
+                ),
+                # **The agent's home, not its workspace.** A brain loads the rules it is to
+                # follow because they *stand in the directory it stands in* — that is the
+                # whole mechanism, and it is what the scaffolded `AGENTS.md` says out loud.
+                # Standing it one directory lower put every one of those files out of its
+                # reach: the agent was asked who it was and answered, truthfully, that
+                # there was nothing here to tell it. `workspace/` is still where it works,
+                # by instruction, which is what that file also says.
+                cwd=whose["home"],
+                takes_input=True,
+                errors_apart=True,
+                on_error=_noting(writing, trouble),
             )
-        finally:
-            activity.ended(whose["run"], run)
-            # The adapter has finished with the file by now, so this is the one moment the
-            # ceiling can be applied to a stream rundesk itself never writes. In the
-            # `finally`, because a turn that was interrupted printed just as much as one
-            # that was not (R-RUN-22).
-            transcript.trim(whose["logs"], run)
+            # Written before the brain is started, because what is sent is what the account
+            # has to show — and an account written afterwards is one that can be written to
+            # match whatever happened. A steered turn records it as it sends it instead, so
+            # that everything said mid-turn lands in the order it was said.
+            #
+            # **One gate, asked once.** This used to be decided by what the brain can do
+            # and again inside `_run` by whether the caller had anything to steer with. The
+            # two look interchangeable right up until the caller has nothing to add — which
+            # is every ordinary `rundesk ask` — and then the record was skipped here and
+            # never written there, so a turn reached a brain with nothing in its account to
+            # show for it (R-RUN-9, R-PRV-10).
+            if not can["steer"]:
+                writing.add(event={"type": SENT, "text": prompt})
+            try:
+                return await _run(
+                    program, prompt, writing, said, watching,
+                    steer=can["steer"], steering=steer_with, started=provider_started,
+                )
+            finally:
+                activity.ended(whose["run"], run)
+                # The adapter has finished with the file by now, so this is the one moment
+                # the ceiling can be applied to a stream rundesk itself never writes. In the
+                # `finally`, because a turn that was interrupted printed just as much as one
+                # that was not (R-RUN-22).
+                transcript.trim(whose["logs"], run)
+
+        result = await attempt(resume, steering)
+        # **Only a prompt that stands on its own is worth asking again.** Everything rundesk
+        # writes into a turn itself is a *continuation* — "carry on where the last gateway
+        # stopped", "finish what you were doing before the update" — and those mean nothing
+        # at all without the session they were written for. Asked on a fresh one, the brain
+        # answers about nothing, the turn is recorded as finished, and the handle the retry
+        # ends on replaces the interrupted conversation's own, which is the work itself
+        # going (R-GW-22). A recovery turn is refused outright rather than resumed
+        # elsewhere, and this is the same refusal one attempt later.
+        if prompt_author == "user" and _never_ran(said, result, resumed=bool(resume)):
+            # **The question is still worth asking, so it is asked** (R-RUN-24). A resumed
+            # session that hands the turn straight back never read the prompt, and rundesk
+            # is the only layer that knows both that nothing was said and what the person
+            # originally wanted. Discarding it consumed two real questions on a live
+            # gateway inside 82 minutes, each answered with an activity mark and silence.
+            #
+            # Once, and on a fresh session — the stale session is the fault, so carrying it
+            # again would buy the same silence twice. Written into the account first, so a
+            # turn that started a brain twice is never a turn that looks like it started one.
+            writing.add(event={"type": RETRY, "why": NEVER_RAN})
+            # Nothing to steer with the second time. Whatever a person said into the first
+            # attempt is already in the account and already consumed; re-reading an iterator
+            # that is spent is not a second chance at it, and the prompt — which is what was
+            # lost — is sent again in full.
+            result = await attempt(None, None)
 
         # Inside the same writer, and last. A second one would count from nothing and
         # give the end of a run the same places in the order as its beginning.
@@ -782,6 +825,43 @@ def _answered(said: list) -> bool:
         if one.get("type") == "text" and str(one.get("text") or "").strip():
             return True
     return False
+
+
+def _never_ran(said: list, result, resumed: bool) -> bool:
+    """Whether a resumed brain handed this turn straight back without ever running it.
+
+    Measured on a live gateway, twice in 82 minutes: a resumed session's first record was
+    a notification left over from the *previous* session, and it ended the turn 14 ms
+    later reporting `ok`, a usage record of four zeros, and nothing said at all. The
+    prompt was never read, and the process exited zero — so nothing below rundesk could
+    tell either, and the question was consumed.
+
+    **Narrow on purpose, because the cost of being wrong is a brain asked to do the same
+    work twice.** Every one of these has to hold, and each rules out a turn that failed
+    for a reason a fresh session would meet again:
+
+    - it was resumed — a turn that carried nothing on had no stale session to be given
+      back, and starting it again would only repeat it;
+    - the program finished and nothing it said was lost — a crash, a hole in the account
+      or a cancelled turn is not a turn that never ran;
+    - the brain said the turn ended, and said it ended well — no `done` at all is the
+      shape a killed gateway leaves, and nothing here may declare such a turn over;
+    - it classified nothing — a refusal, an exhausted account or a lost context is a
+      decision the brain made, and it will make it again (R-RUN-19);
+    - nobody was answered (R-RUN-21);
+    - and it reported what it cost, and what it cost was nothing at all. Reported,
+      because a brain that measures nothing says nothing about what happened and silence
+      about cost is not evidence of a turn that never ran (R-USE-7); nothing at all,
+      because one token in any of the four slots is a brain that reached the prompt.
+    """
+    if not resumed or not result.ok:
+        return False
+    if _ended(said) is not True or _because(said) is not None or _answered(said):
+        return False
+    tokens = _tokens(said)
+    if not tokens.get("reported"):
+        return False
+    return not any(tokens.get(what) for what in ("input", "output", "cached", "written"))
 
 
 def _why(said: list) -> str | None:

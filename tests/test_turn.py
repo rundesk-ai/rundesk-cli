@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import agent, provider, store, transcript, turn  # noqa: E402
+from rundesk import agent, process, provider, store, transcript, turn  # noqa: E402
 
 PY = sys.executable
 
@@ -104,6 +104,41 @@ sys.stdout.write(json.dumps(
     {"type": "usage", "input": 0, "output": 0, "cached": 0, "written": 0}) + "\\n")
 sys.stdout.write(json.dumps({"type": "done", "ok": True, "session": "s"}) + "\\n")
 sys.stdout.flush()
+'''
+
+#: Answers a fresh session and hands a resumed one straight back untouched — what a real
+#: brain was measured doing when its session carried a notification left over from the
+#: turn before, and what makes the question disappear.
+STALE = '''
+import json, os, sys
+if "--capabilities" in sys.argv:
+    print(json.dumps({"resume": True, "usage": True}))
+    sys.exit(0)
+prompt = sys.stdin.read().strip()
+say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
+if os.environ.get("RUNDESK_RESUME"):
+    # A handle of its own, never the one it was handed. A stand-in that echoes what it was
+    # given makes both attempts report the same string, and every assertion about which
+    # handle the conversation kept then passes whichever one the code picks.
+    say(type="usage", input=0, output=0, cached=0, written=0)
+    say(type="done", ok=True, session="stale-" + os.environ["RUNDESK_RESUME"])
+    sys.exit(0)
+say(type="text", text="answered " + prompt)
+say(type="usage", input=12, output=3, model="stand-in-1")
+say(type="done", ok=True, session="a-session")
+'''
+
+#: Hands every session back untouched, resumed or not — so a second attempt is no better
+#: than the first and the turn has to settle as the failure it is.
+MUTE = '''
+import json, sys
+if "--capabilities" in sys.argv:
+    print(json.dumps({"resume": True, "usage": True}))
+    sys.exit(0)
+sys.stdin.read()
+say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
+say(type="usage", input=0, output=0, cached=0, written=0)
+say(type="done", ok=True, session="a-session")
 '''
 
 #: The same, saying only whitespace — which a surface posts nothing for.
@@ -192,7 +227,7 @@ say(type="done", ok=True)
 BRAINS = {"plain": PLAIN, "quiet": QUIET, "nosy": NOSY, "strange": STRANGE,
           "failing": FAILING, "steerable": STEERABLE, "finishes": FINISHES,
           "goes_on": GOES_ON, "silent": SILENT, "blank": BLANK,
-          "narrates": NARRATES}
+          "stale": STALE, "mute": MUTE, "narrates": NARRATES}
 
 
 class WithAnAgentToRunTurnsFor(unittest.IsolatedAsyncioTestCase):
@@ -623,6 +658,172 @@ class CarryingAConversationOn(WithAnAgentToRunTurnsFor):
         self.assertIsNone(self.handle_for("quiet"))
         self.assertEqual("s", self.handle_for("plain"),
                          "the lookup is wrong, so finding nothing proved nothing")
+
+
+class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
+    """R-RUN-24 — measured on a live gateway twice in 82 minutes: a resumed session's
+    first record was a notification left over from the session before, and it ended the
+    turn 14 ms later with `ok`, four zeros of usage and nothing said at all. The prompt
+    was never read. Rundesk is the only layer that knows both that the turn said nothing
+    and what the person originally asked, and it discarded the question."""
+
+    def attempts(self, run: str) -> int:
+        """How many times the brain was actually started — one `done` each."""
+        return len([one for one in self.account(run) if one["type"] == "done"])
+
+    def asked_again(self, run: str) -> list:
+        return [one for one in self.account(run) if one["type"] == turn.RETRY]
+
+    async def test_a_resumed_turn_that_never_ran_is_asked_again_on_a_fresh_session(self):
+        """R-RUN-24 — the person who asked gets their answer instead of an activity mark
+        and silence, and the question is not consumed."""
+        first = await self.ask("stale")
+        self.assertEqual("a-session", self.handle_for("stale"),
+                         "there was no session to hand back, so nothing is being tested")
+
+        again = await self.ask("stale", prompt="submit ticket")
+        self.assertTrue(again.ok, "the question was consumed and nobody was told")
+        self.assertEqual("answered submit ticket", again.text)
+        self.assertIsNone(again.why)
+        self.assertEqual("finished", self.settled(again.run)["outcome"])
+        self.assertEqual("answered submit ticket", self.answer(again.run),
+                         "the person who asked has nothing in the conversation to read")
+        self.assertEqual(2, self.attempts(again.run))
+        self.assertNotEqual(first.run, again.run)
+
+    async def test_the_conversation_carries_on_from_the_fresh_session_not_the_stale_one(self):
+        """R-RUN-11, R-RUN-24 — a retried turn reports two sessions and only one of them
+        exists. Keep the one that was handed back and every later turn resumes a session
+        that is already dead: handed straight back, retried, answered on a new session, and
+        pinned to the dead one again — two brain starts a turn, for ever, with each turn
+        still answering so nothing looks wrong."""
+        await self.ask("stale")
+        again = await self.ask("stale")
+        self.assertEqual("a-session", again.handle,
+                         "the turn carried on from the session that had just failed it")
+        self.assertEqual("a-session", self.handle_for("stale"),
+                         "the conversation was pinned to the stale session")
+
+    async def test_being_asked_again_is_in_the_runs_own_account(self):
+        """R-RUN-24 — a brain started twice for one turn with nothing written down is a
+        turn nobody can explain the cost or the duration of afterwards."""
+        await self.ask("stale")
+        again = await self.ask("stale")
+        retried = self.asked_again(again.run)
+        self.assertEqual(1, len(retried), "the brain was run twice and the account says once")
+        self.assertEqual(turn.NEVER_RAN, retried[0]["why"])
+        # Both attempts, because both were billed. The first reported four zeros and the
+        # second is what the answer actually cost.
+        self.assertEqual(12, again.tokens["input"])
+        self.assertEqual(3, again.tokens["output"])
+
+    async def test_a_second_silence_is_the_answer_and_nothing_is_asked_a_third_time(self):
+        """R-RUN-24 — asked again once. A brain that says nothing whatever session it is
+        given must not be asked round a loop, and the turn settles as the failure it is
+        (R-RUN-21)."""
+        await self.ask("mute")
+        again = await self.ask("mute")
+        self.assertFalse(again.ok)
+        self.assertEqual(turn.NOTHING_SAID, again.why)
+        self.assertEqual("failed", self.settled(again.run)["outcome"])
+        self.assertEqual(2, self.attempts(again.run), "a turn was asked a third time")
+
+    async def test_a_turn_rundesk_asked_for_itself_is_not_asked_again(self):
+        """R-RUN-24, R-GW-22 — what rundesk writes into a turn itself is always a
+        continuation, and a continuation means nothing on a session that was not there for
+        what it continues. Asked again on a fresh one it answers about nothing, the turn is
+        recorded as finished, and the person is told interrupted work was picked up when it
+        was not."""
+        await self.ask("stale")
+        again = await self.ask("stale", prompt="carry on", prompt_author="rundesk")
+        self.assertFalse(again.ok)
+        self.assertEqual(turn.NOTHING_SAID, again.why)
+        self.assertEqual(1, self.attempts(again.run), "a continuation was begun again")
+        self.assertEqual([], self.asked_again(again.run))
+
+    async def test_a_recovery_turn_is_refused_rather_than_begun_again(self):
+        """R-GW-22 — an interrupted turn is taken up where it stopped, never begun again.
+        A recovery turn is already refused outright when there is no session to carry on
+        from, and a retry is that same refusal one attempt later: it would hand
+        `Continue the interrupted work` to a brain that knows nothing about it, record the
+        turn as finished, and move the conversation onto the fresh session it ended on —
+        while the interrupted run is already claimed and can never be offered again."""
+        await self.ask("stale")
+        self.assertEqual("a-session", self.handle_for("stale"))
+        recovered = await self.ask("stale", prompt="carry on", prompt_author="rundesk",
+                                   resume_required=True, recovery_of="an-earlier-run")
+        self.assertFalse(recovered.ok, "a recovery that answered nobody was reported as done")
+        self.assertEqual(1, self.attempts(recovered.run), "interrupted work was begun again")
+        self.assertEqual([], self.asked_again(recovered.run))
+        self.assertNotEqual("a-session", self.handle_for("stale"),
+                            "the conversation was moved onto a session started from nothing")
+
+    async def test_a_turn_that_was_not_resumed_is_not_asked_again(self):
+        """R-RUN-24 — nothing was handed back, so there is nothing a fresh session would
+        do differently. A brain asked to repeat work it has already refused to do costs
+        an owner twice for the same silence."""
+        first = await self.ask("mute")
+        self.assertFalse(first.ok)
+        self.assertFalse(self.settled(first.run)["resumed"])
+        self.assertEqual(1, self.attempts(first.run))
+        self.assertEqual([], self.asked_again(first.run))
+
+
+class WhenAResumedTurnIsWorthAskingAgain(unittest.TestCase):
+    """R-RUN-24 — narrow on purpose, because the cost of being wrong is a brain asked to
+    do the same work twice. `_never_ran` is the whole decision and is asked directly."""
+
+    NOTHING = [{"type": "usage", "input": 0, "output": 0, "cached": 0, "written": 0},
+               {"type": "done", "ok": True, "session": "s"}]
+
+    def never_ran(self, said, result=None, resumed=True) -> bool:
+        return turn._never_ran(
+            said, result or process.Result(process.FINISHED, 0), resumed=resumed)
+
+    def test_a_resumed_session_that_reported_nothing_and_said_nothing_never_ran(self):
+        self.assertTrue(self.never_ran(self.NOTHING))
+
+    def test_a_turn_that_was_not_resumed_had_no_stale_session_to_be_given_back(self):
+        self.assertFalse(self.never_ran(self.NOTHING, resumed=False))
+
+    def test_a_turn_that_spent_anything_at_all_read_something(self):
+        """One token in any of the four slots is a brain that reached the prompt. What it
+        did with it is its own business, and asking again would bill an owner twice."""
+        for what in ("input", "output", "cached", "written"):
+            said = [dict(self.NOTHING[0], **{what: 1}), self.NOTHING[1]]
+            self.assertFalse(self.never_ran(said), f"{what} was spent and it was asked again")
+
+    def test_a_brain_that_measured_nothing_is_not_a_brain_that_did_nothing(self):
+        """An adapter that omits usage says nothing about what happened, and silence about
+        cost is not evidence of a turn that never ran (R-USE-7)."""
+        self.assertFalse(self.never_ran([{"type": "done", "ok": True, "session": "s"}]))
+
+    def test_a_turn_that_answered_is_left_alone(self):
+        """Including one that answered with a file and typed nothing at all."""
+        for answer in ({"type": "text", "text": "here"}, {"type": "file", "path": "a.txt"}):
+            self.assertFalse(self.never_ran([self.NOTHING[0], answer, self.NOTHING[1]]))
+
+    def test_a_brain_that_said_why_it_stopped_stopped_for_a_reason_of_its_own(self):
+        """A refusal, an exhausted account or a lost context is a decision, not a turn
+        that was never run — and a fresh session would meet the same wall (R-RUN-19)."""
+        for word in turn.BECAUSE:
+            self.assertFalse(self.never_ran(
+                [self.NOTHING[0], {"type": "done", "ok": True, "because": word}]))
+
+    def test_a_turn_whose_brain_never_said_it_ended_is_not_asked_again(self):
+        """The shape a killed gateway leaves. Nothing said the turn is over, so nothing
+        here may declare it over and start it afresh."""
+        self.assertFalse(self.never_ran([self.NOTHING[0]]))
+        self.assertFalse(self.never_ran(
+            [self.NOTHING[0], {"type": "done", "ok": False}]))
+
+    def test_a_program_that_did_not_finish_well_failed_for_its_own_reason(self):
+        """A crash and a lost record are both failures a fresh session does not fix, and
+        a cancelled turn is one nobody is waiting on any more."""
+        self.assertFalse(self.never_ran(
+            self.NOTHING, result=process.Result(process.FAILED, 1)))
+        self.assertFalse(self.never_ran(
+            self.NOTHING, result=process.Result(process.FINISHED, 0, undelivered=1)))
 
 
 class WhatFourSlotsOfUsageAddUpTo(unittest.TestCase):

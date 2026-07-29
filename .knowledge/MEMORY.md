@@ -137,6 +137,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `tests/test_install.py` drives a *copy* of the checkout for exactly that reason: run against the
   checkout itself it deletes the `.venv` a live install is made of. (`--help` no longer installs —
   R-INS-17 — but every other invocation still does.)
+- **A scratch root is not enough on a machine with a live install: the uninstall still takes the
+  live `ai.rundesk-automatic-update` job away.** launchd labels are per *user* and job files are
+  per *install*, so `remove_automatic_update` checks ownership of the scratch plist, passes, and
+  boots out the only registration the shared label can have. The live plist stays on disk, so
+  nothing looks wrong and the machine has silently stopped updating itself (#146). Check
+  `launchctl list | grep rundesk` before and after every install/uninstall verification, and put
+  back whatever went with
+  `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.rundesk-automatic-update.plist`.
 - **Waiting for the gate with `while pgrep -f "scripts/gate"` never ends, because the waiter
   matches itself.** The pattern is in the waiting shell's own command line, so `pgrep` finds it
   and every waiter keeps every other waiter alive — six were still spinning long after the runs
