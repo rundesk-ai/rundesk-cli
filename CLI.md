@@ -120,7 +120,7 @@ rundesk schedules ava off nightly
 ## What the arguments mean
 
 ```sh
---activity, --no-activity       show what the agent is doing while it works, not only what it finally says (default: on)
+--activity, --no-activity       show what the agent is doing and saying while it works; off means one message a turn, the answer (default: on)
 --all                           every agent on this machine
 --allow <user>                  who may reach this agent through it — at least one, always; repeatable
 --ask <prompt>                  what to ask this agent when it is due, in quotes — a turn rather than a program
@@ -133,7 +133,7 @@ rundesk schedules ava off nightly
 --expired                       instead, the one-time schedules whose moment has gone — whether each ran, or whether it passed while nothing was running
 --fresh                         start the conversation again rather than carrying it on
 --here                          run it in this terminal instead of handing it to the machine
---in <where>                    which place on that channel to say it in — a room, a direct message, in whatever the surface calls them. Left out, it follows the conversation
+--in <where>                    which place on that channel to say it in, in that surface's own words — for Discord: a room name or id, or on a DM channel the person's user id (the same id as --allow) or the DM channel id. Left out, it follows the conversation
 --instructions <text>           what every turn for this agent is told before it reads a prompt, where neither the schedule nor the surface said — empty takes it off
 --kind <kind>                   which kind of surface — one that ships, or the path of a program that speaks yours
 --model <model>                 which model, in that brain's own words

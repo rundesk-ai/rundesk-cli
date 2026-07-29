@@ -680,10 +680,11 @@ class Store:
         and which parts of it it can fill in, so a `{where.something}` an owner writes later
         is checked against what will actually be there rather than against a guess.
 
-        `activity` is whether this surface is shown what the agent is *doing* while it
-        works, as against what it finally says. On unless an owner says otherwise: a room
-        that goes quiet for four minutes and then answers looks broken, and the fix for a
-        room where that is noise is to say so once rather than to guess per message.
+        `activity` is whether this surface is shown the turn while it runs — what the agent
+        is doing and what it says on the way — as against only its answer (R-CH-6, R-CH-27).
+        On unless an owner says otherwise: a room that goes quiet for four minutes and then
+        answers looks broken, and the fix for a room where that is noise is to say so once
+        rather than to guess per message.
         """
         if not allow:
             raise ValueError("a channel nobody may use is refused rather than defaulted")
