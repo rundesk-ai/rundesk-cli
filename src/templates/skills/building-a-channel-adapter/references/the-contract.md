@@ -124,6 +124,13 @@ one it was and absent when it did not, because nothing here guesses. Everything 
 that record is a count of tokens: `input` is fresh, `cached` is re-read, and an absent one
 means the brain could not tell rather than that it was zero.
 
+**`session` is the one that answers "how big is this conversation now".** The others say
+what the turn was billed for; this says the size it ended at, so somebody can decide
+whether to start a fresh one — and it falls when a conversation is compacted. Lead with it
+where a brain reports it, and show what you always showed where one does not. It is a
+count of tokens and is nothing to do with the opaque session handle a turn is resumed on,
+which never reaches a surface at all.
+
 **A gesture is checked the same way a message is.** A `control` from somebody not allowed
 is dropped exactly as their message would be, and you are told nothing either way — so a
 button or a command your surface shows to a whole room is safe to show, and will simply do
@@ -245,7 +252,7 @@ both — so a photograph sent with nothing typed is an ordinary message and not 
 {"type": "tool",   "conversation": "1180", "run": "7-a3f1", "id": "1", "name": "Bash", "did": "run"}
 {"type": "result", "conversation": "1180", "run": "7-a3f1", "id": "1", "ok": true, "summary": "3 files changed"}
 {"type": "think",  "conversation": "1180", "run": "7-a3f1", "text": "The error is in the parser."}
-{"type": "usage",  "conversation": "1180", "run": "7-a3f1", "input": 1200, "output": 340, "cached": 8000, "model": "…"}
+{"type": "usage",  "conversation": "1180", "run": "7-a3f1", "input": 1200, "output": 340, "cached": 8000, "session": 9200, "model": "…"}
 {"type": "said",   "conversation": "1180", "run": "7-a3f1", "text": "I'll look at the logs."}
 {"type": "answer", "conversation": "1180", "run": "7-a3f1", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png"}]}
 {"type": "state",  "conversation": "1180", "run": "7-a3f1", "state": "finished"}
