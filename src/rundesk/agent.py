@@ -413,7 +413,9 @@ def _what_is_wrong_with_its_skills(name: str, where: Path | None = None) -> list
                 f"rundesk update"))
     held = skill.library()
     try:
-        wanted = config.skills(where)["granted"]
+        # Install configuration is not under the agents directory. `where` redirects where
+        # this agent lives; the required baseline still belongs to the install (R-AGT-36).
+        wanted = config.skills()["granted"]
     except config.Unreadable as why:
         # The one place an owner hears it without having to be making an agent at the time.
         return found + [Complaint(config.NAMED, str(why), f"edit {config.path(where)}")]
@@ -443,7 +445,9 @@ def _given_what_is_required(name: str, where: Path | None = None) -> list[str]:
     an install, and is not a half-made agent.
     """
     given = []
-    for called in config.skills(where)["granted"]:
+    # `where` is an agents directory, never the install's data directory. The baseline is
+    # install-wide and resolves from the same file every agent shares (R-AGT-36).
+    for called in config.skills()["granted"]:
         try:
             skill.grant(skills(name, where), called)
         except (skill.Unknown, skill.NotASkill, skill.InTheWay, OSError):
