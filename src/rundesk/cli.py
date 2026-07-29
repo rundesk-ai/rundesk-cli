@@ -617,10 +617,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="who may reach this agent through it — at least one, always; "
                              "repeatable")
     # On unless an owner says otherwise, because a room that goes quiet for four minutes
-    # and then answers looks broken. `BooleanOptionalAction` is what makes the flag read
-    # as the thing it settles rather than as an instruction: `--activity` and
-    # `--no-activity`, one of which is already true, so nobody has to remember which way
-    # round the default is.
+    # and then answers looks broken. Off settles the whole turn and not part of it — what
+    # the agent is doing *and* what it says on the way — so such a channel gets one message
+    # a turn (R-CH-6). `BooleanOptionalAction` is what makes the flag read as the thing it
+    # settles rather than as an instruction: `--activity` and `--no-activity`, one of which
+    # is already true, so nobody has to remember which way round the default is.
     # Read from a pipe rather than typed, for a script that has the credential in hand. A
     # flag with no value, deliberately: the moment one takes the credential *as* its value
     # it is in `ps` for every user on the machine and in a shell history for ever (R-CAD-11).
@@ -628,8 +629,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="read the credential this channel needs from standard input, "
                              "one line; asked for at the terminal when left out")
     joined.add_argument("--activity", action=argparse.BooleanOptionalAction, default=True,
-                        help="show what the agent is doing while it works, not only what "
-                             "it finally says (default: on)")
+                        help="show what the agent is doing and saying while it works; off "
+                             "means one message a turn, the answer (default: on)")
     # Declared so the reference shows it, and carried rather than read. Whatever the
     # platform needs is the adapter's own vocabulary, and the `--` in front is grammar:
     # without it the first thing that looks like an option is refused (R-CAD-13).

@@ -118,7 +118,7 @@ rundesk schedules ava off nightly
 ## What the arguments mean
 
 ```sh
---activity, --no-activity       show what the agent is doing while it works, not only what it finally says (default: on)
+--activity, --no-activity       show what the agent is doing and saying while it works; off means one message a turn, the answer (default: on)
 --all                           every agent on this machine
 --allow <user>                  who may reach this agent through it — at least one, always; repeatable
 --ask <prompt>                  what to ask this agent when it is due, in quotes — a turn rather than a program

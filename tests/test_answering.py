@@ -1121,9 +1121,9 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
                         "what it did was shown after what it said")
 
     async def test_a_surface_told_not_to_show_what_it_is_doing_still_answers(self):
-        """R-CH-6 — what an agent *is doing* is what an owner may turn off, and what it
-        *says* is not. Turning both off would be a channel that takes a message and never
-        replies to it, which is not a quieter agent but a broken one."""
+        """R-CH-6 — everything a turn shows on the way is what an owner may turn off, and
+        the answer is not. Turning that off too would be a channel that takes a message and
+        never replies to it, which is not a quieter agent but a broken one."""
         brain = Brain(showing=[{"type": "think", "text": "the error is in the parser"},
                                {"type": "tool", "id": "1", "did": "run"},
                                {"type": "usage", "input": 10, "output": 2}])
@@ -1134,6 +1134,75 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
         self.assertEqual([], [one for one in kinds if one in ("think", "tool", "usage")],
                          "a surface told not to be shown what it was doing was shown it")
         self.assertIn("answer", kinds, "turning activity off took the answer with it")
+
+    async def test_a_quiet_channel_posts_one_message_for_the_whole_turn(self):
+        """R-CH-27, R-CH-6 — the regression. A turn that thinks out loud four times posted
+        four remarks and then the answer into a room explicitly set to stay quiet, because
+        prose was routed on before the owner's choice was ever asked. Only the marks a
+        platform shows without posting anything — how the turn stands — are left."""
+        brain = Brain(showing=[
+            {"type": "text", "text": "I'll read the issue.", "whole": True},
+            {"type": "text", "text": "Now the code.", "whole": True},
+            {"type": "text", "text": "The routing is the cause.", "whole": True},
+            {"type": "text", "text": "Writing the fix.", "whole": True},
+            {"type": "think", "text": "the error is in the parser"},
+            {"type": "text", "text": "Done: one line.", "whole": True}],
+            outcome=Outcome(text="Done: one line."))
+        surface = Surface()
+        held = self.answering(surface, brain, record=dict(self.record, activity=False))
+        await self.carry(held, self.arrived())
+        posted = [one["type"] for one in surface.shown if one["type"] != "state"]
+        self.assertEqual(["answer"], posted,
+                         f"a channel told to stay quiet posted {posted}")
+        self.assertEqual(["Done: one line."],
+                         [one["text"] for one in surface.of("answer")],
+                         "the one message it posted was not the answer")
+
+    async def test_what_a_quiet_channel_says_at_the_end_is_still_only_its_last_thought(self):
+        """R-CH-27, R-CH-19 — what is said is still collected when none of it is posted.
+        Dropping the record instead of the delivery would make the answer every thought
+        the turn ever had, joined together — the room quieter and the message four times
+        longer, which is the opposite of what was asked for."""
+        brain = Brain(showing=[
+            {"type": "text", "text": "I'll read the issue.", "whole": True},
+            {"type": "text", "text": "Three files changed.", "whole": True}],
+            outcome=Outcome(text="I'll read the issue.Three files changed."))
+        surface = Surface()
+        held = self.answering(surface, brain, record=dict(self.record, activity=False))
+        await self.carry(held, self.arrived())
+        self.assertEqual(["Three files changed."],
+                         [one["text"] for one in surface.of("answer")])
+
+    async def test_a_quiet_channels_reply_written_a_piece_at_a_time_still_arrives_whole(self):
+        """R-CH-27, R-CH-7 — a brain that streams fragments and never marks one whole has
+        said nothing complete until it stops, and the pieces are still what the answer is
+        made of on a channel that posts nothing before it."""
+        brain = Brain(showing=[{"type": "text", "text": "Three "},
+                               {"type": "text", "text": "files changed."}],
+                      outcome=Outcome(text="Three files changed."))
+        surface = Surface()
+        held = self.answering(surface, brain, record=dict(self.record, activity=False))
+        await self.carry(held, self.arrived())
+        self.assertEqual([], surface.of("said"))
+        self.assertEqual(["Three files changed."],
+                         [one["text"] for one in surface.of("answer")])
+
+    async def test_a_channel_shown_what_it_is_doing_still_hears_every_thought(self):
+        """R-CH-6, R-CH-19 — the other half of the choice, and the one nobody asked to
+        change. A room that is watching a long turn is readable because each finished
+        thought arrives when it was had."""
+        brain = Brain(showing=[
+            {"type": "text", "text": "I'll read the issue.", "whole": True},
+            {"type": "text", "text": "Now the code.", "whole": True},
+            {"type": "text", "text": "Done: one line.", "whole": True}],
+            outcome=Outcome(text="Done: one line."))
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual(["I'll read the issue.", "Now the code."],
+                         [one["text"] for one in surface.of("said")])
+        self.assertEqual(["Done: one line."],
+                         [one["text"] for one in surface.of("answer")])
 
     async def test_a_finished_thing_said_mid_turn_is_shown_when_the_next_one_arrives(self):
         """R-CH-19 — an agent that says "I will look at the logs" and then, a minute
