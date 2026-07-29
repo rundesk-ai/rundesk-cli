@@ -32,6 +32,10 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 - **A fresh worktree has no `.venv`, so its Discord regression test skips and looks green.**
   Run the worktree's test path with the main checkout's `.venv/bin/python`; the interpreter
   supplies `discord.py` while the working directory and imported adapter remain the worktree's.
+- **A test class appended to the end of a suite file lands *after* the `__main__` guard and
+  never runs — and the suite still says `OK`.** `tests/test_gateway.py` reported the same 184
+  cases with a new four-case class in it, which reads exactly like a class that passed. Insert
+  a new class before the guard, and check the count moved before believing a green run.
 - **An agent running the gate on its own repository fails three cases that have nothing to
   do with its change.** A rundesk turn's environment already carries `RUNDESK_HOME`,
   `RUNDESK_AGENTS_DIR`, `RUNDESK_SCRIPTS` and nine more, and `test_process` and `test_cli`
