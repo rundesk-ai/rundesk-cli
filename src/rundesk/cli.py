@@ -3349,10 +3349,26 @@ def cmd_runs(args: argparse.Namespace, gateways, agents) -> int:
     named = {row["id"]: row["name"] for row in kept.schedules()}
     _as_table(("RUN", "WHEN", "SOURCE", "ANSWERED BY", "OUTCOME", "COST"), [
         (one["id"], str(one["started_at"]), _admitted_by(one, named),
-         _answered_by(one["provider"]), str(one["outcome"] or "running"), _spent(one))
+         _answered_by(one["provider"]), _came_to(one), _spent(one))
         for one in found
     ])
     return 0
+
+
+def _came_to(one: dict) -> str:
+    """What became of this run, and the word for why where the brain gave one (R-RUN-19).
+
+    `failed` on its own answers "did it work" and not "what do I do about it" — a turn
+    stopped by an account limit reads exactly like a crashed adapter or a bad flag. The word
+    is added rather than substituted, so the outcome column still says the one thing it has
+    always said and can still be grepped for.
+
+    Absent for every run whose adapter did not classify the failure, which is every run
+    written before there was a column for it. Nothing is inferred from the prose in `why`.
+    """
+    became = str(one["outcome"] or "running")
+    word = one.get("because")
+    return f"{became} ({word})" if word else became
 
 
 def _admitted_by(one: dict, named: dict) -> str:

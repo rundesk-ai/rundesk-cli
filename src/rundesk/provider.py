@@ -46,7 +46,13 @@ ADAPTERS = Path(__file__).resolve().parent.parent / "providers"
 #: and not the picture. Inferring it from what a tool printed was the alternative, and it
 #: would have meant sending anything a brain happened to name, which is a hole rather
 #: than a feature. A brain says so or nothing is sent.
-RECORDS = ("text", "think", "tool", "result", "usage", "file", "done")
+#: `limit` is the eighth, and it was added for the same shape of reason as `file`: brains
+#: report account state — how much of an allowance is left, when the window resets — and the
+#: seam had nowhere to put it, so a turn stopped by a limit reached an owner as whatever
+#: prose an adapter scraped from a failure line. It is not this turn's activity and it is
+#: not a failure: a turn carrying one may have succeeded, which is what makes it a record
+#: rather than an outcome (R-PRV-28).
+RECORDS = ("text", "think", "tool", "result", "usage", "file", "limit", "done")
 
 #: What a brain says on a `text` record when the thing it just said is *finished* rather
 #: than a piece of something still being written (R-PRV-22).

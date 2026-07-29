@@ -87,6 +87,11 @@ class Outcome:
     #: Carried on the outcome rather than left in a file, because a turn that failed with
     #: its one actionable line filed where nobody looks is a turn somebody is stuck on.
     why: str | None = None
+    #: The closed word for the same failure, where the brain classified it (R-RUN-19). Never
+    #: a replacement for `why`, which keeps saying what the brain actually said: prose is
+    #: what a person reads and the word is what anything else can count or branch on. Absent
+    #: whenever an adapter did not say, and never inferred from the prose beside it.
+    because: str | None = None
     trouble: list = field(default_factory=list)
 
     @property
@@ -341,13 +346,14 @@ async def carry(
         # schedule reporting it as failed, or the other way round.
         outcome = Outcome(run=run, ok=ok, reason=result.reason, said=said, tokens=tokens,
                           handle=handle if carried else None, why=_why(said),
+                          because=_because(said),
                           trouble=[one for one in trouble if one.strip()][-TROUBLE_KEPT:])
         # How it finished, in one word. A turn is `finished` only when the program ended
         # well *and* the brain did not say otherwise — a brain that answered "no" through
         # a process that exited zero is a failed turn, and the two used to be told apart
         # by two fields that a reader had to combine correctly to get right.
         kept.ended(run, store.stamped(now), outcome.became, exit_code=result.code,
-                   why=_why(said), tokens=tokens)
+                   why=_why(said), tokens=tokens, because=outcome.because)
         settled.append(outcome.became)
     return outcome
 
@@ -663,6 +669,33 @@ def _why(said: list) -> str | None:
         if one.get("type") == "done":
             why = one.get("why")
             return why if isinstance(why, str) and why else None
+    return None
+
+
+#: The closed set of words for why a turn stopped (R-RUN-19). Short and shut on purpose: a
+#: word a surface cannot phrase is a word nobody benefits from, and the point of the set is
+#: that everything downstream knows every member of it.
+#:
+#: An adapter that cannot classify a failure says nothing, exactly as it already omits a
+#: usage field it cannot measure — so this is additive, and no adapter that never learns any
+#: of these behaves differently than it does today.
+BECAUSE = ("rate_limited", "usage_exhausted", "no_credit", "signed_out",
+           "context_exceeded", "cancelled", "refused", "crashed")
+
+
+def _because(said: list) -> str | None:
+    """Which of the closed words the brain gave for stopping, if it gave one at all.
+
+    Off the record that ends the turn, like `why` beside it. A word this rundesk does not
+    know is dropped rather than stored: the whole value of a closed set is that a reader can
+    exhaust it, and one unknown member silently in the column takes that away — while an
+    adapter reporting a word from a *newer* rundesk is exactly the case that must not corrupt
+    an older one's totals.
+    """
+    for one in reversed(said):
+        if one.get("type") == "done":
+            word = one.get("because")
+            return word if isinstance(word, str) and word in BECAUSE else None
     return None
 
 

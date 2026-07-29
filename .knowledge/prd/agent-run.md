@@ -39,6 +39,7 @@ worth having if what it did can be read back afterwards.
 | ✅ | R-RUN-16 | A run says what admitted it, and it is one of the declared ways work is admitted | `every way work is admitted is named here`, `work admitted from somewhere nobody declared is refused`, `a run refused for its source is not written at all`, `a turn the clock started says so in the account` |
 | ✅ | R-RUN-17 | An interrupted execution and the run continuing it name each other in their accounts | `a recovery run names the execution it continues`, `a successor continues the interrupted provider session once` |
 | ✅ | R-RUN-18 | Two finished thoughts are two paragraphs in the one reply, and a reply arriving in fragments is still one sentence | `two finished thoughts do not run into each other`, `a reply arriving a piece at a time is still one sentence`, `fragments still open are closed by the thought that follows`, `what a brain put inside one thought is left exactly as it said it`, `nothing but text records reach the reply`, `a turn that said nothing replies with nothing` |
+| ✅ | R-RUN-19 | Why a turn stopped is one of a closed set of words, kept beside the brain's own sentence and never inferred from it | `a turn stopped for a reason the seam has a word for records that word`, `a word this rundesk does not know is dropped rather than stored`, `a run whose brain classified nothing keeps its prose and no word`, `what a run came to names the reason it stopped`, `rows written before there was a column for a reason stay unknown` |
 
 ## Open questions
 
