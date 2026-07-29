@@ -510,8 +510,14 @@ def build_parser() -> argparse.ArgumentParser:
                              "room, in the platform's own word for it")
     # The choices are read off the store's own closed sets rather than restated, and the
     # reference prints them, so neither says the list twice.
-    recent.add_argument("--author", choices=list(store.AUTHORS), metavar="<who>",
+    recent.add_argument("--author", choices=list(store.AUTHORS), metavar="<kind>",
                         help="only what this kind of author said")
+    # Kind and identity are two questions, and one flag answering both is how `--author
+    # user` came to return rows whose WHO column shows a platform id. This one is the
+    # identity in that column, and is not a closed set: it is whatever the surface calls
+    # one person.
+    recent.add_argument("--who", metavar="<identity>",
+                        help="only what this one person said, as the WHO column names them")
     recent.add_argument("--source", choices=list(store.SOURCES), metavar="<how>",
                         help="only messages belonging to work admitted this way")
 
@@ -3472,7 +3478,7 @@ def cmd_messages(args: argparse.Namespace, gateways, agents) -> int:
     try:
         found = kept.latest(limit=max(1, args.most), since=args.since,
                             channel=args.channel, author=args.author, source=args.source,
-                            conversation=args.conversation)
+                            conversation=args.conversation, who=args.who)
     except ValueError as why:
         # The closed sets say what they are rather than being quietly ignored, so a filter
         # nobody can spell is refused instead of answering a different question (R-STO-26).

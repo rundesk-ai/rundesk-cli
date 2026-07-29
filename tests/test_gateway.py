@@ -31,7 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import gateway, process, schedule, store  # noqa: E402
+from rundesk import activity, gateway, process, schedule, store  # noqa: E402
 
 PY = sys.executable
 
@@ -3385,6 +3385,75 @@ class WhenTheClockAsksATurn(WithARunDirectory):
             await asyncio.sleep(0.05)
         self.assertEqual("could not start", self.records.schedule("nightly")["last_outcome"])
         self.assertIn("nothing to ask one with", gateway.log_path("ava", self.logs).read_text())
+
+
+class ARunTheGatewayNeverSettled(WithARunDirectory):
+    """R-GW-23 — a run is marked running the moment it is admitted, and nothing rewrote
+    that if the gateway holding it died, was stopped, or was replaced by an update.
+
+    Reported (#105): one agent's `rundesk runs` still showed a turn in flight more than
+    twenty-six hours after its transcript stopped being written, across three releases.
+    The record is what answers "what is in flight" and "what did this cost"; a stranded
+    row makes both untrue and its cost stays unreported for ever.
+    """
+
+    def _left_running(self, provider="codex"):
+        """A run admitted and never ended — what a gateway that went mid-turn leaves."""
+        return self.records.began("channel", provider, "read", "2026-07-27T18:31:18Z")
+
+    def _row(self, run):
+        return next(one for one in self.records.runs(limit=200) if one["id"] == run)
+
+    def _turning(self, run, pid=None):
+        """The activity record a live turn publishes for itself."""
+        activity.began(self.where, {
+            "run": run, "source": "channel", "surface": "discord",
+            "conversation": "one", "pid": pid or os.getpid(), "since": 1,
+        })
+
+    def test_a_run_left_running_by_a_gone_gateway_is_settled_when_the_next_one_starts(self):
+        run = self._left_running()
+        self.made().claim()
+        row = self._row(run)
+        self.assertIsNotNone(row["ended_at"], "the run is still marked as running")
+        self.assertEqual("stopped", row["outcome"])
+        self.assertEqual(gateway.ABANDONED_WHY, row["why"])
+
+    def test_a_turn_that_is_genuinely_still_turning_is_left_running(self):
+        """Settling live work would be the same lie the other way up. What is turning
+        says so for itself, and this gateway asks that rather than a process table."""
+        run = self._left_running()
+        self._turning(run)
+        self.made().claim()
+        self.assertIsNone(self._row(run)["ended_at"],
+                          "a turn that is genuinely running was written off")
+
+    def test_settling_one_stranded_run_does_not_touch_a_run_that_already_ended(self):
+        """A settled run keeps what it was settled as — including what it cost."""
+        done = self._left_running(provider="claude")
+        self.records.ended(done, "2026-07-27T18:33:00Z", "finished",
+                           tokens={"input": 12, "output": 3, "reported": True})
+        stranded = self._left_running()
+        self.made().claim()
+        settled, kept = self._row(stranded), self._row(done)
+        self.assertEqual("stopped", settled["outcome"])
+        self.assertEqual("finished", kept["outcome"], "a finished run was overwritten")
+        self.assertEqual("2026-07-27T18:33:00Z", kept["ended_at"])
+        self.assertEqual(12, kept["tokens_in"])
+
+    def test_a_gateway_whose_records_will_not_settle_still_comes_up(self):
+        """A gateway that refused to start because it could not tidy the last one's
+        records is a worse outage than the bad rows it was trying to fix."""
+        class Refuses:
+            def __getattr__(self, named):
+                raise RuntimeError("records are unreadable")
+
+        gw = self.made()
+        gw.records = Refuses()
+        gw._settle_runs_nothing_is_doing()          # says so in the log, and returns
+        gw.claim()
+        self.assertIsNotNone(gw._lock, "the gateway refused to start over old records")
+
 
 
 if __name__ == "__main__":

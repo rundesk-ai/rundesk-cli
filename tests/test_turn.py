@@ -722,6 +722,30 @@ class BeingSentToMidTurn(WithAnAgentToRunTurnsFor):
         self.assertEqual(["first", "second"], sent,
                          "a word said mid-turn is not in the account of the turn it reached")
 
+    async def test_a_word_said_mid_turn_is_recorded_under_who_said_it(self):
+        """R-STO-27 — reported (#106): the same person was recorded two ways in one
+        conversation. What started a turn carried their platform identity; what they said
+        into a turn already running carried none, so it read as the bare kind `user` and
+        the column could not be grouped, counted or filtered on."""
+        said = await turn.carry(
+            "ava", "first", self.brain("steerable"), where=self.where,
+            on="ops", kind="somewhere", conversation="one",
+            asked_by={"channel": "ops", "on": "one", "user": "2207"},
+            steering=self.words(turn.Said("second", "2207")),
+        )
+        spoke = [one for one in self.talk(said.run) if one["author"] == "user"]
+        self.assertEqual(["first", "second"], [one["text"] for one in spoke])
+        self.assertEqual(["2207", "2207"], [one["who"] for one in spoke],
+                         "the same person was written down two different ways")
+
+    async def test_a_word_said_by_nobody_named_is_recorded_without_an_identity(self):
+        """The terminal, where the only speaker is whoever is at it. An identity invented
+        for them would be a name nothing else can match."""
+        said = await turn.carry("ava", "first", self.brain("steerable"), where=self.where,
+                                steering=self.words("second"))
+        spoke = [one for one in self.talk(said.run) if one["author"] == "user"]
+        self.assertEqual([None, None], [one["who"] for one in spoke])
+
     async def test_a_brain_that_cannot_be_steered_is_not_left_waiting_for_more(self):
         """R-PRV-19 — holding input open for a brain that will never read again is a turn
         that never ends, so what it said it can do decides how it is run."""
@@ -978,6 +1002,30 @@ class ATurnTheGatewayStoodDownOn(WithAnAgentToRunTurnsFor):
         self.assertIsNotNone(runs[0]["ended_at"], "the run is still marked as running")
         self.assertEqual("stopped", runs[0]["outcome"])
         self.assertIn("gateway stopped", (runs[0]["why"] or ""))
+
+    async def test_a_turn_a_person_stopped_is_not_recorded_as_a_gateway_outage(self):
+        """Reported (#124): a person's `/stop` cancels a turn exactly as a shutdown does,
+        so every stop was written down as `the gateway stopped while this turn was
+        running` — while the gateway was still up and answered the next message in the
+        same conversation seconds later. `outcome` is right either way; only `why` was
+        untrue, and it makes "did my gateway fall over last night?" unanswerable from the
+        records, which is the question the field exists for."""
+        going = asyncio.ensure_future(self.ask(
+            "goes_on", conversation="one", on="ops", kind="somewhere",
+            asked_by={"channel": "ops", "on": "one", "user": "2207"},
+            stopped_by_owner=lambda: True,
+        ))
+        await asyncio.sleep(1.5)
+        going.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await going
+
+        runs = list(self.kept().runs())
+        self.assertEqual(1, len(runs), "the turn never got as far as being admitted")
+        self.assertEqual("stopped", runs[0]["outcome"])
+        self.assertEqual(turn.STOPPED_WHY, runs[0]["why"])
+        self.assertNotIn("gateway stopped", (runs[0]["why"] or ""),
+                         "an owner's stop was recorded as a gateway outage")
 
     async def test_a_gateway_cancelled_channel_turn_is_left_for_one_successor(self):
         """R-GW-22 — gateway loss is marked apart from a person's explicit stop."""

@@ -71,6 +71,28 @@ LOST = "lost"
 
 
 @dataclass(frozen=True)
+class Said:
+    """A word said into a running turn, and who said it where a surface knows.
+
+    **Identity travels with the word, and no further.** What a person said mid-turn is a
+    message of its own and is written down as one — so it needs the same identity the
+    message that started the turn already carries, or the same person appears in their own
+    history twice, once as a name and once as `user` (R-STO-27). It goes no nearer the
+    brain than this: the adapter is handed the words, never who said them.
+
+    A bare string is still accepted by everything that takes these, and means a word nobody
+    is named for — which is the terminal, where the only speaker is whoever is at it.
+    """
+
+    text: str
+    who: str | None = None
+
+    @classmethod
+    def of(cls, word) -> "Said":
+        return word if isinstance(word, cls) else cls(str(word), None)
+
+
+@dataclass(frozen=True)
 class Outcome:
     """What became of one turn, once it is over."""
 
@@ -152,6 +174,7 @@ async def carry(
     resume_required: bool = False,
     prompt_author: str = "user",
     resume_on_interrupt=None,
+    stopped_by_owner=None,
     recovery_of: str | None = None,
     started=None,
 ) -> Outcome:
@@ -259,7 +282,8 @@ async def carry(
     # already closed when it writes.
     settled: list = []
     with _settled_whatever_happens(
-            kept, run, settled, now, recoverable=resume_on_interrupt), \
+            kept, run, settled, now, recoverable=resume_on_interrupt,
+            by_owner=stopped_by_owner), \
             _Account(kept, run, where_it_is, transcript.beside(whose["logs"], run),
                      now=now) as writing:
         if recovery_of:
@@ -364,10 +388,16 @@ async def carry(
 #: mid-turn is the ordinary way this happens rather than a fault.
 INTERRUPTED = "stopped"
 INTERRUPTED_WHY = "the gateway stopped while this turn was running"
+#: The same silence, for the opposite reason. A person's `/stop` cancels a turn exactly as a
+#: shutdown does, so nothing downstream could tell the two apart afterwards and every stop
+#: was written down as a gateway outage — which makes "did my gateway fall over last night?"
+#: unanswerable from the records, the one question the field exists for (R-RUN-13).
+STOPPED_WHY = "a person stopped this turn"
 
 
 @contextlib.contextmanager
-def _settled_whatever_happens(kept, run: str, settled: list, now, recoverable=None):
+def _settled_whatever_happens(kept, run: str, settled: list, now, recoverable=None,
+                              by_owner=None):
     """Leave no run marked as still going once nothing is doing it (R-RUN-13).
 
     **The path this exists for cannot be caught by the body it wraps.** A gateway standing
@@ -392,7 +422,8 @@ def _settled_whatever_happens(kept, run: str, settled: list, now, recoverable=No
         if not settled:
             with contextlib.suppress(Exception):
                 kept.interrupted(
-                    run, store.stamped(now), INTERRUPTED_WHY,
+                    run, store.stamped(now),
+                    STOPPED_WHY if by_owner is not None and by_owner() else INTERRUPTED_WHY,
                     recoverable=bool(recoverable is not None and recoverable()),
                 )
                 settled.append(INTERRUPTED)
@@ -455,7 +486,12 @@ class _Account:
             # already running, which is a message of its own and belongs in the order it
             # was said (R-RUN-9).
             if event.get("mid"):
-                self._kept.arrived(self._conversation, at, str(event.get("text") or ""))
+                # Named the same way the prompt was. Without this the same person was
+                # recorded twice over in one conversation — by their platform identity
+                # when they started a turn, and as the bare word `user` whenever they
+                # spoke into one already running (R-STO-27).
+                self._kept.arrived(self._conversation, at, str(event.get("text") or ""),
+                                   who=event.get("who") or None)
             return self._seq
         if kind == self.SAID:
             # Gathered, not recorded. A reply arrives a fragment at a time and is one
@@ -599,8 +635,10 @@ async def _saying(program, prompt: str, writing, steering, trouble: list) -> Non
         writing.add(event={"type": SENT, "text": prompt})
         await program.send(provider.spoken(prompt))
         async for word in steering:
-            writing.add(event={"type": SENT, "text": word, "mid": True})
-            await program.send(provider.spoken(word))
+            said = Said.of(word)
+            writing.add(event={"type": SENT, "text": said.text, "mid": True,
+                               "who": said.who})
+            await program.send(provider.spoken(said.text))
     except process.NotListening:
         pass  # it finished while somebody was still typing, which is nobody's fault
     except asyncio.CancelledError:

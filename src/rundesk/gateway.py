@@ -45,6 +45,7 @@ from rundesk import activity
 from rundesk import dependencies
 from rundesk import process
 from rundesk import schedule
+from rundesk import store
 from rundesk import update_request
 from rundesk import updater
 
@@ -92,6 +93,10 @@ LOG_SOURCES = (GATEWAY_LOG, MACHINE_LOG, EVERY_LOG)
 #: rather than believed. `INTERRUPTED` is what it becomes.
 STARTED = "started"
 INTERRUPTED = "interrupted"
+#: What a run nobody is doing is settled as when the gateway that began it is gone. Says
+#: the gateway went rather than that the turn broke, because those are different news and
+#: only one of them means somebody should look at something.
+ABANDONED_WHY = "the gateway that began this turn went without settling it"
 
 #: What a schedule's work is called while a gateway holds it. One place, because a
 #: reconciliation matching an outcome to the work it named has to spell it the same way
@@ -1215,6 +1220,7 @@ class Gateway:
                 "ended work left running by a gateway that is gone: %s", ", ".join(self.swept)
             )
         self._reconcile_what_never_finished()
+        self._settle_runs_nothing_is_doing()
         try:
             self._record()
         except OSError as err:
@@ -1426,6 +1432,38 @@ class Gateway:
             # all — putting the moment of reconciling there would read as a later firing to
             # the next gateway up, and everything due in between would be passed over.
             self._remember_outcome(named, INTERRUPTED)
+
+    def _settle_runs_nothing_is_doing(self) -> None:
+        """Settle a run the last gateway left marked as still going (R-GW-23).
+
+        The schedule beside it was already reconciled here; the run row was not. A run is
+        marked running when it starts and nothing rewrote it when the gateway died, was
+        stopped, or was replaced by an update — so `rundesk runs` reported a turn in
+        flight twenty-six hours after its transcript stopped being written, across three
+        releases, and it would have stayed there for ever. The record is what answers
+        "what is in flight" and "what did this cost", and a stranded row makes both untrue.
+
+        Called at the same point and for the same reason as the schedule reconciliation:
+        the claim has just established that nothing of the last gateway is running except
+        what it handed over, and this gateway has begun nothing of its own. What *is* still
+        turning says so for itself in the activity records, and is left exactly alone —
+        settling live work would be the same lie the other way up.
+        """
+        if self.records is None:
+            return
+        live = [row["run"] for row in activity.active(self.where)]
+        try:
+            settled = self.records.abandoned(
+                store.stamped(), ABANDONED_WHY, keep=live)
+        except Exception as why:  # noqa: BLE001 — a records boundary
+            # Never worth refusing to start over. This is an account of turns that are
+            # already over, and a gateway that would not come up because it could not
+            # tidy the last one's records is a worse outage than the bad rows.
+            self.log.warning("could not settle what the last gateway left running: %s", why)
+            return
+        if settled:
+            self.log.warning(
+                "settled %s run(s) left running by a gateway that is gone", settled)
 
     def _say_what_was_missed(self) -> None:
         """Say what fell due while nothing was running (R-SCH-5).
