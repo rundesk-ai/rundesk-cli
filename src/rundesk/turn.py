@@ -384,7 +384,15 @@ async def carry(
                 transcript.trim(whose["logs"], run)
 
         result = await attempt(resume, steering)
-        if _never_ran(said, result, resumed=bool(resume)):
+        # **Only a prompt that stands on its own is worth asking again.** Everything rundesk
+        # writes into a turn itself is a *continuation* — "carry on where the last gateway
+        # stopped", "finish what you were doing before the update" — and those mean nothing
+        # at all without the session they were written for. Asked on a fresh one, the brain
+        # answers about nothing, the turn is recorded as finished, and the handle the retry
+        # ends on replaces the interrupted conversation's own, which is the work itself
+        # going (R-GW-22). A recovery turn is refused outright rather than resumed
+        # elsewhere, and this is the same refusal one attempt later.
+        if prompt_author == "user" and _never_ran(said, result, resumed=bool(resume)):
             # **The question is still worth asking, so it is asked** (R-RUN-24). A resumed
             # session that hands the turn straight back never read the prompt, and rundesk
             # is the only layer that knows both that nothing was said and what the person

@@ -117,8 +117,11 @@ if "--capabilities" in sys.argv:
 prompt = sys.stdin.read().strip()
 say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
 if os.environ.get("RUNDESK_RESUME"):
+    # A handle of its own, never the one it was handed. A stand-in that echoes what it was
+    # given makes both attempts report the same string, and every assertion about which
+    # handle the conversation kept then passes whichever one the code picks.
     say(type="usage", input=0, output=0, cached=0, written=0)
-    say(type="done", ok=True, session=os.environ["RUNDESK_RESUME"])
+    say(type="done", ok=True, session="stale-" + os.environ["RUNDESK_RESUME"])
     sys.exit(0)
 say(type="text", text="answered " + prompt)
 say(type="usage", input=12, output=3, model="stand-in-1")
@@ -629,6 +632,19 @@ class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
         self.assertEqual(2, self.attempts(again.run))
         self.assertNotEqual(first.run, again.run)
 
+    async def test_the_conversation_carries_on_from_the_fresh_session_not_the_stale_one(self):
+        """R-RUN-11, R-RUN-24 — a retried turn reports two sessions and only one of them
+        exists. Keep the one that was handed back and every later turn resumes a session
+        that is already dead: handed straight back, retried, answered on a new session, and
+        pinned to the dead one again — two brain starts a turn, for ever, with each turn
+        still answering so nothing looks wrong."""
+        await self.ask("stale")
+        again = await self.ask("stale")
+        self.assertEqual("a-session", again.handle,
+                         "the turn carried on from the session that had just failed it")
+        self.assertEqual("a-session", self.handle_for("stale"),
+                         "the conversation was pinned to the stale session")
+
     async def test_being_asked_again_is_in_the_runs_own_account(self):
         """R-RUN-24 — a brain started twice for one turn with nothing written down is a
         turn nobody can explain the cost or the duration of afterwards."""
@@ -652,6 +668,36 @@ class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
         self.assertEqual(turn.NOTHING_SAID, again.why)
         self.assertEqual("failed", self.settled(again.run)["outcome"])
         self.assertEqual(2, self.attempts(again.run), "a turn was asked a third time")
+
+    async def test_a_turn_rundesk_asked_for_itself_is_not_asked_again(self):
+        """R-RUN-24, R-GW-22 — what rundesk writes into a turn itself is always a
+        continuation, and a continuation means nothing on a session that was not there for
+        what it continues. Asked again on a fresh one it answers about nothing, the turn is
+        recorded as finished, and the person is told interrupted work was picked up when it
+        was not."""
+        await self.ask("stale")
+        again = await self.ask("stale", prompt="carry on", prompt_author="rundesk")
+        self.assertFalse(again.ok)
+        self.assertEqual(turn.NOTHING_SAID, again.why)
+        self.assertEqual(1, self.attempts(again.run), "a continuation was begun again")
+        self.assertEqual([], self.asked_again(again.run))
+
+    async def test_a_recovery_turn_is_refused_rather_than_begun_again(self):
+        """R-GW-22 — an interrupted turn is taken up where it stopped, never begun again.
+        A recovery turn is already refused outright when there is no session to carry on
+        from, and a retry is that same refusal one attempt later: it would hand
+        `Continue the interrupted work` to a brain that knows nothing about it, record the
+        turn as finished, and move the conversation onto the fresh session it ended on —
+        while the interrupted run is already claimed and can never be offered again."""
+        await self.ask("stale")
+        self.assertEqual("a-session", self.handle_for("stale"))
+        recovered = await self.ask("stale", prompt="carry on", prompt_author="rundesk",
+                                   resume_required=True, recovery_of="an-earlier-run")
+        self.assertFalse(recovered.ok, "a recovery that answered nobody was reported as done")
+        self.assertEqual(1, self.attempts(recovered.run), "interrupted work was begun again")
+        self.assertEqual([], self.asked_again(recovered.run))
+        self.assertNotEqual("a-session", self.handle_for("stale"),
+                            "the conversation was moved onto a session started from nothing")
 
     async def test_a_turn_that_was_not_resumed_is_not_asked_again(self):
         """R-RUN-24 — nothing was handed back, so there is nothing a fresh session would
