@@ -1239,6 +1239,121 @@ class WhichRoomAWordMeans(unittest.TestCase):
         """Spaces around it are typing, not the name."""
         self.assertTrue(discord.room_matches("  #operations  ", "operations"))
 
+    def test_a_dm_place_that_is_a_user_id_opens_that_persons_dm(self):
+        """R-CAD-16 — schedule `--in` is often the same user snowflake as `--allow`.
+
+        That is not a channel id. `fetch_channel` fails; without the user→DM path a finished
+        schedule reports "nowhere to write" and the owner never sees the answer. Winston
+        schedules that worked used a DM *channel* id; Markus's used a *user* id and silently
+        posted nowhere. Both words must resolve on a DM surface.
+        """
+        opened = []
+        fetched = []
+
+        class Person:
+            id = 279024636254224384
+
+            async def create_dm(self):
+                opened.append(self.id)
+                return f"dm-with-{self.id}"
+
+        class Surface:
+            guilds = ()
+
+            class chose:
+                dm = True
+                allow = ["279024636254224384"]
+                server = None
+
+            async def wait_until_ready(self):
+                return None
+
+            async def fetch_channel(self, where):
+                raise RuntimeError("not a channel")
+
+            async def fetch_user(self, where):
+                fetched.append(where)
+                return Person()
+
+        found = asyncio.run(
+            discord.Agent._room_named(Surface(), "279024636254224384"))
+        self.assertEqual("dm-with-279024636254224384", found)
+        self.assertEqual([279024636254224384], fetched)
+        self.assertEqual([279024636254224384], opened)
+
+    def test_a_dm_channel_id_still_resolves_as_a_channel(self):
+        """R-CAD-16 — the working Winston shape: place is the DM channel snowflake."""
+        seen = []
+
+        class Surface:
+            guilds = ()
+
+            class chose:
+                dm = True
+                allow = ["279024636254224384"]
+                server = None
+
+            async def wait_until_ready(self):
+                return None
+
+            async def fetch_channel(self, where):
+                seen.append(where)
+                return f"channel-{where}"
+
+            async def fetch_user(self, where):
+                raise AssertionError("user lookup must not run when the channel exists")
+
+        found = asyncio.run(
+            discord.Agent._room_named(Surface(), "1529678042396622928"))
+        self.assertEqual("channel-1529678042396622928", found)
+        self.assertEqual([1529678042396622928], seen)
+
+    def test_a_user_id_is_not_opened_as_a_dm_from_a_room_channel(self):
+        """A failed room id must not become a private message (R-CH-4, R-CAD-16)."""
+
+        class Surface:
+            guilds = ()
+
+            class chose:
+                dm = False
+                allow = ["279024636254224384"]
+                server = None
+
+            async def wait_until_ready(self):
+                return None
+
+            async def fetch_channel(self, where):
+                raise RuntimeError("not a channel")
+
+            async def fetch_user(self, where):
+                raise AssertionError("room channels do not open DMs from bare ids")
+
+        found = asyncio.run(discord.Agent._room_named(Surface(), "279024636254224384"))
+        self.assertIsNone(found)
+
+    def test_a_dm_place_refuses_a_user_who_is_not_allowed(self):
+        """Schedules must not open DMs with people the channel does not authorize."""
+
+        class Surface:
+            guilds = ()
+
+            class chose:
+                dm = True
+                allow = ["111"]
+                server = None
+
+            async def wait_until_ready(self):
+                return None
+
+            async def fetch_channel(self, where):
+                raise RuntimeError("not a channel")
+
+            async def fetch_user(self, where):
+                raise AssertionError("unauthorized users are not fetched")
+
+        found = asyncio.run(discord.Agent._room_named(Surface(), "279024636254224384"))
+        self.assertIsNone(found)
+
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class WhatTheOwnerIsTold(unittest.TestCase):

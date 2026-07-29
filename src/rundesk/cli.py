@@ -466,9 +466,10 @@ def build_parser() -> argparse.ArgumentParser:
     # channel reaching a whole server has many rooms, and which of them an owner meant is
     # theirs to say rather than rundesk's to guess from whoever spoke last.
     added.add_argument("--in", dest="place", metavar="<where>",
-                       help="which place on that channel to say it in — a room, a direct "
-                            "message, in whatever the surface calls them. Left out, it "
-                            "follows the conversation")
+                       help="which place on that channel to say it in, in that surface's "
+                            "own words — for Discord: a room name or id, or on a DM "
+                            "channel the person's user id (the same id as --allow) or the "
+                            "DM channel id. Left out, it follows the conversation")
     # After `--`, taken off before the parser sees it, and never read here. It was a
     # required greedy positional, which argparse can carry a tail into on its own — but the
     # moment this verb grew options of its own, an option *inside* the tail was read as one
