@@ -4006,6 +4006,15 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         except gateways.NotAName as why:
             print(f"{named}: INVALID NAME — {why}", file=sys.stderr)
             return 1
+    # What this install calls its jobs is *this process's* environment rather than a
+    # collaborator's decision, so it is read from the module and not from the supervisor
+    # passed in — and read once here, before a command runs, because a prefix that could
+    # escape the jobs directory must stop the command rather than plant a job somewhere.
+    try:
+        _supervisor.prefix()
+    except _supervisor.NotAPrefix as why:
+        print(f"RUNDESK_JOB_PREFIX: INVALID — {why}", file=sys.stderr)
+        return 1
     if args.command in PLANNED:
         return cmd_not_available(args.command, getattr(args, "act", None))
     if args.command == "version":

@@ -48,11 +48,11 @@ class Machine:
         self.asked.append(args)
         verb, target = args[0], args[-1]
         name = target.rsplit(".", 1)[-1] if verb != "bootstrap" else None
-        if verb != "bootstrap" and target.endswith("/" + supervisor.UPDATE_LABEL):
-            name = supervisor.UPDATE_LABEL
+        if verb != "bootstrap" and target.endswith("/" + supervisor.update_label()):
+            name = supervisor.update_label()
         if verb != "bootstrap" and target.endswith(
-                "/" + supervisor.AUTOMATIC_UPDATE_LABEL):
-            name = supervisor.AUTOMATIC_UPDATE_LABEL
+                "/" + supervisor.automatic_update_label()):
+            name = supervisor.automatic_update_label()
         if verb in self.deaf:
             return supervisor.Spoke(False, "the machine did not answer in time", answered=False)
         if verb in self.refuse:
@@ -74,11 +74,11 @@ class Machine:
         if verb == "bootstrap":
             loaded = pathlib.Path(args[-1]).name[: -len(".plist")]
             named = (
-                supervisor.UPDATE_LABEL
-                if loaded == supervisor.UPDATE_LABEL
-                else supervisor.AUTOMATIC_UPDATE_LABEL
-                if loaded == supervisor.AUTOMATIC_UPDATE_LABEL
-                else loaded[len(supervisor.PREFIX) + 1:]
+                supervisor.update_label()
+                if loaded == supervisor.update_label()
+                else supervisor.automatic_update_label()
+                if loaded == supervisor.automatic_update_label()
+                else loaded[len(supervisor.prefix()) + 1:]
             )
             if named in self.holding:
                 return supervisor.Spoke(False, "Bootstrap failed: 5: Input/output error")
@@ -100,6 +100,13 @@ class WithAJobDirectory(unittest.TestCase):
     honestly, not the duration. Set once for every case rather than per test, because the
     two that most need it are the ones nobody remembers to turn down — the ones where the
     machine never lets go, which spend the whole patience by definition.
+
+    **What this install calls its jobs is isolated here too**, beside the directories.
+    The prefix is the one part of a job that is not a directory, so a fixture that
+    redirects every path and leaves it alone is still reading the shell it was run from —
+    and the shell this repo's own guide tells you to work in has it set. Three cases then
+    fail for the person following that guide and for nobody else, which is the same shape
+    as the trap they were written about.
     """
 
     SETTLE = 0.3
@@ -107,6 +114,12 @@ class WithAJobDirectory(unittest.TestCase):
     def setUp(self):
         self.addCleanup(setattr, supervisor, "SETTLE_SECONDS", supervisor.SETTLE_SECONDS)
         supervisor.SETTLE_SECONDS = self.SETTLE
+        # Taken out rather than pointed somewhere: unset is what rundesk ships, and a case
+        # that wants a second install's name says so itself.
+        restored = mock.patch.dict(os.environ)
+        restored.start()
+        self.addCleanup(restored.stop)
+        os.environ.pop("RUNDESK_JOB_PREFIX", None)
         self.where = Path(tempfile.mkdtemp(prefix="rundesk-jobs-"))
         self.addCleanup(shutil.rmtree, self.where, True)
         self.root = Path(tempfile.mkdtemp(prefix="rundesk-root-"))
@@ -342,7 +355,7 @@ class TakingItAllBack(WithAJobDirectory):
 
         left = supervisor.remove_our_shared_jobs(str(self.where), self.root, self.machine)
 
-        self.assertEqual([supervisor.UPDATE_LABEL, supervisor.AUTOMATIC_UPDATE_LABEL], left)
+        self.assertEqual([supervisor.update_label(), supervisor.automatic_update_label()], left)
         self.assertTrue(supervisor.update_job_path(str(self.where)).exists(),
                         "it took another install's update worker")
         self.assertTrue(supervisor.automatic_update_job_path(str(self.where)).exists(),
@@ -364,7 +377,7 @@ class TakingItAllBack(WithAJobDirectory):
         left = supervisor.remove_our_shared_jobs(str(self.where), self.root, self.machine)
 
         self.assertEqual((["mine"], []), (taken, stubborn), "its own gateway was not taken")
-        self.assertEqual([supervisor.AUTOMATIC_UPDATE_LABEL], left)
+        self.assertEqual([supervisor.automatic_update_label()], left)
 
     def test_removing_the_install_that_wrote_the_shared_jobs_takes_them(self):
         """R-RM-9 — the ordinary case, unchanged: an install that wrote them removes them,
@@ -838,14 +851,14 @@ class AutomaticUpdates(WithAJobDirectory):
         )
         self.assertTrue(said.ok)
         self.assertTrue(path.exists())
-        self.assertIn(supervisor.AUTOMATIC_UPDATE_LABEL, self.machine.holding)
+        self.assertIn(supervisor.automatic_update_label(), self.machine.holding)
 
         removed = supervisor.remove_automatic_update(
             str(self.where), self.root, self.machine
         )
         self.assertTrue(removed.ok)
         self.assertFalse(path.exists())
-        self.assertNotIn(supervisor.AUTOMATIC_UPDATE_LABEL, self.machine.holding)
+        self.assertNotIn(supervisor.automatic_update_label(), self.machine.holding)
 
     def test_the_machine_is_given_the_owners_configured_time(self):
         """R-UPD-42"""
@@ -903,6 +916,155 @@ class AutomaticUpdates(WithAJobDirectory):
                 str(self.where), self.root, self.machine, logs
             )
         self.assertEqual("worth keeping\n", history.read_text(encoding="utf-8"))
+
+
+class WhatASecondInstallCallsItsJobs(WithAJobDirectory):
+    """R-INS-18 — reported (#146). Two installs can be moved apart in every directory
+    they touch, and none of it reaches the machine: a label is registered per person, so
+    `ai.rundesk-automatic-update` names one registration on the whole machine. A second
+    install checked the plist it was about to remove — its own, in its own directory —
+    and then asked the machine to take away the only registration that name can have,
+    which was the first install's. Nothing said so, and the first install's file stayed
+    on disk looking perfectly well.
+    """
+
+    def named(self, prefix: str = "ai.rundesk-station"):
+        """This install, saying who it is. Undone after the case, because the variable
+        is the process's and a leaked one would rename every job a later case writes."""
+        patch = mock.patch.dict(os.environ, {"RUNDESK_JOB_PREFIX": prefix})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_nothing_said_is_the_prefix_rundesk_ships(self):
+        self.assertEqual("ai.rundesk", supervisor.prefix())
+        self.assertEqual("ai.rundesk.gateway", supervisor.label("gateway"))
+        self.assertEqual("ai.rundesk-automatic-update", supervisor.automatic_update_label())
+
+    def test_a_second_install_names_every_job_apart_from_the_first(self):
+        self.named()
+        self.assertEqual("ai.rundesk-station.gateway", supervisor.label("gateway"))
+        self.assertEqual("ai.rundesk-station-backup", supervisor.backup_label())
+        self.assertEqual("ai.rundesk-station-update", supervisor.update_label())
+        self.assertEqual("ai.rundesk-station-automatic-update",
+                         supervisor.automatic_update_label())
+        self.assertEqual(
+            "ai.rundesk-station-automatic-update.plist",
+            supervisor.automatic_update_job_path(str(self.where)).name,
+        )
+
+    def test_a_second_install_asks_the_machine_only_for_its_own_registration(self):
+        """The defect itself: what the machine is *asked to take away* is the label, and
+        that is the one thing a directory cannot move."""
+        self.named()
+        supervisor.install_automatic_update(
+            "03:00", self.root, self.logs, str(self.where), self.machine
+        )
+        supervisor.remove_automatic_update(str(self.where), self.root, self.machine)
+
+        asked = [args[-1] for args in self.machine.asked]
+        self.assertTrue(asked, "the machine was never asked anything")
+        for target in asked:
+            self.assertNotIn("ai.rundesk-automatic-update", target,
+                             "it reached for the other install's registration")
+            self.assertIn("ai.rundesk-station-automatic-update", target)
+
+    def test_a_gateway_of_another_prefix_is_not_this_installs(self):
+        """Two installs may share a jobs directory — a suite redirects one there — and a
+        job written under another prefix is not a gateway of this install to sweep."""
+        supervisor.install("mine", self.root, self.logs, str(self.where), self.machine)
+        self.named()
+        supervisor.install("theirs", self.root, self.logs, str(self.where), self.machine)
+
+        self.assertEqual(["theirs"], supervisor.described(str(self.where), self.root))
+
+    def test_a_prefix_that_could_escape_the_jobs_directory_is_refused(self):
+        for said in ("../elsewhere", "with space", "", "..", "under/neath"):
+            with self.subTest(said=said), self.assertRaises(supervisor.NotAPrefix):
+                supervisor.checked_prefix(said)
+
+    def test_a_prefix_inside_the_default_namespace_is_refused(self):
+        """`described()` globs `<prefix>.*.plist`, so a station named under a dot would
+        have the ordinary install read every station gateway as one of its own."""
+        self.named("ai.rundesk.station")
+        with self.assertRaises(supervisor.NotAPrefix):
+            supervisor.label("gateway")
+
+    def test_every_job_carries_the_name_this_install_gave_it(self):
+        """A job is the one place rundesk starts itself with no shell in between, so a
+        prefix the job does not name is a prefix the started process does not have."""
+        self.named()
+        jobs = {
+            "gateway": supervisor.describe("gateway", self.root, self.logs),
+            "backup": supervisor.describe_backup("03:00", self.root, self.logs),
+            "automatic update": supervisor.describe_automatic_update(
+                "03:00", self.root, self.logs),
+            "update worker": supervisor.describe_update_worker(self.root, self.logs),
+        }
+        for what, job in jobs.items():
+            with self.subTest(job=what):
+                self.assertEqual(
+                    "ai.rundesk-station",
+                    job["EnvironmentVariables"].get("RUNDESK_JOB_PREFIX"),
+                    "the job is named apart and then runs as the first install",
+                )
+
+    def test_a_job_of_this_install_asks_the_machine_only_for_this_installs(self):
+        """The defect one process hop on, and the reason the environment above matters.
+
+        Run verbatim: the automatic update job is fired with exactly the environment it
+        was written with and nothing else, which is what the machine hands it, and it
+        then does what it exists to do — queue the update by handing over the worker.
+        Before the prefix reached the job, this asked the machine to take away
+        `ai.rundesk-update`, the *first* install's, from a job called
+        `ai.rundesk-station-automatic-update` (R-INS-18).
+        """
+        self.named()
+        job = supervisor.describe_automatic_update("03:00", self.root, self.logs)
+        self.assertEqual("ai.rundesk-station-automatic-update", job["Label"])
+
+        machine = Machine()
+        with mock.patch.dict(os.environ, job["EnvironmentVariables"], clear=True):
+            supervisor.install_update_worker(
+                self.root, self.logs, str(self.where), machine
+            )
+
+        asked = [args[-1] for args in machine.asked]
+        self.assertTrue(asked, "the machine was never asked anything")
+        for target in asked:
+            with self.subTest(target=target):
+                self.assertNotIn(
+                    "/ai.rundesk-update", target,
+                    "the job took the first install's update worker away")
+                self.assertIn("ai.rundesk-station-update", target)
+        self.assertEqual(
+            ["ai.rundesk-station-update.plist"],
+            [path.name for path in sorted(self.where.glob("*.plist"))],
+        )
+
+    def test_nothing_said_writes_the_job_that_shipped(self):
+        """Upgrade safety, and the reason the prefix is written in only when it was said.
+
+        `install_automatic_update` compares the description it would write against the one
+        the machine already holds, key for key. A default written in unconditionally would
+        make every existing registration differ from its own description, so an upgrade
+        would take the owner's automatic update away and put it back for nothing.
+        """
+        described = supervisor.describe_automatic_update("03:00", self.root, self.logs)
+        self.assertNotIn("RUNDESK_JOB_PREFIX", described["EnvironmentVariables"])
+        self.assertEqual("ai.rundesk-automatic-update", described["Label"])
+
+        supervisor.write_automatic_update("03:00", self.root, self.logs, str(self.where))
+        self.machine.holding.add(supervisor.automatic_update_label())
+
+        said = supervisor.install_automatic_update(
+            "03:00", self.root, self.logs, str(self.where), self.machine
+        )
+
+        self.assertTrue(said.ok)
+        self.assertNotIn(
+            "bootout", [args[0] for args in self.machine.asked],
+            "an upgrade took its own automatic update away and put it back",
+        )
 
 
 if __name__ == "__main__":

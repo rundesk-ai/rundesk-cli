@@ -45,11 +45,20 @@ class WithAnAgentThatHasRun(unittest.TestCase):
         # falls back to it, so a fixture that isolates the four and forgets this
         # one still reaches the owner's real library — `add` grants what the
         # release ships, and would link a scratch agent at what they actually have.
+        #
+        # **A fallback is only a fallback while nothing said otherwise**, which is why the
+        # library and the commands are named here too rather than left to derive. An agent
+        # runs this suite from inside rundesk, and a gateway hands every program it starts
+        # an explicit `RUNDESK_SKILL_LIBRARY` — read before the data root, so the scratch
+        # agent was granted the owner's real skills and then reported as missing every one
+        # of them. It failed for an agent and for nobody else.
         for said, at in (("RUNDESK_DATA_DIR", self.before / "data"),
                          ("RUNDESK_AGENTS_DIR", self.where),
                          ("RUNDESK_RUN_DIR", self.before / "run"),
                          ("RUNDESK_LOG_DIR", self.before / "logs"),
                          ("RUNDESK_SCHEDULES_DIR", self.before / "schedules"),
+                         ("RUNDESK_SKILL_LIBRARY", self.before / "data" / "skills"),
+                         ("RUNDESK_SCRIPTS", self.before / "data" / "scripts"),
                          ("RUNDESK_JOBS_DIR", self.before / "jobs")):
             self.addCleanup(os.environ.pop, said, None)
             os.environ[said] = str(at)
