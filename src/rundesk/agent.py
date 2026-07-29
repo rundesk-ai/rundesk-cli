@@ -372,11 +372,10 @@ def add(name: str, where: Path | None = None) -> list[str]:
             made.append(called)
     records = store.path_for(directory(name, where))
     fresh = not records.exists()
-    # Required grants are attached when an agent is first made. The command prevents their
-    # removal while configured, so a missing one later is damage for `doctor` to report
-    # rather than an owner decision `add` should silently reverse.
+    # Fresh agents receive the baseline here. Existing populations are reconciled by both
+    # upgrade routes after this release's library has been laid down (R-AGT-36).
     if fresh:
-        made.extend(_given_what_is_required(name, where))
+        made.extend(require_skills(name, where))
     store.Store(records).made()
     if fresh:
         made.append(store.NAME)
@@ -427,8 +426,8 @@ def _what_is_wrong_with_its_skills(name: str, where: Path | None = None) -> list
     return found
 
 
-def _given_what_is_required(name: str, where: Path | None = None) -> list[str]:
-    """The install's required skills, attached as an agent is made.
+def require_skills(name: str, where: Path | None = None) -> list[str]:
+    """Attach every install-required skill this agent does not already hold.
 
     One of them is the skill that says how to write a skill, and it is the reason this
     happens without being asked for: an agent cannot be told to use `rundesk skills grant`
@@ -438,18 +437,23 @@ def _given_what_is_required(name: str, where: Path | None = None) -> list[str]:
     agent should carry — how to write a skill, how to write a pull request — and a skill an
     agent will never reach for is not free: its description is read by the brain on every
     turn. So the set is `config.skills()["granted"]`, which an owner states once in
-    `config.json`. A fresh configuration names the four an agent needs to work with rundesk
-    itself (R-AGT-36).
+    `config.json`. A fresh configuration names the four every agent needs to work with
+    rundesk itself. Creation, update, and installer reconciliation all come through this one
+    policy (R-AGT-36).
 
     A library that has nothing in it yet is a checkout somebody is working in rather than
     an install, and is not a half-made agent.
     """
     given = []
+    mine = skills(name, where)
+    already = set(skill.granted(mine))
     # `where` is an agents directory, never the install's data directory. The baseline is
     # install-wide and resolves from the same file every agent shares (R-AGT-36).
     for called in config.skills()["granted"]:
+        if called in already:
+            continue
         try:
-            skill.grant(skills(name, where), called)
+            skill.grant(mine, called)
         except (skill.Unknown, skill.NotASkill, skill.InTheWay, OSError):
             continue
         given.append(f"skills/{called}")

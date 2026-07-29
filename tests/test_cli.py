@@ -817,6 +817,8 @@ class FakeAgents:
         self.refuses: BaseException | None = None
         #: What was made, adopted and taken away, in the order it was asked for.
         self.added, self.adopted, self.forgotten = [], [], []
+        #: Existing agents whose configured baseline an upgrade route reconciled.
+        self.required: list[str] = []
         for one in self._made:
             self._built(one)
 
@@ -894,6 +896,10 @@ class FakeAgents:
             self._made.append(name)
         self._built(name)
         return made
+
+    def require_skills(self, name):
+        self.required.append(name)
+        return []
 
     def adopt(self, name):
         self.adopted.append(name)
@@ -1199,6 +1205,19 @@ class WhatTheInstallerDoesToTheLibrary(unittest.TestCase):
         self.assertEqual(tuple(agents.skills(name) for name in agents.known()),
                          getattr(skills, "retired_holding", None),
                          "the installer laid the new names down and retired nothing")
+        self.assertEqual(["ava", "bo"], agents.required,
+                         "the installer did not reconcile existing agents")
+
+    def test_laying_down_also_reconciles_every_existing_agent(self):
+        """R-AGT-36 — reinstalling over an existing installation applies the configured
+        baseline to agents that predate this release."""
+        agents = FakeAgents(made=("ava", "bo"))
+
+        code, said = drive(["skills", "--lay-down"], agents=agents,
+                           skills=FakeSkills(ships=("managing-rundesk",)))
+
+        self.assertEqual(0, code, said)
+        self.assertEqual(["ava", "bo"], agents.required)
 
 
 class WhatCanBeTakenFromAnAgent(unittest.TestCase):

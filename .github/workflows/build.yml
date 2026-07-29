@@ -241,6 +241,9 @@ jobs:
           git archive "$previous" | tar -x -C "$old"
           "$old/install.sh"
           "$RUNDESK_BIN_DIR/rundesk" add existing --provider codex
+          # Older releases allowed a built-in baseline grant to be removed. The proposed
+          # release must repair that existing agent from the migrated configuration.
+          "$RUNDESK_BIN_DIR/rundesk" skills revoke existing managing-rundesk-schedules
           "$RUNDESK_BIN_DIR/rundesk" schedules existing add heartbeat \
             --when "0 6 * * *" --ask "report that the gateway is healthy"
           printf '%s\n' '{"backups":{"keep_days":45,"at":"04:30"},"updates":{},"skills":{}}' \
@@ -308,6 +311,8 @@ jobs:
           "$RUNDESK_BIN_DIR/rundesk" version
           "$RUNDESK_BIN_DIR/rundesk" status
           "$RUNDESK_BIN_DIR/rundesk" agents | grep -q '^existing '
+          "$RUNDESK_BIN_DIR/rundesk" skills |
+            grep -qE '^managing-rundesk-schedules +rundesk +existing$'
           "$RUNDESK_BIN_DIR/rundesk" schedules existing | grep -q 'heartbeat'
           "$RUNDESK_BIN_DIR/rundesk" serve existing &
           serving=$!

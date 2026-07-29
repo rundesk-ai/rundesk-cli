@@ -308,7 +308,7 @@ Discord without changing Rundesk core.
 - Agent removal that preserves its home unless purge is explicitly requested
 
 `~/.rundesk/data/config.json` is the source of every install-wide value. A fresh install
-writes the complete configuration, including the skills every new agent must receive:
+writes the complete configuration, including the skills every agent must receive:
 
 ```json
 {
@@ -331,8 +331,9 @@ writes the complete configuration, including the skills every new agent must rec
 ```
 
 Change `updates.at` and run `rundesk update` to reschedule automatic updates. A skill in
-`skills.granted` is attached to every new agent and cannot be revoked until it is removed
-from this list.
+`skills.granted` is attached to every new and existing agent and cannot be revoked until it
+is removed from this list. Updates and reinstalls reconcile missing required grants without
+removing optional skills an owner added.
 - Generated command reference that cannot drift from the installed parser
 
 ## 📖 Documentation

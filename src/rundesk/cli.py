@@ -1905,6 +1905,10 @@ def _provisioned(root: Path = REPO_ROOT) -> str | None:
     # lay-down rather than before, because a grant is only carried once the name it is
     # carried to is actually standing in the library (R-AGT-35).
     skill.retire(holding=tuple(_agent.skills(name) for name in _agent.known()))
+    # Existing agents are brought forward too. Optional owner grants are not removed; the
+    # configured list is the minimum every agent must hold, not its complete grant set.
+    for name in _agent.known():
+        _agent.require_skills(name)
     return None
 
 
@@ -2217,6 +2221,11 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
         # lay-down, because a grant is only carried once the name it goes to is standing;
         # and a no-op on a fresh install, where nothing of ours is under an old name.
         skills.retire(holding=tuple(agents.skills(name) for name in agents.known()))
+        # `skills.granted` is a floor for every agent, including ones that predate the
+        # value. Re-running the installer is an upgrade route, so reconcile the existing
+        # population here as well as in `_provisioned` (R-AGT-36).
+        for name in agents.known():
+            agents.require_skills(name)
         print(" ".join(laid))
         return 0
     act = getattr(args, "act", None)

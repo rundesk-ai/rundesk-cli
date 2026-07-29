@@ -44,7 +44,7 @@ NAMED = "config.json"
 
 #: What a new configuration says in full (R-INS-19). This is an installation seed, never a
 #: runtime fallback: once written, `config.json` is what governs the install. Not every
-#: shipped skill belongs here — these four are what a new agent needs to work with rundesk.
+#: shipped skill belongs here — these four are what every agent needs to work with rundesk.
 INITIAL = {
     "backups": {"at": "04:00", "keep_days": 30},
     "updates": {"at": "03:00"},

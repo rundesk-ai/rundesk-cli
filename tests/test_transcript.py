@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import agent, store, transcript  # noqa: E402
+from rundesk import agent, config, store, transcript  # noqa: E402
 
 AT = "2026-07-26T09:00:00Z"
 LATER = "2026-07-26T10:00:00Z"
@@ -63,6 +63,9 @@ class WithAnAgentThatHasRun(unittest.TestCase):
             self.addCleanup(os.environ.pop, said, None)
             os.environ[said] = str(at)
             at.mkdir(parents=True, exist_ok=True)
+        # Fresh-agent creation reads the install's required skill baseline. This fixture
+        # owns its data root, so it must own a complete configuration too.
+        config.ensure(self.before / "data")
         agent.add("ava", self.where)
         # With a brain, because an agent that has none is now a fault every diagnosis
         # reports (R-AGT-18) — and one case here asks a freshly made agent to have nothing

@@ -745,6 +745,23 @@ class WhatMakingAnAgentGrants(WithALibrary):
         self.assertEqual(["writing-skills"], skill.granted(self.agents.skills("ava")),
                          "an agent was given a skill the configuration did not name")
 
+    def test_an_existing_agent_is_reconciled_to_the_required_baseline(self):
+        """R-AGT-36 — adding a required value on update applies to agents that already
+        exist; otherwise config.json governs only future users of the install."""
+        self.agents.add("ava")
+        a_skill(self.release, "later-addition")
+        a_skill(self.release, "owner-chose-this")
+        skill.lay_down(self.library)
+        skill.grant(self.agents.skills("ava"), "owner-chose-this")
+        (self.where / "data" / "config.json").write_text(
+            '{"skills": {"granted": ["writing-skills", "later-addition"]}}\n',
+            encoding="utf-8")
+
+        self.agents.require_skills("ava")
+
+        self.assertEqual(["later-addition", "owner-chose-this", "writing-skills"],
+                         skill.granted(self.agents.skills("ava")))
+
     def test_an_agent_is_made_with_the_skills_written_into_a_new_configuration(self):
         """R-AGT-36 — the required set is the four an agent needs to work with rundesk
         itself, written where the owner and the command both read it."""
