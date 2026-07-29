@@ -1,8 +1,3 @@
----
-name: building-integration-clis
-description: Build and install custom CLI integrations that Rundesk agents invoke through the shared script library. Use when someone asks to create, add, package, improve, or debug an agent-accessible script, API wrapper, service integration, or command-line tool.
----
-
 # Building integration CLIs
 
 An integration is an ordinary executable in the directory printed by:

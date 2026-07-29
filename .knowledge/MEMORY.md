@@ -639,5 +639,12 @@ re-checked since, so treat these as true-when-found rather than as current.*
   `env $(env | grep -o '^RUNDESK_[A-Z_]*' | sed 's/^/-u /' | tr '\n' ' ') ./rundesk …` —
   which is also what makes the gate pass under an agent (the note above).
 
+- **A multi-line `from rundesk import (...)` in `agent.py` fails `test_store`.** The guard
+  `TheOnlyWayIn.test_the_product_reaches_what_an_agent_keeps` matches
+  `^\s*from\s+rundesk\s+import\s+[^\n]*\bstore\b` on one line, so wrapping the import puts
+  `store` on a continuation line and the case reads it as an agent with nowhere to keep
+  anything. Add a second `from rundesk import <name>` line instead of wrapping — which is
+  what `cli.py` does anyway.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

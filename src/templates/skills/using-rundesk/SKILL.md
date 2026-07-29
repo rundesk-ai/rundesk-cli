@@ -46,7 +46,14 @@ rundesk channels <you>              where you can be reached
 rundesk usage <you>                 what your turns have cost
 rundesk logs <you>                  what your gateway has been saying, when something failed
 rundesk skills                      every skill here, and which you were given
+rundesk config                      how this install is configured, and what defaulted
 ```
+
+**Two of these have a skill of their own.** `managing-rundesk-schedules` is what an agent runs
+on its own and what a schedule is *for*; `managing-rundesk-backups` is copies and what putting
+one back really does. Reach for those rather than working either out from the commands, and if
+you were not given one, say so — `rundesk skills grant <you> <name>` is the line your owner
+types.
 
 For the exact arguments, ask the command — `rundesk <verb> --help` is generated from the
 command itself and cannot be out of date. **Where anything disagrees with the command, the
@@ -92,6 +99,7 @@ Work you did on one is not in front of you now.
 at a moment they chose — a reminder, a check, a report they asked for. Never add one to move your
 own work out of the turn you are in, to finish something later, or because a turn is getting
 long: work you want done in the background is your own delegation, and the clock is not it.
+`managing-rundesk-schedules` is the rest of it.
 
 ## The rest
 

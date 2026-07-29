@@ -1,0 +1,137 @@
+"""The file this install is configured through — what is written, and what is never touched.
+
+Offline and complete. What each section *means* is proven where the thing it configures is
+proven: how long a backup is kept in `test_backup`, when the machine looks for a release in
+`test_updater`, which skills a new agent gets in `test_skill`. What is answered here is the
+file itself — that it appears, that it grows a section a release added, and that nothing an
+owner wrote into it is ever rewritten by us.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from rundesk import config
+
+
+class WithADataDirectory(unittest.TestCase):
+    """A scratch data root, passed in rather than set in the environment."""
+
+    def setUp(self):
+        self.where = Path(tempfile.mkdtemp(prefix="rundesk-config-"))
+        self.addCleanup(shutil.rmtree, self.where, ignore_errors=True)
+        self.at = self.where / config.NAMED
+
+
+class WhatInstallingWrites(WithADataDirectory):
+    def test_installing_writes_the_configuration_an_owner_can_read(self):
+        """R-INS-18 — a file an owner is expected to open and never sees is a file nobody
+        edits, and every value in it is then folklore."""
+        self.assertEqual(list(config.SECTIONS), config.ensure(self.where))
+        self.assertEqual(list(config.SECTIONS), list(json.loads(self.at.read_text())))
+
+    def test_a_section_is_written_empty_so_a_default_can_still_improve(self):
+        """R-INS-18 — written with real values, a file pins them: a later release that
+        improves a default never reaches the install, and the file looks correct doing it."""
+        config.ensure(self.where)
+
+        self.assertEqual({one: {} for one in config.SECTIONS},
+                         json.loads(self.at.read_text()))
+        # And the defaults are still what answers, because nothing stated them.
+        self.assertEqual(config.KEEP_DAYS, config.backups(self.where)["keep_days"])
+        self.assertEqual(config.GRANTED, config.skills(self.where)["granted"])
+
+    def test_installing_again_changes_nothing_an_owner_configured(self):
+        """R-INS-18, R-AGT-4 — running the installer again is a repair, and it must not be
+        how somebody loses what they set."""
+        self.at.write_text('{"backups": {"keep_days": 400}}\n', encoding="utf-8")
+
+        config.ensure(self.where)
+
+        self.assertEqual(400, config.backups(self.where)["keep_days"])
+
+
+class WhatAnUpdateAdds(WithADataDirectory):
+    def test_a_section_this_release_added_reaches_a_file_written_before_it(self):
+        """R-UPD-48 — otherwise a section is discoverable only to installs made after it,
+        and every owner who installed earlier has to be told it exists."""
+        self.at.write_text('{"backups": {}}\n', encoding="utf-8")
+
+        added = config.ensure(self.where)
+
+        self.assertEqual(["updates", "skills"], added)
+        self.assertEqual(list(config.SECTIONS), list(json.loads(self.at.read_text())))
+
+    def test_a_value_already_stated_survives_the_section_being_added(self):
+        """R-UPD-48 — an update that rewrote the file would be an owner's configuration
+        lost by a command that reported success."""
+        self.at.write_text('{"backups": {"at": "23:30", "keep_days": 7}}\n', encoding="utf-8")
+
+        config.ensure(self.where)
+
+        self.assertEqual({"at": "23:30", "keep_days": 7},
+                         json.loads(self.at.read_text())["backups"])
+
+    def test_a_configuration_that_cannot_be_read_is_left_exactly_as_it_is(self):
+        """R-UPD-48, R-STO-13 — refused rather than replaced. Rewriting it would turn a
+        typo an owner can fix into their whole configuration silently gone."""
+        was = "{ this is not json\n"
+        self.at.write_text(was, encoding="utf-8")
+
+        self.assertEqual([], config.ensure(self.where))
+        self.assertEqual(was, self.at.read_text())
+
+    def test_a_key_this_release_has_never_heard_of_is_kept(self):
+        """R-UPD-48 — an install carried back to an older rundesk, or a section added by a
+        release this one has not caught up with, is not ours to drop."""
+        self.at.write_text('{"from-tomorrow": {"x": 1}}\n', encoding="utf-8")
+
+        config.ensure(self.where)
+
+        self.assertEqual({"x": 1}, json.loads(self.at.read_text())["from-tomorrow"])
+
+
+class WhichSkillsANewAgentGets(WithADataDirectory):
+    def test_an_install_configured_with_nothing_gets_the_default_set(self):
+        """R-AGT-36 — and it is a subset of what ships, not all of it: a skill an agent
+        never reaches for still costs its description on every turn."""
+        self.assertEqual(config.GRANTED, config.skills(self.where)["granted"])
+
+    def test_which_skills_a_new_agent_gets_is_the_owners_to_state(self):
+        """R-AGT-36 — an owner running agents that do one job says so once."""
+        self.at.write_text('{"skills": {"granted": ["using-rundesk"]}}\n', encoding="utf-8")
+
+        self.assertEqual(("using-rundesk",), config.skills(self.where)["granted"])
+
+    def test_an_empty_list_is_honoured_rather_than_read_as_saying_nothing(self):
+        """R-AGT-36 — somebody who wants agents made with no skills has stated something,
+        and turning it back into four is exactly the quiet override this file prevents."""
+        self.at.write_text('{"skills": {"granted": []}}\n', encoding="utf-8")
+
+        self.assertEqual((), config.skills(self.where)["granted"])
+
+    def test_something_that_is_not_a_list_of_names_is_refused(self):
+        """R-AGT-36 — never defaulted around: an owner who wrote a string meant something,
+        and granting four skills instead is a decision made on their behalf in silence."""
+        self.at.write_text('{"skills": {"granted": "using-rundesk"}}\n', encoding="utf-8")
+
+        with self.assertRaises(config.Unreadable):
+            config.skills(self.where)
+
+    def test_a_section_that_is_not_an_object_is_refused(self):
+        """R-AGT-36 — the same, one level up."""
+        self.at.write_text('{"skills": ["using-rundesk"]}\n', encoding="utf-8")
+
+        with self.assertRaises(config.Unreadable):
+            config.skills(self.where)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

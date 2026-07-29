@@ -69,7 +69,23 @@ LEGACY = {
 #: is simply absent from what ships, which is indistinguishable from a name that never
 #: shipped at all. So it is declared, for the same reason `LEGACY` is — the directory
 #: cannot tell you a thing that only history knows.
-RENAMED = {"reporting-a-rundesk-bug": "filing-rundesk-issues"}
+RENAMED = {
+    "reporting-a-rundesk-bug": "filing-rundesk-issues",
+    "managing-backups": "managing-rundesk-backups",
+    "writing-pull-requests": "writing-rundesk-pull-requests",
+    "writing-skills": "writing-rundesk-skills",
+}
+
+#: Built-ins this release stopped shipping with nothing standing in their place. Not a
+#: rename: what these held is documentation now — `docs/extending/` — because building an
+#: adapter is a thing a person does once against the repository, not a thing an agent needs
+#: in front of it on every turn. Retired the same way, so the library and every grant of one
+#: goes rather than being left resolving to text no release will ever bring forward again.
+RETIRED = (
+    "building-a-channel-adapter",
+    "building-a-provider-adapter",
+    "building-integration-clis",
+)
 
 #: What a name may be, and it is the tightest of the three brains rather than ours: grok
 #: refuses anything else outright, and a name a loader rejects is a skill that is silently
@@ -276,7 +292,7 @@ def take_back(where: Path | None = None) -> list[str]:
     if not where.is_dir():
         return []
     gone = []
-    for name in tuple(shipped()) + tuple(sorted(RENAMED)):
+    for name in tuple(shipped()) + tuple(sorted(RENAMED)) + RETIRED:
         standing = where / name
         if not standing.is_dir() or standing.is_symlink() or not _owned(standing, name):
             continue
@@ -293,7 +309,7 @@ def take_back(where: Path | None = None) -> list[str]:
 
 
 def retire(where: Path | None = None, holding: tuple[Path, ...] = ()) -> list[str]:
-    """Take out a built-in this release renamed, carry every grant of it to the new name.
+    """Take out a built-in this release renamed or dropped, and carry a grant where it goes.
 
     **Left alone, a rename is worse than a broken link.** `lay_down` puts the new name in
     the library and touches nothing else, so the old directory stands there with the old
@@ -301,7 +317,8 @@ def retire(where: Path | None = None, holding: tuple[Path, ...] = ()) -> list[st
     and an agent goes on reading superseded instructions for as long as the machine lasts.
 
     **A grant is carried, never handed out.** Only an agent already holding the old name
-    is given the new one. An owner who revoked it keeps it revoked — the same reason
+    is given the new one, and one that has no new name — a built-in this release dropped
+    rather than renamed — has its grant taken away rather than left pointing at nothing. An owner who revoked it keeps it revoked — the same reason
     `agent._given_what_ships` refuses to backfill, and the reason this cannot simply grant
     the new built-in to everybody.
 
@@ -315,9 +332,10 @@ def retire(where: Path | None = None, holding: tuple[Path, ...] = ()) -> list[st
     where = where or home()
     standing_now = library(where)
     retired = []
-    for old, new in sorted(RENAMED.items()):
+    gone_for_good = [(one, None) for one in RETIRED]
+    for old, new in sorted(RENAMED.items()) + gone_for_good:
         was = where / old
-        if new not in standing_now:
+        if new is not None and new not in standing_now:
             continue     # the new name never landed, so a grant has nowhere to be carried
         if not was.is_dir() or was.is_symlink() or not _owned(was, old):
             continue     # nothing of ours under that name
@@ -326,10 +344,11 @@ def retire(where: Path | None = None, holding: tuple[Path, ...] = ()) -> list[st
             if not ours(grant_at, where):
                 continue
             try:
-                # The new grant is made before the old one goes: an agent that loses power
-                # between the two is left holding both names rather than neither, and the
-                # next update takes the spare.
-                grant(mine, new, where)
+                if new is not None:
+                    # The new grant is made before the old one goes: an agent that loses
+                    # power between the two is left holding both names rather than neither,
+                    # and the next update takes the spare.
+                    grant(mine, new, where)
                 grant_at.unlink()
             except (Unknown, NotASkill, InTheWay, OSError):
                 continue

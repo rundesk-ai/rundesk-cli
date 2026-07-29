@@ -1,12 +1,4 @@
----
-name: building-a-provider-adapter
-description: How to put a new brain behind a rundesk agent by writing a provider adapter — the two questions it answers, the records it prints, and the traps that cost a feature. Use whenever anyone wants rundesk to reach a model, CLI or endpoint it does not already support, asks how to add a provider or brain, or is debugging an adapter that runs but reports nothing.
----
-
 # Building a provider adapter
-
-*This skill ships with rundesk and is replaced whenever rundesk updates. To make a version of
-your own, copy it under a different name — that copy is yours and is never touched.*
 
 Rundesk does not run a conversation. It runs **your program**, gives it somewhere to work,
 reads what you report, and ends it. That program is an adapter.

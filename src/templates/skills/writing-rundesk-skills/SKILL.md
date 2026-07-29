@@ -1,6 +1,6 @@
 ---
-name: writing-skills
-description: How to write a skill for a rundesk agent, and how to add it so agents can be given it. Use whenever anyone asks to write, create, author, improve, fix, review or debug a skill, or asks why a skill is not being picked up — and whenever a repeated procedure looks worth keeping, even if the word "skill" is never said.
+name: writing-rundesk-skills
+description: How to write a skill for a rundesk agent and put it in this machine's library so agents can be granted it. Use whenever anyone asks to write, create, author, improve, fix, review or debug a skill for a rundesk agent, or asks why one is not being picked up — and whenever a repeated procedure here looks worth keeping, even if the word "skill" is never said.
 ---
 
 # Writing a skill

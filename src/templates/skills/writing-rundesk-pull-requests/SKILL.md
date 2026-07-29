@@ -1,9 +1,9 @@
 ---
-name: writing-pull-requests
-description: How to write a pull request that makes the case for a change rather than listing the diff. Use whenever opening a PR, writing or rewriting a PR description, being asked to "write this up", summarising work for review, or reviewing whether a PR body is good enough to merge — even if nobody says the words "pull request".
+name: writing-rundesk-pull-requests
+description: How to write a pull request against rundesk itself — making the case for a change rather than listing the diff, and what this repository requires of one. Use whenever opening a PR against rundesk, writing or rewriting its description, summarising rundesk work for review, or judging whether a rundesk PR body is good enough to merge. Somebody else's repository has its own conventions and this is not them.
 ---
 
-# Writing a pull request
+# Writing a pull request against rundesk
 
 *This skill ships with rundesk and is replaced whenever rundesk updates. To make a version of
 your own, copy it under a different name — that copy is yours and is never touched.*
@@ -12,6 +12,17 @@ A PR is **the case for a change**, not a changelog of the diff. A reviewer shoul
 to bottom and understand why it exists, how the problem was proven real, what was done, and
 how to confirm it works — all before opening a single file. The diff shows *what* changed; the
 PR explains *why it is correct to change it*.
+
+**This is rundesk's own repository and its conventions.** `rundesk-ai/rundesk-cli` gates every
+change on `python3 .knowledge/scripts/gate`, guarantees new behaviour with a `prd/` requirement
+and its test, and closes issues from the PR body. Opening a pull request against somebody else's
+repository means following *their* conventions, whatever they are — none of the specifics below
+travel.
+
+**Before you write it: `python3 .knowledge/scripts/gate`.** A PR whose case rests on a suite
+nobody ran is an assertion. The gate's own output — how many suites, which checks — is the
+evidence the Validation section wants, and `./install.sh && ./install.sh --uninstall` is the part
+it does not cover and CI does.
 
 ## Before anything else: nothing says what wrote it
 
