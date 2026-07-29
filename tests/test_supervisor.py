@@ -328,6 +328,61 @@ class TakingItAllBack(WithAJobDirectory):
         self.assertEqual(([], []), (taken, stubborn))
         self.assertTrue(path.exists(), "it removed a job belonging to something else")
 
+    def test_removing_one_install_leaves_the_shared_jobs_another_install_wrote(self):
+        """R-RM-15 — reported (#129): a gateway's job carries the gateway's name, so two
+        installs never collide over one; the update worker and the automatic-update job
+        carry neither, so a second install finds the first install's job exactly where its
+        own would go. Removing it would stop the machine updating the install somebody
+        actually uses."""
+        theirs = Path(tempfile.mkdtemp(prefix="rundesk-theirs-"))
+        self.addCleanup(shutil.rmtree, theirs, True)
+        (theirs / "rundesk").write_text("#!/usr/bin/env python3\n")
+        supervisor.write_update_worker(theirs, self.logs, str(self.where))
+        supervisor.write_automatic_update("03:00", theirs, self.logs, str(self.where))
+
+        left = supervisor.remove_our_shared_jobs(str(self.where), self.root, self.machine)
+
+        self.assertEqual([supervisor.UPDATE_LABEL, supervisor.AUTOMATIC_UPDATE_LABEL], left)
+        self.assertTrue(supervisor.update_job_path(str(self.where)).exists(),
+                        "it took another install's update worker")
+        self.assertTrue(supervisor.automatic_update_job_path(str(self.where)).exists(),
+                        "it took another install's automatic-update job")
+
+    def test_leaving_another_installs_jobs_alone_does_not_end_the_removal(self):
+        """R-RM-15 — the refusal is right and escaping was not: uncaught, it ended the whole
+        removal partway through and `install.sh` reported it as gateways that would not stop.
+        Nothing on the machine says that, and a redirected install could not be uninstalled
+        at all on any machine that already had an ordinary one."""
+        theirs = Path(tempfile.mkdtemp(prefix="rundesk-theirs-"))
+        self.addCleanup(shutil.rmtree, theirs, True)
+        (theirs / "rundesk").write_text("#!/usr/bin/env python3\n")
+        supervisor.write_automatic_update("03:00", theirs, self.logs, str(self.where))
+        supervisor.install("mine", self.root, self.logs, str(self.where), self.machine)
+
+        taken, stubborn = supervisor.take_all_back(
+            str(self.where), self.root, self.machine, standing=self._standing())
+        left = supervisor.remove_our_shared_jobs(str(self.where), self.root, self.machine)
+
+        self.assertEqual((["mine"], []), (taken, stubborn), "its own gateway was not taken")
+        self.assertEqual([supervisor.AUTOMATIC_UPDATE_LABEL], left)
+
+    def test_removing_the_install_that_wrote_the_shared_jobs_takes_them(self):
+        """R-RM-9 — the ordinary case, unchanged: an install that wrote them removes them,
+        and leaves nothing of itself behind."""
+        supervisor.write_update_worker(self.root, self.logs, str(self.where))
+        supervisor.write_automatic_update("03:00", self.root, self.logs, str(self.where))
+
+        self.assertEqual([], supervisor.remove_our_shared_jobs(
+            str(self.where), self.root, self.machine))
+        self.assertFalse(supervisor.update_job_path(str(self.where)).exists())
+        self.assertFalse(supervisor.automatic_update_job_path(str(self.where)).exists())
+
+    def test_shared_jobs_that_were_never_written_are_not_a_refusal(self):
+        """An install that never scheduled an update has nothing to leave alone, and a
+        removal that reported one would be describing a job the machine does not have."""
+        self.assertEqual([], supervisor.remove_our_shared_jobs(
+            str(self.where), self.root, self.machine))
+
     def test_a_gateway_that_will_not_stop_is_reported_rather_than_assumed(self):
         """R-RM-9 — removal must not claim to have stopped what is still running."""
         supervisor.install("stubborn", self.root, self.logs, str(self.where), self.machine)

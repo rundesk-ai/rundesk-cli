@@ -1574,6 +1574,48 @@ class ReadingBackWhatWasSaid(WithAnAgentsOwnRecords):
         self.assertEqual([tim], [one["id"] for one in found])
         self.assertEqual(["tim"], [one["who"] for one in found])
 
+    def test_a_place_is_narrowed_to_by_the_name_the_listing_prints_for_it(self):
+        """R-STO-28 — reported (#103): the `WHERE` column prints `<channel>/<space>` and the
+        filter matched the bare space alone, so the one identifier an agent can see and copy
+        back matched nothing at all — and the empty listing that came back reads as "this
+        conversation is empty", which is the single wrong answer `messages` exists to stop."""
+        kept = self.built()
+        kept.opened("dm-tim", "discord-dms", "dms", "482910337", AT)
+        kept.opened("dm-sam", "discord-dms", "dms", "913774028", AT)
+        tim = kept.arrived("dm-tim", AT, "nice work!", who="tim")
+        kept.arrived("dm-sam", LATER, "did you finish?", who="sam")
+        printed = kept.latest(conversation="482910337")[0]
+        qualified = f"{printed['channel']}/{printed['space']}"
+        self.assertEqual([tim], [one["id"] for one in kept.latest(conversation=qualified)],
+                         "the identifier the listing prints is not the one its filter takes")
+
+    def test_a_place_named_on_the_wrong_channel_is_not_narrowed_to(self):
+        """The qualified form is both halves or it is worth nothing: a space id that exists on
+        one channel must not answer for a channel it was never on."""
+        kept = self.built()
+        kept.opened("dm-tim", "discord-dms", "dms", "482910337", AT)
+        kept.arrived("dm-tim", AT, "nice work!", who="tim")
+        self.assertEqual([], kept.latest(conversation="discord-rooms/482910337"))
+
+    def test_a_place_whose_own_name_holds_a_slash_is_still_narrowed_to(self):
+        """A platform's own word for a place is the platform's own. Splitting the qualified
+        form on the last slash must not stop a bare value that contains one from matching."""
+        kept = self.built()
+        kept.opened("c-repo", "github", "room", "rundesk-ai/rundesk-cli", AT)
+        said = kept.arrived("c-repo", AT, "the gate is green")
+        self.assertEqual([said],
+                         [one["id"] for one in kept.latest(conversation="rundesk-ai/rundesk-cli")])
+
+    def test_a_place_that_exists_is_told_apart_from_one_that_does_not(self):
+        """R-STO-28 — "there is no such conversation" and "that conversation is empty" send a
+        reader somewhere completely different, and one empty list answered both."""
+        kept = self.built()
+        kept.opened("dm-tim", "discord-dms", "dms", "482910337", AT)
+        self.assertTrue(kept.has_conversation("482910337"))
+        self.assertTrue(kept.has_conversation("discord-dms/482910337"))
+        self.assertFalse(kept.has_conversation("no-such-place"))
+        self.assertFalse(kept.has_conversation("discord-rooms/482910337"))
+
     def test_two_people_on_one_channel_are_kept_apart_by_where_they_said_it(self):
         """The column an agent reads to know who it is talking to. Both are `user`, and what
         tells them apart is the place and the name their surface gave."""

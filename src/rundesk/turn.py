@@ -229,6 +229,12 @@ async def carry(
     # a program: an adapter told to append to a file in a directory nobody made is one
     # that fails for a reason that has nothing to do with the brain.
     transcript.home(whose["logs"]).mkdir(parents=True, exist_ok=True)
+    # Swept here rather than on a schedule of its own, for the reason `backups add` prunes
+    # where it does: this is the moment a new one arrives, so it is the moment the question
+    # has a new answer, and an agent nothing runs stops accumulating anything to sweep
+    # (R-RUN-23). The gateway would be the wrong place — it knows nothing of agents, and
+    # these belong to one.
+    transcript.sweep(whose["logs"])
 
     can = await provider.capabilities(at, provider.environment(
         home=whose["run"], cwd=whose["home"], provider_home=home, skills=whose["skills"],
@@ -354,6 +360,11 @@ async def carry(
             )
         finally:
             activity.ended(whose["run"], run)
+            # The adapter has finished with the file by now, so this is the one moment the
+            # ceiling can be applied to a stream rundesk itself never writes. In the
+            # `finally`, because a turn that was interrupted printed just as much as one
+            # that was not (R-RUN-22).
+            transcript.trim(whose["logs"], run)
 
         # Inside the same writer, and last. A second one would count from nothing and
         # give the end of a run the same places in the order as its beginning.

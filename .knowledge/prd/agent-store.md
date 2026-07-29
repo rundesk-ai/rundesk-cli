@@ -46,6 +46,7 @@ has done. Each agent keeps its own, so nothing one agent holds is ever in anothe
 | ✅ | R-STO-26 | A narrowing by a word that is not one of the ones that exist is refused rather than ignored | `a narrowing by an author nobody could be is refused`, `a narrowing by a source nothing is admitted from is refused` |
 | ✅ | R-STO-24 | A run that failed says why, where the run is read | `a run that failed says why beside the run and not only in a file`, `a run that finished well says nothing about why` |
 | ✅ | R-STO-27 | Who said something and what kind of author they are are kept apart, and each can be asked for on its own | `a word said mid turn is recorded under who said it`, `a word said by nobody named is recorded without an identity`, `a word steered into a running turn carries who said it`, `what a listing shows can be narrowed to one person`, `narrowing by a person nobody has been is empty rather than refused` |
+| ✅ | R-STO-28 | A conversation is narrowed to by the identifier its listing prints, and one nobody has is told from one holding nothing | `a place is narrowed to by the name the listing prints for it`, `a place named on the wrong channel is not narrowed to`, `a place whose own name holds a slash is still narrowed to`, `a place that exists is told apart from one that does not`, `messages narrows to the place by the name it printed for it`, `messages still narrows by the platforms own word alone`, `a conversation nobody has is told apart from one with nothing in it` |
 
 ## Open questions
 

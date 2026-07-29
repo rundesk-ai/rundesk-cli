@@ -173,7 +173,14 @@ class RemovingWhatIsRunningTests(Sandbox):
         self.assertTrue(theirs.exists(), "it removed a job belonging to something else")
 
     def test_removing_a_scratch_install_leaves_another_installs_update_worker(self):
-        """R-UPD-35, R-RM-9"""
+        """R-UPD-35, R-RM-9, R-RM-15 — reported (#129).
+
+        Leaving the foreign worker was always right and is unchanged. What changed is what
+        happened next: the refusal escaped as an exception, so the removal ended partway
+        through and reported it as gateways that would not stop. Nothing on the machine
+        said that, and a redirected install could not be removed at all on any machine
+        that already had an ordinary one — which is every machine one is validated on.
+        """
         jobs = self.root / "jobs"
         jobs.mkdir()
         self.install(extra_env={"RUNDESK_JOBS_DIR": str(jobs)})
@@ -188,8 +195,13 @@ class RemovingWhatIsRunningTests(Sandbox):
 
         said = self.uninstall(extra_env={"RUNDESK_JOBS_DIR": str(jobs)})
 
-        self.assertNotEqual(0, said.returncode)
+        self.assertEqual(0, said.returncode,
+                         "leaving another install's worker alone ended the removal")
         self.assertTrue(worker.exists(), "it removed another install's update worker")
+        self.assertIn("another install of rundesk wrote it", said.stdout + said.stderr,
+                      "it did not say what it deliberately left behind")
+        self.assertFalse((self.bindir / "rundesk").exists(),
+                         "the removal did not finish")
 
 
 class WhatWasAskedForTests(Sandbox):

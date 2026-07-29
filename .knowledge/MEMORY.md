@@ -8,6 +8,16 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **A rundesk agent running the gate fails four suites on its own environment, not on the
+  code.** A turn is handed `RUNDESK_AGENTS_DIR`, `RUNDESK_SKILL_LIBRARY`, `RUNDESK_SCRIPTS`
+  and friends, the suites inherit them, and `test_agent`, `test_skill`, `test_transcript`
+  and `test_process` then resolve to the owner's real data home — so their isolation cases
+  fail with paths under `~/.rundesk` where a scratch root was expected. Identical on a clean
+  `main`, and green on CI, which has none of them set. Prefix the gate with
+  `env -u RUNDESK_AGENTS_DIR -u RUNDESK_SKILL_LIBRARY -u RUNDESK_SCRIPTS -u RUNDESK_HOME
+  -u RUNDESK_SKILLS -u RUNDESK_PROVIDER_HOME -u RUNDESK_RUN -u RUNDESK_POSTURE
+  -u RUNDESK_RESUME -u RUNDESK_PREFACE -u RUNDESK_RAW -u RUNDESK_CWD` and it is green.
+  Do not spend an hour hunting a regression in these four first.
 - **Antigravity's `-p` flag consumes its next argument; it is not the switch for a piped
   prompt.** `agy -p --output-format stream-json` asks the model about `--output-format`, and
   `agy ... -p ""` rejects an empty prompt. For the private stdin transport Rundesk requires,
