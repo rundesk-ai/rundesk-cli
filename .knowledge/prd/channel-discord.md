@@ -51,10 +51,7 @@ so only a running commentary may grow.
 | ✅ | R-DIS-26 | A gateway returning from update maintenance names the version now listening and links its release | `a gateway returning from an update links the version now listening`, `a gateway told only a version still names it` |
 | ✅ | R-DIS-27 | An ordinary gateway startup adds no update wording and no release link | `an ordinary startup adds no update wording and no release link` |
 | ✅ | R-DIS-28 | An answer is a reply to the message that asked, unless that message is not in the conversation the turn is in | `an answer in a direct message is a reply to the message that asked`, `an answer in a channel is a reply to the message that asked`, `an answer does not quote a message from somewhere else`, `only the first piece of a split answer carries the anchor`, `the anchor is read off the attribute a message actually has`, `an answer still arrives when the message it quotes is gone` |
-<<<<<<< HEAD
 | ✅ | R-DIS-29 | A completed Discord answer leads its cost line with how big the conversation is, where the provider said so | `the footer leads with how big the conversation is`, `the whole footer an owner reads is the size what was written and the clock`, `a brain that does not report a conversation size gets the footer it always got` |
-=======
->>>>>>> origin/main
 
 ## Open questions
 
