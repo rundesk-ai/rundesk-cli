@@ -102,8 +102,12 @@ class TheEnvironmentAProgramIsGiven(Quickened):
 
     def test_the_environment_carries_what_a_program_needs_to_find_itself(self):
         """R-PROC-1"""
+        # `clear=True` is the whole point, not tidiness: an agent runs this suite from
+        # inside rundesk, which hands every program it starts the live install's
+        # `RUNDESK_SCRIPTS` — read before the data directory this case sets, so without
+        # it the owner's own paths come back and three cases fail for nobody but an agent.
         with unittest.mock.patch.dict(
-                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}):
+                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}, clear=True):
             built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
         self.assertEqual("/tmp/rundesk-home", built["RUNDESK_HOME"])
         self.assertEqual("/tmp/rundesk-data/scripts:/usr/bin", built["PATH"])
@@ -116,8 +120,9 @@ class TheEnvironmentAProgramIsGiven(Quickened):
     def test_an_owner_command_is_first_on_every_programs_path(self):
         """R-PROC-22 — a provider and every shell it starts inherit one stable command
         name, independent of the directory the agent happens to be working in."""
+        # Cleared for the reason above: an agent's own RUNDESK_SCRIPTS would win.
         with unittest.mock.patch.dict(
-                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}):
+                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}, clear=True):
             built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin:/bin")
         self.assertEqual(
             ["/tmp/rundesk-data/scripts", "/usr/bin", "/bin"],
@@ -126,8 +131,9 @@ class TheEnvironmentAProgramIsGiven(Quickened):
     def test_a_program_is_told_where_owner_commands_stand(self):
         """R-PROC-23 — a skill can locate support files without hard-coding where this
         install keeps its data."""
+        # Cleared for the reason above: an agent's own RUNDESK_SCRIPTS would win.
         with unittest.mock.patch.dict(
-                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}):
+                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}, clear=True):
             built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
         self.assertEqual("/tmp/rundesk-data/scripts", built["RUNDESK_SCRIPTS"])
         self.assertEqual("/tmp/rundesk-data/skills", built["RUNDESK_SKILL_LIBRARY"])

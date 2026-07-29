@@ -1545,6 +1545,21 @@ class ConfiguringAnAgent(unittest.TestCase):
         self.assertIn("INVALID NAME", said)
         self.assertEqual([], agents.added, "it refused the name and made one anyway")
 
+    def test_a_job_prefix_that_cannot_be_one_stops_the_command(self):
+        """R-INS-18 — the variable a second install isolates itself with becomes a file
+        name and a launchd target, so one that could escape the jobs directory has to be
+        answered in our words before a command runs rather than planting a job."""
+        before = os.environ.get("RUNDESK_JOB_PREFIX")
+        os.environ["RUNDESK_JOB_PREFIX"] = "../elsewhere"
+        self.addCleanup(
+            lambda: os.environ.__setitem__("RUNDESK_JOB_PREFIX", before)
+            if before is not None else os.environ.pop("RUNDESK_JOB_PREFIX", None))
+        code, said = drive(["agents"])
+        self.assertEqual(1, code)
+        self.assertIn("RUNDESK_JOB_PREFIX", said)
+        self.assertIn("INVALID", said)
+        self.assertNotIn("Traceback", said)
+
     def test_adopting_a_gateway_that_has_no_agent_brings_what_it_wrote_in(self):
         """R-AGW-1 — one place afterwards, rather than two that disagree."""
         agents = FakeAgents(wrote=["gateway.log", "gateway.json"])

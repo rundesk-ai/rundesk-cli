@@ -8,6 +8,18 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **Running `./rundesk` from a checkout tests new code against the live install's data, and
+  nothing warns you.** An agent's shell is a gateway's child, so it already carries
+  `RUNDESK_AGENTS_DIR`, `RUNDESK_HOME`, `RUNDESK_SCRIPTS` and `RUNDESK_RUN` — the *owner's*.
+  Measured: `./rundesk agents` from a checkout listed the machine's real agents and their PIDs;
+  the same command with those variables unset and pointed at a scratch root listed none.
+  `env | grep RUNDESK` before believing otherwise. The launchd half is worse, because a
+  directory cannot move it: a label belongs to the person, so a second install's `--uninstall`
+  boots out `ai.rundesk-automatic-update` — the live one — and leaves the other install's plist
+  on disk looking well (#146). Set `RUNDESK_JOB_PREFIX` for anything that touches a job, and
+  check `launchctl list | grep rundesk` before and after. The whole recipe is
+  [`guides/testing-against-a-station.md`](./guides/testing-against-a-station.md).
+
 - **A run's account holds no record of what its brain *said*, so "the account keeps every
   raw event" is false for text.** `store.RECORD_KINDS` has no `text` member and
   `turn._Account.add` returns before writing one — including its `raw` — because what was

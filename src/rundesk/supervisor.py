@@ -37,6 +37,7 @@ from rundesk import ROOT, backups_home, data_home, gateway
 #: another's.
 PREFIX = "ai.rundesk"
 
+
 #: How long to wait for the machine to catch up with what it just said it did. Taking a
 #: job away is not finished when the command returns, and bootstrapping while the old one
 #: is still going away fails with an error that reads like nothing to do with timing.
@@ -94,6 +95,10 @@ class NotOurs(Exception):
     """A job named like one of ours, which this install did not write."""
 
 
+class NotAPrefix(ValueError):
+    """A job prefix that would name something other than this install's jobs."""
+
+
 class Unsure(Exception):
     """The machine did not answer, so what it holds is unknown rather than absent."""
 
@@ -111,6 +116,52 @@ class Spoke:
     answered: bool = True
 
 
+def prefix() -> str:
+    """What this install calls its jobs.
+
+    **The one thing about a job that a second install cannot redirect by moving a
+    directory.** `RUNDESK_INSTALL_DIR` and `RUNDESK_JOBS_DIR` move every file two installs
+    could fight over, and none of that reaches the label: the machine registers a label per
+    *person*, so `ai.rundesk-automatic-update` means the same registration whichever install
+    wrote the description. An install elsewhere then checks that the plist it is about to
+    remove is its own — which it is — and boots out the only registration that name can
+    have, which is the other install's. The plist it left alone stays on disk, so nothing
+    looks wrong afterwards and a machine quietly stops updating itself (R-INS-18).
+
+    So a second install says who it is here, and its jobs are then named apart from the
+    first's the whole way down — description, file name, and what the machine is asked to
+    take away.
+
+    Resolved on every call and never cached, for the same reason `data_home()` is: binding
+    it at import is how a suite comes to write into the real one.
+    """
+    said = os.environ.get("RUNDESK_JOB_PREFIX")
+    if not said:
+        return PREFIX
+    return checked_prefix(said)
+
+
+def checked_prefix(said: str) -> str:
+    """A prefix becomes a file name and a launchd target, so one carrying a separator
+    would plant a job outside the jobs directory and have the machine keep it."""
+    if not all(ch.isalnum() or ch in "-_." for ch in said) or said.strip(".") == "":
+        raise NotAPrefix(
+            f"'{said}' is not a usable job prefix — letters, digits, dash, dot and underscore"
+        )
+    # **Not under the default's gateway namespace.** `described()` finds gateways by
+    # globbing `<prefix>.*.plist`, so a prefix of `ai.rundesk.station` would have the
+    # default install report every one of the station's gateways as a gateway of its own
+    # called `station.<name>` — and offer them to a sweep. A hyphen cannot be matched by
+    # that glob; a dot is exactly what it wants.
+    if said.startswith(f"{PREFIX}."):
+        raise NotAPrefix(
+            f"'{said}' sits inside the default prefix '{PREFIX}.', where its gateways would be "
+            f"read as the default install's — use a separator that is not a dot, like "
+            f"'{PREFIX}-station'"
+        )
+    return said
+
+
 def label(name: str) -> str:
     """What the machine calls this gateway's job.
 
@@ -118,7 +169,7 @@ def label(name: str) -> str:
     without ever constructing one, so a name that escapes its directory would otherwise
     plant a job wherever it liked and have the machine keep it running.
     """
-    return f"{PREFIX}.{gateway.checked(name)}"
+    return f"{prefix()}.{gateway.checked(name)}"
 
 
 def job_path(name: str, where: str | None = None) -> Path:
@@ -227,22 +278,33 @@ def describe(name: str, root: Path | None = None, logs: Path | None = None,
 # Everything above is one gateway's. This is the other kind: a job that belongs to the install
 # rather than to any agent, runs at a stated hour rather than staying up, and ends.
 #
-# **The label is deliberately not under `PREFIX.`** — `described()` finds gateways by globbing
+# **The label is deliberately not under `prefix().`** — `described()` finds gateways by globbing
 # `ai.rundesk.*.plist`, so a job called `ai.rundesk.backup` would be reported as a gateway
 # called `backup`: `_every_name` would offer it to `_stand_all_down`, an uninstall would try to
 # stop it as though it were one, and an agent an owner really did call `backup` would collide
 # with it outright. `ai.rundesk-backup` cannot be matched by that glob, because the glob wants a
 # literal dot where this has a hyphen. Structurally unable to collide, rather than remembered.
 
-#: The install's own job, in a namespace beside the gateways rather than inside it.
-BACKUP_LABEL = f"{PREFIX}-backup"
-UPDATE_LABEL = f"{PREFIX}-update"
-AUTOMATIC_UPDATE_LABEL = f"{PREFIX}-automatic-update"
 AUTOMATIC_UPDATE_LOGS_MARKER = ".automatic-update-owned"
 
 
+# The install's own jobs, in a namespace beside the gateways rather than inside it. Asked
+# for rather than fixed at import, because the prefix they hang off is this install's
+# answer to `prefix()` and a second install has a different one.
+def backup_label() -> str:
+    return f"{prefix()}-backup"
+
+
+def update_label() -> str:
+    return f"{prefix()}-update"
+
+
+def automatic_update_label() -> str:
+    return f"{prefix()}-automatic-update"
+
+
 def backup_job_path(where: str | None = None) -> Path:
-    return Path(os.path.expanduser(where or jobs_home())) / f"{BACKUP_LABEL}.plist"
+    return Path(os.path.expanduser(where or jobs_home())) / f"{backup_label()}.plist"
 
 
 def describe_backup(at: str, root: Path | None = None, logs: Path | None = None) -> dict:
@@ -260,7 +322,7 @@ def describe_backup(at: str, root: Path | None = None, logs: Path | None = None)
     logs = logs or gateway.logs_home()
     hour, _, minute = at.partition(":")
     return {
-        "Label": BACKUP_LABEL,
+        "Label": backup_label(),
         "ProgramArguments": [str(root / "rundesk"), "backups", "add"],
         "WorkingDirectory": str(root),
         # The same places every job carries, from the one place that decides them.
@@ -286,7 +348,7 @@ def write_backup(at: str, root: Path | None = None, logs: Path | None = None,
 def install_backup(at: str, root: Path | None = None, logs: Path | None = None,
                    where: str | None = None, asking: Callable[..., Spoke] = ask) -> Spoke:
     """Hand the daily backup to the machine, replacing any job of ours already there."""
-    asking("bootout", f"{domain()}/{BACKUP_LABEL}")
+    asking("bootout", f"{domain()}/{backup_label()}")
     path = write_backup(at, root, logs, where)
     return asking("bootstrap", domain(), str(path))
 
@@ -298,7 +360,7 @@ def remove_backup(where: str | None = None, asking: Callable[..., Spoke] = ask) 
     is no process of its own that could outlive it, and a description left behind is a job the
     machine picks up again at the next login after an owner asked for it to stop.
     """
-    said = asking("bootout", f"{domain()}/{BACKUP_LABEL}")
+    said = asking("bootout", f"{domain()}/{backup_label()}")
     with contextlib.suppress(OSError):
         os.remove(backup_job_path(where))
     return said
@@ -310,11 +372,11 @@ def keeps_backups(where: str | None = None) -> bool:
 
 
 def update_job_path(where: str | None = None) -> Path:
-    return Path(os.path.expanduser(where or jobs_home())) / f"{UPDATE_LABEL}.plist"
+    return Path(os.path.expanduser(where or jobs_home())) / f"{update_label()}.plist"
 
 
 def automatic_update_job_path(where: str | None = None) -> Path:
-    return Path(os.path.expanduser(where or jobs_home())) / f"{AUTOMATIC_UPDATE_LABEL}.plist"
+    return Path(os.path.expanduser(where or jobs_home())) / f"{automatic_update_label()}.plist"
 
 
 def _prepare_automatic_update_logs(logs: Path | None = None) -> Path:
@@ -347,7 +409,7 @@ def describe_automatic_update(at: str, root: Path | None = None,
     logs = logs or gateway.logs_home()
     hour, _, minute = at.partition(":")
     return {
-        "Label": AUTOMATIC_UPDATE_LABEL,
+        "Label": automatic_update_label(),
         "ProgramArguments": [str(root / "rundesk"), "update", "--automatic"],
         "WorkingDirectory": str(root),
         "EnvironmentVariables": _environment(logs),
@@ -378,7 +440,7 @@ def install_automatic_update(at: str, root: Path | None = None, logs: Path | Non
     if path.exists():
         if not ours(path, root):
             raise NotOurs("the automatic update job was not written by this install of rundesk")
-        loaded = asking("print", f"{domain()}/{AUTOMATIC_UPDATE_LABEL}")
+        loaded = asking("print", f"{domain()}/{automatic_update_label()}")
         if not loaded.answered:
             return loaded
         try:
@@ -389,7 +451,7 @@ def install_automatic_update(at: str, root: Path | None = None, logs: Path | Non
         if loaded.ok and current == describe_automatic_update(at, root, logs):
             return Spoke(True, "")
         if loaded.ok:
-            stopped = asking("bootout", f"{domain()}/{AUTOMATIC_UPDATE_LABEL}")
+            stopped = asking("bootout", f"{domain()}/{automatic_update_label()}")
             if not stopped.ok:
                 return stopped
     path = write_automatic_update(at, root, logs, where)
@@ -405,7 +467,7 @@ def remove_automatic_update(where: str | None = None, root: Path | None = None,
         return Spoke(True, "")
     if not ours(path, root):
         raise NotOurs("the automatic update job was not written by this install of rundesk")
-    said = asking("bootout", f"{domain()}/{AUTOMATIC_UPDATE_LABEL}")
+    said = asking("bootout", f"{domain()}/{automatic_update_label()}")
     with contextlib.suppress(OSError):
         os.remove(path)
     _release_automatic_update_logs(logs)
@@ -420,7 +482,7 @@ def describe_update_worker(root: Path | None = None, logs: Path | None = None) -
     if os.environ.get("RUNDESK_UPDATE_ROOT"):
         environment["RUNDESK_UPDATE_ROOT"] = os.environ["RUNDESK_UPDATE_ROOT"]
     return {
-        "Label": UPDATE_LABEL,
+        "Label": update_label(),
         "ProgramArguments": [str(root / "rundesk"), "update", "--worker"],
         "WorkingDirectory": str(root),
         "EnvironmentVariables": environment,
@@ -448,11 +510,11 @@ def install_update_worker(root: Path | None = None, logs: Path | None = None,
                           where: str | None = None,
                           asking: Callable[..., Spoke] = ask) -> Spoke:
     """Load and start the external update worker."""
-    asking("bootout", f"{domain()}/{UPDATE_LABEL}")
+    asking("bootout", f"{domain()}/{update_label()}")
     path = write_update_worker(root, logs, where)
     said = asking("bootstrap", domain(), str(path))
     if said.ok:
-        kicked = asking("kickstart", f"{domain()}/{UPDATE_LABEL}")
+        kicked = asking("kickstart", f"{domain()}/{update_label()}")
         return kicked if not kicked.ok else said
     return said
 
@@ -465,7 +527,7 @@ def update_worker_loaded(asking: Callable[..., Spoke] = ask) -> bool:
     must ask launchd rather than infer ownership from the request or its plist (R-UPD-36,
     R-UPD-37).
     """
-    said = asking("print", f"{domain()}/{UPDATE_LABEL}")
+    said = asking("print", f"{domain()}/{update_label()}")
     if not said.answered:
         raise Unsure("the machine did not say whether it holds the update worker")
     return said.ok
@@ -473,7 +535,7 @@ def update_worker_loaded(asking: Callable[..., Spoke] = ask) -> bool:
 
 def kick_update_worker(asking: Callable[..., Spoke] = ask) -> Spoke:
     """Make a loaded one-shot worker run, without replacing a worker already running."""
-    return asking("kickstart", f"{domain()}/{UPDATE_LABEL}")
+    return asking("kickstart", f"{domain()}/{update_label()}")
 
 
 def remove_update_worker(where: str | None = None, root: Path | None = None,
@@ -491,7 +553,7 @@ def remove_update_worker(where: str | None = None, root: Path | None = None,
         return Spoke(True, "")
     if not ours(path, root):
         raise NotOurs("the update worker was not written by this install of rundesk")
-    said = asking("bootout", f"{domain()}/{UPDATE_LABEL}")
+    said = asking("bootout", f"{domain()}/{update_label()}")
     with contextlib.suppress(OSError):
         os.remove(path)
     return said
@@ -666,9 +728,13 @@ def described(where: str | None = None, root: Path | None = None) -> list[str]:
     home = Path(os.path.expanduser(where or jobs_home()))
     if not home.is_dir():
         return []
+    # This install's prefix, so a second install sharing the directory is not read as
+    # having written these — the ownership check below would catch it, but a job named
+    # under another prefix is not this install's gateway to begin with.
+    mine = prefix()
     return sorted(
-        path.name[len(PREFIX) + 1: -len(".plist")]
-        for path in home.glob(f"{PREFIX}.*.plist")
+        path.name[len(mine) + 1: -len(".plist")]
+        for path in home.glob(f"{mine}.*.plist")
         if ours(path, root)
     )
 
@@ -765,8 +831,8 @@ def remove_our_shared_jobs(
     say what it deliberately did not take.
     """
     left = []
-    for label, take in ((UPDATE_LABEL, remove_update_worker),
-                        (AUTOMATIC_UPDATE_LABEL, remove_automatic_update)):
+    for label, take in ((update_label(), remove_update_worker),
+                        (automatic_update_label(), remove_automatic_update)):
         try:
             take(where, root, asking)
         except NotOurs:
