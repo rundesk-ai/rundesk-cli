@@ -219,6 +219,27 @@ def conversation_id(channel: str, space: str, thread: str = "") -> str:
     return hashlib.sha256(said).hexdigest()[:16]
 
 
+def _one_conversation(named: str, of: str = "") -> tuple:
+    """Match one conversation by either name it goes by, as a clause and its values.
+
+    **The identifier a listing prints is the identifier its filter takes (R-STO-28).**
+    `messages` shows `<channel>/<space>` in its `WHERE` column while the filter matched
+    the bare space alone, so the one value an agent can see and copy back matched nothing
+    — and an empty listing reads as "this conversation is empty", which is the single
+    wrong answer `messages` exists to prevent.
+
+    Both forms, rather than the qualified one replacing the bare: a platform's own word
+    for a place may itself contain a slash, and splitting on the last one would then
+    quietly stop matching a value that used to work.
+    """
+    named = str(named)
+    channel, slash, space = named.rpartition("/")
+    if not slash:
+        return f"{of}space = ?", [named]
+    return (f"({of}space = ? OR ({of}channel = ? AND {of}space = ?))",
+            [named, channel, space])
+
+
 def _plain(row) -> dict:
     """A row as an ordinary mapping. Nothing of the database's leaves this module."""
     return {key: row[key] for key in row.keys()}
@@ -835,6 +856,21 @@ class Store:
             ).fetchone()
         return _plain(row) if row else None
 
+    def has_conversation(self, named: str) -> bool:
+        """Is there a conversation of this name, by either way of naming one?
+
+        Asked so that a narrowed listing can tell "there is no such conversation" from
+        "that conversation has nothing in it" — two sentences an agent acts on completely
+        differently, and which returning an empty list for both made indistinguishable
+        (R-STO-28).
+        """
+        clause_for, held = _one_conversation(named)
+        with self._reading() as conn:
+            row = conn.execute(
+                f"SELECT 1 FROM conversation WHERE {clause_for} LIMIT 1", held
+            ).fetchone()
+        return row is not None
+
     def conversations(self, channel=None, space=None, limit: int = 50) -> list:
         where, values = [], []
         if channel is not None:
@@ -997,10 +1033,11 @@ class Store:
             where.append("c.channel = ?")
             values.append(channel)
         if conversation is not None:
-            # The platform's own word for one place, never parsed here — which is how an
-            # agent in one of two DMs narrows to the one it is actually in.
-            where.append("c.space = ?")
-            values.append(conversation)
+            # Either way of naming one place: the platform's own word for it, or the
+            # qualified form the listing prints beside every row (R-STO-28).
+            clause_for, held = _one_conversation(conversation, "c.")
+            where.append(clause_for)
+            values.extend(held)
         if author is not None:
             where.append("m.author = ?")
             values.append(author)

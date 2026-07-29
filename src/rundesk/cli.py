@@ -88,6 +88,13 @@ LOOK_AGAIN_SECONDS = 0.2
 #: and reports that one answer as unavailable (R-BKP-28).
 BACKUP_STATUS_PATIENCE = 1.0
 
+#: How long a command whose whole job is the backups waits for the same directory. Longer
+#: than the glance health takes, because here the listing *is* the answer and a slow disk
+#: is not an unreachable one — but still bounded, because the directory that blocks never
+#: answers at all, and a command that waits forever cannot even name what it is waiting on
+#: (R-BKP-29).
+BACKUP_PATIENCE = 20.0
+
 #: What a command that exists but is not built yet exits with. Not 0, which a script
 #: would take as done; not 1, which is reserved for a command that ran and failed; and
 #: not 2, which argparse already spends on a usage error. Those last two are different
@@ -507,7 +514,8 @@ def build_parser() -> argparse.ArgumentParser:
                              "under")
     recent.add_argument("--conversation", metavar="<where>",
                         help="only what was said in one place on it — the direct message or "
-                             "room, in the platform's own word for it")
+                             "room, either as the WHERE column prints it or in the "
+                             "platform's own word alone")
     # The choices are read off the store's own closed sets rather than restated, and the
     # reference prints them, so neither says the list twice.
     recent.add_argument("--author", choices=list(store.AUTHORS), metavar="<kind>",
@@ -2012,37 +2020,59 @@ def _take_a_backup() -> int:
     # Pruned here rather than on a second schedule of its own: the thing that makes an old
     # copy old is a newer one arriving, so this is the moment the question has a new answer,
     # and a machine that has stopped taking backups stops deleting them too.
-    gone = backups.prune(backups_home(), config.backups()["keep_days"], note=_out_loud)
-    if gone:
-        print(f"        {len(gone)} older than "
-              f"{config.backups()['keep_days']} days were removed")
+    # Bounded like every other reading of this directory: the copy is already written and
+    # safe, so a directory that stops answering costs the tidying and never the backup
+    # itself, and the command says which of the two happened (R-BKP-29).
+    keep_days = config.backups()["keep_days"]
+    reached, gone = _answered_within(
+        BACKUP_PATIENCE,
+        lambda: backups.prune(backups_home(), keep_days, note=_out_loud),
+        "rundesk-backups-prune",
+    )
+    if not reached:
+        print(f"        WARNING: {backups_home()} did not answer within "
+              f"{BACKUP_PATIENCE:.0f}s, so older copies were left as they are",
+              file=sys.stderr)
+    elif gone:
+        print(f"        {len(gone)} older than {keep_days} days were removed")
     return 0
 
 
 def _list_backups() -> int:
     """Every copy there is, oldest first, with what each cost and what it holds."""
     where = backups_home()
-    found = backups.every(where)
-    if not found:
-        print("no backups")
-        print(f"        take one:  rundesk backups add")
-        return 0
-    rows = []
-    for one in found:
-        said = one.said or {}
-        rows.append((
+
+    def describe() -> list:
+        # Read and described inside the bound together, because the size of each copy is
+        # a `stat` of its own: a directory that answers `opendir` and then blocks on the
+        # files in it would otherwise hang after the guard had already let go (R-BKP-29).
+        return [(
             one.at.name,
             one.taken_at if one.readable else "-",
             updater.readable(one.held_bytes) if one.held_bytes is not None else "-",
             str(len(said.get("records", {}))) if one.readable else "-",
             said.get("why", "-") if one.readable else "UNREADABLE",
-        ))
-    _as_table(("BACKUP", "TAKEN", "SIZE", "AGENTS", "WHY"), rows)
+            one.why if not one.readable else None,
+        ) for one, said in ((one, one.said or {}) for one in backups.every(where))]
+
+    reached, rows = _answered_within(BACKUP_PATIENCE, describe, "rundesk-backups-list")
+    if not reached:
+        # Named, and never answered with the empty listing. "There are no backups" and
+        # "the place they are kept did not answer" send an owner somewhere completely
+        # different, and only one of them means their agents are unprotected (R-BKP-29).
+        print(f"backups: FAILED — {where} did not answer within "
+              f"{BACKUP_PATIENCE:.0f}s, so what is kept there is unknown", file=sys.stderr)
+        return 1
+    if not rows:
+        print("no backups")
+        print(f"        take one:  rundesk backups add")
+        return 0
+    _as_table(("BACKUP", "TAKEN", "SIZE", "AGENTS", "WHY"), [row[:5] for row in rows])
     print()
     print(f"kept in {where}")
-    unreadable = [one for one in found if not one.readable]
-    for one in unreadable:
-        print(f"        {one.at.name}: {one.why}", file=sys.stderr)
+    for row in rows:
+        if row[5] is not None:
+            print(f"        {row[0]}: {row[5]}", file=sys.stderr)
     return 0
 
 
@@ -2539,24 +2569,43 @@ def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
     return 1 if unfit else 0
 
 
-def _how_backups_stand(machine) -> str:
-    """Whether daily copies run and how many exist, without waiting forever (R-BKP-28)."""
+def _answered_within(patience: float, work, called: str) -> tuple:
+    """Do something that may block inside the operating system, and give up on it.
+
+    Returns `(True, what it gave back)`, or `(False, None)` when it did not answer in
+    time or failed. **The bound belongs to every command that touches the directory, not
+    only to health (R-BKP-29).** `status` grew this guard first, for a backup directory
+    symlinked into cloud storage that blocks in `opendir` forever; `backups` then sat on
+    the identical call with no bound at all, which is the one command that cannot answer
+    without it.
+
+    A Python thread cannot interrupt an operating-system `opendir`, but a daemon does not
+    keep this one-shot CLI process alive: the blocked call is abandoned with the process
+    rather than turning one unreachable filesystem into a command that never returns.
+    """
     answered: queue.Queue = queue.Queue(maxsize=1)
 
-    def count() -> None:
+    def carry() -> None:
         try:
-            answered.put(len(backups.every(backups_home())))
+            answered.put((True, work()))
         except BaseException:                           # pragma: no cover - defensive boundary
-            answered.put(None)
+            answered.put((False, None))
 
-    # A Python thread cannot interrupt an operating-system `opendir`, but a daemon does
-    # not keep this one-shot CLI process alive. Status can answer while the blocked call
-    # is abandoned with the process instead of turning one unavailable filesystem into
-    # an unavailable health command.
-    threading.Thread(target=count, name="rundesk-backup-status", daemon=True).start()
+    threading.Thread(target=carry, name=called, daemon=True).start()
     try:
-        count_kept = answered.get(timeout=BACKUP_STATUS_PATIENCE)
+        return answered.get(timeout=patience)
     except queue.Empty:
+        return (False, None)
+
+
+def _how_backups_stand(machine) -> str:
+    """Whether daily copies run and how many exist, without waiting forever (R-BKP-28)."""
+    reached, count_kept = _answered_within(
+        BACKUP_STATUS_PATIENCE,
+        lambda: len(backups.every(backups_home())),
+        "rundesk-backup-status",
+    )
+    if not reached:
         count_kept = None
     held = ("unavailable" if count_kept is None else
             (f"{count_kept} kept" if count_kept else "none yet"))
@@ -3485,6 +3534,14 @@ def cmd_messages(args: argparse.Namespace, gateways, agents) -> int:
         print(f"{args.name}: {why}", file=sys.stderr)
         return 1
     if not found:
+        if args.conversation and not kept.has_conversation(args.conversation):
+            # A conversation nobody has and a conversation with nothing in it are different
+            # answers, and returning the empty listing for both is how an agent comes to
+            # report that work it did never happened (R-STO-28).
+            print(f"{args.name}: no conversation called {args.conversation}", file=sys.stderr)
+            print("        the WHERE column names every one it has:  "
+                  f"rundesk messages {args.name}", file=sys.stderr)
+            return 1
         print(f"{args.name}: NOTHING SAID YET")
         print(f'        ask it something:  rundesk ask {args.name} "…"')
         return 0

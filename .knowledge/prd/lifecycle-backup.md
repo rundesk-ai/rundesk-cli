@@ -48,6 +48,7 @@ own act, and the dangerous half.
 | ✅ | R-BKP-25 | The machine takes a copy every day once it is asked to | `the daily job runs at the hour it was given`, `the daily job is never kept alive`, `the daily job carries where backups go`, `the daily job cannot be mistaken for a gateway`, `an agent may be called backup without colliding with the daily job`, `stopping the daily job takes its description away too` |
 | ✅ | R-BKP-26 | Copies survive removing rundesk, with or without its data (R-RM-14) | `removing rundesk keeps the copies it took`, `purging keeps the copies it took` |
 | ✅ | R-BKP-28 | Unavailable backup storage does not prevent install health from answering | `status survives a backup directory that does not answer` |
+| ✅ | R-BKP-29 | Every command that reads the backup directory answers within a bound, and names a directory that did not rather than reporting none | `listing the backups survives a directory that does not answer`, `a directory that does not answer is not reported as no backups` |
 
 ## Open questions
 

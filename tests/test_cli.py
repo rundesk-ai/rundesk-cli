@@ -1665,6 +1665,51 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
         self.assertIn("unavailable", said)
         self.assertIn("fit to run", said, "other health was lost with backup health")
 
+    def test_listing_the_backups_survives_a_directory_that_does_not_answer(self):
+        """R-BKP-29 — reported (#102): the guard R-BKP-28 was written for went only into
+        `status`. `backups` ran the identical enumeration on the main thread with no bound
+        at all, and sat for over five minutes at 0.0% CPU with no output and no error —
+        the one command that cannot answer without the guard."""
+        real_every = cli.backups.every
+        real_patience = cli.BACKUP_PATIENCE
+        entered, release = threading.Event(), threading.Event()
+
+        def blocked(_where):
+            entered.set()
+            release.wait(1)
+            return []
+
+        cli.backups.every = blocked
+        cli.BACKUP_PATIENCE = 0.02
+        began = time.monotonic()
+        try:
+            code, said = drive(["backups"])
+        finally:
+            release.set()
+            cli.backups.every = real_every
+            cli.BACKUP_PATIENCE = real_patience
+        self.assertTrue(entered.wait(0.1), "the listing never asked after the backups")
+        self.assertLess(time.monotonic() - began, 0.5, "the listing waited on storage")
+        self.assertEqual(1, code, "an unreachable directory was reported as success")
+        self.assertIn(str(_TEST_BACKUP_DIR), said, "it did not name what failed to answer")
+
+    def test_a_directory_that_does_not_answer_is_not_reported_as_no_backups(self):
+        """R-BKP-29 — an empty listing and an unreachable directory must not look the same.
+        While the two agree, an owner cannot tell a working daily backup from one that has
+        never landed, and only one of the two means their agents are unprotected."""
+        real_every = cli.backups.every
+        real_patience = cli.BACKUP_PATIENCE
+        cli.backups.every = lambda _where: threading.Event().wait(1) or []
+        cli.BACKUP_PATIENCE = 0.02
+        try:
+            code, said = drive(["backups"])
+        finally:
+            cli.backups.every = real_every
+            cli.BACKUP_PATIENCE = real_patience
+        self.assertEqual(1, code)
+        self.assertNotIn("no backups", said,
+                         "a directory that did not answer was reported as holding none")
+
     def test_agents_lists_simultaneous_turns_without_prompts_or_arguments(self):
         """R-AGW-13 — concurrent conversations are distinct and only safe identity is shown."""
         agents = FakeAgents(made=["ava"])
@@ -3553,6 +3598,49 @@ class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
         code, said = drive(["runs", "ava"], agents=self.agents)
         self.assertEqual(0, code, said)
         self.assertIn("120 in / 10 cached / 30 out", said)
+
+    def test_messages_narrows_to_the_place_by_the_name_it_printed_for_it(self):
+        """R-STO-28 — reported (#103): every agent's own preamble instructs this flag, and
+        the only identifier an agent can see is the qualified one in the `WHERE` column.
+        Handing it straight back matched nothing and returned `NOTHING SAID YET` at exit 0
+        for a conversation with hundreds of messages — an agent confidently reporting that
+        work it did never happened, the one thing `messages` exists to prevent."""
+        self.furnished()
+        code, said = drive(["messages", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("ops/general", said, "the WHERE column no longer prints the two")
+
+        code, said = drive(["messages", "ava", "--conversation", "ops/general"],
+                           agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("what happened to the parser", said)
+        self.assertNotIn("NOTHING SAID YET", said)
+
+    def test_messages_still_narrows_by_the_platforms_own_word_alone(self):
+        """Both forms, because the bare one is what a channel adapter has to hand and is
+        what the preamble taught. Taking the qualified one must not cost the other."""
+        self.furnished()
+        code, said = drive(["messages", "ava", "--conversation", "general"],
+                           agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("what happened to the parser", said)
+
+    def test_a_conversation_nobody_has_is_told_apart_from_one_with_nothing_in_it(self):
+        """R-STO-28 — "there is no such conversation" and "nothing has been said here" send
+        a reader somewhere completely different, and a confident zero-exit answered both."""
+        self.furnished()
+        code, said = drive(["messages", "ava", "--conversation", "ops/no-such-room"],
+                           agents=self.agents)
+        self.assertEqual(1, code, "an unmatched conversation was reported as success")
+        self.assertIn("no conversation called ops/no-such-room", said)
+        self.assertNotIn("NOTHING SAID YET", said)
+
+    def test_an_agent_that_has_said_nothing_at_all_still_says_so_plainly(self):
+        """The empty listing is still the empty listing: an agent nobody has asked anything
+        is ordinary, and telling it that its records are wrong would be the same lie back."""
+        code, said = drive(["messages", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("NOTHING SAID YET", said)
 
     def test_a_run_whose_provider_reported_no_cache_at_all_claims_none(self):
         """R-USE-6 — absent is not zero. A provider that never mentions a cache and one

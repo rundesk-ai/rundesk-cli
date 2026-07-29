@@ -42,6 +42,8 @@ worth having if what it did can be read back afterwards.
 | ✅ | R-RUN-19 | Why a turn stopped is one of a closed set of words, kept beside the brain's own sentence and never inferred from it | `a turn stopped for a reason the seam has a word for records that word`, `a word this rundesk does not know is dropped rather than stored`, `a run whose brain classified nothing keeps its prose and no word`, `what a run came to names the reason it stopped`, `rows written before there was a column for a reason stay unknown` |
 | ✅ | R-RUN-20 | A turn that ended without saying so says which of the two silences it was — a person stopping it, or the gateway going | `a turn a person stopped is not recorded as a gateway outage`, `a cancelled turn does not stay running for ever` |
 | ✅ | R-RUN-21 | A turn that answered nobody is recorded as failed and says so, whatever the brain and its exit code claimed | `a turn that answered nobody is not a turn that worked`, `whitespace is not an answer either` |
+| ✅ | R-RUN-22 | What a brain printed during one run is bounded, keeping the end of the run and saying what was cut away | `what a brain printed is cut down to the ceiling`, `the end of a run is what is kept and the replay is what goes`, `what was cut away says so where the transcript is read`, `every line left is still a whole record`, `a transcript under the ceiling is left exactly as it is`, `a transcript that is not there is not an error` |
+| ✅ | R-RUN-23 | What brains printed longer ago than the kept window is swept, and every account still reads | `what a brain printed longer ago than the window is swept`, `sweeping what a brain printed leaves every account readable`, `sweeping where nothing was ever printed is ordinary` |
 
 ## Open questions
 

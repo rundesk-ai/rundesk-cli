@@ -133,10 +133,11 @@ from rundesk import supervisor
 if not supervisor.available():
     raise SystemExit(0)          # nothing of the kind on this machine
 taken, stubborn = supervisor.take_all_back()
-supervisor.remove_update_worker()
-supervisor.remove_automatic_update()
+left = supervisor.remove_our_shared_jobs()
 for name in taken:
     print(f"stopped gateway '{name}' and removed its job")
+for label in left:
+    print(f"left '{label}' alone — another install of rundesk wrote it")
 if stubborn:
     for name in stubborn:
         print(f"gateway '{name}' would not stop, and is still running")

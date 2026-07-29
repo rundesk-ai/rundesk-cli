@@ -127,7 +127,7 @@ rundesk schedules ava off nightly
 --channel <channel>             only what was said on this channel, by the name it was added under
 --check                         say whether a newer release exists
 --conversation <conversation>   which conversation to carry on — this terminal's, when left out
---conversation <where>          only what was said in one place on it — the direct message or room, in the platform's own word for it
+--conversation <where>          only what was said in one place on it — the direct message or room, either as the WHERE column prints it or in the platform's own word alone
 --expired                       instead, the one-time schedules whose moment has gone — whether each ran, or whether it passed while nothing was running
 --fresh                         start the conversation again rather than carrying it on
 --here                          run it in this terminal instead of handing it to the machine

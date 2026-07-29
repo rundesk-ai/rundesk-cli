@@ -744,3 +744,31 @@ def take_all_back(
         except (NotOurs, NoSupervisor):
             continue
     return taken, stubborn
+
+
+def remove_our_shared_jobs(
+    where: str | None = None,
+    root: Path | None = None,
+    asking: Callable[..., Spoke] = ask,
+) -> list[str]:
+    """Take away the two jobs a user has only one of, and say which were another's.
+
+    **The two are named per user, not per install (R-RM-15).** A gateway's job carries the
+    gateway's name, so two installs never collide over one; the update worker and the
+    automatic-update job carry neither, so a second install finds the first install's job
+    sitting exactly where its own would go. Refusing to remove it is right — taking it
+    would stop the machine updating the install somebody actually uses — but the refusal
+    is a `NotOurs` and, left to escape, it ended the whole removal partway through and
+    reported it as gateways that would not stop. Nothing on the machine says that.
+
+    Returns the labels left standing because another install wrote them, so removal can
+    say what it deliberately did not take.
+    """
+    left = []
+    for label, take in ((UPDATE_LABEL, remove_update_worker),
+                        (AUTOMATIC_UPDATE_LABEL, remove_automatic_update)):
+        try:
+            take(where, root, asking)
+        except NotOurs:
+            left.append(label)
+    return left
