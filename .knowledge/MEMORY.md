@@ -8,6 +8,18 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **`getattr(vendor_object, "name", default)` is a silent feature-killer, and a stand-in
+  carrying an attribute the real class does not have will agree with you for ever.**
+  `_post`'s anchor guard asked a `discord.Message` for `channel_id`, which discord.py has
+  never had, so `getattr` handed back `""`, `"" != conversation` was true of every message
+  ever posted, and no answer rundesk sent to Discord was a reply for months (#151). Nothing
+  raised, nothing logged, and the case covering it passed — it grepped the source for the
+  guard and built its message from a `class Message: channel_id`, a shape the platform does
+  not have. **Before trusting a defaulted `getattr` on somebody else's object, ask the
+  installed library whether the attribute exists** — `.venv/bin/python -c "import discord;
+  print(hasattr(discord.Message, 'channel_id'))"` — and build a stand-in only out of
+  attributes that answered yes. A guard whose wrong reading fails *open* takes the whole
+  feature with it and looks exactly like a feature nobody built.
 - **A rundesk agent running the gate fails four suites on its own environment, not on the
   code.** A turn is handed `RUNDESK_AGENTS_DIR`, `RUNDESK_SKILL_LIBRARY`, `RUNDESK_SCRIPTS`
   and friends, the suites inherit them, and `test_agent`, `test_skill`, `test_transcript`
