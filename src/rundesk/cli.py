@@ -1745,11 +1745,12 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
             fresh=args.fresh or by_the_clock,
             watching=said,
             steering=_typed() if args.steer else None,
-            # What it is told before it reads a word: this turn's own, then the agent's,
-            # then what rundesk says about the situation — which for a person at a terminal
-            # is nothing, because they are here (R-AGT-16).
+            # What it is told before it reads a word: this turn's own, then the agent's
+            # (R-AGT-16) — and, where the clock started this, what rundesk says about that
+            # situation whatever they wrote (R-AGT-34). For a person at a terminal there is
+            # nothing to add, because they are here.
             preface=agents.told(name, said=args.says,
-                                otherwise=schedules.by_default(clock) if clock else ""),
+                                regardless=schedules.by_default(clock) if clock else ""),
             source=turn.SCHEDULE if clock else None,
         ))
     except provider.NotRunnable as why:

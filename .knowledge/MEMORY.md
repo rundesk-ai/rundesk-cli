@@ -8,6 +8,16 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **A run's account holds no record of what its brain *said*, so "the account keeps every
+  raw event" is false for text.** `store.RECORD_KINDS` has no `text` member and
+  `turn._Account.add` returns before writing one — including its `raw` — because what was
+  said is a message and only what *happened* is a record. So the only place a brain's
+  individual thoughts survive is `logs/runs/<run>.jsonl`, which R-STO-5 and R-RUN-23
+  explicitly allow to be destroyed and swept. Anything narrowing what the message row holds
+  is narrowing the durable account, whatever the record table appears to promise. Check with
+  `sqlite3 <agent>/state.db "select kind, count(*) from record where run_id=? group by kind"`
+  on a real run before believing otherwise — a 3.7 MB transcript beside a run with no text
+  record in it is what this looks like.
 - **A rundesk agent running the gate fails four suites on its own environment, not on the
   code.** A turn is handed `RUNDESK_AGENTS_DIR`, `RUNDESK_SKILL_LIBRARY`, `RUNDESK_SCRIPTS`
   and friends, the suites inherit them, and `test_agent`, `test_skill`, `test_transcript`

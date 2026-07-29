@@ -388,7 +388,14 @@ async def carry(
         # the end because it is only whole then: a reply arrives a fragment at a time, and
         # a row per fragment is a history nobody can read back and a search that matches
         # half a sentence.
-        writing.answered(_reply(said))
+        #
+        # **A turn the clock started answers with its close, and no other kind does**
+        # (R-SCH-45). A turn somebody is watching shows its working as it goes and its last
+        # thought is already the answer, because the surface sends each earlier one on as it
+        # is finished. A scheduled turn never passes that way: it runs headless, and what it
+        # said is read back out of this one row afterwards — so everything it thought aloud
+        # on the way arrived as a report with the report buried at the end of it.
+        writing.answered(_close(said) if source_name == SCHEDULE else _reply(said))
         # Built here rather than at the end, so the word written down and the word handed
         # back are the same word: `Outcome.became` is the one place it is worked out, and a
         # second copy of that expression would drift into a run recorded as finished and a
@@ -686,8 +693,8 @@ async def _saying(program, prompt: str, writing, steering, trouble: list) -> Non
         await program.close_input()
 
 
-def _reply(said: list) -> str:
-    """Everything the brain said, as the one thing it said (R-PRV-22).
+def _thoughts(said: list) -> list:
+    """What the brain said, split where it finished a thought.
 
     **A finished thought ends a paragraph; a fragment does not.** Every `text` record used
     to be concatenated with nothing between it and the next, which is right for fragments
@@ -698,6 +705,10 @@ def _reply(said: list) -> str:
 
     Fragments are still joined with nothing, because a reply arriving a piece at a time is
     one sentence and not several.
+
+    One split, read two ways: everything as one reply, and the last of them on its own. Two
+    walks of the same records would agree until one of them was changed, and then a turn
+    would deliver a thought that is not the one its account says it ended on.
     """
     parts, piece = [], ""
     for one in said:
@@ -717,7 +728,35 @@ def _reply(said: list) -> str:
     # Stripped of the blank lines a brain put at its own edges, never of the ones inside a
     # thought: what is between paragraphs here is rundesk's, and what is within one is the
     # brain's and is left exactly as it said it.
-    return "\n\n".join(kept for kept in (part.strip("\n") for part in parts) if kept.strip())
+    return [kept for kept in (part.strip("\n") for part in parts) if kept.strip()]
+
+
+def _reply(said: list) -> str:
+    """Everything the brain said, as the one thing it said (R-PRV-22)."""
+    return "\n\n".join(_thoughts(said))
+
+
+def _close(said: list) -> str:
+    """The last whole thing the brain said — what a turn the clock started answers with
+    (R-SCH-45).
+
+    **Decided after the turn is over, which is the only moment it is a fact.** A brain
+    cannot mark its own final message: it says something, then decides whether to call
+    another tool, and only if it does not does that thought turn out to have been the last.
+    Asked here, once there is no more coming, "which was last" is read rather than guessed.
+
+    A multi-paragraph answer survives whole, because one finished thought is one record and
+    the blank lines inside it are the brain's. What is dropped is a thought said *before*
+    further tool calls, which is working narration and is what this exists to drop.
+
+    The turn is not lost with it: every record the brain reported is in the run's own
+    transcript, exactly as it arrived (R-PRV-5). It is not in the run's account, which keeps
+    what a turn *did* and never what it said — and that transcript may be destroyed to
+    reclaim space (R-STO-5, R-RUN-23), so what is dropped here is dropped for good once it
+    has been.
+    """
+    thoughts = _thoughts(said)
+    return thoughts[-1] if thoughts else ""
 
 
 def _handle(said: list) -> str | None:
