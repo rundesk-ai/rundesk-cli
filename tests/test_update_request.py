@@ -10,7 +10,7 @@ from unittest import mock
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import cli, update_request  # noqa: E402
+from rundesk import cli, update_request, updater  # noqa: E402
 
 
 class DurableRequests(unittest.TestCase):
@@ -375,6 +375,32 @@ class DurableRequests(unittest.TestCase):
         self.assertIn(
             "https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.15.0", said
         )
+
+    def test_a_worker_run_outcome_names_the_release_once_rather_than_twice(self):
+        """R-UPD-46, #108 — the worker persists what the update printed, and that already
+        names the release. Appending it again handed the owner the same URL on two
+        consecutive lines, which reads as two different things having happened."""
+        queued, _ = update_request.queue({"agent": "ava", "run": "one"})
+        update_request.claim()
+        where = updater.release_url("0.15.0")
+        row = update_request.finish(
+            queued["id"], "succeeded",
+            f"v0.15.0: UPDATED\nupdate: applied — now on [0.15.0]({where})",
+            "rundesk 0.15.0",
+        )
+        said = update_request.summary(row)
+        self.assertEqual(1, said.count(where), "the release was named twice")
+        self.assertNotIn("what changed:", said)
+
+    def test_an_outcome_whose_transcript_says_nothing_still_links_the_release(self):
+        """R-UPD-46 — the direct path and an agent-delivered row both come through here,
+        and one of them carries no transcript at all. Dropping the link whenever the
+        wrapper stopped adding it would lose it exactly where it is the only copy."""
+        queued, _ = update_request.queue({"agent": "ava", "run": "one"})
+        update_request.claim()
+        row = update_request.finish(queued["id"], "succeeded", "updated", "rundesk 0.15.0")
+        said = update_request.summary(row)
+        self.assertIn(f"[rundesk 0.15.0]({updater.release_url('0.15.0')})", said)
 
     def test_a_failed_or_rolled_back_outcome_never_links_a_release_as_landed(self):
         """R-UPD-47 — the version on a rolled-back request is the release the owner was

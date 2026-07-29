@@ -71,6 +71,23 @@ def release_url(version: str | None) -> str | None:
     return RELEASE_URL.format(tag=f"v{match.group(1)}")
 
 
+def linked(version: str | None) -> str:
+    """A version with what changed in it behind the number, rather than beside it.
+
+    **The number is the link, so there is nothing left to say twice.** An outcome carried a
+    release note as a line of its own, and the worker path produced that line twice over —
+    once from the update as it ran and once from the outcome summarising it — so an owner was
+    handed the same URL on two consecutive lines (#108). A version nobody can build a link
+    for is returned as it stands, because naming the release is worth more than the link is
+    (R-UPD-46, R-UPD-47).
+    """
+    if not version:
+        return ""
+    shown = str(version).strip()
+    where = release_url(shown)
+    return f"[{shown}]({where})" if where else shown
+
+
 def is_newer(latest: str, local: str) -> bool:
     there, here = parse_version(latest), parse_version(local)
     # A version we cannot read is not a reason to claim an update: saying "behind"
@@ -472,13 +489,16 @@ def _bring_forward(repo_root: Path, stopped: list, resume=None, carry=None,
 
 
 def _say_what_landed(landed: str | None) -> None:
-    """Which release is now installed, and where to read what changed in it."""
+    """Which release is now installed, with what changed in it behind the number.
+
+    One line, not two. The second line was a release note beside the version, and the
+    outcome that summarises this run appended the same URL again — so the worker path
+    printed it twice (#108). Behind the number there is only one of it, and nothing
+    downstream has to know whether this line already carried a link.
+    """
     if not landed:
         return
-    print(f"update: applied — now on {landed}")
-    where = release_url(landed)
-    if where:
-        print(f"        what changed: {where}")
+    print(f"update: applied — now on {linked(landed)}")
 
 
 #: Which installs *this process* already holds the right to change. `flock` is held per
