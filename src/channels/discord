@@ -1067,9 +1067,10 @@ class Agent(discord.Client):
     async def _answer(self, it: dict, held: Live) -> None:
         """The answer, whole, at the end — split across messages rather than cut.
 
-        Anchored to the message that asked, so it is findable in a busy channel; only the
-        first piece carries the anchor, because a quote on every piece buries what it is
-        quoting.
+        Anchored to the message that asked (R-DIS-28), so it is findable in a busy channel
+        and so an owner can tell an answer from a scheduled report arriving beside it; only
+        the first piece carries the anchor, because a quote on every piece buries what it
+        is quoting.
         """
         # The cost first, then the answer, in one message (R-DIS-17). At the top rather
         # than the bottom because a long answer pushes anything after it off a phone
@@ -1156,12 +1157,17 @@ class Agent(discord.Client):
         if channel is None:
             note(f"nowhere to write in {it.get('place') or it.get('conversation')}")
             return
-        # **Only if it is in the same place.** Being named in a channel opens a thread
-        # and the turn happens there, while the message that asked is still sitting in
-        # the channel above it — so quoting it made Discord refuse the whole message, and
-        # a turn ended with a ✅ on the question and no answer under it.
-        if anchor is not None and str(getattr(anchor, "channel_id", "")) != str(
-                it.get("conversation")):
+        # **Only if it is in the same place** (R-DIS-28). Being named in a channel opens a
+        # thread and the turn happens there, while the message that asked is still sitting
+        # in the channel above it — so quoting it made Discord refuse the whole message,
+        # and a turn ended with a ✅ on the question and no answer under it.
+        #
+        # Read off `channel.id`, never `channel_id`: a `discord.Message` has no such
+        # attribute, so this guard compared `""` to the conversation, was true of every
+        # message that ever reached it, and dropped every anchor there has ever been —
+        # the feature it exists to protect had therefore never once happened.
+        anchor_in = getattr(getattr(anchor, "channel", None), "id", "")
+        if anchor is not None and str(anchor_in) != str(it.get("conversation")):
             anchor = None
         sending = []
         for at in files:
@@ -1172,10 +1178,16 @@ class Agent(discord.Client):
         if text_as is not None:
             sending.append(discord.File(io.BytesIO(text_as.encode("utf-8")),
                                         filename="answer.md"))
+        # **The quote never costs the answer** (R-DIS-1, R-DIS-28). discord.py builds the
+        # reference without `fail_if_not_exists`, so Discord's own default applies: a
+        # message quoting one it can no longer resolve is refused outright, and the answer
+        # is lost to a line on our own stderr. The asker deleting their question is enough,
+        # and a turn here runs for minutes. Off, Discord drops the quote and still posts.
+        quoting = None if anchor is None else anchor.to_reference(fail_if_not_exists=False)
         try:
             said = await channel.send(
                 content,
-                reference=anchor if anchor is not None else None,
+                reference=quoting,
                 mention_author=False,
                 files=sending or None,
             )
