@@ -158,6 +158,47 @@ rundesk schedules ava add release-check \
 Schedules can start an agent turn or an executable by full path. Rundesk records the
 outcome either way.
 
+### Install a plugin
+
+A plugin is a versioned bundle somebody else publishes — a command, usually some skills, and
+its own records. Installing one makes it available to **every** agent at once.
+
+```sh
+rundesk plugins install owner/rundesk-plugin-jira      # what it declares; writes nothing
+rundesk plugins install owner/rundesk-plugin-jira --confirm
+rundesk plugins grant ava jira                          # give one agent its skills
+rundesk plugins                                         # what is installed, and what is held back
+```
+
+Without `--confirm` nothing is written: the commands, skills, credentials and migration steps
+it declares are printed, and you decide. A local directory or `.tar.gz` works anywhere a
+`owner/repo[@tag]` does.
+
+Plugins move when Rundesk moves. `rundesk update` brings each one forward in the same window it
+uses for its own records, then prints what changed:
+
+```text
+update: applied — now on v0.16.0
+
+what moved:
+  rundesk  0.15.0 -> 0.16.0  updated
+  jira     1.4.0 -> 1.5.0    updated
+  linear   0.9.0             held back — needs rundesk '>=1.0.0'
+  weather  2.0.1             up to date
+```
+
+A plugin that cannot be moved is *held back* — kept, but taken off every agent's `PATH` until
+someone looks. **It can never fail the update it was riding.** Removing one keeps what it kept
+unless you ask for that to go too:
+
+```sh
+rundesk plugins remove jira            # records stay; installing again picks them up
+rundesk plugins remove jira --purge    # records go too, and nothing brings them back
+```
+
+Writing one: `rundesk plugins init <name>` scaffolds a plugin that already installs, and
+`rundesk plugins check <path>` says whether anybody could install it.
+
 ## 🧠 Provider adapters
 
 Rundesk ships four first-class provider adapters. Each uses the provider CLI and login
@@ -315,7 +356,8 @@ set it in `~/.rundesk/data/config.json`, then run `rundesk update` to apply the 
 - **[Provider adapter contract](src/templates/skills/building-a-provider-adapter/references/the-contract.md)** — put another coding CLI behind an agent
 - **[Channel adapter contract](src/templates/skills/building-a-channel-adapter/references/the-contract.md)** — reach an agent from another platform
 - **[Integration CLI guide](src/templates/skills/building-integration-clis/SKILL.md)** — give every agent a custom command
-- **[Plugin template](src/templates/plugin/README.md)** — publish a plugin others can install and update
+- **[Plugin guide](src/templates/skills/building-a-plugin/SKILL.md)** — publish a plugin others can install and update
+- **[Plugin template](src/templates/plugin/README.md)** — the working plugin `rundesk plugins init` writes
 - **[Tested contracts](.knowledge/prd/README.md)** — every guarantee and the test that proves it
 - **[Roadmap](ROADMAP.md)** — what is built, what is next, and why
 - **[Architecture](.knowledge/CODEMAP.md)** — how the system is organized

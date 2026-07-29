@@ -14,9 +14,20 @@ rundesk scripts --where
 Every agent receives that directory first on `PATH` and as `RUNDESK_SCRIPTS`. A companion
 skill teaches an agent when and how to use the command; it is not a second implementation.
 
+## Is this a script or a plugin?
+
+A script is the owner's own: it stands in their script library, nobody installs it, and nothing
+versions it. **The moment somebody other than its author has to install it, it is a plugin** —
+a versioned bundle with a manifest, its own records and its own migrations, installed and
+updated by `rundesk plugins`. The `building-a-plugin` skill is how to write one, and
+`rundesk plugins init <name>` writes a working one to start from.
+
+Everything below applies to both: a plugin's command obeys the same contract, and the sections
+on shape, credentials and validation are unchanged. What differs is only who installs it.
+
 ## Check first
 
-Run `command -v <name>` and `rundesk scripts` before building. Extend an existing command
+Run `command -v <name>`, `rundesk scripts` and `rundesk plugins` before building. Extend an existing command
 when it already owns the service or data source.
 
 ## Shape

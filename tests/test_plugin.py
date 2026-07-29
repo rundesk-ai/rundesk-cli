@@ -815,6 +815,30 @@ class WhatIsInstalled(WithAMachine):
         self.assertTrue((self.scripts / "example").is_symlink())
         self.assertTrue((self.skills / "example").is_symlink())
 
+    def test_an_agent_is_shipped_instructions_for_working_plugins(self):
+        """R-PLG-46 — a feature no agent knows how to reach is one nobody uses.
+
+        Checked against the skills the release actually ships rather than a list here: the two
+        that carry this are built-ins, so an agent is given them without anybody deciding to.
+        """
+        shipped = skill.shipped()
+        self.assertIn("building-a-plugin", shipped)
+        operating = (skill.SHIPPED / "using-rundesk" / skill.NAMED).read_text(encoding="utf-8")
+        manual = (skill.SHIPPED / "using-rundesk" / "references"
+                  / "the-manual.md").read_text(encoding="utf-8")
+        for said in ("rundesk plugins install", "rundesk plugins update",
+                     "rundesk plugins remove"):
+            self.assertIn(said, operating + manual,
+                          f"an agent is never told how to run `{said}`")
+        # The two an agent must not do on its own initiative, said where it will be read.
+        self.assertIn("--purge", manual)
+        self.assertIn("unless you were asked for that exact one", operating)
+
+    def test_every_shipped_skill_about_plugins_is_one_a_brain_would_index(self):
+        """R-PLG-46 — a skill that exists and never fires is worse than none."""
+        for name in ("building-a-plugin", "using-rundesk", "building-integration-clis"):
+            self.assertIsNone(skill.valid(skill.SHIPPED / name), name)
+
     def test_a_path_on_this_machine_is_never_mistaken_for_a_repository(self):
         """R-PLG-11 — a directory that happens to be called `a/b` is still a directory."""
         self.assertIsNone(plugin.source_is_remote(str(self.made)))

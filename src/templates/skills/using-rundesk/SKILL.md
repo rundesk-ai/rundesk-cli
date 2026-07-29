@@ -35,6 +35,37 @@ Each one ends your own turn or somebody else's work.
   go away, and one of them may be you.
 - **`rundesk update` refuses while you are running.** Your turn is work in flight and an update
   refuses rather than interrupting it. That is correct, not a fault.
+- **Never install or remove a plugin unless you were asked for that exact one.** A plugin is
+  software somebody else wrote, and installing it puts their command within reach of *every*
+  agent on this machine, not only you. `rundesk plugins remove <name> --purge` deletes
+  everything that plugin ever kept, for every agent, and nothing brings it back.
+
+## Plugins
+
+A plugin is software a third party publishes: one install and its command is on your `PATH`
+and its skills are in the library. **You may already have one and not know it** — if a command
+exists that is not yours and not rundesk's, `rundesk plugins` says where it came from.
+
+```sh
+rundesk plugins                        what is installed, and what is held back
+rundesk plugins install <source>       what it declares — reads only, writes nothing
+rundesk plugins update                 move every plugin to what is published
+```
+
+**`install` without `--confirm` changes nothing.** It prints the commands, skills and
+credentials the plugin declares and stops. That is the form to run when somebody asks what a
+plugin would do; adding `--confirm` is a decision your owner makes, not you.
+
+**`HELD BACK` means installed and unreachable.** A plugin whose update failed, or which no
+longer fits this rundesk, is kept but taken off every agent's `PATH` — so its command is gone
+and its records are not. `rundesk plugins` says which and why.
+
+**A plugin's records are shared.** Every agent reaches the same database, so what you write
+through a plugin's command, another agent reads. That is deliberate, and it means a plugin's
+data is never private to you.
+
+Asked to *write* one rather than use one, the `building-a-plugin` skill is how; ask your owner
+for it if you were not given it.
 
 ## What to reach for
 
@@ -46,6 +77,7 @@ rundesk channels <you>              where you can be reached
 rundesk usage <you>                 what your turns have cost
 rundesk logs <you>                  what your gateway has been saying, when something failed
 rundesk skills                      every skill here, and which you were given
+rundesk plugins                     what is installed, at what version, and what is held back
 ```
 
 For the exact arguments, ask the command — `rundesk <verb> --help` is generated from the

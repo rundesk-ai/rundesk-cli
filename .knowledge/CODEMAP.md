@@ -257,6 +257,10 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   it** — it was a document at the repository root that an agent had to be told to go and read,
   and the pointer named a path that existed on neither kind of install. As a skill it is handed
   to the agent instead. Each adapter skill carries its contract beside it in `references/`.
+  `using-rundesk` also teaches operating plugins — an agent that meets a command it did not put
+  there needs `rundesk plugins` to find out whose it is — and `building-a-plugin` is how to
+  write and publish one, which is what `building-integration-clis` now points at the moment
+  somebody other than the author has to install the thing.
 - `src/templates/plugin/` — **what `rundesk plugins init` writes**, and a plugin that installs as
   it stands rather than a page describing one. Its `lib/store.py` is the load-bearing part: a
   plugin's records are reached by every agent at once, so it opens them in WAL with a busy timeout

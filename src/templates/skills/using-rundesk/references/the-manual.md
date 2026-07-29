@@ -289,6 +289,52 @@ rundesk status                 how rundesk is on this machine
 rundesk version                what is installed, and whether it is current
 ```
 
+**Plugins — software somebody else wrote.**
+
+```sh
+rundesk plugins                          what is installed, at what version, from where
+rundesk plugins install <source>         what it declares; writes nothing without --confirm
+rundesk plugins update [<name>]          move one, or every one, to what is published
+rundesk plugins grant <agent> <plugin>   give an agent every skill that plugin ships
+rundesk plugins remove <name>            take it off; what it kept stays
+rundesk plugins check <path>             is this a plugin anybody could install?
+rundesk plugins init <name>              write a new one to build on
+```
+
+A source is a path on this machine — a directory or a `.tar.gz` — or `owner/repo`, optionally
+pinned as `owner/repo@v1.2.0`. A path is tried first, so a directory that happens to look like
+a repository name is still a directory.
+
+**Installing is two commands on purpose.** Without `--confirm`, `install` fetches the manifest,
+prints the commands, skills, credentials and migration steps it declares, and writes nothing at
+all. That is the form to run when somebody asks what a plugin is or what it would do. The
+second form, with `--confirm`, is a decision for your owner: a plugin's command lands on
+*every* agent's `PATH`, not only yours.
+
+**One install, every agent, one copy of the data.** A plugin is not granted per agent the way a
+skill is — installing it is what shares it. Its records are a single database every agent
+reaches, so a plugin's data is shared between you and every other agent here.
+
+**Its skills are still granted.** `rundesk plugins grant <agent> <plugin>` gives an agent every
+skill that plugin ships, in one word. An agent without the grant can still run the command; it
+just has nothing telling it when to.
+
+**Plugins move when rundesk moves.** `rundesk update` brings every plugin forward inside the
+same window it uses for its own records, and finishes with one list — rundesk first, then each
+plugin, with where each came from, where it got to, and what became of it. A plugin that cannot
+be moved is *held back*: kept, but taken off every agent's `PATH` until somebody looks. **A
+plugin can never fail the update it was riding**, which is why a held-back one is reported
+rather than raised.
+
+**Removing keeps what it kept.** `rundesk plugins remove <name>` pulls the command and the
+skills and leaves the records, so installing it again picks them back up. `--purge` takes those
+too, for every agent, and nothing brings them back — treat it exactly as you treat
+`rundesk remove`.
+
+**A plugin's credentials are names, never values.** The manifest declares which environment
+variables it needs; the values live in the owner's environment or a config file they control.
+Never write one into a manifest, a plugin's directory, or anything you say.
+
 **Copies of everything, and putting one back.**
 
 ```sh

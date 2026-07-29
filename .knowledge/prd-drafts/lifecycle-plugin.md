@@ -74,6 +74,8 @@ rundesk loads.
 | ✅ | R-PLG-44 | An update says what it moved as one ordered list: rundesk first, then every plugin, each with both versions and its outcome | `every plugin gets a row whether or not anything happened to it`, `what moved is listed in order with rundesk first`, `the list comes after the release it is about`, `an owner with no plugins sees exactly what they saw before`, `the version being left survives the handover to the new release`, `rundesks own row shows where it came from and where it got to` |
 | ✅ | R-PLG-45 | An install that has never had a plugins directory updates exactly as it always did | `an install that has never had a plugins directory updates as it always did` |
 
+| ✅ | R-PLG-46 | Every agent is shipped instructions for installing, updating and removing a plugin, and for writing one | `an agent is shipped instructions for working plugins`, `every shipped skill about plugins is one a brain would index` |
+
 ## Open questions
 
 - Whether a plugin should be able to ship a provider or channel adapter, which would put a
