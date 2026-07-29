@@ -722,15 +722,15 @@ class BeingSentToMidTurn(WithAnAgentToRunTurnsFor):
         self.assertEqual(["first", "second"], sent,
                          "a word said mid-turn is not in the account of the turn it reached")
 
-    async def test_a_steerable_turns_continuation_rule_is_in_its_account(self):
-        """R-PRV-19, R-RUN-9, R-PRV-10 — replacement-style transports need one recorded
-        instruction to preserve the seam's continue-unless-replaced meaning. Putting it
-        inside one adapter instead made the run account a lie."""
+    async def test_a_steerable_turns_continuation_context_is_in_its_account(self):
+        """R-PRV-19, R-RUN-9, R-PRV-10 — replacement-style transports need recorded
+        context to preserve the seam's continue-unless-replaced meaning. Putting it inside
+        one adapter instead made the run account a lie."""
         said = await turn.carry("ava", "first", self.brain("steerable"), where=self.where,
                                 steering=self.words("second"))
         rundesk_said = [one["text"] for one in self.talk(said.run)
                         if one["author"] == "rundesk"]
-        self.assertEqual([turn.STEERING_PREFACE], rundesk_said)
+        self.assertEqual([turn.STEERING_CONTEXT], rundesk_said)
 
     async def test_a_word_said_mid_turn_is_recorded_under_who_said_it(self):
         """R-STO-27 — reported (#106): the same person was recorded two ways in one

@@ -410,27 +410,47 @@ def _returned(one: dict) -> list:
     return said
 
 
-def _cancelled(one: dict) -> bool:
-    """Whether Claude made a failed tool result only to account for a user interrupt.
+def _without_cancelled(one: dict) -> dict:
+    """Remove only tool results Claude made to account for a user interrupt.
 
     Native interruption stops an in-flight tool by first emitting an ordinary-looking
     failed `tool_result`. Its separate metadata is the distinction between that synthetic
     result and a command that genuinely failed. The caller additionally requires an
     interrupt to be pending, so a real permission refusal outside steering remains visible.
+
+    One vendor message may contain several parallel tools' results. Filtering blocks rather
+    than dropping the message preserves work that completed beside the canceled tool.
     """
-    failed = {
-        str(block.get("tool_use_id") or "")
-        for block in one.get("message", {}).get("content", [])
-        if isinstance(block, dict) and block.get("type") == "tool_result"
-        and block.get("is_error")
-    }
     metadata = one.get("tool_result_meta")
-    return bool(failed and isinstance(metadata, list) and any(
-        isinstance(meta, dict)
-        and meta.get("non_execution_kind") == "user-rejected"
-        and str(meta.get("id") or "") in failed
+    if not isinstance(metadata, list):
+        return one
+    cancelled = {
+        str(meta.get("id") or "")
         for meta in metadata
-    ))
+        if isinstance(meta, dict) and meta.get("non_execution_kind") == "user-rejected"
+    }
+    if not cancelled:
+        return one
+    message = one.get("message")
+    if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+        return one
+    content = [
+        block for block in message["content"]
+        if not (
+            isinstance(block, dict)
+            and block.get("type") == "tool_result"
+            and block.get("is_error")
+            and str(block.get("tool_use_id") or "") in cancelled
+        )
+    ]
+    return {
+        **one,
+        "message": {**message, "content": content},
+        "tool_result_meta": [
+            meta for meta in metadata
+            if not (isinstance(meta, dict) and str(meta.get("id") or "") in cancelled)
+        ],
+    }
 
 
 def _ended(one: dict, seen: dict) -> list:
@@ -515,7 +535,12 @@ def _word(line: str):
     if not line.startswith("{"):
         return line
     try:
-        return (json.loads(line) or {}).get("text") or None
+        record = json.loads(line) or {}
+        word = record.get("text") or None
+        context = record.get("context") or None
+        if word is not None and context is not None:
+            return f"{word}\n\n{context}"
+        return word
     except (AttributeError, ValueError):
         return line
 
@@ -967,10 +992,11 @@ def _turn(argv: list, where: str, words: Words, env: dict, session: str,
             vendor = {}
         if isinstance(vendor, dict) and control.heard(vendor):
             continue
-        if isinstance(vendor, dict) and control.interrupting() and _cancelled(vendor):
+        if isinstance(vendor, dict) and control.interrupting():
             # The native interrupt accounts for its canceled tool as `user-rejected`.
-            # That is neither a command failure nor useful channel activity.
-            continue
+            # Remove only that block: parallel tools may have completed in the same record.
+            vendor = _without_cancelled(vendor)
+            line = json.dumps(vendor)
         if isinstance(vendor, dict) and vendor.get("type") == "result":
             if control.interrupted():
                 control.counted(vendor)

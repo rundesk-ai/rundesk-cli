@@ -62,16 +62,14 @@ CHANNEL = "channel"
 #: whole of it is in the run's own file; this is the tail worth putting in front of a person.
 TROUBLE_KEPT = 20
 
-#: What a steerable turn is told about later words before it starts. Native steering
-#: transports differ: some insert guidance into active work, while others cancel one
-#: provider request and begin another in the same session. The seam promises one meaning
-#: either way (R-PRV-19), and this standing instruction keeps that meaning without hiding
-#: words inside an adapter. It is appended to `preface`, so R-RUN-9/R-PRV-10 put the exact
-#: instruction in the account before the brain receives it.
-STEERING_PREFACE = (
-    "A message received while you are still working is mid-turn guidance within the "
-    "original request, not automatically a new standalone task. Address it, then continue "
-    "working toward the original request unless it explicitly stops or replaces that work."
+#: What Rundesk says alongside a word that reaches work already in flight. Kept apart from
+#: the person's text in both the input record and the account: an adapter may need the
+#: context to preserve R-PRV-19, but changing the person's recorded words would violate
+#: R-RUN-9/R-PRV-10 precisely where the audit is meant to explain what happened.
+STEERING_CONTEXT = (
+    "This is mid-turn guidance within the original request. After addressing it, continue "
+    "working toward and finish the original request unless this guidance explicitly stops "
+    "or replaces that work."
 )
 
 #: The two rundesk puts into a turn itself, and the one it records about a turn going wrong.
@@ -251,9 +249,6 @@ async def carry(
         raise CannotResume(
             "the interrupted turn could not be resumed because no provider session was saved"
         )
-
-    if can["steer"]:
-        preface = "\n\n".join(one for one in (preface.strip(), STEERING_PREFACE) if one)
 
     at_now = store.stamped(now)
     if preface:
@@ -505,8 +500,12 @@ class _Account:
                 # recorded twice over in one conversation — by their platform identity
                 # when they started a turn, and as the bare word `user` whenever they
                 # spoke into one already running (R-STO-27).
-                self._kept.arrived(self._conversation, at, str(event.get("text") or ""),
-                                   who=event.get("who") or None)
+                author = event.get("author")
+                self._kept.arrived(
+                    self._conversation, at, str(event.get("text") or ""),
+                    author=author or "user",
+                    who=None if author else (event.get("who") or None),
+                )
             return self._seq
         if kind == self.SAID:
             # Gathered, not recorded. A reply arrives a fragment at a time and is one
@@ -653,7 +652,9 @@ async def _saying(program, prompt: str, writing, steering, trouble: list) -> Non
             said = Said.of(word)
             writing.add(event={"type": SENT, "text": said.text, "mid": True,
                                "who": said.who})
-            await program.send(provider.spoken(said.text))
+            writing.add(event={"type": SENT, "text": STEERING_CONTEXT, "mid": True,
+                               "author": "rundesk"})
+            await program.send(provider.spoken(said.text, context=STEERING_CONTEXT))
     except process.NotListening:
         pass  # it finished while somebody was still typing, which is nobody's fault
     except asyncio.CancelledError:

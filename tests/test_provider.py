@@ -348,6 +348,15 @@ class TheContract(DrivesAnAdapter):
         for what, answer in said.items():
             self.assertIsInstance(answer, bool, f"'{what}' was answered with something else")
 
+    def test_mid_turn_context_is_carried_apart_from_the_persons_words(self):
+        """R-PRV-19, R-RUN-9, R-PRV-10 — an adapter may need Rundesk's context to keep
+        replacement-style steering in the active task, but the person's words remain
+        independently readable and unchanged."""
+        said = json.loads(provider.spoken("what version?", context="continue the work"))
+        self.assertEqual({
+            "type": "say", "text": "what version?", "context": "continue the work",
+        }, said)
+
     async def test_an_adapter_carries_a_whole_turn(self):
         """R-PRV-4 — the one thing every adapter must do. A turn that reached its end
         says so; only `done` is required, and it is required."""

@@ -242,15 +242,20 @@ def environment(
     return said
 
 
-def spoken(text: str) -> bytes:
+def spoken(text: str, context: str | None = None) -> bytes:
     """One thing said *to* a brain, as a record it reads a line at a time (R-PRV-19).
 
     Records rather than plain text, and only for an adapter that said it can be steered.
     Its input has to stay open for more, so nothing can mean "the prompt ended" any more —
     a brain reading to the end of its input would wait for an end that is not coming. A
     line each, with the text encoded, so a prompt with newlines in it is still one thing.
+    Optional Rundesk-authored context is carried apart so an adapter can apply it without
+    changing the person's recorded words (R-RUN-9, R-PRV-10).
     """
-    return (json.dumps({"type": SAY, "text": text}) + "\n").encode("utf-8")
+    record = {"type": SAY, "text": text}
+    if context:
+        record["context"] = context
+    return (json.dumps(record) + "\n").encode("utf-8")
 
 
 def understood(said: bytes | str) -> dict | None:
