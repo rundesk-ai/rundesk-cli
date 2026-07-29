@@ -81,8 +81,13 @@ WHOLE = "whole"
 #: being changed is not the same news as a file it was working on being changed. Which
 #: files those are, and how an adapter is sure it was one of them rather than a
 #: same-named file in some checkout, is `CONTINUITY` below.
+#:
+#: **Those four name what was changed rather than what was done, and are nouns for it.**
+#: The act is always the same one — a file was written — so the useful half is which file,
+#: and a surface reading these raw is left with something that reads: a terminal shows
+#: `updated memory` where a verb-shaped token would have shown `remember Write`.
 DID = ("read", "search", "run", "edit", "list", "make", "delegate",
-       "remember", "rules", "preferences", "identity")
+       "memory", "rules", "profile", "identity")
 
 #: What an agent keeps of its own, and what changing one is called (R-PRV-29). The names
 #: are Rundesk's — they are what a new agent is given and what `AGENTS.md` tells it to
@@ -94,10 +99,14 @@ DID = ("read", "search", "run", "edit", "list", "make", "delegate",
 #: is worse than the plain `edit` it would otherwise get, because it is untrue. What
 #: qualifies is the resolved path standing directly in the agent's own working directory
 #: — `RUNDESK_CWD`, which is the one thing every adapter is already told (R-PRV-3).
+#: `USER.md` is `profile` rather than `preferences` because preferences are one section of
+#: it. Its own first line is "what you know about the user", and it also holds who they
+#: are and what they are building — a verb naming the narrowest part of a file stops being
+#: true the first time the widest part is what changed.
 CONTINUITY = {
-    "MEMORY.md": "remember",
+    "MEMORY.md": "memory",
     "AGENTS.md": "rules",
-    "USER.md": "preferences",
+    "USER.md": "profile",
     "SOUL.md": "identity",
 }
 

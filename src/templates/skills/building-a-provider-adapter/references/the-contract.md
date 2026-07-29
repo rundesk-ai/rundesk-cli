@@ -248,7 +248,7 @@ grow by a release rather than by every adapter guessing differently.
 
 **An agent editing a file it lives by is not the same news as an agent editing a file it was
 working on, and both reach you as `edit`.** `RUNDESK_CONTINUITY` hands you the pairing —
-`MEMORY.md=remember,AGENTS.md=rules,SOUL.md=identity,USER.md=preferences` — so which files
+`AGENTS.md=rules,MEMORY.md=memory,SOUL.md=identity,USER.md=profile` — so which files
 these are stays rundesk's to change and never becomes a copy of its layout you are holding.
 When a write lands on one of them, report that verb in place of `edit`.
 

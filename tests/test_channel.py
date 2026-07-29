@@ -818,7 +818,7 @@ class WhatTheSurfaceIsNeverGiven(DrivesAnAdapter):
 
         self.assertIs(channel.DID, provider.DID)
         self.assertEqual(("read", "search", "run", "edit", "list", "make", "delegate",
-                          "remember", "rules", "preferences", "identity"), channel.DID)
+                          "memory", "rules", "profile", "identity"), channel.DID)
 
     def test_what_the_agent_did_is_shown_while_it_is_happening(self):
         """R-CH-6 — a tool it ran, a thought it closed. These are worth watching, and

@@ -73,7 +73,7 @@ still carries your own word. Do not stretch one to fit; say so instead and the l
 release. A channel never sees your vendor's names, which is the whole point.
 
 **An agent editing what it lives by is worth telling apart, and matching the name is the wrong
-way to do it.** `RUNDESK_CONTINUITY` hands you `MEMORY.md=remember,AGENTS.md=rules,…`; when a
+way to do it.** `RUNDESK_CONTINUITY` hands you `AGENTS.md=rules,MEMORY.md=memory,…`; when a
 write lands on one of those *standing directly in `RUNDESK_CWD`*, report that verb instead of
 `edit`. Resolve both sides before comparing, and never match on the file's name alone — every
 checkout on the machine has an `AGENTS.md`, and reporting one of those as the agent rewriting

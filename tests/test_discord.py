@@ -1229,10 +1229,26 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         next time, and it is the one saying so."""
         from rundesk import provider
 
-        for verb in provider.CONTINUITY.values():
+        for name, verb in provider.CONTINUITY.items():
             with self.subTest(verb):
-                self.assertIn(" my ", f" {discord.SHOWN[verb]} ")
-                self.assertNotIn(" its ", f" {discord.SHOWN[verb]} ")
+                said = f" {discord.SHOWN[verb]} "
+                self.assertNotIn(" its ", said)
+                if name == "USER.md":
+                    # The one that is not the agent's. `USER.md` is what it knows about the
+                    # owner, so "my" would be a claim on the wrong person's file.
+                    self.assertNotIn(" my ", said)
+                else:
+                    self.assertIn(" my ", said)
+
+    def test_the_owners_own_file_is_not_called_the_agents_preferences(self):
+        """R-PRV-29 — `USER.md`'s own first line is "what you know about the user", and it
+        holds who they are and what they are building as well as how they want answering.
+        A verb naming the narrowest part of a file stops being true the first time the
+        widest part is what changed."""
+        from rundesk import provider
+
+        self.assertEqual("profile", provider.CONTINUITY["USER.md"])
+        self.assertEqual("updated profile", discord.SHOWN["profile"])
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")

@@ -219,7 +219,7 @@ DID = {"read": "📖", "search": "🔎", "run": "💻", "edit": "✏️", "list"
        # What the agent changed of its own (R-PRV-29). Marked apart from `edit` because
        # they are apart: a file the agent was working on and a file the agent lives by
        # are the same pencil and different news.
-       "remember": "🧠", "rules": "📜", "preferences": "⚙️", "identity": "✨"}
+       "memory": "🧠", "rules": "📜", "profile": "👤", "identity": "✨"}
 UNKNOWN = "💭"
 
 #: The same verbs as a person would say them. A commentary is read as a sentence, and
@@ -229,14 +229,16 @@ UNKNOWN = "💭"
 #: marks, dozens of them in a turn, and at that width "a" is a word carrying nothing: a
 #: reader skims the verb and the noun. Clipped for the same reason a log line is.
 #:
-#: The continuity four are said in the first person, and the rest are not, because the
-#: rest are not about the agent. "Updated its memory" reads as a process writing to a
-#: store; the agent changed what it will know next time, and it is the one saying so.
+#: Three of the continuity four are said in the first person, because they are the agent's
+#: own. "Updated its memory" reads as a process writing to a store; the agent changed what
+#: it will know next time, and it is the one saying so. `profile` is not one of them —
+#: `USER.md` is what the agent knows about the *owner*, so "my" would be a claim on the
+#: wrong person's file.
 SHOWN = {"read": "read file", "search": "searched", "run": "ran command",
          "edit": "edited file", "list": "listed files", "make": "made something",
          "delegate": "delegated to subagent",
-         "remember": "updated my memory", "rules": "updated my rules",
-         "preferences": "updated my preferences", "identity": "updated my identity"}
+         "memory": "updated my memory", "rules": "updated my rules",
+         "profile": "updated profile", "identity": "updated my identity"}
 
 #: The two lines a delegation is bracketed by, written once. Both are said in three places
 #: — the line itself, the prefix a repeat is counted under, and the prefix a name is
@@ -251,8 +253,8 @@ FINISHED_HELPER = f"{DID['delegate']} subagent finished"
 FAILED = {"read": "file read failed", "search": "search failed", "run": "command failed",
           "edit": "file edit failed", "list": "file listing failed",
           "make": "creation failed", "delegate": "subagent failed",
-          "remember": "could not update my memory", "rules": "could not update my rules",
-          "preferences": "could not update my preferences",
+          "memory": "could not update my memory", "rules": "could not update my rules",
+          "profile": "could not update profile",
           "identity": "could not update my identity"}
 
 

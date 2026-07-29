@@ -514,16 +514,16 @@ class WhenItChangesWhatItKeepsOfItsOwn(unittest.TestCase):
         """R-PRV-29 — a brain naming a file relative to the working directory means the
         same file as one naming it outright, and a home reached through a link is still
         the same home."""
-        self.assertEqual("remember", self._wrote("MEMORY.md")["did"])
-        self.assertEqual("remember", self._wrote("./MEMORY.md")["did"])
+        self.assertEqual("memory", self._wrote("MEMORY.md")["did"])
+        self.assertEqual("memory", self._wrote("./MEMORY.md")["did"])
 
     def test_a_notebook_names_its_target_by_another_word(self):
         """R-PRV-29 — measured against 2.1.220: `Edit` and `Write` say `file_path` and
         `NotebookEdit` says `notebook_path`, so looking for one word finds two of three."""
         at = str(self.home / "MEMORY.md")
         self.assertEqual(
-            "remember", self._wrote(at, "NotebookEdit", "notebook_path")["did"])
-        self.assertEqual("remember", self._wrote(at, "Edit")["did"])
+            "memory", self._wrote(at, "NotebookEdit", "notebook_path")["did"])
+        self.assertEqual("memory", self._wrote(at, "Edit")["did"])
 
     def test_a_file_beside_them_that_is_not_one_of_them_is_an_ordinary_edit(self):
         """R-PRV-29 — standing in the agent's home is not on its own the test; being one
