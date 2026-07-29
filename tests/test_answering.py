@@ -1088,6 +1088,23 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
         self.assertEqual(122435, shown["session"])
         self.assertNotIn("prompt_cache_key", shown)
 
+    async def test_what_a_brain_wrote_into_its_cache_reaches_a_surface_too(self):
+        """R-CH-13, R-USE-13 — the fourth quantity a turn is billed for, and the one that
+        bills above fresh input. Discord has named `written` as the fourth slot of its
+        footer since v0.17.0 and could never once be given it, because this allowlist did
+        not name it: both suites green, nothing raised, nothing logged, and an owner shown
+        three of the four quantities they paid for."""
+        brain = Brain(showing=[{"type": "usage", "input": 2, "output": 88,
+                                "cached": 34200, "written": 1500,
+                                "prompt_cache_key": "a private key"}])
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        shown = surface.of("usage")[0]
+        self.assertEqual(1500, shown["written"],
+                         "cache writes still do not cross the seam")
+        self.assertNotIn("prompt_cache_key", shown)
+
     async def test_a_safe_helper_name_leaves_but_unrelated_tool_fields_do_not(self):
         """R-CH-13 — a helper name is deliberately allowed; provider extras stay private."""
         brain = Brain(showing=[

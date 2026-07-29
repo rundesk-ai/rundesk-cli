@@ -821,7 +821,7 @@ class _Shown:
         "think": ("text",),
         "tool": ("id", "name", "did"),
         "result": ("id", "ok", "summary"),
-        "usage": ("input", "output", "cached", "session", "model"),
+        "usage": ("input", "output", "cached", "written", "session", "model"),
     }
 
     #: How much of a summary a surface is shown. A brain is entitled to hand back the
