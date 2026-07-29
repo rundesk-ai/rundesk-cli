@@ -3609,6 +3609,32 @@ class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
         self.assertIn("WRITTEN", said)
         self.assertIn("5550", said)
 
+    def test_what_a_run_came_to_names_the_reason_it_stopped(self):
+        """R-RUN-19. `failed` answers "did it work" and not "what do I do about it": an
+        account limit, a crashed adapter and a bad flag all read identically without the
+        word. Added rather than substituted, so the column still says what it always said
+        and can still be grepped for."""
+        kept = self.agents.records("ava")
+        run = kept.began("terminal", "claude", "work", "2026-07-26T09:00:00Z")
+        kept.ended(run, "2026-07-26T09:00:01Z", "failed", exit_code=1,
+                   why="Claude AI usage limit reached|1784920200",
+                   because="usage_exhausted")
+        code, said = drive(["runs", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("failed (usage_exhausted)", said)
+
+    def test_a_run_whose_brain_classified_nothing_keeps_its_prose_and_no_word(self):
+        """Every run written before there was a column for a reason, and every adapter that
+        never learns one. Nothing is inferred from the prose in `why`."""
+        kept = self.agents.records("ava")
+        run = kept.began("terminal", "codex", "work", "2026-07-26T09:00:00Z")
+        kept.ended(run, "2026-07-26T09:00:01Z", "failed", exit_code=1,
+                   why="the parser exploded")
+        code, said = drive(["runs", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("failed", said)
+        self.assertNotIn("failed (", said)
+
     def test_an_agent_that_has_run_nothing_says_so_and_says_what_to_do(self):
         """A listing that printed an empty table would read as a failure to answer."""
         code, said = drive(["runs", "ava"], agents=self.agents)

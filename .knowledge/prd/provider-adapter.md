@@ -53,6 +53,7 @@ is a whole brain with that work absent, rather than a broken one.
 | ✅ | R-PRV-25 | A child agent finishing does not end or answer its parent's turn | `a child agents completion does not end the parent turn`, `finish waits for the child turn not the spawn call` |
 | ✅ | R-PRV-26 | Image content returned by a tool is reported as a file | `image content returned by a tool is reported as a file` |
 | ✅ | R-PRV-27 | A posture an adapter does not recognise narrows the turn and is said out loud, rather than widening it | `a posture this adapter does not know falls to the narrowest one`, `falling closed is said out loud rather than done quietly`, `the two postures the seam has are passed through untouched` |
+| ✅ | R-PRV-28 | An adapter reports a brain's account state as a record of its own, apart from the turn's activity and without failing it | `account state a brain volunteers is reported as a limit`, `an allowance that is merely allowed reports no state`, `a limit a brain never mentions is never invented`, `a turn carrying a limit is not a turn that failed` |
 
 ## Open questions
 

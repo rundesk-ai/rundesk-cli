@@ -551,6 +551,42 @@ class WhatFourSlotsOfUsageAddUpTo(unittest.TestCase):
         self.assertEqual({"reported": False}, turn._tokens([{"type": "text", "text": "x"}]))
 
 
+class WhyATurnStopped(unittest.TestCase):
+    """R-RUN-19. `_because` is the whole of the decision and is asked directly."""
+
+    def ending(self, **said):
+        return [{"type": "text", "text": "before it stopped"},
+                {"type": "done", "ok": False, **said}]
+
+    def test_a_turn_stopped_for_a_reason_the_seam_has_a_word_for_records_that_word(self):
+        """`failed` alone answers "did it work" and not "what do I do about it": a turn an
+        account limit stopped reads exactly like a crashed adapter or a bad flag."""
+        for word in turn.BECAUSE:
+            self.assertEqual(word, turn._because(self.ending(because=word, why="…")))
+
+    def test_a_word_this_rundesk_does_not_know_is_dropped_rather_than_stored(self):
+        """The whole value of a closed set is that a reader can exhaust it, and one unknown
+        member sitting in the column takes that away. This is also the case that matters
+        most in practice — an adapter written against a *newer* rundesk reporting a word
+        this one has never heard of must not quietly corrupt an older install's totals."""
+        for word in ("rate-limited", "RATE_LIMITED", "throttled", "", "  ", "unknown"):
+            self.assertIsNone(turn._because(self.ending(because=word, why="…")))
+        self.assertIsNone(turn._because(self.ending(because=["rate_limited"], why="…")))
+        self.assertIsNone(turn._because(self.ending(because=True, why="…")))
+
+    def test_a_run_whose_brain_classified_nothing_keeps_its_prose_and_no_word(self):
+        """Additive, and this is what that means: an adapter that never learns any of these
+        words behaves exactly as it did before, and `why` is untouched either way."""
+        said = self.ending(why="the parser exploded")
+        self.assertIsNone(turn._because(said))
+        self.assertEqual("the parser exploded", turn._why(said))
+
+    def test_a_turn_that_never_ended_has_no_reason_to_give(self):
+        """Nothing to read it off. A turn with no `done` record at all is the shape a killed
+        gateway leaves, and it must not fall through to a word."""
+        self.assertIsNone(turn._because([{"type": "text", "text": "cut off"}]))
+
+
 class WhatOneReplyIsMadeOf(unittest.TestCase):
     """R-PRV-22 read from the other end: an adapter marks a finished thought `whole`, and
     what a person reads back is where that marking has to land.

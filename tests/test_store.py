@@ -861,7 +861,8 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
              "can": {"steer": True}, "settings": {"effort": "high"}, "resumed": True,
              "started_at": AT, "ended_at": None, "outcome": None, "why": None,
              "exit_code": None, "tokens_in": None, "tokens_out": None,
-             "tokens_cached": None, "tokens_written": None, "tokens_reported": False},
+             "tokens_cached": None, "tokens_written": None, "tokens_reported": False,
+             "because": None},
             kept.run(named))
         self.assertEqual([named], [one["id"] for one in kept.runs(conversation_id="c1")])
         self.assertIsNone(kept.run("404-zzzz"))

@@ -209,7 +209,7 @@ class WhichStepsThereAre(WithStepsOfThisCasesOwn):
         self.assertIn("two steps claim the same version", str(refused.exception))
         self.assertIn("[2]", str(refused.exception))
         with self.assertRaises(ValueError):
-            migration.carry(self.at, self.home, 2, where=self.steps)
+            migration.carry(self.at, self.home, MINE, where=self.steps)
         self.assertEqual(store.VERSION, self.stamped(), "a refused directory still moved data")
         self.assertNotIn("mark", self.columns())
 
@@ -232,7 +232,7 @@ class WhichStepsThereAre(WithStepsOfThisCasesOwn):
         self.wrote("002-agents-carry-a-mark.py", working("mark", "002"))
         self.assertEqual([], self.named(migration.found(self.steps)))
         self.assertEqual(store.VERSION,
-                         migration.carry(self.at, self.home, 2, where=self.steps))
+                         migration.carry(self.at, self.home, MINE, where=self.steps))
         self.assertEqual(store.VERSION, self.stamped())
         self.assertNotIn("mark", self.columns())
 
@@ -677,6 +677,23 @@ class CarryingTheShapeThatShippedForward(WithStepsOfThisCasesOwn):
             "SELECT tokens_in, tokens_written FROM run WHERE id = 'run-2'").fetchone()
         self.assertEqual((2, 5550), (one["tokens_in"], one["tokens_written"]))
 
+    def test_rows_written_before_there_was_a_column_for_a_reason_stay_unknown(self):
+        """R-RUN-19. A run recorded before `003` failed with prose and nothing else, and
+        nothing infers a word from that prose afterwards: reading a reason out of a sentence
+        is guessing, and a guessed word counted in a total is worse than an absent one
+        because absent can be seen. The sentence itself is left exactly as it was."""
+        self.built_at_the_first_shape()
+        conn = self.raw()
+        try:
+            conn.execute("UPDATE run SET outcome = 'failed', why = ? WHERE id = 'run-1'",
+                         ("Claude AI usage limit reached|1784920200",))
+        finally:
+            conn.close()
+        one = self.carried().execute(
+            "SELECT why, because FROM run WHERE id = 'run-1'").fetchone()
+        self.assertEqual("Claude AI usage limit reached|1784920200", one["why"])
+        self.assertIsNone(one["because"], "a word was inferred from prose after the fact")
+
     def test_a_run_still_names_the_schedule_that_started_it_after_the_shape_changes(self):
         """The loss this step exists not to cause. With foreign keys on — which is how the
         runner opens every step — dropping the table a run references performs an implicit
@@ -971,18 +988,18 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
         was = self.where / "ava"
         (was / "home").mkdir(parents=True)
         (was / "agent.json").write_text('{"provider": "codex"}')
-        self.wrote(2, NOTHING)
+        self.wrote(MINE, NOTHING)
 
-        self.assertEqual({"ava": 2}, migration.carry_every(self.where, 2, where=self.steps))
+        self.assertEqual({"ava": MINE}, migration.carry_every(self.where, MINE, where=self.steps))
         self.assertTrue(store.path_for(was).is_file(), "it was walked past")
-        self.assertEqual(2, self.stamped_at(was))
+        self.assertEqual(MINE, self.stamped_at(was))
 
     def test_a_directory_that_is_not_an_agent_is_walked_past(self):
         self.agent("ava")
         (self.where / "not-an-agent").mkdir()
         (self.where / "a-file").write_text("nor this")
-        self.wrote(2, "def up(conn, home):\n    return []\n")
-        self.assertEqual({"ava": 2}, migration.carry_every(self.where, 2, where=self.steps))
+        self.wrote(MINE, "def up(conn, home):\n    return []\n")
+        self.assertEqual({"ava": MINE}, migration.carry_every(self.where, MINE, where=self.steps))
 
     def test_the_first_agent_that_cannot_be_moved_stops_the_walk(self):
         for called in ("ava", "john", "zeta"):
@@ -1040,14 +1057,14 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
         """Losing the note is bad. Refusing to move an owner's data because a note could not
         be written is worse, and the caller is told either way."""
         home, at, _ = self.agent("ava")
-        self.wrote(2, "def up(conn, home):\n    return []\n")
+        self.wrote(MINE, "def up(conn, home):\n    return []\n")
         # A directory where the log file goes: appending to it raises, which is the shape of
         # a log that cannot be written without inventing a permission the suite cannot rely on.
         at = home / migration.LOG
         if at.exists():
             at.unlink()
         at.mkdir(parents=True)
-        self.assertEqual({"ava": 2}, migration.carry_every(self.where, 2, where=self.steps))
+        self.assertEqual({"ava": MINE}, migration.carry_every(self.where, MINE, where=self.steps))
 
 
 class WhatAnUpdateMustNotCost(WithStepsOfThisCasesOwn):

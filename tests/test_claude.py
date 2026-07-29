@@ -125,6 +125,62 @@ class WhatTheGoldenSaysBack(unittest.TestCase):
         self.assertNotEqual(20 + 17453, counted["input"])
         self.assertNotEqual(20 + 17453 + 302567, counted["input"])
 
+    def test_account_state_a_brain_volunteers_is_reported_as_a_limit(self):
+        """R-PRV-28. The captured stream carries one of these and this adapter used to drop
+        it — on reasoning that was right as far as it went, that it is account state rather
+        than this turn's activity, and wrong only in that account state had nowhere to go.
+        What reached an owner instead was whatever prose could be scraped after the fact."""
+        found = only(self.said, "limit")
+        self.assertEqual(1, len(found), "the account state on this stream was dropped")
+        self.assertEqual("rate", found[0]["of"])
+        self.assertEqual("five_hour", found[0]["scope"])
+        self.assertEqual(1784920200, found[0]["resets_at"])
+
+    def test_an_allowance_that_is_merely_allowed_reports_no_state(self):
+        """`allowed` is the ordinary condition of an account and says nothing worth telling
+        an owner. `near` and `reached` are the two that are worth saying, so a stream that
+        only ever says `allowed` reports the window and its reset without claiming either."""
+        self.assertNotIn("state", only(self.said, "limit")[0])
+
+    def test_a_turn_carrying_a_limit_is_not_a_turn_that_failed(self):
+        """The distinction that makes this a record of its own rather than an outcome: the
+        captured turn reports an allowance *and* succeeds, so anything treating one as a
+        failure would fail every turn on an account that reports its state at all."""
+        self.assertTrue(only(self.said, "done")[0]["ok"])
+
+    def test_a_limit_a_brain_never_mentions_is_never_invented(self):
+        """R-USE-6's reasoning at the seam. A stream with no account state on it reports
+        none, rather than an `of: rate` with everything about it unknown."""
+        self.assertEqual([], claude.records('{"type":"system","subtype":"init"}', {}))
+        self.assertEqual([], claude.records('{"type":"rate_limit_event"}', {}))
+
+    def test_a_turn_stopped_for_a_reason_the_seam_has_a_word_for_records_that_word(self):
+        """R-RUN-19. This vendor puts a limit-stopped turn on an ordinary `result` line with
+        `is_error` — the same shape as a crash, a bad flag or a refusal — so the prose is
+        the only place the kind of failure appears. Matching it is weak evidence and is
+        treated as such: what is not recognised stays unclassified."""
+        for said, word in (
+            ("Claude AI usage limit reached|1784920200", "usage_exhausted"),
+            ("rate limit exceeded, please try again later", "rate_limited"),
+            ("Your credit balance is too low to run this", "no_credit"),
+            ("Invalid API key · Please run /login", "signed_out"),
+            ("prompt is too long: 400000 tokens > 200000 maximum", "context_exceeded"),
+        ):
+            ending = claude.records(json.dumps(
+                {"type": "result", "is_error": True, "result": said}), {})
+            done = [one for one in ending if one["type"] == "done"][0]
+            self.assertEqual(word, done.get("because"), said)
+            self.assertEqual(said, done["why"], "the brain's own words were replaced")
+
+    def test_a_failure_this_adapter_cannot_classify_says_nothing_rather_than_guessing(self):
+        """The guard on the one above, and the whole reason the phrases are kept narrow. A
+        wrong word inside a total cannot be seen; an absent one can."""
+        ending = claude.records(json.dumps(
+            {"type": "result", "is_error": True, "result": "the parser exploded"}), {})
+        done = [one for one in ending if one["type"] == "done"][0]
+        self.assertNotIn("because", done)
+        self.assertEqual("the parser exploded", done["why"])
+
     def test_the_model_that_answered_is_named(self):
         """R-PRV-9. Reported rather than requested: a silent substitution shows up here."""
         self.assertEqual("claude-opus-5[1m]", only(self.said, "usage")[0]["model"])
@@ -153,12 +209,15 @@ class WhatTheGoldenSaysBack(unittest.TestCase):
         self.assertIsNone(did["TaskCreate"], "a tool with no verb here claimed one anyway")
 
     def test_a_line_kind_nobody_mapped_is_reported_as_nothing(self):
-        """R-PRV-5 from the adapter's side. Framing, status churn, a reasoning meter and
-        the account's rate-limit state are all dropped deliberately — and the raw stream is
-        kept beside the run either way, so a vendor changing shape is visible as drift."""
+        """R-PRV-5 from the adapter's side. Framing, status churn and a reasoning meter are
+        dropped deliberately — and the raw stream is kept beside the run either way, so a
+        vendor changing shape is visible as drift.
+
+        The account's rate-limit state used to be dropped here too, and is now a `limit`
+        record: it was never unmappable, only unhoused (R-PRV-28)."""
         for line in GOLDEN.read_text(encoding="utf-8").splitlines():
             one = json.loads(line)
-            if one.get("type") in ("stream_event", "rate_limit_event"):
+            if one.get("type") == "stream_event":
                 self.assertEqual([], claude.records(line, dict(self.seen)))
             if one.get("type") == "system" and one.get("subtype") in ("status", "thinking_tokens"):
                 self.assertEqual([], claude.records(line, dict(self.seen)))

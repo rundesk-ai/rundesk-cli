@@ -71,7 +71,11 @@ WAIT_MOST = 0.15
 MARK_FROM = "abcdefghijklmnopqrstuvwxyz0123456789"
 MARK_LENGTH = 4
 
-RECORD_KINDS = ("think", "tool", "result", "usage", "file", "done", "lost", "unknown")
+# `limit` is account state a brain volunteered rather than this turn's activity — how much of
+# an allowance is left, and when the window resets. It is non-fatal: a turn carrying one may
+# still have succeeded, which is what makes it a record of its own rather than a failure.
+RECORD_KINDS = ("think", "tool", "result", "usage", "file", "limit", "done", "lost",
+                "unknown")
 AUTHORS = ("user", "agent", "rundesk")
 
 # Appended to a stopped run's account rather than added to the schema. Recovery is lifecycle
@@ -1084,7 +1088,7 @@ class Store:
             return named
 
     def ended(self, run_id, ended_at, outcome, exit_code=None, why=None,
-              tokens=None) -> None:
+              tokens=None, because=None) -> None:
         """How it finished, and what it cost. Written once, at the end.
 
         A cost that never arrived is left absent rather than recorded as nothing: a run that
@@ -1094,15 +1098,22 @@ class Store:
         than only in what the brain printed — because a turn that failed with its reason
         filed where nobody looks is a turn somebody is stuck on, and a run that never
         reached a brain has nothing printed at all.
+
+        `because` is the closed word for the same failure and never a replacement for that
+        sentence (R-RUN-19): prose says what this brain said, and the word is what anything
+        else can count, branch on or phrase well. An adapter that cannot classify a failure
+        leaves it absent, which is what every run written before there was a column for it
+        already is — nothing infers one from `why` afterwards, because reading a word out of
+        prose is guessing and a guessed reason inside a total cannot be seen.
         """
         tokens = tokens or {}
         with self._writing() as conn:
             conn.execute(
                 "UPDATE run SET ended_at = ?, outcome = ?, exit_code = ?, why = ?,"
-                " tokens_in = ?, tokens_out = ?, tokens_cached = ?,"
+                " because = ?, tokens_in = ?, tokens_out = ?, tokens_cached = ?,"
                 " tokens_written = ?, tokens_reported = ? WHERE id = ?",
                 (
-                    ended_at, outcome, exit_code, why,
+                    ended_at, outcome, exit_code, why, because,
                     tokens.get("input"), tokens.get("output"), tokens.get("cached"),
                     tokens.get("written"),
                     1 if tokens.get("reported") else 0,

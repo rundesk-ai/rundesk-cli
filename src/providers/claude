@@ -299,10 +299,56 @@ def records(line: str, seen: dict) -> list:
     if kind == "result":
         return _ended(one, seen)
 
-    # `stream_event` in all its forms, `system/status`, `system/thinking_tokens` and
-    # `rate_limit_event`. The first is framing and duplicated text; the last is the
-    # account's state rather than this turn's activity.
+    if kind == "rate_limit_event":
+        return _allowance(one)
+
+    # `stream_event` in all its forms, `system/status` and `system/thinking_tokens`. The
+    # first is framing and duplicated text; the others say nothing this seam has a word for.
     return []
+
+
+#: What this vendor calls each allowance window, in rundesk's word for what kind of limit it
+#: is. Only the ones seen on a real stream — a window named here that this brain never sends
+#: is a guess, and guessing a vendor's shape is what costs a feature silently.
+OF = {"five_hour": "rate", "seven_day": "rate", "opus_seven_day": "rate"}
+
+
+def _allowance(one: dict) -> list:
+    """The account's own state, which this turn happened to be told about (R-PRV-28).
+
+    **Not this turn's activity, and not a failure.** A turn carrying one of these may have
+    succeeded perfectly; it is how much of an allowance is left and when the window resets.
+    This used to be dropped, on reasoning that was right as far as it went — it *is* account
+    state rather than activity — and the gap was that account state had nowhere to go, so
+    what reached an owner was whatever prose an adapter scraped after the fact.
+
+    Captured shape, from `tests/samples/claude-stream.jsonl`:
+
+        {"type": "rate_limit_event", "rate_limit_info": {
+            "status": "allowed", "resetsAt": 1784920200,
+            "rateLimitType": "five_hour", "overageStatus": "allowed", ...}}
+
+    Everything below is left out where this brain did not send it, rather than defaulted.
+    """
+    said = one.get("rate_limit_info")
+    if not isinstance(said, dict):
+        return []
+    scope = str(said.get("rateLimitType") or "")
+    it = {"type": "limit", "of": OF.get(scope, "rate")}
+    if scope:
+        it["scope"] = scope
+    # `allowed` is the ordinary state and says nothing worth reporting a state for; the
+    # other two are what an owner would want to hear about. A word this adapter has not
+    # seen leaves `state` out rather than being passed through as though it were ours.
+    state = {"allowed_warning": "near", "rejected": "reached"}.get(str(said.get("status")))
+    if state:
+        it["state"] = state
+    resets = said.get("resetsAt")
+    if isinstance(resets, int) and not isinstance(resets, bool):
+        it["resets_at"] = resets
+    if said.get("isUsingOverage") is True:
+        it["why"] = "this account is into its overage allowance"
+    return [it]
 
 
 def _assistant(one: dict, seen: dict) -> list:
@@ -386,7 +432,39 @@ def _ended(one: dict, seen: dict) -> list:
         # turn — a `result` line like any other — rather than on stderr where a reader
         # would look for it.
         seen["why"] = ended["why"]
+        word = _classified(ended["why"])
+        if word:
+            ended["because"] = word
     return [usage, ended]
+
+
+#: What this brain says when a turn stopped for a reason the seam has a word for, and the
+#: word. **Read off the failure prose, because that is the only place this vendor puts it**
+#: — a limit-stopped turn arrives as an ordinary `result` line with `is_error`, exactly like
+#: any other failure, and there is no field on it saying which kind it was.
+#:
+#: Matching prose is the weaker kind of evidence and is treated as such: an unrecognised
+#: failure simply leaves `because` out and behaves exactly as it did before, which is the
+#: same choice this adapter makes everywhere it cannot measure something. The phrases are
+#: kept narrow for that reason — a loose one costs a wrong word in a total, which is worse
+#: than an absent one because nothing can see it.
+CLASSIFIED = (
+    (("rate limit", "rate_limit", "too many requests"), "rate_limited"),
+    (("usage limit", "usage_limit", "quota", "allowance"), "usage_exhausted"),
+    (("credit balance", "insufficient credit", "out of credit"), "no_credit"),
+    (LOGGED_OUT, "signed_out"),
+    (("prompt is too long", "context low", "exceeds the context", "context window"),
+     "context_exceeded"),
+)
+
+
+def _classified(said: str) -> str | None:
+    """One of the seam's closed words for why this stopped, or none rather than a guess."""
+    lowered = said.lower()
+    for phrases, word in CLASSIFIED:
+        if any(phrase in lowered for phrase in phrases):
+            return word
+    return None
 
 
 def _n(counted: dict, what: str) -> int:
