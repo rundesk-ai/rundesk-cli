@@ -796,14 +796,10 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
 
 
 class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
-    """R-AGT-16 — the fallback, and the fact that it is one place.
+    """R-AGT-16 — every applicable instruction is appended in one stable order.
 
-    Four things could say what a turn is told about its situation, and what is nearest wins:
-    the schedule's or the turn's own, then the surface it arrived on, then the agent's, then
-    the one line rundesk says about that situation. Each caller working the order out for
-    itself would be four orders that agree until one of them does not — and the way that
-    fails is silent, because an agent told the wrong thing about where it is answers perfectly
-    well and wrongly.
+    Rundesk's trigger context, the agent owner's instructions, and the turn's own
+    instructions answer different questions. None silently displaces another.
     """
 
     def situation(self, said: str) -> str:
@@ -818,21 +814,21 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
                         "rundesk's own words did not come first")
         return said[len(standing):].strip()
 
-    def test_what_a_turn_was_told_itself_wins(self):
-        """R-AGT-16 — nearest first, so a schedule or a command can always override."""
+    def test_turn_instructions_append_after_agent_instructions(self):
+        """R-AGT-16 — a command adds instructions without displacing either earlier layer."""
         self.made()
         agent.remember("ava", self.where, instructions="what the agent says")
-        self.assertEqual("what this turn says",
+        self.assertEqual("what rundesk would say\n\nwhat the agent says\n\nwhat this turn says",
                          self.situation(agent.told("ava", self.where, said="what this turn says",
-                                    otherwise="what rundesk would say")))
+                                    regardless="what rundesk would say")))
 
-    def test_the_agents_own_is_next(self):
-        """R-AGT-16 — the tier that had a column, a writer and no reader at all."""
+    def test_agent_instructions_append_after_rundesk_context(self):
+        """R-AGT-16 — the stored owner layer follows, rather than replacing, core context."""
         self.made()
         agent.remember("ava", self.where, instructions="what the agent says")
-        self.assertEqual("what the agent says",
+        self.assertEqual("what rundesk would say\n\nwhat the agent says",
                          self.situation(agent.told("ava", self.where,
-                                                   otherwise="what rundesk would say")))
+                                                   regardless="what rundesk would say")))
 
     def test_rundesks_own_line_is_last(self):
         """R-AGT-16 — something that says what the situation is beats something that says
@@ -840,7 +836,7 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
         self.made()
         self.assertEqual("what rundesk would say",
                          self.situation(agent.told("ava", self.where,
-                                                   otherwise="what rundesk would say")))
+                                                   regardless="what rundesk would say")))
 
     def test_nothing_anywhere_is_nothing_rather_than_a_guess(self):
         """R-AGT-16 — a person at a terminal is watching, so there is nothing to tell them
@@ -866,7 +862,7 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
         agent.remember("ava", self.where, instructions="")
         self.assertEqual("what rundesk would say",
                          self.situation(agent.told("ava", self.where,
-                                                   otherwise="what rundesk would say")))
+                                                   regardless="what rundesk would say")))
 
     def test_a_turn_the_clock_started_is_told_nobody_is_watching(self):
         """R-SCH-30 — the first trigger with no person at the other end. The fact that matters
@@ -893,12 +889,6 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
                       "a brain cannot tell which thought will be its last, so the rule it "
                       "can actually follow has to be the one it is given")
 
-    def test_a_turn_the_clock_started_with_no_schedule_named_still_says_the_situation(self):
-        """R-SCH-30 — the sentence is about the situation, not about the name, so it still
-        says the thing that matters when there is no name to give."""
-        from rundesk import schedule
-        self.assertIn("will not be answered", schedule.by_default(""))
-
     def test_what_rundesk_says_about_a_scheduled_turn_is_there_whatever_the_owner_wrote(self):
         """R-AGT-34 — the tier this moved out of. As the situation tier's last resort, an
         owner writing anything at all deleted it: a schedule told to focus on high-priority
@@ -917,7 +907,8 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
         about it, and a turn needs both."""
         self.made()
         agent.remember("ava", self.where, instructions="what the agent says")
-        self.assertEqual("nobody is watching\n\nfocus on the high-priority issues",
+        self.assertEqual("nobody is watching\n\nwhat the agent says\n\n"
+                         "focus on the high-priority issues",
                          self.situation(agent.told(
                              "ava", self.where, said="focus on the high-priority issues",
                              regardless="nobody is watching")))
@@ -1179,7 +1170,7 @@ class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):
         # Every agent was told, on every turn, to read something it could not find. What it
         # names now travels with the agent instead of being somewhere to go and look.
         self.assertIn("using-rundesk", said)
-        self.assertNotIn(".md", said)
+        self.assertNotIn("~/.rundesk", said)
 
 
 if __name__ == "__main__":

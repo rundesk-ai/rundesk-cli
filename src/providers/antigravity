@@ -163,10 +163,8 @@ def _prompt(asked: str) -> str:
     if not preface:
         return asked
     return (
-        "<rundesk-standing-instructions>\n"
-        + preface
-        + "\n</rundesk-standing-instructions>\n\n"
-        + asked
+        f"<rundesk-standing-instructions>\n{preface}\n"
+        f"</rundesk-standing-instructions>\n\n{asked}"
     )
 
 

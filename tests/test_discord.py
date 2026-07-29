@@ -40,7 +40,7 @@ for _packages in sorted((ROOT / ".venv" / "lib").glob("python3.*/site-packages")
 
 #: The seam itself, because which fields reach this surface is decided there and rendered
 #: here — and a list kept in two places is a list that disagrees with itself (R-CH-13).
-from rundesk import answering  # noqa: E402
+from rundesk import answering, channel  # noqa: E402
 
 
 def _adapter():
@@ -538,8 +538,9 @@ class WhereAMessageCameFrom(unittest.TestCase):
     answered a room of forty people in the voice it used for a direct message."""
 
     class Where:
-        def __init__(self, name=None):
+        def __init__(self, name=None, identifier=None):
             self.name = name
+            self.id = identifier
 
     class Thread(Where):
         pass
@@ -582,6 +583,61 @@ class WhereAMessageCameFrom(unittest.TestCase):
         self.assertEqual("the thread 'what changed today?' under #ops on the "
                          "'Rundesk' server",
                          discord._place(at, False, True))
+
+    def test_discord_maps_its_places_to_the_shared_channel_hierarchy(self):
+        """R-DIS-21, R-AGT-35 — Discord nouns do not leak into shared variable names."""
+        thread = self.Thread("release", 42)
+        thread.parent = self.Where("ops", 1180)
+        at = self.message(thread, self.Where("Acme", 99), shown="Tim")
+        self.assertEqual({
+            "channel_name": "ops",
+            "channel_id": "1180",
+            "channel_parent_name": "Acme",
+            "channel_parent_id": "99",
+            "channel_thread_name": "release",
+            "channel_thread_id": "42",
+        }, discord._prompt_context(at, False, True))
+
+    def test_discord_maps_an_ordinary_room_without_inventing_a_thread(self):
+        at = self.message(self.Where("ops", 1180), self.Where("Acme", 99), shown="Tim")
+        self.assertEqual({
+            "channel_name": "ops",
+            "channel_id": "1180",
+            "channel_parent_name": "Acme",
+            "channel_parent_id": "99",
+            "channel_thread_name": "",
+            "channel_thread_id": "",
+        }, discord._prompt_context(at, False, False))
+
+    def test_discord_maps_a_direct_message_without_platform_containers(self):
+        at = self.message(self.Where(None, 1180), shown="Tim")
+        self.assertEqual({
+            "channel_name": "a direct message",
+            "channel_id": "1180",
+            "channel_parent_name": "",
+            "channel_parent_id": "",
+            "channel_thread_name": "",
+            "channel_thread_id": "",
+        }, discord._prompt_context(at, True, False))
+
+    def test_discords_exact_legacy_defaults_are_replaced_but_owner_edits_are_not(self):
+        """R-DIS-21, R-CH-22 — old adapter defaults do not duplicate the standardized
+        trigger, while text an owner changed stays additive."""
+        for shape, direct in ((discord.DMS, True), (discord.ROOMS, False)):
+            old = discord.LEGACY_INSTRUCTIONS[shape]
+            arrived = {"direct": direct, "where": "#ops", "called": "Tim",
+                       channel.PROMPT_REPLACES: old}
+            built = channel.preface(
+                {"kind": "discord", channel.INSTRUCTIONS: old},
+                "ava", "discord-" + shape, arrived,
+            )
+            self.assertNotIn("reached over discord", built)
+            changed = old + "\nOwner addition."
+            kept = channel.preface(
+                {"kind": "discord", channel.INSTRUCTIONS: changed},
+                "ava", "discord-" + shape, arrived,
+            )
+            self.assertIn("Owner addition.", kept)
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")

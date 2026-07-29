@@ -47,7 +47,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 22 modules)
+## Backend / Services (src/rundesk/ — 23 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -62,14 +62,17 @@ file with it.
   holds. A new agent's home is copied from `src/templates/agent/` — stubs an owner reads and edits, kept beside the package rather than inside it, and what a home holds is read off that
   directory rather than listed in code. What a name may be is stricter here than for a gateway: one path
   component, standing where agents are kept, and never a word a gateway writes beside some other name.
+- `src/rundesk/instructions.py` — Rundesk's core and trigger instructions, their communication-agnostic
+  variables, and the builder that composes them with adapter and owner additions.
 - `src/rundesk/provider.py` — the seam a brain is reached through, and nothing about any
   particular brain. Resolves a provider — a shipped adapter, or a path to a program somebody wrote — into
   something runnable, builds the environment it is told everything through, asks what it can do, and reads
   one of its records. **Enumerates nothing**: no list of providers and no list of models, so one rundesk
   has never heard of is the ordinary case. A vendor name appearing in this file is the seam already failing.
-- `src/providers/` — the brains that ship, one program each. Not modules: nothing imports them
-  and they import nothing of ours, so a vendor's flags, stream shape, session file and usage arithmetic
-  live in one file and reach no further. Four so far — `codex`, `claude`, `grok` and `antigravity` — and adding the
+- `src/providers/` — the brains that ship, one program each. Not modules: nothing imports them and they
+  import nothing of Rundesk's, so a vendor's flags, system-prompt transport, stream shape, session file
+  and usage arithmetic live in one file and reach no further. Four so far —
+  `codex`, `claude`, `grok` and `antigravity` — and adding the
   latter three changed nothing above this line, which is the claim the seam was built to make. Each is
   driven offline by a suite of its own against real captured output in `tests/samples/`.
 - `src/rundesk/channel.py` — the seam a surface is reached through, and nothing about any
@@ -81,9 +84,9 @@ file with it.
   surface calls its places arrives as options this file hands straight back unread. It also holds the two
   decisions a surface does not get to make — what state a turn is in, and that what a brain *says* is
   handed over once and whole. A platform's word appearing in this file is the seam already failing.
-- `src/channels/` — the surfaces that ship, one program each. Not modules: nothing imports
-  them and they import nothing of ours, so a platform's ids, intents and limits live in one file and
-  reach no further.
+- `src/channels/` — the surfaces that ship, one program each. Not modules: nothing imports them and they
+  import nothing of Rundesk's, so a platform's ids, prompt additions, intents and limits live in one file
+  and reach no further.
 - `src/rundesk/answering.py` — what arrives on a channel, carried through to an answer: the mirror of
   `turn.py`, and the only module that knows `channel`, `turn` and `agent` all exist. Two things
   live here and nowhere else, because two surfaces deciding either separately would eventually disagree
@@ -182,7 +185,7 @@ file with it.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 25 files, ~1500 cases)
+## Tests (tests/ — 28 files, ~1500 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
@@ -210,6 +213,7 @@ provider. One file per contract, named for it:
 | `test_channel.py` | 65 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
 | `test_answering.py` | 94 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
 | `test_discord.py` | 148 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up |
+| `test_instructions.py` | 8 | Rundesk's core and trigger prompts, standard variables, and additive builder |
 | `test_ci.py` | 11 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, and the supported matrix |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and

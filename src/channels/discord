@@ -79,27 +79,21 @@ TOKEN_FILE = "token"
 #: allowed list and a set of instructions for each.
 DMS, ROOMS = "dms", "rooms"
 
+# Defaults shipped by older Discord adapters and persisted into channel records. They are
+# sent back verbatim as `prompt_replaces` so Rundesk can omit only an untouched old default;
+# owner-modified instructions remain appended. Discord owns these Discord-specific words.
+LEGACY_INSTRUCTIONS = {
+    DMS: """You are {agent}, reached over {kind} in a private conversation with {called}.
+Nobody else can read it, so answer directly and at whatever length the question needs.""",
+    ROOMS: """You are {agent}, reached over {kind} in {where.channel} on the {where.server} server,
+and {called} is asking. Anyone in that room can read what you write. Keep replies short
+enough to read on a phone, and never paste a credential, a private path, or anything
+said to you in confidence somewhere else.""",
+}
+
 #: How many servers to name when saying what a room channel reaches. A bot in forty
 #: servers has a description nobody reads; the count of the rest says the same thing.
 GUILDS_SHOWN = 3
-
-#: What an agent is told about each, to start from. **A starting point and not a rule**: it
-#: is written into the channel record where an owner can read it and rewrite it, with
-#: `rundesk channels <agent> instructions <channel>`. Written here rather than in the core because
-#: what is true about a Discord room is a Discord-shaped fact, and the core does not know
-#: this platform has rooms.
-INSTRUCTIONS = {
-    DMS: """
-You are {agent}, reached over {kind} in a private conversation with {called}.
-Nobody else can read it, so answer directly and at whatever length the question needs.
-""",
-    ROOMS: """
-You are {agent}, reached over {kind} in {where.channel} on the {where.server} server,
-and {called} is asking. Anyone in that room can read what you write. Keep replies short
-enough to read on a phone, and never paste a credential, a private path, or anything
-said to you in confidence somewhere else.
-""",
-}
 
 #: The pieces of a place, which an owner writes as `{where.channel}` and `{where.server}`.
 #: Declared here so a misspelt one is refused when it is written; `where` on its own is
@@ -735,7 +729,9 @@ class Agent(discord.Client):
         say(type="arrived", conversation=str(conversation), user=str(message.author.id),
             text=text, ref=str(message.id), direct=direct, attachments=brought,
             where=_place(message, direct, in_thread), called=_who(message),
-            parts=_parts(message, direct, in_thread))
+            prompt_replaces=LEGACY_INSTRUCTIONS[DMS if direct else ROOMS],
+            parts=_parts(message, direct, in_thread),
+            **_prompt_context(message, direct, in_thread))
 
     async def _fetch(self, message: discord.Message) -> list:
         """Put whatever somebody attached where the agent can read it (R-CH-17).
@@ -1300,14 +1296,38 @@ def _parts(message, direct: bool, in_thread: bool) -> dict:
         return {}
     where = message.channel
     under = getattr(where, "parent", None) if in_thread else None
-    named = getattr(under or where, "name", None)
+    channel = under or where
+    named = getattr(channel, "name", None)
+    server = getattr(message, "guild", None)
     return {what: value for what, value in (
         # With the hash, because that is how Discord writes a channel and how anyone
         # reading the agent's reply would expect to see it named.
         ("channel", f"#{named}" if named else None),
-        ("server", getattr(getattr(message, "guild", None), "name", None)),
+        ("server", getattr(server, "name", None)),
         ("thread", getattr(where, "name", None) if in_thread else None),
     ) if value}
+
+
+def _prompt_context(message, direct: bool, in_thread: bool) -> dict:
+    """Map Discord's place hierarchy onto communication-agnostic prompt variables."""
+    destination = message.channel
+    parent = getattr(destination, "parent", None) if in_thread else None
+    channel = parent or destination
+    container = getattr(message, "guild", None)
+    return {
+        "channel_name": (
+            "a direct message" if direct else str(getattr(channel, "name", "") or "")
+        ),
+        "channel_id": str(getattr(channel, "id", "") or ""),
+        "channel_parent_name": str(getattr(container, "name", "") or ""),
+        "channel_parent_id": str(getattr(container, "id", "") or ""),
+        "channel_thread_name": (
+            str(getattr(destination, "name", "") or "") if in_thread else ""
+        ),
+        "channel_thread_id": (
+            str(getattr(destination, "id", "") or "") if in_thread else ""
+        ),
+    }
 
 
 def room_matches(said: str, named: str) -> bool:
@@ -1674,7 +1694,7 @@ def _shape(chose, suffix: str, describes: str, **where) -> dict:
         ("bot", chose.bot), ("token_from", chose.token_from),
         ("activity", chose.activity), *where.items()) if value}
     return {"suffix": suffix, "describes": describes, "settings": settings,
-            "fills": list(FILLS[suffix]), "instructions": INSTRUCTIONS[suffix].strip()}
+            "fills": list(FILLS[suffix])}
 
 
 async def carry(chose) -> int:

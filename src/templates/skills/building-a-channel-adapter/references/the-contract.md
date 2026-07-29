@@ -113,7 +113,7 @@ That is the whole of what you say. Six kinds of record, and only `arrived` start
 | | must have | may have |
 |---|---|---|
 | `ready` | | |
-| `arrived` | `conversation`, `user` | `text` · `ref` · `direct` · `attachments` · `where` · `called` · `parts` |
+| `arrived` | `conversation`, `user` | `text` · `ref` · `direct` · `attachments` · `where` · `called` · `parts` · standard channel context · prompt override/append/replaces |
 | `control` | `conversation`, `user`, `control` | `ref` |
 | `configure` | `conversation`, `user`, `provider`, `ref` | |
 | `query` | `conversation`, `user`, `query`, `ref` | |
@@ -186,12 +186,10 @@ question the adapter could answer itself.
  "shapes": [
    {"suffix": "dms",   "describes": "direct messages to acme-bot",
     "settings": {"dm": true},
-    "fills": [],
-    "instructions": "You are {agent}, in a private conversation with {called}."},
+    "fills": []},
    {"suffix": "rooms", "describes": "#ops in Acme",
     "settings": {"room": "1180"},
-    "fills": ["channel", "server"],
-    "instructions": "You are {agent} in {where.channel} on the {where.server} server. Others read this."}
+    "fills": ["channel", "server"]}
  ]}
 ```
 
@@ -203,10 +201,9 @@ Three things belong to a shape and not to the whole:
 
 - **`settings`** — narrowed to that place and nothing else, so the direct-message channel
   is told nothing about a room and cannot drift into answering in one.
-- **`instructions`** — what the agent is told about that kind of place, to start from. **A starting
-  point, never a rule**: it is written into the record where an owner reads it and rewrites
-  it. Write it as if you were explaining the room to somebody who has never seen your
-  platform.
+- **`instructions`** — an optional adapter-specific addition for that kind of place. It is
+  written into the record where an owner reads and rewrites it, and it appends after
+  Rundesk's trigger instruction rather than replacing it.
 - **`fills`** — the pieces of a place you promise to supply, which an owner writes as
   `{where.channel}`. Declare them and they are checked when an owner writes them; leave them
   out and `{where}` on its own is all anybody can use.
@@ -219,6 +216,22 @@ up — `{"channel": "#ops", "server": "Acme"}` — under the names you declared 
 an owner can say "you are in {where.channel}" without dragging the server along with it. A
 phrase is all `where` can ever be; the parts are what makes it writable. Both are optional and separately
 so; say neither and everything works exactly as before.
+
+Also report the standard context your platform can supply: `channel_name`, `channel_id`,
+`channel_parent_name`, `channel_parent_id`, `channel_thread_name`, and
+`channel_thread_id`. These describe a destination, an optional containing place, and an
+optional nested conversation without teaching Rundesk platform nouns. A Discord server is
+a parent place; an email adapter may use a mailbox there; an iMessage adapter may leave it
+empty. `conversation` remains the stable identifier for the exact exchange.
+
+Set `direct` to `true` for a private conversation and `false` for a public room or thread;
+Rundesk uses that trigger to select its standard instruction. If your adapter needs
+different wording for one arrival, `prompt_override` replaces only that trigger
+instruction and `prompt_append` adds wording after it. Neither can replace Rundesk's core
+instruction. An adapter shipped with Rundesk may use `prompt_replaces` to identify one
+exact default that an older shipped version stored as owner instructions; arbitrary
+adapters cannot remove owner text, and anything the owner changed remains additive. Keep
+platform-specific variables and wording inside your adapter.
 
 Say them anyway. Without them a brain is handed the words and nothing else, so it answers a
 room of forty people in the same voice it uses for a direct message, and the person it is

@@ -199,23 +199,15 @@ class Answering:
 
     def _from(self, it: dict) -> str:
         """What this agent is told about the situation, before it reads the words
-        (R-CH-21, R-CH-22, R-AGT-16, R-AGT-17).
+        (R-CH-21, R-CH-22, R-AGT-16, R-AGT-17, R-AGT-35).
 
-        Three things could say it and what is nearest wins: this channel's own, then the
-        agent's, then the one line rundesk says when nobody has said anything. Rundesk's
-        stable standing words precede whichever situational tier wins.
+        Rundesk's core and channel instructions come first. A channel or adapter may
+        override only the channel layer or append to it; the agent owner's instructions
+        always append and never displace either core layer.
         """
-        said = self.record.get(channel.INSTRUCTIONS)
-        if isinstance(said, str) and said.strip():
-            # The channel is the nearest situational tier. Pass only the invariant prefix:
-            # handing the agent-level situation too would make both tiers reach the turn.
-            otherwise = agents.standing(self.name)
-        else:
-            otherwise = agents.told(
-                self.name, self._where, otherwise=channel.by_default(self.record, it))
         return channel.preface(
             self.record, self.name, self.channel, it,
-            otherwise=otherwise)
+            append=agents.added_instructions(self.name, self._where))
 
     #: What rundesk says on a surface when a scheduled run that will report there begins
     #: (R-SCH-46). Rundesk's own bookkeeping and never the agent's prose: an owner cannot

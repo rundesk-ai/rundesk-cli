@@ -510,9 +510,8 @@ class WhereABrainIsAnswering(CarriesAConversation):
         self.assertEqual("You are ava, and you are brief.", said,
                          "the agent's own was passed over for rundesk's default sentence")
 
-    async def test_what_this_channel_says_still_wins_over_the_agents(self):
-        """R-AGT-16, R-AGT-17, R-CH-22 — nearest situational wording wins without
-        replacing Rundesk's stable standing prefix."""
+    async def test_channel_and_agent_instructions_both_append(self):
+        """R-AGT-16, R-AGT-17, R-CH-22 — neither owner layer replaces another."""
         agents.remember("ava", self.where, instructions="what the agent says")
         brain, surface = Brain(), Surface()
         held = self.answering(surface, brain,
@@ -521,37 +520,37 @@ class WhereABrainIsAnswering(CarriesAConversation):
         said = brain.asked[0]["preface"]
         self.assertTrue(said.startswith(agents.standing("ava")))
         self.assertIn("Keep it short here.", said)
-        self.assertNotIn("what the agent says", said)
+        self.assertIn("what the agent says", said)
         self.assertLess(said.index("rundesk messages ava"), said.index("Keep it short here."))
+        self.assertLess(said.index("Keep it short here."), said.index("what the agent says"))
 
     async def test_a_brain_is_told_which_surface_and_conversation_it_is_answering_in(self):
         """R-CH-21 — the surface, the channel the owner named, the place as that surface
         shows it, and who is asking."""
         brain, surface = Brain(), Surface()
         held = self.answering(surface, brain)
-        await self.carry(held, dict(self.arrived(),
-                                    where="#ops on the Rundesk server", called="Tim"))
+        await self.carry(held, dict(
+            self.arrived(), direct=False,
+            where="#ops on the Rundesk server", called="Tim",
+        ))
         said = brain.asked[0]["preface"]
         self.assertEqual("what changed?", brain.asked[0]["prompt"],
                          "the situation was folded into what the person typed")
-        self.assertIn("over somewhere", said)
+        self.assertIn("through somewhere", said)
         self.assertNotIn("'ops'", said, "rundesk's own label for the connection is not "
                          "the agent's business, and collides with the platform's own word")
         self.assertIn("in #ops on the Rundesk server", said)
-        self.assertIn("from Tim", said)
+        self.assertIn("responding to Tim", said)
 
     async def test_a_surface_that_names_neither_is_answered_exactly_as_before(self):
-        """R-CH-21 — separately optional. A surface with no name for the place or the
-        person still says which surface it is, and nothing is invented for the rest."""
+        """R-CH-21 — an adapter that supplies no trigger context gets none invented."""
         brain, surface = Brain(), Surface()
         held = self.answering(surface, brain)
         await self.carry(held, self.arrived())
         # Rundesk's own words come first on every turn now (R-AGT-17) and legitimately
         # contain ", in " — so the guard reads what the *surface* added, not the whole of it.
         said = brain.asked[0]["preface"].replace(agents.standing("ava"), "").strip()
-        self.assertIn("over somewhere", said)
-        self.assertNotIn(", in ", said)
-        self.assertNotIn(", from ", said)
+        self.assertEqual("", said)
 
     async def test_a_channel_of_an_unnamed_kind_says_nothing_about_where_it_is(self):
         """R-CH-21 — a half-written line about a surface with no name is worse than no
