@@ -26,8 +26,13 @@ import json
 import os
 import re
 import sys
+import tempfile
+import threading
+import textwrap
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -65,6 +70,25 @@ def carried(lines=None) -> tuple:
 
 def only(said: list, kind: str) -> list:
     return [one for one in said if one["type"] == kind]
+
+
+class Sink:
+    """A text pipe whose contents remain inspectable after the writer closes it."""
+
+    def __init__(self):
+        self.text = ""
+
+    def write(self, said: str) -> None:
+        self.text += said
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def getvalue(self) -> str:
+        return self.text
 
 
 class WhatTheGoldenSaysBack(unittest.TestCase):
@@ -493,6 +517,7 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
         argv = self.opening()
         self.assertIn("--verbose", argv)
         self.assertIn("-p", argv)
+        self.assertEqual("stream-json", argv[argv.index("--input-format") + 1])
         self.assertEqual("stream-json", argv[argv.index("--output-format") + 1])
 
     def test_a_new_conversation_is_named_before_the_first_byte(self):
@@ -515,8 +540,7 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
         cannot eat it."""
         argv = self.opening(preface="stand here")
         self.assertNotIn("-p", argv[argv.index("-p") + 1:], "the prompt looks like a flag value")
-        source = AT.read_text(encoding="utf-8")
-        self.assertIn("sys.stdin.read()", source)
+        self.assertIn("--input-format", argv)
 
     def test_what_an_owner_set_reaches_the_brain_unread(self):
         """R-PRV-16. Their words for their brain: a new option on this CLI is theirs to
@@ -604,16 +628,144 @@ class WhatThisBrainCanDo(unittest.TestCase):
         for what, said in claude.CAN.items():
             self.assertIsInstance(said, bool, f"{what} is not a yes or a no")
 
-    def test_it_does_not_claim_it_can_be_sent_to_mid_turn(self):
-        """Measured: `claude -p` reads its prompt and runs to the end. Claiming `steer`
-        would have rundesk hold this adapter's input open for a brain that will never read
-        again, which is a turn that never ends."""
-        self.assertFalse(claude.CAN["steer"])
+    def test_it_claims_the_interrupt_protocol_as_mid_turn_steering(self):
+        """R-PRV-19. A control interrupt plus a new message changes the active work."""
+        self.assertTrue(claude.CAN["steer"])
+
+    def test_the_protocol_initializes_then_interrupts_before_the_later_word(self):
+        words = claude.Words("count to ten", io.StringIO(
+            '{"type":"say","text":"actually, stop at three"}\n'))
+        output, control = Sink(), claude.Control()
+        thread = threading.Thread(
+            target=claude._fed,
+            args=(output, words, claude.threading.Event(), control))
+        thread.start()
+
+        def records():
+            return [json.loads(line) for line in output.getvalue().splitlines()]
+
+        for request in ("rundesk_1", "rundesk_2"):
+            limit = time.monotonic() + 1
+            while not any(one.get("request_id") == request for one in records()):
+                self.assertLess(time.monotonic(), limit, "the control request was not sent")
+                time.sleep(0.001)
+            control.heard({"type": "control_response", "response": {
+                "subtype": "success", "request_id": request, "response": {}}})
+            if request == "rundesk_2":
+                self.assertTrue(control.interrupted(),
+                                "the interrupted request's result was not drained")
+        thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+
+        said = records()
+        self.assertEqual(["control_request", "user", "control_request", "user"],
+                         [one["type"] for one in said])
+        self.assertEqual("initialize", said[0]["request"]["subtype"])
+        self.assertEqual("count to ten", said[1]["message"]["content"])
+        self.assertEqual("interrupt", said[2]["request"]["subtype"])
+        self.assertEqual("actually, stop at three", said[3]["message"]["content"])
+
+    def test_an_interrupted_result_is_not_the_end_and_its_usage_is_not_lost(self):
+        control = claude.Control()
+        control._interrupted_results = 1
+        interrupted = {"type": "result", "usage": {
+            "input_tokens": 3, "output_tokens": 5}}
+        final = {"type": "result", "usage": {
+            "input_tokens": 7, "output_tokens": 11}}
+        self.assertTrue(control.interrupted())
+        control.counted(interrupted)
+        self.assertEqual({"input_tokens": 10, "output_tokens": 16},
+                         control.with_usage(final)["usage"])
+
+    def test_a_control_response_is_kept_out_of_the_provider_record_stream(self):
+        control = claude.Control()
+        self.assertTrue(control.heard({"type": "control_response", "response": {
+            "subtype": "success", "request_id": "not-ours"}}))
+
+    def test_a_refused_interrupt_does_not_consume_the_real_ending(self):
+        output, control, accepted = Sink(), claude.Control(), []
+        thread = threading.Thread(
+            target=lambda: accepted.append(control.request(output, "interrupt")))
+        thread.start()
+        limit = time.monotonic() + 1
+        while not output.getvalue():
+            self.assertLess(time.monotonic(), limit, "the interrupt request was not sent")
+            time.sleep(0.001)
+        request = json.loads(output.getvalue())["request_id"]
+        control.heard({"type": "control_response", "response": {
+            "subtype": "error", "request_id": request, "error": "not active"}})
+        thread.join(timeout=1)
+        self.assertEqual([False], accepted)
+        self.assertFalse(control.interrupted(),
+                         "the next real result would be discarded as an interruption")
 
     def test_it_claims_the_four_things_the_golden_proves(self):
         for what in ("tools", "resume", "usage", "model"):
             self.assertTrue(claude.CAN[what], f"{what} is proven by the golden and not claimed")
 
+
+class WhenTheActiveClaudeRequestIsSteered(unittest.TestCase):
+    """The whole adapter/CLI exchange, using a deterministic local stand-in."""
+
+    FAKE = textwrap.dedent("""\
+        import json
+        import sys
+
+        def read():
+            return json.loads(sys.stdin.readline())
+
+        def write(record):
+            print(json.dumps(record), flush=True)
+
+        initialize = read()
+        write({"type": "control_response", "response": {
+            "subtype": "success", "request_id": initialize["request_id"], "response": {}}})
+
+        first = read()
+        write({"type": "system", "subtype": "init", "session_id": "same-session",
+               "model": "claude-test"})
+        write({"type": "assistant", "session_id": "same-session",
+               "message": {"content": [{"type": "text", "text": "working on the first"}]}})
+
+        interrupt = read()
+        write({"type": "control_response", "response": {
+            "subtype": "success", "request_id": interrupt["request_id"], "response": {}}})
+        write({"type": "result", "subtype": "error_during_execution", "is_error": True,
+               "session_id": "same-session", "result": "Request interrupted by user",
+               "usage": {"input_tokens": 3, "output_tokens": 5}})
+
+        replacement = read()
+        write({"type": "assistant", "session_id": "same-session",
+               "message": {"content": [{"type": "text", "text": "followed the correction"}]}})
+        write({"type": "result", "subtype": "success", "is_error": False,
+               "session_id": "same-session",
+               "usage": {"input_tokens": 7, "output_tokens": 11}})
+        """)
+
+    def test_one_process_is_interrupted_and_continues_with_the_new_instruction(self):
+        words = claude.Words("do the first thing", io.StringIO(
+            '{"type":"say","text":"do this instead"}\n'))
+        reported = []
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / "fake_claude.py"
+            fake.write_text(self.FAKE, encoding="utf-8")
+            with mock.patch.object(claude, "say",
+                                   side_effect=lambda **record: reported.append(record)):
+                code, lost = claude._turn(
+                    [sys.executable, str(fake)], directory, words, dict(os.environ),
+                    "same-session")
+
+        self.assertEqual((0, False), (code, lost))
+        self.assertEqual(["working on the first", "followed the correction"],
+                         [one["text"] for one in only(reported, "text")])
+        self.assertEqual(1, len(only(reported, "done")),
+                         "the interrupted request was mistaken for Rundesk's turn ending")
+        self.assertTrue(only(reported, "done")[0]["ok"])
+        self.assertEqual("same-session", only(reported, "done")[0]["session"])
+        usage = only(reported, "usage")
+        self.assertEqual(1, len(usage))
+        self.assertEqual((10, 16), (usage[0]["input"], usage[0]["output"]),
+                         "work before the interruption disappeared from the turn's cost")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
