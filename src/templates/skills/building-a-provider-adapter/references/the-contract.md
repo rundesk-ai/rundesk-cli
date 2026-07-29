@@ -169,7 +169,7 @@ open for one that will never read again is a turn that never ends.
 {"type": "think",  "text": "The error is in the parser."}
 {"type": "tool",   "id": "1", "name": "Bash", "did": "run"}
 {"type": "result", "id": "1", "ok": true, "summary": "3 files changed"}
-{"type": "usage",  "input": 1200, "output": 340, "cached": 8000, "model": "…"}
+{"type": "usage",  "input": 1200, "output": 340, "cached": 8000, "session": 9200, "model": "…"}
 {"type": "file",   "at": "/…/workspace/chart.png", "name": "chart.png"}
 {"type": "done",   "ok": true, "session": "019f954d-ad60-7f91"}
 ```
@@ -186,12 +186,24 @@ That is the contract. Seven kinds of record, and only `done` is required.
 | `text` · `think` | `text` | `whole` |
 | `tool` | `id` (a string) | `name` — your brain's own word · `did` |
 | `result` | `id`, matching a `tool` you sent | `ok` · `summary` |
-| `usage` | | `input` · `output` · `cached` · `model` |
+| `usage` | | `input` · `output` · `cached` · `written` · `session` · `model` |
 | `file` | `at` (an absolute path) | `name` |
 | `done` | `ok` | `session` · `why`, when it failed |
 
-`input` is **fresh tokens only** — what `cached` counts is not in it. Send more than one
-`usage` and they are added together, so report each as a share and never as a new total.
+`input` is **fresh tokens only** — what `cached` and `written` count is not in it. Those
+three are billed at three different rates, which is why they are three fields. Send more
+than one `usage` and they are added together, so report each as a share and never as a new
+total.
+
+`session` is the exception, and it is not a cost: **how big the conversation is now**, at
+the moment the turn ended. A person reads it to decide whether to start a fresh one, so it
+is a level and never a running total — it goes *down* when a conversation is compacted,
+which no total can. If your brain describes one prompt in pieces, add those pieces
+together: they are one prompt. Never add across the requests a turn made — that is a bill,
+it reaches millions on a conversation of thousands, and nobody can read it. Report it on
+your last `usage` record; where more than one carries it, the newest is the one shown.
+A `usage` record's `session` is a count of tokens and has nothing to do with `done`'s
+`session`, which is the handle a later turn is carried on from.
 
 Leave a field out rather than guessing at it: an absent `cached` means *you could not tell*,
 and is recorded differently from a `cached` of zero. If your brain gives you one input

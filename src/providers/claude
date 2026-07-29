@@ -39,6 +39,12 @@ against 302,567 cache reads. Cache *creation* is billed above standard input, so
 with fresh; cache *reads* are the cheap volume and go on their own. Summing them reports
 320,020 tokens at one price, which is real and misleading.
 
+**Except once, and it is not a bill.** How big the conversation is now is the one thing a
+person reads a footer to find out, and no billed quantity answers it. This vendor describes
+one prompt in three pieces — fresh, read back, written — so adding those three back
+together on the final message reassembles that prompt rather than summing across requests.
+It is reported beside the four and never instead of them.
+
 **A posture is the allowlist, not the mode.** `--permission-mode` is a prompting policy —
 measured: under `plan` with no allowlist this CLI reached for `Write` and wrote a file
 outside the repository, and `plan` never returned. The allowlist is what this adapter sets,
@@ -490,6 +496,20 @@ def _ended(one: dict, seen: dict) -> list:
              "output": _n(counted, "output_tokens"),
              "cached": _n(at_end, "cache_read_input_tokens"),
              "written": _n(at_end, "cache_creation_input_tokens")}
+
+    # **How big the conversation is now** (R-USE-15). The four slots above are what a turn
+    # is billed for, and none of them answers the question somebody reads a footer to ask:
+    # should I start a fresh conversation? Fresh input alone is 2 on any warm turn, which
+    # says nothing about a session at all.
+    #
+    # **Adding these three is not a sum across requests.** This vendor splits one prompt
+    # into three — what is fresh, what came back from the cache and what was written into
+    # it — so putting them back together reassembles the single prompt they describe, at
+    # the moment this turn ended. That is a level: after a compaction it goes down, which
+    # is the behaviour a gauge must have and a running total cannot.
+    session = _prompt(at_end)
+    if session is not None:
+        usage["session"] = session
     if seen.get("model"):
         usage["model"] = seen["model"]
 
@@ -545,6 +565,26 @@ def _classified(said: str) -> str | None:
 def _n(counted: dict, what: str) -> int:
     value = counted.get(what)
     return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+#: The three pieces this vendor splits one prompt into, and the whole of it. Named here
+#: because the same three are what makes a prompt whole and what makes the input side of a
+#: bill: read together they are one conversation, read apart they are three prices.
+PROMPT = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def _prompt(at_end: dict) -> int | None:
+    """How big the prompt this turn ended on was, or nothing rather than a guess.
+
+    Absent where this brain reported none of the pieces (R-USE-16) — the same choice
+    everything else in this adapter makes about a thing it cannot measure, because a
+    conversation reported as nought tokens is a measurement, stated plainly, and wrong.
+    A partial report is added as far as it goes and is a floor, which is what a count of
+    what was actually said always is.
+    """
+    said = [_n(at_end, what) for what in PROMPT
+            if isinstance(at_end.get(what), int) and not isinstance(at_end.get(what), bool)]
+    return sum(said) if said else None
 
 
 def _word(line: str):
