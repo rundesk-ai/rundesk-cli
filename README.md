@@ -7,7 +7,6 @@
   <a href="https://github.com/rundesk-ai/rundesk-cli/releases/latest"><img src="https://img.shields.io/github/v/release/rundesk-ai/rundesk-cli?style=flat-square" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square" alt="macOS">
-  <img src="https://img.shields.io/badge/build%20step-none-green?style=flat-square" alt="No build step">
 </p>
 <p align="center">
   ✨ <a href="#-highlights"><strong>Highlights</strong></a>
