@@ -24,6 +24,12 @@ report costs a maintainer more than a missing one:
   version is often a bug somebody already reported.
 - **Can you make it happen again?** One-off failures under load are worth mentioning to your
   owner; they are rarely worth an issue until they repeat.
+- **Did you *run* it, or only read it?** Tracing a defect in the source is a **hypothesis**,
+  not a finding — and it is the most convincing kind of wrong report, because a `file:line`
+  and a traced mechanism look exactly like proof. Run it before you file: a probe, a case
+  against the repository's own test harness, a real reproduction. Where it genuinely cannot be
+  run — it is destructive, it needs a real outage, it needs hardware you do not have — file it
+  anyway and **say in the body that it was not executed**, so a reader can weigh it.
 
 A defect is: rundesk did something **untrue** (reported success it did not earn, said a thing
 was there when it was not), **crashed**, **lost something**, or **disagreed with its own
@@ -37,6 +43,12 @@ gh issue list --repo rundesk-ai/rundesk-cli --search "<a distinctive phrase from
 
 If one exists, **add a comment rather than a second issue** — say what your reproduction adds
 that the original does not. Duplicate issues are the fastest way to make a tracker useless.
+
+**And if an existing issue is simply wrong, say so on it.** A report nobody corrected is one
+somebody eventually builds against: a wrong root cause sends the fix at the wrong code, and a
+false claim in a title outlives every comment under it. Correcting a report — your own or
+anybody's — is worth as much as filing a good one, and closing it with the measurement is the
+whole of the work.
 
 ## Gather the evidence
 
@@ -87,6 +99,8 @@ Title reads like a commit subject — `doctor: reports READY for an agent with n
 
 **Expected:** <what should have happened>
 **Actual:** <what happened, trimmed to the failure>
+<!-- If this was traced in the source rather than run, say so here, in these words:
+     "This was not executed — the path was read and <why running it was not possible>." -->
 
 ## Environment
 - rundesk `<rundesk version>`
@@ -102,6 +116,11 @@ Title reads like a commit subject — `doctor: reports READY for an agent with n
 Add `--label bug` only if that label exists; a label that does not is an error, not a note.
 
 ## Gotchas
+
+**A traced mechanism is not an observed failure, and it is the most convincing way to be
+wrong.** A `file:line` says where to look; it never says that the thing happens. Keep the two
+apart in the body — what you read, and what you saw — so a reader can tell which claim rests
+on which.
 
 **A crash is a stack trace, and a stack trace is evidence — but read it first.** It names the
 file and line, and often shows the bug is in a skill, a channel adapter, or a brain rather than

@@ -79,7 +79,32 @@ billing, data loss or privacy, or production/deploy. State the blast radius and 
 
 ## How to test by hand   <!-- only when a human should verify user-facing behaviour -->
 <3–5 bullets: what changed and where to see it; the steps; the expected result.>
+
+Closes #<n>.   <!-- one line per issue this fixes; see below — a bare #<n> closes nothing -->
 ```
+
+## Close what you fixed, or the work did not happen
+
+**A merged fix whose issue is still open reads as a fix that was never made.** The tracker is
+what people check, not the release notes.
+
+GitHub acts on a **closing keyword** and on nothing else — `Closes #12`, `Fixes #12`,
+`Resolves #12`, one per issue, each with its own `#`. A bare `#12` renders as a link and reads
+to a human exactly like a promise, and closes nothing at all. `Closes #12 and #13` closes only
+`#12`.
+
+**Check it, do not trust the body.** The list GitHub will actually act on is its own:
+
+```sh
+gh pr view <n> --json closingIssuesReferences --jq '.closingIssuesReferences[].number'
+```
+
+Empty output on a PR that fixes something is the bug, and it is invisible in review — the
+body looks right. Run this **before merging**, not after. Where a PR names an issue it is
+only *referring* to, say so in the body so a reader knows the omission was a decision.
+
+Squash merges carry the PR body, so a keyword in the body is enough; a keyword in a commit
+message that gets squashed away is not.
 
 ## Writing each section
 
@@ -136,6 +161,11 @@ or task for exhaustive detail.
 **Never put identity or tool branding anywhere** — the rule at the top of this file, repeated
 here because this is where it gets broken. A trailer a harness added for you is still a trailer
 you left in.
+
+**`#12` is not `Closes #12`.** The body reads identically to a human and does nothing on
+merge, which is why this survives review. Check `closingIssuesReferences` before merging —
+a release that ships four fixes and leaves four issues open is a release nobody can tell
+happened.
 
 **A root cause is a mechanism, not a louder Problem.** "The handler used the first line's model
 and never checked the rest" is a cause. "Batches were handled wrongly" is the problem restated.
