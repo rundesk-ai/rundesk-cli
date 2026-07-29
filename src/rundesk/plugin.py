@@ -382,13 +382,14 @@ class Outcome:
     still there, because a single plugin moved on its own deserves one.
     """
 
-    #: The four things that can become of a plugin. `UNCHANGED` is not `CURRENT`: one means
-    #: there was nothing newer, the other that it could not be looked at properly, and
-    #: folding them together is how "nothing happened" comes to mean two different things.
+    #: The four words a row can end in, and the line between them is **whether the plugin
+    #: still works**. `skipped` is a plugin that was not moved and is fine where it is;
+    #: `failed` is one that is now unreachable — off every agent's PATH until somebody
+    #: looks. That is the distinction somebody acts on, so it is the one the words carry.
     UPDATED = "updated"
     CURRENT = "up to date"
-    HELD = "held back"
-    UNCHANGED = "unchanged"
+    FAILED = "failed"
+    SKIPPED = "skipped"
 
     __slots__ = ("name", "was", "now", "state", "why")
 
@@ -406,12 +407,18 @@ class Outcome:
 
     @property
     def held(self) -> bool:
-        return self.state == self.HELD
+        """Installed and unreachable — the only state anybody has to do something about."""
+        return self.state == self.FAILED
 
     def __str__(self) -> str:
+        """One plugin on its own, which is the one place there is room for the reason.
+
+        A row in a list says only what became of it; a plugin somebody asked about by name
+        says why as well, because there is nothing else on the line to compete with it.
+        """
         if self.state == self.UPDATED:
             return f"{self.name}: {self.was} -> {self.now}"
-        if self.state == self.CURRENT:
+        if self.state == self.CURRENT and not self.why:
             return f"{self.name}: up to date"
         return f"{self.name}: {self.state}" + (f" — {self.why}" if self.why else "")
 
@@ -1007,7 +1014,7 @@ def update(name: str, where: Path | None = None, scripts_dir: Path | None = None
         entry = ledger(where).get(name) or {}
     source = entry.get("source")
     if not source:
-        return Outcome(name, Outcome.UNCHANGED, was=standing.version,
+        return Outcome(name, Outcome.SKIPPED, was=standing.version,
                        why="no record of where it came from")
     if entry.get("pinned"):
         return Outcome(name, Outcome.CURRENT, was=standing.version)
@@ -1018,9 +1025,9 @@ def update(name: str, where: Path | None = None, scripts_dir: Path | None = None
             got = (fetch or _fetch)(source, Path(work), say)
             coming = read(got.at)
         except NotAPlugin as why:
-            return Outcome(name, Outcome.UNCHANGED, was=standing.version, why=str(why))
+            return Outcome(name, Outcome.SKIPPED, was=standing.version, why=str(why))
         if coming.name != name:
-            return Outcome(name, Outcome.UNCHANGED, was=standing.version,
+            return Outcome(name, Outcome.SKIPPED, was=standing.version,
                            why=f"what is published there now calls itself {coming.name}")
         if standing.manifest and not updater.is_newer(coming.version, standing.version):
             # Not newer is not the same as broken, and it is not a failure: a plugin that
@@ -1034,11 +1041,11 @@ def update(name: str, where: Path | None = None, scripts_dir: Path | None = None
         if not fits(coming.requires, running):
             # **Held at the version it is on, never dragged into a rundesk it disclaims**
             # (R-PLG-14). The plugin that is installed still works; the new one would not.
-            return Outcome(name, Outcome.CURRENT, was=standing.version,
+            return Outcome(name, Outcome.SKIPPED, was=standing.version,
                            why=f"{coming.version} needs rundesk '{coming.requires}' and "
                                f"this is {running}")
         if got.tag and not _tag_matches(got.tag, coming.version):
-            return Outcome(name, Outcome.CURRENT, was=standing.version,
+            return Outcome(name, Outcome.SKIPPED, was=standing.version,
                            why=f"published as {got.tag} but its manifest says "
                                f"{coming.version}")
 
@@ -1052,7 +1059,7 @@ def update(name: str, where: Path | None = None, scripts_dir: Path | None = None
             _put_app_back(at, kept)
             hold(at, f"the move to {coming.version} failed: {why}")
             unlink(standing.manifest, at, scripts_dir, skills_dir)
-            return Outcome(name, Outcome.HELD, was=standing.version, now=coming.version,
+            return Outcome(name, Outcome.FAILED, was=standing.version, now=coming.version,
                            why=f"could not be moved to {coming.version}: {why}")
         _let_app_go(kept)
         release(at)
@@ -1061,7 +1068,7 @@ def update(name: str, where: Path | None = None, scripts_dir: Path | None = None
             link(read(at / APP), at, scripts_dir, skills_dir)
         except InTheWay as why:
             hold(at, str(why))
-            return Outcome(name, Outcome.HELD, was=standing.version, now=coming.version,
+            return Outcome(name, Outcome.FAILED, was=standing.version, now=coming.version,
                            why=str(why))
         remember(name, {**entry, "tag": got.tag, "sha256": got.sha256,
                         "version": coming.version,
@@ -1118,7 +1125,7 @@ def bring_forward(where: Path | None = None, scripts_dir: Path | None = None,
         # left to do about it.
         if one.manifest is None:
             unlink(None, one.at, scripts_dir, skills_dir)
-            said.append(Outcome(name, Outcome.HELD, why=one.why_unfit))
+            said.append(Outcome(name, Outcome.FAILED, why=one.why_unfit))
             continue
         # A plugin that no longer fits the rundesk about to run is held back before it is
         # asked to move, because the version it would move to is not the question — the
@@ -1127,7 +1134,7 @@ def bring_forward(where: Path | None = None, scripts_dir: Path | None = None,
             why = (f"needs rundesk '{one.manifest.requires}' and this is {running}")
             hold(one.at, f"{one.version} {why}")
             unlink(one.manifest, one.at, scripts_dir, skills_dir)
-            said.append(Outcome(name, Outcome.HELD, was=one.version, why=why))
+            said.append(Outcome(name, Outcome.FAILED, was=one.version, why=why))
             continue
         try:
             said.append(update(name, where, scripts_dir, skills_dir, running,
@@ -1136,7 +1143,7 @@ def bring_forward(where: Path | None = None, scripts_dir: Path | None = None,
             hold(one.at, str(trouble))
             with contextlib.suppress(Exception):
                 unlink(one.manifest, one.at, scripts_dir, skills_dir)
-            said.append(Outcome(name, Outcome.HELD, was=one.version, why=str(trouble)))
+            said.append(Outcome(name, Outcome.FAILED, was=one.version, why=str(trouble)))
     return said
 
 

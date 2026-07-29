@@ -1,6 +1,6 @@
 ---
 name: building-a-plugin
-description: How to write, publish and version a rundesk plugin — a bundle of commands and skills a third party installs from a GitHub release, with its own shared records and its own migrations. Use whenever anyone wants to package a capability so other people can install it, asks how to publish or release a plugin, asks why a plugin will not install or is held back, or wants an existing integration command turned into something installable.
+description: How to write, publish and version a rundesk plugin — a bundle of commands and skills a third party installs from a GitHub release, with its own shared records and its own migrations. Use whenever anyone wants to package a capability so other people can install it, asks how to publish or release a plugin, asks why a plugin will not install or has failed, or wants an existing integration command turned into something installable.
 ---
 
 # Building a plugin
@@ -109,9 +109,10 @@ it is refused outright, because a manifest is published.
 Rundesk gives programs a small environment, so anything exported in an interactive shell is not
 there. Read the file.
 
-## Why yours might be held back
+## Why yours might fail
 
-`HELD BACK` means installed and unreachable — kept, but off every agent's `PATH`.
+An update prints one word a plugin: `skipped` was not moved and still works, `failed` is
+installed and unreachable — kept, but off every agent's `PATH`. `rundesk plugins` says why.
 
 - **its `requires.rundesk` excludes the rundesk now running** — the commonest cause after an
   owner updates rundesk. Widen the range and publish;

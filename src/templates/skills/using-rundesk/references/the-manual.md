@@ -328,12 +328,16 @@ rundesk  0.15.0 -> 0.16.0  updated
 
 plugins:
   jira     1.4.0 -> 1.5.0    updated
-  linear   0.9.0             held back — needs rundesk '>=1.0.0'
+  linear   0.9.0             skipped
+  sentry   2.1.0 -> 2.2.0    failed
 ```
 
-A plugin that cannot be moved is *held back*: kept, but taken off every agent's `PATH` until
-somebody looks. **A plugin can never fail the update it was riding**, which is why a held-back
-one is reported rather than raised.
+One word each, and the line between them is whether the plugin still works. **`skipped`** was
+not moved and is fine where it is — usually a release needing a newer rundesk. **`failed`** is
+now unreachable: kept, but off every agent's `PATH` until somebody looks. `rundesk plugins`
+says why, and asking about one plugin by name — `rundesk plugins update <name>` — says why on
+the spot. **A plugin can never fail the update it was riding**, which is why a failed one is
+reported rather than raised.
 
 **Removing keeps what it kept.** `rundesk plugins remove <name>` pulls the command and the
 skills and leaves the records, so installing it again picks them back up. `--purge` takes those

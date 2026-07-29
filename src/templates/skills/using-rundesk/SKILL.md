@@ -47,7 +47,7 @@ and its skills are in the library. **You may already have one and not know it** 
 exists that is not yours and not rundesk's, `rundesk plugins` says where it came from.
 
 ```sh
-rundesk plugins                        what is installed, and what is held back
+rundesk plugins                        what is installed, and what failed
 rundesk plugins install <source>       what it declares — reads only, writes nothing
 rundesk plugins update                 move every plugin to what is published
 ```
@@ -56,9 +56,10 @@ rundesk plugins update                 move every plugin to what is published
 credentials the plugin declares and stops. That is the form to run when somebody asks what a
 plugin would do; adding `--confirm` is a decision your owner makes, not you.
 
-**`HELD BACK` means installed and unreachable.** A plugin whose update failed, or which no
-longer fits this rundesk, is kept but taken off every agent's `PATH` — so its command is gone
-and its records are not. `rundesk plugins` says which and why.
+**`failed` means installed and unreachable.** A plugin whose update failed, or which no longer
+fits this rundesk, is kept but taken off every agent's `PATH` — so its command is gone and its
+records are not. `skipped` is the harmless one: not moved, still working. `rundesk plugins`
+says which and why.
 
 **A plugin's records are shared.** Every agent reaches the same database, so what you write
 through a plugin's command, another agent reads. That is deliberate, and it means a plugin's
@@ -77,7 +78,7 @@ rundesk channels <you>              where you can be reached
 rundesk usage <you>                 what your turns have cost
 rundesk logs <you>                  what your gateway has been saying, when something failed
 rundesk skills                      every skill here, and which you were given
-rundesk plugins                     what is installed, at what version, and what is held back
+rundesk plugins                     what is installed, at what version, and what failed
 ```
 
 For the exact arguments, ask the command — `rundesk <verb> --help` is generated from the

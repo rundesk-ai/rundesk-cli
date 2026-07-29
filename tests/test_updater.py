@@ -62,7 +62,7 @@ class Moved:
 
     @property
     def held(self):
-        return self.state == "held back"
+        return self.state == "failed"
 
 
 class PluginsInTheWindowTests(unittest.TestCase):
@@ -98,10 +98,10 @@ class PluginsInTheWindowTests(unittest.TestCase):
     def test_an_update_lands_even_when_every_plugin_is_held_back(self):
         """R-PLG-15 — a stranger's release cannot take an owner's agents down."""
         code, said = self._update(
-            plugins=lambda: [Moved("jira", "held back", was="1.4.0", why="its step failed")])
-        self.assertEqual(0, code, "a held-back plugin failed the update")
+            plugins=lambda: [Moved("jira", "failed", was="1.4.0", why="its step failed")])
+        self.assertEqual(0, code, "a failed plugin failed the update")
         self.assertIn("update: applied", said)
-        self.assertIn("held back — its step failed", said)
+        self.assertIn("failed", said)
 
     def test_a_plugin_step_that_raises_is_not_something_an_update_has_to_survive(self):
         """R-PLG-15 — the callable is the boundary, and `cli` never lets one through."""
@@ -121,7 +121,7 @@ class PluginsInTheWindowTests(unittest.TestCase):
         """R-PLG-44 — rundesk first, because a plugin is judged against it."""
         _code, said = self._update(plugins=lambda: [
             Moved("jira", "updated", was="1.4.0", now="1.5.0"),
-            Moved("linear", "held back", was="0.9.0", why="needs rundesk '>=1.0.0'"),
+            Moved("linear", "skipped", was="0.9.0", why="needs rundesk '>=1.0.0'"),
             Moved("weather", "up to date", was="2.0.1"),
         ])
         # rundesk stands at the margin, the plugins are indented under their label.
@@ -131,7 +131,10 @@ class PluginsInTheWindowTests(unittest.TestCase):
         self.assertEqual(["rundesk", "jira", "linear", "weather"], listed)
         self.assertIn("plugins:", said)
         self.assertIn("1.4.0 -> 1.5.0", said)
-        self.assertIn("held back — needs rundesk '>=1.0.0'", said)
+        # One word a row: why a plugin was skipped is `rundesk plugins`' answer, not this
+        # line's, so nothing trails off the end of it.
+        self.assertIn("skipped", said)
+        self.assertNotIn("needs rundesk", said)
 
     def test_the_list_comes_after_the_release_it_is_about(self):
         """R-PLG-44 — plugin news before the news that the release landed reads backwards."""

@@ -491,7 +491,7 @@ class UpdatingOne(WithAMachine):
         """R-PLG-28 — a stranger's broken step costs an owner nothing."""
         said = self.update("example", self._published(version="2.0.0",
                                                       steps=((1, A_STEP_THAT_FAILS),)))
-        self.assertTrue(said.held, said)
+        self.assertEqual(plugin.Outcome.FAILED, said.state)
         standing = plugin.installed(self.plugins)["example"]
         self.assertEqual("1.0.0", standing.version)
         self.assertTrue(standing.quarantined)
@@ -506,7 +506,7 @@ class UpdatingOne(WithAMachine):
         """R-PLG-14 — the plugin installed still works; the new one would not."""
         said = self.update("example", self._published(version="2.0.0", requires=">=9.0.0"),
                            version="0.15.0")
-        self.assertEqual(plugin.Outcome.CURRENT, said.state)
+        self.assertEqual(plugin.Outcome.SKIPPED, said.state)
         self.assertEqual("1.0.0", said.was)
         self.assertIn("needs rundesk", said.why)
         self.assertEqual("1.0.0", plugin.installed(self.plugins)["example"].version)
@@ -516,13 +516,13 @@ class UpdatingOne(WithAMachine):
         said = plugin.update("example", self.plugins, self.scripts, self.skills,
                              version="0.15.0",
                              fetch=_fetching(self._published(version="2.0.0"), tag="v9.9.9"))
-        self.assertEqual(plugin.Outcome.CURRENT, said.state)
+        self.assertEqual(plugin.Outcome.SKIPPED, said.state)
         self.assertEqual("1.0.0", said.was)
 
     def test_a_plugin_that_calls_itself_something_else_now_is_refused(self):
         """R-PLG-30 — a repository that changed hands does not get to become another plugin."""
         said = self.update("example", self._published(name="other", version="2.0.0"))
-        self.assertEqual(plugin.Outcome.UNCHANGED, said.state)
+        self.assertEqual(plugin.Outcome.SKIPPED, said.state)
         self.assertIn("calls itself other", said.why)
 
     def test_a_release_that_stops_providing_a_command_takes_it_off_the_path(self):

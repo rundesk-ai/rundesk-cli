@@ -167,7 +167,7 @@ its own records. Installing one makes it available to **every** agent at once.
 rundesk plugins install owner/rundesk-plugin-jira      # what it declares; writes nothing
 rundesk plugins install owner/rundesk-plugin-jira --confirm
 rundesk plugins grant ava jira                          # give one agent its skills
-rundesk plugins                                         # what is installed, and what is held back
+rundesk plugins                                         # what is installed, and what failed
 ```
 
 Without `--confirm` nothing is written: the commands, skills, credentials and migration steps
@@ -184,12 +184,15 @@ rundesk  0.15.0 -> 0.16.0  updated
 
 plugins:
   jira     1.4.0 -> 1.5.0    updated
-  linear   0.9.0             held back — needs rundesk '>=1.0.0'
+  linear   0.9.0             skipped
+  sentry   2.1.0 -> 2.2.0    failed
   weather  2.0.1             up to date
 ```
 
-A plugin that cannot be moved is *held back* — kept, but taken off every agent's `PATH` until
-someone looks. **It can never fail the update it was riding.** Removing one keeps what it kept
+`skipped` is a plugin that was not moved and works fine where it is — usually a new release
+needing a newer Rundesk. `failed` is one that is now unreachable: kept, but taken off every
+agent's `PATH` until someone looks. `rundesk plugins` says why. **A plugin can never fail the
+update it was riding.** Removing one keeps what it kept
 unless you ask for that to go too:
 
 ```sh

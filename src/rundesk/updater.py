@@ -511,10 +511,11 @@ NAME_ROOM = 4
 def _say_what_moved(landed: str | None, moved: list, was: str | None = None) -> None:
     """What this update moved: rundesk, then the plugins under it.
 
-    **Two labels and rows, and nothing else.** What a reader needs is which things moved and
-    which did not; a sentence explaining the list is one more thing to read before the list.
-    A held-back row carries its reason because that is the payload — it is what somebody
-    does something about — and every other row carries none because there is nothing to do.
+    **Two labels, rows, and one word each.** What a reader needs is which things moved and
+    which did not, and the word carries it: `skipped` is a plugin that was not moved and
+    works fine where it is, `failed` is one that is now unreachable. Why it failed is a
+    question with an answer somewhere it has room — `rundesk plugins` — rather than a
+    sentence trailing off the end of a row.
 
     Silent on a machine with no plugins: an owner who has never installed one sees exactly
     what they saw before this existed (R-PLG-44).
@@ -524,21 +525,19 @@ def _say_what_moved(landed: str | None, moved: list, was: str | None = None) -> 
     # Bare digits, because every plugin beside it is bare: a table where one row says
     # `v0.16.0` and the next says `1.5.0` makes a reader wonder what the `v` means.
     rows = [("rundesk", (was or "").lstrip("v"), (landed or "").lstrip("v"),
-             "updated" if landed else "up to date", "")]
-    rows += [(one.name, one.was or "", one.now or "", one.state, one.why or "")
-             for one in moved]
+             "updated" if landed else "up to date")]
+    rows += [(one.name, one.was or "", one.now or "", one.state) for one in moved]
     room = max(NAME_ROOM, max(len(name) for name, *_ in rows))
     span = max(len(_between(was, now)) for _n, was, now, *_ in rows)
     print()
-    for at, (name, before, after, state, why) in enumerate(rows):
+    for at, (name, before, after, state) in enumerate(rows):
         if at == 1:
             print()
             print("plugins:")
         # rundesk stands at the margin and the plugins sit under their label, so the shape
         # says which is which before a word is read.
         print(f"{'  ' if at else ''}{name.ljust(room)}  "
-              f"{_between(before, after).ljust(span)}  {state}"
-              + (f" — {why}" if why and state == "held back" else ""))
+              f"{_between(before, after).ljust(span)}  {state}")
 
 
 def _between(was: str | None, now: str | None) -> str:

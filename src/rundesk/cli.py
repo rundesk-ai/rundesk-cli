@@ -1047,7 +1047,7 @@ def _plugins_forward(version: str) -> list:
         # **An outcome, not a sentence**: the summary reads a state off every row, and a
         # string here reached it as one — so the boundary that exists to keep an update
         # alive would itself have ended it, on exactly the path nothing else covers.
-        return [plugin.Outcome("plugins", plugin.Outcome.HELD, why=str(trouble))]
+        return [plugin.Outcome("plugins", plugin.Outcome.FAILED, why=str(trouble))]
 
 
 def _carry_every(agents) -> str | None:
@@ -2230,13 +2230,18 @@ def cmd_plugins(args: argparse.Namespace, agents, plugins) -> int:
     rows = []
     for name, one in sorted(held.items()):
         entry = recorded.get(name) or {}
+        # **The same word an update prints.** One state under two names is one state
+        # somebody has to learn twice, and the listing is where they look after the update
+        # told them something went wrong.
         rows.append((name, one.version, str(entry.get("source") or "-"),
-                     "held back" if one.quarantined else "ok"))
+                     plugins.Outcome.FAILED if one.quarantined else "ok"))
     _as_table(("PLUGIN", "VERSION", "FROM", "STATE"), rows)
+    # **The listing is where the reason lives.** An update prints one word a row on purpose;
+    # this is the command it sends somebody to, so this is where why belongs.
     for name, one in sorted(held.items()):
         if one.quarantined:
             print()
-            print(f"{name}: HELD BACK — {one.why_unfit}")
+            print(f"{name}: {one.why_unfit}")
             print(f"        it is installed and no agent can reach it; "
                   f"try: rundesk plugins update {name}")
     print()
