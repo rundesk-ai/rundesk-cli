@@ -654,5 +654,14 @@ re-checked since, so treat these as true-when-found rather than as current.*
   reads the surface before anything could have reached it. `tests/test_gateway.py::_became`
   does both; `_fired` waits for a run row, which a program schedule never writes at all.
 
+- **An `R-<AREA>-<n>` on an open branch is not reserved, and the branch finds out at rebase.**
+  Ids are permanent once merged, so whatever lands first takes the number and every other
+  branch holding it has to move — and doc-lint's contiguity rule means moving to the next
+  free one, never to a gap. Renumbering is a whole-tree edit with a trap in it: main is
+  already citing your old id for its own row, so a blind replace across the files you touch
+  renames somebody else's citations too. Replace only on lines that are not in
+  `git show origin/main:<file>`, then check what is left with
+  `grep -rn 'R-XXX-n' src tests .knowledge` — what remains should be exactly main's.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*
