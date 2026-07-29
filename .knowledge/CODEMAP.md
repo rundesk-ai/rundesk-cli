@@ -182,7 +182,7 @@ file with it.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 25 files, ~1500 cases)
+## Tests (tests/ — 27 files, ~1900 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
@@ -190,27 +190,27 @@ provider. One file per contract, named for it:
 | File | Cases | Covers |
 |---|---|---|
 | `test_gateway.py` | 196 | `platform-gateway` — real processes, real signals, waits turned down |
-| `test_agent.py` | 80 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
-| `test_cli.py` | 228 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
-| `test_process.py` | 97 | `platform-process` — real process groups, grandchildren, drains and ceilings |
-| `test_updater.py` | 75 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
-| `test_update_request.py` | 9 | `lifecycle-update` — durable self-update handoff, duplicate requests, external ownership, and outcome delivery |
-| `test_dependencies.py` | 27 | `lifecycle-update` — what the install is made of: what is declared, what the virtualenv holds, and building one **without pip ever running** |
-| `test_install.py` | 53 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
-| `test_supervisor.py` | 39 | the launchd job — a fake `launchctl`, so it runs where there is none |
-| `test_schedule.py` | 32 | `platform-schedule` — pure time arithmetic, the clock passed in |
-| `test_provider.py` | 34 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
-| `test_claude.py` | 42 | `provider-adapter` — the arithmetic and the postures one shipped brain decides on its own, driven against 184 captured lines rather than an account |
-| `test_grok.py` | 33 | `provider-adapter` — a brain that reports no tools, and the two flags of its that are accepted and enforce nothing |
+| `test_agent.py` | 89 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
+| `test_cli.py` | 268 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
+| `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
+| `test_updater.py` | 81 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
+| `test_update_request.py` | 22 | `lifecycle-update` — durable self-update handoff, duplicate requests, external ownership, and outcome delivery |
+| `test_dependencies.py` | 28 | `lifecycle-update` — what the install is made of: what is declared, what the virtualenv holds, and building one **without pip ever running** |
+| `test_install.py` | 70 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
+| `test_supervisor.py` | 69 | the launchd job — a fake `launchctl`, so it runs where there is none |
+| `test_schedule.py` | 49 | `platform-schedule` — pure time arithmetic, the clock passed in |
+| `test_provider.py` | 37 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
+| `test_claude.py` | 65 | `provider-adapter` — the arithmetic and the postures one shipped brain decides on its own, driven against 184 captured lines rather than an account |
+| `test_grok.py` | 35 | `provider-adapter` — a brain that reports no tools, and the two flags of its that are accepted and enforce nothing |
 | `test_antigravity.py` | 18 | `provider-adapter` — piped prompt privacy, stream mapping, cumulative-resume usage, posture, skills and native-keyring environment, all offline |
-| `test_turn.py` | 54 | `agent-run` — one whole turn, and `rundesk ask` end to end |
+| `test_turn.py` | 106 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_activity.py` | 3 | live-turn concurrency, safe persisted fields, and update visibility |
-| `test_transcript.py` | 19 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
-| `test_store.py` | 102 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
-| `test_channel.py` | 65 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
+| `test_transcript.py` | 28 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
+| `test_store.py` | 123 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
+| `test_channel.py` | 68 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
 | `test_answering.py` | 94 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
-| `test_discord.py` | 148 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up |
-| `test_ci.py` | 11 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, and the supported matrix |
+| `test_discord.py` | 159 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
+| `test_ci.py` | 13 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, and the supported matrix |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and
 `.knowledge/scripts/check-evidence` fails the build when a row names one that does not exist.
