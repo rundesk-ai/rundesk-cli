@@ -1404,13 +1404,21 @@ def _as_a_line(it: dict) -> str:
             return "-# ⚠ tool failed"
         return ""
     if kind == "usage":
-        # Every slot the seam has. A brain that does not report one leaves it out here too,
-        # which is what the isinstance guard has always been for — `written` is simply the
-        # fourth, and is added at the end rather than in billing order so a footer somebody
-        # is used to reading does not rearrange itself under them.
+        # **How big this session is now, then what the turn wrote** (R-DIS-29). A footer is
+        # read to decide one thing — whether to start a fresh conversation — and none of the
+        # billed quantities answers it: fresh input is 2 on any warm turn, and a reader
+        # cannot add three numbers in their head to find out. So a brain that says how big
+        # the conversation it ended on was leads with that, and `output` stays beside it as
+        # the only other thing the turn itself did.
+        #
+        # A brain that does not say gets exactly the footer it got before, rather than
+        # `output` alone: adding a quantity for one brain may not take three away from
+        # another. Absent means "could not tell" on either side of that, which is what the
+        # isinstance guard has always been for.
+        slots = (("session", "output") if isinstance(it.get("session"), int)
+                 else ("input", "output", "cached", "written"))
         parts = [f"{_amount(it[what])} {what}"
-                 for what in ("input", "output", "cached", "written")
-                 if isinstance(it.get(what), int)]
+                 for what in slots if isinstance(it.get(what), int)]
         return f"-# · {' · '.join(parts)}" if parts else ""
     return ""
 
