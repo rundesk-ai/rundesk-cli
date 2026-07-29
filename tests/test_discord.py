@@ -190,9 +190,14 @@ class AnAnswerRepliesToTheQuestion(unittest.TestCase):
     answer rundesk has ever posted was a reply."""
 
     class Room:
-        """A place to write in, remembering only what it was asked to quote."""
+        """A place to write in, remembering only what it was asked to quote.
 
-        def __init__(self):
+        It carries `id` because a real channel does, and because that is what the guard
+        compares an anchor against: the room resolved for this write, which is the only
+        thing a delivery routed by a place name has to go on."""
+
+        def __init__(self, id):
+            self.id = id
             self.quoted = []
 
         async def send(self, content, reference=None, mention_author=False, files=None):
@@ -233,8 +238,8 @@ class AnAnswerRepliesToTheQuestion(unittest.TestCase):
             message=asking, fail_if_not_exists=fail_if_not_exists)
         return asking
 
-    def _posted_to(self, conversation, anchor):
-        room = self.Room()
+    def _posted_to(self, conversation, anchor, room_is=None):
+        room = self.Room(conversation if room_is is None else room_is)
         asyncio.run(discord.Agent._post(
             self.Turn(room), {"conversation": str(conversation)}, "the answer",
             anchor=anchor))
@@ -290,6 +295,14 @@ class AnAnswerRepliesToTheQuestion(unittest.TestCase):
         self.assertEqual([None], self._posted_to(90001, asking),
                          "an answer still quotes a message outside the place it is sent")
 
+    def test_an_anchor_is_kept_for_the_room_being_written_in_not_the_one_named(self):
+        """R-DIS-29 — a schedule reporting into a place rundesk has never seen a word in sends
+        the word and no conversation at all, because only this surface can find that room. The
+        guard compared the anchor against the conversation, so the one delivery whose notice
+        most needed quoting was the one that dropped it."""
+        notice = self._message(777)
+        self.assertEqual([notice], self._posted_to(None, notice, room_is=777))
+
     def test_only_the_first_piece_of_a_split_answer_carries_the_anchor(self):
         """R-DIS-13, R-DIS-28 — a quote on every piece buries what it is quoting."""
         quoted = []
@@ -306,6 +319,106 @@ class AnAnswerRepliesToTheQuestion(unittest.TestCase):
                 "line %d" % i for i in range(400))}, held))
         self.assertGreater(len(quoted), 1, "the answer was not long enough to split")
         self.assertEqual([held.anchor] + [None] * (len(quoted) - 1), quoted)
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class AScheduledRunReportsUnderItsOwnNotice(unittest.TestCase):
+    """R-DIS-29, R-SCH-42 — an owner scrolling a busy direct message sees that a schedule
+    began, and sees what it found attached to the thing that began it rather than floating
+    loose among answers to other questions.
+
+    Held in memory for as long as the run is: a gateway that restarts mid-run takes the run
+    with it, so there is no report left to anchor and nothing durable worth keeping."""
+
+    class Saying:
+        """Everything `told` reaches for on a `said` record, and nothing else."""
+
+        def __init__(self):
+            self.live: dict = {}
+            self.started: dict = {}
+            self.posted: list = []
+
+        _holding = discord.Agent._holding if discord is not None else None
+
+        def _stop_typing(self, held): pass
+
+        def _no_longer_last(self, held): pass
+
+        async def _flush(self, it, held): pass
+
+        async def _typing(self, it): return
+
+        async def _post(self, it, content, anchor=None, files=(), text_as=None):
+            self.posted.append((content, anchor))
+            return SimpleNamespace(id=len(self.posted))
+
+    @staticmethod
+    def _remark(text="what it found", **held) -> dict:
+        return dict({"type": "said", "conversation": "4242", "text": text}, **held)
+
+    def _said(self, *records):
+        saying = self.Saying()
+
+        async def carry():
+            for one in records:
+                await discord.Agent.told(saying, one)
+            await asyncio.sleep(0)
+
+        asyncio.run(carry())
+        return saying
+
+    def test_a_scheduled_report_is_a_reply_to_the_message_that_said_it_started(self):
+        """R-DIS-29 — the pair is self-describing only if the second quotes the first."""
+        saying = self._said(
+            self._remark("💻 Working on 'nightly' …", schedule="nightly", began=True),
+            self._remark("nothing broke overnight", schedule="nightly"))
+        (_notice, first), (found, quoted) = saying.posted
+        self.assertIsNone(first, "the notice quoted something of its own")
+        self.assertEqual("nothing broke overnight", found)
+        self.assertEqual(1, getattr(quoted, "id", None),
+                         "the report was not a reply to the notice that started it")
+
+    def test_a_report_for_a_schedule_nobody_announced_quotes_nothing(self):
+        """R-DIS-29 — a program schedule says nothing when it starts and still says what it
+        came to, and a gateway that restarted holds nothing. Both post plainly, which is what
+        every scheduled report did before there were notices at all."""
+        saying = self._said(self._remark("schedule 'tidy' finished", schedule="tidy"))
+        self.assertEqual([("schedule 'tidy' finished", None)], saying.posted)
+
+    def test_an_ordinary_remark_still_quotes_nothing(self):
+        """R-CH-19, R-DIS-29 — a finished thought said mid-turn names no schedule, and quoting
+        the question on every remark buries the question."""
+        saying = self._said(self._remark("I'll look at the logs."))
+        self.assertEqual([("I'll look at the logs.", None)], saying.posted)
+
+    def test_a_notice_is_answered_once_and_never_by_the_next_firing(self):
+        """R-DIS-29 — the same schedule fires again tomorrow. Left standing, its second report
+        would quote a message from a run that finished a day earlier."""
+        saying = self._said(
+            self._remark("💻 Working on 'nightly' …", schedule="nightly", began=True),
+            self._remark("nothing broke overnight", schedule="nightly"),
+            self._remark("nothing broke again", schedule="nightly"))
+        self.assertEqual([None, 1, None],
+                         [getattr(one, "id", one) for _text, one in saying.posted])
+        self.assertEqual({}, saying.started, "the notice was kept after it was answered")
+
+    def test_a_notice_that_could_not_be_posted_is_not_held(self):
+        """R-DIS-29 — `_post` hands back nothing when the platform refused, and holding that
+        would make the report a reply to a message that is not there."""
+        class Refusing(self.Saying):
+            async def _post(self, it, content, anchor=None, files=(), text_as=None):
+                self.posted.append((content, anchor))
+                return None
+
+        saying = Refusing()
+
+        async def carry():
+            await discord.Agent.told(saying, self._remark(
+                "💻 Working on 'nightly' …", schedule="nightly", began=True))
+            await asyncio.sleep(0)
+
+        asyncio.run(carry())
+        self.assertEqual({}, saying.started)
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
@@ -689,7 +802,7 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             live = {}
 
             async def _flush(self, it, held): pass
-            async def _post(self, it, text): posted.append(text)
+            async def _post(self, it, text, **kw): posted.append(text)
             def _no_longer_last(self, held): pass
             def _stop_typing(self, held): pass
             async def _typing(self, it): pass
@@ -757,7 +870,7 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         class Turn:
             chose = type("Choice", (), {"activity": discord.GROWS})()
 
-            async def _post(self, it, text):
+            async def _post(self, it, text, **kw):
                 raise AssertionError("an editable commentary was posted again")
 
         held = discord.Live()
@@ -784,7 +897,7 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             class Turn:
                 chose = type("Choice", (), {"activity": discord.GROWS})()
 
-                async def _post(self, it, text):
+                async def _post(self, it, text, **kw):
                     raise AssertionError("an editable commentary was posted again")
 
                 async def _flush(self, it, held):
@@ -940,7 +1053,7 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             live = {}
 
             async def _flush(self, it, held): pass
-            async def _post(self, it, text): return None
+            async def _post(self, it, text, **kw): return None
             def _no_longer_last(self, held): pass
             def _stop_typing(self, held): held.typing = None
             async def _typing(self, it): started.append(it)

@@ -52,6 +52,7 @@ so only a running commentary may grow.
 | ✅ | R-DIS-27 | An ordinary gateway startup adds no update wording and no release link | `an ordinary startup adds no update wording and no release link` |
 | ✅ | R-DIS-28 | An answer is a reply to the message that asked, unless that message is not in the conversation the turn is in | `an answer in a direct message is a reply to the message that asked`, `an answer in a channel is a reply to the message that asked`, `an answer does not quote a message from somewhere else`, `only the first piece of a split answer carries the anchor`, `the anchor is read off the attribute a message actually has`, `an answer still arrives when the message it quotes is gone` |
 | ✅ | R-DIS-29 | A completed Discord answer leads its cost line with how big the conversation is, where the provider said so | `the footer leads with how big the conversation is`, `the whole footer an owner reads is the size what was written and the clock`, `a brain that does not report a conversation size gets the footer it always got` |
+| ✅ | R-DIS-30 | Discord holds the message it posted to say a scheduled run began, and posts that run's report as a reply to it | `a scheduled report is a reply to the message that said it started`, `a report for a schedule nobody announced quotes nothing`, `an ordinary remark still quotes nothing`, `a notice is answered once and never by the next firing`, `a notice that could not be posted is not held`, `an anchor is kept for the room being written in not the one named` |
 
 ## Open questions
 

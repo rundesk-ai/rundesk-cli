@@ -217,6 +217,54 @@ class Answering:
             self.record, self.name, self.channel, it,
             otherwise=otherwise)
 
+    #: What rundesk says on a surface when a scheduled run that will report there begins
+    #: (R-SCH-42). Rundesk's own bookkeeping and never the agent's prose: an owner cannot
+    #: otherwise tell that work started at six in the morning, and the first sign of it is
+    #: a report arriving twenty minutes later beside answers to other questions, with
+    #: nothing tying the two together.
+    STARTING = "💻 Working on '{named}' — I will report back when it is done."
+
+    async def told_a_schedule_started(self, named: str) -> bool:
+        """Say on this surface that one of this agent's schedules has begun (R-SCH-42).
+
+        The sibling of `told_what_a_schedule_did`, and it resolves where to say it exactly
+        the same way — the place the owner named, and the newest conversation on this
+        surface only when they named none (R-SCH-32). Two messages that resolved *where*
+        differently would be a notice in one room and its outcome in another, which is
+        worse than neither.
+
+        **Only where a report is actually delivered.** Which schedules those are is not
+        known here: a schedule that starts a program has no report to anchor, and only the
+        gateway that started it knows which kind it was. So this is called for one kind and
+        not the other rather than deciding for itself.
+
+        **Nowhere to say it is nowhere to say it started.** A surface nobody has spoken on
+        and no place named has no room for the notice either, and hands back that it said
+        nothing — the caller owes a reply only to a notice that actually went out.
+
+        **Not written down where it was delivered**, which is the one place this differs
+        from the report. R-SCH-33 exists so a person replying to what the agent *said*
+        reaches a brain whose session saw it; nobody replies "nice work" to rundesk saying
+        work has begun, and writing it in would put a line the agent never said into the
+        account of what it said.
+        """
+        kept = agents.reading(self.name, self._where)
+        row = kept.schedule(named) or {}
+        place = row.get("place")
+        where_it_goes, said = self._where_to_say(kept, place)
+        if where_it_goes is None and not place:
+            self._note(f"channel '{self.channel}': nowhere to say that '{named}' has "
+                       f"started — nothing has been said on this surface yet")
+            return False
+        # The schedule's name goes over with it, because that is what the surface holds the
+        # posted message under and what the report names to find it again (R-DIS-29). The
+        # surface is never asked to read it — it is a key, exactly as `place` is a word.
+        self._tell(type="said", conversation=where_it_goes, place=place or None,
+                   text=self.STARTING.format(named=named), schedule=named, began=True)
+        if where_it_goes is None and said:
+            self._note(said)
+        return True
+
     async def told_what_a_schedule_did(self, named: str, became: str) -> None:
         """Say on this surface what one of this agent's schedules came to (R-SCH-31).
 
@@ -240,6 +288,11 @@ class Answering:
         the next message in that conversation reaches a brain whose session never saw this, so
         somebody saying "nice work" about it is asking about something the agent has no record
         of having said there.
+
+        **A reply to the notice that this run started, where one went out** (R-SCH-42). The
+        schedule's name is on the record and the surface anchors to whatever it is holding
+        under that name; a surface holding nothing posts it plainly, which is what every
+        report did before there were notices at all.
         """
         kept = agents.reading(self.name, self._where)
         row = kept.schedule(named) or {}
@@ -253,7 +306,8 @@ class Answering:
         # The place goes over even when we resolved a conversation ourselves: only the adapter
         # can reach a room nobody has spoken in yet, and it is the one that knows what the word
         # means. A surface that cannot resolve one falls back to the conversation (R-CAD-16).
-        self._tell(type="said", conversation=where_it_goes, place=place or None, text=text)
+        self._tell(type="said", conversation=where_it_goes, place=place or None, text=text,
+                   schedule=named)
         if where_it_goes is not None:
             ran = kept.runs(schedule_id=row.get("id"), limit=1)
             kept.answered(where_it_goes, ran[0]["id"] if ran else None,
