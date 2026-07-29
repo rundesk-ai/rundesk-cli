@@ -2529,6 +2529,215 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         self.assertNotIn("→", rows["quiet"], "a schedule naming nowhere claimed somewhere")
         self.assertIn("runs", rows["tidy"])
 
+    def test_one_schedule_reads_back_everything_it_was_given(self):
+        """R-SCH-42 — the listing says one word for what a schedule starts, because a prompt
+        is a sentence and a program is a path. This is where they are read back, and until it
+        existed the only account of what a schedule asked was the one an owner remembered
+        typing."""
+        kept = self.agents.records("gateway")
+        kept.remember_channel("ops", "somewhere", ["2207"], store.stamped())
+        kept.remember_schedule("nightly", "0 3 * * *", store.stamped(),
+                               prompt="what changed overnight?", provider="claude",
+                               model="opus", instructions="be brief", channel="ops",
+                               place="#operations")
+        code, said = drive(["schedules", "gateway", "show", "nightly"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        for expected in ("what changed overnight?", "0 3 * * *", "claude/opus",
+                         "be brief", "ops", "#operations", "asks a turn"):
+            self.assertIn(expected, said, f"showing a schedule never said {expected!r}")
+
+    def test_a_place_a_schedule_has_no_channel_for_still_reads_back(self):
+        """R-SCH-42 — `add` permits `--in` without `--to`, so the word sits in the row doing
+        nothing. Saying only "nobody" would positively assert it was not there, in the one
+        command that exists so an owner never has to open that database — and a later
+        `--to` would then switch on delivery into a place `show` never disclosed."""
+        kept = self.agents.records("gateway")
+        kept.remember_schedule("orphan", "0 5 * * *", store.stamped(), prompt="check",
+                               place="#operations")
+        code, said = drive(["schedules", "gateway", "show", "orphan"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("#operations", said, "a place in the row was never shown")
+        self.assertIn("nobody", said, "it claimed a surface it has not got")
+
+    def test_a_schedule_that_is_not_there_is_said_rather_than_shown_as_empty(self):
+        """R-SCH-42 — the same answer `channels show` gives, and never an empty table, which
+        reads as a schedule that holds nothing."""
+        code, said = drive(["schedules", "gateway", "show", "nope"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT FOUND", said)
+
+    def test_a_schedule_nobody_can_understand_is_still_shown(self):
+        """R-SCH-42 — a cron nobody can parse is exactly when an owner needs to see the
+        characters they typed. Answering with nothing at all would send them to the database
+        this exists to replace."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "bad", "when": "99 * * * *", "run": ["/bin/echo"]}]})
+        code, said = drive(["schedules", "gateway", "show", "bad"], gateways, agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("99 * * * *", said, "it never showed what was actually typed")
+        self.assertIn("NOT UNDERSTOOD", said)
+
+    def test_showing_a_schedule_changes_nothing(self):
+        """R-SCH-42 — read through the reading path, for the reason `doctor` is (R-AGT-12):
+        the command an owner runs when a schedule looks wrong must not be the one that
+        quietly changes it."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]})
+        before = self.schedules_of("gateway")
+        drive(["schedules", "gateway", "show", "tidy"], gateways, agents=self.agents)
+        self.assertEqual(before, self.schedules_of("gateway"))
+
+    def test_a_schedule_is_changed_and_keeps_what_it_has_already_done(self):
+        """R-SCH-43 — the whole of why this exists rather than removing and adding again,
+        which takes a schedule's account of itself with it."""
+        gateways = self._gateways(
+            schedules={"gateway": [{"name": "nightly", "when": "0 3 * * *",
+                                    "ask": "what changed?"}]},
+            ran_schedules={"gateway": {"nightly": {"at": "2026-07-25 03:00",
+                                                   "outcome": "finished"}}})
+        code, said = drive(["schedules", "gateway", "edit", "nightly",
+                            "--ask", "what broke?"], gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("EDITED", said)
+        after = self.schedules_of("gateway")[0]
+        self.assertEqual("what broke?", after["prompt"])
+        self.assertEqual(("0 3 * * *", "2026-07-25 03:00", "finished"),
+                         (after["cron"], after["last_auto_run_at"], after["last_outcome"]),
+                         "changing one thing moved something nobody named")
+        self.assertIn("edited", self.written.read_text(), "the change was not written to the log")
+
+    def test_what_a_schedule_says_is_never_written_into_the_log(self):
+        """A prompt and standing instructions are an owner's own, and the log is read by
+        whoever can read the file. What belongs in an account is which fields moved."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "nightly", "when": "0 3 * * *", "ask": "what changed?"}]})
+        drive(["schedules", "gateway", "edit", "nightly", "--ask", "the secret question"],
+              gateways, agents=self.agents)
+        written = self.written.read_text()
+        self.assertIn("prompt", written)
+        self.assertNotIn("the secret question", written, "the log kept what was asked")
+
+    def test_changing_a_schedule_that_is_not_there_says_so(self):
+        """R-SCH-43 — a change to a name that is not there is a change that did nothing."""
+        code, said = drive(["schedules", "gateway", "edit", "nope", "--ask", "anything?"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT FOUND", said)
+
+    def test_a_change_naming_nothing_to_change_is_said_rather_than_reported_as_done(self):
+        """Nothing named is nothing changed, and saying EDITED would be a success with no
+        change behind it."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]})
+        code, said = drive(["schedules", "gateway", "edit", "tidy"], gateways, agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOTHING TO CHANGE", said)
+
+    def test_a_single_moment_is_refused_once_the_clock_has_started_a_schedule(self):
+        """R-SCH-38, R-SCH-43 — **the trap this option would otherwise walk into.** A single
+        moment is spent the instant anything durable says the clock started it, and that is
+        written for every firing a repeating schedule ever had. Set here it would be used
+        before it arrived: the listing would show a time that could never come round."""
+        gateways = self._gateways(
+            schedules={"gateway": [{"name": "nightly", "when": "0 3 * * *",
+                                    "ask": "what changed?"}]},
+            ran_schedules={"gateway": {"nightly": {"at": "2026-07-25 03:00",
+                                                   "outcome": "finished"}}})
+        code, said = drive(["schedules", "gateway", "edit", "nightly",
+                            "--at", "2099-01-01T09:00"], gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("R-SCH-38", said)
+        after = self.schedules_of("gateway")[0]
+        self.assertEqual("0 3 * * *", after["cron"])
+        self.assertIsNone(after["at"], "a moment that could never run was written anyway")
+
+    def test_a_repeating_time_and_a_single_moment_replace_each_other(self):
+        """R-SCH-36, R-SCH-43 — one is how an owner says the other has gone, and a row
+        holding both is one the records refuse."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "once", "at": "2098-01-01 09:00", "ask": "ready?"}]})
+        code, said = drive(["schedules", "gateway", "edit", "once", "--when", "0 3 * * *"],
+                           gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        after = self.schedules_of("gateway")[0]
+        self.assertEqual("0 3 * * *", after["cron"])
+        self.assertIsNone(after["at"])
+
+    def test_a_moment_already_behind_us_is_refused_as_it_is_on_the_way_in(self):
+        """R-SCH-43 — the same refusal `add` makes, because it is the same mistake."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "nightly", "when": "0 3 * * *", "ask": "what changed?"}]})
+        code, said = drive(["schedules", "gateway", "edit", "nightly",
+                            "--at", "2020-01-01T09:00"], gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("already passed", said)
+
+    def test_a_turn_becoming_a_program_never_leaves_a_brain_behind_it(self):
+        """R-SCH-43 — `--provider`, `--model` and `--instructions` reach a brain, and a
+        schedule that starts a program has none. An edit can arrive at that row two ways:
+        naming one of them on a program, and turning a turn into a program while the columns
+        it filled stay behind. The second leaves no option to point at, so the row after the
+        change is what is asked."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "nightly", "when": "0 3 * * *", "ask": "what changed?"}]})
+        self.agents.records("gateway").change_schedule("nightly", provider="claude",
+                                                       instructions="be brief")
+        code, said = drive(["schedules", "gateway", "edit", "nightly", "--", "/bin/echo", "hi"],
+                           gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("is for a turn", said)
+        self.assertEqual("what changed?", self.schedules_of("gateway")[0]["prompt"])
+        # And in one command, because clearing them on an owner's behalf would be losing
+        # something nobody asked to lose.
+        code, said = drive(["schedules", "gateway", "edit", "nightly", "--provider", "",
+                            "--instructions", "", "--", "/bin/echo", "hi"],
+                           gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        after = self.schedules_of("gateway")[0]
+        self.assertEqual(["/bin/echo", "hi"], after["command"])
+        self.assertIsNone(after["prompt"])
+        self.assertIsNone(after["provider"])
+
+    def test_a_change_naming_a_channel_this_agent_has_not_got_is_refused(self):
+        """R-SCH-31, R-SCH-43 — refused where it is written rather than found at three in
+        the morning, exactly as adding one is."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "nightly", "when": "0 3 * * *", "ask": "what changed?"}]})
+        code, said = drive(["schedules", "gateway", "edit", "nightly", "--to", "nowhere"],
+                           gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("no channel called", said)
+        self.assertIsNone(self.schedules_of("gateway")[0]["channel"])
+
+    def test_a_prompt_that_is_nothing_but_space_is_refused_by_a_change_too(self):
+        """R-SCH-44 — `add` strips before it decides, so `--ask "   "` there is a schedule
+        naming neither a program nor a prompt and is refused. A change that did not strip
+        accepted it, and the schedule stayed enabled and fired nightly asking a brain a
+        blank line, with `show` rendering an empty `asks` row that reads as a display
+        fault."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "nightly", "when": "0 3 * * *", "ask": "what changed?"}]})
+        code, said = drive(["schedules", "gateway", "edit", "nightly", "--ask", "   "],
+                           gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("NOT CHANGED", said)
+        self.assertEqual("what changed?", self.schedules_of("gateway")[0]["prompt"],
+                         "a change that was refused wrote a blank prompt anyway")
+
+    def test_a_program_named_rather_than_located_is_refused_by_a_change_too(self):
+        """R-PROC-2, R-SCH-43 — a gateway runs with almost no PATH, so a bare name resolves
+        in the shell that typed it and nowhere else."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]})
+        code, said = drive(["schedules", "gateway", "edit", "tidy", "--", "echo", "hi"],
+                           gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("is a name, not a location", said)
+        self.assertEqual(["/bin/echo"], self.schedules_of("gateway")[0]["command"])
+
     def test_a_schedule_reporting_to_a_channel_this_agent_has_not_got_is_refused(self):
         """R-SCH-31 — refused where it is written rather than found at three in the morning,
         the same way a program named rather than located is: a schedule reporting to a surface

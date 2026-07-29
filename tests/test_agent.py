@@ -869,9 +869,9 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
                                                    otherwise="what rundesk would say")))
 
     def test_a_turn_the_clock_started_is_told_nobody_is_watching(self):
-        """R-SCH-30 — the first trigger with no person at the other end. Three facts, and the
-        one that matters most is that a question will not be answered: a brain that asks one
-        into an empty room is a turn that ends waiting."""
+        """R-SCH-30 — the first trigger with no person at the other end. The fact that matters
+        most is that a question will not be answered: a brain that asks one into an empty room
+        is a turn that ends waiting."""
         from rundesk import schedule
         said = schedule.by_default("nightly")
         self.assertIn("nightly", said, "it never said which schedule started this")
@@ -879,11 +879,60 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
         self.assertIn("will not be answered", said)
         self.assertIn("recorded", said, "it never said what becomes of what it says")
 
+    def test_a_turn_the_clock_started_is_told_what_it_delivers(self):
+        """R-SCH-30 — the one fact here a brain cannot find out for itself. Measured: two
+        schedules that displaced nothing were told nobody was watching and narrated anyway,
+        because the sentence answered *whether to ask a question* and said nothing about
+        *when to speak* — so three paragraphs of orientation reached the owner with the
+        report underneath them."""
+        from rundesk import schedule
+        said = schedule.by_default("nightly")
+        self.assertIn("last whole thing you write is delivered", said,
+                      "it never said what becomes of everything before the last")
+        self.assertIn("write nothing until the work is finished", said,
+                      "a brain cannot tell which thought will be its last, so the rule it "
+                      "can actually follow has to be the one it is given")
+
     def test_a_turn_the_clock_started_with_no_schedule_named_still_says_the_situation(self):
         """R-SCH-30 — the sentence is about the situation, not about the name, so it still
         says the thing that matters when there is no name to give."""
         from rundesk import schedule
         self.assertIn("will not be answered", schedule.by_default(""))
+
+    def test_what_rundesk_says_about_a_scheduled_turn_is_there_whatever_the_owner_wrote(self):
+        """R-AGT-34 — the tier this moved out of. As the situation tier's last resort, an
+        owner writing anything at all deleted it: a schedule told to focus on high-priority
+        issues was no longer told that nobody was watching or what it delivers."""
+        self.made()
+        agent.remember("ava", self.where, instructions="what the agent says")
+        for said in ("", "focus on the high-priority issues"):
+            told = self.situation(agent.told("ava", self.where, said=said,
+                                             regardless="nobody is watching"))
+            self.assertTrue(told.startswith("nobody is watching"),
+                            f"what rundesk says was displaced by {said!r}: {told!r}")
+
+    def test_what_an_owner_says_about_a_scheduled_turn_is_added_to_rundesks_own(self):
+        """R-AGT-34 — added, not replaced, and in that order: they answer different
+        questions. Rundesk's says what the situation *is* and the owner's says what to *do*
+        about it, and a turn needs both."""
+        self.made()
+        agent.remember("ava", self.where, instructions="what the agent says")
+        self.assertEqual("nobody is watching\n\nfocus on the high-priority issues",
+                         self.situation(agent.told(
+                             "ava", self.where, said="focus on the high-priority issues",
+                             regardless="nobody is watching")))
+        self.assertEqual("nobody is watching\n\nwhat the agent says",
+                         self.situation(agent.told("ava", self.where,
+                                                   regardless="nobody is watching")),
+                         "the agent's own tier stopped being reached")
+
+    def test_what_rundesk_always_says_is_nothing_where_there_is_nothing_to_say(self):
+        """R-AGT-34 — a person at a terminal is watching, so nothing is added and the turn is
+        told exactly what it was told before this existed."""
+        self.made()
+        agent.remember("ava", self.where, instructions="what the agent says")
+        self.assertEqual("what the agent says",
+                         self.situation(agent.told("ava", self.where, regardless="")))
 
 
 class AGatewayThatHasNoAgentYet(WithSomewhereToKeepAgents):

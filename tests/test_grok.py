@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import provider  # noqa: E402
+from rundesk import provider, turn  # noqa: E402
 
 AT = ROOT / "src" / "providers" / "grok"
 
@@ -128,6 +128,38 @@ class WhatTheACPStreamSaysBack(unittest.TestCase):
         for one in self.said:
             self.assertIn(one["type"], provider.RECORDS)
             self.assertIsNotNone(provider.understood(json.dumps(one)))
+
+
+class WhatAScheduledTurnOnThisBrainDelivers(unittest.TestCase):
+    """R-SCH-45 on the adapter that refuses `whole` on purpose.
+
+    The records here are this adapter's own, not a shape invented in `test_turn`: a reply
+    written a token at a time, on both sides of one tool call. Read on `whole` alone the
+    close of a scheduled turn is the whole turn — narration, no separator and all — which
+    is exactly the defect the close exists to fix, arriving on the brains that never mark
+    a finished thought.
+    """
+
+    def setUp(self):
+        self.said, _ = carried([
+            update("agent_message_chunk", content={"type": "text", "text": "I'll read "}),
+            update("agent_message_chunk",
+                   content={"type": "text", "text": "the instructions."}),
+            update("tool_call", toolCallId="call-read", title="read_file"),
+            update("tool_call_update", toolCallId="call-read", status="completed"),
+            update("agent_message_chunk", content={"type": "text", "text": "Done. "}),
+            update("agent_message_chunk", content={"type": "text", "text": "One report."}),
+        ])
+
+    def test_a_scheduled_turn_on_this_brain_says_its_report_and_not_its_working(self):
+        self.assertEqual("Done. One report.", turn._close(self.said))
+
+    def test_what_a_watched_turn_says_keeps_both_and_does_not_fuse_them(self):
+        """R-PRV-22 — the guard on the one above. Everything is still delivered to whoever
+        asked, and the two runs of fragments are two paragraphs rather than
+        `the instructions.Done.`"""
+        self.assertEqual("I'll read the instructions.\n\nDone. One report.",
+                         turn._reply(self.said))
 
 
 class ToolVocabulary(unittest.TestCase):

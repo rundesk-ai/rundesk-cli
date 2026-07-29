@@ -3169,11 +3169,11 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         self.assertIn("nightly", told[0])
         self.assertIn("will not be answered", told[0])
 
-    async def test_what_a_schedule_was_told_to_say_wins_over_rundesks_own(self):
-        """R-SCH-30, R-AGT-16, R-AGT-17 — nearest first among the things that describe the
-        situation, and what the owner wrote is added to rundesk's own rather than replacing
-        them: ours says what the agent is and how to find what it did, theirs says what to do
-        about tonight, and an agent needs both."""
+    async def test_what_a_schedule_was_told_to_say_is_added_to_rundesks_own(self):
+        """R-SCH-30, R-AGT-16, R-AGT-17, R-AGT-34 — what the owner wrote is added to
+        rundesk's own rather than replacing them: ours says what the agent is, how to find
+        what it did and what the situation is, theirs says what to do about tonight, and an
+        agent needs both."""
         self.agents.remember("ava", self.agents_at, provider=self.brain())
         self.asks(instructions="Only look at the deploy log.")
         gw = self.made()
@@ -3185,8 +3185,28 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         self.assertTrue(told[0].startswith(self.agents.standing("ava")))
         self.assertTrue(told[0].endswith("Only look at the deploy log."))
 
-    async def test_a_schedule_that_says_nothing_falls_to_what_the_agent_says(self):
-        """R-AGT-16 — the tier in the middle, on the surface that has no other."""
+    async def test_a_schedule_told_what_to_do_is_still_told_nobody_is_watching(self):
+        """R-AGT-34, R-SCH-30 — the regression this whole tier change exists for. Standing
+        instructions as ordinary as one line about what to look at used to displace the only
+        statement rundesk makes about a scheduled turn, and nothing anywhere said so."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain(),
+                             instructions="You are ava, and you are always brief.")
+        self.asks(instructions="Only look at the deploy log.")
+        gw = self.made()
+        gw.claim()
+        run = await self._fired(gw)
+        told = [one["text"] for one in self.records.messages(run["conversation_id"])
+                if one["author"] == "rundesk"][0]
+        self.assertIn("nightly", told, "it never said which schedule started this")
+        self.assertIn("will not be answered", told)
+        self.assertIn("write nothing until the work is finished", told)
+        self.assertLess(told.index("will not be answered"),
+                        told.index("Only look at the deploy log."),
+                        "the owner's words came before rundesk's account of the situation")
+
+    async def test_a_schedule_that_says_nothing_still_gets_what_the_agent_says(self):
+        """R-AGT-16 — the tier in the middle, on the surface that has no other. Still
+        reached now that rundesk's own line no longer waits for everyone else to be silent."""
         self.agents.remember("ava", self.agents_at, provider=self.brain(),
                              instructions="You are ava, and you are always brief.")
         self.asks()

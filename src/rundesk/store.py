@@ -807,6 +807,84 @@ class Store:
                 raise Taken(f"a schedule called '{name}' is already there") from clash
             raise Refused(f"'{name}' names something this agent has not got: {clash}") from clash
 
+    #: What `change_schedule` may move. `enabled` is not among them — it has two verbs of its
+    #: own — and neither are the columns that say what this schedule has already done, which
+    #: is the whole of what an edit keeps that removing and adding again destroys.
+    CHANGEABLE = ("cron", "at", "command", "prompt", "provider", "model",
+                  "instructions", "channel", "place")
+
+    def change_schedule(self, name: str, **fields) -> bool:
+        """Change what a schedule does, keeping every record of what it has already done.
+
+        Only what is named moves. A caller passing one field changes one column, so an edit
+        is never a rewrite of the row from a caller's idea of what the rest of it held —
+        which is what `remove` and `add` again amounts to, and why that path loses a
+        schedule's account of itself.
+
+        **Read, decided and written under one lock.** Both of the pairs the table insists on
+        — a repeating time or a single moment, a program or a prompt — are properties of the
+        row *after* the change, not of what was passed in, so they can only be checked
+        against what is actually there. Asking first and writing after would be two
+        decisions with a gap in the middle, and two edits at once would settle it by
+        whichever wrote last (the same trap `remember_agent` names).
+
+        Setting one of a pair clears the other, because the table would refuse the row
+        otherwise and an owner switching a schedule from a moment to a repeating time is
+        saying exactly that. Passing `None` leaves a column alone; passing an empty string
+        clears it, which is how an owner takes standing instructions off a schedule that
+        has them.
+
+        False where nothing of that name is there — including a schedule removed between
+        this being asked for and this being written, which is a change that did nothing and
+        must say so rather than reporting a success.
+        """
+        unknown = set(fields) - set(self.CHANGEABLE)
+        if unknown:
+            raise ValueError(f"a schedule has no {', '.join(sorted(unknown))} to change")
+        moving = {key: value for key, value in fields.items() if value is not None}
+        if not moving:
+            raise ValueError("nothing was named to change")
+        # One of a pair arriving clears the other. Said here rather than left to each caller:
+        # the table refuses a row holding both, and a caller that forgot would meet that as an
+        # integrity error rather than as the thing it actually asked for.
+        for one, other in (("cron", "at"), ("at", "cron"),
+                           ("command", "prompt"), ("prompt", "command")):
+            if moving.get(one):
+                moving[other] = None
+        try:
+            with self._writing() as conn:
+                row = conn.execute("SELECT * FROM schedule WHERE name = ?", (name,)).fetchone()
+                if row is None:
+                    return False
+                after = dict(_plain(row))
+                for key, value in moving.items():
+                    # Empty is how a caller says "take this off", for a word and for a
+                    # program alike — the column holds nothing rather than an empty thing.
+                    after[key] = value if value not in ("", []) else None
+                if after["command"] is not None and isinstance(after["command"], list):
+                    after["command"] = json.dumps(after["command"])
+                if (after["command"] is None) == (after["prompt"] is None):
+                    raise ValueError(
+                        "a schedule runs a command or asks a turn, never both or neither"
+                    )
+                if (after["cron"] is None) == (after["at"] is None):
+                    raise ValueError(
+                        "a schedule states a repeating time or a single moment, "
+                        "never both or neither"
+                    )
+                conn.execute(
+                    "UPDATE schedule SET cron = ?, at = ?, command = ?, prompt = ?,"
+                    " provider = ?, model = ?, instructions = ?, channel = ?, place = ?"
+                    " WHERE name = ?",
+                    tuple(after[one] for one in self.CHANGEABLE) + (name,),
+                )
+        except sqlite3.IntegrityError as clash:
+            # The one thing the database refuses here that the caller answers differently: a
+            # channel that is not there to report to. Told apart by asking, rather than by
+            # reading the driver's words.
+            raise Refused(f"'{name}' names something this agent has not got: {clash}") from clash
+        return True
+
     def enable_schedule(self, name: str, on: bool) -> None:
         """Keep a schedule and what it did, but stop it running."""
         with self._writing() as conn:

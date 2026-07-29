@@ -481,6 +481,45 @@ def build_parser() -> argparse.ArgumentParser:
                        help="after `--`, the full path of what to start when it is due, and its "
                             "arguments — a bare name is refused, because a gateway runs with "
                             "almost no PATH")
+    # **Everything `add` took, and only what is named moves.** The listing says what kind of
+    # work a schedule is and when; this is where the prompt, the brain and where it reports
+    # are read back, because they are sentences and paths and none of them fits a column.
+    # Without it the only account of what a schedule does is the one an owner remembers
+    # typing — and the edit below would destroy it unseen.
+    shown = acts.add_parser("show", help="one schedule, and everything it was given")
+    shown.add_argument("schedule", metavar="<schedule>",
+                       help="which schedule, by the name it was added under")
+
+    changed = acts.add_parser("edit", help="change an existing schedule, keeping what it has done")
+    changed.add_argument("schedule", metavar="<schedule>",
+                         help="which schedule, by the name it was added under")
+    # Never `default=""` the way `add` spells the same option: not given and given as
+    # nothing are different instructions here — leave it alone, and take it off — and one
+    # default would make them the same keystroke.
+    changed.add_argument("--when", metavar="<cron>",
+                         help="a new repeating time, as five cron fields. Clears --at")
+    changed.add_argument("--at", dest="moment", metavar="<moment>",
+                         help="a new single moment, as YYYY-MM-DDTHH:MM. Clears --when, and "
+                              "is refused once the clock has started this schedule — a moment "
+                              "already used can never come round again (R-SCH-38)")
+    changed.add_argument("--ask", dest="prompt", metavar="<prompt>",
+                         help="what to ask instead. Turns a schedule that started a program "
+                              "into one that asks a turn")
+    changed.add_argument("--provider", metavar="<provider>",
+                         help="which brain answers it now")
+    changed.add_argument("--model", metavar="<model>", help="which model, in that brain's own words")
+    changed.add_argument("--instructions", dest="says", metavar="<text>",
+                         help="new standing instructions — given as \"\", it takes them off")
+    changed.add_argument("--to", dest="channel", metavar="<channel>",
+                         help="which channel to say what this came to on — given as \"\", it "
+                              "stops reporting to one")
+    changed.add_argument("--in", dest="place", metavar="<where>",
+                         help="which place on that channel — given as \"\", it follows the "
+                              "conversation again")
+    changed.add_argument(CARRIED, nargs="*", metavar="<program>",
+                         help="after `--`, a new program and its arguments. Turns a schedule "
+                              "that asked a turn into one that starts a program")
+
     for act, what in (("remove", "take a schedule away"),
                       ("on", "let a schedule run"),
                       ("off", "keep a schedule but stop it running"),
@@ -1708,11 +1747,12 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
             fresh=args.fresh or by_the_clock,
             watching=said,
             steering=_typed() if args.steer else None,
-            # What it is told before it reads a word: this turn's own, then the agent's,
-            # then what rundesk says about the situation — which for a person at a terminal
-            # is nothing, because they are here (R-AGT-16).
+            # What it is told before it reads a word: this turn's own, then the agent's
+            # (R-AGT-16) — and, where the clock started this, what rundesk says about that
+            # situation whatever they wrote (R-AGT-34). For a person at a terminal there is
+            # nothing to add, because they are here.
             preface=agents.told(name, said=args.says,
-                                otherwise=schedules.by_default(clock) if clock else ""),
+                                regardless=schedules.by_default(clock) if clock else ""),
             source=turn.SCHEDULE if clock else None,
         ))
     except provider.NotRunnable as why:
@@ -3012,10 +3052,14 @@ def cmd_schedules(args: argparse.Namespace, gateways, agents) -> int:
         return 1
     whose = agents.resolved(args.name)
     try:
-        kept = agents.records(args.name) if act in ("add", "remove", "on", "off") \
+        kept = agents.records(args.name) if act in ("add", "edit", "remove", "on", "off") \
             else agents.reading(args.name)
         if act == "add":
             return _add_schedule(args, gateways, kept, whose)
+        if act == "edit":
+            return _edit_schedule(args, gateways, kept, whose)
+        if act == "show":
+            return _show_schedule(args, kept)
         if act == "run":
             return _run_schedule(args, gateways, agents, kept, whose)
         if act in ("remove", "on", "off"):
@@ -3178,6 +3222,225 @@ def _change_schedule(args: argparse.Namespace, gateways, kept, whose, act: str) 
         told = f"schedule '{args.schedule}' turned {said.lower()}"
     unlogged = _note(gateways, args.name, told, whose)
     print(f"{args.name}/{args.schedule}: {said}")
+    return unlogged
+
+
+def _show_schedule(args: argparse.Namespace, kept) -> int:
+    """One schedule, and everything it was given — whole, and changing nothing.
+
+    The listing answers "what runs here, and when" in a row apiece, so what a schedule
+    *says* is deliberately not in it: a prompt is a sentence and a program is a path, and
+    neither fits a column beside six others. This is where they are read back, which until
+    now nothing did — the only account of what a schedule asks was the one an owner
+    remembered typing, and editing meant removing it and typing it again from that memory.
+
+    Read through the reading path and writes nothing, for the reason `doctor` does not
+    (R-AGT-12): the command an owner runs when a schedule looks wrong must not be the one
+    that quietly changes it.
+    """
+    from rundesk import schedule
+
+    row = kept.schedule(args.schedule)
+    if row is None:
+        print(f"{args.name}/{args.schedule}: NOT FOUND — no schedule by that name",
+              file=sys.stderr)
+        return 1
+    wanted, refused = schedule.read([row])
+    now = datetime.now()
+    ran = row.get("last_auto_run_at")
+    rows = [("state", "on" if row.get("enabled") else "off — kept, and not running")]
+    if wanted:
+        one = wanted[0]
+        rows.append(("when", (one.stated.strftime(schedule.A_MINUTE) + "  (once)")
+                     if one.once else str(one.when)))
+        rows.append(("next", schedule.describe(one, now)))
+    else:
+        # Shown rather than refused. A cron nobody can parse is exactly when an owner needs
+        # to see the characters they typed, and a command that answered such a schedule with
+        # nothing at all would send them back to the database this exists to replace.
+        rows.append(("when", str(row.get("cron") or row.get("at") or "-")))
+        rows.append(("next", "NOT UNDERSTOOD — " + (refused[0][1] if refused else "?")))
+    runs = row.get("command")
+    rows.append(("it", "asks a turn" if row.get("prompt") else "starts a program"))
+    rows.append(("asks" if row.get("prompt") else "runs",
+                 str(row.get("prompt") or " ".join(runs or []) or "-")))
+    if row.get("prompt"):
+        # Only of a schedule that asks one. On a program these three cannot be set at all,
+        # and rows saying so would be three lines of nothing on every schedule that runs one.
+        rows.append(("brain", "/".join(
+            one for one in (row.get("provider"), row.get("model")) if one)
+            or "whatever the agent uses"))
+        rows.append(("instructions", str(row.get("instructions") or "nothing of its own")))
+    place = str(row.get("place") or "")
+    if row.get("channel"):
+        rows.append(("reports to",
+                     str(row["channel"]) + (f", in {place}" if place else "")))
+    elif place:
+        # **A place with no surface to be a place on.** `add` permits `--in` without `--to`,
+        # so the word is sitting in the row doing nothing — and a line saying only "nobody"
+        # would positively assert it was not there, in the one command that exists so an
+        # owner never has to open that database. Said here, a later `--to` switches on
+        # delivery into a place they were shown rather than one they were told was absent.
+        rows.append(("reports to", f"nobody — and {place} is kept, reaching nothing until "
+                                   f"a channel is named"))
+    else:
+        rows.append(("reports to", "nobody — it is in the account either way"))
+    rows.append(("last run", f"{ran} — {row.get('last_outcome') or '?'}" if ran
+                 else "never"))
+    rows.append(("added", str(row.get("created_at") or "-")))
+    _as_table(("WHAT", "IS"), rows)
+    return 1 if refused else 0
+
+
+def _typed(one):
+    """What an owner typed, without the space around it — and still `None` when they did not
+    type it at all.
+
+    The three states a change has to keep apart: absent leaves a field alone, empty says it
+    off, and whitespace is empty (R-SCH-44). `add` has always stripped; a change that did
+    not accepted `--ask "   "`, which `add` refuses outright, and left the schedule enabled
+    and firing nightly asking a brain a blank line.
+    """
+    return one if one is None else one.strip()
+
+
+def _edit_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
+    """Change an existing schedule, keeping every record of what it has already done.
+
+    **Only what is named moves.** Everything else is left exactly as it was, which is the
+    whole difference between this and the path it replaces: removing a schedule and adding
+    it again takes its firing history and its last outcome with it, and could only ever
+    restore the parts an owner still remembered — because until `show` there was nothing
+    that would tell them the rest.
+
+    What `add` refuses, this refuses in the same words, because they are the same mistakes:
+    a moment already behind us, a channel this agent has not got, a program named rather
+    than located, and `--provider`/`--model`/`--instructions` on a schedule that starts a
+    program rather than asking a turn.
+    """
+    from rundesk import schedule
+
+    runs = list(args.options) + list(getattr(args, "handed_on", []))
+    row = kept.schedule(args.schedule)
+    if row is None:
+        print(f"{args.name}/{args.schedule}: NOT FOUND — no schedule by that name",
+              file=sys.stderr)
+        return 1
+    # Stripped as it arrives, the way `add` already does — every decision below is then
+    # asked of what was meant rather than of what was typed around it (R-SCH-44).
+    when, moment = _typed(args.when), _typed(args.moment)
+    prompt, to = _typed(args.prompt), _typed(args.channel)
+    given = {
+        "cron": when, "at": moment, "prompt": prompt,
+        "provider": _typed(args.provider), "model": _typed(args.model),
+        "instructions": _typed(args.says),
+        "channel": to, "place": _typed(args.place),
+    }
+    if runs:
+        given["command"] = runs
+    named = {key: value for key, value in given.items() if value is not None}
+    if not named:
+        print(f"{args.name}/{args.schedule}: NOTHING TO CHANGE — say what to change",
+              file=sys.stderr)
+        print(f"        what it is now:  rundesk schedules {args.name} show "
+              f"{args.schedule}", file=sys.stderr)
+        return 1
+    if when and moment:
+        print(f"{args.name}/{args.schedule}: NOT CHANGED — a schedule states a repeating "
+              f"time or a single moment, never both", file=sys.stderr)
+        return 1
+    if prompt and runs:
+        print(f"{args.name}/{args.schedule}: NOT CHANGED — a schedule starts a program or "
+              f"asks a turn, never both", file=sys.stderr)
+        return 1
+    if moment:
+        try:
+            made = schedule.Schedule(args.schedule, None, at=moment)
+        except schedule.NotASchedule as why:
+            print(f"{args.name}/{args.schedule}: NOT CHANGED — {why}", file=sys.stderr)
+            print(f"        say a moment ahead of now, as {schedule.SAID_AS}",
+                  file=sys.stderr)
+            return 1
+        if made.expired_at(datetime.now()):
+            print(f"{args.name}/{args.schedule}: NOT CHANGED — "
+                  f"{made.stated.strftime(schedule.A_MINUTE)} has already passed, so this "
+                  f"could never run", file=sys.stderr)
+            return 1
+        if (row.get("last_auto_run_at") or "").strip():
+            # **The trap this whole option would otherwise walk into.** A single moment is
+            # spent the instant anything durable says the clock started this schedule
+            # (R-SCH-38), and that is written for every firing a repeating schedule ever
+            # had. So a moment set on a schedule that has run would be `used` before it
+            # arrived: the listing would show a time, and it could never come round. Adding
+            # a new schedule is what an owner wants here, and it is said rather than left
+            # to be discovered at the moment nothing happens.
+            print(f"{args.name}/{args.schedule}: NOT CHANGED — the clock has already "
+                  f"started this schedule, and a single moment is spent once it has "
+                  f"(R-SCH-38), so it could never run", file=sys.stderr)
+            print(f"        add a new schedule for that moment:  rundesk schedules "
+                  f"{args.name} add <name> --at {moment}", file=sys.stderr)
+            return 1
+        named["at"] = made.stated.strftime(schedule.A_MINUTE)
+    if when:
+        try:
+            schedule.Schedule(args.schedule, when)
+        except schedule.NotASchedule as why:
+            print(f"{args.name}/{args.schedule}: NOT CHANGED — {why}", file=sys.stderr)
+            return 1
+    if to and kept.channel(to) is None:
+        print(f"{args.name}/{args.schedule}: NOT CHANGED — this agent has no channel "
+              f"called '{to}'", file=sys.stderr)
+        print(f"        what it has:  rundesk channels {args.name}", file=sys.stderr)
+        return 1
+    if runs and not process.located(runs[0]):
+        print(f"{args.name}/{args.schedule}: NOT CHANGED — '{runs[0]}' is a name, not a "
+              f"location; give the full path (try: command -v {runs[0]})", file=sys.stderr)
+        return 1
+    # **Asked of the schedule as it will be, not of what was typed.** These three reach a
+    # brain, and a schedule that starts a program has none for them to reach — which `add`
+    # already refuses. An edit can arrive at the same wrong row two ways: by naming one of
+    # them on a program, and by turning a turn into a program while the columns it filled
+    # stay behind. The second leaves no option to point at, so it is the row after the
+    # change that is asked, and what is already there counts exactly as what was typed.
+    asks_after = bool(named.get("prompt") or (row.get("prompt") and "command" not in named))
+    if not asks_after:
+        for option, key in (("--provider", "provider"), ("--model", "model"),
+                            ("--instructions", "instructions")):
+            after = named[key] if key in named else row.get(key)
+            if not (after or "").strip():
+                continue
+            print(f"{args.name}/{args.schedule}: NOT CHANGED — {option} is for a turn, and "
+                  f"this schedule "
+                  + ("starts a program" if row.get("command")
+                     else "would start a program after this change"), file=sys.stderr)
+            # Never cleared on an owner's behalf. Dropping standing instructions because a
+            # schedule changed shape is losing something nobody asked to lose — and saying
+            # it in one line means the whole change is still one command.
+            print('        say them off in the same breath:  --provider "" --model "" '
+                  '--instructions ""', file=sys.stderr)
+            return 1
+    try:
+        moved = kept.change_schedule(args.schedule, **named)
+    except store.Refused as why:
+        print(f"{args.name}/{args.schedule}: NOT CHANGED — {why}", file=sys.stderr)
+        return 1
+    except ValueError as why:
+        print(f"{args.name}/{args.schedule}: NOT CHANGED — {why}", file=sys.stderr)
+        return 1
+    if not moved:
+        # Removed between being read and being written. The change did nothing, and a
+        # command that reported one anyway would be a success nobody can find afterwards.
+        print(f"{args.name}/{args.schedule}: NOT FOUND — it was taken away while this was "
+              f"being changed", file=sys.stderr)
+        return 1
+    # The names of what moved and never the words in it. A prompt and standing instructions
+    # are an owner's own, and the log is read by whoever can read the file — what belongs in
+    # an account is that they changed and when, which is what this says.
+    changed = ", ".join(sorted(named))
+    unlogged = _note(gateways, args.name,
+                     f"schedule '{args.schedule}' edited ({changed})", whose)
+    print(f"{args.name}/{args.schedule}: EDITED — {changed}")
+    print(f"        what it is now:  rundesk schedules {args.name} show {args.schedule}")
     return unlogged
 
 

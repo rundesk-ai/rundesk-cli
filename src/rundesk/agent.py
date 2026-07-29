@@ -643,7 +643,8 @@ def standing(name: str) -> str:
     return STANDING.format(name=name)
 
 
-def told(name: str, where: Path | None = None, said: str = "", otherwise: str = "") -> str:
+def told(name: str, where: Path | None = None, said: str = "", otherwise: str = "",
+         regardless: str = "") -> str:
     """What a turn for this agent is told about its situation, before it reads a prompt.
 
     **Rundesk's own words first, and then the nearest thing anybody else said** (R-AGT-16,
@@ -658,16 +659,36 @@ def told(name: str, where: Path | None = None, said: str = "", otherwise: str = 
     sentence about the situation, so every caller hands in what it knows and none of them has
     to know the order.
 
+    `regardless` is the exception, and it is rundesk's too: what is structurally true of this
+    turn whatever anybody wrote (R-AGT-34). It follows R-AGT-17's rule rather than R-AGT-16's
+    — always present, with the owner's words added to it — because it is not something an
+    owner could be disagreeing with by saying anything at all.
+
     Written once because the order is the guarantee. Each caller working it out would be four
     orders that agree until one of them does not, and the way that fails is silent: an agent
     told the wrong thing about where it is answers perfectly well, and wrongly.
     """
     return "\n\n".join(part for part in (standing(name), _situation(name, where, said,
-                                                                    otherwise)) if part)
+                                                                    otherwise, regardless))
+                       if part)
 
 
-def _situation(name: str, where: Path | None, said: str, otherwise: str) -> str:
-    """The nearest thing anybody said about *this* turn's situation, or nothing."""
+def _situation(name: str, where: Path | None, said: str, otherwise: str,
+               regardless: str) -> str:
+    """What rundesk always says about this turn, and the nearest thing anybody else said.
+
+    The two tiers are joined rather than ranked (R-AGT-34, R-AGT-16). A schedule's standing
+    instructions are what to *do*; rundesk's line is what the situation *is*, and an owner
+    writing the first was never saying anything about the second — but it silently replaced
+    it, so a schedule told to focus on high-priority issues was no longer told that nobody
+    was watching or that what it delivers is one report.
+    """
+    return "\n\n".join(part for part in (regardless, _nearest(name, where, said, otherwise))
+                       if part and part.strip())
+
+
+def _nearest(name: str, where: Path | None, said: str, otherwise: str) -> str:
+    """The nearest thing anybody said about *this* turn's situation, or nothing (R-AGT-16)."""
     if said and said.strip():
         return said
     mine = chosen(name, where).get("instructions")
@@ -995,10 +1016,11 @@ def asking(name: str, where: Path | None = None, carry=None):
             settings=kept.get("settings"),
             conversation=one.name, on=turns.SCHEDULE, kind=turns.SCHEDULE,
             fresh=True,
-            # This schedule's own, then the agent's, then the one line rundesk says to a
-            # turn nobody is waiting for (R-AGT-16).
+            # The one line rundesk says to a turn nobody is waiting for, which is always
+            # there (R-AGT-34), and then this schedule's own words or the agent's added to
+            # it (R-AGT-16).
             preface=told(name, where, said=one.instructions or "",
-                         otherwise=schedules.by_default(one.name)),
+                         regardless=schedules.by_default(one.name)),
             source=turns.SCHEDULE,
             # What correlates this run with the schedule that started it, so what ran at
             # three in the morning is found by the name an owner already knows.

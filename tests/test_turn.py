@@ -206,10 +206,28 @@ say(type="text", text="working on it")
 time.sleep(30)
 '''
 
+#: Thinks aloud while it works, then answers — the shape every real brain arrives in. Three
+#: finished thoughts with tool calls between them, the last of which is the report and is
+#: several paragraphs long.
+NARRATES = '''
+import json, sys
+if "--capabilities" in sys.argv:
+    print("{}")
+    sys.exit(0)
+sys.stdin.read()
+say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
+say(type="text", text="I'll start by reading the repository instructions.", whole=True)
+say(type="tool", name="Read")
+say(type="text", text="Selected candidate: the first one.", whole=True)
+say(type="tool", name="Bash")
+say(type="text", text="Done.\\n\\nOne report, in two paragraphs.", whole=True)
+say(type="done", ok=True)
+'''
+
 BRAINS = {"plain": PLAIN, "quiet": QUIET, "nosy": NOSY, "strange": STRANGE,
           "failing": FAILING, "steerable": STEERABLE, "finishes": FINISHES,
           "goes_on": GOES_ON, "silent": SILENT, "blank": BLANK,
-          "stale": STALE, "mute": MUTE}
+          "stale": STALE, "mute": MUTE, "narrates": NARRATES}
 
 
 class WithAnAgentToRunTurnsFor(unittest.IsolatedAsyncioTestCase):
@@ -526,6 +544,47 @@ class WhatAdmittedThisTurn(WithAnAgentToRunTurnsFor):
         self.assertEqual("terminal", self.settled(said.run)["source"])
         self.assertIsNone(self.asked(said.run)["who"],
                           "a turn from a terminal claimed somebody had asked for it")
+
+
+class WhatATurnAnswersWith(WithAnAgentToRunTurnsFor):
+    """R-SCH-45 — one whole turn, and the one row somebody reads it back out of.
+
+    A scheduled run never passes through the surface that shows a watched turn working, so
+    the last-whole-thought behaviour a person already gets could not reach it: what it says
+    is read back out of the conversation afterwards, and that row held every thought the
+    brain had on the way. Nothing about a watched turn changes here.
+    """
+
+    async def answered(self, **extra) -> list:
+        """What this agent said in the run's conversation, as it will be read back."""
+        outcome = await self.ask("narrates", **extra)
+        self.assertTrue(outcome.ok, f"the turn did not finish: {outcome.why}")
+        return [one["text"] for one in self.talk(outcome.run) if one["author"] == "agent"]
+
+    async def test_a_turn_nobody_watched_says_its_last_thought_and_not_its_working(self):
+        """R-SCH-45 — the whole defect, end to end. Three finished thoughts with tool calls
+        between them is what a real scheduled run looks like, and its owner was handed all
+        three with the report at the bottom."""
+        self.assertEqual(["Done.\n\nOne report, in two paragraphs."],
+                         await self.answered(source=turn.SCHEDULE, conversation="nightly",
+                                             on=turn.SCHEDULE, kind=turn.SCHEDULE))
+
+    async def test_a_turn_somebody_asked_for_still_says_everything_it_said(self):
+        """R-PRV-22 — unchanged, and this is the case that says so. Somebody watching a turn
+        is watching it *because* the working is the point, and a surface has already sent
+        each finished thought on as the next one arrived."""
+        self.assertEqual(["I'll start by reading the repository instructions.\n\n"
+                          "Selected candidate: the first one.\n\n"
+                          "Done.\n\nOne report, in two paragraphs."],
+                         await self.answered())
+
+    async def test_a_turn_the_clock_started_still_records_everything_it_did(self):
+        """R-RUN-4 — what is narrowed is the one row holding what it *said*. What it did is
+        the run's account and is untouched, so the turn is still readable as a turn."""
+        outcome = await self.ask("narrates", source=turn.SCHEDULE, conversation="nightly",
+                                 on=turn.SCHEDULE, kind=turn.SCHEDULE)
+        self.assertEqual(["tool", "tool", "done"],
+                         [one["kind"] for one in self.account(outcome.run)])
 
 
 class CarryingAConversationOn(WithAnAgentToRunTurnsFor):
@@ -870,6 +929,28 @@ class WhatOneReplyIsMadeOf(unittest.TestCase):
                 {"type": "text", "text": "Then a finished thought.", "whole": True}]
         self.assertEqual("half a sentence\n\nThen a finished thought.", turn._reply(said))
 
+    def test_fragments_on_each_side_of_a_tool_call_are_two_thoughts(self):
+        """The seam for a brain that never marks anything finished. Joined with nothing, a
+        grok turn reads back `caught it running.The worker` — the very shape the case above
+        exists to prevent, arriving by the other door."""
+        said = [{"type": "text", "text": "caught it "},
+                {"type": "text", "text": "running."},
+                {"type": "tool", "name": "Bash", "id": "one"},
+                {"type": "result", "id": "one", "ok": True},
+                {"type": "text", "text": "The worker (PID 72422) "},
+                {"type": "text", "text": "is blocked."}]
+        self.assertEqual("caught it running.\n\nThe worker (PID 72422) is blocked.",
+                         turn._reply(said))
+
+    def test_a_tool_a_brain_never_announced_still_ends_the_thought(self):
+        """An adapter may hear of a tool only once it is over, and report the terminal
+        update alone. The seam has to be found there too, or the thoughts on each side of
+        work nobody saw start fuse back together."""
+        said = [{"type": "text", "text": "looking"},
+                {"type": "result", "id": "one", "ok": True},
+                {"type": "text", "text": "found it"}]
+        self.assertEqual("looking\n\nfound it", turn._reply(said))
+
     def test_nothing_but_text_records_reach_the_reply(self):
         """A turn says more than it replies with: what it thought and what a tool returned
         are kept, and are not what somebody asked for."""
@@ -892,6 +973,78 @@ class WhatOneReplyIsMadeOf(unittest.TestCase):
         self.assertEqual("", turn._reply([]))
         self.assertEqual("", turn._reply([{"type": "text", "text": "  ", "whole": True}]))
         self.assertEqual("", turn._reply([{"type": "usage", "input": 1}]))
+
+
+class WhatATurnClosesOn(unittest.TestCase):
+    """R-SCH-45 — the same records, read for the last thought rather than for all of them.
+
+    No agent and no brain: `_close` is the whole decision and is asked directly. Read only
+    once the turn is over, because that is the only moment "which was last" is a fact — a
+    brain says something and then decides whether to call another tool, so it cannot mark
+    its own final message without predicting what it is about to do.
+    """
+
+    def test_the_close_of_a_turn_is_the_last_whole_thing_its_brain_said(self):
+        """The working narration is exactly what stands between an owner and the report:
+        measured on a real account, three paragraphs of orientation arrived above it."""
+        said = [{"type": "text", "text": "I'll start by reading the instructions.",
+                 "whole": True},
+                {"type": "tool", "name": "Read"},
+                {"type": "text", "text": "Selected candidate: the first one.", "whole": True},
+                {"type": "text", "text": "Nothing needs your decision.", "whole": True}]
+        self.assertEqual("Nothing needs your decision.", turn._close(said))
+
+    def test_an_answer_written_in_one_go_survives_every_paragraph_of_it(self):
+        """The objection this design had to answer. One finished thought is one record,
+        however long it is, so what is dropped is only a thought said before further tool
+        calls — never the paragraphs inside the answer itself."""
+        said = [{"type": "text", "text": "working on it", "whole": True},
+                {"type": "text", "text": "a heading\n\n- one\n- two\n\nand after it",
+                 "whole": True}]
+        self.assertEqual("a heading\n\n- one\n- two\n\nand after it", turn._close(said))
+
+    def test_a_reply_no_brain_ever_called_finished_is_still_the_close(self):
+        """An adapter that never marks a thought `whole` says one thing in fragments, and
+        that one thing is what it closed on — not nothing, which is what reading only
+        `whole` records would deliver. Nothing was said before further tool calls here, so
+        there is no working to drop and the whole of it is the close."""
+        said = [{"type": "text", "text": "one "},
+                {"type": "text", "text": "whole "},
+                {"type": "text", "text": "sentence"}]
+        self.assertEqual("one whole sentence", turn._close(said))
+
+    def test_a_brain_that_never_marks_a_thought_finished_still_drops_its_working(self):
+        """**The guarantee on the two adapters that cannot mark a thought `whole`** —
+        `grok`, which refuses it on purpose, and `antigravity`, whose deltas carry it only
+        on a terminal fallback nothing reaching here ever takes. Read on `whole` alone this
+        close is the entire turn, narration and all, and a schedule on either brain still
+        delivers its working. Going to work is the seam that makes it the report."""
+        said = [{"type": "text", "text": "I'll start by reading "},
+                {"type": "text", "text": "the repository instructions."},
+                {"type": "tool", "name": "Read", "id": "one"},
+                {"type": "result", "id": "one", "ok": True},
+                {"type": "text", "text": "Selected candidate: the first one."},
+                {"type": "tool", "name": "Bash", "id": "two"},
+                {"type": "result", "id": "two", "ok": True},
+                {"type": "text", "text": "Done. "},
+                {"type": "text", "text": "One report."}]
+        self.assertEqual("Done. One report.", turn._close(said))
+        self.assertNotEqual(turn._reply(said), turn._close(said))
+
+    def test_what_a_brain_said_after_its_last_finished_thought_is_the_close(self):
+        """A brain cut off part-way through writing its next thought still said that much,
+        and it is the last thing it said."""
+        said = [{"type": "text", "text": "the thought before", "whole": True},
+                {"type": "text", "text": "and then it was "},
+                {"type": "text", "text": "interrupted"}]
+        self.assertEqual("and then it was interrupted", turn._close(said))
+
+    def test_a_turn_that_said_nothing_closes_on_nothing(self):
+        """`answered` writes nothing for an empty close, exactly as it does for an empty
+        reply — a turn that produced no answer must not gain one here."""
+        self.assertEqual("", turn._close([]))
+        self.assertEqual("", turn._close([{"type": "text", "text": "  ", "whole": True}]))
+        self.assertEqual("", turn._close([{"type": "tool", "name": "Read"}]))
 
 
 class WhatATurnCost(WithAnAgentToRunTurnsFor):
