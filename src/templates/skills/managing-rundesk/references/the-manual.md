@@ -187,10 +187,10 @@ with. Shared channels cannot change an agent-wide default.
 
 **Schedules are their own skill.** What a schedule is *for*, how to say when, where its
 outcome lands and what a channel that spans a server does to that are all in
-`managing-rundesk-schedules`. It is a separate grant, and an agent made before it existed
-will not have been given it — if it is on this machine and you were not, say so rather than
-guessing at the parts. The one thing worth carrying here: a schedule is the owner's clock,
-never a way to move your own work out of the turn you are in.
+`managing-rundesk-schedules`. A fresh configuration requires that grant for every new agent.
+If it is on this machine and you were not given it, say so rather than guessing at the parts.
+The one thing worth carrying here: a schedule is the owner's clock, never a way to move your
+own work out of the turn you are in.
 
 
 **What things cost, and how rundesk itself is.**

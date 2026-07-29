@@ -17,23 +17,22 @@ added later neither collides with what is here nor makes the reader guess what o
 
 **An owner writes this file by hand**, which is the whole reason it is JSON in the open
 rather than a row in a database. So no *reader* here ever writes it back: a reader that
-rewrites what it parsed is a reader that eventually reformats somebody's comments away, and
-a half-written file read at the wrong moment is how the value they set silently becomes the
-default. Exactly two functions write, and neither reads a value to do it — `ensure` adds the
-sections this release knows and touches nothing already there, and `take_back` removes a
-file nobody ever stated anything in. Both say why in their own docstrings; a third writer
-would need the same argument made again.
+rewrites what it parsed is a reader that eventually reformats somebody's choices away.
+Exactly two functions write. `ensure` puts in values an install has never stated and touches
+nothing already there; `take_back` removes the untouched configuration the install wrote.
 
-**Missing is not the same as unreadable.** A file that is not there is an owner who never
-wrote one, and every default applies. A file that is there and cannot be understood is
-refused and said out loud, because treating it as absent means running on defaults an owner
-believes they overrode — which they only discover when a backup they thought was kept for a
-year has gone (R-STO-13 says the same thing about an agent's records).
+**The file is the source of truth.** The initial values below exist only to write a new
+configuration and fill a value an older release never wrote. Runtime readers require the
+value in the file; they never fall back around a missing one. A missing or unreadable value
+is refused and said out loud, because silently reaching into Python makes `config.json`
+untrue about what governs the install (R-STO-13 says the same thing about an agent's
+records).
 """
 
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
 from pathlib import Path
 
@@ -43,35 +42,24 @@ from rundesk import data_home
 #: open it, and a dotfile is a file people are not told about.
 NAMED = "config.json"
 
-#: How long a backup is kept before the next one prunes it. A default rather than a law —
-#: this is the name the requirement cites, and the number lives only here.
-KEEP_DAYS = 30
+#: What a new configuration says in full (R-INS-19). This is an installation seed, never a
+#: runtime fallback: once written, `config.json` is what governs the install. Not every
+#: shipped skill belongs here — these four are what a new agent needs to work with rundesk.
+INITIAL = {
+    "backups": {"at": "04:00", "keep_days": 30},
+    "updates": {"at": "03:00"},
+    "skills": {
+        "granted": [
+            "managing-rundesk",
+            "managing-rundesk-schedules",
+            "managing-rundesk-backups",
+            "filing-rundesk-issues",
+        ]
+    },
+}
 
-#: When the machine takes the daily one, on its own local clock, as a person states a time.
-#: Early enough to be finished before a working day, late enough not to collide with the
-#: nightly schedules an agent is likely to have.
-DAILY_AT = "04:00"
-
-#: When the machine checks for a new Rundesk release, on its own local clock.
-UPDATE_AT = "03:00"
-
-#: What a new agent is given, when nothing here says otherwise. Not `shipped()`: a release
-#: ships more than every agent should carry, and an agent that holds a skill it will never
-#: reach for pays for it in the description every brain reads on every turn. These four are
-#: what an agent needs to work *with rundesk* — everything else is granted when somebody
-#: decides that agent does that job.
-GRANTED = (
-    "managing-rundesk",
-    "managing-rundesk-schedules",
-    "managing-rundesk-backups",
-    "filing-rundesk-issues",
-)
-
-#: Every section this release knows, in the order an owner reads them. What `ensure` writes
-#: and what an update adds to a file written before a section existed — the names only, so
-#: the values stay here in code and a default improved in a later release still reaches an
-#: install that never set one.
-SECTIONS = ("backups", "updates", "skills")
+#: Every section this release knows, in the order an owner reads them.
+SECTIONS = tuple(INITIAL)
 
 
 class Unreadable(Exception):
@@ -108,62 +96,42 @@ def read(where: Path | None = None) -> dict:
 
 
 def backups(where: Path | None = None) -> dict:
-    """How backups are configured here, with every default already applied.
-
-    One place decides both the defaults and what a stated value may be, so the command that
-    takes a backup, the job the machine runs and the pruning that follows can never disagree
-    about how long "kept" is.
-    """
-    said = read(where).get("backups")
-    if said is None:
-        said = {}
+    """How backups are configured here, read completely from the file."""
+    said = _section("backups", where)
     if not isinstance(said, dict):
         raise Unreadable(f"{path(where)}: 'backups' holds "
                          f"{type(said).__name__} where it must hold an object")
     return {
-        "keep_days": _days(said.get("keep_days"), where),
-        "at": _at(said.get("at"), where, "backups"),
+        "keep_days": _days(_value(said, "backups", "keep_days", where), where),
+        "at": _at(_value(said, "backups", "at", where), where, "backups"),
     }
 
 
 def updates(where: Path | None = None) -> dict:
-    """How automatic Rundesk updates are configured, with the default applied."""
-    said = read(where).get("updates")
-    if said is None:
-        said = {}
+    """How automatic Rundesk updates are configured, read completely from the file."""
+    said = _section("updates", where)
     if not isinstance(said, dict):
         raise Unreadable(f"{path(where)}: 'updates' holds "
                          f"{type(said).__name__} where it must hold an object")
-    return {"at": _at(said.get("at"), where, "updates", UPDATE_AT)}
+    return {"at": _at(_value(said, "updates", "at", where), where, "updates")}
 
 
 def skills(where: Path | None = None) -> dict:
-    """Which skills a newly made agent is given, with the default applied.
+    """Which skills every agent is required to hold, read completely from the file.
 
-    **What a new agent gets, and never what an existing one gets back.** Nothing records
-    that a grant was taken away, so anything reading this at any moment other than the
-    making of an agent would hand back, on every update, the skill an owner had just
-    revoked (`agent._given_what_ships` says the same thing from the other side).
+    This is the install-wide baseline rather than every skill the release ships. A new
+    agent receives each one, and the command refuses to revoke one while it remains named
+    here (R-AGT-36).
     """
-    said = read(where).get("skills")
-    if said is None:
-        said = {}
+    said = _section("skills", where)
     if not isinstance(said, dict):
         raise Unreadable(f"{path(where)}: 'skills' holds "
                          f"{type(said).__name__} where it must hold an object")
-    return {"granted": _granted(said.get("granted"), where)}
+    return {"granted": _granted(_value(said, "skills", "granted", where), where)}
 
 
 def _granted(said, where) -> tuple[str, ...]:
-    """A list of skill names, or the default.
-
-    An empty list is honoured rather than read as "said nothing": an owner who wants agents
-    made with no skills at all has stated something, and turning it back into four is the
-    kind of quiet override this whole file exists to prevent. `None` — the key absent — is
-    the one that means the default.
-    """
-    if said is None:
-        return GRANTED
+    """A list of skill names, including an explicitly empty one."""
     if not isinstance(said, list) or any(not isinstance(one, str) for one in said):
         raise Unreadable(f"{path(where)}: 'skills.granted' must be a list of skill names, "
                          f"and is {said!r}")
@@ -171,59 +139,58 @@ def _granted(said, where) -> tuple[str, ...]:
 
 
 def ensure(where: Path | None = None) -> list[str]:
-    """Put the file there, with every section this release knows, and say which were added.
+    """Put the file there with every effective value, and say which sections changed.
 
-    **Written empty, deliberately.** A section holding `{}` is the shape of what can be set
-    without being a value that has been set: an owner opens the file and sees what there is
-    to configure, while every default still lives in code, where a later release can improve
-    one and have it reach an install that never stated its own. A file written with real
-    values in it pins them for ever, and looks correct while doing it.
-
-    Run by the install, and again by an update so a file written before a section existed
-    grows the new one. **Nothing already in the file is touched** — not a value, not a
-    section, not a key this release has never heard of. An unreadable file is left exactly
-    as it is and said out loud by whoever asked for it; rewriting one is how an owner's
-    configuration is lost while a command reports success.
+    Run by the install, and again by an update so a file written by an older release grows
+    every section and key that release did not know. **Nothing already in the file is
+    touched** — not a value, not a section, not a key this release has never heard of. This
+    migrates v0.20.0's empty objects into a complete configuration without replacing
+    anything an owner filled first (R-UPD-48).
     """
     at = path(where)
     try:
         standing = read(where)
     except Unreadable:
         return []
-    missing = [one for one in SECTIONS if one not in standing]
-    if not missing and at.is_file():
+    changed = []
+    for section, values in INITIAL.items():
+        if section not in standing:
+            standing[section] = copy.deepcopy(values)
+            changed.append(section)
+            continue
+        current = standing[section]
+        if not isinstance(current, dict):
+            continue
+        for key, value in values.items():
+            if key not in current:
+                current[key] = copy.deepcopy(value)
+                if section not in changed:
+                    changed.append(section)
+    if not changed and at.is_file():
         return []
-    for one in missing:
-        standing[one] = {}
     ordered = {one: standing[one] for one in SECTIONS if one in standing}
     ordered.update({one: standing[one] for one in standing if one not in SECTIONS})
     coming = at.with_name(f".{NAMED}.coming")
     try:
         at.parent.mkdir(parents=True, exist_ok=True)
         coming.write_text(json.dumps(ordered, indent=2) + "\n", encoding="utf-8")
-        # Swapped in whole. A half-written configuration read at the wrong moment is the
-        # value an owner set silently becoming the default.
+        # Swapped in whole. A half-written configuration read at the wrong moment is an
+        # owner's choice silently becoming something else.
         coming.replace(at)
     except OSError:
         with contextlib.suppress(OSError):
             coming.unlink()
         return []
-    return missing
+    return changed
 
 
 def take_back(where: Path | None = None) -> bool:
-    """Take back a configuration nobody ever wrote anything into, and say whether it went.
+    """Take back the unchanged configuration this release wrote.
 
     **The mirror of `ensure`, and the same rule as a built-in skill's** (R-RM-7): what the
     install put there is the program's and goes with it, and what the owner wrote is theirs
-    and stays. A file whose every section is empty is the skeleton this install wrote and
-    nothing else — nobody has stated anything, so there is nothing of theirs to keep, and
-    leaving it is what makes a fresh install and an uninstall leave a directory behind
-    (R-RM-8).
-
-    One stated value anywhere, one key this release does not know, or a file that cannot be
-    read, and it stays exactly as it is. Removing a configuration on the way out is not
-    something to be nearly right about.
+    and stays. The exact initial document is what this release put there; any difference,
+    including an unknown key, makes it the owner's and leaves it alone (R-RM-8).
     """
     at = path(where)
     if not at.is_file():
@@ -232,7 +199,7 @@ def take_back(where: Path | None = None) -> bool:
         standing = read(where)
     except Unreadable:
         return False
-    if any(one not in SECTIONS or said for one, said in standing.items()):
+    if standing != INITIAL:
         return False
     try:
         at.unlink()
@@ -242,25 +209,21 @@ def take_back(where: Path | None = None) -> bool:
 
 
 def _days(said, where) -> int:
-    """A number of days, or the default — never a number that would delete everything.
+    """A number of days — never one that would delete everything.
 
     `True` is an `int` in Python and would arrive here as one day, so the type is asked
     before the value. Zero and negatives are refused rather than clamped: an owner who wrote
     one meant something, and quietly turning it into the default keeps every backup for ever
     while quietly turning it into a day deletes their history.
     """
-    if said is None:
-        return KEEP_DAYS
     if isinstance(said, bool) or not isinstance(said, int) or said < 1:
         raise Unreadable(f"{path(where)}: 'keep_days' must be a whole number of days "
                          f"of at least one, and is {said!r}")
     return said
 
 
-def _at(said, where, section: str, default: str = DAILY_AT) -> str:
+def _at(said, where, section: str) -> str:
     """A time of day the machine can be given, stated the way a person writes one."""
-    if said is None:
-        return default
     if not isinstance(said, str):
         raise Unreadable(
             f"{path(where)}: '{section}.at' must be a time of day, and is {said!r}"
@@ -275,3 +238,18 @@ def _at(said, where, section: str, default: str = DAILY_AT) -> str:
             f"{path(where)}: '{section}.at' is not a time of day: {said!r}"
         )
     return f"{int(hour):02d}:{int(minute):02d}"
+
+
+def _section(name: str, where) -> object:
+    """One required section, never a hidden fallback."""
+    configured = read(where)
+    if name not in configured:
+        raise Unreadable(f"{path(where)}: '{name}' is missing")
+    return configured[name]
+
+
+def _value(section: dict, name: str, key: str, where) -> object:
+    """One required value, never a hidden fallback."""
+    if key not in section:
+        raise Unreadable(f"{path(where)}: '{name}.{key}' is missing")
+    return section[key]

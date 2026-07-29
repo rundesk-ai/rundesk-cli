@@ -718,6 +718,7 @@ class WhatMakingAnAgentGrants(WithALibrary):
         (self.where / "data" / "config.json").write_text(
             '{"skills": {"granted": ["writing-skills"]}}\n', encoding="utf-8")
         for name, at in (("RUNDESK_DATA_DIR", self.where / "data"),
+                         ("RUNDESK_SKILL_LIBRARY", self.library),
                          ("RUNDESK_AGENTS_DIR", self.where / "data" / "agents"),
                          ("RUNDESK_RUN_DIR", self.where / "run"),
                          ("RUNDESK_LOG_DIR", self.where / "logs")):
@@ -744,17 +745,19 @@ class WhatMakingAnAgentGrants(WithALibrary):
         self.assertEqual(["writing-skills"], skill.granted(self.agents.skills("ava")),
                          "an agent was given a skill the configuration did not name")
 
-    def test_an_agent_is_made_with_the_skills_that_work_rundesk_when_nothing_is_stated(self):
-        """R-AGT-36 — the default is the four an agent needs to work with rundesk itself,
-        and it is read off the same place the command reads, never a second list."""
+    def test_an_agent_is_made_with_the_skills_written_into_a_new_configuration(self):
+        """R-AGT-36 — the required set is the four an agent needs to work with rundesk
+        itself, written where the owner and the command both read it."""
         (self.where / "data" / "config.json").unlink()
-        for called in config.GRANTED:
+        config.ensure(self.where / "data")
+        required = config.INITIAL["skills"]["granted"]
+        for called in required:
             a_skill(self.release, called)
         skill.lay_down(self.library)
 
         self.agents.add("ava")
 
-        self.assertEqual(sorted(config.GRANTED), skill.granted(self.agents.skills("ava")))
+        self.assertEqual(sorted(required), skill.granted(self.agents.skills("ava")))
 
     def test_an_owner_who_wants_no_skills_granted_gets_none(self):
         """R-AGT-36 — an empty list is a thing somebody stated, and turning it back into
@@ -787,18 +790,6 @@ class WhatMakingAnAgentGrants(WithALibrary):
         self.assertEqual([], complained,
                          "a diagnosis asked for a skill the configuration never named")
 
-    def test_making_an_agent_again_does_not_hand_back_a_skill_that_was_taken_away(self):
-        """R-AGT-29 — `add` is also how an owner repairs an agent, and every other thing
-        it puts back is a thing that is missing. A grant that is missing may be one they
-        removed on purpose, and nothing records which — so handing it back would undo a
-        decision using the command they reached for to fix something else."""
-        self.agents.add("ava")
-        skill.revoke(self.agents.skills("ava"), "writing-skills")
-        self.agents.add("ava")          # the documented repair path
-        self.assertEqual([], skill.granted(self.agents.skills("ava")),
-                         "making the agent again handed back a revoked skill")
-
-
 class NothingHereReachesTheOwnersOwn(unittest.TestCase):
     """The guard on every fixture in this repository that isolates rundesk's directories.
 
@@ -821,6 +812,11 @@ class NothingHereReachesTheOwnersOwn(unittest.TestCase):
         os.environ["RUNDESK_DATA_DIR"] = str(where / "data")
         self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", was)
                         if was is not None else os.environ.pop("RUNDESK_DATA_DIR", None))
+        was_library = os.environ.get("RUNDESK_SKILL_LIBRARY")
+        os.environ["RUNDESK_SKILL_LIBRARY"] = str(where / "data" / "skills")
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_SKILL_LIBRARY", was_library)
+                        if was_library is not None
+                        else os.environ.pop("RUNDESK_SKILL_LIBRARY", None))
         for name in ("RUNDESK_AGENTS_DIR", "RUNDESK_RUN_DIR", "RUNDESK_LOG_DIR"):
             had = os.environ.pop(name, None)
             if had is not None:
