@@ -296,7 +296,7 @@ class AnAnswerRepliesToTheQuestion(unittest.TestCase):
                          "an answer still quotes a message outside the place it is sent")
 
     def test_an_anchor_is_kept_for_the_room_being_written_in_not_the_one_named(self):
-        """R-DIS-29 — a schedule reporting into a place rundesk has never seen a word in sends
+        """R-DIS-30 — a schedule reporting into a place rundesk has never seen a word in sends
         the word and no conversation at all, because only this surface can find that room. The
         guard compared the anchor against the conversation, so the one delivery whose notice
         most needed quoting was the one that dropped it."""
@@ -323,7 +323,7 @@ class AnAnswerRepliesToTheQuestion(unittest.TestCase):
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class AScheduledRunReportsUnderItsOwnNotice(unittest.TestCase):
-    """R-DIS-29, R-SCH-42 — an owner scrolling a busy direct message sees that a schedule
+    """R-DIS-30, R-SCH-46 — an owner scrolling a busy direct message sees that a schedule
     began, and sees what it found attached to the thing that began it rather than floating
     loose among answers to other questions.
 
@@ -368,7 +368,7 @@ class AScheduledRunReportsUnderItsOwnNotice(unittest.TestCase):
         return saying
 
     def test_a_scheduled_report_is_a_reply_to_the_message_that_said_it_started(self):
-        """R-DIS-29 — the pair is self-describing only if the second quotes the first."""
+        """R-DIS-30 — the pair is self-describing only if the second quotes the first."""
         saying = self._said(
             self._remark("💻 Working on 'nightly' …", schedule="nightly", began=True),
             self._remark("nothing broke overnight", schedule="nightly"))
@@ -379,20 +379,20 @@ class AScheduledRunReportsUnderItsOwnNotice(unittest.TestCase):
                          "the report was not a reply to the notice that started it")
 
     def test_a_report_for_a_schedule_nobody_announced_quotes_nothing(self):
-        """R-DIS-29 — a program schedule says nothing when it starts and still says what it
+        """R-DIS-30 — a program schedule says nothing when it starts and still says what it
         came to, and a gateway that restarted holds nothing. Both post plainly, which is what
         every scheduled report did before there were notices at all."""
         saying = self._said(self._remark("schedule 'tidy' finished", schedule="tidy"))
         self.assertEqual([("schedule 'tidy' finished", None)], saying.posted)
 
     def test_an_ordinary_remark_still_quotes_nothing(self):
-        """R-CH-19, R-DIS-29 — a finished thought said mid-turn names no schedule, and quoting
+        """R-CH-19, R-DIS-30 — a finished thought said mid-turn names no schedule, and quoting
         the question on every remark buries the question."""
         saying = self._said(self._remark("I'll look at the logs."))
         self.assertEqual([("I'll look at the logs.", None)], saying.posted)
 
     def test_a_notice_is_answered_once_and_never_by_the_next_firing(self):
-        """R-DIS-29 — the same schedule fires again tomorrow. Left standing, its second report
+        """R-DIS-30 — the same schedule fires again tomorrow. Left standing, its second report
         would quote a message from a run that finished a day earlier."""
         saying = self._said(
             self._remark("💻 Working on 'nightly' …", schedule="nightly", began=True),
@@ -403,7 +403,7 @@ class AScheduledRunReportsUnderItsOwnNotice(unittest.TestCase):
         self.assertEqual({}, saying.started, "the notice was kept after it was answered")
 
     def test_a_notice_that_could_not_be_posted_is_not_held(self):
-        """R-DIS-29 — `_post` hands back nothing when the platform refused, and holding that
+        """R-DIS-30 — `_post` hands back nothing when the platform refused, and holding that
         would make the report a reply to a message that is not there."""
         class Refusing(self.Saying):
             async def _post(self, it, content, anchor=None, files=(), text_as=None):
@@ -419,6 +419,27 @@ class AScheduledRunReportsUnderItsOwnNotice(unittest.TestCase):
 
         asyncio.run(carry())
         self.assertEqual({}, saying.started)
+
+    def test_a_scheduled_report_still_arrives_when_its_notice_is_gone(self):
+        """R-DIS-1, R-DIS-28, R-DIS-30 — the notice stands in the room for the length of the
+        run, which is exactly the window an owner has to tidy it away. Discord refuses a whole
+        message quoting one it cannot resolve, so a deleted notice would have taken the report
+        with it — a dangling notice is bad and a lost report is worse. The reference is built
+        with `fail_if_not_exists` off for every anchor there is, this one included: the quote
+        is what goes, and what the run found still arrives.
+
+        Through the real `_post` and the room that refuses the way Discord does, because what
+        is under test is the reference this delivery builds rather than the record it came
+        from."""
+        notice = AnAnswerRepliesToTheQuestion._message(4242)
+        room = AnAnswerRepliesToTheQuestion.Forgetful(4242)
+        asyncio.run(discord.Agent._post(
+            AnAnswerRepliesToTheQuestion.Turn(room),
+            {"conversation": "4242", "schedule": "nightly"},
+            "nothing broke overnight", anchor=notice))
+        self.assertEqual(["nothing broke overnight"], room.wrote,
+                         "a notice the owner deleted took the report down with it")
+        self.assertEqual([notice], room.quoted)
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")

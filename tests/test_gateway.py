@@ -3007,7 +3007,7 @@ class ASurface:
 
     #: Where a notice goes, which a real surface resolves once and hands back so the report
     #: is delivered to the same conversation rather than to whichever is newest by then
-    #: (R-SCH-42).
+    #: (R-SCH-46).
     NOTICE_WENT_TO = "the-room-the-notice-went-to"
 
     def __init__(self, refuses: bool = False, nowhere: bool = False):
@@ -3017,7 +3017,7 @@ class ASurface:
         self.delivered_to: list = []
         self.refuses = refuses
         #: A surface with nowhere to deliver, which is what `told_a_schedule_started` hands
-        #: back when nothing has ever been said on it and no place was named (R-SCH-42).
+        #: back when nothing has ever been said on it and no place was named (R-SCH-46).
         self.nowhere = nowhere
 
     async def told_what_a_schedule_did(self, named: str, became: str, where=None) -> None:
@@ -3359,7 +3359,7 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         return became
 
     async def test_a_scheduled_run_says_it_started_before_it_says_what_it_found(self):
-        """R-SCH-42 — an owner cannot otherwise tell a schedule is running: work starts at six,
+        """R-SCH-46 — an owner cannot otherwise tell a schedule is running: work starts at six,
         nothing is said for twenty minutes, and the report arrives beside answers to other
         questions with nothing tying the two together."""
         self.agents.remember("ava", self.agents_at, provider=self.brain())
@@ -3375,7 +3375,7 @@ class WhenTheClockAsksATurn(WithARunDirectory):
                          "what it found did not follow the notice that it had started")
 
     async def test_a_run_carries_where_its_notice_went_to_its_report(self):
-        """R-SCH-42 — the gateway is what holds the two ends of a run together, so it is what
+        """R-SCH-46 — the gateway is what holds the two ends of a run together, so it is what
         carries where the notice went across to the report. Left for the report to work out
         again, the answer is whichever room somebody last spoke in — which a long run gives an
         owner every chance to change, leaving a promise standing in one room for ever and its
@@ -3392,7 +3392,7 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         self.assertEqual({}, gw._announced, "a notice already answered is still standing")
 
     async def test_a_report_for_a_run_nobody_announced_resolves_where_it_goes(self):
-        """R-SCH-31, R-SCH-42 — a program schedule never announces, so there is nowhere carried
+        """R-SCH-31, R-SCH-46 — a program schedule never announces, so there is nowhere carried
         to deliver to and the report goes where every report went before there were notices."""
         self.reachable_on("ops")
         self.records.remember_schedule("tidy", "* * * * *", store.stamped(),
@@ -3405,7 +3405,7 @@ class WhenTheClockAsksATurn(WithARunDirectory):
                          "a report nobody announced was pinned to a conversation anyway")
 
     async def test_a_schedule_that_starts_a_program_says_nothing_when_it_starts(self):
-        """R-SCH-42 — a program has no report to anchor, so `Working on…` for one is a promise
+        """R-SCH-46 — a program has no report to anchor, so `Working on…` for one is a promise
         rundesk does not keep. What it *came to* is still said, exactly as it was (R-SCH-31)."""
         self.reachable_on("ops")
         self.records.remember_schedule("tidy", "* * * * *", store.stamped(),
@@ -3420,7 +3420,7 @@ class WhenTheClockAsksATurn(WithARunDirectory):
                          "a program schedule stopped saying what it came to")
 
     async def test_a_run_that_could_not_start_still_replies_to_its_notice(self):
-        """R-SCH-42 — the notice must not be left standing with nothing under it. A brain that
+        """R-SCH-46 — the notice must not be left standing with nothing under it. A brain that
         could not be reached is exactly the case an owner is waiting on, and a `Working on…`
         with no outcome beneath it reads as an agent that hung."""
         async def would_not(one):
@@ -3437,7 +3437,7 @@ class WhenTheClockAsksATurn(WithARunDirectory):
                          "the notice was left with no outcome under it")
 
     async def test_a_firing_refused_for_still_running_says_nothing_about_starting(self):
-        """R-SCH-6, R-SCH-42 — announced before the overlap guard, this firing would have said
+        """R-SCH-6, R-SCH-46 — announced before the overlap guard, this firing would have said
         work began that never did. And the notice standing on the surface belongs to the run
         still going, so answering it here would close off work that has not finished."""
         self.agents.remember("ava", self.agents_at, provider=self.brain())
@@ -3453,7 +3453,7 @@ class WhenTheClockAsksATurn(WithARunDirectory):
                          "it answered a notice belonging to the run still going")
 
     async def test_a_surface_with_nowhere_to_deliver_leaves_no_notice_to_answer(self):
-        """R-SCH-42 — nowhere to say it is nowhere to say it started, and only what actually
+        """R-SCH-46 — nowhere to say it is nowhere to say it started, and only what actually
         went out is owed a reply. A gateway that assumed the notice landed would post an
         outcome into a room that never saw the thing it is answering."""
         async def would_not(one):

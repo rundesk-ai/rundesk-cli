@@ -1170,7 +1170,7 @@ class Gateway:
         #: two differ for as long as an adapter is down and being started again.
         self._reached: dict = {}
         #: Which schedules have said on a surface that they have started and not yet said
-        #: what they came to, and the conversation each notice went to (R-SCH-42). A notice
+        #: what they came to, and the conversation each notice went to (R-SCH-46). A notice
         #: with no outcome under it is worse than no notice, so every way out of a run that
         #: can still reach the surface answers whatever is in here — and a run whose gateway
         #: went is one whose notice dies with the process that could have answered it, which
@@ -1953,7 +1953,7 @@ class Gateway:
             # and a turn has two — what became of the process, and what became of the turn
             # it was carrying — and only the second is what a schedule reports (R-SCH-8).
             if one.prompt:
-                # **Only a schedule that asks a turn says it has started** (R-SCH-42). A
+                # **Only a schedule that asks a turn says it has started** (R-SCH-46). A
                 # program has no report to anchor, so `💻 Working on…` for one is a promise
                 # rundesk does not keep. Said from inside `_asked`, once the schedule's name
                 # is claimed: announced here instead, a firing refused for still running
@@ -1970,7 +1970,7 @@ class Gateway:
             #
             # **And nothing is said on the surface.** This firing never announced itself,
             # and the notice that may be standing there belongs to the run still going —
-            # answering it here would close off work that has not finished (R-SCH-42).
+            # answering it here would close off work that has not finished (R-SCH-46).
             self.log.warning("schedule '%s' skipped: what it started last time is still running",
                              one.name)
             self._remember_outcome(one.name, "still running")
@@ -1985,7 +1985,7 @@ class Gateway:
             #
             # **And no notice to answer, by construction.** This is raised by `start` and
             # nowhere else, so only the program branch above can reach it — and a program
-            # schedule never says it has started, having no report to anchor (R-SCH-42).
+            # schedule never says it has started, having no report to anchor (R-SCH-46).
             self._remember_outcome(one.name, INTERRUPTED)
             return
         except asyncio.CancelledError:
@@ -2013,7 +2013,7 @@ class Gateway:
         await self._told_the_surface(one, became)
 
     async def _told_the_surface_it_started(self, one) -> None:
-        """Say on the surface this schedule reports to that its run has begun (R-SCH-42).
+        """Say on the surface this schedule reports to that its run has begun (R-SCH-46).
 
         The mirror of `_told_the_surface`, and it refuses in the same places: a schedule
         naming no surface says nothing, and one naming a surface that is not up is said in
@@ -2036,7 +2036,7 @@ class Gateway:
             if said:
                 # Where it went, not that it went: the report is delivered to this same
                 # conversation rather than resolving the newest one again at the end
-                # (R-SCH-42).
+                # (R-SCH-46).
                 self._announced[one.name] = where
         except Exception as why:  # noqa: BLE001 — a delivery boundary; see the docstring
             self.log.warning("channel '%s': could not say that '%s' started: %s",
@@ -2044,7 +2044,7 @@ class Gateway:
 
     async def _answered_any_notice(self, one, became: str) -> None:
         """Put an outcome under a start notice on a run that ended without reaching the
-        ordinary reporting below (R-SCH-42).
+        ordinary reporting below (R-SCH-46).
 
         A run that failed, was interrupted or never got going has said `💻 Working on…` on
         a surface and would otherwise leave it standing with nothing under it — which is a
@@ -2082,7 +2082,7 @@ class Gateway:
         A surface that will not take it changes nothing about what the schedule did: the work is
         over and the record of it is already written. Said in the log, and on.
 
-        **This is what answers a start notice** (R-SCH-42), so the notice is forgotten here
+        **This is what answers a start notice** (R-SCH-46), so the notice is forgotten here
         whether or not the report reaches anybody — a channel that went down between the two
         must not leave a name standing that the schedule's *next* firing would answer. What
         it is forgotten *with* is where it went, and that goes over with the report: the two
@@ -2133,7 +2133,7 @@ class Gateway:
         started, so it is not in `running` and a shutdown does not end it — what it *does* do
         is cancel the task waiting here, which is recorded as an interruption above.
 
-        **`admitted` is told the moment this run is really going to happen** (R-SCH-42) —
+        **`admitted` is told the moment this run is really going to happen** (R-SCH-46) —
         after the guard that refuses one still running, and before the brain is asked. That
         is the only point at which saying so is true: earlier includes firings that are
         about to be refused, and later is after the twenty minutes an owner spent wondering

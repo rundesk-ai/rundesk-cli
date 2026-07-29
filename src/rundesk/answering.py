@@ -218,14 +218,14 @@ class Answering:
             otherwise=otherwise)
 
     #: What rundesk says on a surface when a scheduled run that will report there begins
-    #: (R-SCH-42). Rundesk's own bookkeeping and never the agent's prose: an owner cannot
+    #: (R-SCH-46). Rundesk's own bookkeeping and never the agent's prose: an owner cannot
     #: otherwise tell that work started at six in the morning, and the first sign of it is
     #: a report arriving twenty minutes later beside answers to other questions, with
     #: nothing tying the two together.
     STARTING = "💻 Working on '{named}' — I will report back when it is done."
 
     async def told_a_schedule_started(self, named: str) -> tuple[bool, str | None]:
-        """Say on this surface that one of this agent's schedules has begun (R-SCH-42).
+        """Say on this surface that one of this agent's schedules has begun (R-SCH-46).
 
         The sibling of `told_what_a_schedule_did`, and where it goes is resolved here **once
         for both** — the place the owner named, and the newest conversation on this surface
@@ -267,7 +267,7 @@ class Answering:
                        f"started — nothing has been said on this surface yet")
             return False, None
         # The schedule's name goes over with it, because that is what the surface holds the
-        # posted message under and what the report names to find it again (R-DIS-29). The
+        # posted message under and what the report names to find it again (R-DIS-30). The
         # surface is never asked to read it — it is a key, exactly as `place` is a word.
         self._tell(type="said", conversation=where_it_goes, place=place or None,
                    text=self.STARTING.format(named=named), schedule=named, began=True)
@@ -299,7 +299,7 @@ class Answering:
         somebody saying "nice work" about it is asking about something the agent has no record
         of having said there.
 
-        **A reply to the notice that this run started, where one went out** (R-SCH-42). The
+        **A reply to the notice that this run started, where one went out** (R-SCH-46). The
         schedule's name is on the record and the surface anchors to whatever it is holding
         under that name; a surface holding nothing posts it plainly, which is what every
         report did before there were notices at all.
