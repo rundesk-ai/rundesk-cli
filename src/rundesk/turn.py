@@ -490,8 +490,12 @@ class _Account:
                 # recorded twice over in one conversation — by their platform identity
                 # when they started a turn, and as the bare word `user` whenever they
                 # spoke into one already running (R-STO-27).
-                self._kept.arrived(self._conversation, at, str(event.get("text") or ""),
-                                   who=event.get("who") or None)
+                author = event.get("author")
+                self._kept.arrived(
+                    self._conversation, at, str(event.get("text") or ""),
+                    author=author or "user",
+                    who=None if author else (event.get("who") or None),
+                )
             return self._seq
         if kind == self.SAID:
             # Gathered, not recorded. A reply arrives a fragment at a time and is one
@@ -638,7 +642,10 @@ async def _saying(program, prompt: str, writing, steering, trouble: list) -> Non
             said = Said.of(word)
             writing.add(event={"type": SENT, "text": said.text, "mid": True,
                                "who": said.who})
-            await program.send(provider.spoken(said.text))
+            writing.add(event={"type": SENT, "text": provider.STEERING_CONTEXT, "mid": True,
+                               "author": "rundesk"})
+            await program.send(provider.spoken(
+                said.text, context=provider.STEERING_CONTEXT))
     except process.NotListening:
         pass  # it finished while somebody was still typing, which is nobody's fault
     except asyncio.CancelledError:

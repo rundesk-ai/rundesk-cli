@@ -92,6 +92,15 @@ CAPABILITIES = ("tools", "resume", "model", "usage", "steer")
 #: One kind, because there is one thing to say to a running brain: more words.
 SAY = "say"
 
+#: What Rundesk says alongside a word that reaches work already in flight. Kept apart from
+#: the person's text in the input record and the account: replacement-style transports
+#: need this to preserve R-PRV-19, while cooperative ones may ignore it.
+STEERING_CONTEXT = (
+    "This is mid-turn guidance within the original request. After addressing it, continue "
+    "working toward and finish the original request unless this guidance explicitly stops "
+    "or replaces that work."
+)
+
 #: How much of the machine a turn may touch, in rundesk's words rather than any vendor's
 #: (R-PRV-18). Two, because a posture nobody can act on is not worth carrying: an adapter
 #: maps these onto whatever its own brain understands, or ignores them.
@@ -242,15 +251,20 @@ def environment(
     return said
 
 
-def spoken(text: str) -> bytes:
+def spoken(text: str, context: str | None = None) -> bytes:
     """One thing said *to* a brain, as a record it reads a line at a time (R-PRV-19).
 
     Records rather than plain text, and only for an adapter that said it can be steered.
     Its input has to stay open for more, so nothing can mean "the prompt ended" any more —
     a brain reading to the end of its input would wait for an end that is not coming. A
     line each, with the text encoded, so a prompt with newlines in it is still one thing.
+    Optional Rundesk-authored context is carried apart so an adapter can apply it without
+    changing the person's recorded words (R-RUN-9, R-PRV-10).
     """
-    return (json.dumps({"type": SAY, "text": text}) + "\n").encode("utf-8")
+    record = {"type": SAY, "text": text}
+    if context:
+        record["context"] = context
+    return (json.dumps(record) + "\n").encode("utf-8")
 
 
 def understood(said: bytes | str) -> dict | None:

@@ -387,11 +387,17 @@ Only if you said `steer: true`. Your stdin stays open, and every line is a recor
 
 ```json
 {"type":"say","text":"count from one to ten"}      <- the prompt
-{"type":"say","text":"actually, stop at three"}    <- eight seconds later
+{"type":"say","text":"actually, stop at three",
+ "context":"This is mid-turn guidance …"}          <- eight seconds later
 ```
 
 Read a line, act on it, keep reading. Everything that arrives goes to the turn that is
 *already running* — it is not a new turn, and the old one is not thrown away.
+
+`context` is optional, written by Rundesk, and already appears in the run's account under
+Rundesk's own authorship. Use it when the brain's steering transport replaces an active
+request rather than inserting words into it. Keep `text` as the person's exact words;
+an adapter that can steer cooperatively may ignore `context`.
 
 **The turn ends when your brain is finished, not when your stdin closes.** Say `done` and
 exit the moment the work is over, whatever your input is doing. Rundesk may hold it open

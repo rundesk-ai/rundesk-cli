@@ -634,7 +634,8 @@ class WhatThisBrainCanDo(unittest.TestCase):
 
     def test_the_protocol_initializes_then_interrupts_before_the_later_word(self):
         words = claude.Words("count to ten", io.StringIO(
-            '{"type":"say","text":"actually, stop at three"}\n'))
+            '{"type":"say","text":"actually, stop at three",'
+            '"context":"continue the original request"}\n'))
         output, control = Sink(), claude.Control()
         thread = threading.Thread(
             target=claude._fed,
@@ -663,7 +664,10 @@ class WhatThisBrainCanDo(unittest.TestCase):
         self.assertEqual("initialize", said[0]["request"]["subtype"])
         self.assertEqual("count to ten", said[1]["message"]["content"])
         self.assertEqual("interrupt", said[2]["request"]["subtype"])
-        self.assertEqual("actually, stop at three", said[3]["message"]["content"])
+        self.assertEqual(
+            "actually, stop at three\n\ncontinue the original request",
+            said[3]["message"]["content"],
+        )
 
     def test_an_interrupted_result_is_not_the_end_and_its_usage_is_not_lost(self):
         control = claude.Control()
@@ -730,6 +734,16 @@ class WhenTheActiveClaudeRequestIsSteered(unittest.TestCase):
         interrupt = read()
         write({"type": "control_response", "response": {
             "subtype": "success", "request_id": interrupt["request_id"], "response": {}}})
+        write({"type": "user", "message": {"content": [{
+            "type": "tool_result", "tool_use_id": "tool-before-steer",
+            "content": "The user doesn't want to proceed with this tool use.",
+            "is_error": True
+        }, {
+            "type": "tool_result", "tool_use_id": "parallel-tool",
+            "content": "parallel work completed", "is_error": False
+        }]}, "tool_result_meta": [{
+            "id": "tool-before-steer", "non_execution_kind": "user-rejected"
+        }]})
         write({"type": "result", "subtype": "error_during_execution", "is_error": True,
                "session_id": "same-session", "result": "Request interrupted by user",
                "usage": {"input_tokens": 3, "output_tokens": 5}})
@@ -758,6 +772,10 @@ class WhenTheActiveClaudeRequestIsSteered(unittest.TestCase):
         self.assertEqual((0, False), (code, lost))
         self.assertEqual(["working on the first", "followed the correction"],
                          [one["text"] for one in only(reported, "text")])
+        results = only(reported, "result")
+        self.assertEqual(["parallel-tool"], [one["id"] for one in results],
+                         "the canceled tool hid parallel work or appeared as a failure")
+        self.assertTrue(results[0]["ok"])
         self.assertEqual(1, len(only(reported, "done")),
                          "the interrupted request was mistaken for Rundesk's turn ending")
         self.assertTrue(only(reported, "done")[0]["ok"])
