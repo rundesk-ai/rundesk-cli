@@ -180,8 +180,9 @@ uses for its own records, then prints what changed:
 ```text
 update: applied — now on v0.16.0
 
-what moved:
-  rundesk  0.15.0 -> 0.16.0  updated
+rundesk  0.15.0 -> 0.16.0  updated
+
+plugins:
   jira     1.4.0 -> 1.5.0    updated
   linear   0.9.0             held back — needs rundesk '>=1.0.0'
   weather  2.0.1             up to date

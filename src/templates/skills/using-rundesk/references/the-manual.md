@@ -320,11 +320,20 @@ skill that plugin ships, in one word. An agent without the grant can still run t
 just has nothing telling it when to.
 
 **Plugins move when rundesk moves.** `rundesk update` brings every plugin forward inside the
-same window it uses for its own records, and finishes with one list — rundesk first, then each
-plugin, with where each came from, where it got to, and what became of it. A plugin that cannot
-be moved is *held back*: kept, but taken off every agent's `PATH` until somebody looks. **A
-plugin can never fail the update it was riding**, which is why a held-back one is reported
-rather than raised.
+same window it uses for its own records, and ends with rundesk's own row and the plugins under
+it:
+
+```text
+rundesk  0.15.0 -> 0.16.0  updated
+
+plugins:
+  jira     1.4.0 -> 1.5.0    updated
+  linear   0.9.0             held back — needs rundesk '>=1.0.0'
+```
+
+A plugin that cannot be moved is *held back*: kept, but taken off every agent's `PATH` until
+somebody looks. **A plugin can never fail the update it was riding**, which is why a held-back
+one is reported rather than raised.
 
 **Removing keeps what it kept.** `rundesk plugins remove <name>` pulls the command and the
 skills and leaves the records, so installing it again picks them back up. `--purge` takes those

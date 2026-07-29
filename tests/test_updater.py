@@ -101,7 +101,7 @@ class PluginsInTheWindowTests(unittest.TestCase):
             plugins=lambda: [Moved("jira", "held back", was="1.4.0", why="its step failed")])
         self.assertEqual(0, code, "a held-back plugin failed the update")
         self.assertIn("update: applied", said)
-        self.assertIn("held back", said)
+        self.assertIn("held back — its step failed", said)
 
     def test_a_plugin_step_that_raises_is_not_something_an_update_has_to_survive(self):
         """R-PLG-15 — the callable is the boundary, and `cli` never lets one through."""
@@ -124,12 +124,12 @@ class PluginsInTheWindowTests(unittest.TestCase):
             Moved("linear", "held back", was="0.9.0", why="needs rundesk '>=1.0.0'"),
             Moved("weather", "up to date", was="2.0.1"),
         ])
-        rows = said[said.index("what moved:"):].splitlines()[1:]
-        # The rows are indented two; the footer naming what is held back is indented eight,
-        # which is how every other aside in this module is set off.
-        listed = [line.split()[0] for line in rows
-                  if line.startswith("  ") and not line.startswith("   ")]
+        # rundesk stands at the margin, the plugins are indented under their label.
+        listed = [line.split()[0] for line in said.splitlines()
+                  if line.startswith("rundesk ")
+                  or (line.startswith("  ") and not line.startswith("   "))]
         self.assertEqual(["rundesk", "jira", "linear", "weather"], listed)
+        self.assertIn("plugins:", said)
         self.assertIn("1.4.0 -> 1.5.0", said)
         self.assertIn("held back — needs rundesk '>=1.0.0'", said)
 
@@ -137,13 +137,13 @@ class PluginsInTheWindowTests(unittest.TestCase):
         """R-PLG-44 — plugin news before the news that the release landed reads backwards."""
         _code, said = self._update(
             plugins=lambda: [Moved("jira", "updated", was="1.4.0", now="1.5.0")])
-        self.assertLess(said.index("update: applied"), said.index("what moved:"))
+        self.assertLess(said.index("update: applied"), said.index("plugins:"))
 
     def test_an_owner_with_no_plugins_sees_exactly_what_they_saw_before(self):
         """R-PLG-44 — the commonest machine there is, and it gains no new output at all."""
         _code, said = self._update(plugins=lambda: [])
-        self.assertNotIn("what moved", said)
         self.assertNotIn("plugin", said)
+        self.assertNotIn("rundesk  ", said)
 
     def test_the_version_being_left_survives_the_handover_to_the_new_release(self):
         """R-PLG-44 — otherwise the commonest update of all can only say where it arrived.
@@ -176,7 +176,7 @@ class PluginsInTheWindowTests(unittest.TestCase):
         _code, said = self._update(
             plugins=lambda: [Moved("jira", "updated", was="1.4.0", now="1.5.0")])
         self.assertIn("0.1.0 -> 0.2.0", said)
-        self.assertNotIn("v0.2.0  ", said.split("what moved:")[1])
+        self.assertNotIn("v0.2.0  ", said.split("plugins:")[0].splitlines()[-2])
 
     def test_an_update_with_nothing_newer_still_moves_plugins_when_it_mends(self):
         """R-PLG-15 — the mend path is the same window, so it carries the same steps."""

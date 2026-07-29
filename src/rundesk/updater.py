@@ -504,48 +504,48 @@ def _bring_forward(repo_root: Path, stopped: list, resume=None, carry=None,
     return 0
 
 
-#: How wide the name column is before it gives up and just spaces once. Every plugin name
-#: measured, so nothing is truncated and a machine with one plugin does not get a table
-#: sized for ten.
+#: The narrowest the name column goes, so a single short name still reads as a column.
 NAME_ROOM = 4
 
 
 def _say_what_moved(landed: str | None, moved: list, was: str | None = None) -> None:
-    """One ordered list of everything this update moved: rundesk, then each plugin.
+    """What this update moved: rundesk, then the plugins under it.
 
-    **In the order it went through them**, which is the order somebody debugging needs and
-    the order they watched it happen in. Rundesk first because a plugin is judged against
-    it — a plugin held back for needing a newer rundesk makes sense only under the line
-    saying which rundesk this now is.
+    **Two labels and rows, and nothing else.** What a reader needs is which things moved and
+    which did not; a sentence explaining the list is one more thing to read before the list.
+    A held-back row carries its reason because that is the payload — it is what somebody
+    does something about — and every other row carries none because there is nothing to do.
 
-    Silent on a machine with no plugins. An owner who has never installed one should see
-    exactly what they saw before this existed (R-PLG-44).
+    Silent on a machine with no plugins: an owner who has never installed one sees exactly
+    what they saw before this existed (R-PLG-44).
     """
     if not moved:
         return
     # Bare digits, because every plugin beside it is bare: a table where one row says
     # `v0.16.0` and the next says `1.5.0` makes a reader wonder what the `v` means.
-    now = (landed or "").lstrip("v")
-    rows = [("rundesk", (was or "").lstrip("v"), now,
+    rows = [("rundesk", (was or "").lstrip("v"), (landed or "").lstrip("v"),
              "updated" if landed else "up to date", "")]
     rows += [(one.name, one.was or "", one.now or "", one.state, one.why or "")
              for one in moved]
     room = max(NAME_ROOM, max(len(name) for name, *_ in rows))
+    span = max(len(_between(was, now)) for _n, was, now, *_ in rows)
     print()
-    print("what moved:")
-    for name, was, now, state, why in rows:
-        # `1.4.0 -> 1.5.0` when it moved and both are known; the version it is on otherwise.
-        # A plugin that was never readable has neither, and an empty column is the honest
-        # answer rather than a guess at one.
-        version = f"{was} -> {now}" if (now and was and now != was) else (was or now or "-")
-        print(f"  {name.ljust(room)}  {version.ljust(16)}  {state}"
-              + (f" — {why}" if why else ""))
-    held = [one for one in moved if one.held]
-    if held:
-        print()
-        print(f"        held back, and no agent can reach {'them' if len(held) > 1 else 'it'}: "
-              + ", ".join(sorted(one.name for one in held)))
-        print("        why, and how to try again: rundesk plugins")
+    for at, (name, before, after, state, why) in enumerate(rows):
+        if at == 1:
+            print()
+            print("plugins:")
+        # rundesk stands at the margin and the plugins sit under their label, so the shape
+        # says which is which before a word is read.
+        print(f"{'  ' if at else ''}{name.ljust(room)}  "
+              f"{_between(before, after).ljust(span)}  {state}"
+              + (f" — {why}" if why and state == "held back" else ""))
+
+
+def _between(was: str | None, now: str | None) -> str:
+    """Where something came from and where it got to, or the one version anybody knows."""
+    if was and now and was != now:
+        return f"{was} -> {now}"
+    return was or now or "-"
 
 
 def _say_what_landed(landed: str | None) -> None:
