@@ -1169,6 +1169,18 @@ class Gateway:
         #: `reachable` is what an agent *has*; this is what can be said something on, and the
         #: two differ for as long as an adapter is down and being started again.
         self._reached: dict = {}
+        #: Which schedules have said on a surface that they have started and not yet said
+        #: what they came to, and the conversation each notice went to (R-SCH-46). A notice
+        #: with no outcome under it is worse than no notice, so every way out of a run that
+        #: can still reach the surface answers whatever is in here — and a run whose gateway
+        #: went is one whose notice dies with the process that could have answered it, which
+        #: is why this is memory and not a record.
+        #:
+        #: The conversation is carried rather than resolved twice: where a schedule with no
+        #: place named reports is the newest conversation on the surface, and a run long
+        #: enough to be worth announcing is long enough for somebody to have spoken in
+        #: another room. `None` where the notice went by a place word instead.
+        self._announced: dict = {}
 
     # -- what it is made of -------------------------------------------------------
 
@@ -1941,7 +1953,13 @@ class Gateway:
             # and a turn has two — what became of the process, and what became of the turn
             # it was carrying — and only the second is what a schedule reports (R-SCH-8).
             if one.prompt:
-                became = await self._asked(one, held)
+                # **Only a schedule that asks a turn says it has started** (R-SCH-46). A
+                # program has no report to anchor, so `💻 Working on…` for one is a promise
+                # rundesk does not keep. Said from inside `_asked`, once the schedule's name
+                # is claimed: announced here instead, a firing refused for still running
+                # would have said work began that never did.
+                became = await self._asked(
+                    one, held, admitted=lambda: self._told_the_surface_it_started(one))
             else:
                 ran = await self.start(list(one.run), as_name=held,
                                        env=self._for_a_schedule(one.name))
@@ -1949,6 +1967,10 @@ class Gateway:
         except AlreadyStarted:
             # R-SCH-7: said, not passed over. A schedule quietly skipping every time
             # because the last run never ended looks exactly like one that is working.
+            #
+            # **And nothing is said on the surface.** This firing never announced itself,
+            # and the notice that may be standing there belongs to the run still going —
+            # answering it here would close off work that has not finished (R-SCH-46).
             self.log.warning("schedule '%s' skipped: what it started last time is still running",
                              one.name)
             self._remember_outcome(one.name, "still running")
@@ -1960,6 +1982,10 @@ class Gateway:
             # saying work is in flight that never began at all, and the one form of the
             # stale outcome that no reconciliation on the way back up can reach
             # (R-SCH-23).
+            #
+            # **And no notice to answer, by construction.** This is raised by `start` and
+            # nowhere else, so only the program branch above can reach it — and a program
+            # schedule never says it has started, having no report to anchor (R-SCH-46).
             self._remember_outcome(one.name, INTERRUPTED)
             return
         except asyncio.CancelledError:
@@ -1971,6 +1997,7 @@ class Gateway:
             # line in the one account that outlives the gateway (R-GW-18), and in the file
             # that is meant to say truthfully what each schedule last did.
             self._remember_outcome(one.name, INTERRUPTED)
+            await self._answered_any_notice(one, INTERRUPTED)
             raise
         except BaseException as would_not_start:  # noqa: BLE001 — see below
             # Nobody awaits this task, so anything raised here is raised nowhere at all:
@@ -1980,9 +2007,59 @@ class Gateway:
             # — while failing again every single time it fell due (R-SCH-8).
             self.log.error("schedule '%s' could not be started: %s", one.name, would_not_start)
             self._remember_outcome(one.name, "could not start")
+            await self._answered_any_notice(one, "could not start")
             return
         self._remember_outcome(one.name, became)
         await self._told_the_surface(one, became)
+
+    async def _told_the_surface_it_started(self, one) -> None:
+        """Say on the surface this schedule reports to that its run has begun (R-SCH-46).
+
+        The mirror of `_told_the_surface`, and it refuses in the same places: a schedule
+        naming no surface says nothing, and one naming a surface that is not up is said in
+        the log rather than invented. Only what actually went out is remembered, so the
+        outcome owes a reply to a notice and never to a delivery that never happened.
+
+        A notice that could not be shown changes nothing about the run. The work is under
+        way and the report at the end stands on its own, exactly as it did before there
+        were notices at all.
+        """
+        answering = self._reached.get(one.channel) if one.channel else None
+        if answering is None:
+            if one.channel:
+                self.log.warning(
+                    "schedule '%s': nothing said on '%s' about starting — that channel "
+                    "is not up", one.name, one.channel)
+            return
+        try:
+            said, where = await answering.told_a_schedule_started(one.name)
+            if said:
+                # Where it went, not that it went: the report is delivered to this same
+                # conversation rather than resolving the newest one again at the end
+                # (R-SCH-46).
+                self._announced[one.name] = where
+        except Exception as why:  # noqa: BLE001 — a delivery boundary; see the docstring
+            self.log.warning("channel '%s': could not say that '%s' started: %s",
+                             one.channel, one.name, why)
+
+    async def _answered_any_notice(self, one, became: str) -> None:
+        """Put an outcome under a start notice on a run that ended without reaching the
+        ordinary reporting below (R-SCH-46).
+
+        A run that failed, was interrupted or never got going has said `💻 Working on…` on
+        a surface and would otherwise leave it standing with nothing under it — which is a
+        promise rundesk made and did not keep, and reads exactly like an agent that hung.
+        A no-op where no notice went out, so nothing new is posted for a schedule that
+        never announced itself.
+
+        **A gateway going down is the one way out this cannot answer**, and knowingly: the
+        shutdown takes the channels before it cancels what is still running, so by the time
+        a run in flight is cancelled there is no surface left to say anything on and the log
+        says so. The notice goes down with the process that made it, and the schedule's next
+        firing posts its own — nothing is left standing that a later run would answer.
+        """
+        if one.name in self._announced:
+            await self._told_the_surface(one, became)
 
     async def _told_the_surface(self, one, became: str) -> None:
         """Say what this schedule came to, on the surface it names.
@@ -2004,7 +2081,14 @@ class Gateway:
 
         A surface that will not take it changes nothing about what the schedule did: the work is
         over and the record of it is already written. Said in the log, and on.
+
+        **This is what answers a start notice** (R-SCH-46), so the notice is forgotten here
+        whether or not the report reaches anybody — a channel that went down between the two
+        must not leave a name standing that the schedule's *next* firing would answer. What
+        it is forgotten *with* is where it went, and that goes over with the report: the two
+        messages are one delivery, and only the first of them is allowed to decide where.
         """
+        where = self._announced.pop(one.name, None)
         answering = self._reached.get(one.channel) if one.channel else None
         if answering is None:
             if one.channel:
@@ -2015,7 +2099,7 @@ class Gateway:
                                  one.name, one.channel)
             return
         try:
-            await answering.told_what_a_schedule_did(one.name, became)
+            await answering.told_what_a_schedule_did(one.name, became, where=where)
         except Exception as why:  # noqa: BLE001 — a delivery boundary; see the docstring
             self.log.warning("channel '%s': could not say what '%s' did: %s",
                              one.channel, one.name, why)
@@ -2034,7 +2118,7 @@ class Gateway:
         said[SCHEDULE_IS] = named
         return said
 
-    async def _asked(self, one, held: str) -> str:
+    async def _asked(self, one, held: str, admitted=None) -> str:
         """Admit a turn for a schedule that asks one, and hand back how it ended.
 
         **Through a collaborator, never by reaching for one.** A turn needs an agent, a brain
@@ -2048,6 +2132,12 @@ class Gateway:
         begin again over its own last one (R-SCH-6). A turn is not a program this gateway
         started, so it is not in `running` and a shutdown does not end it — what it *does* do
         is cancel the task waiting here, which is recorded as an interruption above.
+
+        **`admitted` is told the moment this run is really going to happen** (R-SCH-46) —
+        after the guard that refuses one still running, and before the brain is asked. That
+        is the only point at which saying so is true: earlier includes firings that are
+        about to be refused, and later is after the twenty minutes an owner spent wondering
+        whether anything had started.
         """
         if self.asking is None:
             raise Unrunnable(
@@ -2057,6 +2147,8 @@ class Gateway:
             raise AlreadyStarted(f"'{held}' is already running under gateway '{self.name}'")
         self._asked_for.add(held)
         try:
+            if admitted is not None:
+                await admitted()
             return (await self.asking(one)).became
         finally:
             self._asked_for.discard(held)

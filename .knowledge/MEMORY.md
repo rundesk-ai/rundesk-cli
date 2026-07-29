@@ -639,5 +639,29 @@ re-checked since, so treat these as true-when-found rather than as current.*
   `env $(env | grep -o '^RUNDESK_[A-Z_]*' | sed 's/^/-u /' | tr '\n' ' ') ./rundesk …` —
   which is also what makes the gate pass under an agent (the note above).
 
+- **A `TestCase` helper called `_outcome` overwrites unittest's own, and the failure names
+  neither.** `unittest` keeps the running case's `_Outcome` object on `self._outcome`, so a
+  helper of that name shadows it and every case using it dies with `TypeError: '_Outcome'
+  object is not callable` — pointing at the call site, saying nothing about the collision.
+  Our own domain word for what a run came to makes this an easy name to reach for; `_became`
+  is free. The same trap is set for `_result`, `_subtest` and `_cleanups`.
+
+- **A schedule's `last_outcome` says `started` before the work begins, so polling it for
+  "an outcome" returns instantly and reads the wrong one.** `_remember_firing` writes it
+  ahead of the run on purpose (R-SCH-9). A test that fires the clock and waits for a final
+  outcome has to wait for something *other* than `started` — and then wait again, because
+  what is said on a surface is said after that write, so a case about delivery otherwise
+  reads the surface before anything could have reached it. `tests/test_gateway.py::_became`
+  does both; `_fired` waits for a run row, which a program schedule never writes at all.
+
+- **An `R-<AREA>-<n>` on an open branch is not reserved, and the branch finds out at rebase.**
+  Ids are permanent once merged, so whatever lands first takes the number and every other
+  branch holding it has to move — and doc-lint's contiguity rule means moving to the next
+  free one, never to a gap. Renumbering is a whole-tree edit with a trap in it: main is
+  already citing your old id for its own row, so a blind replace across the files you touch
+  renames somebody else's citations too. Replace only on lines that are not in
+  `git show origin/main:<file>`, then check what is left with
+  `grep -rn 'R-XXX-n' src tests .knowledge` — what remains should be exactly main's.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

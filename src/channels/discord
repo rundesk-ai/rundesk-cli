@@ -424,6 +424,12 @@ class Agent(discord.Client):
         #: Bounded because the adapter lives for weeks and a broken gateway must not turn
         #: one unanswered interaction into permanent memory.
         self.queries: dict = {}
+        #: The message that said a scheduled run had started, by schedule name, so what it
+        #: found is posted as a reply to it (R-DIS-30). **Memory only, deliberately**: if
+        #: this process goes, the run it was carrying goes with it, so there is no report
+        #: left to anchor and nothing durable worth keeping. Bounded like the rest, because
+        #: a schedule removed while its notice stood would otherwise never be forgotten.
+        self.started: dict = {}
         self.tree = discord.app_commands.CommandTree(self)
 
     # -- coming up and going down ----------------------------------------------------
@@ -818,10 +824,22 @@ class Agent(discord.Client):
             # somebody is reading it — the next thing said starts the indicator again.
             self._stop_typing(held)
             await self._flush(it, held)
-            rest = str(it.get("text") or "")
+            # **A scheduled run's two messages, joined** (R-SCH-46, R-DIS-30). A remark
+            # naming a schedule is either that run saying it has begun — held, so what it
+            # finds can quote it — or the report itself, which replies to whatever is being
+            # held under that name. Everything else is an ordinary remark and anchors to
+            # nothing, because quoting the question on every remark buries the question.
+            named = str(it.get("schedule") or "")
+            began = bool(it.get("began"))
+            anchor = None if began else (self.started.pop(named, None) if named else None)
+            rest, notice = str(it.get("text") or ""), None
             while rest:
                 piece, rest = split_at(rest, LIMIT)
-                await self._post(it, piece)
+                posted = await self._post(it, piece, anchor=anchor)
+                notice = posted if notice is None else notice
+                anchor = None
+            if began and named and notice is not None:
+                self._holding(named, notice)
             self._no_longer_last(held)
             # **And start again, because the turn has not ended.** The line above stops it
             # so nobody is told the agent is typing while they read what it just said — and
@@ -834,6 +852,19 @@ class Agent(discord.Client):
             held.typing = held.typing or asyncio.ensure_future(self._typing(it))
         elif kind in ("think", "tool", "result", "usage"):
             await self._doing(it, held)
+
+    def _holding(self, named: str, message) -> None:
+        """Keep what was posted to say a schedule started, until its report replies to it
+        (R-DIS-30).
+
+        Newest wins for a name, which is what a schedule firing again after its last notice
+        was answered leaves behind. Bounded like `seen` and `live`, because this process
+        runs for weeks and a schedule taken away mid-run would otherwise be remembered for
+        the whole of it.
+        """
+        self.started[named] = message
+        while len(self.started) > SEEN_KEPT:
+            self.started.pop(next(iter(self.started)))
 
     async def _query_result(self, it: dict) -> None:
         """Complete the exact deferred interaction that asked, and nowhere public."""
@@ -1195,8 +1226,14 @@ class Agent(discord.Client):
         # attribute, so this guard compared `""` to the conversation, was true of every
         # message that ever reached it, and dropped every anchor there has ever been —
         # the feature it exists to protect had therefore never once happened.
+        #
+        # Compared against the room actually resolved above, not against `conversation`.
+        # The two are the same room in every case that had an anchor before — but a
+        # schedule reporting into a place rundesk has never seen a word in sends no
+        # conversation at all, only the word, so the old comparison dropped the notice
+        # this report is a reply to on exactly the delivery that needed it (R-DIS-30).
         anchor_in = getattr(getattr(anchor, "channel", None), "id", "")
-        if anchor is not None and str(anchor_in) != str(it.get("conversation")):
+        if anchor is not None and str(anchor_in) != str(getattr(channel, "id", "")):
             anchor = None
         sending = []
         for at in files:

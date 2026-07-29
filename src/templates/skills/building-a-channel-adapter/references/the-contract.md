@@ -254,6 +254,8 @@ both — so a photograph sent with nothing typed is an ordinary message and not 
 {"type": "think",  "conversation": "1180", "run": "7-a3f1", "text": "The error is in the parser."}
 {"type": "usage",  "conversation": "1180", "run": "7-a3f1", "input": 1200, "output": 340, "cached": 8000, "session": 9200, "model": "…"}
 {"type": "said",   "conversation": "1180", "run": "7-a3f1", "text": "I'll look at the logs."}
+{"type": "said",   "conversation": "1180", "place": null, "schedule": "nightly", "began": true, "text": "💻 Working on 'nightly' — I will report back when it is done."}
+{"type": "said",   "conversation": "1180", "place": null, "schedule": "nightly", "text": "Nothing broke overnight."}
 {"type": "answer", "conversation": "1180", "run": "7-a3f1", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png"}]}
 {"type": "state",  "conversation": "1180", "run": "7-a3f1", "state": "finished"}
 {"type": "query-result", "conversation": "1180", "query": "status", "ref": "8843", "text": "ava: RUNNING"}
@@ -269,6 +271,27 @@ says arrives as the `answer` — which is the one somebody will reply to, and th
 anchoring to the message that asked. A brain that writes its reply a piece at a time
 sends no `said` at all and only an `answer`, so a surface that treats them identically is
 still correct and merely noisier.
+
+**A `said` naming a `schedule` is the clock's, and it comes in pairs.** Work rundesk starts
+because the time came says so where that schedule reports — `{"type": "said", "schedule":
+"nightly", "began": true, …}` — and what it found arrives later as another `said` carrying
+the same name and no `began`. **Keep what you posted for the first, and make the second a
+reply to it**, so an owner scrolling a busy conversation sees an outcome attached to the
+thing that started it rather than floating loose among answers to other questions. In
+memory is enough and durable storage is wrong: if your program restarts the run dies with
+it, so there is no report left to anchor. A name you are holding nothing for is posted
+plainly, which is what every scheduled report did before there were notices. The name is a
+key and never something to read, exactly as `place` is — which is the other field these
+carry: the room the owner named for this schedule, yours to resolve, and the only way to
+reach one nobody has spoken in yet. Both go to the *same* conversation, decided when the
+first is sent: post the pair where you are told and never work the second one out again.
+
+**The notice is rundesk's own bookkeeping and not the agent's speech**, which is why it is
+not in the record of what the agent said. On a surface where anybody can reply to any
+message, somebody *will* reply to it — and that is an ordinary message, starting an
+ordinary turn, whose brain has no record of a line it never wrote. Send it on as you would
+any other; there is nothing for an adapter to do about it. The report beneath it is written
+down, so a reply to *that* reaches a session that saw it.
 
 **Nothing repeats, so keep your own time.** `running` is sent once, when the turn is
 admitted — it is not a heartbeat, and a surface whose "still working" indicator lapses

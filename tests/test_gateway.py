@@ -3005,14 +3005,34 @@ class ASurface:
     here that knew more would let a case pass against a message nobody could read.
     """
 
-    def __init__(self, refuses: bool = False):
-        self.told: list = []
-        self.refuses = refuses
+    #: Where a notice goes, which a real surface resolves once and hands back so the report
+    #: is delivered to the same conversation rather than to whichever is newest by then
+    #: (R-SCH-46).
+    NOTICE_WENT_TO = "the-room-the-notice-went-to"
 
-    async def told_what_a_schedule_did(self, named: str, became: str) -> None:
+    def __init__(self, refuses: bool = False, nowhere: bool = False):
+        self.told: list = []
+        self.started: list = []
+        #: What each report was told to be delivered to, in order.
+        self.delivered_to: list = []
+        self.refuses = refuses
+        #: A surface with nowhere to deliver, which is what `told_a_schedule_started` hands
+        #: back when nothing has ever been said on it and no place was named (R-SCH-46).
+        self.nowhere = nowhere
+
+    async def told_what_a_schedule_did(self, named: str, became: str, where=None) -> None:
         if self.refuses:
             raise OSError("the platform would not take it")
         self.told.append((named, became))
+        self.delivered_to.append(where)
+
+    async def told_a_schedule_started(self, named: str):
+        if self.refuses:
+            raise OSError("the platform would not take it")
+        if self.nowhere:
+            return False, None
+        self.started.append(named)
+        return True, self.NOTICE_WENT_TO
 
 
 class WhenTheClockAsksATurn(WithARunDirectory):
@@ -3309,6 +3329,144 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         self.assertEqual("finished", self.records.schedule("nightly")["last_outcome"],
                          "a surface refusing changed what the schedule recorded")
         self.assertIn("could not say what", gateway.log_path("ava", self.logs).read_text())
+
+    async def _became(self, gw, named: str, seconds: float = 30.0) -> str:
+        """Fire the clock and wait for this schedule to settle on a final outcome.
+
+        `_fired` waits for a *run*, which a schedule that starts a program never writes and
+        a firing that never reached a brain never writes either. What every one of them does
+        write is the outcome on the schedule itself — and `started` is written before the
+        work begins, so it is the one word that means this has not finished yet.
+
+        Whatever is said on a surface is said after that write, so the settle below is not
+        politeness: read straight off the outcome, a case about what reached the surface is
+        reading it before anything could have.
+        """
+        gw._fire(schedule, datetime.now())
+        deadline, became = time.time() + seconds, None
+        while time.time() < deadline:
+            with contextlib.suppress(Exception):
+                became = (self.records.schedule(named) or {}).get("last_outcome")
+                if became and became != "started":
+                    break
+            await asyncio.sleep(0.05)
+        else:
+            self.fail(f"schedule '{named}' never settled on an outcome (last said {became!r})")
+        for _ in range(200):
+            if not [one for one in asyncio.all_tasks() if one is not asyncio.current_task()]:
+                break
+            await asyncio.sleep(0.005)
+        return became
+
+    async def test_a_scheduled_run_says_it_started_before_it_says_what_it_found(self):
+        """R-SCH-46 — an owner cannot otherwise tell a schedule is running: work starts at six,
+        nothing is said for twenty minutes, and the report arrives beside answers to other
+        questions with nothing tying the two together."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.reachable_on("ops")
+        self.asks(channel="ops")
+        gw = self.made()
+        gw._reached["ops"] = ASurface()
+        gw.claim()
+        await self._fired(gw)
+        self.assertEqual(["nightly"], gw._reached["ops"].started,
+                         "nothing said the run had begun")
+        self.assertEqual([("nightly", "finished")], gw._reached["ops"].told,
+                         "what it found did not follow the notice that it had started")
+
+    async def test_a_run_carries_where_its_notice_went_to_its_report(self):
+        """R-SCH-46 — the gateway is what holds the two ends of a run together, so it is what
+        carries where the notice went across to the report. Left for the report to work out
+        again, the answer is whichever room somebody last spoke in — which a long run gives an
+        owner every chance to change, leaving a promise standing in one room for ever and its
+        outcome posted in another."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.reachable_on("ops")
+        self.asks(channel="ops")
+        gw = self.made()
+        gw._reached["ops"] = ASurface()
+        gw.claim()
+        await self._fired(gw)
+        self.assertEqual([ASurface.NOTICE_WENT_TO], gw._reached["ops"].delivered_to,
+                         "the report was left to resolve where it goes all over again")
+        self.assertEqual({}, gw._announced, "a notice already answered is still standing")
+
+    async def test_a_report_for_a_run_nobody_announced_resolves_where_it_goes(self):
+        """R-SCH-31, R-SCH-46 — a program schedule never announces, so there is nowhere carried
+        to deliver to and the report goes where every report went before there were notices."""
+        self.reachable_on("ops")
+        self.records.remember_schedule("tidy", "* * * * *", store.stamped(),
+                                       command=[PY, "-c", "pass"], channel="ops")
+        gw = self.made()
+        gw._reached["ops"] = ASurface()
+        gw.claim()
+        await self._became(gw, "tidy")
+        self.assertEqual([None], gw._reached["ops"].delivered_to,
+                         "a report nobody announced was pinned to a conversation anyway")
+
+    async def test_a_schedule_that_starts_a_program_says_nothing_when_it_starts(self):
+        """R-SCH-46 — a program has no report to anchor, so `Working on…` for one is a promise
+        rundesk does not keep. What it *came to* is still said, exactly as it was (R-SCH-31)."""
+        self.reachable_on("ops")
+        self.records.remember_schedule("tidy", "* * * * *", store.stamped(),
+                                       command=[PY, "-c", "pass"], channel="ops")
+        gw = self.made()
+        gw._reached["ops"] = ASurface()
+        gw.claim()
+        await self._became(gw, "tidy")
+        self.assertEqual([], gw._reached["ops"].started,
+                         "a program schedule promised a report it never delivers")
+        self.assertEqual(["tidy"], [named for named, _became in gw._reached["ops"].told],
+                         "a program schedule stopped saying what it came to")
+
+    async def test_a_run_that_could_not_start_still_replies_to_its_notice(self):
+        """R-SCH-46 — the notice must not be left standing with nothing under it. A brain that
+        could not be reached is exactly the case an owner is waiting on, and a `Working on…`
+        with no outcome beneath it reads as an agent that hung."""
+        async def would_not(one):
+            raise RuntimeError("the brain could not be reached")
+
+        self.reachable_on("ops")
+        self.asks(channel="ops")
+        gw = self.made(asking=would_not)
+        gw._reached["ops"] = ASurface()
+        gw.claim()
+        self.assertEqual("could not start", await self._became(gw, "nightly"))
+        self.assertEqual(["nightly"], gw._reached["ops"].started)
+        self.assertEqual([("nightly", "could not start")], gw._reached["ops"].told,
+                         "the notice was left with no outcome under it")
+
+    async def test_a_firing_refused_for_still_running_says_nothing_about_starting(self):
+        """R-SCH-6, R-SCH-46 — announced before the overlap guard, this firing would have said
+        work began that never did. And the notice standing on the surface belongs to the run
+        still going, so answering it here would close off work that has not finished."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.reachable_on("ops")
+        self.asks(channel="ops")
+        gw = self.made()
+        gw._reached["ops"] = ASurface()
+        gw._asked_for.add(f"{gateway.SCHEDULED_AS}nightly")
+        gw.claim()
+        self.assertEqual("still running", await self._became(gw, "nightly"))
+        self.assertEqual([], gw._reached["ops"].started, "it said a refused firing had begun")
+        self.assertEqual([], gw._reached["ops"].told,
+                         "it answered a notice belonging to the run still going")
+
+    async def test_a_surface_with_nowhere_to_deliver_leaves_no_notice_to_answer(self):
+        """R-SCH-46 — nowhere to say it is nowhere to say it started, and only what actually
+        went out is owed a reply. A gateway that assumed the notice landed would post an
+        outcome into a room that never saw the thing it is answering."""
+        async def would_not(one):
+            raise RuntimeError("the brain could not be reached")
+
+        self.reachable_on("ops")
+        self.asks(channel="ops")
+        gw = self.made(asking=would_not)
+        gw._reached["ops"] = ASurface(nowhere=True)
+        gw.claim()
+        await self._became(gw, "nightly")
+        self.assertEqual([], gw._reached["ops"].told,
+                         "it answered a notice that never went out")
 
     async def test_a_schedule_that_names_rundesk_ask_is_admitted_as_the_clocks_work(self):
         """R-RUN-16, R-SCH-27, R-SCH-29 — the other half of the phase, and the one a stand-in
