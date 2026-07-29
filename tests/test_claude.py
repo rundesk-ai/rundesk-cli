@@ -663,7 +663,10 @@ class WhatThisBrainCanDo(unittest.TestCase):
         self.assertEqual("initialize", said[0]["request"]["subtype"])
         self.assertEqual("count to ten", said[1]["message"]["content"])
         self.assertEqual("interrupt", said[2]["request"]["subtype"])
-        self.assertEqual("actually, stop at three", said[3]["message"]["content"])
+        guidance = said[3]["message"]["content"]
+        self.assertIn("actually, stop at three", guidance)
+        self.assertIn("Continue working toward the user's original request", guidance,
+                      "the replacement became a standalone task instead of steering")
 
     def test_an_interrupted_result_is_not_the_end_and_its_usage_is_not_lost(self):
         control = claude.Control()
@@ -730,6 +733,13 @@ class WhenTheActiveClaudeRequestIsSteered(unittest.TestCase):
         interrupt = read()
         write({"type": "control_response", "response": {
             "subtype": "success", "request_id": interrupt["request_id"], "response": {}}})
+        write({"type": "user", "message": {"content": [{
+            "type": "tool_result", "tool_use_id": "tool-before-steer",
+            "content": "The user doesn't want to proceed with this tool use.",
+            "is_error": True
+        }]}, "tool_result_meta": [{
+            "id": "tool-before-steer", "non_execution_kind": "user-rejected"
+        }]})
         write({"type": "result", "subtype": "error_during_execution", "is_error": True,
                "session_id": "same-session", "result": "Request interrupted by user",
                "usage": {"input_tokens": 3, "output_tokens": 5}})
@@ -758,6 +768,8 @@ class WhenTheActiveClaudeRequestIsSteered(unittest.TestCase):
         self.assertEqual((0, False), (code, lost))
         self.assertEqual(["working on the first", "followed the correction"],
                          [one["text"] for one in only(reported, "text")])
+        self.assertEqual([], only(reported, "result"),
+                         "the canceled tool was reported as a failed command")
         self.assertEqual(1, len(only(reported, "done")),
                          "the interrupted request was mistaken for Rundesk's turn ending")
         self.assertTrue(only(reported, "done")[0]["ok"])
