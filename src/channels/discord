@@ -1178,10 +1178,16 @@ class Agent(discord.Client):
         if text_as is not None:
             sending.append(discord.File(io.BytesIO(text_as.encode("utf-8")),
                                         filename="answer.md"))
+        # **The quote never costs the answer** (R-DIS-1, R-DIS-28). discord.py builds the
+        # reference without `fail_if_not_exists`, so Discord's own default applies: a
+        # message quoting one it can no longer resolve is refused outright, and the answer
+        # is lost to a line on our own stderr. The asker deleting their question is enough,
+        # and a turn here runs for minutes. Off, Discord drops the quote and still posts.
+        quoting = None if anchor is None else anchor.to_reference(fail_if_not_exists=False)
         try:
             said = await channel.send(
                 content,
-                reference=anchor if anchor is not None else None,
+                reference=quoting,
                 mention_author=False,
                 files=sending or None,
             )
