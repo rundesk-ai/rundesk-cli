@@ -373,6 +373,129 @@ class WhereABrainIsAnswering(CarriesAConversation):
         self.assertTrue(any("nowhere to say" in one for one in self.told),
                         f"it said nothing about having nowhere: {self.told}")
 
+    async def test_a_scheduled_run_says_it_has_started_where_it_will_report(self):
+        """R-SCH-46 — where the pair goes is resolved here, once, and handed back for the
+        report to be delivered to, because a notice in one room and its outcome in another is
+        worse than neither."""
+        where_it_is = self.spoken_on()
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        self.assertEqual((True, where_it_is), await held.told_a_schedule_started("nightly"),
+                         "it did not hand back where the notice went")
+        await self._settled(held)
+        said = surface.of("said")
+        self.assertEqual(1, len(said), f"nothing was said on the surface: {surface.shown}")
+        self.assertEqual("💻 Working on 'nightly' — I will report back when it is done.",
+                         said[0]["text"])
+        self.assertEqual(where_it_is, said[0]["conversation"])
+        self.assertEqual("nightly", said[0]["schedule"])
+        self.assertTrue(said[0]["began"], "the surface cannot tell a notice from a report")
+
+    async def test_a_scheduled_run_says_which_schedule_its_report_is_for(self):
+        """R-SCH-46 — the name is how a surface finds the message it posted at the start. It is
+        a key and never something to read: what a place is called is already carried unread past
+        this file, and this is the same promise for the same reason (R-SCH-32)."""
+        self.spoken_on()
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_a_schedule_started("nightly")
+        await held.told_what_a_schedule_did("nightly", "finished")
+        await self._settled(held)
+        notice, report = surface.of("said")
+        self.assertEqual(("nightly", True), (notice["schedule"], notice["began"]))
+        self.assertEqual("nightly", report["schedule"])
+        self.assertIsNone(report.get("began"),
+                          "the report claims to be a notice, so it would anchor to itself")
+
+    async def test_a_scheduled_run_starting_is_said_in_the_place_the_schedule_named(self):
+        """R-SCH-32, R-SCH-46 — an owner naming a room is what makes a daily report land where
+        they meant, and a notice that ignored it would stand in a room the report never reaches."""
+        self.spoken_on("one")
+        wanted = self.spoken_on("two")
+        self.a_schedule(place="two")
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_a_schedule_started("nightly")
+        await self._settled(held)
+        said = surface.of("said")[0]
+        self.assertEqual(wanted, said["conversation"])
+        self.assertEqual("two", said["place"], "the surface was not told which place")
+
+    async def test_a_report_is_delivered_where_the_notice_went(self):
+        """R-SCH-46, R-SCH-32 — resolving the same *way* is not resolving to the same *answer*.
+        Where a schedule with no place named reports is the newest conversation on the surface,
+        and the owner writing in another room during the twenty minutes the run takes is what
+        makes that a different room. Asked again at the end, the notice stands in the first one
+        for ever with nothing under it while the report lands in the second, anchored to
+        nothing — so the notice decides where, once, and the report is delivered there."""
+        kept = agents.records("ava", self.where)
+        began_in = kept.opened(store.conversation_id("ops", "general"), "ops", "somewhere",
+                               "general", "2026-07-26T06:00:00Z")["id"]
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        said, where = await held.told_a_schedule_started("nightly")
+        self.assertTrue(said)
+        # The owner writes in another room while the run is going, which is all it takes for
+        # the newest conversation on this surface to be a different one.
+        kept.opened(store.conversation_id("ops", "random"), "ops", "somewhere", "random",
+                    "2026-07-26T06:10:00Z")
+        await held.told_what_a_schedule_did("nightly", "finished", where=where)
+        await self._settled(held)
+        notice, report = surface.of("said")
+        self.assertEqual(began_in, notice["conversation"])
+        self.assertEqual(began_in, report["conversation"],
+                         "the report went to whichever room was newest, not to its notice")
+        wrote = [one["text"] for one in kept.messages(began_in) if one["author"] == "agent"]
+        self.assertEqual([report["text"]], wrote,
+                         "what was delivered was written down in another conversation (R-SCH-33)")
+
+    async def test_a_report_for_a_schedule_that_named_a_place_goes_to_the_place(self):
+        """R-SCH-32, R-SCH-46 — a place is a word the owner said, carried to the adapter for
+        both messages, so there is nothing for the pair to disagree about and nothing to carry
+        over from the notice. The word wins over anything handed in beside it."""
+        self.spoken_on("one")
+        wanted = self.spoken_on("two")
+        self.a_schedule(place="two")
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_a_schedule_started("nightly")
+        await held.told_what_a_schedule_did("nightly", "finished", where="somewhere-else")
+        await self._settled(held)
+        notice, report = surface.of("said")
+        self.assertEqual((wanted, "two"), (notice["conversation"], notice["place"]))
+        self.assertEqual((wanted, "two"), (report["conversation"], report["place"]),
+                         "the report left the place its owner named")
+
+    async def test_a_surface_with_nowhere_to_deliver_says_nothing_when_a_run_starts(self):
+        """R-SCH-46 — nowhere to say what a run found is nowhere to say it began. Said rather
+        than invented, and handed back, because only a notice that went out is owed a reply."""
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        self.assertEqual((False, None), await held.told_a_schedule_started("nightly"))
+        await self._settled(held)
+        self.assertEqual([], surface.of("said"), "it invented somewhere to post")
+        self.assertTrue(any("nowhere to say that 'nightly' has started" in one
+                            for one in self.told),
+                        f"it said nothing about having nowhere: {self.told}")
+
+    async def test_what_rundesk_says_a_run_started_is_not_the_agents_own_record(self):
+        """R-SCH-33, R-SCH-46 — the report is written down where it was delivered so a person
+        replying to it reaches a brain whose session saw it. Nobody replies "nice work" to
+        rundesk saying work has begun, and writing it in would put a line the agent never said
+        into the account of what the agent said."""
+        where_it_is = self.spoken_on()
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_a_schedule_started("nightly")
+        await self._settled(held)
+        kept = agents.records("ava", self.where)
+        said = [one for one in kept.messages(where_it_is) if one["author"] == "agent"]
+        self.assertEqual([], said, "rundesk's own bookkeeping was written down as the agent's")
+
     async def test_a_channel_that_says_nothing_falls_to_what_the_agent_says(self):
         """R-AGT-16, R-CH-22 — the composition, rather than either half of it. `channel.py`
         has no idea what an agent keeps and `agent.py` has no idea what a surface is, so this
