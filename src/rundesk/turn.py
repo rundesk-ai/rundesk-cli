@@ -309,13 +309,9 @@ async def carry(
             # Appended before the provider starts, so another interruption still leaves a
             # truthful audit trail linking both executions (R-RUN-17).
             writing.add(event={"type": "recovery", "run": recovery_of})
-        # Written before the brain is started, because what is sent is what the account
-        # has to show — and an account written afterwards is one that can be written to
-        # match whatever happened. A steered turn records it as it sends it instead, so
-        # that everything said mid-turn lands in the order it was said.
-        #
-        said: list = []
+        # What the brain said, and what it said went wrong — the turn's, not one attempt's.
         # Kept as well as written down, so what went wrong can be shown to whoever asked.
+        said: list = []
         trouble: list = []
         source_name = source or (CHANNEL if asked_by else TERMINAL)
 
