@@ -10,8 +10,14 @@ this CLI is `.knowledge/research/2026-07-26-claude-cli-as-a-brain.md`, and the s
 is measured against is `tests/samples/claude-stream.jsonl` — 184 real lines that cost real
 money and cannot be re-derived by reading anything.
 
-Four decisions in here are the whole of the difficulty, and each one reads plausible when
+Five decisions in here are the whole of the difficulty, and each one reads plausible when
 it is wrong:
+
+**Streaming input queues; steering interrupts first.** Anthropic's CLI reference says a user
+message sent during work stays queued as its own turn. The native SDK client gets different
+behaviour by sending an `interrupt` control request, draining that request's result, and then
+sending the replacement message on the same process and session. That is what this adapter does;
+merely holding stdin open would reproduce the queue this capability exists to avoid.
 
 **The reply arrives twice, and this takes the second copy.** Ten `text_delta` fragments and
 three whole `assistant` blocks carry the same 574 bytes; reporting both reports every
@@ -54,11 +60,12 @@ CLAUDE = os.environ.get("RUNDESK_CLAUDE_BIN", "claude")
 
 #: What this brain can do, and only what was measured of it.
 #:
-#: `steer` is false because `claude -p` reads its prompt and runs to the end: there is no
-#: measured way to put a word into a turn that is already going. Asking for it would hold
-#: this adapter's input open for a brain that will never read again, which is a turn that
-#: never ends.
-CAN = {"tools": True, "resume": True, "usage": True, "model": True, "steer": False}
+#: `--input-format stream-json` alone is *not* steering: the CLI documents later user
+#: messages as queued turns. Its SDK control protocol is the missing half. This adapter
+#: sends `control_request: interrupt`, waits for the acknowledgement, then sends the new
+#: user message on the same process and session. That changes the work in flight instead
+#: of letting the old answer finish before the new words are considered.
+CAN = {"tools": True, "resume": True, "usage": True, "model": True, "steer": True}
 
 #: What a tool *did*, in rundesk's words rather than this vendor's. The list is closed and
 #: short on purpose, and a tool whose work is not one of these leaves `did` out rather than
@@ -155,6 +162,10 @@ GONE = "no conversation found"
 ASKING_AUTH = ("auth", "status")
 ASKING_AUTH_SECONDS = 30.0
 
+#: How long one answer on Claude's SDK control protocol is worth waiting for. A window on
+#: the acknowledgement, never on the turn itself.
+CONTROL_SECONDS = 120.0
+
 
 def say(**it) -> None:
     """One record, one line, flushed — because a turn is watched while it happens."""
@@ -210,7 +221,8 @@ def opening(posture: str, model, resume, extra: dict, session: str) -> list:
     without starting anything — which is the only way the traps below stay proven rather
     than remembered.
     """
-    argv = ["-p", "--output-format", "stream-json", "--verbose"]
+    argv = ["-p", "--input-format", "stream-json",
+            "--output-format", "stream-json", "--verbose"]
 
     # Measured: `--output-format stream-json` exits 1 under `-p` without `--verbose`. It is
     # above every branch below because there is no turn shape that does not need it.
@@ -472,14 +484,172 @@ def _n(counted: dict, what: str) -> int:
     return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-def _asked() -> str:
-    """What this turn was asked, read to the end of stdin.
+def _word(line: str):
+    """One thing Rundesk said, whether carried as its record or typed by hand."""
+    line = line.strip()
+    if not line:
+        return None
+    if not line.startswith("{"):
+        return line
+    try:
+        return (json.loads(line) or {}).get("text") or None
+    except (AttributeError, ValueError):
+        return line
 
-    `steer` is false, so the prompt is plain text and the input closes after it. It goes to
-    the brain on *its* stdin too, never as an argument: what somebody asks their agent is
-    readable through the process list otherwise, and `--allowedTools` would eat it anyway.
+
+def _first(stream):
+    """The first non-empty thing said, or none when input ended without one."""
+    for line in stream:
+        word = _word(line)
+        if word is not None:
+            return word
+    return None
+
+
+def _message(word: str) -> dict:
+    """One user message in Claude's SDK streaming-input shape."""
+    return {"type": "user", "message": {
+        "role": "user", "content": word,
+    }, "parent_tool_use_id": None, "session_id": ""}
+
+
+class Control:
+    """Claude's small bidirectional control protocol, kept vendor-side.
+
+    Ordinary stream-json input queues. The cooperative operation exposed by
+    `ClaudeSDKClient.interrupt()` is a JSONL control request to the same CLI process. The
+    stdout reader calls `heard`; the stdin feeder waits on the matching acknowledgement.
+    Interrupted result records are counted so the reader can keep the process open for the
+    replacement message rather than mistaking the interrupted subturn for Rundesk's end.
     """
-    return sys.stdin.read()
+
+    def __init__(self):
+        self._condition = threading.Condition()
+        self._next = 0
+        self._answers = {}
+        self._interrupted_results = 0
+        self.usage = {}
+
+    def request(self, stream, subtype: str) -> bool:
+        with self._condition:
+            self._next += 1
+            request = f"rundesk_{self._next}"
+            self._answers[request] = None
+            if subtype == "interrupt":
+                # Mark before writing: Claude may finish the interrupted request before
+                # the acknowledgement reaches the stdout reader.
+                self._interrupted_results += 1
+        try:
+            _write(stream, {"type": "control_request", "request_id": request,
+                            "request": {"subtype": subtype,
+                                        **({"hooks": None} if subtype == "initialize" else {})}})
+        except (OSError, ValueError):
+            with self._condition:
+                self._answers.pop(request, None)
+                if subtype == "interrupt" and self._interrupted_results > 0:
+                    self._interrupted_results -= 1
+            return False
+        with self._condition:
+            answered = self._condition.wait_for(
+                lambda: self._answers.get(request) is not None, timeout=CONTROL_SECONDS)
+            response = self._answers.pop(request, None)
+            accepted = bool(answered and response and response.get("subtype") == "success")
+            if not accepted and subtype == "interrupt":
+                # The result may have raced the failed acknowledgement and consumed this
+                # mark already. Never let the count go negative: a negative count is
+                # truthy and would make every later result look interrupted.
+                if self._interrupted_results > 0:
+                    self._interrupted_results -= 1
+            if accepted and subtype == "interrupt":
+                # Match the native SDK's sequence exactly: acknowledgement says the
+                # interrupt was accepted; the result says the interrupted request has
+                # actually drained. A replacement sent between those two is merely queued.
+                accepted = self._condition.wait_for(
+                    lambda: self._interrupted_results == 0, timeout=CONTROL_SECONDS)
+            return accepted
+
+    def heard(self, one: dict) -> bool:
+        """Accept one control response, and say whether it belonged to us."""
+        if one.get("type") != "control_response":
+            return False
+        response = one.get("response")
+        if not isinstance(response, dict):
+            return True
+        request = response.get("request_id")
+        with self._condition:
+            if request in self._answers:
+                self._answers[request] = response
+                self._condition.notify_all()
+        return True
+
+    def interrupted(self) -> bool:
+        """Whether this result ends the request that steering deliberately stopped."""
+        with self._condition:
+            if self._interrupted_results <= 0:
+                return False
+            self._interrupted_results -= 1
+            self._condition.notify_all()
+            return True
+
+    def counted(self, one: dict) -> None:
+        """Accumulate one subturn's usage into this Rundesk turn."""
+        for name, value in (one.get("usage") or {}).items():
+            if isinstance(value, int) and not isinstance(value, bool):
+                self.usage[name] = self.usage.get(name, 0) + value
+
+    def with_usage(self, one: dict) -> dict:
+        """Put all interrupted and final work onto the one final result record."""
+        self.counted(one)
+        return {**one, "usage": dict(self.usage)}
+
+
+class Words:
+    """Every word sent to this adapter, retained so a lost session can be retried.
+
+    One thread owns the outer input for the adapter's whole life. Each Claude process gets
+    a reader starting at zero, so reopening a conversation after a stale `--resume` replays
+    the prompt and any steering that already arrived rather than losing the latter between
+    two processes.
+    """
+
+    def __init__(self, first: str, stream):
+        self.words = [first]
+        self.closed = False
+        self._condition = threading.Condition()
+        self._reader = threading.Thread(target=self._read, args=(stream,), daemon=True)
+        self._reader.start()
+
+    def _read(self, stream) -> None:
+        try:
+            for line in stream:
+                word = _word(line)
+                if word is None:
+                    continue
+                with self._condition:
+                    self.words.append(word)
+                    self._condition.notify_all()
+        finally:
+            with self._condition:
+                self.closed = True
+                self._condition.notify_all()
+
+    def each(self, stopping: threading.Event):
+        at = 0
+        while True:
+            with self._condition:
+                self._condition.wait_for(
+                    lambda: at < len(self.words) or self.closed or stopping.is_set())
+                if stopping.is_set():
+                    return
+                if at >= len(self.words):
+                    return
+                word = self.words[at]
+                at += 1
+            yield word
+
+    def wake(self) -> None:
+        with self._condition:
+            self._condition.notify_all()
 
 
 #: Where this brain looks for skills, relative to the directory a turn stands in.
@@ -595,10 +765,11 @@ def carry() -> int:
         say(type="done", ok=False, why="the Claude Code CLI is not on this machine's path")
         return 1
 
-    asked = _asked()
-    if not asked.strip():
+    first = _first(sys.stdin)
+    if first is None:
         say(type="done", ok=False, why="nothing was asked")
         return 1
+    words = Words(first, sys.stdin)
 
     session = str(uuid.uuid4())
     resume = os.environ.get("RUNDESK_RESUME")
@@ -614,7 +785,7 @@ def carry() -> int:
     else:
         env.pop("CLAUDE_CONFIG_DIR", None)
 
-    code, lost = _turn(argv, where, asked, env, session, may_start_again=bool(resume))
+    code, lost = _turn(argv, where, words, env, session, may_start_again=bool(resume))
     if lost and resume:
         # The conversation this turn was told to carry on is gone — cleaned up, or never
         # created because the turn that reported the handle had failed. Losing a handle
@@ -624,7 +795,7 @@ def carry() -> int:
         session = str(uuid.uuid4())
         argv = [CLAUDE] + opening(posture, os.environ.get("RUNDESK_MODEL"), None,
                                   _settings(), session)
-        code, _ = _turn(argv, where, asked, env, session)
+        code, _ = _turn(argv, where, words, env, session)
     return code
 
 
@@ -719,7 +890,7 @@ def _lost(said: dict) -> bool:
     return not said.get("ok") and GONE in str(said.get("why") or "").lower()
 
 
-def _turn(argv: list, where: str, asked: str, env: dict, session: str,
+def _turn(argv: list, where: str, words: Words, env: dict, session: str,
           may_start_again: bool = False) -> tuple:
     """Run the brain, and report what it said as it says it.
 
@@ -730,6 +901,7 @@ def _turn(argv: list, where: str, asked: str, env: dict, session: str,
     """
     raw = _raw()
     seen = {"session": session, "model": None, "ended": False}
+    control = Control()
     trouble = []
     try:
         brain = subprocess.Popen(
@@ -746,13 +918,10 @@ def _turn(argv: list, where: str, asked: str, env: dict, session: str,
     draining = threading.Thread(target=_drained, args=(brain.stderr, trouble), daemon=True)
     draining.start()
 
-    try:
-        brain.stdin.write(asked)
-        brain.stdin.close()
-    except OSError:
-        # It went before it read the prompt. Whatever it said about that is on stderr and
-        # is collected by the thread above; there is nothing to be gained by raising here.
-        pass
+    finished = threading.Event()
+    feeding = threading.Thread(
+        target=_fed, args=(brain.stdin, words, finished, control), daemon=True)
+    feeding.start()
 
     # Everything streams as it arrives except the pair that ends a turn. Those are held
     # until the program is gone, because whether the conversation was lost is a thing this
@@ -764,13 +933,37 @@ def _turn(argv: list, where: str, asked: str, env: dict, session: str,
         if raw:
             raw.write(line)
             raw.flush()
+        try:
+            vendor = json.loads(line)
+        except ValueError:
+            vendor = {}
+        if isinstance(vendor, dict) and control.heard(vendor):
+            continue
+        if isinstance(vendor, dict) and vendor.get("type") == "result":
+            if control.interrupted():
+                control.counted(vendor)
+                seen["ended"] = False
+                continue
+            line = json.dumps(control.with_usage(vendor))
         for it in records(line, seen):
+            if it["type"] == "done":
+                # Stream input can carry several user turns in one Claude process, so the
+                # process waits for another until its input closes. Rundesk asked for one
+                # turn. Close on that turn's result, not on the outer input: a channel
+                # deliberately keeps the latter open so it can steer.
+                finished.set()
+                words.wake()
+                _close(brain.stdin)
             if may_start_again and it["type"] in ("usage", "done"):
                 ending.append(it)
             else:
                 say(**it)
 
+    finished.set()
+    words.wake()
+    _close(brain.stdin)
     brain.stdout.close()
+    feeding.join(timeout=GOING_SECONDS)
     draining.join(timeout=GOING_SECONDS)
     if raw:
         raw.close()
@@ -788,6 +981,37 @@ def _turn(argv: list, where: str, asked: str, env: dict, session: str,
         say(type="done", ok=False, why=_why(trouble, code))
         return code or 1, False
     return code, False
+
+
+def _fed(stream, words: Words, stopping: threading.Event, control: Control) -> None:
+    """Start Claude's SDK protocol, then interrupt before every later word."""
+    try:
+        if not control.request(stream, "initialize"):
+            went_wrong("Claude did not accept its streaming control protocol")
+            return
+        first = True
+        for word in words.each(stopping):
+            if not first and not control.request(stream, "interrupt"):
+                went_wrong("Claude did not complete the native mid-turn interrupt")
+                return
+            _write(stream, _message(word))
+            first = False
+    except (OSError, ValueError):
+        pass  # the result raced the last word; the provider has already finished
+    finally:
+        _close(stream)
+
+
+def _write(stream, record: dict) -> None:
+    stream.write(json.dumps(record, separators=(",", ":")) + "\n")
+    stream.flush()
+
+
+def _close(stream) -> None:
+    try:
+        stream.close()
+    except (OSError, ValueError):
+        pass
 
 
 def _said_how_to_sign_in(said: str, env: dict) -> None:
