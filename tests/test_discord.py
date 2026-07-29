@@ -19,6 +19,7 @@ import asyncio
 import contextlib
 import importlib.machinery
 import importlib.util
+import inspect
 import io
 import json
 import os
@@ -175,22 +176,138 @@ class WhereItListens(unittest.TestCase):
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class AnAnswerRepliesToTheQuestion(unittest.TestCase):
+    """R-DIS-28 — an answer quotes the message that asked for it, unless that message is
+    somewhere other than where the answer is going.
+
+    **The stand-in message carries `channel.id` and nothing else**, because that is what a
+    real one carries. A stand-in given an attribute discord.py has never had is how this
+    went unnoticed: the guard asked for `channel_id`, every message answered `""`, and no
+    answer rundesk has ever posted was a reply."""
+
+    class Room:
+        """A place to write in, remembering only what it was asked to quote."""
+
+        def __init__(self):
+            self.quoted = []
+
+        async def send(self, content, reference=None, mention_author=False, files=None):
+            self.quoted.append(getattr(reference, "message", reference))
+            return SimpleNamespace(id=99)
+
+    class Forgetful:
+        """A room that has forgotten the message being quoted, which is what Discord does
+        when the asker deleted their question: it refuses the whole message rather than the
+        quote alone, unless the reference says not to.
+
+        It carries `id` because a real channel does, so the guard above keeps the anchor and
+        this case is about the refusal rather than about the guard."""
+
+        def __init__(self, id):
+            self.id, self.quoted, self.wrote = id, [], []
+
+        async def send(self, content, reference=None, mention_author=False, files=None):
+            if reference is not None and getattr(reference, "fail_if_not_exists", True):
+                raise RuntimeError("400 Bad Request (error code: 10008): Unknown message")
+            self.quoted.append(getattr(reference, "message", reference))
+            self.wrote.append(content)
+            return SimpleNamespace(id=99)
+
+    class Turn:
+        def __init__(self, room):
+            self.room = room
+
+        async def _where_to_write(self, it):
+            return self.room
+
+    @staticmethod
+    def _message(where):
+        """A message standing in a place — the shape of a real one, no more, down to the
+        reference a real one hands over when it is asked to be quoted."""
+        asking = SimpleNamespace(id=7, channel=SimpleNamespace(id=where))
+        asking.to_reference = lambda fail_if_not_exists=True: SimpleNamespace(
+            message=asking, fail_if_not_exists=fail_if_not_exists)
+        return asking
+
+    def _posted_to(self, conversation, anchor):
+        room = self.Room()
+        asyncio.run(discord.Agent._post(
+            self.Turn(room), {"conversation": str(conversation)}, "the answer",
+            anchor=anchor))
+        return room.quoted
+
+    def test_the_anchor_is_read_off_the_attribute_a_message_actually_has(self):
+        """A `discord.Message` has no `channel_id`, so `getattr(anchor, "channel_id", "")`
+        returned `""` for every message that ever passed through, `"" != conversation` was
+        always true, and the anchor was discarded unconditionally. Asked of the installed
+        library, because that is the fact the guard is wrong about."""
+        self.assertFalse(hasattr(_installed.Message, "channel_id"),
+                         "the guard may be read off channel_id after all")
+        self.assertTrue(hasattr(_installed.Message, "channel"))
+        self.assertIn("fail_if_not_exists",
+                      inspect.signature(_installed.Message.to_reference).parameters,
+                      "the installed discord.py cannot be told to keep a refused quote")
+
+    def test_an_answer_in_a_direct_message_is_a_reply_to_the_message_that_asked(self):
+        """R-DIS-28 — the conversation is the direct-message channel's id, which is where
+        the asking message stands. Scheduled reports and answers interleave in a one-to-one
+        conversation, and a reply is the only thing telling them apart."""
+        asking = self._message(4242)
+        self.assertEqual([asking], self._posted_to(4242, asking))
+
+    def test_an_answer_in_a_channel_is_a_reply_to_the_message_that_asked(self):
+        """R-DIS-28 — a turn already happening where the question was asked quotes it, so
+        it is findable in a busy room."""
+        asking = self._message(555)
+        self.assertEqual([asking], self._posted_to(555, asking))
+
+    def test_an_answer_still_arrives_when_the_message_it_quotes_is_gone(self):
+        """R-DIS-1, R-DIS-28 — the asker deleting their own question during a turn that
+        runs for minutes must not cost them the answer. discord.py builds the reference
+        without `fail_if_not_exists`, so Discord's default applied and it refused the whole
+        message: a short answer was lost outright and a split one lost the piece carrying
+        its cost line — the shape this guard exists to close, through another door. Built
+        with it off, the quote is what goes and the answer still arrives."""
+        asking = self._message(555)
+        room = self.Forgetful(555)
+        asyncio.run(discord.Agent._post(
+            self.Turn(room), {"conversation": "555"}, "the answer", anchor=asking))
+        self.assertEqual(["the answer"], room.wrote,
+                         "a quote Discord would not resolve took the answer with it")
+        self.assertEqual([asking], room.quoted)
+
+    def test_an_answer_does_not_quote_a_message_from_somewhere_else(self):
+        """R-DIS-1, R-DIS-28 — Discord refuses a whole message that quotes one in another
+        channel. So a turn in a thread ended with a ✅ on the question and no answer under
+        it: the mark went on the message in the channel, which works, and the reply quoting
+        that same message was rejected outright. Being named opens a thread, so the
+        conversation is the thread while the question stands in the parent."""
+        asking = self._message(555)
+        self.assertEqual([None], self._posted_to(90001, asking),
+                         "an answer still quotes a message outside the place it is sent")
+
+    def test_only_the_first_piece_of_a_split_answer_carries_the_anchor(self):
+        """R-DIS-13, R-DIS-28 — a quote on every piece buries what it is quoting."""
+        quoted = []
+
+        class Splitting:
+            async def _post(self, it, text, anchor=None, **kw): quoted.append(anchor)
+            def _stop_typing(self, held): pass
+            def _no_longer_last(self, held): pass
+
+        held = discord.Live()
+        held.anchor = self._message(555)
+        asyncio.run(discord.Agent._answer(
+            Splitting(), {"type": "answer", "text": "\n".join(
+                "line %d" % i for i in range(400))}, held))
+        self.assertGreater(len(quoted), 1, "the answer was not long enough to split")
+        self.assertEqual([held.anchor] + [None] * (len(quoted) - 1), quoted)
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class AnAnswerInAThread(unittest.TestCase):
     """R-DIS-1 — being named opens a thread and the turn happens there, while the message
     that asked stays in the channel above it."""
-
-    class Message:
-        def __init__(self, channel_id):
-            self.channel_id = channel_id
-
-    def test_an_answer_does_not_quote_a_message_from_somewhere_else(self):
-        """R-DIS-1 — Discord refuses a whole message that quotes one in another channel.
-        So a turn in a thread ended with a ✅ on the question and no answer under it: the
-        mark went on the message in the channel, which works, and the reply quoting that
-        same message was rejected outright."""
-        source = (ROOT / "src" / "channels" / "discord").read_text()
-        self.assertIn('str(getattr(anchor, "channel_id", "")) != str(', source,
-                      "an answer can still quote a message outside the place it is sent")
 
     def test_a_thread_is_a_conversation_of_its_own(self):
         """R-DIS-1, R-CH-3 — one thread is one conversation and one session, so the id a
