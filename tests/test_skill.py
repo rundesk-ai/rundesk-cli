@@ -17,7 +17,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import skill
+from rundesk import config, skill
+
+#: What this release really declares and really ships, taken at import — every class below
+#: points `skill.SHIPPED` at a scratch directory, so by the time a test runs neither can be
+#: read off the module any more.
+REALLY_RENAMED = dict(skill.RENAMED)
+REALLY_SHIPPED = skill.SHIPPED
+REALLY_RETIRED = tuple(skill.RETIRED)
 
 
 def a_skill(at: Path, name: str, described: str = None, says: str = "") -> Path:
@@ -327,6 +334,191 @@ class BringingTheBuiltInsForward(WithALibrary):
         self.assertEqual([], skill.lay_down(blocked))
 
 
+class WhatARenameDoes(WithALibrary):
+    """A built-in this release ships under a name an earlier one did not use.
+
+    The failure this guards is quiet rather than loud: `lay_down` alone leaves the old
+    directory standing with the old text in it and every grant of it still resolving, so
+    an agent reads superseded instructions and nothing anywhere says so.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.release = self.where / "app" / "src" / "templates" / "skills"
+        self.release.mkdir(parents=True)
+        was_shipped, was_renamed = skill.SHIPPED, skill.RENAMED
+        skill.SHIPPED = self.release
+        skill.RENAMED = {"reporting-a-bug": "filing-issues"}
+        was_retired = skill.RETIRED
+        skill.RETIRED = ("building-adapters",)
+        self.addCleanup(setattr, skill, "SHIPPED", was_shipped)
+        self.addCleanup(setattr, skill, "RENAMED", was_renamed)
+        self.addCleanup(setattr, skill, "RETIRED", was_retired)
+
+    def _both_names(self):
+        """The old built-in laid down, then the release renaming it."""
+        a_skill(self.release, "reporting-a-bug", says="the old words")
+        skill.lay_down(self.library)
+        shutil.rmtree(self.release / "reporting-a-bug")
+        a_skill(self.release, "filing-issues", says="the new words")
+        skill.lay_down(self.library)
+
+    def test_every_rename_names_a_skill_this_release_ships(self):
+        """R-AGT-35 — a rename pointing at a name nobody ships carries every grant of the
+        old one into nothing. Asserted against the real directory rather than the scratch
+        one, because the value being checked is the declaration this release makes."""
+        really_shipped = tuple(sorted(
+            one.name for one in REALLY_SHIPPED.iterdir()
+            if (one / skill.NAMED).is_file()))
+        for old in REALLY_RETIRED:
+            self.assertNotIn(old, really_shipped,
+                             f"{old} is both retired and still shipped")
+        for old, new in REALLY_RENAMED.items():
+            self.assertIn(new, really_shipped,
+                          f"{old} was renamed to {new}, which this release does not ship")
+            self.assertNotIn(old, really_shipped,
+                             f"{old} is both retired and still shipped")
+
+    def test_no_shipped_instruction_names_a_skill_this_release_retired(self):
+        """R-AGT-35 — the rename has to reach the words as well as the directory.
+
+        Every file here is copied onto an owner's machine and read by a brain as an
+        instruction. One naming a skill this release renamed away sends the agent to
+        `rundesk skills grant <me> <old name>`, which answers `there is no skill called
+        <old name>` — on every install, from the day it lands. Asserted against the real
+        templates and the real declaration, because those are what ship.
+        """
+        gone = set(REALLY_RENAMED) | set(REALLY_RETIRED)
+        shipped_text = sorted(
+            one for one in (REALLY_SHIPPED.parent).rglob("*.md") if one.is_file())
+        self.assertTrue(shipped_text, "no shipped instruction text was found to check")
+        named = []
+        for page in shipped_text:
+            for number, line in enumerate(page.read_text(encoding="utf-8").splitlines(), 1):
+                named += [f"{page.name}:{number} names `{one}`"
+                          for one in sorted(gone) if f"`{one}`" in line]
+        self.assertEqual([], named)
+
+    def test_a_renamed_built_in_is_taken_out_of_the_library(self):
+        """R-AGT-35 — left there it is not a broken link but a working one, pointing at
+        text the release has replaced."""
+        self._both_names()
+        self.assertEqual(["reporting-a-bug"], skill.retire(self.library))
+        self.assertFalse((self.library / "reporting-a-bug").exists())
+        self.assertIn("the new words",
+                      (self.library / "filing-issues" / skill.NAMED).read_text())
+
+    def test_a_grant_of_a_renamed_built_in_becomes_a_grant_of_the_new_name(self):
+        """R-AGT-35 — an agent that held it goes on holding it, under the name it now has."""
+        self._both_names()
+        skill.grant(self.mine, "reporting-a-bug", self.library)
+
+        skill.retire(self.library, holding=(self.mine,))
+
+        self.assertEqual(["filing-issues"], skill.granted(self.mine))
+        self.assertTrue((self.mine / "filing-issues" / skill.NAMED).is_file(),
+                        "the carried grant does not resolve to the new skill")
+
+    def test_a_rename_never_hands_the_new_skill_to_an_agent_without_the_old(self):
+        """R-AGT-35 — a grant is carried, never handed out. Nothing records that a grant
+        was taken away, so anything that gave the new name to everybody would hand back,
+        on every update, the skill an owner had just revoked."""
+        self._both_names()
+
+        skill.retire(self.library, holding=(self.mine,))
+
+        self.assertEqual([], skill.granted(self.mine))
+
+    def test_a_skill_the_owner_wrote_under_the_old_name_is_never_retired(self):
+        """R-AGT-29, R-AGT-35 — a rename in a release must be incapable of taking away
+        work somebody did, whatever they happened to call it."""
+        a_skill(self.release, "filing-issues")
+        skill.lay_down(self.library)
+        theirs = a_skill(self.library, "reporting-a-bug", says="a month of work")
+        skill.grant(self.mine, "reporting-a-bug", self.library)
+
+        self.assertEqual([], skill.retire(self.library, holding=(self.mine,)))
+
+        self.assertEqual("a month of work\n", (theirs / skill.NAMED).read_text().splitlines()[-1]
+                         + "\n")
+        self.assertEqual(["reporting-a-bug"], skill.granted(self.mine))
+
+    def test_a_skill_the_owner_wrote_under_the_new_name_is_not_the_rename_landing(self):
+        """R-AGT-29, R-AGT-35 — the destructive half of the same rule, and the only case
+        here where getting it wrong cannot be undone.
+
+        A release introduces names nobody was ever warned off, so an owner can already
+        have written a skill called what a built-in is being renamed *to*. `lay_down`
+        asks whose that directory is and correctly leaves it alone. Asking only whether
+        the name stands reads their work as the rename having landed: the built-in is
+        deleted, every agent holding it is handed a link to their unrelated file under
+        the name the built-in had, and no later release puts it back — nothing ships the
+        old name again and `lay_down` skips the new one for as long as their directory
+        stands.
+        """
+        a_skill(self.release, "reporting-a-bug", says="the manual")
+        skill.lay_down(self.library)
+        theirs = a_skill(self.library, "filing-issues", says="a month of work")
+        skill.grant(self.mine, "reporting-a-bug", self.library)
+        shutil.rmtree(self.release / "reporting-a-bug")
+        a_skill(self.release, "filing-issues", says="the new words")
+        skill.lay_down(self.library, force=True)   # skips theirs, which is the point
+
+        self.assertEqual([], skill.retire(self.library, holding=(self.mine,)))
+
+        self.assertIn("the manual",
+                      (self.library / "reporting-a-bug" / skill.NAMED).read_text(),
+                      "the built-in was deleted with nothing of ours standing in its place")
+        self.assertIn("a month of work", (theirs / skill.NAMED).read_text())
+        self.assertEqual(["reporting-a-bug"], skill.granted(self.mine))
+        self.assertIn("the manual", (self.mine / "reporting-a-bug" / skill.NAMED).read_text(),
+                      "the agent's grant was repointed at a skill the owner wrote")
+
+    def test_nothing_is_carried_until_the_new_name_is_in_the_library(self):
+        """R-AGT-35 — a library that could not be written to leaves the new name absent,
+        and a grant carried into nothing is a skill the agent no longer has."""
+        a_skill(self.release, "reporting-a-bug")
+        skill.lay_down(self.library)
+        skill.grant(self.mine, "reporting-a-bug", self.library)
+
+        self.assertEqual([], skill.retire(self.library, holding=(self.mine,)))
+
+        self.assertEqual(["reporting-a-bug"], skill.granted(self.mine))
+        self.assertTrue((self.library / "reporting-a-bug").is_dir())
+
+    def test_a_built_in_this_release_dropped_is_taken_out_of_the_library(self):
+        """R-AGT-35 — a built-in with no successor: what it held is documentation now, and
+        leaving the directory means a library that grows a stale copy every release."""
+        a_skill(self.release, "building-adapters", says="the old guide")
+        skill.lay_down(self.library)
+        shutil.rmtree(self.release / "building-adapters")
+
+        self.assertEqual(["building-adapters"], skill.retire(self.library))
+        self.assertFalse((self.library / "building-adapters").exists())
+
+    def test_a_grant_of_a_dropped_built_in_is_taken_away_rather_than_left_pointing_at_nothing(self):
+        """R-AGT-35 — a link to a directory that has gone is skipped in silence by every
+        brain, so the agent keeps a grant that does nothing and nobody is told."""
+        a_skill(self.release, "building-adapters")
+        skill.lay_down(self.library)
+        skill.grant(self.mine, "building-adapters", self.library)
+        shutil.rmtree(self.release / "building-adapters")
+
+        skill.retire(self.library, holding=(self.mine,))
+
+        self.assertEqual([], skill.granted(self.mine))
+        self.assertFalse((self.mine / "building-adapters").is_symlink())
+
+    def test_uninstalling_takes_a_renamed_built_in_too(self):
+        """R-RM-7 — one this release no longer ships by name is still a piece of rundesk,
+        and leaving it keeps the whole install directory standing."""
+        self._both_names()
+
+        self.assertEqual(["filing-issues", "reporting-a-bug"],
+                         sorted(skill.take_back(self.library)))
+        self.assertFalse(self.library.exists(), "the library was left standing")
+
+
 class WhatEachShippedAdapterPlaces(WithALibrary):
     """The `_present` every shipped adapter has, driven for real against a scratch home.
 
@@ -520,6 +712,11 @@ class WhatMakingAnAgentGrants(WithALibrary):
         self.addCleanup(setattr, skill, "SHIPPED", was)
         a_skill(self.release, "writing-skills")
         skill.lay_down(self.library)
+        # What a new agent is given is stated rather than "everything shipped" (R-AGT-36),
+        # so the scratch release has to be named or nothing here is granted at all.
+        (self.where / "data").mkdir(parents=True, exist_ok=True)
+        (self.where / "data" / "config.json").write_text(
+            '{"skills": {"granted": ["writing-skills"]}}\n', encoding="utf-8")
         for name, at in (("RUNDESK_DATA_DIR", self.where / "data"),
                          ("RUNDESK_AGENTS_DIR", self.where / "data" / "agents"),
                          ("RUNDESK_RUN_DIR", self.where / "run"),
@@ -530,10 +727,65 @@ class WhatMakingAnAgentGrants(WithALibrary):
                             if h is not None else os.environ.pop(n, None))
 
     def test_a_new_agent_is_given_what_the_release_ships(self):
-        """R-AGT-27 — the bootstrap: an agent cannot use `skills grant` to give itself the
-        skill that explains what granting is, so it starts with it."""
+        """R-AGT-27, R-AGT-36 — the bootstrap: an agent starts with what it needs to work
+        rundesk at all, because it cannot use `skills grant` to give itself the skill that
+        explains what granting is."""
         self.agents.add("ava")
         self.assertIn("writing-skills", skill.granted(self.agents.skills("ava")))
+
+    def test_a_new_agent_is_given_what_the_configuration_says(self):
+        """R-AGT-36 — a release ships more than every agent should carry, and a skill an
+        agent never reaches for is not free: its description is read on every turn."""
+        a_skill(self.release, "later-addition")
+        skill.lay_down(self.library)
+
+        self.agents.add("ava")
+
+        self.assertEqual(["writing-skills"], skill.granted(self.agents.skills("ava")),
+                         "an agent was given a skill the configuration did not name")
+
+    def test_an_agent_is_made_with_the_skills_that_work_rundesk_when_nothing_is_stated(self):
+        """R-AGT-36 — the default is the four an agent needs to work with rundesk itself,
+        and it is read off the same place the command reads, never a second list."""
+        (self.where / "data" / "config.json").unlink()
+        for called in config.GRANTED:
+            a_skill(self.release, called)
+        skill.lay_down(self.library)
+
+        self.agents.add("ava")
+
+        self.assertEqual(sorted(config.GRANTED), skill.granted(self.agents.skills("ava")))
+
+    def test_an_owner_who_wants_no_skills_granted_gets_none(self):
+        """R-AGT-36 — an empty list is a thing somebody stated, and turning it back into
+        the default is the quiet override this whole file exists to prevent."""
+        (self.where / "data" / "config.json").write_text(
+            '{"skills": {"granted": []}}\n', encoding="utf-8")
+
+        self.agents.add("ava")
+
+        self.assertEqual([], skill.granted(self.agents.skills("ava")))
+
+    def test_a_configuration_that_cannot_be_read_refuses_to_make_the_agent(self):
+        """R-AGT-36 — never treated as absent: the skills this agent would be given are
+        stated there, and making it without them is an owner's decision silently ignored."""
+        (self.where / "data" / "config.json").write_text("{ not json\n", encoding="utf-8")
+
+        with self.assertRaises(config.Unreadable):
+            self.agents.add("ava")
+
+    def test_a_diagnosis_judges_an_agent_against_what_is_configured(self):
+        """R-AGT-36 — judged against every shipped skill instead, a diagnosis would report
+        every skill the owner deliberately kept off the default set as missing."""
+        a_skill(self.release, "later-addition")
+        skill.lay_down(self.library)
+        self.agents.add("ava")
+
+        complained = [one for one in self.agents.diagnosed("ava")
+                      if "later-addition" in str(one)]
+
+        self.assertEqual([], complained,
+                         "a diagnosis asked for a skill the configuration never named")
 
     def test_making_an_agent_again_does_not_hand_back_a_skill_that_was_taken_away(self):
         """R-AGT-29 — `add` is also how an owner repairs an agent, and every other thing

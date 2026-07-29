@@ -25,8 +25,9 @@ that decision gets quietly lost.
 `rundesk skills` says what exists on this machine and which of it you have. If you can see
 a skill that would help and were not given it, say so rather than working around it.
 
-You can write skills too, and `writing-skills` says how — including where to put one so it
-can be given to an agent.
+You can write skills too, and `writing-rundesk-skills` says how — including where to put one
+so it can be given to an agent. It is not one every agent starts with, so if it is on this
+machine and you were not given it, that is the thing to say rather than to work around.
 
 ## Where you work
 

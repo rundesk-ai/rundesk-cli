@@ -1,12 +1,4 @@
----
-name: building-a-channel-adapter
-description: How to reach a rundesk agent from a new surface by writing a channel adapter — the two questions it answers, the records each way, and what rundesk decides rather than you. Use whenever anyone wants an agent reachable somewhere rundesk does not already support, asks how to add a channel, platform or integration, or is debugging a channel that connects but never answers.
----
-
 # Building a channel adapter
-
-*This skill ships with rundesk and is replaced whenever rundesk updates. To make a version of
-your own, copy it under a different name — that copy is yours and is never touched.*
 
 A channel adapter is how an agent is reached from somewhere — a chat app, a board, a webhook,
 anything that can carry a message. Like a provider adapter it is **a program rundesk runs**,
@@ -91,8 +83,12 @@ what the *brain* declared. Offering somebody a way to interrupt a turn whose bra
 correlated `query-result`. Never turn a platform command into arbitrary CLI arguments.
 
 **A tool's verb is one of a closed list** — `read`, `search`, `run`, `edit`, `list`, `make`,
-`delegate` — or absent. Never render your own word for one; a channel that recognised a
-vendor's tool names would carry that vocabulary forever.
+`delegate`, `memory`, `rules`, `profile`, `identity` — or absent. Never render your own word
+for one; a channel that recognised a vendor's tool names would carry that vocabulary forever.
+
+**The last four are the agent rewriting a file it lives by**, and each wants its own mark.
+Folding them back into `edit` throws away the only part a reader wanted: `MEMORY.md`,
+`AGENTS.md`, `USER.md` and `SOUL.md` are what an agent *is* between turns.
 
 **Never a credential as a command-line argument.** Read it from an environment variable or a
 file the owner already controls, and report only *where* it was found.

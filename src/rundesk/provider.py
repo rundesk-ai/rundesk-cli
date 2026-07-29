@@ -75,7 +75,40 @@ WHOLE = "whole"
 #: rather than stretching one to fit: a reader shown nothing is better than one taught
 #: to believe a word that means something else here. Growing it is a release, not a
 #: guess an adapter makes on its own.
-DID = ("read", "search", "run", "edit", "list", "make", "delegate")
+#:
+#: The last four are the same act as `edit` and are told apart on purpose (R-PRV-29):
+#: what an agent keeps of its own is what it *is* between turns, and a file it lives by
+#: being changed is not the same news as a file it was working on being changed. Which
+#: files those are, and how an adapter is sure it was one of them rather than a
+#: same-named file in some checkout, is `CONTINUITY` below.
+#:
+#: **Those four name what was changed rather than what was done, and are nouns for it.**
+#: The act is always the same one — a file was written — so the useful half is which file,
+#: and a surface reading these raw is left with something that reads: a terminal shows
+#: `updated memory` where a verb-shaped token would have shown `remember Write`.
+DID = ("read", "search", "run", "edit", "list", "make", "delegate",
+       "memory", "rules", "profile", "identity")
+
+#: What an agent keeps of its own, and what changing one is called (R-PRV-29). The names
+#: are Rundesk's — they are what a new agent is given and what `AGENTS.md` tells it to
+#: live by — so the mapping belongs here rather than in an adapter, which knows about a
+#: brain and nothing about what an agent is made of.
+#:
+#: **A file's name is not the test.** Every repository on the machine has an `AGENTS.md`;
+#: an agent editing one in a checkout has not rewritten its own rules, and saying it did
+#: is worse than the plain `edit` it would otherwise get, because it is untrue. What
+#: qualifies is the resolved path standing directly in the agent's own working directory
+#: — `RUNDESK_CWD`, which is the one thing every adapter is already told (R-PRV-3).
+#: `USER.md` is `profile` rather than `preferences` because preferences are one section of
+#: it. Its own first line is "what you know about the user", and it also holds who they
+#: are and what they are building — a verb naming the narrowest part of a file stops being
+#: true the first time the widest part is what changed.
+CONTINUITY = {
+    "MEMORY.md": "memory",
+    "AGENTS.md": "rules",
+    "USER.md": "profile",
+    "SOUL.md": "identity",
+}
 
 #: What an adapter may say it can do (R-PRV-15). Absent means no, so an adapter that
 #: answers with nothing at all is a whole brain with the work simply absent — which is
@@ -221,6 +254,13 @@ def environment(
     # directory: an adapter that inferred it would be holding a copy of rundesk's layout,
     # which is the thing telling it `RUNDESK_CWD` exists to prevent.
     said["RUNDESK_SKILLS"] = str(skills)
+    # **Which of the files beside it an agent lives by, and what changing one is called**
+    # (R-PRV-29). Told for the same reason skills are: an adapter that carried these four
+    # names would be holding a copy of rundesk's layout, and renaming a continuity file
+    # here would silently stop being reported by every adapter at once. Offered, never
+    # required — one that ignores it reports the plain `edit` it always did.
+    said["RUNDESK_CONTINUITY"] = ",".join(
+        f"{name}={verb}" for name, verb in sorted(CONTINUITY.items()))
     said["RUNDESK_PROVIDER_HOME"] = str(provider_home)
     said["RUNDESK_RUN"] = run
     said["RUNDESK_POSTURE"] = posture

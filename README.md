@@ -224,7 +224,7 @@ Rundesk. It can be a Python program, compiled binary, or shell script. Custom pr
 the same agent homes, schedules, channels, turn records, usage reporting, and lifecycle as
 the adapters above.
 
-→ **[Write a provider adapter](src/templates/skills/building-a-provider-adapter/references/the-contract.md)**
+→ **[Write a provider adapter](docs/extending/provider-adapters/references/the-contract.md)**
 
 ## 💬 Channel adapters
 
@@ -264,7 +264,7 @@ It owns the vocabulary and behavior of its platform while Rundesk owns access co
 state, history, and delivery. A custom channel gets the same agent and turn lifecycle as
 Discord without changing Rundesk core.
 
-→ **[Write a channel adapter](src/templates/skills/building-a-channel-adapter/references/the-contract.md)**
+→ **[Write a channel adapter](docs/extending/channel-adapters/references/the-contract.md)**
 
 ## 🧰 Everything Rundesk supports
 
@@ -318,9 +318,9 @@ set it in `~/.rundesk/data/config.json`, then run `rundesk update` to apply the 
 ## 📖 Documentation
 
 - **[CLI reference](CLI.md)** — every command and argument, generated from the parser
-- **[Provider adapter contract](src/templates/skills/building-a-provider-adapter/references/the-contract.md)** — put another coding CLI behind an agent
-- **[Channel adapter contract](src/templates/skills/building-a-channel-adapter/references/the-contract.md)** — reach an agent from another platform
-- **[Integration CLI guide](src/templates/skills/building-integration-clis/SKILL.md)** — give every agent a custom command
+- **[Provider adapter contract](docs/extending/provider-adapters/references/the-contract.md)** — put another coding CLI behind an agent
+- **[Channel adapter contract](docs/extending/channel-adapters/references/the-contract.md)** — reach an agent from another platform
+- **[Integration CLI guide](docs/extending/integration-clis/README.md)** — give every agent a custom command
 - **[Tested contracts](.knowledge/prd/README.md)** — every guarantee and the test that proves it
 - **[Roadmap](ROADMAP.md)** — what is built, what is next, and why
 - **[Architecture](.knowledge/CODEMAP.md)** — how the system is organized

@@ -102,8 +102,12 @@ class TheEnvironmentAProgramIsGiven(Quickened):
 
     def test_the_environment_carries_what_a_program_needs_to_find_itself(self):
         """R-PROC-1"""
+        # `clear=True` is the whole point, not tidiness: an agent runs this suite from
+        # inside rundesk, which hands every program it starts the live install's
+        # `RUNDESK_SCRIPTS` — read before the data directory this case sets, so without
+        # it the owner's own paths come back and three cases fail for nobody but an agent.
         with unittest.mock.patch.dict(
-                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}):
+                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}, clear=True):
             built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
         self.assertEqual("/tmp/rundesk-home", built["RUNDESK_HOME"])
         self.assertEqual("/tmp/rundesk-data/scripts:/usr/bin", built["PATH"])
@@ -116,8 +120,9 @@ class TheEnvironmentAProgramIsGiven(Quickened):
     def test_an_owner_command_is_first_on_every_programs_path(self):
         """R-PROC-22 — a provider and every shell it starts inherit one stable command
         name, independent of the directory the agent happens to be working in."""
+        # Cleared for the reason above: an agent's own RUNDESK_SCRIPTS would win.
         with unittest.mock.patch.dict(
-                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}):
+                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}, clear=True):
             built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin:/bin")
         self.assertEqual(
             ["/tmp/rundesk-data/scripts", "/usr/bin", "/bin"],
@@ -126,8 +131,9 @@ class TheEnvironmentAProgramIsGiven(Quickened):
     def test_a_program_is_told_where_owner_commands_stand(self):
         """R-PROC-23 — a skill can locate support files without hard-coding where this
         install keeps its data."""
+        # Cleared for the reason above: an agent's own RUNDESK_SCRIPTS would win.
         with unittest.mock.patch.dict(
-                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}):
+                os.environ, {"RUNDESK_DATA_DIR": "/tmp/rundesk-data"}, clear=True):
             built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
         self.assertEqual("/tmp/rundesk-data/scripts", built["RUNDESK_SCRIPTS"])
         self.assertEqual("/tmp/rundesk-data/skills", built["RUNDESK_SKILL_LIBRARY"])
@@ -173,6 +179,24 @@ class TheEnvironmentAProgramIsGiven(Quickened):
             self.addCleanup(os.environ.__setitem__, "RUNDESK_AGENTS_DIR", was)
         built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
         self.assertNotIn("RUNDESK_AGENTS_DIR", built)
+
+    def test_a_program_is_told_what_this_install_calls_its_jobs(self):
+        """R-INS-18 — a program rundesk starts may itself be rundesk, and `rundesk update`
+        inside a turn is a supported path. A launchd label belongs to the *person* rather
+        than to an install, so nothing a directory is pointed at moves it: a child that
+        resolved the default would ask after the first install's gateway and boot out the
+        first install's update worker, from a turn the second install started."""
+        with unittest.mock.patch.dict(
+                os.environ, {"RUNDESK_JOB_PREFIX": "ai.rundesk-station"}, clear=True):
+            built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
+        self.assertEqual("ai.rundesk-station", built["RUNDESK_JOB_PREFIX"])
+
+    def test_nothing_is_said_about_job_names_when_this_install_uses_the_ones_that_ship(self):
+        """R-PROC-1 — forwarded rather than defaulted, for the reason above: unset already
+        resolves to what rundesk ships, through the same code."""
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            built = process.environment(Path("/tmp/rundesk-home"), path="/usr/bin")
+        self.assertNotIn("RUNDESK_JOB_PREFIX", built)
 
 
 class FindingTheProgram(Quickened):
