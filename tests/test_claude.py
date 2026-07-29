@@ -25,6 +25,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -465,6 +466,94 @@ class WhenItHandsWorkToAHelper(unittest.TestCase):
             "type": "tool", "id": "helper-1", "name": "Agent",
             "did": "delegate", "who": "code-reviewer",
         }], claude.records(real, {"session": "s"}))
+
+
+class WhenItChangesWhatItKeepsOfItsOwn(unittest.TestCase):
+    """R-PRV-29 — the four files an agent lives by, told apart from every other file."""
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.home, True)
+        self.was = {name: os.environ.get(name)
+                    for name in ("RUNDESK_CWD", "RUNDESK_CONTINUITY")}
+        self.addCleanup(self._put_back)
+        os.environ["RUNDESK_CWD"] = str(self.home)
+        os.environ["RUNDESK_CONTINUITY"] = ",".join(
+            f"{name}={verb}" for name, verb in sorted(provider.CONTINUITY.items()))
+
+    def _put_back(self):
+        for name, value in self.was.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def _wrote(self, at, tool="Write", named="file_path"):
+        real = json.dumps({"type": "assistant", "session_id": "s", "message": {
+            "content": [{"type": "tool_use", "id": "w-1", "name": tool,
+                         "input": {named: at}}]
+        }})
+        return claude.records(real, {"session": "s"})[0]
+
+    def test_each_continuity_file_is_reported_as_what_it_is(self):
+        """R-PRV-29 — a file the agent lives by being rewritten is not the same news as a
+        file it was working on being rewritten, and both arrive as the same tool."""
+        for name, verb in provider.CONTINUITY.items():
+            with self.subTest(name):
+                self.assertEqual(verb, self._wrote(str(self.home / name))["did"])
+
+    def test_the_same_name_in_a_checkout_is_an_ordinary_edit(self):
+        """R-PRV-29 — the trap this exists to avoid. Every repository on the machine has
+        an `AGENTS.md`; saying an agent rewrote its own rules because it edited one is
+        worse than the plain `edit` it would otherwise get, because it is untrue."""
+        checkout = self.home / "workspace" / "some-repo"
+        checkout.mkdir(parents=True)
+        self.assertEqual("edit", self._wrote(str(checkout / "AGENTS.md"))["did"])
+
+    def test_it_is_matched_where_the_agent_stands_rather_than_where_the_path_starts(self):
+        """R-PRV-29 — a brain naming a file relative to the working directory means the
+        same file as one naming it outright, and a home reached through a link is still
+        the same home."""
+        self.assertEqual("remember", self._wrote("MEMORY.md")["did"])
+        self.assertEqual("remember", self._wrote("./MEMORY.md")["did"])
+
+    def test_a_notebook_names_its_target_by_another_word(self):
+        """R-PRV-29 — measured against 2.1.220: `Edit` and `Write` say `file_path` and
+        `NotebookEdit` says `notebook_path`, so looking for one word finds two of three."""
+        at = str(self.home / "MEMORY.md")
+        self.assertEqual(
+            "remember", self._wrote(at, "NotebookEdit", "notebook_path")["did"])
+        self.assertEqual("remember", self._wrote(at, "Edit")["did"])
+
+    def test_a_file_beside_them_that_is_not_one_of_them_is_an_ordinary_edit(self):
+        """R-PRV-29 — standing in the agent's home is not on its own the test; being one
+        of the named files is."""
+        self.assertEqual("edit", self._wrote(str(self.home / "NOTES.md"))["did"])
+
+    def test_nothing_is_told_apart_when_nothing_named_them(self):
+        """R-PRV-3, R-PRV-29 — an adapter run by something that never named these files
+        reports the plain `edit` it always did, rather than carrying its own copy of what
+        rundesk keeps beside an agent."""
+        os.environ.pop("RUNDESK_CONTINUITY", None)
+        self.assertEqual("edit", self._wrote(str(self.home / "MEMORY.md"))["did"])
+
+    def test_only_a_write_is_told_apart_and_never_a_read(self):
+        """R-PRV-29 — reading these is what every turn does before it answers. Reported as
+        activity it would say the agent rewrote itself on every single turn."""
+        real = json.dumps({"type": "assistant", "session_id": "s", "message": {
+            "content": [{"type": "tool_use", "id": "r-1", "name": "Read",
+                         "input": {"file_path": str(self.home / "MEMORY.md")}}]
+        }})
+        self.assertEqual("read", claude.records(real, {"session": "s"})[0]["did"])
+
+    def test_where_the_file_was_is_never_carried_off_this_adapter(self):
+        """R-DIS-9, R-DIS-20, R-PRV-29 — a path may be private, and the reason a verb was
+        chosen rather than a path relayed is that a surface needs the first and must never
+        be handed the second."""
+        said = self._wrote(str(self.home / "SOUL.md"))
+        self.assertEqual("identity", said["did"])
+        self.assertNotIn("SOUL.md", json.dumps(said))
+        self.assertNotIn(str(self.home), json.dumps(said))
 
 
 class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):

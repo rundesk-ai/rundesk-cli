@@ -215,21 +215,45 @@ QUERY_COMMANDS = (
 #: into this file forever. A verb with no mark here would silently show as the fallback,
 #: so the suite checks this covers the seam's list rather than trusting it to.
 DID = {"read": "📖", "search": "🔎", "run": "💻", "edit": "✏️", "list": "📁",
-       "make": "🎨", "delegate": "🤖"}
+       "make": "🎨", "delegate": "🤖",
+       # What the agent changed of its own (R-PRV-29). Marked apart from `edit` because
+       # they are apart: a file the agent was working on and a file the agent lives by
+       # are the same pencil and different news.
+       "remember": "🧠", "rules": "📜", "preferences": "⚙️", "identity": "✨"}
 UNKNOWN = "💭"
 
 #: The same verbs as a person would say them. A commentary is read as a sentence, and
 #: `edit` beside a pencil reads as an instruction rather than as something that happened.
-SHOWN = {"read": "read a file", "search": "searched", "run": "ran a command",
-         "edit": "edited a file", "list": "listed files", "make": "made something",
-         "delegate": "Delegated to subagent"}
+#:
+#: **No articles, and no capitals.** These are read as a column of subtext beside a row of
+#: marks, dozens of them in a turn, and at that width "a" is a word carrying nothing: a
+#: reader skims the verb and the noun. Clipped for the same reason a log line is.
+#:
+#: The continuity four are said in the first person, and the rest are not, because the
+#: rest are not about the agent. "Updated its memory" reads as a process writing to a
+#: store; the agent changed what it will know next time, and it is the one saying so.
+SHOWN = {"read": "read file", "search": "searched", "run": "ran command",
+         "edit": "edited file", "list": "listed files", "make": "made something",
+         "delegate": "delegated to subagent",
+         "remember": "updated my memory", "rules": "updated my rules",
+         "preferences": "updated my preferences", "identity": "updated my identity"}
+
+#: The two lines a delegation is bracketed by, written once. Both are said in three places
+#: — the line itself, the prefix a repeat is counted under, and the prefix a name is
+#: appended to — and a delegation counted under a heading that no longer matches the line
+#: above it is a silent break with nothing to see in a diff.
+DELEGATED = f"{DID['delegate']} {SHOWN['delegate']}"
+FINISHED_HELPER = f"{DID['delegate']} subagent finished"
 
 #: What a failed tool says without relaying its arguments or result. Those remain in the
 #: run account; Discord activity is broad, because a command or path may be private
 #: (R-DIS-9, R-DIS-20).
 FAILED = {"read": "file read failed", "search": "search failed", "run": "command failed",
           "edit": "file edit failed", "list": "file listing failed",
-          "make": "creation failed", "delegate": "subagent failed"}
+          "make": "creation failed", "delegate": "subagent failed",
+          "remember": "could not update my memory", "rules": "could not update my rules",
+          "preferences": "could not update my preferences",
+          "identity": "could not update my identity"}
 
 
 def say(**it) -> None:
@@ -1376,7 +1400,7 @@ def _activity_line(it: dict, tools: dict) -> str:
         if at:
             tools[at] = {"did": did, "who": who}
         if did == "delegate":
-            return f"-# 🤖 Delegated to subagent{': ' + who if who else ''}"
+            return f"-# {DELEGATED}{': ' + who if who else ''}"
         return commentary(it)
     if kind == "result":
         remembered = tools.pop(at, None) if at else None
@@ -1387,7 +1411,7 @@ def _activity_line(it: dict, tools: dict) -> str:
         if it.get("ok") is False:
             return f"-# ⚠ {FAILED.get(did, 'tool failed')}"
         if did == "delegate" and it.get("ok") is True:
-            return f"-# 🤖 Subagent finished{': ' + who if who else ''}"
+            return f"-# {FINISHED_HELPER}{': ' + who if who else ''}"
     return commentary(it)
 
 
@@ -1412,10 +1436,10 @@ def _group_activity(groups: list, lines: list) -> list:
 
 def _activity_category(line: str) -> str:
     """The broad line counted even when one helper's safe name is shown."""
-    if line.startswith("-# 🤖 Delegated to subagent"):
-        return "-# 🤖 Delegated to subagent"
-    if line.startswith("-# 🤖 Subagent finished"):
-        return "-# 🤖 Subagent finished"
+    if line.startswith(f"-# {DELEGATED}"):
+        return f"-# {DELEGATED}"
+    if line.startswith(f"-# {FINISHED_HELPER}"):
+        return f"-# {FINISHED_HELPER}"
     return line
 
 

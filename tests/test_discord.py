@@ -858,26 +858,26 @@ class WhatOneTurnLooksLike(unittest.TestCase):
 
     def test_one_activity_has_no_count(self):
         """R-DIS-20 — a count starts only when something actually repeats."""
-        self.assertEqual("-# 💻 ran a command",
+        self.assertEqual("-# 💻 ran command",
                          discord._render_activity(
-                             discord._group_activity([], ["-# 💻 ran a command"])))
+                             discord._group_activity([], ["-# 💻 ran command"])))
 
     def test_consecutive_activity_is_one_line_with_a_count(self):
         """R-DIS-20 — repeated activity remains legible and leaves room for the answer."""
         groups = discord._group_activity([], [
-            "-# 💻 ran a command", "-# 💻 ran a command", "-# 💻 ran a command"])
-        self.assertEqual("-# 💻 ran a command **(x3)**",
+            "-# 💻 ran command", "-# 💻 ran command", "-# 💻 ran command"])
+        self.assertEqual("-# 💻 ran command **(x3)**",
                          discord._render_activity(groups))
 
     def test_only_consecutive_activity_is_counted(self):
         """R-DIS-20 — a different category closes the group permanently."""
         groups = discord._group_activity([], [
-            "-# 💻 ran a command", "-# 💻 ran a command",
-            "-# 📖 read a file", "-# 💻 ran a command"])
+            "-# 💻 ran command", "-# 💻 ran command",
+            "-# 📖 read file", "-# 💻 ran command"])
         self.assertEqual(
-            "-# 💻 ran a command **(x2)**\n"
-            "-# 📖 read a file\n"
-            "-# 💻 ran a command",
+            "-# 💻 ran command **(x2)**\n"
+            "-# 📖 read file\n"
+            "-# 💻 ran command",
             discord._render_activity(groups))
 
     def test_a_growing_message_counts_across_separate_writes(self):
@@ -896,11 +896,11 @@ class WhatOneTurnLooksLike(unittest.TestCase):
 
         held = discord.Live()
         held.posted = Posted()
-        held.activity_groups = [("-# 💻 ran a command", 1)]
+        held.activity_groups = [("-# 💻 ran command", 1)]
         held.activity = discord._render_activity(held.activity_groups)
-        held.pending = ["-# 💻 ran a command"]
+        held.pending = ["-# 💻 ran command"]
         asyncio.run(discord.Agent._flush(Turn(), {}, held))
-        self.assertEqual(["-# 💻 ran a command **(x2)**"], edited)
+        self.assertEqual(["-# 💻 ran command **(x2)**"], edited)
 
     def test_activity_arriving_during_an_edit_gets_a_successor_write(self):
         """R-DIS-20 — a Discord await may not strand the newest count until the answer."""
@@ -929,8 +929,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
 
             held = discord.Live()
             held.posted = Posted()
-            held.activity_groups = [("-# 💻 ran a command", 1)]
-            held.pending = ["-# 💻 ran a command"]
+            held.activity_groups = [("-# 💻 ran command", 1)]
+            held.pending = ["-# 💻 ran command"]
             held.pacing = asyncio.create_task(discord.Agent._paced(Turn(), {}, held))
             await asyncio.wait_for(editing.wait(), timeout=2)
             await discord.Agent._doing(
@@ -944,17 +944,17 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             return edited, held
 
         edited, held = asyncio.run(scenario())
-        self.assertEqual("-# 💻 ran a command **(x3)**", edited[-1])
+        self.assertEqual("-# 💻 ran command **(x3)**", edited[-1])
         self.assertEqual([], held.pending)
 
     def test_an_intervening_message_breaks_a_count_that_has_not_flushed_yet(self):
         """R-DIS-20 — a pending write may not merge activity across visible history."""
         held = discord.Live()
-        held.pending = ["-# 💻 ran a command"]
+        held.pending = ["-# 💻 ran command"]
         discord.Agent._no_longer_last(None, held)
-        held.pending.append("-# 💻 ran a command")
+        held.pending.append("-# 💻 ran command")
         self.assertEqual(
-            "-# 💻 ran a command\n-# 💻 ran a command",
+            "-# 💻 ran command\n-# 💻 ran command",
             discord._render_activity(discord._group_activity([], held.pending)))
 
     def test_a_subagent_start_and_finish_are_two_broad_categories(self):
@@ -965,8 +965,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         finished = discord._activity_line(
             {"type": "result", "id": "helper-1", "ok": True,
              "summary": "private helper response"}, tools)
-        self.assertEqual("-# 🤖 Delegated to subagent", started)
-        self.assertEqual("-# 🤖 Subagent finished", finished)
+        self.assertEqual("-# 🤖 delegated to subagent", started)
+        self.assertEqual("-# 🤖 subagent finished", finished)
         self.assertNotIn("private helper response", finished)
 
     def test_a_safe_subagent_name_is_shown_without_its_provider_path(self):
@@ -980,19 +980,19 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             "type": "result", "id": "helper-1", "ok": True,
             "summary": "private response",
         }, tools)
-        self.assertEqual("-# 🤖 Delegated to subagent: senior_code_reviewer", started)
-        self.assertEqual("-# 🤖 Subagent finished: senior_code_reviewer", finished)
+        self.assertEqual("-# 🤖 delegated to subagent: senior_code_reviewer", started)
+        self.assertEqual("-# 🤖 subagent finished: senior_code_reviewer", finished)
         self.assertNotIn("/root", started)
         self.assertNotIn("private response", finished)
 
     def test_named_subagents_still_collapse_as_one_broad_category(self):
         """R-DIS-20 — names add detail only while they do not defeat compact counts."""
         groups = discord._group_activity([], [
-            "-# 🤖 Delegated to subagent: Gibbs",
-            "-# 🤖 Delegated to subagent: Plato",
+            "-# 🤖 delegated to subagent: Gibbs",
+            "-# 🤖 delegated to subagent: Plato",
         ])
         self.assertEqual(
-            "-# 🤖 Delegated to subagent **(x2)**",
+            "-# 🤖 delegated to subagent **(x2)**",
             discord._render_activity(groups))
 
     def test_it_stops_saying_it_is_typing_the_moment_there_is_something_to_read(self):
@@ -1094,8 +1094,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         the new line appears above whatever came after it, where nobody is looking. So
         the next thing to show has to begin a message of its own."""
         held = discord.Live()
-        held.posted, held.activity = object(), "-# 💻 ran a command"
-        held.activity_groups = [("-# 💻 ran a command", 1)]
+        held.posted, held.activity = object(), "-# 💻 ran command"
+        held.activity_groups = [("-# 💻 ran command", 1)]
         # Unbound on purpose: the decision uses nothing of the connection, which is what
         # makes it testable without one.
         discord.Agent._no_longer_last(None, held)
@@ -1187,6 +1187,52 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         from rundesk import provider
 
         self.assertEqual(set(provider.DID), set(discord.SHOWN))
+
+    def test_activity_is_written_clipped_rather_than_as_prose(self):
+        """R-DIS-20 — a turn puts dozens of these in a column of subtext beside a column
+        of marks. At that width an article is a word carrying nothing, and one line
+        starting with a capital reads as the start of a sentence the rest are not."""
+        for verb, said in discord.SHOWN.items():
+            with self.subTest(verb):
+                self.assertNotRegex(said, r"\b(a|an|the)\b",
+                                    "an article in a line nobody reads as a sentence")
+                self.assertEqual(said[:1], said[:1].lower(),
+                                 "one line capitalised and the rest not")
+
+    def test_the_two_lines_a_delegation_is_bracketed_by_are_written_once(self):
+        """R-DIS-20 — each is said three times: the line, the heading a repeat is counted
+        under, and the prefix a helper's name is appended to. Three copies drifting apart
+        is a count that stops matching the line above it, with nothing to see in a diff."""
+        started = discord._activity_line(
+            {"type": "tool", "id": "h", "did": "delegate"}, {})
+        self.assertEqual(f"-# {discord.DELEGATED}", started)
+        self.assertEqual(started, discord._activity_category(started))
+        self.assertEqual(discord.SHOWN["delegate"],
+                         discord.DELEGATED[len(discord.DID["delegate"]) + 1:])
+
+    def test_changing_what_it_keeps_of_its_own_is_told_apart_from_any_other_edit(self):
+        """R-PRV-29 — the whole point of the four verbs. Shown beside `edit` they would be
+        the same pencil, and a reader could not tell a working file from the file the
+        agent lives by."""
+        from rundesk import provider
+
+        for verb in provider.CONTINUITY.values():
+            with self.subTest(verb):
+                said = discord.commentary({"type": "tool", "name": "Write", "did": verb})
+                self.assertIn(discord.DID[verb], said)
+                self.assertNotIn(discord.DID["edit"], said)
+                self.assertNotIn("Write", said, "a vendor's own word reached a reader")
+
+    def test_what_it_keeps_of_its_own_is_spoken_of_in_the_first_person(self):
+        """R-DIS-20 — an activity line is the agent saying what it just did. "Updated its
+        memory" reads as a process writing to a store; the agent changed what it will know
+        next time, and it is the one saying so."""
+        from rundesk import provider
+
+        for verb in provider.CONTINUITY.values():
+            with self.subTest(verb):
+                self.assertIn(" my ", f" {discord.SHOWN[verb]} ")
+                self.assertNotIn(" its ", f" {discord.SHOWN[verb]} ")
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
