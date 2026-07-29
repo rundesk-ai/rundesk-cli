@@ -709,6 +709,87 @@ class WhenTheClockStartsWork(WithAnAgentsOwnRecords):
         self.assertEqual([], [one for one in self.kept.schedules() if one["name"] == "weekly"])
 
 
+class WhenAScheduleIsChanged(WithAnAgentsOwnRecords):
+    def setUp(self):
+        super().setUp()
+        self.kept = self.built()
+        self.kept.remember_schedule("nightly", "0 3 * * *", AT, prompt="what changed?",
+                                    instructions="be brief", provider="claude")
+
+    def test_only_what_is_named_moves(self):
+        """The whole difference between changing a schedule and removing it to add it
+        again: everything not named stays exactly as it was, rather than being written back
+        from a caller's idea of what the row held."""
+        self.assertTrue(self.kept.change_schedule("nightly", prompt="what broke?"))
+        after = self.kept.schedule("nightly")
+        self.assertEqual("what broke?", after["prompt"])
+        self.assertEqual(("0 3 * * *", "be brief", "claude"),
+                         (after["cron"], after["instructions"], after["provider"]))
+
+    def test_a_change_keeps_every_record_of_what_the_schedule_has_already_done(self):
+        """What removing and adding again destroys, and the reason this exists."""
+        self.kept.schedule_fired("nightly", AT, "started")
+        self.kept.schedule_became("nightly", "finished")
+        made = self.kept.schedule("nightly")["created_at"]
+        self.kept.change_schedule("nightly", cron="30 6 * * *")
+        after = self.kept.schedule("nightly")
+        self.assertEqual((AT, "finished", made),
+                         (after["last_auto_run_at"], after["last_outcome"], after["created_at"]))
+
+    def test_setting_one_of_a_pair_clears_the_other(self):
+        """Both pairs the table insists on. A row holding a repeating time and a single
+        moment is one the database refuses, so a caller stating one is stating that the
+        other has gone — the alternative is an integrity error where an owner asked for a
+        change."""
+        self.kept.change_schedule("nightly", at="2099-01-01 09:00")
+        moved = self.kept.schedule("nightly")
+        self.assertEqual("2099-01-01 09:00", moved["at"])
+        self.assertIsNone(moved["cron"])
+        self.kept.change_schedule("nightly", command=["/bin/echo", "hi"])
+        became = self.kept.schedule("nightly")
+        self.assertEqual(["/bin/echo", "hi"], became["command"])
+        self.assertIsNone(became["prompt"])
+
+    def test_nothing_is_given_as_empty_and_left_alone_by_being_absent(self):
+        """The two instructions a caller has to be able to tell apart — leave it, and take
+        it off — which one default would make one keystroke."""
+        self.kept.change_schedule("nightly", instructions="")
+        self.assertIsNone(self.kept.schedule("nightly")["instructions"])
+        self.kept.change_schedule("nightly", provider="grok")
+        self.assertIsNone(self.kept.schedule("nightly")["instructions"],
+                          "a field nobody named was written anyway")
+
+    def test_a_change_that_would_leave_neither_of_a_pair_is_refused(self):
+        """Checked against the row after the change rather than against what was passed in:
+        only that knows which of the two this ends up being."""
+        with self.assertRaises(ValueError):
+            self.kept.change_schedule("nightly", prompt="")
+        self.assertEqual("what changed?", self.kept.schedule("nightly")["prompt"],
+                         "the refused change was written anyway")
+
+    def test_a_schedule_that_is_not_there_is_said_rather_than_reported_as_changed(self):
+        """Including one taken away between being read and being written: a change that did
+        nothing must say so rather than report a success nobody can find afterwards."""
+        self.assertFalse(self.kept.change_schedule("gone", prompt="anything?"))
+
+    def test_a_change_naming_a_channel_that_is_not_there_is_refused(self):
+        """The same reference that stops a schedule outliving the surface it reports to,
+        holding on the way through an edit as well as on the way in."""
+        with self.assertRaises(store.Refused):
+            self.kept.change_schedule("nightly", channel="nowhere")
+
+    def test_a_column_that_is_not_a_schedules_to_change_is_refused(self):
+        """`enabled` has two verbs of its own, and what a schedule has already done is not
+        an owner's to rewrite — so neither is reachable from here."""
+        for named in ({"enabled": 0}, {"last_outcome": "finished"},
+                      {"last_auto_run_at": AT}, {"created_at": AT}):
+            with self.assertRaises(ValueError):
+                self.kept.change_schedule("nightly", **named)
+        # A schedule's name is what its runs are recorded against, so it is not among them
+        # either — and it cannot be, being the one thing this is asked by.
+        self.assertNotIn("name", store.Store.CHANGEABLE)
+
+
 class WhereAConversationIsHappening(WithAnAgentsOwnRecords):
     def test_the_same_place_is_the_same_conversation_however_often_it_is_opened(self):
         """Every message that arrives asks this, so it is asked far more often than a

@@ -155,6 +155,16 @@ rundesk schedules ava add release-check \
 Schedules can start an agent turn or an executable by full path. Rundesk records the
 outcome either way.
 
+Read one back in full, and change it without losing what it has already done:
+
+```sh
+rundesk schedules ava show nightly
+rundesk schedules ava edit nightly --when "0 4 * * *" --to discord-dms
+```
+
+Only what you name changes; everything else — including when it last ran and what that
+came to — stays exactly as it was.
+
 ## 🧠 Provider adapters
 
 Rundesk ships four first-class provider adapters. Each uses the provider CLI and login
@@ -280,6 +290,7 @@ Discord without changing Rundesk core.
 - One-time schedules at an exact local timestamp
 - Agent turns or arbitrary executables by full path
 - Per-schedule provider, model, instructions, and delivery channel
+- Every schedule readable in full, and editable in place without losing its history
 - No overlapping run of the same schedule and no late execution after downtime
 
 ### Skills and integration CLIs

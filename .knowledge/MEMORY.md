@@ -585,5 +585,14 @@ re-checked since, so treat these as true-when-found rather than as current.*
   all 101 pass. CI never sees it, because CI is not an agent. Check `env | grep RUNDESK`
   before spending a diagnosis on it.
 
+- **`RUNDESK_DATA_DIR` does not isolate a scratch install when an agent is running the work.**
+  `agents_home()` is `RUNDESK_AGENTS_DIR or data_home()/agents`, and its own variable wins — so
+  a gateway, which exports `RUNDESK_AGENTS_DIR` into every turn, silently overrides the data
+  directory a scratch station just set. `rundesk add probe` then makes a **real agent in the
+  live install**, and `rundesk agents probe` is what says so, several commands too late. Set
+  both, or scrub every `RUNDESK_*` name:
+  `env $(env | grep -o '^RUNDESK_[A-Z_]*' | sed 's/^/-u /' | tr '\n' ' ') ./rundesk …` —
+  which is also what makes the gate pass under an agent (the note above).
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*
