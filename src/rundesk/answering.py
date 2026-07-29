@@ -224,14 +224,20 @@ class Answering:
     #: nothing tying the two together.
     STARTING = "💻 Working on '{named}' — I will report back when it is done."
 
-    async def told_a_schedule_started(self, named: str) -> bool:
+    async def told_a_schedule_started(self, named: str) -> tuple[bool, str | None]:
         """Say on this surface that one of this agent's schedules has begun (R-SCH-42).
 
-        The sibling of `told_what_a_schedule_did`, and it resolves where to say it exactly
-        the same way — the place the owner named, and the newest conversation on this
-        surface only when they named none (R-SCH-32). Two messages that resolved *where*
-        differently would be a notice in one room and its outcome in another, which is
-        worse than neither.
+        The sibling of `told_what_a_schedule_did`, and where it goes is resolved here **once
+        for both** — the place the owner named, and the newest conversation on this surface
+        only when they named none (R-SCH-32). Hands back whether anything went out and the
+        conversation it went to, because the report is delivered *there* rather than asking
+        the same question again twenty minutes later.
+
+        Resolving the same way is not resolving to the same answer: the newest conversation
+        is whichever room somebody last spoke in, and somebody speaking in another one is
+        exactly what a long run gives them time to do. Re-derived at the end, the notice
+        stands in one room for ever with nothing under it while the outcome lands in
+        another, anchored to nothing — which is worse than neither message.
 
         **Only where a report is actually delivered.** Which schedules those are is not
         known here: a schedule that starts a program has no report to anchor, and only the
@@ -241,6 +247,10 @@ class Answering:
         **Nowhere to say it is nowhere to say it started.** A surface nobody has spoken on
         and no place named has no room for the notice either, and hands back that it said
         nothing — the caller owes a reply only to a notice that actually went out.
+
+        **A place named is carried, not resolved for.** A word an owner said is what the
+        adapter is handed for both messages, so the two reach the same room whether or not
+        rundesk has ever seen it; there is nothing to carry over and nothing that can drift.
 
         **Not written down where it was delivered**, which is the one place this differs
         from the report. R-SCH-33 exists so a person replying to what the agent *said*
@@ -255,7 +265,7 @@ class Answering:
         if where_it_goes is None and not place:
             self._note(f"channel '{self.channel}': nowhere to say that '{named}' has "
                        f"started — nothing has been said on this surface yet")
-            return False
+            return False, None
         # The schedule's name goes over with it, because that is what the surface holds the
         # posted message under and what the report names to find it again (R-DIS-29). The
         # surface is never asked to read it — it is a key, exactly as `place` is a word.
@@ -263,9 +273,9 @@ class Answering:
                    text=self.STARTING.format(named=named), schedule=named, began=True)
         if where_it_goes is None and said:
             self._note(said)
-        return True
+        return True, where_it_goes
 
-    async def told_what_a_schedule_did(self, named: str, became: str) -> None:
+    async def told_what_a_schedule_did(self, named: str, became: str, where=None) -> None:
         """Say on this surface what one of this agent's schedules came to (R-SCH-31).
 
         **The one thing here that nobody asked for.** Every other record this sends answers
@@ -293,11 +303,21 @@ class Answering:
         schedule's name is on the record and the surface anchors to whatever it is holding
         under that name; a surface holding nothing posts it plainly, which is what every
         report did before there were notices at all.
+
+        **`where` is where that notice went**, handed back when it went out and passed
+        straight through here — the one thing this does not work out for itself. Asking
+        again would ask a *different* question: the newest conversation is whichever room
+        somebody last spoke in, and a run long enough to be worth announcing is long enough
+        for that to have changed. A schedule that named a place carries the word instead,
+        and one that never announced resolves where it always did.
         """
         kept = agents.reading(self.name, self._where)
         row = kept.schedule(named) or {}
         place = row.get("place")
-        where_it_goes, said = self._where_to_say(kept, place)
+        if where and not place:
+            where_it_goes, said = where, ""
+        else:
+            where_it_goes, said = self._where_to_say(kept, place)
         if where_it_goes is None and not place:
             self._note(f"channel '{self.channel}': nowhere to say what '{named}' did — "
                        f"nothing has been said on this surface yet")

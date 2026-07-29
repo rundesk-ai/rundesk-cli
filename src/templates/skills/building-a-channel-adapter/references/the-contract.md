@@ -283,7 +283,15 @@ it, so there is no report left to anchor. A name you are holding nothing for is 
 plainly, which is what every scheduled report did before there were notices. The name is a
 key and never something to read, exactly as `place` is — which is the other field these
 carry: the room the owner named for this schedule, yours to resolve, and the only way to
-reach one nobody has spoken in yet.
+reach one nobody has spoken in yet. Both go to the *same* conversation, decided when the
+first is sent: post the pair where you are told and never work the second one out again.
+
+**The notice is rundesk's own bookkeeping and not the agent's speech**, which is why it is
+not in the record of what the agent said. On a surface where anybody can reply to any
+message, somebody *will* reply to it — and that is an ordinary message, starting an
+ordinary turn, whose brain has no record of a line it never wrote. Send it on as you would
+any other; there is nothing for an adapter to do about it. The report beneath it is written
+down, so a reply to *that* reaches a session that saw it.
 
 **Nothing repeats, so keep your own time.** `running` is sent once, when the turn is
 admitted — it is not a heartbeat, and a surface whose "still working" indicator lapses

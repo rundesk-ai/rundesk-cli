@@ -374,13 +374,15 @@ class WhereABrainIsAnswering(CarriesAConversation):
                         f"it said nothing about having nowhere: {self.told}")
 
     async def test_a_scheduled_run_says_it_has_started_where_it_will_report(self):
-        """R-SCH-42 — the notice and the report resolve where they go the same way, because a
-        notice in one room and its outcome in another is worse than neither."""
+        """R-SCH-42 — where the pair goes is resolved here, once, and handed back for the
+        report to be delivered to, because a notice in one room and its outcome in another is
+        worse than neither."""
         where_it_is = self.spoken_on()
         self.a_schedule()
         surface = Surface()
         held = self.answering(surface, Brain())
-        self.assertTrue(await held.told_a_schedule_started("nightly"))
+        self.assertEqual((True, where_it_is), await held.told_a_schedule_started("nightly"),
+                         "it did not hand back where the notice went")
         await self._settled(held)
         said = surface.of("said")
         self.assertEqual(1, len(said), f"nothing was said on the surface: {surface.shown}")
@@ -421,12 +423,58 @@ class WhereABrainIsAnswering(CarriesAConversation):
         self.assertEqual(wanted, said["conversation"])
         self.assertEqual("two", said["place"], "the surface was not told which place")
 
+    async def test_a_report_is_delivered_where_the_notice_went(self):
+        """R-SCH-42, R-SCH-32 — resolving the same *way* is not resolving to the same *answer*.
+        Where a schedule with no place named reports is the newest conversation on the surface,
+        and the owner writing in another room during the twenty minutes the run takes is what
+        makes that a different room. Asked again at the end, the notice stands in the first one
+        for ever with nothing under it while the report lands in the second, anchored to
+        nothing — so the notice decides where, once, and the report is delivered there."""
+        kept = agents.records("ava", self.where)
+        began_in = kept.opened(store.conversation_id("ops", "general"), "ops", "somewhere",
+                               "general", "2026-07-26T06:00:00Z")["id"]
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        said, where = await held.told_a_schedule_started("nightly")
+        self.assertTrue(said)
+        # The owner writes in another room while the run is going, which is all it takes for
+        # the newest conversation on this surface to be a different one.
+        kept.opened(store.conversation_id("ops", "random"), "ops", "somewhere", "random",
+                    "2026-07-26T06:10:00Z")
+        await held.told_what_a_schedule_did("nightly", "finished", where=where)
+        await self._settled(held)
+        notice, report = surface.of("said")
+        self.assertEqual(began_in, notice["conversation"])
+        self.assertEqual(began_in, report["conversation"],
+                         "the report went to whichever room was newest, not to its notice")
+        wrote = [one["text"] for one in kept.messages(began_in) if one["author"] == "agent"]
+        self.assertEqual([report["text"]], wrote,
+                         "what was delivered was written down in another conversation (R-SCH-33)")
+
+    async def test_a_report_for_a_schedule_that_named_a_place_goes_to_the_place(self):
+        """R-SCH-32, R-SCH-42 — a place is a word the owner said, carried to the adapter for
+        both messages, so there is nothing for the pair to disagree about and nothing to carry
+        over from the notice. The word wins over anything handed in beside it."""
+        self.spoken_on("one")
+        wanted = self.spoken_on("two")
+        self.a_schedule(place="two")
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_a_schedule_started("nightly")
+        await held.told_what_a_schedule_did("nightly", "finished", where="somewhere-else")
+        await self._settled(held)
+        notice, report = surface.of("said")
+        self.assertEqual((wanted, "two"), (notice["conversation"], notice["place"]))
+        self.assertEqual((wanted, "two"), (report["conversation"], report["place"]),
+                         "the report left the place its owner named")
+
     async def test_a_surface_with_nowhere_to_deliver_says_nothing_when_a_run_starts(self):
         """R-SCH-42 — nowhere to say what a run found is nowhere to say it began. Said rather
         than invented, and handed back, because only a notice that went out is owed a reply."""
         surface = Surface()
         held = self.answering(surface, Brain())
-        self.assertFalse(await held.told_a_schedule_started("nightly"))
+        self.assertEqual((False, None), await held.told_a_schedule_started("nightly"))
         await self._settled(held)
         self.assertEqual([], surface.of("said"), "it invented somewhere to post")
         self.assertTrue(any("nowhere to say that 'nightly' has started" in one

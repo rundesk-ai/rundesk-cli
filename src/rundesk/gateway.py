@@ -1170,11 +1170,17 @@ class Gateway:
         #: two differ for as long as an adapter is down and being started again.
         self._reached: dict = {}
         #: Which schedules have said on a surface that they have started and not yet said
-        #: what they came to (R-SCH-42). A notice with no outcome under it is worse than no
-        #: notice, so every way out of a run answers whatever is in here — and a run whose
-        #: gateway went is one whose notice dies with the process that could have answered
-        #: it, which is why this is memory and not a record.
-        self._announced: set[str] = set()
+        #: what they came to, and the conversation each notice went to (R-SCH-42). A notice
+        #: with no outcome under it is worse than no notice, so every way out of a run that
+        #: can still reach the surface answers whatever is in here — and a run whose gateway
+        #: went is one whose notice dies with the process that could have answered it, which
+        #: is why this is memory and not a record.
+        #:
+        #: The conversation is carried rather than resolved twice: where a schedule with no
+        #: place named reports is the newest conversation on the surface, and a run long
+        #: enough to be worth announcing is long enough for somebody to have spoken in
+        #: another room. `None` where the notice went by a place word instead.
+        self._announced: dict = {}
 
     # -- what it is made of -------------------------------------------------------
 
@@ -1976,8 +1982,11 @@ class Gateway:
             # saying work is in flight that never began at all, and the one form of the
             # stale outcome that no reconciliation on the way back up can reach
             # (R-SCH-23).
+            #
+            # **And no notice to answer, by construction.** This is raised by `start` and
+            # nowhere else, so only the program branch above can reach it — and a program
+            # schedule never says it has started, having no report to anchor (R-SCH-42).
             self._remember_outcome(one.name, INTERRUPTED)
-            await self._answered_any_notice(one, INTERRUPTED)
             return
         except asyncio.CancelledError:
             # Not a failure to start, and told apart from one before the catch-all below
@@ -2023,8 +2032,12 @@ class Gateway:
                     "is not up", one.name, one.channel)
             return
         try:
-            if await answering.told_a_schedule_started(one.name):
-                self._announced.add(one.name)
+            said, where = await answering.told_a_schedule_started(one.name)
+            if said:
+                # Where it went, not that it went: the report is delivered to this same
+                # conversation rather than resolving the newest one again at the end
+                # (R-SCH-42).
+                self._announced[one.name] = where
         except Exception as why:  # noqa: BLE001 — a delivery boundary; see the docstring
             self.log.warning("channel '%s': could not say that '%s' started: %s",
                              one.channel, one.name, why)
@@ -2038,6 +2051,12 @@ class Gateway:
         promise rundesk made and did not keep, and reads exactly like an agent that hung.
         A no-op where no notice went out, so nothing new is posted for a schedule that
         never announced itself.
+
+        **A gateway going down is the one way out this cannot answer**, and knowingly: the
+        shutdown takes the channels before it cancels what is still running, so by the time
+        a run in flight is cancelled there is no surface left to say anything on and the log
+        says so. The notice goes down with the process that made it, and the schedule's next
+        firing posts its own — nothing is left standing that a later run would answer.
         """
         if one.name in self._announced:
             await self._told_the_surface(one, became)
@@ -2065,9 +2084,11 @@ class Gateway:
 
         **This is what answers a start notice** (R-SCH-42), so the notice is forgotten here
         whether or not the report reaches anybody — a channel that went down between the two
-        must not leave a name standing that the schedule's *next* firing would answer.
+        must not leave a name standing that the schedule's *next* firing would answer. What
+        it is forgotten *with* is where it went, and that goes over with the report: the two
+        messages are one delivery, and only the first of them is allowed to decide where.
         """
-        self._announced.discard(one.name)
+        where = self._announced.pop(one.name, None)
         answering = self._reached.get(one.channel) if one.channel else None
         if answering is None:
             if one.channel:
@@ -2078,7 +2099,7 @@ class Gateway:
                                  one.name, one.channel)
             return
         try:
-            await answering.told_what_a_schedule_did(one.name, became)
+            await answering.told_what_a_schedule_did(one.name, became, where=where)
         except Exception as why:  # noqa: BLE001 — a delivery boundary; see the docstring
             self.log.warning("channel '%s': could not say what '%s' did: %s",
                              one.channel, one.name, why)
