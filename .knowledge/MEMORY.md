@@ -721,6 +721,12 @@ re-checked since, so treat these as true-when-found rather than as current.*
   The shell safety layer rejects the command even when the target came from `mktemp -d`.
   Point `PYTHONPYCACHEPREFIX` at a task-specific path under `/tmp` and leave cleanup outside
   the gate invocation.
+
+- **`gh pr checks --required` exits nonzero when a branch has no required-check rules,
+  even when every reported CI check passed.** Inspect `statusCheckRollup` and reject any
+  conclusion other than `SUCCESS` or `SKIPPED` before merging; do not chain the
+  `--required` command ahead of the merge.
+
 - **A checkout path containing `bo` fails `test_cli` even when status lists no agent
   names.** Its R-CMD-5 case asserts that fixture agent `bo` appears nowhere in the whole
   status output, which includes the install path; use a worktree path without `bo`.
