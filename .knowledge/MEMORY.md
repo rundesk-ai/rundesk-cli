@@ -703,5 +703,10 @@ re-checked since, so treat these as true-when-found rather than as current.*
   anything. Add a second `from rundesk import <name>` line instead of wrapping — which is
   what `cli.py` does anyway.
 
+- **A full-gate command with an `rm -rf` cleanup trap is rejected before the gate starts.**
+  The shell safety layer rejects the command even when the target came from `mktemp -d`.
+  Point `PYTHONPYCACHEPREFIX` at a task-specific path under `/tmp` and leave cleanup outside
+  the gate invocation.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

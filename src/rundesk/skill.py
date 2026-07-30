@@ -319,9 +319,9 @@ def retire(where: Path | None = None, holding: tuple[Path, ...] = ()) -> list[st
 
     **A grant is carried, never handed out.** Only an agent already holding the old name
     is given the new one, and one that has no new name — a built-in this release dropped
-    rather than renamed — has its grant taken away rather than left pointing at nothing. An owner who revoked it keeps it revoked — the same reason
-    `agent._given_what_ships` refuses to backfill, and the reason this cannot simply grant
-    the new built-in to everybody.
+    rather than renamed — has its grant taken away rather than left pointing at nothing.
+    Renames preserve who held the old name; they do not make the new name required for
+    everybody.
 
     **Nothing of the owner's is moved, at either end of the rename.** A directory standing
     under the old name without the ownership marker is theirs, whatever it is called, so

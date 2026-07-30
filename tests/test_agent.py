@@ -24,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import agent, gateway, skill, store, updater  # noqa: E402
+from rundesk import agent, config, gateway, skill, store, updater  # noqa: E402
 
 
 #: The two files SQLite keeps beside a database, which are its bookkeeping and not the
@@ -78,6 +78,7 @@ class WithSomewhereToKeepAgents(unittest.TestCase):
             # to a log without making the directory and swallows the failure, so a case
             # that arranges a log in scratch gets silence instead of a log.
             at.mkdir(parents=True, exist_ok=True)
+        config.ensure(self.before / "data")
 
     def made(self, name: str = "ava") -> str:
         """An agent as an owner actually has one: with a brain (R-AGT-18).

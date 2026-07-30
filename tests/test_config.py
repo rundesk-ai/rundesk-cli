@@ -35,18 +35,19 @@ class WhatInstallingWrites(WithADataDirectory):
         """R-INS-19 — a file an owner is expected to open and never sees is a file nobody
         edits, and every value in it is then folklore."""
         self.assertEqual(list(config.SECTIONS), config.ensure(self.where))
-        self.assertEqual(list(config.SECTIONS), list(json.loads(self.at.read_text())))
+        self.assertEqual(config.INITIAL, json.loads(self.at.read_text()))
 
-    def test_a_section_is_written_empty_so_a_default_can_still_improve(self):
-        """R-INS-19 — written with real values, a file pins them: a later release that
-        improves a default never reaches the install, and the file looks correct doing it."""
+    def test_installing_writes_every_value_that_governs_the_install(self):
+        """R-INS-19 — an empty section leaves the real configuration hidden in Python,
+        which makes the file a menu rather than the source of truth."""
         config.ensure(self.where)
 
-        self.assertEqual({one: {} for one in config.SECTIONS},
-                         json.loads(self.at.read_text()))
-        # And the defaults are still what answers, because nothing stated them.
-        self.assertEqual(config.KEEP_DAYS, config.backups(self.where)["keep_days"])
-        self.assertEqual(config.GRANTED, config.skills(self.where)["granted"])
+        written = json.loads(self.at.read_text())
+        self.assertEqual({"at", "keep_days"}, set(written["backups"]))
+        self.assertEqual({"at"}, set(written["updates"]))
+        self.assertEqual({"granted"}, set(written["skills"]))
+        self.assertEqual(tuple(written["skills"]["granted"]),
+                         config.skills(self.where)["granted"])
 
     def test_installing_again_changes_nothing_an_owner_configured(self):
         """R-INS-19, R-AGT-4 — running the installer again is a repair, and it must not be
@@ -59,15 +60,16 @@ class WhatInstallingWrites(WithADataDirectory):
 
 
 class WhatAnUpdateAdds(WithADataDirectory):
-    def test_a_section_this_release_added_reaches_a_file_written_before_it(self):
-        """R-UPD-48 — otherwise a section is discoverable only to installs made after it,
-        and every owner who installed earlier has to be told it exists."""
-        self.at.write_text('{"backups": {}}\n', encoding="utf-8")
+    def test_v020s_empty_sections_are_filled_with_the_values_in_force(self):
+        """R-UPD-48 — v0.20.0 wrote the names and kept the actual values hidden in code;
+        carrying that file forward must make it a complete configuration."""
+        self.at.write_text('{"backups": {}, "updates": {}, "skills": {}}\n',
+                           encoding="utf-8")
 
         added = config.ensure(self.where)
 
-        self.assertEqual(["updates", "skills"], added)
-        self.assertEqual(list(config.SECTIONS), list(json.loads(self.at.read_text())))
+        self.assertEqual(list(config.SECTIONS), added)
+        self.assertEqual(config.INITIAL, json.loads(self.at.read_text()))
 
     def test_a_value_already_stated_survives_the_section_being_added(self):
         """R-UPD-48 — an update that rewrote the file would be an owner's configuration
@@ -78,6 +80,18 @@ class WhatAnUpdateAdds(WithADataDirectory):
 
         self.assertEqual({"at": "23:30", "keep_days": 7},
                          json.loads(self.at.read_text())["backups"])
+
+    def test_a_missing_value_is_added_without_touching_one_already_stated(self):
+        """R-UPD-48 — migrating the empty v0.20.0 shape is key-wise: an owner may have
+        filled one value before updating and that choice must survive."""
+        self.at.write_text('{"backups": {"at": "23:30"}}\n', encoding="utf-8")
+
+        config.ensure(self.where)
+
+        self.assertEqual(
+            {"at": "23:30", "keep_days": config.INITIAL["backups"]["keep_days"]},
+            json.loads(self.at.read_text())["backups"],
+        )
 
     def test_a_configuration_that_cannot_be_read_is_left_exactly_as_it_is(self):
         """R-UPD-48, R-STO-13 — refused rather than replaced. Rewriting it would turn a
@@ -99,10 +113,12 @@ class WhatAnUpdateAdds(WithADataDirectory):
 
 
 class WhichSkillsANewAgentGets(WithADataDirectory):
-    def test_an_install_configured_with_nothing_gets_the_default_set(self):
-        """R-AGT-36 — and it is a subset of what ships, not all of it: a skill an agent
-        never reaches for still costs its description on every turn."""
-        self.assertEqual(config.GRANTED, config.skills(self.where)["granted"])
+    def test_a_new_agent_gets_the_set_written_in_the_install_configuration(self):
+        """R-AGT-36 — the grant set is a value an owner can read and edit, not a hidden
+        fallback that only the running code can name."""
+        config.ensure(self.where)
+        written = json.loads(self.at.read_text())["skills"]["granted"]
+        self.assertEqual(tuple(written), config.skills(self.where)["granted"])
 
     def test_which_skills_a_new_agent_gets_is_the_owners_to_state(self):
         """R-AGT-36 — an owner running agents that do one job says so once."""
@@ -128,6 +144,14 @@ class WhichSkillsANewAgentGets(WithADataDirectory):
     def test_a_section_that_is_not_an_object_is_refused(self):
         """R-AGT-36 — the same, one level up."""
         self.at.write_text('{"skills": ["managing-rundesk"]}\n', encoding="utf-8")
+
+        with self.assertRaises(config.Unreadable):
+            config.skills(self.where)
+
+    def test_a_missing_grant_list_is_refused_rather_than_defaulted_outside_the_file(self):
+        """R-AGT-36 — otherwise deleting the value leaves the same behavior in force and
+        proves the file never governed it."""
+        self.at.write_text('{"skills": {}}\n', encoding="utf-8")
 
         with self.assertRaises(config.Unreadable):
             config.skills(self.where)

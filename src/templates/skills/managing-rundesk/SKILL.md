@@ -46,7 +46,7 @@ rundesk channels <you>              where you can be reached
 rundesk usage <you>                 what your turns have cost
 rundesk logs <you>                  what your gateway has been saying, when something failed
 rundesk skills                      every skill here, and which you were given
-rundesk config                      how this install is configured, and what defaulted
+rundesk config                      every install-wide value that is in force
 ```
 
 **Two of these have a skill of their own.** `managing-rundesk-schedules` is what an agent runs

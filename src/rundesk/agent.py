@@ -372,14 +372,10 @@ def add(name: str, where: Path | None = None) -> list[str]:
             made.append(called)
     records = store.path_for(directory(name, where))
     fresh = not records.exists()
-    # **Only an agent being made, never one being repaired.** Everything else `add` puts
-    # back is a thing that is missing; a grant that is missing may be one an owner took
-    # away on purpose, and nothing records which. Handing it back on a re-run would undo
-    # a decision by the same command an owner reaches for to fix something unrelated —
-    # which is the failure `_given_what_ships` was written to avoid, reached from the one
-    # call site that had not been thought about.
+    # Fresh agents receive the baseline here. Existing populations are reconciled by both
+    # upgrade routes after this release's library has been laid down (R-AGT-36).
     if fresh:
-        made.extend(_given_what_ships(name, where))
+        made.extend(require_skills(name, where))
     store.Store(records).made()
     if fresh:
         made.append(store.NAME)
@@ -392,9 +388,9 @@ def _what_is_wrong_with_its_skills(name: str, where: Path | None = None) -> list
     Two things, and neither is a fault of the agent's own making. A grant whose skill has
     gone — a built-in dropped by a release, or one an owner deleted from the library —
     leaves a link pointing at nothing, which every brain skips in silence. And a built-in
-    this release ships that this agent has never been given, because it was made before
-    the release that added it; there is no backfill on purpose (see `_given_what_ships`),
-    so a diagnosis is where an owner hears about it.
+    the install configuration requires that this agent does not hold, because it was made
+    before the requirement was added or its grant was changed outside the command. A
+    diagnosis is where an owner hears about it.
     """
     found = []
     mine = skills(name, where)
@@ -416,7 +412,9 @@ def _what_is_wrong_with_its_skills(name: str, where: Path | None = None) -> list
                 f"rundesk update"))
     held = skill.library()
     try:
-        wanted = config.skills(where)["granted"]
+        # Install configuration is not under the agents directory. `where` redirects where
+        # this agent lives; the required baseline still belongs to the install (R-AGT-36).
+        wanted = config.skills()["granted"]
     except config.Unreadable as why:
         # The one place an owner hears it without having to be making an agent at the time.
         return found + [Complaint(config.NAMED, str(why), f"edit {config.path(where)}")]
@@ -428,31 +426,34 @@ def _what_is_wrong_with_its_skills(name: str, where: Path | None = None) -> list
     return found
 
 
-def _given_what_ships(name: str, where: Path | None = None) -> list[str]:
-    """The skills every agent starts with, granted as it is made.
+def require_skills(name: str, where: Path | None = None) -> list[str]:
+    """Attach every install-required skill this agent does not already hold.
 
     One of them is the skill that says how to write a skill, and it is the reason this
     happens without being asked for: an agent cannot be told to use `rundesk skills grant`
     to give itself the thing that explains what granting is. It is the bootstrap.
 
-    **Only as an agent is made.** There is deliberately no backfill on update, because
-    nothing records that a grant was taken away — a backfill would hand back, on every
-    update, the skill an owner had just removed. An agent made before a built-in existed
-    is told by a diagnosis, with the line to type.
-
     **Which skills, and not simply every one that ships.** A release ships more than every
     agent should carry — how to write a skill, how to write a pull request — and a skill an
     agent will never reach for is not free: its description is read by the brain on every
     turn. So the set is `config.skills()["granted"]`, which an owner states once in
-    `config.json` and which defaults to the four an agent needs to work with rundesk itself.
+    `config.json`. A fresh configuration names the four every agent needs to work with
+    rundesk itself. Creation, update, and installer reconciliation all come through this one
+    policy (R-AGT-36).
 
     A library that has nothing in it yet is a checkout somebody is working in rather than
     an install, and is not a half-made agent.
     """
     given = []
-    for called in config.skills(where)["granted"]:
+    mine = skills(name, where)
+    already = set(skill.granted(mine))
+    # `where` is an agents directory, never the install's data directory. The baseline is
+    # install-wide and resolves from the same file every agent shares (R-AGT-36).
+    for called in config.skills()["granted"]:
+        if called in already:
+            continue
         try:
-            skill.grant(skills(name, where), called)
+            skill.grant(mine, called)
         except (skill.Unknown, skill.NotASkill, skill.InTheWay, OSError):
             continue
         given.append(f"skills/{called}")

@@ -307,12 +307,33 @@ Discord without changing Rundesk core.
 - Program and owner data kept in separate directories
 - Agent removal that preserves its home unless purge is explicitly requested
 
-Automatic updates default to 03:00 in the machine's local time. To choose another time,
-set it in `~/.rundesk/data/config.json`, then run `rundesk update` to apply the schedule:
+`~/.rundesk/data/config.json` is the source of every install-wide value. A fresh install
+writes the complete configuration, including the skills every agent must receive:
 
 ```json
-{"updates": {"at": "02:30"}}
+{
+  "backups": {
+    "at": "04:00",
+    "keep_days": 30
+  },
+  "updates": {
+    "at": "03:00"
+  },
+  "skills": {
+    "granted": [
+      "managing-rundesk",
+      "managing-rundesk-schedules",
+      "managing-rundesk-backups",
+      "filing-rundesk-issues"
+    ]
+  }
+}
 ```
+
+Change `updates.at` and run `rundesk update` to reschedule automatic updates. A skill in
+`skills.granted` is attached to every new and existing agent and cannot be revoked until it
+is removed from this list. Updates and reinstalls reconcile missing required grants without
+removing optional skills an owner added.
 - Generated command reference that cannot drift from the installed parser
 
 ## 📖 Documentation

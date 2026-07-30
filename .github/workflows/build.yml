@@ -241,9 +241,12 @@ jobs:
           git archive "$previous" | tar -x -C "$old"
           "$old/install.sh"
           "$RUNDESK_BIN_DIR/rundesk" add existing --provider codex
+          # Older releases allowed a built-in baseline grant to be removed. The proposed
+          # release must repair that existing agent from the migrated configuration.
+          "$RUNDESK_BIN_DIR/rundesk" skills revoke existing managing-rundesk-schedules
           "$RUNDESK_BIN_DIR/rundesk" schedules existing add heartbeat \
             --when "0 6 * * *" --ask "report that the gateway is healthy"
-          printf '%s\n' '{"backups":{"keep_days":45,"at":"04:30"}}' \
+          printf '%s\n' '{"backups":{"keep_days":45,"at":"04:30"},"updates":{},"skills":{}}' \
             > "$RUNDESK_INSTALL_DIR/data/config.json"
           cp "$RUNDESK_INSTALL_DIR/data/config.json" "$RUNNER_TEMP/config.before"
           printf '%s\n' "kept by the owner" \
@@ -272,11 +275,10 @@ jobs:
       - name: Existing behavior and owner data still work
         run: |
           set -euo pipefail
-          # **Not byte-identical any more, and deliberately.** An upgrade adds a section
-          # this release knows to a file written before it existed (R-UPD-48). What has to
-          # hold is the thing the `cmp` here was really asking: nothing an owner stated
-          # moved. The sections are read off the code rather than listed, or this check
-          # goes stale the day one is added.
+          # **Not byte-identical any more, and deliberately.** An upgrade fills values an
+          # earlier release never wrote (R-UPD-48). What has to hold is the thing the `cmp`
+          # here was really asking: nothing an owner stated moved. The expected values are
+          # read off the code rather than listed, or this check goes stale when one is added.
           PROPOSED="$RUNNER_TEMP/proposed-release" python3 - <<'CONFIG'
           import json, os, sys
           from pathlib import Path
@@ -288,10 +290,17 @@ jobs:
 
           was = json.loads(Path(os.environ["RUNNER_TEMP"], "config.before").read_text())
           now = json.loads(Path(os.environ["RUNDESK_INSTALL_DIR"], "data/config.json").read_text())
-          for section, said in was.items():
-              if now.get(section) != said:
-                  raise SystemExit(
-                      f"::error::the upgrade changed '{section}': {said!r} -> {now.get(section)!r}")
+          for section, values in config.INITIAL.items():
+              before = was.get(section, {})
+              after = now.get(section, {})
+              for key, expected in values.items():
+                  if key in before and after.get(key) != before[key]:
+                      raise SystemExit(
+                          f"::error::the upgrade changed '{section}.{key}': "
+                          f"{before[key]!r} -> {after.get(key)!r}")
+                  if key not in before and after.get(key) != expected:
+                      raise SystemExit(
+                          f"::error::the upgrade left '{section}.{key}' unstated")
           missing = [one for one in config.SECTIONS if one not in now]
           if missing:
               raise SystemExit(f"::error::the upgrade left out {', '.join(missing)}")
@@ -302,6 +311,8 @@ jobs:
           "$RUNDESK_BIN_DIR/rundesk" version
           "$RUNDESK_BIN_DIR/rundesk" status
           "$RUNDESK_BIN_DIR/rundesk" agents | grep -q '^existing '
+          "$RUNDESK_BIN_DIR/rundesk" skills |
+            grep -qE '^managing-rundesk-schedules +rundesk +existing$'
           "$RUNDESK_BIN_DIR/rundesk" schedules existing | grep -q 'heartbeat'
           "$RUNDESK_BIN_DIR/rundesk" serve existing &
           serving=$!
