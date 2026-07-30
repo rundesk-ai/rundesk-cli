@@ -20,6 +20,7 @@ reached back for an agent would end it.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import re
 import shutil
@@ -471,25 +472,28 @@ def creation_pending(name: str, where: Path | None = None) -> bool:
 
 def _write_pending(pending: Path, display_name: str) -> None:
     """Publish a complete first display spelling once, without replacing one on retry."""
-    beside = pending.with_name(
-        f"{pending.name}.{os.getpid()}.{time.monotonic_ns()}.writing"
-    )
-    try:
-        with beside.open("x", encoding="utf-8") as handle:
-            handle.write(display_name)
-            handle.flush()
-            os.fsync(handle.fileno())
+    beside = pending.with_name(f"{pending.name}.writing")
+    with beside.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
         try:
-            os.link(beside, pending)
-        except FileExistsError:
-            pass
-        folder = os.open(pending.parent, os.O_RDONLY)
-        try:
-            os.fsync(folder)
+            if not pending.is_symlink() and not pending.exists():
+                handle.seek(0)
+                handle.truncate()
+                handle.write(display_name)
+                handle.flush()
+                os.fsync(handle.fileno())
+                os.link(beside, pending)
+            folder = os.open(pending.parent, os.O_RDONLY)
+            try:
+                os.fsync(folder)
+            finally:
+                os.close(folder)
+            # Removed while the lock is still held. Another writer that already opened
+            # this inode sees the published marker; a later one gets a fresh staging file
+            # and sees it too. A crash leaves one fixed file a retry can safely resume.
+            beside.unlink(missing_ok=True)
         finally:
-            os.close(folder)
-    finally:
-        beside.unlink(missing_ok=True)
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def _pending_display(pending: Path) -> str | None:
@@ -529,6 +533,16 @@ def add(name: str, where: Path | None = None, display_name: str | None = None) -
     checked rather than rebuilt, which is what makes making an agent again a repair.
     """
     made = []
+    agent_dir = directory(name, where)
+    records = store.path_for(agent_dir)
+    fresh = not records.exists()
+    pending = agent_dir / DISPLAY_PENDING
+    if fresh and display_name is not None:
+        # Publish identity recovery before `home/` makes this count as an agent. If this
+        # process dies first, retry still sees a new name; if it dies afterwards, retry
+        # sees the durable marker and finishes the same creation.
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        _write_pending(pending, display_name.strip())
     for path in made_of(name, where).values():
         if not path.exists():
             path.mkdir(parents=True, exist_ok=True)
@@ -538,11 +552,6 @@ def add(name: str, where: Path | None = None, display_name: str | None = None) -
         if not page.exists():
             page.write_text(_copied(called, display_name or name), encoding="utf-8")
             made.append(called)
-    records = store.path_for(directory(name, where))
-    fresh = not records.exists()
-    pending = directory(name, where) / DISPLAY_PENDING
-    if fresh and display_name is not None:
-        _write_pending(pending, display_name.strip())
     # Fresh agents receive the baseline here. Existing populations are reconciled by both
     # upgrade routes after this release's library has been laid down (R-AGT-36).
     if fresh:
@@ -741,6 +750,10 @@ def forget(name: str, where: Path | None = None) -> list[str]:
     if pending.is_symlink() or pending.exists():
         pending.unlink()
         taken.append(pending.name)
+    writing = pending.with_name(f"{pending.name}.writing")
+    if writing.is_symlink() or writing.exists():
+        writing.unlink()
+        taken.append(writing.name)
     for path in (logs_home(name, where),):
         if path.exists():
             shutil.rmtree(path)

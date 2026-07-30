@@ -554,6 +554,17 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         agent.add("ios-helper", self.where, display_name="IOS HELPER")
         self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
 
+    def test_interruption_before_marker_does_not_make_a_stranded_agent(self):
+        """R-AGT-39 — no `home/` exists until display recovery is durable."""
+        with mock.patch.object(
+            agent, "_write_pending", side_effect=RuntimeError("interrupted")
+        ):
+            with self.assertRaises(RuntimeError):
+                agent.add("ios-helper", self.where, display_name="iOS Helper")
+        self.assertFalse(agent.exists("ios-helper", self.where))
+        agent.add("ios-helper", self.where, display_name="iOS Helper")
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+
     def test_repair_alias_does_not_rewrite_a_completed_display_name(self):
         """R-AGT-4, R-AGT-39 — repair leaves the owner's existing identity alone."""
         agent.add("winston", self.where, display_name="winston")
@@ -568,6 +579,8 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
             with self.assertRaises(RuntimeError):
                 agent.add("ios-helper", self.where, display_name="iOS Helper")
         self.assertTrue(agent.creation_pending("ios-helper", self.where))
+        pending = agent.directory("ios-helper", self.where) / agent.DISPLAY_PENDING
+        pending.with_name(f"{pending.name}.writing").write_text("stale")
         agent.forget("ios-helper", self.where)
         self.assertFalse(agent.directory("ios-helper", self.where).exists())
 
