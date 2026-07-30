@@ -335,9 +335,9 @@ jobs:
             { echo "::error::the existing agent lost its built-in skill grant"; exit 1; }
           "$RUNDESK_BIN_DIR/rundesk" schedules existing | grep -q 'heartbeat' ||
             { echo "::error::the existing schedule disappeared during upgrade"; exit 1; }
-          "$RUNDESK_BIN_DIR/rundesk" agents "Legacy Name" | grep -q '^Legacy_Name ' ||
+          "$RUNDESK_BIN_DIR/rundesk" agents "Legacy Name" | grep -q '^Legacy_Name:' ||
             { echo "::error::a spaced alias did not reach Legacy_Name"; exit 1; }
-          "$RUNDESK_BIN_DIR/rundesk" agents "LEGACY-NAME" | grep -q '^Legacy_Name ' ||
+          "$RUNDESK_BIN_DIR/rundesk" agents "LEGACY-NAME" | grep -q '^Legacy_Name:' ||
             { echo "::error::a case-insensitive slug did not reach Legacy_Name"; exit 1; }
           "$RUNDESK_BIN_DIR/rundesk" schedules "legacy name" | grep -q 'heartbeat' ||
             { echo "::error::an alias did not reach the legacy schedule"; exit 1; }
@@ -363,11 +363,11 @@ jobs:
           legacy_serving=$!
           for _ in $(seq 30); do
             "$RUNDESK_BIN_DIR/rundesk" agents "legacy-name" |
-              grep -qE '^Legacy_Name +RUNNING' && break
+              grep -qE '^Legacy_Name: +RUNNING' && break
             sleep 1
           done
           if ! "$RUNDESK_BIN_DIR/rundesk" agents "LEGACY NAME" |
-              grep -qE '^Legacy_Name +RUNNING'; then
+              grep -qE '^Legacy_Name: +RUNNING'; then
             echo "::error::the legacy gateway did not run through its alias after the upgrade"
             kill "$legacy_serving" 2>/dev/null || true
             exit 1
