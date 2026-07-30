@@ -2249,10 +2249,12 @@ class WhatTheOwnerIsTold(unittest.TestCase):
                 it = self.Connects()
                 asyncio.run(discord.Agent.on_ready(it))
         self.assertIn("new rundesk update installed", it.said[0].lower())
+        self.assertTrue(it.said[0].startswith("👋 **I'm back**"))
+        self.assertNotIn("🟢", it.said[0])
         self.assertFalse(marker.exists(), "completed maintenance stayed attached to the gateway")
 
     def test_a_gateway_returning_from_an_update_links_the_version_now_listening(self):
-        """R-DIS-26 — the green notice is the only thing every returning gateway sends,
+        """R-DIS-26 — the return notice is the only thing every returning gateway sends,
         including after an unattended update no conversation started. Told the version and
         the link by rundesk: an adapter that asked a forge what is newest would name a
         release this gateway is not running."""

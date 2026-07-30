@@ -20,7 +20,6 @@ brain went on reading whatever else it found.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import os
 import re
 import shutil
@@ -40,53 +39,6 @@ NAMED = "SKILL.md"
 #: A name matching what a release ships is not proof: a later release can introduce a
 #: name the owner already used, and that coincidence does not transfer ownership.
 OWNED = ".rundesk-built-in"
-
-#: Exact fingerprints of the built-ins shipped immediately before ownership markers
-#: existed. This is a one-release bridge for installs already on 0.10: only an untouched
-#: directory can acquire the marker. A modified built-in is left alone, and a newly shipped
-#: name can never appear here and claim an owner's work by coincidence.
-LEGACY = {
-    "building-a-channel-adapter": (
-        "eeea76bac1c12db493ad823b1d89d4d42740ab7b17173459b3c0705353332466",
-        "65c4e1f28f278ea29ac5e59317eb94ff99b6b43c1aeab855045f6823ac82db9b",
-    ),
-    "building-a-provider-adapter": (
-        "699c7b9408c743115eb32fdf4e4c242201ff5dbabc34833510e26f4aac025ab1",),
-    "managing-backups": (
-        "dbe161e30d98c0f1cef541de6b63791005f794c8f2c27d4811a4d630b55f096a",),
-    "reporting-a-rundesk-bug": (
-        "4a00da98050dd3debbcba46c52c48f1fdbfa7684605c3bfb9c7fcd378c29d87b",),
-    "using-rundesk": (
-        "fee454e2f180769ab22f8c0a44274467ddc9d7036b17e717250f851236a08c30",),
-    "writing-pull-requests": (
-        "e0053196a485e2553b7a47bf7b35ed3583c3553c83b5e6c38db86be85ae739d1",),
-    "writing-skills": (
-        "ba4d002a005251f87f0343c9305823d2a2052584dfb92fe7a0586b99f23e28a2",),
-}
-
-#: Built-ins an earlier release shipped under another name, and the name each became.
-#: A rename cannot be read off the directory the way everything else here is: the old name
-#: is simply absent from what ships, which is indistinguishable from a name that never
-#: shipped at all. So it is declared, for the same reason `LEGACY` is — the directory
-#: cannot tell you a thing that only history knows.
-RENAMED = {
-    "reporting-a-rundesk-bug": "filing-rundesk-issues",
-    "using-rundesk": "managing-rundesk",
-    "managing-backups": "managing-rundesk-backups",
-    "writing-pull-requests": "writing-rundesk-pull-requests",
-    "writing-skills": "writing-rundesk-skills",
-}
-
-#: Built-ins this release stopped shipping with nothing standing in their place. Not a
-#: rename: what these held is documentation now — `docs/extending/` — because building an
-#: adapter is a thing a person does once against the repository, not a thing an agent needs
-#: in front of it on every turn. Retired the same way, so the library and every grant of one
-#: goes rather than being left resolving to text no release will ever bring forward again.
-RETIRED = (
-    "building-a-channel-adapter",
-    "building-a-provider-adapter",
-    "building-integration-clis",
-)
 
 #: What a name may be, and it is the tightest of the three brains rather than ours: grok
 #: refuses anything else outright, and a name a loader rejects is a skill that is silently
@@ -250,25 +202,7 @@ def lay_down(where: Path | None = None, force: bool = False) -> list[str]:
 
 def _owned(at: Path, name: str) -> bool:
     """Whether Rundesk has evidence that this skill is its own."""
-    if (at / OWNED).is_file():
-        return True
-    expected = LEGACY.get(name, ())
-    if not expected or not at.is_dir() or at.is_symlink():
-        return False
-    return _fingerprint(at) in expected
-
-
-def _fingerprint(at: Path) -> str:
-    """The exact file tree of one legacy skill, or an empty fingerprint if unreadable."""
-    found = hashlib.sha256()
-    try:
-        files = sorted(one for one in at.rglob("*") if one.is_file() and one.name != OWNED)
-        for one in files:
-            found.update(str(one.relative_to(at)).encode("utf-8") + b"\0")
-            found.update(one.read_bytes() + b"\0")
-    except OSError:
-        return ""
-    return found.hexdigest()
+    return (at / OWNED).is_file()
 
 
 def take_back(where: Path | None = None) -> list[str]:
@@ -293,7 +227,7 @@ def take_back(where: Path | None = None) -> list[str]:
     if not where.is_dir():
         return []
     gone = []
-    for name in tuple(shipped()) + tuple(sorted(RENAMED)) + RETIRED:
+    for name in shipped():
         standing = where / name
         if not standing.is_dir() or standing.is_symlink() or not _owned(standing, name):
             continue
@@ -307,81 +241,6 @@ def take_back(where: Path | None = None) -> list[str]:
     with contextlib.suppress(OSError):
         where.rmdir()          # only when nothing of the owner's is in it
     return gone
-
-
-def retire(where: Path | None = None, holding: tuple[Path, ...] = ()) -> list[str]:
-    """Take out a built-in this release renamed or dropped, and carry a grant where it goes.
-
-    **Left alone, a rename is worse than a broken link.** `lay_down` puts the new name in
-    the library and touches nothing else, so the old directory stands there with the old
-    text in it and every grant of it still resolves. Nothing dangles, nothing is reported,
-    and an agent goes on reading superseded instructions for as long as the machine lasts.
-
-    **A grant is carried, never handed out.** Only an agent already holding the old name
-    is given the new one, and one that has no new name — a built-in this release dropped
-    rather than renamed — has its grant taken away rather than left pointing at nothing.
-    Renames preserve who held the old name; they do not make the new name required for
-    everybody.
-
-    **Nothing of the owner's is moved, at either end of the rename.** A directory standing
-    under the old name without the ownership marker is theirs, whatever it is called, so
-    neither it nor any grant of it is touched — a rename in a release must not be able to
-    take away work somebody did. The *new* name is asked the same question, and it is the
-    destructive half: a release introduces names nobody was ever warned off, so an owner
-    can already have written a skill called what this one renames a built-in to. A
-    directory of that name merely *standing* is not the rename having landed. Read as one,
-    `lay_down` correctly leaves their work alone while this deletes the built-in, hands
-    every agent holding it a link to their unrelated file under the name the built-in had,
-    and no later release can put it back — nothing ships the old name again, and `lay_down`
-    goes on skipping the new one for as long as their directory stands.
-
-    `holding` is each agent's own skills directory, passed in rather than discovered here:
-    `agent` reads this module, so this module cannot read it back.
-    """
-    where = where or home()
-    standing_now = library(where)
-    retired = []
-    gone_for_good = [(one, None) for one in RETIRED]
-    for old, new in sorted(RENAMED.items()) + gone_for_good:
-        was = where / old
-        if new is not None and not _landed(standing_now.get(new), new):
-            continue     # nothing of ours stands under the new name, so a grant has
-                         # nowhere to be carried and the old one is not ours to take
-        if not was.is_dir() or was.is_symlink() or not _owned(was, old):
-            continue     # nothing of ours under that name
-        for mine in holding:
-            grant_at = mine / old
-            if not ours(grant_at, where):
-                continue
-            try:
-                if new is not None:
-                    # The new grant is made before the old one goes: an agent that loses
-                    # power between the two is left holding both names rather than neither,
-                    # and the next update takes the spare.
-                    grant(mine, new, where)
-                grant_at.unlink()
-            except (Unknown, NotASkill, InTheWay, OSError):
-                continue
-        try:
-            shutil.rmtree(was)
-        except OSError:
-            # A library that cannot be written to is said by a diagnosis, not raised out of
-            # the middle of an update that has otherwise already gone forward.
-            continue
-        retired.append(old)
-    return retired
-
-
-def _landed(standing: Path | None, name: str) -> bool:
-    """Whether the skill a rename carries a grant to is standing, and is rundesk's own.
-
-    Both halves, because either alone is the wrong question. A name that is absent is a
-    lay-down that did not happen; a name that is present and is the owner's is a
-    coincidence, and reading it as the rename having landed is what makes the retirement
-    delete a built-in nobody can get back. Ownership is the same evidence `lay_down` and
-    `take_back` ask for, so all three agree about which directories are rundesk's.
-    """
-    return standing is not None and _owned(standing, name)
 
 
 def granted(skills_dir: Path) -> list[str]:
