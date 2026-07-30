@@ -13,31 +13,45 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from rundesk import agent, channel, instructions, schedule  # noqa: E402
 
+CORE = {
+    "agent": "ava",
+    "agent_home": "/agents/ava/home",
+    "workspace": "/agents/ava/home/workspace",
+}
+
 
 class InstructionBuilder(unittest.TestCase):
     """R-AGT-38 — one builder owns the core layers, variables, overrides, and appends."""
 
     def test_standard_variables_use_agent_and_user(self):
         self.assertEqual((
-            "agent", "channel_kind", "channel_config_name", "channel_name", "channel_id",
-            "channel_parent_name", "channel_parent_id", "channel_thread_name",
-            "channel_thread_id", "channel_where", "user", "user_id",
-            "conversation_id", "schedule",
+            "agent", "agent_home", "workspace", "channel_kind", "channel_config_name",
+            "channel_name", "channel_id", "channel_parent_name", "channel_parent_id",
+            "channel_thread_name", "channel_thread_id", "channel_where", "user",
+            "user_id", "conversation_id", "schedule",
         ), instructions.STANDARD_VARIABLES)
 
-    def test_rundesk_instructions_are_always_first_and_fill_agent(self):
-        built = instructions.build(variables={"agent": "ava"})
-        self.assertEqual(agent.standing("ava"), built)
-        self.assertTrue(built.startswith("You are ava, an agent running inside rundesk."))
-        self.assertNotIn("{agent}", built)
+    def test_rundesk_instructions_are_always_first_and_fill_agent_locations(self):
+        agents = Path("/agents")
+        variables = agent.instruction_variables("ava", agents)
+        built = instructions.build(variables=variables)
+        self.assertEqual(agent.standing("ava", agents), built)
+        self.assertIn("You are ava, an agent running inside rundesk.", built)
+        self.assertIn("`/agents/ava/home`", built)
+        self.assertIn("`/agents/ava/home/workspace`", built)
+        for placeholder in ("{agent}", "{agent_home}", "{workspace}"):
+            self.assertNotIn(placeholder, built)
 
     def test_standing_instruction_keeps_its_paragraph_boundaries(self):
-        self.assertIn("\n\nAlways read the AGENTS.md", instructions.RUNDESK_INSTRUCTIONS)
-        self.assertIn("\n\nWhen you reply to the user", instructions.RUNDESK_INSTRUCTIONS)
+        self.assertIn("\n\n## Startup\n\n", instructions.RUNDESK_INSTRUCTIONS)
+        self.assertIn(
+            "\n\n## Recovering context you do not have\n\n",
+            instructions.RUNDESK_INSTRUCTIONS,
+        )
 
     def test_schedule_and_owner_instructions_append_in_order(self):
         built = instructions.build(
-            variables={"agent": "ava", "schedule": "nightly"},
+            variables={**CORE, "schedule": "nightly"},
             trigger=instructions.SCHEDULE,
             append=("Agent rules.", "Only inspect failures."),
         )
@@ -58,7 +72,7 @@ class InstructionBuilder(unittest.TestCase):
 
     def test_direct_message_uses_standard_channel_variables(self):
         built = instructions.build(
-            variables={"agent": "ava", "channel_kind": "discord", "user": "Tim"},
+            variables={**CORE, "channel_kind": "discord", "user": "Tim"},
             trigger=instructions.DIRECT,
         )
         self.assertIn(
@@ -69,7 +83,7 @@ class InstructionBuilder(unittest.TestCase):
     def test_public_room_uses_standard_channel_variables(self):
         built = instructions.build(
             variables={
-                "agent": "ava", "channel_kind": "discord", "user": "Tim",
+                **CORE, "channel_kind": "discord", "user": "Tim",
                 "channel_where": "#ops on Acme",
             },
             trigger=instructions.PUBLIC,
@@ -97,9 +111,15 @@ class InstructionBuilder(unittest.TestCase):
             channel.PROMPT_APPEND: "Adapter addition for {channel_config_name}.",
         }
         built = channel.preface(
-            record, "ava", "discord-dms", arrived, append="Agent addition."
+            record, "ava", "discord-dms", arrived,
+            core_variables={
+                "agent_home": "/agents/ava/home",
+                "workspace": "/agents/ava/home/workspace",
+            },
+            append="Agent addition.",
         )
-        self.assertTrue(built.startswith("You are ava"))
+        self.assertTrue(built.startswith("# Rundesk agent operating rules"))
+        self.assertIn("You are ava", built)
         self.assertNotIn("private conversation", built)
         self.assertIn("Private adapter instruction for Tim.", built)
         self.assertLess(
@@ -125,6 +145,10 @@ class InstructionBuilder(unittest.TestCase):
             {"kind": "discord", channel.INSTRUCTIONS: "Old adapter default."},
             "ava", "discord-dms", arrived,
             append="Agent addition.",
+            core_variables={
+                "agent_home": "/agents/ava/home",
+                "workspace": "/agents/ava/home/workspace",
+            },
         )
         self.assertNotIn("Old adapter default.", built)
         self.assertIn("Adapter trigger for Tim.", built)

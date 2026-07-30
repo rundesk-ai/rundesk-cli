@@ -207,6 +207,7 @@ class Answering:
         """
         return channel.preface(
             self.record, self.name, self.channel, it,
+            core_variables=agents.instruction_variables(self.name, self._where),
             append=agents.added_instructions(self.name, self._where))
 
     #: What rundesk says on a surface when a scheduled run that will report there begins
