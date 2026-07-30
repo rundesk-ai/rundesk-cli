@@ -62,6 +62,7 @@ cycled without disturbing the rest.
 | ✅ | R-GW-40 | Work that is running again is no longer reported as never having finished | `work that is running again is no longer unfinished`, `other work that never finished is left standing` |
 | ✅ | R-GW-41 | An install whose virtualenv does not satisfy the version declared does not fit, and says which | `an install whose virtualenv no longer satisfies what is declared says which`, `the version that was declared fits`, `at least this version is met by a newer one`, `at least this version is not met by an older one`, `a version is compared by number and not by text` |
 | ✅ | R-GW-42 | A declared version this cannot judge is reported as unchecked rather than treated as met | `a comparison this does not understand is refused rather than guessed at`, `a version that is not a plain release is refused rather than compared`, `a requirement that cannot be checked is reported and never passed over` |
+| ✅ | R-GW-43 | A restart requested during active work is queued unless its caller explicitly forces interruption | `a busy restart is queued and says when it will run`, `force restarts a busy gateway immediately`, `restart worker waits for safety then cycles and finishes`, `a queued restart waits for the final answer delivery`, `a completed restart is delivered without starting another turn`, `a queued restart worker recovers after stopping halfway` |
 
 ## Open questions
 

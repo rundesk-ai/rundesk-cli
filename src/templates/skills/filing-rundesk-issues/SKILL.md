@@ -118,7 +118,8 @@ A public tracker is published, indexed and cached. Deleting a comment does not u
 - **Absolute paths under an agent's home**, which carry the owner's username. Write
   `<agent home>/skills` rather than the real path.
 - **Your owner's name, email, or the names of people in their channels.**
-- **Anything naming what wrote the issue** — no tool or model branding, in the body or a trailer.
+- **Provider, model, session, or tool branding.** The required agent footer below is the only
+  identity attached to the issue.
 
 When in doubt, leave it out and say what you left out. A maintainer can ask; you cannot unpublish.
 
@@ -187,6 +188,14 @@ and never `it broke`.
 
 Each ends with **acceptance criteria somebody can check** — a condition that can be tested, not
 "works properly". If you cannot write one, the issue is not understood well enough to file yet.
+
+After the content, add a blank line and identify the filing agent:
+
+```md
+🤖 by <Agent>
+```
+
+Use the agent's display name, not its provider, model, tool, or session.
 
 ## Gotchas
 

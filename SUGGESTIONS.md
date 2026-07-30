@@ -6,9 +6,9 @@ history — the ledger is a work list, not an account of what was done, and a re
 in it is one more thing to read before finding the thing that matters. Numbers are never
 reused and gaps are expected: they are cited in commits, in `ROADMAP.md` and in each other.
 
-Three findings are **partly** closed and say in their own status which half is still open —
-4, 6 and 9. Read the status before the body. **28 is narrowed rather than partly closed** and
-says in its own status what is left of it.
+Eight findings are **partly** closed and say in their own status which half is still open —
+4, 6, 9, 12, 29, 35, 40 and 42. Read the status before the body. **28 is narrowed rather
+than partly closed** and says in its own status what is left of it.
 
 **What the clock closed.** Letting a schedule start a *turn* ran the whole chain in one line —
 the clock fires, a gateway admits a turn, a brain answers, the account records it, the outcome
@@ -33,11 +33,20 @@ weeks and is answered for after a crash, so three things were owed before one co
 lands and readable across rotation and both writers, a change whose audit line failed no
 longer reports a plain success, a schedule left saying it started by a gateway that died
 is reconciled rather than shown as in flight, and what never finished has a reader at
-last. **6, 9, 12, 23 and 30 are still untouched** — every one of them is about admitting
+last. **6, 9, 23 and 30 are still untouched** — every one of them is about admitting
 work into a gateway, or about handing a gateway back to the machine that supervises it.
 A channel admitting a turn is exactly that path, so they are due as the channel is held
 open rather than as it is designed, and each is to be reproduced on the baseline of the
-day rather than taken from its write-up.
+day rather than taken from its write-up. **12 is narrowed:** the gateway now owns its
+long-lived loops and update-migration turns, but ordinary scheduled tasks and the overall
+shutdown deadline remain open.
+
+**What later releases closed.** Updates now hold one lock across the whole maintenance
+window and resume partially stopped gateways on every exit, so 14 is fixed and gone.
+The per-agent layout removed the colliding history paths in 19. `stop` and `restart`
+require a name or `--all`, and `uninstall` runs the installer's guarded removal, so 32
+and 33 are fixed and gone. The stale store description from 46 is corrected with this
+ledger refresh and that finding is gone too.
 
 **What the Discord round closed on its way through.** Round eight reviewed the one channel
 adapter that ships. Five defects it found were fixed in the same run and are therefore not
@@ -75,14 +84,14 @@ so a later round does not spend the effort again without new reason:
 
 | Area | Outcome |
 |---|---|
-| Ownership, cleanup and bounded resources | findings **9**, **12**, **23**, **30** |
-| Crash recovery and idempotency | findings **9**, **12**, **23** |
-| Concurrency, locks and atomic decisions | findings **12**, **14**, **21**, **30** |
+| Ownership, cleanup and bounded resources | findings **9**, **12** (narrowed), **23**, **30** |
+| Crash recovery and idempotency | findings **9**, **12** (narrowed), **23** |
+| Concurrency, locks and atomic decisions | findings **12** (narrowed), **21**, **30** |
 | Provider protocol boundary | **no change needed** — see "Reviewed, no change needed" below |
 | Scheduling correctness | findings **12**, **21**; **24** and **25** fixed and gone |
-| Install, update and removal safety | findings **4**, **14**, **15**, **28** (narrowed) |
-| Source of truth and auditability | findings **28** (narrowed), **29**; extensions to **12**, **19** |
-| Consumer command surface | findings **32–35**; extensions to **6**, **13**, **28** |
+| Install, update and removal safety | findings **4**, **15**, **28** (narrowed) |
+| Source of truth and auditability | findings **28** (narrowed), **29** (narrowed); extension to **12** |
+| Consumer command surface | findings **34**, **35** (narrowed); extensions to **6**, **13**, **28** |
 | Measured performance | finding **9** (second consequence); measurements below |
 | Failure-injection coverage | see "Tests that prove only the easy half" below |
 | Security and trust boundaries | **no change needed today** — see below |
@@ -199,9 +208,10 @@ job creation in `src/rundesk/supervisor.py`, state and logs in
 
 ### 4. Do not report an unsupervised gateway as successfully started
 
-**Status:** Open — **the missing-job half is closed; the same-name/PID half is not.**
-`start` now asks whether launchd holds a job at all. See also **finding 15**, which shows
-that the unsupervised gateway `start` learned to recognise is still invisible to uninstall.
+**Status:** Open — **supervisor uncertainty is closed; the same-name/PID half is not.**
+`start` now refuses success when launchd does not answer whether it holds the job. See
+also **finding 15**, which shows that an unsupervised gateway is still invisible to
+uninstall.
 
 `supervisor.loaded()` answers only whether launchd holds a job with the gateway's name.
 `cmd_start()` treats that boolean as proof that launchd owns the process currently holding
@@ -229,7 +239,6 @@ Regression criteria:
 - A loaded but dormant same-name job, or one with a different PID, does not make a
   manually started gateway supervised.
 - An unsupervised running gateway is reported as unsupervised with a non-zero exit.
-- An unanswered supervisor query cannot be reported as success.
 
 Relevant implementation: `loaded()` in `src/rundesk/supervisor.py`;
 `cmd_start()` in `src/rundesk/cli.py`.
@@ -415,7 +424,7 @@ Relevant implementation: `Gateway.start()` and `started_at()` in
 
 ### 12. Keep the shutdown budget inside the one launchd allows
 
-**Status:** Open
+**Status:** Open — **task ownership is partly closed; the shared shutdown deadline is not.**
 
 launchd's default `ExitTimeOut` is 20 seconds and `describe()`
 (`supervisor.py:129-165`) does not set it. The gateway's own budget adds up past that:
@@ -432,66 +441,28 @@ because every program is deliberately in its own session the whole tree survives
 nothing owning it — a surviving descendant nobody owns, reached by a different
 route.
 
-The task ownership is split inside `Gateway` itself. `serve()` retains only the beat and
-tick tasks in local variables (`gateway.py:1047-1053`), while `_fire()` creates each
-scheduled run with bare `asyncio.ensure_future()` and retains it nowhere
-(`gateway.py:1165`). Its lifetime is therefore defined by the outer `asyncio.run()`
-destroying the whole loop, not by the gateway that started it. The current cancellation
-test has to search `asyncio.all_tasks()` by function name to recover the scheduled task
-(`tests/test_gateway.py:1219-1223`), which is evidence that there is no owned handle to
-assert against. That assumption directly obstructs provider streams, approval waits and
-channel delivery tasks: they will share a long-lived loop, while cycling one gateway must
-still affect only that gateway.
+The gateway now retains, cancels and awaits its beat, tick, channel, update-notice and
+update-migration tasks. Schedule outcomes also moved to rows with a never-backwards SQL
+update, and gateway-owned writes refuse after `_released`. Those close the old stale
+snapshot overwrite.
 
-The smallest separation is one private task set per gateway and one spawn helper that
-registers a task and removes it when done. Beat, tick and scheduled runs use it; `_go()`
-cancels and awaits that set before releasing the gateway. Finding 12 must establish one
-overall shutdown deadline shared by task cancellation, `end_all()`, reporting,
-interruption writes and release; adding another independent timeout would only extend
-the overrun this finding describes. This is not a task framework or a new module. It
-gives the lifecycle owner a direct handle on work it already creates.
-
-Round three proved the durable-state consequence, not only the shutdown-budget one.
-`_go()` releases the gateway lock (`gateway.py:1083`) before an untracked scheduled
-wrapper necessarily reaches `_remember()` (`:1154-1173`). `_remember()` has no
-`_released` guard and writes the old gateway's whole in-memory `_outcomes` snapshot.
-A successor can therefore claim the name and write a newer outcome, then have the old
-wrapper overwrite it:
-
-```text
-before_old_finishes={'at': '2026-07-25 09:01', 'outcome': 'new successor result'}
-after_old_finishes={'at': '2026-07-25 09:00', 'outcome': 'finished'}
-```
-
-This is the same missing task ownership, not a separate persistence abstraction.
-Cancelling and awaiting the gateway's task set before releasing the name gives the
-history one writer and closes both failures.
-
-**Round four adds the one-line containment, and where the asymmetry shows.** The reaching
-path is not exotic: it is the ordinary one. `_go()` releases at `gateway.py:1083`, `serve()`
-returns, and `asyncio.run` then cancels the untracked wrapper, whose `CancelledError`
-handler calls `_remember(one.name, "interrupted", fired)` (`:1162`) — by design, and after
-the release. `_say()` already refuses to write once released, for exactly this reason
-(`:1224-1225`); `_remember()` (`:1209`) does not. Adding `if self._released: return False`
-to `_remember()` is not the fix for the missing task ownership, and does not remove the
-shutdown-budget half of this finding, but it stops the durable outcome from moving backward
-in the meantime and costs one line. Do it as containment; do not let it stand in for the
-task set.
+What remains is ordinary `_fire()`: it still creates `_run_scheduled()` with bare
+`asyncio.ensure_future()` and keeps no task handle. The suite still has to recover that
+task from `asyncio.all_tasks()`. `describe()` also states no `ExitTimeOut`, and cleanup
+still has several independent budgets rather than one deadline shared with launchd.
 
 Regression criteria:
 
 - `ExitTimeOut` is stated in the job rather than assumed, and is above the gateway's own
   worst-case shutdown.
-- Every background task a gateway creates is retained by that gateway, removed when done,
-  and cancelled and awaited within the same overall shutdown deadline as `_go()`'s other
+- Every ordinary scheduled task is retained by its gateway, removed when done, and
+  cancelled and awaited within the same overall shutdown deadline as `_go()`'s other
   cleanup rather than left to `asyncio.run`.
 - No task created by a gateway can call `_remember()` or write any other gateway-owned
   state after that gateway releases its name.
 - A test keeps the event loop alive after one gateway stops and asserts its owned task set
   is empty, its scheduled run is recorded as interrupted, no child survives and another
   gateway's tasks remain untouched; it never inspects global tasks.
-- A successor writes a newer schedule outcome while the old wrapper is deliberately
-  held; releasing the old wrapper cannot move the durable outcome backward.
 - A gateway with work that will not stop still exits inside the time the machine allows,
   asserted as wall-clock from `SIGTERM` to exit.
 
@@ -544,58 +515,6 @@ Relevant implementation: `Gateway.serve()` and `Gateway._go()` in
 `src/rundesk/gateway.py`; `describe()` in `src/rundesk/supervisor.py`;
 `_stand_down()` in `src/rundesk/cli.py`.
 
-### 14. Take the update lock before stopping anything
-
-**Status:** Open
-
-`run()` (`updater.py:119-184`) does `busy()` → `pause()` → `apply()`, and `_only_one()`
-is taken inside `apply()` (`:187-218`). Both halves of R-UPD-21 — stopping what is about
-to be replaced, and starting it again — sit outside the lock.
-
-Reproduced outcome, with the lock held by a stand-in concurrent update:
-
-```text
-output='0.1.0: OUT OF DATE — 9.9.9 available, run: rundesk update'
-output='FAILED — could not update: another update is already running'
-exit=1
-order=['busy-check', 'STOPPED the gateways', "STARTED them again: ['gateway']"]
-```
-
-The losing update stopped the gateways, discovered it had lost, and started them again —
-at the moment the winner is inside `_copy_over()` replacing `rundesk` and
-`src/rundesk` as separate renames. A gateway brought up in that window can import a
-mixed tree, and `fitness()` can be asked about a `.venv` mid-rebuild.
-
-**Second face — a partial pause is never resumed.** `_stand_all_down()` stops gateways
-in sequence (`cli.py:159-187`) and can return names already stopped plus a refusal from
-a later gateway. `run()` checks that refusal at `updater.py:165-168` and returns before
-entering the `try/finally` whose `resume()` begins at `:169`. An update that changes
-nothing can therefore leave the earlier gateways down indefinitely.
-
-Reproduced with `pause()` returning one stopped gateway and a refusal for the next:
-
-```text
-output='update: NOT APPLIED — agent-two would not stop'
-exit=1
-stopped=['agent-one']
-resumed=[]
-```
-
-The update lock and the resume guarantee are one lifecycle transaction: once any
-gateway has been stopped, every exit path must attempt to restore it.
-
-Regression criteria:
-
-- The lock covers `busy` → `pause` → `apply` → `resume` as one decision.
-- An update that loses the race stops nothing and starts nothing.
-- If `pause()` stops any gateways before refusing, `resume()` is still called for all
-  of them before `run()` returns.
-- A two-gateway test lets the first stop and the second refuse, proves no files move,
-  and proves the first is observed up again or is reported as failed to return.
-
-Relevant implementation: `run()`, `_only_one()` and `download_and_apply()` in
-`src/rundesk/updater.py`.
-
 ### 15. Account for a gateway that has no launchd job before deleting anything
 
 **Status:** Open — **this is a fourth form of "prove the machine let go before deleting",
@@ -638,52 +557,6 @@ Relevant implementation: `take_all_back()` in `src/rundesk/supervisor.py`;
 `stop_gateways()` in `install.sh`; `every()` in `src/rundesk/gateway.py`.
 
 ## Medium impact
-
-### 19. Stop a gateway name from claiming another gateway's history file
-
-**Status:** Open
-
-`checked()` (`gateway.py:53-60`) allows `.`, and `ran_path`/`seen_path`/
-`interrupted_path` build `<name>.ran.json` and friends. Verified:
-
-```text
-ran_path('foo')            == 'foo.ran.json'
-schedules_path('foo.ran')  == 'foo.ran.json'
-same_file=True
-checked('foo.ran')='foo.ran'   # accepted
-```
-
-A gateway named `foo.ran` and a gateway named `foo` share one file, one holding
-schedules and the other holding history.
-
-**Round four adds what actually happens when they do, in both directions — it is silent
-destruction reported as success.** Neither writer notices the other's shape:
-
-- `rundesk schedules --gateway foo.ran add …` opens `foo.ran.json`, which holds `foo`'s
-  outcome history — a dict. `written_schedules()` returns `[]` for anything that is not a
-  list (`gateway.py:97-102`), so `changing_schedules()` appends to nothing and writes a
-  one-element schedule list over the file. Every outcome `foo` had recorded is gone, and
-  the command prints `ADDED`. This is the "empty over unreadable" shape (R-SCH-17) reached by
-  a second route, so the two fixes reinforce each other but neither covers the other.
-- In the other direction `foo`'s `_remember()` (`:1210`) writes its outcome dict over
-  `foo.ran`'s schedules file, and `foo.ran` silently has no schedules from then on —
-  `written_schedules()` maps the dict back to `[]`, so `rundesk schedules` reports
-  `NO SCHEDULES` rather than a fault.
-
-`checked()` is the only gate, `R-GW-20` guards names that escape the *directory* and
-nothing guards names that collide *inside* it, and gateway names will be agent names chosen
-by a person.
-
-Regression criteria:
-
-- A gateway name cannot resolve to a path another gateway already owns. Either refuse the
-  reserved suffixes or give each gateway its own directory.
-- The set of reserved suffixes is derived from the `*_path` helpers rather than restated by
-  hand, so a new sidecar file is covered the day it lands.
-- No schedules command overwrites a file whose contents are not a schedule list (R-SCH-17).
-
-Relevant implementation: `checked()`, `ran_path()`, `seen_path()`,
-`interrupted_path()` and `schedules_path()` in `src/rundesk/gateway.py`.
 
 ### 21. Give updates a durable maintenance barrier rather than a repeated check
 
@@ -843,54 +716,26 @@ Relevant implementation: `describe()` in `src/rundesk/supervisor.py`; `home()`,
 
 ## Medium impact
 
-### 29. Key durable work records by run, not by work name
+### 29. Key interruption records by occurrence, not work name
 
-**Status:** Open — **the smallest change that unblocks channel work.** Findings 26 and
-27 each work around this key; none of them removes it.
+**Status:** Open — **the run-account and schedule-outcome halves are closed; only the
+gateway interruption sidecar remains.**
 
-Every durable per-work row is keyed by the work's *name* and is therefore last-write-wins
-on a fact that has one value per **occurrence**:
+Runs now have durable IDs, and schedule outcomes are rows whose timestamps never move
+backward. The former `"finished (for …)"` degradation is gone.
 
-- `_note_interrupted()` — `said[work] = {…}` (`gateway.py:383`)
-- `_remember()` — `self._outcomes[name] = {…}` (`gateway.py:1208`)
-
-Two consequences today, before any channel exists. The first is history that cannot
-accumulate: work interrupted twice keeps only the second, so the reader of that history has nothing to count
-and R-GW-24 has no input. The second is already visible in the code — `_remember()`'s
-never-move-backwards rule (`:1205-1207`) needs to hold two timestamps in a row that has one,
-and degrades to appending the second into the *outcome string*:
-`"finished (for 2026-11-01 01:05)"`. During a daylight-saving fallback that is the normal
-path for an hour, so the `OUTCOME` column carries a parenthesised timestamp and the
-`LAST RUN` column shows a minute that has not arrived yet. The rule is right; the row cannot
-express it.
-
-Nothing here argues for a database or a new persistence layer — the JSON-per-fact design and
-the four-directory split are sound, and `process.py:96-99` is correct that a durable
-transcript is not that module's concern. What is missing is a **key**. `Gateway.start()`
-already mints an identifier for unnamed work (`gateway.py:919`); minting one for *all* work
-and carrying it into the record's `working` entry, the interruption row and every log line
-about that work is a small change that:
-
-- lets the existing files hold history instead of only a latest value;
-- gives interleaved log lines from concurrent programs something to be correlated by, which
-  is what turns "the operator can read the log" into "the operator can trace one turn";
-- gives the channel layer somewhere to hang a turn's outcome, its pending question and the
-  approval that answered it — all per-occurrence facts that today have no key and therefore
-  no home.
+`_note_interrupted()` still writes `said[work] = {…}`. Interrupting the same named work
+twice therefore preserves only the second occurrence, even though each interruption has
+its own time and process identity.
 
 Regression criteria:
 
 - The same work name interrupted twice leaves two distinguishable durable records.
-- A schedule outcome never needs a timestamp inside its outcome string; a repeated hour
-  records two rows rather than mutating one.
-- Every log line concerning a piece of work carries its run identifier, walked off the log
-  rather than restated.
-- The identifier appears in the runtime record's `working` entry, so a successor and a
-  channel adapter name the same run the same way.
+- Each interruption can be correlated to the run or process occurrence it describes.
+- The bounded interruption history still evicts oldest occurrences deterministically.
 
-Relevant implementation: `Gateway.start()`, `_record()`, `_remember()` and
-`_note_interrupted()` in `src/rundesk/gateway.py`; `RETAINED_LINES` and the module
-docstring in `src/rundesk/process.py`.
+Relevant implementation: `_note_interrupted()` and `what_was_interrupted()` in
+`src/rundesk/gateway.py`.
 
 # Round five — 2026-07-25
 
@@ -951,39 +796,6 @@ above; findings 32–35 are only the distinct consumer command-surface gaps.
 
 ## High impact
 
-### 32. Require an explicit scope for `stop` and `restart`
-
-**Status:** Open
-
-1. **Command and location:** `rundesk stop`, `rundesk restart`;
-   `src/rundesk/cli.py:101-105`, `:343-351`.
-2. **Current behaviour:** Both accept an optional singular `name`, but omission silently
-   expands to every gateway found in runtime records or launchd jobs.
-3. **Why it blocks:** `rundesk restart` reads like the default gateway, not every gateway.
-   The command help does not disclose the fan-out before the action occurs.
-4. **Replacement:** Require either `NAME` or `--all`. A bare command is a usage error:
-   `restart: NAME or --all is required`; it changes nothing.
-5. **Test:** For both verbs, prove bare invocation exits with the usage code and performs
-   no launchd calls; `NAME` touches one gateway; `--all` touches the complete discovered
-   set and prints one outcome per gateway.
-
-### 33. Make `rundesk uninstall` the removal command
-
-**Status:** Open — read with finding 15 for the ownership rule.
-
-1. **Command and location:** `rundesk uninstall`; `src/rundesk/cli.py:89`,
-   `:230-242`.
-2. **Current output:** It exits 0 after printing `uninstall: USE THE INSTALLER` and a
-   checkout path or remote `curl | bash` instruction. It removes nothing.
-3. **Why it blocks:** The advertised control verb is an instruction page. It makes users
-   find or download a second control surface, and exit 0 falsely means the uninstall ran.
-4. **Replacement:** Have `rundesk uninstall [--purge]` invoke the guarded owned-removal
-   path and propagate its result. If instructions remain useful, expose them as
-   `rundesk uninstall --help`, not as a successful uninstall.
-5. **Test:** In an isolated install, assert the command removes only Rundesk-owned files,
-   preserves history unless `--purge` is explicit, refuses foreign/ambiguous ownership,
-   and returns nonzero with the installer failure message when removal is incomplete.
-
 ### 34. Give lifecycle and update outcomes a durable control log
 
 **Status:** Open — what a gateway itself writes is now bounded and readable (R-GW-35, R-GW-36); this is the control log for what the *command* did, which still has none.
@@ -1006,23 +818,22 @@ above; findings 32–35 are only the distinct consumer command-surface gaps.
 
 ### 35. Expose scheduled commands and individual work through Rundesk
 
-**Status:** Open — read with findings 28 and 29 for inventory and run IDs.
+**Status:** Open — **schedule inspection is closed; individual live-work control is not.**
+Read with findings 28 and 29 for inventory and run IDs.
 
 1. **Command and location:** `status`, `schedules`, and the missing work controls;
    `src/rundesk/cli.py:472-507`, `:610-635`;
    `src/rundesk/gateway.py:678-709`, `:880-910`.
-2. **Current behaviour:** Schedule listing omits the stored `run` command. Status reduces
-   live work to names, with no per-run details or control. There is no Rundesk command to
-   inspect one run or stop one work item without stopping its gateway.
-3. **Why it blocks:** Users cannot verify what an unattended schedule will execute, trace
-   one same-name occurrence, or stop only the faulty work Rundesk owns.
-4. **Replacement:** Add `rundesk schedules show GATEWAY/NAME` with a shell-quoted command,
-   and `rundesk work list|show|stop [RUN_ID]`. Use finding 29's run ID and keep gateway
-   lifecycle commands separate.
-5. **Test:** Round-trip an argv containing spaces and option-looking arguments; assert
-   `show` reproduces it unambiguously. Start two work items, stop one by run ID, and prove
-   the other and the gateway remain running. Each owned state source alone must make its
-   gateway or run discoverable, as R-GW-38 now requires of a gateway.
+2. **Current behaviour:** `rundesk schedules <agent>` now shows what each schedule asks or
+   runs. Status still has no per-run live-work details or control, and no Rundesk command
+   stops one owned work item without stopping its gateway.
+3. **Why it blocks:** Users can verify unattended commands, but cannot inspect or stop only
+   the faulty live work Rundesk owns.
+4. **Replacement:** Add `rundesk work list|show|stop [RUN_ID]`. Keep work control separate
+   from gateway lifecycle.
+5. **Test:** Start two work items, stop one by run ID, and prove the other and the gateway
+   remain running. Each owned state source alone must make its gateway or run discoverable,
+   as R-GW-38 now requires of a gateway.
 
 ## Tests that prove only the easy half
 
@@ -1046,12 +857,14 @@ code as it stands rather than argued from the source.
 
 ### 39. A read-only command cannot read records whose `-shm` is not there
 
-**Status:** Open, and the first thing to settle in the phase that owns the store.
+**Status:** Open — **reproduced on the supported Python floor.** macOS system Python
+3.9.6 with SQLite 3.51 raises `OperationalError: unable to open database file`; newer
+SQLite versions may not expose the same failure.
 
-`Store._reading` opens `file:<path>?mode=ro` (`store.py:270-277`). The database is in WAL mode,
-and **a read-only SQLite connection cannot open a WAL database when the `-shm` file is absent**:
-it has to create it and cannot. That is not a rare state — it is what a clean close leaves
-behind, so a gateway or a turn that finishes and closes tidily is what puts the records into it.
+`Store._reading` opens `file:<path>?mode=ro` (`store.py:270-277`). On the SQLite version
+shipped with the oldest supported macOS Python, a read-only connection cannot open this WAL
+database when the `-shm` file is absent: it has to create it and cannot. A newer Homebrew
+Python can hide the defect, so the floor interpreter is the required regression target.
 
 Reproduced from nothing:
 
@@ -1122,21 +935,19 @@ Regression criteria:
 
 Relevant implementation: `Codex._listen` and `Codex._heard` in `src/providers/codex`.
 
-### 42. A read-only posture on Claude does not stop it writing to its own memory
+### 42. Claude's working-directory memory crosses conversation boundaries
 
-**Status:** Open. A boundary finding rather than a crash; it decides what `R-PRV-18` may honestly
-claim on this brain.
+**Status:** Open — **the posture claim is corrected; cross-conversation memory remains.**
+A boundary finding rather than a crash.
 
-`R-PRV-18` says an adapter is told how much of the machine a turn may touch, and the Claude adapter
-maps `read` onto an allowlist because prior art measured the allowlist to be the only thing that
-holds. Measured on 2.1.220, it does not hold for one path: with `--allowedTools Read` and nothing
-else, a turn asked to remember a word wrote a file to
+The adapter now states that `--allowedTools` is pre-approval rather than containment and
+records the 2.1.220 measurement. That closes the claim that `read` prevents every durable
+write. The provider behavior itself remains: with `--allowedTools Read` and nothing else,
+a turn asked to remember a word wrote a file to
 `~/.claude/projects/<resolved cwd slug>/memory/`, outside the agent's own directory entirely.
 
 Two consequences, and the second is the one that matters to the product:
 
-- A turn an owner asked to **only look** wrote something durable, and nothing in the run's account
-  says so.
 - That memory is keyed by the **working directory**, and rundesk stands every one of an agent's
   turns in that agent's own home. So all of one agent's conversations share a memory namespace,
   and a *fresh* conversation answers another's question — reproduced in `probe-asking
@@ -1146,8 +957,6 @@ Two consequences, and the second is the one that matters to the product:
 
 Regression criteria:
 
-- Either the read posture on this brain genuinely prevents durable writes, or the adapter stops
-  claiming that it does and says what it really constrains.
 - Two conversations of one agent cannot read each other's contents, or the limit is written down
   where an owner meets it rather than discovered.
 
@@ -1192,11 +1001,9 @@ somebody reading the same code, so they are written down rather than left to be 
   conversation. `parent_id` says so in `migrations/001.py` itself. R-STO-9 is ✅ on a case that
   passes `kind="thread"`, which is a different thing. Either a surface reports a branch and both
   columns start meaning something, or they are two fields a reader will assume are populated.
-- **`ask --instructions` is not filled in or bounded the way every other preface is.**
-  `channel.preface` runs `_fill` over `{agent}`, `{where}` and the rest and clips to
-  `INSTRUCTIONS_MOST`; `--instructions` reaches the brain exactly as typed, so `{agent}` written
-  there arrives as literal braces. Not wrong — a turn's own instructions are typed for that turn
-  — but it is one surface of two behaving differently about the same-looking text.
+- **`ask --instructions` is filled in but remains unbounded.** `instructions.build()` now
+  renders every layer, so `{agent}` and the other supplied variables are filled consistently.
+  The owner-provided layer still has no size ceiling comparable to the channel preface.
 
 ## Reviewed, no change needed
 
@@ -1387,38 +1194,6 @@ Regression criteria:
 
 Relevant implementation: the Evidence column of `.knowledge/prd/channel-discord.md`;
 `.knowledge/scripts/check-evidence`.
-
-### 46. `CODEMAP.md` tells every agent that nothing reads the store, and four modules do
-
-**Baseline:** `c25bbc6`, working tree clean. **Scope:** `.knowledge/CODEMAP.md`, found while auditing
-`MEMORY.md`.
-
-`CODEMAP.md`'s entry for `src/rundesk/store.py` still ends: "**Nothing reads it yet**; it is built
-and proved before anything moves onto it, so deleting it would leave the product exactly as it is."
-That was true when the store was built ahead of its callers. It is now false — `agent.py:28`,
-`answering.py:34`, `cli.py:40` and `turn.py:43` all import it, and the product reads the store on
-the ordinary path.
-
-Why it matters rather than merely being untidy: `CODEMAP.md` is **always loaded**, so this is not a
-stale corner somebody might find, it is a sentence every agent reads before every task. It invites
-exactly two wrong moves — treating `store.py` as removable dead weight, and building a second path
-to what an agent keeps on the belief that nothing depends on this one — and the second is the more
-expensive, because `store.py` is declared elsewhere in the same file as "the only way in to it".
-
-This is a documentation-truth defect against a concrete rule in the governing `AGENTS.md`
-("Keep docs true in the same task that changes reality"; "Moved/restructured files -> update
-`.knowledge/CODEMAP.md`"), not a behaviour change. Nothing in the gate can catch it: `doc-lint`
-checks form, and `check-evidence` only reads `prd/` rows.
-
-**Fix:** replace the "nothing reads it yet" clause with what is now true — which modules read it and
-that it remains the only way in. One clause; left unfixed here only because `CODEMAP.md` was outside
-the audit's scope and `AGENTS.md` gates changes outside a task's immediate scope.
-
-**Regression check:** the sentence is absent, and `grep -rn "from rundesk import.*store" src/` names
-the readers the entry claims.
-
-Relevant implementation: `.knowledge/CODEMAP.md`, the `src/rundesk/store.py` entry under
-"Backend / Services".
 
 ## Recorded on the way past, and not fixed
 

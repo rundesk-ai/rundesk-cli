@@ -23,7 +23,7 @@ rundesk doctor <agent>                                                          
 # running one
 rundesk start [--here] <agent>                                                                                                                                                                                          have the machine keep an agent running
 rundesk stop [--all] <agent>                                                                                                                                                                                            stand an agent down
-rundesk restart [--all] <agent>                                                                                                                                                                                         cycle an agent, leaving the others alone
+rundesk restart [--all] [--force] <agent>                                                                                                                                                                               cycle an agent, leaving the others alone
 rundesk logs [-n <lines>] [--source <source>] <agent>                                                                                                                                                                   what an agent has been saying
 
 # reaching it
@@ -132,6 +132,7 @@ rundesk schedules ava off nightly
 --conversation <conversation>   which conversation to carry on — this terminal's, when left out
 --conversation <where>          only what was said in one place on it — the direct message or room, either as the WHERE column prints it or in the platform's own word alone
 --expired                       instead, the one-time schedules whose moment has gone — whether each ran, or whether it passed while nothing was running
+--force                         restart now even when doing so interrupts active work
 --fresh                         start the conversation again rather than carrying it on
 --here                          run it in this terminal instead of handing it to the machine
 --in <where>                    which place on that channel to say it in, in that surface's own words — for Discord: a room name or id, or on a DM channel the person's user id (the same id as --allow) or the DM channel id. Left out, it follows the conversation

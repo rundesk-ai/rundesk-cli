@@ -145,10 +145,12 @@ class CarriesAConversation(unittest.IsolatedAsyncioTestCase):
         records.opened(where_it_is, channel, "somewhere", conversation, AT)
         records.remember_session(where_it_is, brain, handle)
 
-    def answering(self, surface, brain, record=None, querying=None) -> answering.Answering:
+    def answering(self, surface, brain, record=None, querying=None,
+                  restart_waiting=None, restart_ready=None) -> answering.Answering:
         return answering.Answering(
             "ava", "ops", record if record is not None else self.record, surface,
-            where=self.where, carry=brain, note=self.told.append, querying=querying)
+            where=self.where, carry=brain, note=self.told.append, querying=querying,
+            restart_waiting=restart_waiting, restart_ready=restart_ready)
 
     async def carry(self, held, *records, wait=True):
         """Hand these to the channel, and let whatever they started finish."""
@@ -180,6 +182,37 @@ class CarriesAConversation(unittest.IsolatedAsyncioTestCase):
     def arrived(text="what changed?", user="2207", conversation="one", ref="8841") -> dict:
         return {"type": "arrived", "conversation": conversation, "user": user,
                 "text": text, "ref": ref}
+
+
+class QueuedRestartDelivery(CarriesAConversation):
+    async def test_a_queued_restart_waits_for_the_final_answer_delivery(self):
+        """R-GW-43"""
+        releasing = asyncio.Event()
+        final_attempted = asyncio.Event()
+        released = []
+
+        class SlowFinal(Surface):
+            async def __call__(mine, said):
+                record = json.loads(said)
+                if record.get("state") == channel.FINISHED:
+                    final_attempted.set()
+                    await releasing.wait()
+                await super().__call__(said)
+
+        surface = SlowFinal()
+        held = self.answering(
+            surface, Brain(),
+            restart_waiting=lambda run: run == "1-aaaa",
+            restart_ready=lambda run: released.append((run, list(surface.states))),
+        )
+        await held.heard(self.arrived())
+        await asyncio.wait_for(final_attempted.wait(), timeout=1)
+        self.assertEqual([], released, "the restart was released before the final answer")
+        releasing.set()
+        await self._settled(held)
+        self.assertEqual([
+            ("1-aaaa", [channel.TAKEN, channel.RUNNING, channel.FINISHED])
+        ], released)
 
 
 class WhereABrainIsAnswering(CarriesAConversation):
@@ -1796,6 +1829,27 @@ class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(brain.asked))
         self.assertEqual(answering.AFTER_UPDATE, brain.asked[0]["prompt"])
         self.assertEqual("rundesk", brain.asked[0]["prompt_author"])
+
+    async def test_a_completed_restart_is_delivered_without_starting_another_turn(self):
+        """R-GW-43"""
+        where = Path(tempfile.mkdtemp(prefix="rundesk-restart-notice-"))
+        self.addCleanup(shutil.rmtree, where, True)
+        agents.add("ava", where)
+        agents.remember("ava", where, provider="a-brain")
+        agents.records("ava", where).opened(
+            store.conversation_id("ops", "one"), "ops", "somewhere", "one", AT
+        )
+        brain, surface = Brain(), Surface()
+        held = answering.Answering(
+            "ava", "ops", {"kind": "somewhere", "allow": ["2207"]},
+            surface, where=where, carry=brain,
+        )
+        held.connected = True
+
+        await held.told_restart_finished("one", "Rundesk restart succeeded")
+
+        self.assertEqual("Rundesk restart succeeded", surface.of("said")[0]["text"])
+        self.assertEqual([], brain.asked)
 
 
 if __name__ == "__main__":

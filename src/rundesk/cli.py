@@ -40,6 +40,7 @@ from rundesk import gateway as _gateway  # noqa: E402
 from rundesk import migration  # noqa: E402
 from rundesk import process  # noqa: E402
 from rundesk import provider  # noqa: E402
+from rundesk import restart_request  # noqa: E402
 from rundesk import schedule as schedules  # noqa: E402
 from rundesk import script  # noqa: E402
 from rundesk import skill  # noqa: E402
@@ -397,6 +398,11 @@ def build_parser() -> argparse.ArgumentParser:
     cycled = sub.add_parser("restart", help="cycle an agent, leaving the others alone")
     cycled.add_argument("name", nargs="?", metavar="<agent>", help="which agent")
     cycled.add_argument("--all", action="store_true", help="every agent on this machine")
+    cycled.add_argument(
+        "--force", action="store_true",
+        help="restart now even when doing so interrupts active work",
+    )
+    cycled.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
 
     listed_agents = sub.add_parser("agents", help="every agent this install has, and what each is doing")
     listed_agents.add_argument("name", nargs="?", metavar="<agent>",
@@ -777,6 +783,8 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
 
 UPDATE_WAIT_SECONDS = 30 * 60
 UPDATE_POLL_SECONDS = 1.0
+RESTART_POLL_SECONDS = 1.0
+RESTART_DEFERRED = 75
 UPDATE_RUN_SECONDS = 30 * 60
 
 
@@ -800,6 +808,105 @@ def _origin_of_update(agents) -> dict:
                 break
         return origin
     return origin
+
+
+def _queue_restart(machine, name: str, origin: dict) -> int:
+    """Hand a busy gateway restart to a process that gateway does not own (R-GW-43)."""
+    if not machine.available():
+        print(f"{name}: RESTART NOT QUEUED — this machine has no usable supervisor",
+              file=sys.stderr)
+        return 1
+    try:
+        if not machine.loaded(name):
+            print(f"{name}: RESTART NOT QUEUED — it is not supervised", file=sys.stderr)
+            return 1
+        row, created = restart_request.queue(name, origin)
+        loaded = machine.restart_worker_loaded()
+        said = (
+            machine.kick_restart_worker()
+            if loaded else machine.install_restart_worker()
+        )
+    except machine.Unsure as why:
+        print(f"{name}: RESTART NOT QUEUED — {why}", file=sys.stderr)
+        return 1
+    except machine.NotOurs as why:
+        print(f"{name}: RESTART NOT QUEUED — {why}", file=sys.stderr)
+        return 1
+    except restart_request.Unreadable as why:
+        print(f"{name}: RESTART NOT QUEUED — {why}", file=sys.stderr)
+        return 1
+    if not said.ok:
+        why = said.said or "the supervisor refused the worker"
+        restart_request.finish(name, row["id"], "failed", why)
+        print(f"{name}: RESTART NOT QUEUED — {why}", file=sys.stderr)
+        return 1
+    state = "RESTART QUEUED" if created else "RESTART ALREADY QUEUED"
+    print(f"{name}: {state} — it will restart automatically after active work finishes")
+    return 0
+
+
+def _restart_in_flight(name: str, gateways, agents) -> list[str]:
+    run_home = agents.resolved(name).run
+    if not _standing(name, gateways, agents).running:
+        return []
+    found = [
+        one for one in gateways.what_is_working(name, run_home)
+        if not one.startswith("channel:")
+    ]
+    found.extend(f"turn:{row['run']}"
+                 for row in gateways.what_is_turning(name, run_home))
+    return sorted(found)
+
+
+def _run_restart_worker(gateways, machine, agents) -> int:
+    """Wait outside gateways, cycle each queued target, and persist the outcome."""
+    worst = 0
+    while True:
+        try:
+            pending = restart_request.active()
+        except restart_request.Unreadable as why:
+            print(f"restart worker: FAILED — {why}", file=sys.stderr)
+            return 1
+        if not pending:
+            return worst
+        progressed = False
+        for pending_row in pending:
+            name = pending_row["name"]
+            try:
+                request = (
+                    restart_request.claim(name)
+                    if pending_row.get("state") == "pending"
+                    else pending_row
+                )
+            except restart_request.Unreadable as why:
+                print(f"restart worker: FAILED — {why}", file=sys.stderr)
+                worst = 1
+                continue
+            if request is None:
+                continue
+            if not request.get("ready") or _restart_in_flight(name, gateways, agents):
+                continue
+            args = argparse.Namespace(
+                name=name, all=False, force=False, worker=True,
+            )
+            code = _stand_down(args, gateways, machine, agents, "restart")
+            if code == RESTART_DEFERRED:
+                continue
+            state = "succeeded" if code == 0 else "failed"
+            result = (
+                f"{name} restarted and is online"
+                if code == 0 else f"{name} could not be restarted; see its gateway log"
+            )
+            try:
+                restart_request.finish(name, request["id"], state, result)
+            except (restart_request.Unreadable, RuntimeError) as why:
+                print(f"restart worker: FAILED — {why}", file=sys.stderr)
+                worst = 1
+            else:
+                worst = max(worst, code)
+                progressed = True
+        if not progressed:
+            time.sleep(RESTART_POLL_SECONDS)
 
 
 def _queue_update(machine, origin: dict) -> int:
@@ -2420,6 +2527,8 @@ def cmd_remove(args: argparse.Namespace, gateways, machine, agents) -> int:
 
 
 def cmd_restart(args: argparse.Namespace, gateways, machine, agents) -> int:
+    if getattr(args, "worker", False):
+        return _run_restart_worker(gateways, machine, agents)
     return _stand_down(args, gateways, machine, agents, "restart")
 
 
@@ -2476,6 +2585,38 @@ def _stand_down(args: argparse.Namespace, gateways, machine, agents, verb: str) 
                     print(f"{name}: NO JOB — nothing to stop")
                 continue
             if verb == "restart":
+                if (getattr(args, "worker", False)
+                        and not _standing(name, gateways, agents).running):
+                    # The external worker may have died after stopping the gateway and
+                    # before starting it. Its durable request is still running, so the
+                    # retry finishes the missing half instead of asking a stopped job to
+                    # stop again and calling the recoverable state a failure (R-GW-43).
+                    said = machine.start(name)
+                    if not said.ok:
+                        print(f"{name}: FAILED — queued restart found it stopped, and "
+                              f"the supervisor refused to start it: {said.said}",
+                              file=sys.stderr)
+                        worst = 1
+                        continue
+                    up = _came_up(name, gateways, agents)
+                    if up is None:
+                        print(f"{name}: FAILED — queued restart found it stopped, but "
+                              "it did not come back", file=sys.stderr)
+                        worst = 1
+                        continue
+                    print(f"{name}: RESTARTED (pid {up.pid})")
+                    continue
+                protected = _restart_in_flight(name, gateways, agents)
+                if protected and not getattr(args, "force", False):
+                    if getattr(args, "worker", False):
+                        return RESTART_DEFERRED
+                    worst = max(
+                        worst,
+                        _queue_restart(
+                            machine, name, _origin_of_update(agents),
+                        ),
+                    )
+                    continue
                 stopped = machine.stop(name)
                 if not stopped.ok:
                     print(f"rundesk {name}: could not ask it to stop — {stopped.said}",
