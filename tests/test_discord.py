@@ -2149,7 +2149,7 @@ class WhatTheOwnerIsTold(unittest.TestCase):
         """R-DIS-32"""
         self.assertEqual("Rundesk – Winston", discord.gateway_name("winston"))
         self.assertEqual("Rundesk – Agent Name", discord.gateway_name("agent-name"))
-        self.assertEqual("Rundesk – iOS Helper", discord.gateway_name("iOS Helper"))
+        self.assertEqual("Rundesk – iOS Helper", discord.gateway_name("iOS Helper", exact=True))
 
     def test_a_discord_gateway_name_stays_inside_the_platform_limit(self):
         """R-DIS-32"""

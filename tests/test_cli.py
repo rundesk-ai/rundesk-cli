@@ -782,6 +782,7 @@ class FakeAgents:
     checked = staticmethod(real_agent.checked)
     slug = staticmethod(real_agent.slug)
     creation_name = staticmethod(real_agent.creation_name)
+    command_name = staticmethod(real_agent.command_name)
     NotAnAgentName = real_agent.NotAnAgentName
     Where = real_agent.Where
 
@@ -837,6 +838,10 @@ class FakeAgents:
 
     def known(self):
         return sorted(self._made)
+
+    def identities(self):
+        legacy = ["gateway"] if self._wrote else []
+        return sorted(set(self._made + legacy))
 
     def home(self, name):
         return self._at / name / "home"

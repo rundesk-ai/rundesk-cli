@@ -20,6 +20,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -115,6 +116,18 @@ class NamingANewAgent(unittest.TestCase):
         self.assertEqual(
             "Agent_Name", agent.creation_name("Agent Name", ["Agent_Name"]))
 
+    def test_exact_case_wins_when_legacy_agents_differ_only_by_case(self):
+        """R-AGT-40 — exact supervisor invocations remain unambiguous on Linux."""
+        existing = ["Winston", "winston"]
+        self.assertEqual("Winston", agent.creation_name("Winston", existing))
+        self.assertEqual("winston", agent.creation_name("winston", existing))
+        with self.assertRaises(agent.NotAnAgentName):
+            agent.creation_name("WINSTON", existing)
+
+    def test_an_unmatched_command_preserves_a_legacy_gateway_name(self):
+        """R-AGT-13 — a pre-agent supervisor command must not change identity."""
+        self.assertEqual("Winston", agent.command_name("Winston"))
+
     def test_ambiguous_legacy_spellings_are_refused(self):
         """R-AGT-40"""
         with self.assertRaises(agent.NotAnAgentName):
@@ -128,6 +141,22 @@ class NamingANewAgent(unittest.TestCase):
         """R-AGT-40 — resolving the existing population skips only the legacy name
         that cannot itself be represented as today's slug."""
         self.assertEqual("new-agent", agent.creation_name("New Agent", ["代理"]))
+
+
+class ResolvingLegacyGatewayNames(WithSomewhereToKeepAgents):
+    def test_shared_history_preserves_the_gateway_spelling_during_adoption(self):
+        """R-AGW-1, R-AGT-13 — pre-agent history is an existing identity."""
+        (self.before / "logs" / "Winston.log").write_text("kept")
+        names = agent.identities(self.where, self.before / "run", self.before / "logs")
+        self.assertIn("Winston", names)
+        self.assertEqual("Winston", agent.creation_name("winston", names))
+
+    def test_rotated_history_alone_preserves_the_gateway_spelling(self):
+        """R-AGW-5 — rotation may be the only surviving artifact."""
+        (self.before / "logs" / "Agent_Name.log.1").write_text("kept")
+        names = agent.identities(self.where, self.before / "run", self.before / "logs")
+        self.assertIn("Agent_Name", names)
+        self.assertEqual("Agent_Name", agent.creation_name("Agent Name", names))
 
 
 class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
@@ -498,6 +527,16 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         agent.add("ios-helper", self.where, display_name="iOS Helper")
         says = (agent.home("ios-helper", self.where) / "SOUL.md").read_text()
         self.assertIn("iOS Helper", says)
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+
+    def test_retry_repairs_display_name_after_interrupted_first_creation(self):
+        """R-AGT-39 — a failed final write cannot permanently lose owner spelling."""
+        with mock.patch.object(
+            store.Store, "remember_display_name", side_effect=RuntimeError("interrupted")
+        ):
+            with self.assertRaises(RuntimeError):
+                agent.add("ios-helper", self.where, display_name="iOS Helper")
+        agent.add("ios-helper", self.where, display_name="iOS Helper")
         self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
 
     def test_an_install_with_nothing_to_make_an_agent_from_says_so(self):

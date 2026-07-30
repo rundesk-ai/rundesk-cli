@@ -190,7 +190,7 @@ MARKS = {"finished": "✅", "stopped": "✋", "failed": "⚠️"}
 SEEN = "👀"
 
 
-def gateway_name(agent: str) -> str:
+def gateway_name(agent: str, exact: bool = False) -> str:
     """How this agent's Discord gateway identifies itself (R-DIS-32).
 
     New agents arrive with the exact display spelling their owner chose. The separator
@@ -198,10 +198,11 @@ def gateway_name(agent: str) -> str:
     directory. Discord refuses its own name anywhere in a username, so that rare agent
     name is shown as ``D-cord`` rather than making the whole rename fail.
     """
-    words = [word for word in re.split(r"[-_.]+", agent.strip()) if word]
+    stripped = agent.strip()
+    words = [word for word in re.split(r"[-_.]+", stripped) if word]
     if not words:
         return ""
-    shown = " ".join(word[:1].upper() + word[1:] for word in words)
+    shown = stripped if exact else " ".join(word[:1].upper() + word[1:] for word in words)
     shown = re.sub("discord", "D-cord", shown, flags=re.IGNORECASE)
     room = BOT_NAME_CHARS - len(BOT_PREFIX)
     if len(shown) > room:
@@ -646,10 +647,10 @@ class Agent(discord.Client):
         the same identity. Failure is non-fatal and visible in the gateway log; naming
         must never make a reachable agent deaf.
         """
+        display = os.environ.get("RUNDESK_AGENT_NAME")
         wanted = gateway_name(
-            os.environ.get("RUNDESK_AGENT_NAME")
-            or os.environ.get("RUNDESK_AGENT")
-            or ""
+            display or os.environ.get("RUNDESK_AGENT") or "",
+            exact=bool(display),
         )
         current = str(getattr(getattr(self, "user", None), "name", "") or "")
         if not wanted or wanted == current or wanted == getattr(self, "profile_named", None):

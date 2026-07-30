@@ -150,10 +150,16 @@ def creation_name(name: str, existing=()) -> str:
     from one human name; on macOS it would silently address the old directory instead.
     Resolve that difference deliberately, and refuse an already-ambiguous legacy set.
 
-    Exact case-insensitive legacy names are considered before ASCII slugging. Older
-    releases admitted Unicode names that have no ASCII spelling; one such directory must
-    remain reachable and must never stop an unrelated new agent from being made.
+    Exact spelling wins first, then an unambiguous case-insensitive legacy match is
+    considered before ASCII slugging. Older releases admitted Unicode names that have no
+    ASCII spelling; one such directory must remain reachable and must never stop an
+    unrelated new agent from being made.
     """
+    existing = tuple(existing)
+    # Exact spelling is an identity, even on a case-sensitive machine that has both
+    # `Winston` and `winston` from an older release. Only an alias may be ambiguous.
+    if name in existing:
+        return name
     same = sorted(one for one in existing if one.casefold() == name.casefold())
     if len(same) > 1:
         raise NotAnAgentName(
@@ -176,6 +182,21 @@ def creation_name(name: str, existing=()) -> str:
             f"'{name}' matches more than one existing agent: {', '.join(matches)}"
         )
     return matches[0] if matches else made
+
+
+def command_name(name: str, existing=()) -> str:
+    """Resolve a command alias without renaming an unmatched legacy gateway.
+
+    Creation deliberately invents a lowercase slug. Other commands do not invent
+    identities: an old supervisor may still invoke ``serve Winston`` before that
+    gateway has an agent or any surviving state. Preserve that exact spelling when
+    there is no known alias target (R-AGT-13, R-AGT-40).
+    """
+    existing = tuple(existing)
+    resolved = creation_name(name, existing)
+    if resolved in existing:
+        return resolved
+    return checked(name)
 
 
 def agents_home() -> Path:
@@ -389,6 +410,45 @@ def known(where: Path | None = None) -> list[str]:
     )
 
 
+def identities(
+    where: Path | None = None,
+    run: Path | None = None,
+    logs: Path | None = None,
+) -> list[str]:
+    """Agent directories and legacy gateway spellings that commands can still address.
+
+    A gateway predating agents may be represented only by shared run state or history.
+    Those spellings must participate in alias resolution so ``Winston`` is not silently
+    split into a new ``winston`` identity during adoption (R-AGW-1, R-AGT-13).
+    """
+    found = set(known(where))
+    found.update(one.name for one in gateway.every(run))
+    log_home = logs or gateway.logs_home()
+    try:
+        entries = tuple(log_home.iterdir())
+    except OSError:
+        entries = ()
+    probe = "0"
+    suffixes = tuple(
+        path.name[len(probe):] for path, _ in _wrote_before(probe, log_home)
+    )
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        for suffix in suffixes:
+            match = re.fullmatch(rf"(.+){re.escape(suffix)}(?:\.\d+|\.changing)?", entry.name)
+            if not match:
+                continue
+            candidate = match.group(1)
+            try:
+                gateway.checked(candidate)
+            except gateway.NotAName:
+                continue
+            found.add(candidate)
+            break
+    return sorted(found)
+
+
 def exists(name: str, where: Path | None = None) -> bool:
     """Whether there is an agent of this name."""
     try:
@@ -432,7 +492,9 @@ def add(name: str, where: Path | None = None, display_name: str | None = None) -
         made.extend(require_skills(name, where))
     kept = store.Store(records)
     kept.made()
-    if fresh and display_name is not None:
+    if display_name is not None and (fresh or kept.display_name() == name):
+        # A retry after interruption between schema creation and this write repairs the
+        # migration fallback instead of losing the owner's spelling permanently.
         kept.remember_display_name(display_name.strip())
     if fresh:
         made.append(store.NAME)

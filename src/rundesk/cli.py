@@ -1519,7 +1519,7 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
         print("        what there is already: rundesk agents", file=sys.stderr)
         return 1
     try:
-        name = agents.creation_name(given, agents.known())
+        name = agents.creation_name(given, agents.identities())
     except agents.NotAnAgentName as why:
         print(f"{given}: INVALID NAME — {why}", file=sys.stderr)
         return 1
@@ -4098,7 +4098,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
     # its lowercase directory slug (R-AGT-40).
     if named is not None and args.command != "add":
         try:
-            args.name = agents.creation_name(named, agents.known())
+            args.name = agents.command_name(named, agents.identities())
         except agents.NotAnAgentName as why:
             print(f"{named}: INVALID NAME — {why}", file=sys.stderr)
             return 1
