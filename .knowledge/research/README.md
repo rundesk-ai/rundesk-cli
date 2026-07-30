@@ -8,6 +8,7 @@ Add a row when you add a note; `doc-lint` fails the build if one is missing. New
 
 | Last updated | Note | Question it answers |
 |---|---|---|
+| 2026-07-29 | [What a gateway tells its agent, before anybody else does](./2026-07-29-what-a-gateway-tells-its-agent.md) | What internal prompt text do comparable self-hosted agent gateways ship to their agents, how is it layered against what an owner writes, and what does that say about the shape and contents of rundesk's own standing words? |
 | 2026-07-28 | [The Antigravity CLI as an agent's brain](./2026-07-28-antigravity-cli-as-a-brain.md) | What does the official Antigravity CLI actually do when driven headlessly, and which behavior must a Rundesk provider adapter absorb? |
 | 2026-07-27 | [Which skills each installed brain discovers](./2026-07-27-skills-a-brain-discovers.md) | Where does each installed provider CLI look for skills, what does it actually load, and what mechanism can present one skill to every brain without a vendor path leaving `src/providers/`? |
 | 2026-07-27 | [What makes a SKILL.md a model triggers and uses](./2026-07-27-authoring-a-skill.md) | What are the durable rules for writing a skill, so that our own guide and our shipped skill-writing skill teach what the field already knows rather than what we guessed? |

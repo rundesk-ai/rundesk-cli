@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from rundesk import ROOT, __version__, data_home, gateway, migration, skill, store
+from rundesk import ROOT, __version__, data_home, gateway, instructions, migration, skill, store
 from rundesk import config
 
 #: What a new agent's home is copied from. Ordinary Markdown files rather than text built
@@ -630,84 +630,33 @@ def chosen(name: str, where: Path | None = None) -> dict:
 #: Said here rather than left to the home an agent loads, because a home is the owner's to edit
 #: and this is the one thing that must be true whatever they wrote — an agent that has been
 #: given no rules at all still knows what it is running inside and how to find out what it did.
-STANDING = """\
-You are {name}, an agent running inside rundesk.
-
-Your memory is per conversation; rundesk's record is not. Work you did on a schedule, in \
-another chat or in the terminal is written down and is not in your memory here. So when \
-something refers to work you cannot place, look it up before answering rather than guessing \
-or saying you have no access:
-
-  rundesk messages {name}                      what was said, newest first
-  rundesk messages {name} --conversation <id>  this room or direct message alone
-  rundesk messages {name} --source schedule    only what the clock started
-
-Rundesk is what runs you, and the `rundesk` command is how it is operated — your schedules \
-and your channels. **Anything else on this machine offering \
-"schedules" or "tasks" is not this**, whatever it is called: `rundesk --help` is the authority, \
-and a question about your schedules is answered by `rundesk schedules {name}`.
-
-Everything else rundesk does is in your `managing-rundesk` skill, and `rundesk --help` always \
-works."""
+STANDING = instructions.RUNDESK_INSTRUCTIONS
 
 
 def standing(name: str) -> str:
     """Rundesk's own words to a turn, for this agent. One place, so it is one wording."""
-    return STANDING.format(name=name)
+    return instructions.build(variables={"agent": name})
 
 
-def told(name: str, where: Path | None = None, said: str = "", otherwise: str = "",
+def added_instructions(name: str, where: Path | None = None) -> str:
+    """What this agent's owner adds to Rundesk's instructions, or nothing."""
+    mine = chosen(name, where).get("instructions")
+    return mine if isinstance(mine, str) and mine.strip() else ""
+
+
+def told(name: str, where: Path | None = None, said: str = "",
          regardless: str = "") -> str:
     """What a turn for this agent is told about its situation, before it reads a prompt.
 
-    **Rundesk's own words first, and then the nearest thing anybody else said** (R-AGT-16,
-    R-AGT-17). What an owner writes is *added to* ours rather than replacing it: they are
-    answering different questions — ours says what the agent is and how to find out what it
-    has done, theirs says what to do about the situation — and an agent that lost the first
-    because its owner supplied the second would be told where it is by nobody.
-
-    Among the rest the nearest still wins: the schedule's or the turn's own, then the surface
-    it arrived on, then the agent's, then whatever rundesk would have said about that
-    situation. `said` is whatever the nearer two came to and `otherwise` is rundesk's own
-    sentence about the situation, so every caller hands in what it knows and none of them has
-    to know the order.
-
-    `regardless` is the exception, and it is rundesk's too: what is structurally true of this
-    turn whatever anybody wrote (R-AGT-34). It follows R-AGT-17's rule rather than R-AGT-16's
-    — always present, with the owner's words added to it — because it is not something an
-    owner could be disagreeing with by saying anything at all.
-
-    Written once because the order is the guarantee. Each caller working it out would be four
-    orders that agree until one of them does not, and the way that fails is silent: an agent
-    told the wrong thing about where it is answers perfectly well, and wrongly.
+    **Rundesk's own words first, then every applicable layer** (R-AGT-16, R-AGT-17,
+    R-AGT-34, R-AGT-38). `regardless` is Rundesk's trigger-specific context. The agent
+    owner's stored instructions follow, then `said`, which is what this turn or schedule
+    added. Empty layers disappear; no supplied instruction replaces one before it.
     """
-    return "\n\n".join(part for part in (standing(name), _situation(name, where, said,
-                                                                    otherwise, regardless))
-                       if part)
-
-
-def _situation(name: str, where: Path | None, said: str, otherwise: str,
-               regardless: str) -> str:
-    """What rundesk always says about this turn, and the nearest thing anybody else said.
-
-    The two tiers are joined rather than ranked (R-AGT-34, R-AGT-16). A schedule's standing
-    instructions are what to *do*; rundesk's line is what the situation *is*, and an owner
-    writing the first was never saying anything about the second — but it silently replaced
-    it, so a schedule told to focus on high-priority issues was no longer told that nobody
-    was watching or that what it delivers is one report.
-    """
-    return "\n\n".join(part for part in (regardless, _nearest(name, where, said, otherwise))
-                       if part and part.strip())
-
-
-def _nearest(name: str, where: Path | None, said: str, otherwise: str) -> str:
-    """The nearest thing anybody said about *this* turn's situation, or nothing (R-AGT-16)."""
-    if said and said.strip():
-        return said
-    mine = chosen(name, where).get("instructions")
-    if isinstance(mine, str) and mine.strip():
-        return mine
-    return otherwise
+    return instructions.build(
+        variables={"agent": name},
+        append=(regardless, added_instructions(name, where), said),
+    )
 
 
 def remember(name: str, where: Path | None = None, provider: str | None = None,

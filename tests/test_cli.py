@@ -976,17 +976,18 @@ class FakeAgents:
                 keeping[what] = value
         return keeping
 
-    def told(self, name, where=None, said="", otherwise=""):
-        """The same three tiers the real one has, over what this stand-in keeps.
+    def told(self, name, where=None, said="", regardless=""):
+        """The same additive tiers the real one has, over what this stand-in keeps.
 
         Written out rather than borrowed because the real one reads a store and this keeps a
-        dict — and kept to three lines, so the order is visible here rather than buried. A
+        dict — and kept short, so the order is visible here rather than buried. A
         stand-in that answered differently would let a case pass against an agent told the
         wrong thing (see `agent.told`)."""
-        if said and said.strip():
-            return said
         mine = self._chosen.get(name, {}).get("instructions")
-        return mine if mine and mine.strip() else otherwise
+        return "\n\n".join(
+            one.strip() for one in (regardless, mine, said)
+            if isinstance(one, str) and one.strip()
+        )
 
 
 class FakeMachine:
@@ -3200,12 +3201,15 @@ raise SystemExit(1)
         drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
                "--allow", "2207"], self._gateways(), agents=self.agents)
         code, said = drive(["channels", "ava", "instructions", "ops",
-                            "You are in {where}. Others read this."],
+                            "You are in {channel_where}. Others read this."],
                            self._gateways(), agents=self.agents)
         self.assertEqual(0, code)
         self.assertIn("INSTRUCTED", said)
         kept = self.kept()
-        self.assertEqual("You are in {where}. Others read this.", kept[channel.INSTRUCTIONS])
+        self.assertEqual(
+            "You are in {channel_where}. Others read this.",
+            kept[channel.INSTRUCTIONS],
+        )
         _, back = drive(["channels", "ava", "instructions", "ops"], self._gateways(),
                         agents=self.agents)
         self.assertIn("Others read this", back)

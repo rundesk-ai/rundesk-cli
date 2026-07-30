@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
+from rundesk import instructions
+
 #: The five fields a schedule is stated in, in order, and what each may say.
 FIELDS = (
     ("minute", 0, 59),
@@ -455,10 +457,9 @@ A_MINUTE = "%Y-%m-%d %H:%M"
 def by_default(named: str) -> str:
     """The one line rundesk says to a turn the clock started (R-SCH-30).
 
-    **Not the last resort the other default sentences are.** A surface's
-    (`channel.by_default`) is displaced by anything an owner writes, because where a turn
-    arrived from is something an owner may describe better. This one is not: that nobody is
-    watching is true of every turn the clock started, on every install, and an owner writing
+    **Not an owner-written layer.** Where a channel turn arrived from is something an owner
+    may describe better. This one is not: that nobody is watching is true of every turn the
+    clock started, on every install, and an owner writing
     "focus on the high-priority issues" is not disagreeing with it. So it is always present
     and what an owner writes is added to it (R-AGT-34) — untouched, an ordinary line of
     standing instructions silently deleted rundesk's only statement of the situation.
@@ -477,13 +478,12 @@ def by_default(named: str) -> str:
     then decides whether to call another tool, so which thought was its last is knowable only
     once the turn is over. The first it can comply with — one thought, written at the end.
     """
-    named = str(named or "").strip()
-    return (f"Nothing asked you this: the schedule '{named}' came due and started you. "
-            if named else "Nothing asked you this: a schedule came due and started you. ") + (
-        "Nobody is watching, so a question will not be answered — say what you found "
-        "instead. What you say is recorded, and posted where this agent is reached: only "
-        "the last whole thing you write is delivered, so write nothing until the work is "
-        "finished, and make that one report.")
+    if not isinstance(named, str) or not named.strip():
+        raise ValueError("a schedule name is required for its trigger instructions")
+    return instructions.render(
+        instructions.SCHEDULE_INSTRUCTIONS,
+        {"schedule": named.strip()},
+    )
 
 
 def describe(one: Schedule, moment: datetime) -> str:

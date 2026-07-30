@@ -34,7 +34,7 @@ import os
 import re
 from pathlib import Path
 
-from rundesk import gateway, process, provider
+from rundesk import gateway, instructions, process, provider
 
 #: Where the adapters that ship with rundesk stand. Read by looking rather than listed, so
 #: one added later is reachable the day it lands and no second copy of the list can come to
@@ -92,10 +92,29 @@ WHERE, CALLED = "where", "called"
 #: rules for composing one.
 INSTRUCTIONS = "instructions"
 
+# Optional per-arrival adapter hooks. An override replaces only the channel-specific
+# instruction; an append follows it. Rundesk's core instructions are never replaceable.
+PROMPT_OVERRIDE = "prompt_override"
+PROMPT_APPEND = "prompt_append"
+# One exact adapter-owned prompt that its current trigger supersedes. This exists for
+# adapters migrating defaults they previously stored as owner instructions: only an exact
+# match is omitted, so anything the owner changed remains additive.
+PROMPT_REPLACES = "prompt_replaces"
+
+# Optional standardized context supplied by an adapter. These are communication concepts,
+# never platform concepts; Discord's server, for example, is a parent place here.
+ADAPTER_VARIABLES = (
+    "channel_name", "channel_id", "channel_parent_name", "channel_parent_id",
+    "channel_thread_name", "channel_thread_id",
+)
+
 #: What an owner may write `{like this}` and have filled in. Closed, because a name that is
 #: not here is a typo, and a typo that silently becomes empty is an instruction that quietly
 #: stopped saying what it said. Refused when it is written, not when a turn runs.
-FILLED = ("agent", "kind", "channel", "where", "called", "user", "conversation")
+FILLED = instructions.STANDARD_VARIABLES
+# Names accepted before the standardized vocabulary. Existing owner instructions keep
+# rendering, while new adapters and documentation use the communication-agnostic names.
+LEGACY_VARIABLES = ("kind", "channel", "where", "called", "conversation")
 
 #: The pieces `where` was made of, each written `{where.channel}`. `where` on its own is the
 #: whole phrase the surface would show a person — "#ops on the Acme server" — and a phrase
@@ -126,9 +145,9 @@ SHAPE_AT = "suffix"
 #: thousand shapes would otherwise write a thousand records under one command.
 SHAPES_MOST = 8
 
-#: How much of a preface is carried. Standing instructions are the owner's own words and
-#: nobody is trying to defend against them — but a turn whose preface is longer than the
-#: conversation is one nobody meant to write, and a record is not somewhere to put a book.
+#: How much one externally supplied instruction layer may carry. Each layer is bounded at
+#: ingestion; the completed stack is not clipped, because doing so would silently replace
+#: whichever later append-only layers fell beyond the boundary.
 INSTRUCTIONS_MOST = 4000
 
 #: How much of either is carried. These are a stranger's words on their way into a prompt,
@@ -351,6 +370,11 @@ def understood(said: bytes | str) -> dict | None:
         if not it["text"] and not it[ATTACHED]:
             return None
         it[WHERE], it[CALLED] = plainly(it.get(WHERE)), plainly(it.get(CALLED))
+        for key in (PROMPT_OVERRIDE, PROMPT_APPEND, PROMPT_REPLACES):
+            value = it.get(key)
+            it[key] = value.strip()[:INSTRUCTIONS_MOST] if isinstance(value, str) else ""
+        for key in ADAPTER_VARIABLES:
+            it[key] = plainly(it.get(key))
     return it
 
 
@@ -413,66 +437,84 @@ def surface(kind: str) -> str:
     return kind
 
 
-def preface(record: dict, agent: str, name: str, it: dict, otherwise: str = "") -> str:
-    """What this agent is told about its situation, for this arrival (R-CH-22).
+def preface(record: dict, agent: str, name: str, it: dict, append: str = "") -> str:
+    """Build core, channel, adapter, and owner instructions for this arrival (R-CH-22)."""
+    stored = record.get(INSTRUCTIONS)
+    stored = stored.strip() if isinstance(stored, str) and stored.strip() else ""
+    replaced = it.get(PROMPT_REPLACES)
+    replaced = replaced.strip() if isinstance(replaced, str) and replaced.strip() else ""
+    if stored and stored == replaced and _shipped_adapter(record.get("kind")):
+        stored = ""
+    arrived = it.get(PROMPT_OVERRIDE)
+    override = arrived.strip() if isinstance(arrived, str) and arrived.strip() else None
+    adapter_append = it.get(PROMPT_APPEND)
+    adapter_append = adapter_append.strip() \
+        if isinstance(adapter_append, str) and adapter_append.strip() else ""
+    variables = prompt_variables(record, agent, name, it)
+    return instructions.build(
+        variables=variables,
+        trigger=_trigger(it),
+        override=override,
+        append=(adapter_append, stored, append),
+    )
 
-    One piece of situational text, because a channel is already one place — see
-    `INSTRUCTIONS`. Rundesk's stable standing words in `otherwise` are kept in front when
-    this channel has words of its own (R-AGT-17); otherwise that argument remains the next
-    situational tier. An owner who has written nothing gets the sentence rundesk would
-    have said anyway.
 
-    Handed in rather than looked up, because what an agent keeps is not this module's to
-    know: this file is the seam a *surface* is reached through and nothing else (R-AGT-16).
-    """
-    said = record.get(INSTRUCTIONS)
-    said = said.strip() if isinstance(said, str) else ""
-    before = otherwise.strip() if said and isinstance(otherwise, str) else ""
-    if not said:
-        said = otherwise.strip() if isinstance(otherwise, str) and otherwise.strip() \
-            else by_default(record, it)
-    filling = {
-        "agent": agent, "channel": name, "kind": surface(record.get("kind")),
-        "where": plainly(it.get(WHERE)), "called": plainly(it.get(CALLED)),
-        "user": str(it.get("user") or ""), "conversation": str(it.get("conversation") or ""),
-        **parts_of(it),
+def prompt_variables(record: dict, agent: str, name: str, it: dict) -> dict[str, str]:
+    """Communication-agnostic builder variables plus legacy owner-written place parts."""
+    parts = parts_of(it)
+    where = plainly(it.get(WHERE))
+    called = plainly(it.get(CALLED))
+    channel_name = plainly(it.get("channel_name"))
+    channel_parent_name = plainly(it.get("channel_parent_name"))
+    channel_thread_name = plainly(it.get("channel_thread_name"))
+    user_id = str(it.get("user") or "")
+    channel_where = (
+        where or channel_thread_name or channel_name or channel_parent_name
+        or ("this public conversation" if it.get("direct") is False else "")
+    )
+    user = called or user_id or "the user"
+    variables = {
+        "agent": agent,
+        "channel_kind": surface(record.get("kind")),
+        "channel_config_name": name,
+        "channel_name": channel_name,
+        "channel_id": plainly(it.get("channel_id")),
+        "channel_parent_name": channel_parent_name,
+        "channel_parent_id": plainly(it.get("channel_parent_id")),
+        "channel_thread_name": channel_thread_name,
+        "channel_thread_id": plainly(it.get("channel_thread_id")),
+        "channel_where": channel_where,
+        "user": user,
+        "user_id": user_id,
+        "conversation_id": str(it.get("conversation") or ""),
+        "schedule": "",
+        # Existing stored channel instructions may still use the names shipped before
+        # the builder standardized them. They remain fillable but are not public variables.
+        "called": called,
+        "kind": surface(record.get("kind")),
+        "channel": name,
+        "where": where,
+        "conversation": str(it.get("conversation") or ""),
+        **parts,
     }
-    situated = _fill(said, filling)
-    return "\n\n".join(part for part in (before, situated) if part)[:INSTRUCTIONS_MOST]
+    return variables
 
 
-def by_default(record: dict, it: dict) -> str:
-    """The one line rundesk says when nobody has said anything (R-CH-21).
-
-    **Not the channel's name.** That is the label an owner gave this connection when they
-    set it up — `dms`, `ops`, `the-loud-one` — and it means nothing to a brain except that
-    the word "channel" now appears twice in one sentence saying two different things. One
-    named `dms`, pointing at a room, had an agent announce it was in "DMs in #development":
-    it reconciled the two the only way the sentence allowed. It is a `{channel}` an owner
-    can write if they want it, and not something rundesk volunteers.
-    """
-    kind = surface(record.get("kind"))
-    if not kind:
-        return ""
-    said = f"This reached you over {kind}"
-    for word, got in ((", in ", plainly(it.get(WHERE))), (", from ", plainly(it.get(CALLED)))):
-        if got:
-            said += word + got
-    return said + ". What you answer is posted straight back there for them to read."
+def _trigger(it: dict) -> str:
+    """Which standardized channel instruction the adapter classified this arrival for."""
+    if it.get("direct") is True:
+        return instructions.DIRECT
+    if it.get("direct") is False:
+        return instructions.PUBLIC
+    return ""
 
 
-def _fill(said: str, filling: dict) -> str:
-    """Put what is known in place of each `{name}`, and leave the rest of the text alone.
-
-    Done by hand rather than with `str.format`, which would read a brace an owner wrote
-    for its own sake — in a snippet of JSON, or a shell expansion — as a name it did not
-    recognise, and raise in the middle of a turn. What is here is filled in; anything else
-    is characters, and stays characters.
-    """
-    for name, value in filling.items():
-        if "{" + name + "}" in said:
-            said = said.replace("{" + name + "}", value)
-    return said
+def _shipped_adapter(named) -> bool:
+    """Whether this adapter is code Rundesk shipped, not an arbitrary executable."""
+    try:
+        return program(str(named or "")).parent.resolve() == ADAPTERS.resolve()
+    except NotRunnable:
+        return False
 
 
 def parts_of(it: dict) -> dict:
@@ -504,7 +546,8 @@ def wrong_with_instructions(said, fills=()) -> str:
     # What the surface itself supplies, as the adapter declared it when the channel was
     # added. The core never learns that any platform has servers or workspaces; it only
     # holds an adapter to what it said it would fill in.
-    known = list(FILLED) + [WHERE_IN + one for one in fills or ()]
+    known = list(FILLED) + list(LEGACY_VARIABLES) \
+        + [WHERE_IN + one for one in fills or ()]
     for found in re.findall(r"\{([a-z_][a-z0-9_.]*)\}", said):
         if found not in known:
             return (f"there is nothing called '{found}' to fill in — there is "

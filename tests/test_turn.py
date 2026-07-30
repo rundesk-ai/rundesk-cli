@@ -1287,6 +1287,18 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
         self.assertEqual("what changed?", json.loads(said)["prompt"].strip(),
                          "standing instructions were folded into what was asked")
 
+    def test_command_instructions_append_after_the_agents_instructions(self):
+        """R-AGT-16 — one turn's instructions never replace the agent owner's."""
+        self.ask("configure", "ava", "--provider", self.brain("nosy"))
+        agent.remember("ava", self.where, instructions="Agent default.")
+        code, said, why = self.ask(
+            "ask", "ava", "what changed?", "--instructions", "Turn addition."
+        )
+        self.assertEqual(0, code, why)
+        preface = json.loads(said)["told"]["RUNDESK_PREFACE"]
+        self.assertLess(preface.index("Agent default."), preface.index("Turn addition."))
+        self.assertTrue(preface.startswith(agent.standing("ava")))
+
     def test_a_turn_is_always_told_rundesks_own_words_whatever_else_it_was_told(self):
         """R-PRV-3, R-PRV-23 — unset rather than empty, so an adapter reading it can
         trust that there is something to act on."""
