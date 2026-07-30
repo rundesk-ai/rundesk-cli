@@ -564,6 +564,10 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         )
         agent.add("ios-helper", self.where, display_name="IOS HELPER")
         self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+        self.assertIn(
+            "iOS Helper",
+            (agent.home("ios-helper", self.where) / "SOUL.md").read_text(),
+        )
 
     def test_pending_staging_never_follows_an_owners_symlink(self):
         """R-AGT-4 — recovery state cannot overwrite another owner file."""
@@ -573,6 +577,18 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         owner.write_text("KEEP ME")
         pending = at / agent.DISPLAY_PENDING
         pending.with_name(f"{pending.name}.writing").symlink_to(owner)
+        with self.assertRaises(store.Unreadable):
+            agent._write_pending(pending, "iOS Helper")
+        self.assertEqual("KEEP ME", owner.read_text())
+
+    def test_pending_staging_never_overwrites_an_owners_hard_link(self):
+        """R-AGT-4 — an existing linked inode is owner data, not scratch space."""
+        at = agent.directory("ios-helper", self.where)
+        at.mkdir(parents=True)
+        owner = at / "owner-kept.txt"
+        owner.write_text("KEEP ME")
+        pending = at / agent.DISPLAY_PENDING
+        os.link(owner, pending.with_name(f"{pending.name}.writing"))
         with self.assertRaises(store.Unreadable):
             agent._write_pending(pending, "iOS Helper")
         self.assertEqual("KEEP ME", owner.read_text())

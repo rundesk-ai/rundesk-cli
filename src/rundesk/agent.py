@@ -485,6 +485,23 @@ def _write_pending(pending: Path, display_name: str) -> None:
     with os.fdopen(opened, "r+b") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         try:
+            opened_as = os.fstat(handle.fileno())
+            try:
+                published_as = pending.lstat()
+            except FileNotFoundError:
+                published_as = None
+            same_published_inode = (
+                published_as is not None
+                and stat.S_ISREG(published_as.st_mode)
+                and (opened_as.st_dev, opened_as.st_ino)
+                == (published_as.st_dev, published_as.st_ino)
+            )
+            if opened_as.st_nlink != 1 and not (
+                opened_as.st_nlink == 2 and same_published_inode
+            ):
+                raise store.Unreadable(
+                    f"{beside} is linked to something other than pending creation state"
+                )
             if not pending.is_symlink() and not pending.exists():
                 handle.seek(0)
                 staged = _display_from_record(handle.read())
@@ -495,17 +512,22 @@ def _write_pending(pending: Path, display_name: str) -> None:
                     handle.flush()
                     os.fsync(handle.fileno())
                 os.link(beside, pending)
-            folder = os.open(pending.parent, os.O_RDONLY)
-            try:
-                os.fsync(folder)
-            finally:
-                os.close(folder)
             # Removed while the lock is still held. Another writer that already opened
             # this inode sees the published marker; a later one gets a fresh staging file
             # and sees it too. A crash leaves one fixed file a retry can safely resume.
-            beside.unlink(missing_ok=True)
+            _unlink_durable(beside)
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _unlink_durable(path: Path) -> None:
+    """Remove one state path and make that absence survive power loss."""
+    path.unlink(missing_ok=True)
+    folder = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(folder)
+    finally:
+        os.close(folder)
 
 
 def _display_record(display_name: str) -> bytes:
@@ -575,6 +597,7 @@ def add(name: str, where: Path | None = None, display_name: str | None = None) -
         # sees the durable marker and finishes the same creation.
         agent_dir.mkdir(parents=True, exist_ok=True)
         _write_pending(pending, display_name.strip())
+    pending_display = _pending_display(pending)
     for path in made_of(name, where).values():
         if not path.exists():
             path.mkdir(parents=True, exist_ok=True)
@@ -582,7 +605,10 @@ def add(name: str, where: Path | None = None, display_name: str | None = None) -
     for called in knowledge():
         page = home(name, where) / called
         if not page.exists():
-            page.write_text(_copied(called, display_name or name), encoding="utf-8")
+            page.write_text(
+                _copied(called, pending_display or display_name or name),
+                encoding="utf-8",
+            )
             made.append(called)
     # Fresh agents receive the baseline here. Existing populations are reconciled by both
     # upgrade routes after this release's library has been laid down (R-AGT-36).
@@ -590,12 +616,11 @@ def add(name: str, where: Path | None = None, display_name: str | None = None) -
         made.extend(require_skills(name, where))
     kept = store.Store(records)
     kept.made()
-    pending_display = _pending_display(pending)
     if pending_display is not None:
         # A retry reads the first creation's spelling, not whichever alias happened to be
         # typed on the retry. The marker leaves only after the durable database write.
         kept.remember_display_name(pending_display)
-        pending.unlink()
+        _unlink_durable(pending)
     if fresh:
         made.append(store.NAME)
     return sorted(made)

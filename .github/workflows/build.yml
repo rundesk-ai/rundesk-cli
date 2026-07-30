@@ -324,14 +324,26 @@ jobs:
             "$RUNDESK_INSTALL_DIR/data/agents/Legacy_Name/home/owner-kept.txt"
           "$RUNDESK_BIN_DIR/rundesk" version
           "$RUNDESK_BIN_DIR/rundesk" status
-          "$RUNDESK_BIN_DIR/rundesk" agents | grep -q '^existing '
-          "$RUNDESK_BIN_DIR/rundesk" skills |
-            grep -qE '^managing-rundesk-schedules +rundesk +Legacy_Name, existing$'
-          "$RUNDESK_BIN_DIR/rundesk" schedules existing | grep -q 'heartbeat'
-          "$RUNDESK_BIN_DIR/rundesk" agents "Legacy Name" | grep -q '^Legacy_Name '
-          "$RUNDESK_BIN_DIR/rundesk" agents "LEGACY-NAME" | grep -q '^Legacy_Name '
-          "$RUNDESK_BIN_DIR/rundesk" schedules "legacy name" | grep -q 'heartbeat'
-          "$RUNDESK_BIN_DIR/rundesk" add "LEGACY-NAME" | grep -q '^Legacy_Name: ALREADY MADE'
+          "$RUNDESK_BIN_DIR/rundesk" agents | grep -q '^existing ' ||
+            { echo "::error::the existing agent disappeared during upgrade"; exit 1; }
+          held="$("$RUNDESK_BIN_DIR/rundesk" skills)"
+          printf '%s\n' "$held" |
+            grep -qE '^managing-rundesk-schedules +rundesk +.*Legacy_Name' ||
+            { echo "::error::the legacy agent lost its built-in skill grant"; exit 1; }
+          printf '%s\n' "$held" |
+            grep -qE '^managing-rundesk-schedules +rundesk +.*existing' ||
+            { echo "::error::the existing agent lost its built-in skill grant"; exit 1; }
+          "$RUNDESK_BIN_DIR/rundesk" schedules existing | grep -q 'heartbeat' ||
+            { echo "::error::the existing schedule disappeared during upgrade"; exit 1; }
+          "$RUNDESK_BIN_DIR/rundesk" agents "Legacy Name" | grep -q '^Legacy_Name ' ||
+            { echo "::error::a spaced alias did not reach Legacy_Name"; exit 1; }
+          "$RUNDESK_BIN_DIR/rundesk" agents "LEGACY-NAME" | grep -q '^Legacy_Name ' ||
+            { echo "::error::a case-insensitive slug did not reach Legacy_Name"; exit 1; }
+          "$RUNDESK_BIN_DIR/rundesk" schedules "legacy name" | grep -q 'heartbeat' ||
+            { echo "::error::an alias did not reach the legacy schedule"; exit 1; }
+          "$RUNDESK_BIN_DIR/rundesk" add "LEGACY-NAME" |
+            grep -q '^Legacy_Name: ALREADY MADE' ||
+            { echo "::error::repair through an alias did not preserve Legacy_Name"; exit 1; }
           test -d "$RUNDESK_INSTALL_DIR/data/agents/Legacy_Name"
           test ! -e "$RUNDESK_INSTALL_DIR/data/agents/legacy-name"
           "$RUNDESK_BIN_DIR/rundesk" serve existing &
