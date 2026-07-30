@@ -326,7 +326,7 @@ jobs:
           "$RUNDESK_BIN_DIR/rundesk" status
           "$RUNDESK_BIN_DIR/rundesk" agents | grep -q '^existing '
           "$RUNDESK_BIN_DIR/rundesk" skills |
-            grep -qE '^managing-rundesk-schedules +rundesk +existing$'
+            grep -qE '^managing-rundesk-schedules +rundesk +Legacy_Name, existing$'
           "$RUNDESK_BIN_DIR/rundesk" schedules existing | grep -q 'heartbeat'
           "$RUNDESK_BIN_DIR/rundesk" agents "Legacy Name" | grep -q '^Legacy_Name '
           "$RUNDESK_BIN_DIR/rundesk" agents "LEGACY-NAME" | grep -q '^Legacy_Name '
