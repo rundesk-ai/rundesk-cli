@@ -994,7 +994,7 @@ def _within(at: Path, inside: Path) -> bool:
 
 
 def _asked(it: dict) -> str:
-    """What the person actually asked, including anything they attached (R-CH-17).
+    """What the person asked, including attachments and explicit reply context.
 
     A brain is given a prompt, so what somebody attached reaches it the only way
     anything reaches it: named in the words of the turn, by a path on this machine that
@@ -1011,6 +1011,22 @@ def _asked(it: dict) -> str:
     if brought:
         named = "\n".join(f"- {one['name']}: {one['at']}" for one in brought)
         said = f"{said}\n\nAttached to this message, on this machine:\n{named}"
+    reply = it.get(channel.REPLY_TO)
+    if reply:
+        identifier = reply["id"]
+        if reply["resolved"]:
+            author = f" from {reply['author']}" if reply.get("author") else ""
+            quoted = reply.get("text") or "(no text content)"
+            context = (
+                f"This message replies to conversation message {identifier}{author}.\n"
+                f"Quoted message: {quoted}"
+            )
+        else:
+            context = (
+                f"This message replies to conversation message {identifier} "
+                "(quoted text unavailable)."
+            )
+        said = f"{said}\n\n--\n\n{context}"
     return said.strip()
 
 

@@ -819,6 +819,7 @@ class Agent(discord.Client):
             where=_place(message, direct, in_thread), called=_who(message),
             prompt_replaces=LEGACY_INSTRUCTIONS[DMS if direct else ROOMS],
             parts=_parts(message, direct, in_thread),
+            **({"reply_to": reply} if (reply := _reply_to(message)) else {}),
             **_prompt_context(message, direct, in_thread))
 
     async def _fetch(self, message: discord.Message) -> list:
@@ -1468,6 +1469,39 @@ def _who(message) -> str:
     """What Discord shows for the person who spoke, rather than their number."""
     author = message.author
     return str(getattr(author, "display_name", None) or getattr(author, "name", "") or "")
+
+
+def _reply_to(message) -> dict | None:
+    """Discord's native reply reference in Rundesk's shared arrival shape (R-DIS-34)."""
+    reference = getattr(message, "reference", None)
+    if reference is None:
+        return None
+    kind = getattr(reference, "type", None)
+    # discord.py exposes the ordinary reply type as `default`; `reply` is an alias.
+    if kind is not None and getattr(kind, "name", "default") not in ("default", "reply"):
+        return None
+    identifier = getattr(reference, "message_id", None)
+    if identifier is None:
+        return None
+    resolved = (
+        getattr(reference, "resolved", None)
+        or getattr(reference, "cached_message", None)
+    )
+    author = getattr(resolved, "author", None)
+    if resolved is None or author is None or not hasattr(resolved, "content"):
+        return {"id": str(identifier), "resolved": False}
+    called = (
+        getattr(author, "display_name", None)
+        or getattr(author, "name", None)
+        or getattr(author, "id", None)
+        or ""
+    )
+    return {
+        "id": str(identifier),
+        "resolved": True,
+        "author": str(called),
+        "text": str(getattr(resolved, "content", "") or ""),
+    }
 
 
 def _without_mentions(text: str, ours=None) -> str:
