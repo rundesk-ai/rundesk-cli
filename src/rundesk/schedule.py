@@ -455,7 +455,7 @@ A_MINUTE = "%Y-%m-%d %H:%M"
 
 
 def by_default(named: str) -> str:
-    """The one line rundesk says to a turn the clock started (R-SCH-30).
+    """What rundesk says to a turn the clock started.
 
     **Not an owner-written layer.** Where a channel turn arrived from is something an owner
     may describe better. This one is not: that nobody is watching is true of every turn the
@@ -464,19 +464,19 @@ def by_default(named: str) -> str:
     and what an owner writes is added to it (R-AGT-34) — untouched, an ordinary line of
     standing instructions silently deleted rundesk's only statement of the situation.
 
-    **What a brain actually needs to know, and nothing else.** That nothing asked, so there is
-    no question behind this to read between the lines of; that nobody is there, so asking one
-    back is a turn that ends waiting; where what it says will go, so it can write for somebody
-    reading it later rather than for a person watching now; and **that only its last thought is
-    delivered**, which is the one fact here a brain has no way of finding out — it is a
-    property of how rundesk carries a scheduled turn, and a brain that does not know it opens
-    with a line of orientation and buries the report underneath it. Four facts, because a
-    brain given a paragraph about being autonomous starts performing autonomy.
+    **What a brain actually needs to know, and nothing else.** The schedule task is the whole
+    request; nobody is there to answer or approve; one final report is delivered; and that
+    report names a no-action result or the approval-gated action that left it blocked. The
+    delivery rule is the fact a brain has no way of discovering — it is a property of how
+    rundesk carries a scheduled turn, and a brain that does not know it opens with a line of
+    orientation and buries the report underneath it.
 
     The rule is written as *write nothing until the work is finished* rather than as *mark
     your final message*, because a brain cannot honestly do the second: it says something,
     then decides whether to call another tool, so which thought was its last is knowable only
     once the turn is over. The first it can comply with — one thought, written at the end.
+
+    R-SCH-30, R-SCH-47, R-SCH-48, R-SCH-49.
     """
     if not isinstance(named, str) or not named.strip():
         raise ValueError("a schedule name is required for its trigger instructions")

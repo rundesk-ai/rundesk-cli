@@ -280,6 +280,14 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
     #: from one of these, directly or through another that is.
     LOADED = ("AGENTS.md", "CLAUDE.md")
 
+    def test_provider_bootstrap_requires_complete_agent_rules_before_action(self):
+        """R-AGT-39 — the shipped provider bootstrap makes the shared agent rules the
+        first action rather than optional reading after a response has begun."""
+        says = (agent.TEMPLATES / "CLAUDE.md").read_text()
+        self.assertIn("Before you respond to the user, do any task, or any action", says)
+        self.assertIn("[AGENTS.md](./AGENTS.md) completely.", says)
+        self.assertIn("your next step must be to read it first, always.", says)
+
     def test_the_file_every_provider_loads_names_the_ones_none_of_them_do(self):
         """R-AGT-2 — the two files loaded because of where they stand are the only way the
         other three are reached at all: no provider follows a Markdown link for free, and
@@ -872,8 +880,8 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
         from rundesk import schedule
         said = schedule.by_default("nightly")
         self.assertIn("nightly", said, "it never said which schedule started this")
-        self.assertIn("Nothing asked you", said)
-        self.assertIn("will not be answered", said)
+        self.assertIn("No user request started it", said)
+        self.assertIn("Nothing will answer", said)
         self.assertIn("recorded", said, "it never said what becomes of what it says")
 
     def test_a_turn_the_clock_started_is_told_what_it_delivers(self):
@@ -884,9 +892,9 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
         report underneath them."""
         from rundesk import schedule
         said = schedule.by_default("nightly")
-        self.assertIn("last whole thing you write is delivered", said,
+        self.assertIn("last complete message you write is delivered", said,
                       "it never said what becomes of everything before the last")
-        self.assertIn("write nothing until the work is finished", said,
+        self.assertIn("Write nothing until the work is finished", said,
                       "a brain cannot tell which thought will be its last, so the rule it "
                       "can actually follow has to be the one it is given")
 

@@ -32,7 +32,7 @@ from rundesk import config
 
 #: What a new agent's home is copied from. Ordinary Markdown files rather than text built
 #: in code, because they are what an owner reads first and edits next, and a rule about how
-#: an agent is reached is worth keeping where it can be read.
+#: an agent is reached is worth keeping where it can be read (R-AGT-39).
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates" / "agent"
 
 #: The one thing substituted on the way in. Everything else is copied as it stands.
@@ -987,7 +987,7 @@ def asking(name: str, where: Path | None = None, carry=None):
             settings=kept.get("settings"),
             conversation=one.name, on=turns.SCHEDULE, kind=turns.SCHEDULE,
             fresh=True,
-            # The one line rundesk says to a turn nobody is waiting for, which is always
+            # Rundesk's schedule layer for a turn nobody is waiting for, which is always
             # there (R-AGT-34), and then this schedule's own words or the agent's added to
             # it (R-AGT-16).
             preface=told(name, where, said=one.instructions or "",

@@ -3197,7 +3197,7 @@ class WhenTheClockAsksATurn(WithARunDirectory):
                 if one["author"] == "rundesk"]
         self.assertEqual(1, len(told), f"what it was told is not in the account: {told}")
         self.assertIn("nightly", told[0])
-        self.assertIn("will not be answered", told[0])
+        self.assertIn("Nothing will answer", told[0])
 
     async def test_what_a_schedule_was_told_to_say_is_added_to_rundesks_own(self):
         """R-SCH-30, R-AGT-16, R-AGT-17, R-AGT-34 — what the owner wrote is added to
@@ -3228,9 +3228,9 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         told = [one["text"] for one in self.records.messages(run["conversation_id"])
                 if one["author"] == "rundesk"][0]
         self.assertIn("nightly", told, "it never said which schedule started this")
-        self.assertIn("will not be answered", told)
-        self.assertIn("write nothing until the work is finished", told)
-        self.assertLess(told.index("will not be answered"),
+        self.assertIn("Nothing will answer", told)
+        self.assertIn("Write nothing until the work is finished", told)
+        self.assertLess(told.index("Nothing will answer"),
                         told.index("Only look at the deploy log."),
                         "the owner's words came before rundesk's account of the situation")
 

@@ -73,10 +73,17 @@ rundesk messages {agent} --source schedule
 - For rundesk capabilities not covered by these rules, consult your `managing-rundesk` skill or other related skills."""
 
 # Appended when a named schedule starts the run.
-SCHEDULE_INSTRUCTIONS = """Nothing asked you this: the schedule '{schedule}' came due and started you. Nobody is watching,
-so a question will not be answered — say what you found instead. What you say is recorded,
-and posted where this agent is reached: only the last whole thing you write is delivered,
-so write nothing until the work is finished, and make that one report."""
+SCHEDULE_INSTRUCTIONS = """## Scheduled run
+
+The schedule '{schedule}' came due and started this run. No user request started it, and no one is present while it runs.
+
+- Treat the schedule's own task text as the request. Never infer additional work from earlier conversations or past runs.
+- Never ask a question, request approval, or wait for a reply. Nothing will answer, and the run ends when you stop.
+- Write nothing until the work is finished. Only the last complete message you write is delivered; everything before it is discarded.
+- Deliver exactly one report as that final message. It is recorded and posted where this agent is reached.
+- Report what you found. When you found nothing worth acting on, say that in a short direct response.
+- When the work requires an action that needs explicit approval, stop before that action and report `blocked`, naming the action and what it was needed for.
+"""
 
 # Appended when the agent is responding to a direct message.
 DIRECT_MESSAGE = """You are responding through {channel_kind} in a private conversation with {user}."""

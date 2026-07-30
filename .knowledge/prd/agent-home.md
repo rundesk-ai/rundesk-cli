@@ -59,6 +59,7 @@ provider's own tools still reach whatever their owner reaches.
 | ✅ | R-AGT-36 | Every new and existing agent receives every skill required by the install configuration | `a new agent is given what the configuration says`, `an existing agent is reconciled to the required baseline`, `laying down also reconciles every existing agent`, `an agent is made with the skills written into a new configuration`, `an owner who wants no skills granted gets none`, `a configuration that cannot be read refuses to make the agent`, `a diagnosis judges an agent against what is configured` |
 | ✅ | R-AGT-37 | A skill required by the install configuration cannot be revoked from an agent | `a skill configured for every agent cannot be revoked`, `a skill not required by the configuration can be revoked` |
 | ✅ | R-AGT-38 | Rundesk-owned core and trigger instructions have one owner-readable source with resolved agent locations | `rundesk instructions are always first and fill agent locations`, `channel turns fill the agents resolved locations`, `standing instruction keeps its paragraph boundaries`, `schedule and owner instructions append in order`, `direct message uses standard channel variables`, `public room uses standard channel variables`, `only trigger prompt text lives in this module` |
+| ✅ | R-AGT-39 | The shipped provider bootstrap requires complete agent rules to be read before any response or action | `provider bootstrap requires complete agent rules before action` |
 
 ## Open questions
 

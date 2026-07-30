@@ -65,6 +65,38 @@ class InstructionBuilder(unittest.TestCase):
             schedule.by_default("nightly"),
         )
 
+    def test_scheduled_run_instructions_apply_only_to_schedule_triggers(self):
+        variables = {**CORE, "schedule": "nightly"}
+        core = instructions.build(variables=variables)
+        scheduled = instructions.build(
+            variables=variables,
+            trigger=instructions.SCHEDULE,
+        )
+        schedule_layer = instructions.render(
+            instructions.SCHEDULE_INSTRUCTIONS,
+            variables,
+        ).strip()
+        self.assertEqual(f"{core}\n\n{schedule_layer}", scheduled)
+        for trigger in ("", instructions.DIRECT, instructions.PUBLIC):
+            with self.subTest(trigger=trigger):
+                built = instructions.build(variables=variables, trigger=trigger)
+                self.assertNotIn("## Scheduled run", built)
+                self.assertNotIn("No user request started it", built)
+
+    def test_scheduled_run_instructions_define_unattended_outcomes(self):
+        built = schedule.by_default("nightly")
+        for rule in (
+            "Treat the schedule's own task text as the request.",
+            "Never infer additional work from earlier conversations or past runs.",
+            "Never ask a question, request approval, or wait for a reply.",
+            "Write nothing until the work is finished.",
+            "Deliver exactly one report as that final message.",
+            "When you found nothing worth acting on, say that in a short direct response.",
+            "stop before that action and report `blocked`",
+        ):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, built)
+
     def test_schedule_instructions_require_a_name(self):
         for missing in ("", "   ", None):
             with self.assertRaisesRegex(ValueError, "schedule name"):
