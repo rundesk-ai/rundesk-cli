@@ -780,6 +780,9 @@ class FakeAgents:
     """
 
     checked = staticmethod(real_agent.checked)
+    slug = staticmethod(real_agent.slug)
+    creation_name = staticmethod(real_agent.creation_name)
+    command_name = staticmethod(real_agent.command_name)
     NotAnAgentName = real_agent.NotAnAgentName
     Where = real_agent.Where
 
@@ -788,7 +791,9 @@ class FakeAgents:
         surface does with it is passed a fake library, so nothing here is read."""
         return pathlib.Path(self._at or "/nowhere/agents") / name / "home" / "skills"
 
-    def __init__(self, made=(), wrote=(), complaints=None, at=None, overrides=None):
+    def __init__(
+        self, made=(), wrote=(), complaints=None, at=None, overrides=None, pending=(),
+    ):
         #: Where this case's owner keeps templates of their own, or None for an owner who
         #: has made none — never the real one, which is what `agents_home` would resolve.
         self._overrides = pathlib.Path(overrides) if overrides else pathlib.Path(
@@ -806,6 +811,7 @@ class FakeAgents:
         self._unrunnable: list = []
         #: The agents that exist, and the directories each resolves.
         self._made = list(made)
+        self._pending = set(pending)
         #: What a gateway of this name wrote before there were agents to own it.
         self._wrote = list(wrote)
         self._complaints = dict(complaints or {})
@@ -817,6 +823,7 @@ class FakeAgents:
         self.refuses: BaseException | None = None
         #: What was made, adopted and taken away, in the order it was asked for.
         self.added, self.adopted, self.forgotten = [], [], []
+        self.display_names: dict[str, str] = {}
         #: Existing agents whose configured baseline an upgrade route reconciled.
         self.required: list[str] = []
         for one in self._made:
@@ -832,8 +839,15 @@ class FakeAgents:
     def exists(self, name):
         return name in self._made
 
+    def creation_pending(self, name):
+        return name in self._pending
+
     def known(self):
         return sorted(self._made)
+
+    def identities(self):
+        legacy = ["gateway"] if self._wrote else []
+        return sorted(set(self._made + legacy))
 
     def home(self, name):
         return self._at / name / "home"
@@ -884,7 +898,7 @@ class FakeAgents:
         """
         return self._at / name
 
-    def add(self, name):
+    def add(self, name, display_name=None):
         # The real one builds the records by walking the steps, so it raises on records
         # this rundesk will not read — which is the whole reason `cmd_add` wraps it. A
         # stand-in that quietly succeeded made that guard look untested.
@@ -894,8 +908,13 @@ class FakeAgents:
         made = [] if name in self._made else ["AGENTS.md", "home/"]
         if name not in self._made:
             self._made.append(name)
+            self.display_names[name] = display_name.strip() if display_name else name
+        self._pending.discard(name)
         self._built(name)
         return made
+
+    def display_name(self, name):
+        return self.display_names.get(name, name)
 
     def require_skills(self, name):
         self.required.append(name)
@@ -1590,6 +1609,45 @@ class StandingGatewaysDown(unittest.TestCase):
 class MakingAnAgent(unittest.TestCase):
     """`add` is the one place an agent and its gateway come into being together."""
 
+    def test_an_agent_is_created_under_a_lowercase_slug(self):
+        """R-AGT-39 — the words an owner gives become one predictable directory and
+        gateway name, including whitespace and punctuation at their edges."""
+        agents = FakeAgents()
+        code, said = drive(
+            ["add", "  Écho's   Helper  ", "--provider", "codex"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["echo-s-helper"], agents.added)
+        self.assertEqual("Écho's   Helper", agents.display_names["echo-s-helper"])
+        self.assertIn("echo-s-helper: MADE", said)
+
+    def test_a_legacy_mixed_case_agent_is_not_duplicated_by_its_slug(self):
+        """R-AGT-40 — upgrades preserve the directory an existing agent owns."""
+        agents = FakeAgents(made=["Winston"])
+        agents.remember("Winston", provider="codex")
+        code, said = drive(["add", "winston"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["Winston"], agents.added)
+        self.assertEqual(["Winston"], agents.known())
+
+    def test_a_legacy_job_without_an_agent_keeps_its_exact_identity(self):
+        """R-AGW-1, R-AGT-13 — a supervisor job may be all that survives."""
+        agents = FakeAgents()
+        machine = FakeMachine(jobs=["Winston"])
+        code, said = drive(
+            ["add", "winston", "--provider", "codex"], machine=machine, agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["Winston"], agents.added)
+        self.assertNotIn("winston", agents.known())
+
+    def test_retry_finishes_an_interrupted_creation_with_its_provider(self):
+        """R-AGT-39 — CLI guards must not strand a pending display-name write."""
+        agents = FakeAgents(made=["ios-helper"], pending=["ios-helper"])
+        code, said = drive(
+            ["add", "iOS Helper", "--provider", "codex"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["ios-helper"], agents.added)
+        self.assertNotIn("ios-helper", agents._pending)
+
     def test_making_an_agent_makes_it_and_says_where_it_stands(self):
         """R-AGW-1"""
         agents = FakeAgents()
@@ -1705,15 +1763,13 @@ class ConfiguringAnAgent(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("NAME REQUIRED", said)
 
-    def test_a_name_that_cannot_be_an_agents_is_refused_before_anything_is_made(self):
-        """R-AGT-5, R-AGT-6 — `ava.log` is the file a gateway named `ava` writes, so it is
-        not a name a second agent may have. `ava.ran` used to be one of these and is an
-        ordinary name again: what a schedule last did is a row, so nothing writes that file."""
+    def test_punctuation_that_used_to_collide_is_slugged_safely(self):
+        """R-AGT-39 — `ava.log` is the file a gateway named `ava` writes, while `ava-log`
+        is an independent agent directory and gateway name."""
         agents = FakeAgents()
         code, said = drive(["add", "ava.log", "--provider", "codex"], agents=agents)
-        self.assertEqual(1, code)
-        self.assertIn("INVALID NAME", said)
-        self.assertEqual([], agents.added, "it refused the name and made one anyway")
+        self.assertEqual(0, code, said)
+        self.assertEqual(["ava-log"], agents.added)
 
     def test_a_job_prefix_that_cannot_be_one_stops_the_command(self):
         """R-INS-18 — the variable a second install isolates itself with becomes a file
@@ -1751,6 +1807,27 @@ class ConfiguringAnAgent(unittest.TestCase):
 
 class TheVerbsNameTheAgent(unittest.TestCase):
     """The gateway is how an agent runs, so every verb asks where *that* agent keeps things."""
+
+    def test_every_command_resolves_a_human_name_to_the_agents_slug(self):
+        """R-AGT-40 — `main` resolves the shared `name` argument before dispatch, so
+        every current and future command gets the directory identity rather than each
+        command growing its own spelling rules."""
+        agents = FakeAgents(made=["agent-name"])
+        gateways = FakeGateways()
+        code, said = drive(["agents", "Agent Name"], gateways, agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("agent-name", said)
+        self.assertNotIn("NO SUCH AGENT", said)
+
+    def test_a_command_reaches_a_legacy_mixed_case_agent_case_insensitively(self):
+        """R-AGT-40 — existing users keep their directories while commands gain the
+        same case-insensitive lookup as newly slugged agents."""
+        agents = FakeAgents(made=["Winston"])
+        gateways = FakeGateways()
+        code, said = drive(["agents", "WINSTON"], gateways, agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("Winston", said)
+        self.assertNotIn("NO SUCH AGENT", said)
 
     def test_a_verb_asks_where_the_agent_it_names_keeps_things(self):
         """R-AGT-9 — an agent's gateway keeps its state in the agent's own directory. A

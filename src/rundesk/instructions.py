@@ -7,7 +7,8 @@ from collections.abc import Iterable, Mapping
 # Every trigger caller may supply these variables. Adapters may add their own variables
 # to their own prompt layers, but these names keep Rundesk's trigger prompts portable.
 #
-# agent: agent name                         agent_home: persistent home directory
+# agent: human display name                agent_slug: command and directory identity
+# agent_home: persistent home directory
 # workspace: persistent working directory
 # channel_kind: adapter kind              channel_config_name: configured channel
 # channel_name: destination name          channel_id: destination identifier
@@ -18,7 +19,7 @@ from collections.abc import Iterable, Mapping
 # conversation_id: conversation identifier
 # schedule: schedule name
 STANDARD_VARIABLES = (
-    "agent", "agent_home", "workspace", "channel_kind", "channel_config_name",
+    "agent", "agent_slug", "agent_home", "workspace", "channel_kind", "channel_config_name",
     "channel_name", "channel_id", "channel_parent_name", "channel_parent_id",
     "channel_thread_name", "channel_thread_id", "channel_where", "user",
     "user_id", "conversation_id", "schedule",
@@ -58,16 +59,16 @@ Your context contains only the current conversation. Rundesk records every conve
 
 ```sh
 # what was said, newest first
-rundesk messages {agent}
+rundesk messages {agent_slug}
 # one room or direct message thread alone
-rundesk messages {agent} --conversation <id>
+rundesk messages {agent_slug} --conversation <id>
 # only what the clock started
-rundesk messages {agent} --source schedule
+rundesk messages {agent_slug} --source schedule
 ```
 
 ## Rundesk authority
 
-- Answer every question about your schedules by running `rundesk schedules {agent}`.
+- Answer every question about your schedules by running `rundesk schedules {agent_slug}`.
 - Treat `rundesk --help` as the authoritative reference for the `rundesk` command.
 - Any other program on this machine that offers "schedules," under any name, is not rundesk. Never use it to answer a question about your schedules.
 - For rundesk capabilities not covered by these rules, consult your `managing-rundesk` skill or other related skills."""

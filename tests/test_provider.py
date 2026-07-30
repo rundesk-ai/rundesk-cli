@@ -611,6 +611,8 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
                     "RUNDESK_SCRIPTS", "RUNDESK_SKILL_LIBRARY", "RUNDESK_CONTINUITY"]
         if os.environ.get("RUNDESK_AGENTS_DIR"):
             expected.append("RUNDESK_AGENTS_DIR")
+        if os.environ.get("RUNDESK_JOB_PREFIX"):
+            expected.append("RUNDESK_JOB_PREFIX")
         self.assertEqual(
             sorted(expected),
             sorted(told))
