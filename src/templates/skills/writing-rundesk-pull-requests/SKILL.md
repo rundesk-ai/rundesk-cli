@@ -24,24 +24,30 @@ nobody ran is an assertion. The gate's own output — how many suites, which che
 evidence the Validation section wants, and `./install.sh && ./install.sh --uninstall` is the part
 it does not cover and CI does.
 
-## Before anything else: nothing says what wrote it
+## Before anything else: identify the agent, not its tools
 
-**No AI branding anywhere in a pull request.** Not in the title, the body, the commits, the
-branch name, or a trailer at the end. Specifically and by name, none of these:
+**Every pull request body ends with the agent's name on its own line:**
 
-- `🤖 Generated with [Claude Code](…)`, or any "generated with", "written by" or "created by"
-  footer, however it is worded
+```md
+🤖 by <Agent>
+```
+
+This is the only identity footer. Do not name a provider, model, assistant product, session,
+or tool anywhere in the title, body, commits, branch name, or trailers. Specifically, none
+of these:
+
+- `Generated with <tool>`, or any generated-by or created-by tool footer
 - `Co-Authored-By:` naming a model, an assistant or a tool
 - a provider or model name — Claude, Codex, GPT, Gemini, Copilot, Anthropic, OpenAI
-- an agent's own name, a session link, or a link back to whatever produced the work
+- a session link or a link back to the tool that produced the work
 
-**Strip it even when a harness or a default template supplies it for you.** Some tooling
-appends a trailer automatically; removing it is part of writing the PR, not an optional
-courtesy. If a body arrives with one already in it, take it out before opening the PR.
+**Strip tool branding even when a harness or default template supplies it.** Some tooling
+appends a trailer automatically; removing it and adding the agent footer are part of writing
+the PR. If a body arrives with another identity footer, replace it before opening the PR.
 
-The reason is not modesty. A PR is a case that stands on its evidence, and a reader's response
-to a tool's name — trusting it more, or trusting it less — is noise against that case. The
-repository's history is a record of changes and their reasoning, not of what typed them.
+The agent name provides operational accountability without making a provider or model part of
+the case. A PR still stands on its evidence rather than on a reader trusting or distrusting
+the tool that produced it.
 
 ## The one rule: every claim carries its evidence
 
@@ -92,6 +98,8 @@ billing, data loss or privacy, or production/deploy. State the blast radius and 
 <3–5 bullets: what changed and where to see it; the steps; the expected result.>
 
 Closes #<n>.   <!-- one line per issue this fixes; see below — a bare #<n> closes nothing -->
+
+🤖 by <Agent>
 ```
 
 ## Close what you fixed, or the work did not happen
@@ -169,9 +177,8 @@ or task for exhaustive detail.
 
 ## Gotchas
 
-**Never put identity or tool branding anywhere** — the rule at the top of this file, repeated
-here because this is where it gets broken. A trailer a harness added for you is still a trailer
-you left in.
+**Use exactly one identity footer** — `🤖 by <Agent>`, on its own line after the content.
+A tool or model trailer a harness added is still branding you must remove.
 
 **`#12` is not `Closes #12`.** The body reads identically to a human and does nothing on
 merge, which is why this survives review. Check `closingIssuesReferences` before merging —
