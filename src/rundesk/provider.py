@@ -76,7 +76,7 @@ WHOLE = "whole"
 #: to believe a word that means something else here. Growing it is a release, not a
 #: guess an adapter makes on its own.
 #:
-#: The last four are the same act as `edit` and are told apart on purpose (R-PRV-29):
+#: The last three are the same act as `edit` and are told apart on purpose (R-PRV-29):
 #: what an agent keeps of its own is what it *is* between turns, and a file it lives by
 #: being changed is not the same news as a file it was working on being changed. Which
 #: files those are, and how an adapter is sure it was one of them rather than a
@@ -87,7 +87,7 @@ WHOLE = "whole"
 #: and a surface reading these raw is left with something that reads: a terminal shows
 #: `updated memory` where a verb-shaped token would have shown `remember Write`.
 DID = ("read", "search", "run", "edit", "list", "make", "delegate",
-       "memory", "rules", "profile", "identity")
+       "memory", "rules", "identity")
 
 #: What an agent keeps of its own, and what changing one is called (R-PRV-29). The names
 #: are Rundesk's — they are what a new agent is given and what `AGENTS.md` tells it to
@@ -99,14 +99,9 @@ DID = ("read", "search", "run", "edit", "list", "make", "delegate",
 #: is worse than the plain `edit` it would otherwise get, because it is untrue. What
 #: qualifies is the resolved path standing directly in the agent's own working directory
 #: — `RUNDESK_CWD`, which is the one thing every adapter is already told (R-PRV-3).
-#: `USER.md` is `profile` rather than `preferences` because preferences are one section of
-#: it. Its own first line is "what you know about the user", and it also holds who they
-#: are and what they are building — a verb naming the narrowest part of a file stops being
-#: true the first time the widest part is what changed.
 CONTINUITY = {
     "MEMORY.md": "memory",
     "AGENTS.md": "rules",
-    "USER.md": "profile",
     "SOUL.md": "identity",
 }
 
@@ -211,6 +206,16 @@ def key(named: str) -> str:
     stands = Path(named).expanduser()
     marked = hashlib.sha256(str(stands).encode("utf-8")).hexdigest()[:8]
     return f"{_plain(stands.name) or 'brain'}-{marked}"
+
+
+def label(named: str) -> str:
+    """A safe, stable provider name for a person to read (R-CH-28).
+
+    `key` already removes a custom adapter's path while keeping two same-named adapters
+    distinct. Plain that result too, because a shipped adapter is its filename and Unix
+    filenames may contain characters that can rewrite a channel's completion line.
+    """
+    return _plain(key(named)) or "brain"
 
 
 def _plain(name: str) -> str:

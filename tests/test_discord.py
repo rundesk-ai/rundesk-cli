@@ -892,6 +892,77 @@ class WhereAMessageCameFrom(unittest.TestCase):
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class WhatAMessageRepliesTo(unittest.IsolatedAsyncioTestCase):
+    """R-DIS-34 — Discord's native reference becomes the shared reply shape."""
+
+    @staticmethod
+    def message(resolved=None, message_id=8839, kind=None):
+        if kind is None:
+            kind = discord.discord.MessageReferenceType.reply
+        reference = SimpleNamespace(
+            message_id=message_id, resolved=resolved, cached_message=None, type=kind,
+        )
+        return SimpleNamespace(reference=reference)
+
+    @staticmethod
+    def parent(text="the schedule report", shown="Winston", identifier=2207):
+        author = SimpleNamespace(
+            display_name=shown, name="winston", id=identifier,
+        )
+        return SimpleNamespace(author=author, content=text)
+
+    def test_a_resolved_reply_carries_the_parent_identity_author_and_body(self):
+        self.assertEqual({
+            "id": "8839", "resolved": True, "author": "Winston",
+            "text": "the schedule report",
+        }, discord._reply_to(self.message(self.parent())))
+
+    def test_a_deleted_or_unfetched_parent_still_carries_its_identity(self):
+        self.assertEqual({
+            "id": "8839", "resolved": False,
+        }, discord._reply_to(self.message()))
+
+    def test_a_non_reply_reference_is_not_presented_as_a_reply(self):
+        kind = SimpleNamespace(name="forward")
+        self.assertIsNone(discord._reply_to(self.message(self.parent(), kind=kind)))
+
+    def test_a_message_without_a_reference_has_no_reply_context(self):
+        self.assertIsNone(discord._reply_to(SimpleNamespace(reference=None)))
+
+    async def test_on_message_reports_the_reply_on_the_arrived_record(self):
+        parent = self.parent()
+        message = SimpleNamespace(
+            id=8841,
+            author=SimpleNamespace(
+                id=2207, bot=False, display_name="Tim", name="tim",
+            ),
+            guild=None,
+            channel=SimpleNamespace(id=1180, name=None),
+            mentions=[],
+            content="fix the second one",
+            attachments=[],
+            reference=self.message(parent).reference,
+        )
+        agent = SimpleNamespace(
+            chose=SimpleNamespace(
+                server=None, channel=None, dm=True, allow=("2207",),
+            ),
+            user=SimpleNamespace(id=42),
+            live={},
+            seen={},
+            _fetch=mock.AsyncMock(return_value=[]),
+            _no_longer_last=lambda _live: None,
+            _make_room=lambda _conversation: True,
+        )
+        with mock.patch.object(discord, "say") as reported:
+            await discord.Agent.on_message(agent, message)
+        self.assertEqual({
+            "id": "8839", "resolved": True, "author": "Winston",
+            "text": "the schedule report",
+        }, reported.call_args.kwargs["reply_to"])
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class AnAnswerTooLongForOneMessage(unittest.TestCase):
     """R-DIS-13 — split or attached, never cut in silence."""
 
@@ -1008,8 +1079,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         asyncio.run(discord.Agent._doing(
             Turn(), {"type": "usage", "session": 122435, "output": 837}, held))
         asyncio.run(discord.Agent._answer(
-            Turn(), {"type": "answer", "text": "done"}, held))
-        self.assertEqual("-# · 122k session · 837 output · 28s elapsed",
+            Turn(), {"type": "answer", "provider": "stand-in", "text": "done"}, held))
+        self.assertEqual("-# stand-in · 122k session · 837 output · 28s elapsed",
                          posted[0].splitlines()[0])
 
     def test_a_brain_that_does_not_report_a_conversation_size_gets_the_footer_it_always_got(self):
@@ -1043,9 +1114,9 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         held.cost = "-# · 1.9k input · 94 output · 70k cached"
         now[0] += 120
         asyncio.run(discord.Agent._answer(
-            Turn(), {"type": "answer", "text": "done"}, held))
+            Turn(), {"type": "answer", "provider": "stand-in", "text": "done"}, held))
         self.assertEqual(
-            "-# · 1.9k input · 94 output · 70k cached · 2m elapsed",
+            "-# stand-in · 1.9k input · 94 output · 70k cached · 2m elapsed",
             posted[0].splitlines()[0])
 
     def test_repeated_taken_does_not_restart_elapsed_time(self):
@@ -1062,8 +1133,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         asyncio.run(discord.Agent._state(Turn(), {"state": "taken"}, held))
         self.assertEqual(100.0, held.started)
 
-    def test_elapsed_time_is_shown_when_usage_was_not_reported(self):
-        """R-DIS-24 — duration is useful even when a provider supplies no token counts."""
+    def test_provider_and_elapsed_time_are_shown_when_usage_was_not_reported(self):
+        """R-DIS-24, R-DIS-33 — provenance does not depend on optional usage metadata."""
         posted = []
 
         class Turn:
@@ -1074,8 +1145,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         held = discord.Live(clock=lambda: 140.0)
         held.started = 100.0
         asyncio.run(discord.Agent._answer(
-            Turn(), {"type": "answer", "text": "done"}, held))
-        self.assertEqual("-# · 40s elapsed", posted[0].splitlines()[0])
+            Turn(), {"type": "answer", "provider": "stand-in", "text": "done"}, held))
+        self.assertEqual("-# stand-in · 40s elapsed", posted[0].splitlines()[0])
 
     def test_a_small_count_is_not_rounded_into_a_zero(self):
         """R-USE-7 — everything was shown in thousands, so a turn that answered in
@@ -1540,22 +1611,7 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             with self.subTest(verb):
                 said = f" {discord.SHOWN[verb]} "
                 self.assertNotIn(" its ", said)
-                if name == "USER.md":
-                    # The one that is not the agent's. `USER.md` is what it knows about the
-                    # owner, so "my" would be a claim on the wrong person's file.
-                    self.assertNotIn(" my ", said)
-                else:
-                    self.assertIn(" my ", said)
-
-    def test_the_owners_own_file_is_not_called_the_agents_preferences(self):
-        """R-PRV-29 — `USER.md`'s own first line is "what you know about the user", and it
-        holds who they are and what they are building as well as how they want answering.
-        A verb naming the narrowest part of a file stops being true the first time the
-        widest part is what changed."""
-        from rundesk import provider
-
-        self.assertEqual("profile", provider.CONTINUITY["USER.md"])
-        self.assertEqual("updated profile", discord.SHOWN["profile"])
+                self.assertIn(" my ", said)
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")

@@ -536,6 +536,47 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
                             {"name": "c", "at": "relative.png"}]}))
         self.assertEqual([], said["attachments"])
 
+    def test_a_reply_reference_crosses_the_seam_with_bounded_context(self):
+        """R-CH-29 — one small, shared shape tells every brain what was replied to."""
+        said = channel.understood(json.dumps({
+            "type": "arrived", "conversation": "one", "user": "2207",
+            "text": "fix the second one",
+            "reply_to": {
+                "id": "8840", "resolved": True, "author": "A" * 500,
+                "text": "x" * (channel.REPLY_TEXT_MOST + 500),
+            },
+        }))
+        self.assertEqual("8840", said[channel.REPLY_TO]["id"])
+        self.assertTrue(said[channel.REPLY_TO]["resolved"])
+        self.assertEqual(channel.SAID_MOST, len(said[channel.REPLY_TO]["author"]))
+        self.assertEqual(
+            "x" * 255 + "...(truncated)",
+            said[channel.REPLY_TO]["text"],
+        )
+
+    def test_an_unresolved_reply_reference_is_kept_without_inventing_context(self):
+        """R-CH-30 — unavailable parent content is orientation, never a dropped turn."""
+        said = channel.understood(json.dumps({
+            "type": "arrived", "conversation": "one", "user": "2207",
+            "text": "what about this?", "reply_to": {
+                "id": "8840", "resolved": False,
+                "author": "invented", "text": "invented",
+            },
+        }))
+        self.assertEqual(
+            {"id": "8840", "resolved": False},
+            said[channel.REPLY_TO],
+        )
+
+    def test_a_malformed_reply_reference_is_ignored_without_losing_the_message(self):
+        """R-CH-29 — optional context cannot make an otherwise valid arrival invalid."""
+        said = channel.understood(json.dumps({
+            "type": "arrived", "conversation": "one", "user": "2207",
+            "text": "ordinary message", "reply_to": {"resolved": True},
+        }))
+        self.assertIsNotNone(said)
+        self.assertIsNone(said[channel.REPLY_TO])
+
     def test_a_name_somebody_chose_cannot_write_its_own_line_in_the_prompt(self):
         """R-CH-21 — a display name is a field whoever holds the account fills in, and it
         goes into a prompt. A newline there is how somebody ends rundesk's sentence and
@@ -930,7 +971,7 @@ class WhatTheSurfaceIsNeverGiven(DrivesAnAdapter):
 
         self.assertIs(channel.DID, provider.DID)
         self.assertEqual(("read", "search", "run", "edit", "list", "make", "delegate",
-                          "memory", "rules", "profile", "identity"), channel.DID)
+                          "memory", "rules", "identity"), channel.DID)
 
     def test_what_the_agent_did_is_shown_while_it_is_happening(self):
         """R-CH-6 — a tool it ran, a thought it closed. These are worth watching, and

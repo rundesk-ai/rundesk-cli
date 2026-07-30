@@ -611,6 +611,8 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
                     "RUNDESK_SCRIPTS", "RUNDESK_SKILL_LIBRARY", "RUNDESK_CONTINUITY"]
         if os.environ.get("RUNDESK_AGENTS_DIR"):
             expected.append("RUNDESK_AGENTS_DIR")
+        if os.environ.get("RUNDESK_JOB_PREFIX"):
+            expected.append("RUNDESK_JOB_PREFIX")
         self.assertEqual(
             sorted(expected),
             sorted(told))
@@ -788,6 +790,13 @@ class AnAdapterThatCannotBeRun(DrivesAnAdapter):
         self.assertNotEqual(one, other)
         self.assertTrue(one.startswith("brain-"))
         self.assertEqual(one, provider.key("/opt/one/brain"), "it is not the same twice")
+
+    def test_a_provider_label_is_readable_without_exposing_or_rewriting_its_location(self):
+        """R-CH-28 — provenance may leave the machine; its filesystem path may not."""
+        one = provider.label("/opt/private/stand-in")
+        self.assertTrue(one.startswith("stand-in-"))
+        self.assertNotIn("/opt", one)
+        self.assertNotIn("\n", provider.label("stand-\nin"))
 
 
 class ATurnThatWentWrong(DrivesAnAdapter):

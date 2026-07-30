@@ -68,6 +68,11 @@ NEEDED = {
 #: Kept out of `NEEDED` because a message with nothing attached is the ordinary one.
 ATTACHED = "attachments"
 
+#: The message an arrival explicitly replies to, when a surface has that concept
+#: (R-CH-29, R-CH-30). One communication-agnostic shape lets any adapter supply the
+#: orientation without writing platform-specific prose into the prompt.
+REPLY_TO = "reply_to"
+
 #: What the surface calls the place this was said, and the person who said it — as it shows
 #: them to a human, not as it stores them (R-CH-21). A brain was being handed the words and
 #: nothing else, so it answered every conversation as though it were the only one: it could
@@ -155,6 +160,12 @@ INSTRUCTIONS_MOST = 4000
 #: so they are clipped and flattened to one line — a display name is a place somebody can
 #: write whatever they like, including something shaped like an instruction.
 SAID_MOST = 80
+
+#: A quoted parent is orientation, not conversation history. Its first 255 characters are
+#: enough to recognize the item while keeping a reply from dominating the new turn
+#: (R-CH-29).
+REPLY_TEXT_MOST = 255
+REPLY_TEXT_TRUNCATED = "...(truncated)"
 
 #: How many attachments on one message are carried through, and how much of one. A chat
 #: platform will accept far more than a turn can use, and an agent's workspace is not
@@ -366,6 +377,7 @@ def understood(said: bytes | str) -> dict | None:
         return None
     if kind == "arrived":
         it[ATTACHED] = attached(it.get(ATTACHED))
+        it[REPLY_TO] = reply_to(it.get(REPLY_TO))
         # A message is words, or something attached, or both — and a photograph sent with
         # nothing typed is the most ordinary message there is. Text was required to be
         # non-empty, so an adapter that dutifully reported one had it refused here and
@@ -415,6 +427,34 @@ def attached(said) -> list:
             continue
         found.append({"name": str(one.get("name") or stands.name), "at": str(stands)})
     return found
+
+
+def reply_to(said) -> dict | None:
+    """A bounded reference to the message this one answers (R-CH-29, R-CH-30).
+
+    The current message remains valid when this optional context is malformed. An
+    unavailable parent keeps only its identity; author or text supplied beside
+    `resolved: false` would be a guess and is deliberately discarded.
+    """
+    if not isinstance(said, dict):
+        return None
+    identifier = plainly(said.get("id"))
+    resolved = said.get("resolved")
+    if not identifier or not isinstance(resolved, bool):
+        return None
+    if not resolved:
+        return {"id": identifier, "resolved": False}
+    text = said.get("text")
+    if not isinstance(text, str):
+        text = ""
+    if len(text) > REPLY_TEXT_MOST:
+        text = text[:REPLY_TEXT_MOST] + REPLY_TEXT_TRUNCATED
+    return {
+        "id": identifier,
+        "resolved": True,
+        "author": plainly(said.get("author")),
+        "text": text,
+    }
 
 
 def surface(kind: str) -> str:

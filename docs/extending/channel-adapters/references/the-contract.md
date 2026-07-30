@@ -96,7 +96,7 @@ is what lets a credential in a file be found by the check that has to prove it.
 
 ```json
 {"type": "ready"}
-{"type": "arrived",  "conversation": "1180", "user": "2207", "text": "what changed today?", "ref": "8841", "direct": false}
+{"type": "arrived",  "conversation": "1180", "user": "2207", "text": "what changed today?", "ref": "8841", "direct": false, "reply_to": {"id": "8839", "resolved": true, "author": "Winston", "text": "Nightly report…"}}
 {"type": "control",  "conversation": "1180", "user": "2207", "control": "stop", "ref": "8842"}
 {"type": "configure", "conversation": "1180", "user": "2207", "provider": "claude", "ref": "8844"}
 {"type": "query",    "conversation": "1180", "user": "2207", "query": "status", "ref": "8843"}
@@ -113,7 +113,7 @@ That is the whole of what you say. Six kinds of record, and only `arrived` start
 | | must have | may have |
 |---|---|---|
 | `ready` | | |
-| `arrived` | `conversation`, `user` | `text` · `ref` · `direct` · `attachments` · `where` · `called` · `parts` · standard channel context · prompt override/append/replaces |
+| `arrived` | `conversation`, `user` | `text` · `ref` · `direct` · `attachments` · `reply_to` · `where` · `called` · `parts` · standard channel context · prompt override/append/replaces |
 | `control` | `conversation`, `user`, `control` | `ref` |
 | `configure` | `conversation`, `user`, `provider`, `ref` | |
 | `query` | `conversation`, `user`, `query`, `ref` | |
@@ -154,19 +154,17 @@ with `configure-result`, carrying the same `conversation` and `ref` plus private
 for the interaction that asked. A turn already running keeps the provider it began with;
 the next message waits and starts fresh rather than steering the old provider.
 
-**`did` is what a tool did, and the list is closed.** It is one of exactly eleven words —
-`read`, `search`, `run`, `edit`, `list`, `make`, `delegate`, `memory`, `rules`, `profile`,
+**`did` is what a tool did, and the list is closed.** It is one of exactly ten words —
+`read`, `search`, `run`, `edit`, `list`, `make`, `delegate`, `memory`, `rules`,
 `identity` — or it is absent, and absent is common. Show a mark or a word of your own for
 each.
 
-**The last four are a file the agent lives by being rewritten**, and they are apart from
-`edit` on purpose: `MEMORY.md`, `AGENTS.md`, `USER.md` and `SOUL.md` are what an agent *is*
+**The last three are a file the agent lives by being rewritten**, and they are apart from
+`edit` on purpose: `MEMORY.md`, `AGENTS.md` and `SOUL.md` are what an agent *is*
 between turns, so one of them changing is different news from a working file changing.
 They name what changed rather than what was done — the act is always the same one — so a
 surface with nothing but the raw word still reads. Give each its own mark; folding them
-back into `edit` throws away the only part a reader wanted. `profile` is the odd one and
-worth wording carefully: `USER.md` is what the agent knows about the *owner*, so it is not
-the agent's own the way the other three are.
+back into `edit` throws away the only part a reader wanted.
 
 **Do not show `name`.** It is the brain's own identifier for the tool — `commandExecution`
 on one, `Bash` on the next — and putting it in front of a reader means putting one
@@ -267,6 +265,14 @@ exchange produces the same one every time. `user` is who spoke, in whatever your
 calls people. A message needs `text` or `attachments` — words, or something attached, or
 both — so a photograph sent with nothing typed is an ordinary message and not a broken one. `ref` is what a mark would attach to, if your platform has marks.
 
+**An explicit reply carries `reply_to` for orientation, never for routing.** Use one
+communication-neutral object: `id` is the referenced message's identifier and `resolved`
+states whether its content was available. When resolved, include `author` in the words a
+person sees and `text` with the parent body. When deleted, unavailable, or unfetched, send
+`{"id": "…", "resolved": false}` and still report the new arrival. Rundesk keeps the same
+`conversation`, keeps only the first 255 parent-text characters followed by
+`...(truncated)` when more existed, and adds no reply wording when `reply_to` is absent.
+
 **You are told how the turn is going, on stdin**, one JSON object per line:
 
 ```json
@@ -279,7 +285,7 @@ both — so a photograph sent with nothing typed is an ordinary message and not 
 {"type": "said",   "conversation": "1180", "run": "7-a3f1", "text": "I'll look at the logs."}
 {"type": "said",   "conversation": "1180", "place": null, "schedule": "nightly", "began": true, "text": "💻 Working on 'nightly' — I will report back when it is done."}
 {"type": "said",   "conversation": "1180", "place": null, "schedule": "nightly", "text": "Nothing broke overnight."}
-{"type": "answer", "conversation": "1180", "run": "7-a3f1", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png"}]}
+{"type": "answer", "conversation": "1180", "run": "7-a3f1", "provider": "stand-in", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png"}]}
 {"type": "state",  "conversation": "1180", "run": "7-a3f1", "state": "finished"}
 {"type": "query-result", "conversation": "1180", "query": "status", "ref": "8843", "text": "ava: RUNNING"}
 {"type": "configure-result", "conversation": "1180", "ref": "8844", "text": "Default provider changed to claude. The next message starts fresh."}
@@ -294,6 +300,10 @@ says arrives as the `answer` — which is the one somebody will reply to, and th
 anchoring to the message that asked. A brain that writes its reply a piece at a time
 sends no `said` at all and only an `answer`, so a surface that treats them identically is
 still correct and merely noisier.
+
+**Every `answer` names the resolved `provider`.** This is Rundesk's safe, stable label for
+the provider that ran the turn, so it is present even when the brain reports no model or
+usage. A custom adapter's filesystem location never appears in the label.
 
 **A `said` naming a `schedule` is the clock's, and it comes in pairs.** Work rundesk starts
 because the time came says so where that schedule reports — `{"type": "said", "schedule":

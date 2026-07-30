@@ -201,6 +201,45 @@ class WhereABrainIsAnswering(CarriesAConversation):
                                prompt=held.pop("prompt", "what changed?"), **held)
         return kept.schedule(named)
 
+    async def test_a_reply_tells_the_brain_which_message_the_follow_up_is_for(self):
+        """R-CH-29 — reply context is distinct from the new words and channel neutral."""
+        surface, brain = Surface(), Brain()
+        held = self.answering(surface, brain)
+        arrived = self.arrived(text="fix the second one")
+        arrived[channel.REPLY_TO] = {
+            "id": "8839", "resolved": True, "author": "Winston",
+            "text": "1. logs\n2. parser\n3. docs",
+        }
+        await self.carry(held, arrived)
+        prompt = brain.asked[0]["prompt"]
+        self.assertEqual(
+            "fix the second one\n\n--\n\n"
+            "This message replies to conversation message 8839 from Winston.\n"
+            "Quoted message: 1. logs\n2. parser\n3. docs",
+            prompt,
+        )
+
+    async def test_an_unresolved_reply_still_starts_a_turn_and_says_what_is_missing(self):
+        """R-CH-30 — a deleted or unavailable parent never costs the new message."""
+        surface, brain = Surface(), Brain()
+        held = self.answering(surface, brain)
+        arrived = self.arrived(text="what about this?")
+        arrived[channel.REPLY_TO] = {"id": "8839", "resolved": False}
+        await self.carry(held, arrived)
+        self.assertEqual(
+            "what about this?\n\n--\n\n"
+            "This message replies to conversation message 8839 "
+            "(quoted text unavailable).",
+            brain.asked[0]["prompt"],
+        )
+
+    async def test_an_ordinary_message_has_no_empty_reply_context(self):
+        """R-CH-29 — the ordinary prompt remains exactly the words somebody sent."""
+        surface, brain = Surface(), Brain()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual("what changed?", brain.asked[0]["prompt"])
+
     async def test_what_a_schedule_came_to_is_said_where_this_agent_is_reached(self):
         """R-SCH-31 — the first trigger with no person at the other end. Work that failed at
         three in the morning is no use in an account nobody opens until they think to.
@@ -1218,6 +1257,13 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
         await self.carry(held, self.arrived())
         self.assertEqual({"type", "conversation", "run", "id", "ok", "summary"},
                          set(surface.of("result")[0]))
+
+    async def test_a_final_answer_names_the_provider_that_produced_it(self):
+        """R-CH-28 — provenance is Rundesk's fact, not optional brain metadata."""
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await self.carry(held, self.arrived())
+        self.assertEqual("a-brain", surface.of("answer")[0]["provider"])
 
     async def test_how_big_the_conversation_is_reaches_a_surface_with_what_it_cost(self):
         """R-USE-15, R-CH-13 — the field is named here or it never leaves, and a footer

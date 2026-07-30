@@ -102,6 +102,7 @@ ABANDONED_WHY = "the gateway that began this turn went without settling it"
 #: reconciliation matching an outcome to the work it named has to spell it the same way
 #: the start did, and two spellings would silently match nothing.
 SCHEDULED_AS = "schedule:"
+UPDATE_AS = "update:"
 
 #: How a scheduled program is told which schedule started it. Read by `rundesk ask`, which is
 #: the one program a schedule is likely to name, so a turn the clock started says so in the
@@ -1165,6 +1166,12 @@ class Gateway:
         #: Which schedules have a turn in flight. Kept apart from `running`, which holds
         #: programs a shutdown ends: a turn's brain is not a program this gateway started.
         self._asked_for: set[str] = set()
+        #: Backend update turns this gateway owns. They remain pending durably until one
+        #: returns, and shutdown cancels and awaits every task here.
+        self._update_turn_tasks: dict[int, asyncio.Task] = {}
+        #: Once a successful read finds none, none can appear until this gateway is down:
+        #: update migrations run only inside the update window that stands gateways down.
+        self._update_turns_drained = False
         #: The surfaces that are up right now, by name — what is held open and answering.
         #: `reachable` is what an agent *has*; this is what can be said something on, and the
         #: two differ for as long as an adapter is down and being started again.
@@ -1735,10 +1742,15 @@ class Gateway:
             ticking.cancel()
             holding.cancel()
             notices.cancel()
+            for task in self._update_turn_tasks.values():
+                task.cancel()
             with contextlib.suppress(BaseException):
                 await holding
             with contextlib.suppress(BaseException):
                 await notices
+            if self._update_turn_tasks:
+                await asyncio.gather(
+                    *tuple(self._update_turn_tasks.values()), return_exceptions=True)
             # The handlers stay installed across `_go()`. Removing them here restores the
             # system default, which for these two signals is *terminate* — so a second
             # signal arriving during the shutdown window would kill the gateway outright,
@@ -1897,6 +1909,7 @@ class Gateway:
         """Start everything due at this moment, and say what happened to each."""
         if self._stopping:
             return
+        self._fire_update_turns(schedule, now)
         try:
             wanted, refused = schedule.read(self._schedules())
         except Unreadable as why:
@@ -1931,7 +1944,83 @@ class Gateway:
                 continue
             asyncio.ensure_future(self._run_scheduled(one, fired))
 
-    async def _run_scheduled(self, one, fired: datetime) -> None:
+    def _fire_update_turns(self, schedules, now) -> None:
+        """Start release-requested turns through scheduled-turn semantics.
+
+        R-MIG-23, R-MIG-24.
+
+        These are deliberately not ordinary schedules. An ordinary one-time schedule that
+        was missed is never replayed; an update migration must survive a slow restart and
+        reach every agent. A request stays pending until a non-stopped run returns, while
+        the synthetic expired schedule gives it the same fresh conversation, instructions
+        and run accounting as other unattended work.
+        """
+        if self.records is None or self._update_turns_drained:
+            return
+        try:
+            pending = self.records.pending_update_turns()
+        except Exception as why:  # noqa: BLE001 — the records seam owns the failure types
+            self.log.warning("could not read update migration turns: %s", why)
+            return
+        if not pending:
+            self._update_turns_drained = True
+            return
+        fired = now.replace(second=0, microsecond=0)
+        # One home is one mutable resource. Even if several releases accumulated while an
+        # agent was unrunnable, only the oldest request may rewrite it at a time.
+        for row in pending[:1]:
+            version = int(row["migration"])
+            if version in self._update_turn_tasks:
+                continue
+            conversation = f"migration-{version}"
+            try:
+                returned = self.records.update_turn_returned(conversation)
+            except Exception as why:  # noqa: BLE001 — the records seam owns failure types
+                self.log.warning("could not reconcile update migration %s: %s", version, why)
+                continue
+            if returned:
+                try:
+                    self.records.complete_update_turn(version, store.stamped())
+                except Exception as why:  # noqa: BLE001 — a durable-write boundary
+                    self.log.warning("could not complete update migration %s: %s",
+                                     version, why)
+                continue
+            one = schedules.Schedule(
+                name=conversation,
+                at=fired.strftime(schedules.A_MINUTE),
+                ran_at=fired.strftime(schedules.A_MINUTE),
+                prompt=row["prompt"],
+                instructions=row["instructions"],
+                backend=True,
+            )
+            task = asyncio.ensure_future(
+                self._run_update_turn(one, version, row["bootstrap"]))
+            self._update_turn_tasks[version] = task
+            task.add_done_callback(
+                lambda finished, requested=version:
+                self._update_turn_tasks.pop(requested, None)
+            )
+
+    async def _run_update_turn(self, one, version: int, bootstrap: str) -> None:
+        """Run and settle one backend-only update migration turn."""
+        self.log.info("update migration %s is due", version)
+        try:
+            self.records.replace_update_bootstrap(version, bootstrap)
+        except Exception as why:  # noqa: BLE001 — a filesystem boundary
+            self.log.error("update migration %s could not replace its bootstrap: %s",
+                           version, why)
+            return
+        became = await self._run_scheduled(one, datetime.now())
+        # A turn that could not begin remains pending for the next tick or gateway. Once a
+        # brain actually returned, its run is the durable outcome and this request expires.
+        if became in ("could not start", "still running", INTERRUPTED):
+            return
+        try:
+            self.records.complete_update_turn(version, store.stamped())
+        except Exception as why:  # noqa: BLE001 — a durable-write boundary
+            self.log.warning("could not complete update migration %s: %s", version, why)
+
+    async def _run_scheduled(self, one, fired: datetime) -> str:
         """Start what a schedule named, under the schedule's own name.
 
         Under its own name on purpose: that is what makes a schedule refuse to begin
@@ -1942,10 +2031,10 @@ class Gateway:
         the same either way — which is why the two are one function with one set of handlers
         rather than two that would drift about what an outcome is.
         """
-        held = f"{SCHEDULED_AS}{one.name}"
+        held = f"{UPDATE_AS if one.backend else SCHEDULED_AS}{one.name}"
         if not one.prompt and (not isinstance(one.run, (list, tuple)) or not one.run):
             self.log.error("schedule '%s' names nothing this gateway can start", one.name)
-            return
+            return "could not start"
         self.log.info("schedule '%s' is due", one.name)
         try:
             # One word out of both branches, because everything after this is the same for
@@ -1973,8 +2062,9 @@ class Gateway:
             # answering it here would close off work that has not finished (R-SCH-46).
             self.log.warning("schedule '%s' skipped: what it started last time is still running",
                              one.name)
-            self._remember_outcome(one.name, "still running")
-            return
+            if not one.backend:
+                self._remember_outcome(one.name, "still running")
+            return "still running"
         except Stopping:
             # Nothing spawned, so there is no process for the shutdown to end and nothing
             # for a later sweep to find and reckon with — and the firing was already
@@ -1986,8 +2076,9 @@ class Gateway:
             # **And no notice to answer, by construction.** This is raised by `start` and
             # nowhere else, so only the program branch above can reach it — and a program
             # schedule never says it has started, having no report to anchor (R-SCH-46).
-            self._remember_outcome(one.name, INTERRUPTED)
-            return
+            if not one.backend:
+                self._remember_outcome(one.name, INTERRUPTED)
+            return INTERRUPTED
         except asyncio.CancelledError:
             # Not a failure to start, and told apart from one before the catch-all below
             # can call it that. This is what a run in flight *is* when the gateway goes:
@@ -1996,7 +2087,8 @@ class Gateway:
             # start', with no reason, one line after the log said it had started. A false
             # line in the one account that outlives the gateway (R-GW-18), and in the file
             # that is meant to say truthfully what each schedule last did.
-            self._remember_outcome(one.name, INTERRUPTED)
+            if not one.backend:
+                self._remember_outcome(one.name, INTERRUPTED)
             await self._answered_any_notice(one, INTERRUPTED)
             raise
         except BaseException as would_not_start:  # noqa: BLE001 — see below
@@ -2006,11 +2098,14 @@ class Gateway:
             # at LAST RUN '-' forever, indistinguishable from one that has never come due
             # — while failing again every single time it fell due (R-SCH-8).
             self.log.error("schedule '%s' could not be started: %s", one.name, would_not_start)
-            self._remember_outcome(one.name, "could not start")
+            if not one.backend:
+                self._remember_outcome(one.name, "could not start")
             await self._answered_any_notice(one, "could not start")
-            return
-        self._remember_outcome(one.name, became)
-        await self._told_the_surface(one, became)
+            return "could not start"
+        if not one.backend:
+            self._remember_outcome(one.name, became)
+            await self._told_the_surface(one, became)
+        return became
 
     async def _told_the_surface_it_started(self, one) -> None:
         """Say on the surface this schedule reports to that its run has begun (R-SCH-46).
