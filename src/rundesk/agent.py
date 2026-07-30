@@ -39,7 +39,10 @@ from rundesk import config
 #: an agent is reached is worth keeping where it can be read.
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates" / "agent"
 
-#: The one thing substituted on the way in. Everything else is copied as it stands.
+#: The one thing new templates substitute on the way in. Everything else is copied as it
+#: stands. `NAMED` remains accepted for templates an owner wrote before this spelling was
+#: clarified.
+AGENT = "{{agent}}"
 NAMED = "{{name}}"
 
 #: The directories inside an agent's home that are the agent's own to work in.
@@ -1065,13 +1068,16 @@ def _copied(called: str, name: str, overrides: Path | None = None) -> str:
     file it came from — editable there, readable as ordinary Markdown, and never a second
     version of the same words held in code.
 
-    **Writing `{{name}}` is optional** (R-AGT-25). The substitution is the whole of the
+    **Writing `{{agent}}` is optional** (R-AGT-25). The substitution is the whole of the
     contract an override has to honour, and honouring it is a choice: a template with no
     placeholder is one every agent gets verbatim, which is a legitimate thing to want.
-    `replace` on a string that does not contain it is the string, so this is already true
-    and is asserted rather than arranged.
+    `{{name}}` remains an alias for owner templates written before the placeholder was
+    clarified (R-AGT-40). Replacing absent strings is harmless, so both forms can be
+    supported without interpreting any other part of the page.
     """
-    return sourced(overrides)[called].read_text(encoding="utf-8").replace(NAMED, name)
+    return (sourced(overrides)[called].read_text(encoding="utf-8")
+            .replace(AGENT, name)
+            .replace(NAMED, name))
 
 
 @dataclass(frozen=True)
