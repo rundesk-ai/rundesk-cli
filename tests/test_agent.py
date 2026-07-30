@@ -158,6 +158,13 @@ class ResolvingLegacyGatewayNames(WithSomewhereToKeepAgents):
         self.assertIn("Agent_Name", names)
         self.assertEqual("Agent_Name", agent.creation_name("Agent Name", names))
 
+    def test_machine_error_output_alone_preserves_the_gateway_spelling(self):
+        """R-GW-36 — a gateway may fail before its own logger ever starts."""
+        (self.before / "logs" / "Winston.err").write_text("failed before logger")
+        names = agent.identities(self.where, self.before / "run", self.before / "logs")
+        self.assertIn("Winston", names)
+        self.assertEqual("Winston", agent.creation_name("winston", names))
+
 
 class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
     """The files a new agent's home is copied from, and an owner's right to replace them.
@@ -536,8 +543,14 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         ):
             with self.assertRaises(RuntimeError):
                 agent.add("ios-helper", self.where, display_name="iOS Helper")
-        agent.add("ios-helper", self.where, display_name="iOS Helper")
+        agent.add("ios-helper", self.where, display_name="IOS HELPER")
         self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+
+    def test_repair_alias_does_not_rewrite_a_completed_display_name(self):
+        """R-AGT-4, R-AGT-39 — repair leaves the owner's existing identity alone."""
+        agent.add("winston", self.where, display_name="winston")
+        agent.add("winston", self.where, display_name="WINSTON")
+        self.assertEqual("winston", agent.display_name("winston", self.where))
 
     def test_an_install_with_nothing_to_make_an_agent_from_says_so(self):
         """R-AGT-11 — a home with no files in it and nothing to have copied there would

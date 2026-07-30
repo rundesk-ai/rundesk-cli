@@ -1622,6 +1622,16 @@ class MakingAnAgent(unittest.TestCase):
         self.assertEqual(["Winston"], agents.added)
         self.assertEqual(["Winston"], agents.known())
 
+    def test_a_legacy_job_without_an_agent_keeps_its_exact_identity(self):
+        """R-AGW-1, R-AGT-13 — a supervisor job may be all that survives."""
+        agents = FakeAgents()
+        machine = FakeMachine(jobs=["Winston"])
+        code, said = drive(
+            ["add", "winston", "--provider", "codex"], machine=machine, agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["Winston"], agents.added)
+        self.assertNotIn("winston", agents.known())
+
     def test_making_an_agent_makes_it_and_says_where_it_stands(self):
         """R-AGW-1"""
         agents = FakeAgents()

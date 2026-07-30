@@ -1500,7 +1500,12 @@ def _brain_already_named(name: str, agents) -> bool:
         return True
 
 
-def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
+def _identities(agents, machine) -> list[str]:
+    """Every persisted spelling that command resolution must not split."""
+    return sorted({*agents.identities(), *machine.described(root=REPO_ROOT)})
+
+
+def cmd_add(args: argparse.Namespace, gateways, machine, agents) -> int:
     """Make an agent, and the one gateway that runs it (R-AGW-1).
 
     Making one that already exists puts back only what is missing (R-AGT-4). That is how an
@@ -1519,7 +1524,7 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
         print("        what there is already: rundesk agents", file=sys.stderr)
         return 1
     try:
-        name = agents.creation_name(given, agents.identities())
+        name = agents.creation_name(given, _identities(agents, machine))
     except agents.NotAnAgentName as why:
         print(f"{given}: INVALID NAME — {why}", file=sys.stderr)
         return 1
@@ -4098,7 +4103,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
     # its lowercase directory slug (R-AGT-40).
     if named is not None and args.command != "add":
         try:
-            args.name = agents.command_name(named, agents.identities())
+            args.name = agents.command_name(named, _identities(agents, machine))
         except agents.NotAnAgentName as why:
             print(f"{named}: INVALID NAME — {why}", file=sys.stderr)
             return 1
@@ -4122,7 +4127,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
     if args.command == "agents":
         return cmd_agents(args, gateways, machine, agents)
     if args.command == "add":
-        return cmd_add(args, gateways, agents)
+        return cmd_add(args, gateways, machine, agents)
     if args.command == "configure":
         return cmd_configure(args, agents)
     if args.command == "doctor":

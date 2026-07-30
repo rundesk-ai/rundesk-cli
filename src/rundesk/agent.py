@@ -42,6 +42,11 @@ NAMED = "{{name}}"
 #: The directories inside an agent's home that are the agent's own to work in.
 WORKING = "workspace", "skills"
 
+#: A fresh agent's human spelling while its records are being created. It is removed only
+#: after the database holds that spelling, so retrying an interrupted creation can finish
+#: without treating an ordinary slug-valued display name as incomplete.
+DISPLAY_PENDING = ".display-name.pending"
+
 
 #: Where an owner keeps the templates they made their own — **inside** where agents are
 #: kept, rather than beside it.
@@ -431,7 +436,7 @@ def identities(
     probe = "0"
     suffixes = tuple(
         path.name[len(probe):] for path, _ in _wrote_before(probe, log_home)
-    )
+    ) + (".out", ".err")
     for entry in entries:
         if not entry.is_file():
             continue
@@ -486,16 +491,20 @@ def add(name: str, where: Path | None = None, display_name: str | None = None) -
             made.append(called)
     records = store.path_for(directory(name, where))
     fresh = not records.exists()
+    pending = directory(name, where) / DISPLAY_PENDING
+    if fresh and display_name is not None:
+        pending.write_text(display_name.strip(), encoding="utf-8")
     # Fresh agents receive the baseline here. Existing populations are reconciled by both
     # upgrade routes after this release's library has been laid down (R-AGT-36).
     if fresh:
         made.extend(require_skills(name, where))
     kept = store.Store(records)
     kept.made()
-    if display_name is not None and (fresh or kept.display_name() == name):
-        # A retry after interruption between schema creation and this write repairs the
-        # migration fallback instead of losing the owner's spelling permanently.
-        kept.remember_display_name(display_name.strip())
+    if pending.is_file():
+        # A retry reads the first creation's spelling, not whichever alias happened to be
+        # typed on the retry. The marker leaves only after the durable database write.
+        kept.remember_display_name(pending.read_text(encoding="utf-8"))
+        pending.unlink()
     if fresh:
         made.append(store.NAME)
     return sorted(made)
