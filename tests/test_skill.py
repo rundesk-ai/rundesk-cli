@@ -79,6 +79,14 @@ class WhatTheLibraryHolds(WithALibrary):
 
 
 class WhatMakesASkill(WithALibrary):
+    def test_every_built_in_is_a_valid_skill(self):
+        """R-AGT-27, R-AGT-30 — a release must not lay down a built-in that every brain
+        silently refuses to index."""
+        for name in sorted(one.name for one in REALLY_SHIPPED.iterdir()
+                           if (one / skill.NAMED).is_file()):
+            with self.subTest(skill=name):
+                self.assertIsNone(skill.valid(REALLY_SHIPPED / name))
+
     def test_a_name_the_brains_would_refuse_is_refused_here(self):
         """R-AGT-27 — grok will not index an underscore, so a skill named with one exists,
         is granted, is placed, and never fires. Refusing it is the only honest answer."""
