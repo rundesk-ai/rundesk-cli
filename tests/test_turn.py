@@ -842,10 +842,9 @@ class WhatFourSlotsOfUsageAddUpTo(unittest.TestCase):
                           "cached": 15273, "written": 5550}, turn._tokens(said))
 
     def test_a_brain_that_does_not_report_cache_writes_has_none_invented(self):
-        """R-USE-6, one field along. Only `claude` measurably reports a cache-creation
-        count — grok, antigravity and codex have no such field — and summing an absent one
-        into zero would say they wrote nothing to a cache rather than that they do not
-        say."""
+        """R-USE-6, one field along. Some brains and older adapter streams report no
+        cache-creation split, and summing an absent one into zero would say they wrote
+        nothing to a cache rather than that they do not say."""
         said = [{"type": "usage", "input": 7, "output": 3, "cached": 2}]
         self.assertNotIn("written", turn._tokens(said))
 
