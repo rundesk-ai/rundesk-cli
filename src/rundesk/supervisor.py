@@ -316,6 +316,10 @@ def update_label() -> str:
     return f"{prefix()}-update"
 
 
+def restart_label() -> str:
+    return f"{prefix()}-restart"
+
+
 def automatic_update_label() -> str:
     return f"{prefix()}-automatic-update"
 
@@ -390,6 +394,10 @@ def keeps_backups(where: str | None = None) -> bool:
 
 def update_job_path(where: str | None = None) -> Path:
     return Path(os.path.expanduser(where or jobs_home())) / f"{update_label()}.plist"
+
+
+def restart_job_path(where: str | None = None) -> Path:
+    return Path(os.path.expanduser(where or jobs_home())) / f"{restart_label()}.plist"
 
 
 def automatic_update_job_path(where: str | None = None) -> Path:
@@ -571,6 +579,75 @@ def remove_update_worker(where: str | None = None, root: Path | None = None,
     if not ours(path, root):
         raise NotOurs("the update worker was not written by this install of rundesk")
     said = asking("bootout", f"{domain()}/{update_label()}")
+    with contextlib.suppress(OSError):
+        os.remove(path)
+    return said
+
+
+def describe_restart_worker(root: Path | None = None, logs: Path | None = None) -> dict:
+    """A one-shot worker owned beside every gateway it may safely cycle (R-GW-43)."""
+    root = root or ROOT
+    logs = logs or gateway.logs_home()
+    return {
+        "Label": restart_label(),
+        "ProgramArguments": [str(root / "rundesk"), "restart", "--worker"],
+        "WorkingDirectory": str(root),
+        "EnvironmentVariables": _environment(logs),
+        "RunAtLoad": True,
+        "KeepAlive": {"SuccessfulExit": False},
+        "StandardOutPath": str(logs / "restart-worker.out"),
+        "StandardErrorPath": str(logs / "restart-worker.err"),
+    }
+
+
+def write_restart_worker(root: Path | None = None, logs: Path | None = None,
+                         where: str | None = None) -> Path:
+    path = restart_job_path(where)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    (logs or gateway.logs_home()).mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as file:
+        plistlib.dump(describe_restart_worker(root, logs), file)
+    return path
+
+
+def install_restart_worker(root: Path | None = None, logs: Path | None = None,
+                           where: str | None = None,
+                           asking: Callable[..., Spoke] = ask) -> Spoke:
+    """Load and start the external restart worker."""
+    path = restart_job_path(where)
+    if path.exists() and not ours(path, root):
+        raise NotOurs("the restart worker was not written by this install of rundesk")
+    asking("bootout", f"{domain()}/{restart_label()}")
+    path = write_restart_worker(root, logs, where)
+    said = asking("bootstrap", domain(), str(path))
+    if said.ok:
+        kicked = asking("kickstart", f"{domain()}/{restart_label()}")
+        return kicked if not kicked.ok else said
+    return said
+
+
+def restart_worker_loaded(asking: Callable[..., Spoke] = ask) -> bool:
+    path = restart_job_path()
+    if path.exists() and not ours(path):
+        raise NotOurs("the restart worker was not written by this install of rundesk")
+    said = asking("print", f"{domain()}/{restart_label()}")
+    if not said.answered:
+        raise Unsure("the machine did not say whether it holds the restart worker")
+    return said.ok
+
+
+def kick_restart_worker(asking: Callable[..., Spoke] = ask) -> Spoke:
+    return asking("kickstart", f"{domain()}/{restart_label()}")
+
+
+def remove_restart_worker(where: str | None = None, root: Path | None = None,
+                          asking: Callable[..., Spoke] = ask) -> Spoke:
+    path = restart_job_path(where)
+    if not path.exists():
+        return Spoke(True, "")
+    if not ours(path, root):
+        raise NotOurs("the restart worker was not written by this install of rundesk")
+    said = asking("bootout", f"{domain()}/{restart_label()}")
     with contextlib.suppress(OSError):
         os.remove(path)
     return said
@@ -834,7 +911,7 @@ def remove_our_shared_jobs(
     root: Path | None = None,
     asking: Callable[..., Spoke] = ask,
 ) -> list[str]:
-    """Take away the two jobs a user has only one of, and say which were another's.
+    """Take away the shared jobs a user has only one of, and say which were another's.
 
     **The two are named per user, not per install (R-RM-15).** A gateway's job carries the
     gateway's name, so two installs never collide over one; the update worker and the
@@ -849,6 +926,7 @@ def remove_our_shared_jobs(
     """
     left = []
     for label, take in ((update_label(), remove_update_worker),
+                        (restart_label(), remove_restart_worker),
                         (automatic_update_label(), remove_automatic_update)):
         try:
             take(where, root, asking)

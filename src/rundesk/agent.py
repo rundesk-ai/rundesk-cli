@@ -1140,10 +1140,13 @@ def _answering(name, one, record, where, carry, answers):
     be cycled. Both are handed in, so nothing here reaches down into a gateway and
     nothing there reaches back for an agent.
     """
-    def made(sending, restarting=None, note=None):
+    def made(sending, restarting=None, note=None,
+             restart_waiting=None, restart_ready=None):
         return answers.Answering(name, one, record, sending, where=where, carry=carry,
                                  restarting=restarting, note=note,
-                                 querying=lambda asked: _queried(name, asked, where))
+                                 querying=lambda asked: _queried(name, asked, where),
+                                 restart_waiting=restart_waiting,
+                                 restart_ready=restart_ready)
     return made
 
 

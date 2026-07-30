@@ -113,7 +113,8 @@ class Answering:
     """
 
     def __init__(self, name: str, channel_name: str, record: dict, sending,
-                 where=None, carry=None, note=None, restarting=None, querying=None):
+                 where=None, carry=None, note=None, restarting=None, querying=None,
+                 restart_waiting=None, restart_ready=None):
         self.name = name
         self.channel = channel_name
         self.record = record
@@ -125,6 +126,8 @@ class Answering:
         #: keeps a gateway up is the machine's and this file has never heard
         #: of a gateway (R-CH-16).
         self._restarting = restarting
+        self._restart_waiting = restart_waiting or (lambda _run: False)
+        self._restart_ready = restart_ready or (lambda _run: None)
         #: Read-only gateway facts, resolved above this layer. Answering owns the
         #: authorization boundary but knows neither how an agent nor its gateway is
         #: represented (R-CAD-17).
@@ -372,6 +375,18 @@ class Answering:
         # request undelivered so the reconnected gateway tries again truthfully.
         await held.task
         raise RuntimeError("the post-update continuation was not admitted")
+
+    async def told_restart_finished(self, conversation: str, text: str) -> None:
+        """Deliver one queued restart outcome after reconnect (R-GW-43)."""
+        if not self.connected:
+            raise RuntimeError(f"channel '{self.channel}' is not connected")
+        await self._sending(channel.spoken(
+            type="said", conversation=conversation, text=text,
+        ))
+        agents.records(self.name, self._where).answered(
+            store.conversation_id(self.channel, conversation),
+            None, store.stamped(), text,
+        )
 
     def _where_to_say(self, kept, place):
         """The conversation to say it in, and why there is none where there is none.
@@ -683,6 +698,12 @@ class Answering:
             held.saying.put_nowait(None)
             held.saying = None
             held.can = {}
+            if self._restart_waiting(held.run):
+                # The provider has ended, but its answer and finished mark may still be
+                # waiting for the adapter. Release the external restart worker only
+                # after that outbound queue has drained (R-GW-43).
+                await self._showing.join()
+                self._restart_ready(held.run)
             if held.forgotten:
                 # After the turn, never before: this is the first moment at which
                 # nothing else is going to write where the conversation got to.
@@ -826,6 +847,8 @@ class Answering:
             except BaseException as why:  # noqa: BLE001 — a delivery boundary
                 self._note(f"channel '{self.channel}': could not show "
                            f"{it.get('type')}: {why}")
+            finally:
+                self._showing.task_done()
 
     # -- going away ------------------------------------------------------------------
 

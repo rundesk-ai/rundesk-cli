@@ -47,7 +47,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 23 modules)
+## Backend / Services (src/rundesk/ — 24 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -159,6 +159,8 @@ file with it.
 - `src/rundesk/update_request.py` — the durable handoff from an agent turn to the
   supervisor-owned update worker: one request, its origin, lifecycle, final outcome, and delivery state,
   all changed under one lock and atomically replaced.
+- `src/rundesk/restart_request.py` — one durable restart request per gateway: its safe
+  origin, readiness, lifecycle, final outcome, and delivery state, owned outside the gateway it may cycle.
 - `src/rundesk/dependencies.py` — what this install is made of beyond the standard library, and putting
   it there. One place decides what `requirements.txt` declares, what the virtualenv actually holds and
   how the second is made to satisfy the first — `install.sh` asked in shell and `gateway.fitness` asked
@@ -198,13 +200,13 @@ provider. One file per contract, named for it:
 |---|---|---|
 | `test_gateway.py` | 196 | `platform-gateway` — real processes, real signals, waits turned down |
 | `test_agent.py` | 88 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
-| `test_cli.py` | 277 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
+| `test_cli.py` | 288 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
 | `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 81 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
-| `test_update_request.py` | 22 | `lifecycle-update` — durable self-update handoff, duplicate requests, external ownership, and outcome delivery |
+| `test_update_request.py` | 26 | `lifecycle-update` + queued restarts — durable external handoff, duplicate requests, safety waits, and outcome delivery |
 | `test_dependencies.py` | 28 | `lifecycle-update` — what the install is made of: what is declared, what the virtualenv holds, and building one **without pip ever running** |
 | `test_install.py` | 70 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
-| `test_supervisor.py` | 69 | the launchd job — a fake `launchctl`, so it runs where there is none |
+| `test_supervisor.py` | 78 | the launchd job — a fake `launchctl`, so it runs where there is none |
 | `test_schedule.py` | 49 | `platform-schedule` — pure time arithmetic, the clock passed in |
 | `test_provider.py` | 37 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
 | `test_claude.py` | 65 | `provider-adapter` — the arithmetic and the postures one shipped brain decides on its own, driven against 184 captured lines rather than an account |
@@ -215,7 +217,7 @@ provider. One file per contract, named for it:
 | `test_transcript.py` | 28 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
 | `test_store.py` | 123 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
 | `test_channel.py` | 73 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
-| `test_answering.py` | 94 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
+| `test_answering.py` | 101 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
 | `test_discord.py` | 168 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
 | `test_instructions.py` | 10 | Rundesk's core and trigger prompts, standard variables, and additive builder |
 | `test_ci.py` | 13 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, and the supported matrix |
