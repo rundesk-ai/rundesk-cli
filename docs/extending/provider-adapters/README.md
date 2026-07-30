@@ -60,7 +60,7 @@ Only `done` is required. **stderr is yours** — say what went wrong there.
 ## The traps that actually cost something
 
 **`did` is a closed list: `read`, `search`, `run`, `edit`, `list`, `make`, `delegate`, and the
-four continuity verbs below.** If what your tool did is none of them, leave `did` out — `name`
+three continuity verbs below.** If what your tool did is none of them, leave `did` out — `name`
 still carries your own word. Do not stretch one to fit; say so instead and the list grows by a
 release. A channel never sees your vendor's names, which is the whole point.
 

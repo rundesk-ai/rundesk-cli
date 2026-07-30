@@ -90,6 +90,9 @@ class Schedule:
     channel: str | None = None
     at: str | None = None
     ran_at: str | None = None
+    #: True only for a Rundesk-requested backend migration. It still uses a fresh scheduled
+    #: conversation, but no ordinary schedule delivery promise applies.
+    backend: bool = False
     _fields: tuple = field(default=(), repr=False, compare=False)
     #: Which fields were written as `*`. Kept because "was anything allowed here?" cannot
     #: be answered by counting what a field ended up allowing: `0-6` allows every day of

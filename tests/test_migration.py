@@ -730,6 +730,65 @@ class CarryingTheShapeThatShippedForward(WithStepsOfThisCasesOwn):
         self.assertEqual(3, conn.execute(
             "SELECT id FROM schedule WHERE name = 'tidy-up'").fetchone()["id"])
 
+    def test_this_update_requests_one_agent_home_migration_turn(self):
+        """The release that retires the separate profile page cannot rewrite an owner's
+        tailored rules blindly. Its migration leaves one durable request for the new gateway,
+        carrying the task and unattended context the agent needs to reconcile them."""
+        self.built_at_the_first_shape()
+        loaded = self.home / "home"
+        loaded.mkdir()
+        (loaded / "CLAUDE.md").write_text("# old bootstrap\n", encoding="utf-8")
+        (loaded / "USER.md").write_text("# user facts\n", encoding="utf-8")
+
+        self.carried().close()
+        pending = store.Store(self.at).pending_update_turns()
+
+        self.assertEqual([4], [one["migration"] for one in pending])
+        self.assertIn("no user is present", pending[0]["instructions"])
+        self.assertIn("remove `USER.md`", pending[0]["prompt"])
+        self.assertIn("### `AGENTS.md`", pending[0]["prompt"])
+        self.assertIn("## Definition of done", pending[0]["prompt"])
+        self.assertNotIn("rundesk.agent.TEMPLATES", pending[0]["prompt"])
+        self.assertIn("recorded only in this agent's", pending[0]["instructions"])
+        self.assertNotIn("posted where this agent is reached", pending[0]["instructions"])
+        self.assertEqual(
+            (migration.STEPS.parent / "templates" / "agent" / "CLAUDE.md").read_text(),
+            pending[0]["bootstrap"],
+        )
+
+    def test_this_update_carries_the_exact_templates_it_migrates_toward(self):
+        """A historical migration is frozen, but its release templates can still drift
+        before shipping. This keeps the request and the files installed beside it identical."""
+        step = migration.found()[-1].loaded()
+        templates = migration.STEPS.parent / "templates" / "agent"
+
+        for name, text in step.TEMPLATES:
+            self.assertEqual(
+                (templates / name).read_text(encoding="utf-8"),
+                text,
+                f"{name} changed without updating migration 004's durable request",
+            )
+
+    def test_a_new_bootstrap_does_not_hide_old_continuity_pages(self):
+        """The bootstrap is safe to replace verbatim and may arrive before the tailored
+        pages do. Matching it alone must not suppress the turn that migrates the other
+        three onto their new fixed sections."""
+        self.built_at_the_first_shape()
+        loaded = self.home / "home"
+        loaded.mkdir()
+        templates = migration.STEPS.parent / "templates" / "agent"
+        (loaded / "CLAUDE.md").write_text(
+            (templates / "CLAUDE.md").read_text(), encoding="utf-8")
+        (loaded / "AGENTS.md").write_text("# Operating rules\n", encoding="utf-8")
+        (loaded / "MEMORY.md").write_text("# Your memory\n", encoding="utf-8")
+        (loaded / "SOUL.md").write_text("# Who you are\n", encoding="utf-8")
+
+        self.carried().close()
+
+        self.assertEqual([4], [
+            one["migration"] for one in store.Store(self.at).pending_update_turns()
+        ])
+
 
 class EachAgentIsCarriedOnItsOwn(WithStepsOfThisCasesOwn):
     """One database per agent means one migration per agent, and no agent waits on another.

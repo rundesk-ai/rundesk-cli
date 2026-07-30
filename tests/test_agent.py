@@ -12,6 +12,7 @@ Run: python3 tests/test_agent.py
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -127,19 +128,23 @@ class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
         template of their own gets the factory set, byte for byte but for the one name."""
         self.made()
         for called, says in self.held().items():
-            self.assertEqual((agent.TEMPLATES / called).read_text().replace("{{name}}", "ava"),
+            self.assertEqual(agent._copied(called, "ava"),
                              says, f"{called} is not what the install ships")
 
     def test_one_overridden_page_is_the_owners_and_the_rest_are_shipped(self):
-        """R-AGT-22 — per page, not per set. Taking on all five to change one would mean
+        """R-AGT-22 — per page, not per set. Taking on all four to change one would mean
         never getting an improvement to any of them, which is a choice worth avoiding."""
         self.own("SOUL.md", "# {{name}} answers only in haiku\n")
         self.made()
 
         held = self.held()
         self.assertEqual("# ava answers only in haiku\n", held["SOUL.md"])
-        for called in ("AGENTS.md", "CLAUDE.md", "USER.md", "MEMORY.md"):
-            self.assertEqual((agent.TEMPLATES / called).read_text().replace("{{name}}", "ava"),
+        self.assertEqual(
+            [], agent.records("ava", self.where).pending_update_turns(),
+            "a fresh owner-customized home was mistaken for an old agent",
+        )
+        for called in ("AGENTS.md", "CLAUDE.md", "MEMORY.md"):
+            self.assertEqual(agent._copied(called, "ava"),
                              held[called], f"{called} stopped being the install's")
 
     def test_an_override_that_never_names_the_agent_still_makes_a_working_agent(self):
@@ -172,6 +177,17 @@ class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
         self.own("RULES.md", "# {{name}} never force-pushes\n")
         self.made()
         self.assertEqual("# ava never force-pushes\n", self.held()["RULES.md"])
+
+    def test_a_legacy_user_override_does_not_restore_the_retired_page(self):
+        """An owner may still have an override from an older release. It is not copied into
+        new homes, while unrelated owner-added pages remain supported."""
+        where = self.own("USER.md", "# old separate context\n")
+        (where / "RULES.md").write_text("# keep this addition\n", encoding="utf-8")
+
+        self.made()
+
+        self.assertNotIn("USER.md", self.held())
+        self.assertEqual("# keep this addition\n", self.held()["RULES.md"])
 
     def test_an_agent_made_before_a_page_was_added_is_not_reported_as_missing_it(self):
         """R-AGT-24 — the reason this decision is not cosmetic, and it only shows up once
@@ -267,6 +283,18 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         self.assertTrue(agent.workspace("ava", self.where).is_dir())
         self.assertTrue(agent.skills("ava", self.where).is_dir())
 
+    def test_a_new_home_has_no_separate_user_page(self):
+        """Personal facts and response preferences now live in MEMORY. The factory home has
+        one continuity page for them, not a second page that can disagree with it."""
+        agent.add("ava", self.where)
+        self.assertEqual(
+            {"AGENTS.md", "CLAUDE.md", "MEMORY.md", "SOUL.md"},
+            {path.name for path in agent.home("ava", self.where).iterdir() if path.is_file()},
+        )
+        memory = (agent.home("ava", self.where) / "MEMORY.md").read_text()
+        self.assertIn("## Who you work for", memory)
+        self.assertIn("## How they want to be answered", memory)
+
     def test_what_an_agent_loads_holds_nothing_rundesk_keeps(self):
         """R-AGT-2 — the home is what the agent loads. A provider reading its own rules
         must not be reading rundesk's lock, log and schedules, which is what putting them
@@ -315,7 +343,7 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
                 reached.add(called)
                 says = (home / called).read_text()
                 walking += [one for one in agent.knowledge() if one in says]
-            for wanted in ("SOUL.md", "USER.md", "MEMORY.md"):
+            for wanted in ("SOUL.md", "MEMORY.md"):
                 self.assertIn(wanted, reached,
                               f"nothing an agent loads reaches {wanted} from {start} — "
                               f"only {sorted(reached)} is reachable")
@@ -366,6 +394,30 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         self.assertEqual(store.VERSION, kept.version())
         self.assertEqual({"provider": None, "model": None, "instructions": None,
                           "settings": {}}, kept.agent())
+
+    def test_a_new_agent_needs_no_update_migration_turn(self):
+        """The templates and the records arrive together for a new agent. A migration turn
+        exists to reconcile homes from an older release, not to rewrite a home just made."""
+        agent.add("ava", self.where)
+        self.assertEqual([], agent.records("ava", self.where).pending_update_turns())
+
+    def test_an_existing_home_without_records_still_gets_the_update_migration(self):
+        """An agent from before records existed is not a fresh home. Repairing it creates
+        records but must retain the release request that reconciles its old continuity."""
+        loaded = agent.home("ava", self.where)
+        loaded.mkdir(parents=True)
+        (loaded / "AGENTS.md").write_text("# old rules\n", encoding="utf-8")
+        (loaded / "MEMORY.md").write_text("# old memory\n", encoding="utf-8")
+        (loaded / "SOUL.md").write_text("# old soul\n", encoding="utf-8")
+        (loaded / "CLAUDE.md").write_text("# old bootstrap\n", encoding="utf-8")
+        (loaded / "USER.md").write_text("# durable user fact\n", encoding="utf-8")
+
+        agent.add("ava", self.where)
+
+        self.assertEqual([4], [
+            one["migration"]
+            for one in agent.records("ava", self.where).pending_update_turns()
+        ])
 
     def test_making_an_agent_again_leaves_the_records_it_already_had(self):
         """R-AGT-4 — making one that exists is the repair, and a repair that rebuilt the
@@ -500,10 +552,10 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
     def test_making_an_agent_again_puts_back_only_what_is_missing(self):
         """R-AGT-4"""
         agent.add("ava", self.where)
-        (agent.home("ava", self.where) / "USER.md").unlink()
+        (agent.home("ava", self.where) / "MEMORY.md").unlink()
         shutil.rmtree(agent.skills("ava", self.where))
 
-        self.assertEqual(agent.add("ava", self.where), ["USER.md", "skills/"])
+        self.assertEqual(agent.add("ava", self.where), ["MEMORY.md", "skills/"])
 
     def test_an_agent_is_only_one_that_has_a_home(self):
         """R-AGT-2 — a directory standing where agents are kept is not by itself an agent.
@@ -897,6 +949,35 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
         self.assertIn("Write nothing until the work is finished", said,
                       "a brain cannot tell which thought will be its last, so the rule it "
                       "can actually follow has to be the one it is given")
+
+    def test_a_backend_update_turn_gets_only_its_truthful_delivery_rule(self):
+        """R-MIG-24 — an update turn is schedule-scoped but reports only to the account.
+        The ordinary promise that Rundesk posts its final message must not contradict that."""
+        from rundesk import schedule
+
+        self.made()
+        captured = {}
+
+        async def carrying(_name, _prompt, _provider, **held):
+            captured.update(held)
+            return object()
+
+        one = schedule.Schedule(
+            name="rundesk-update-4",
+            at="2026-07-30 12:00",
+            ran_at="2026-07-30 12:00",
+            prompt="migrate",
+            instructions="recorded only in this agent's account; never posted",
+            backend=True,
+        )
+        asyncio.run(agent.asking("ava", self.where, carry=carrying)(one))
+
+        preface = self.situation(captured["preface"])
+        self.assertEqual(
+            "recorded only in this agent's account; never posted",
+            preface,
+        )
+        self.assertNotIn("## Scheduled run", captured["preface"])
 
     def test_what_rundesk_says_about_a_scheduled_turn_is_there_whatever_the_owner_wrote(self):
         """R-AGT-34 — the tier this moved out of. As the situation tier's last resort, an

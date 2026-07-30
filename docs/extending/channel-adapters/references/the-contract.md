@@ -154,19 +154,17 @@ with `configure-result`, carrying the same `conversation` and `ref` plus private
 for the interaction that asked. A turn already running keeps the provider it began with;
 the next message waits and starts fresh rather than steering the old provider.
 
-**`did` is what a tool did, and the list is closed.** It is one of exactly eleven words —
-`read`, `search`, `run`, `edit`, `list`, `make`, `delegate`, `memory`, `rules`, `profile`,
+**`did` is what a tool did, and the list is closed.** It is one of exactly ten words —
+`read`, `search`, `run`, `edit`, `list`, `make`, `delegate`, `memory`, `rules`,
 `identity` — or it is absent, and absent is common. Show a mark or a word of your own for
 each.
 
-**The last four are a file the agent lives by being rewritten**, and they are apart from
-`edit` on purpose: `MEMORY.md`, `AGENTS.md`, `USER.md` and `SOUL.md` are what an agent *is*
+**The last three are a file the agent lives by being rewritten**, and they are apart from
+`edit` on purpose: `MEMORY.md`, `AGENTS.md` and `SOUL.md` are what an agent *is*
 between turns, so one of them changing is different news from a working file changing.
 They name what changed rather than what was done — the act is always the same one — so a
 surface with nothing but the raw word still reads. Give each its own mark; folding them
-back into `edit` throws away the only part a reader wanted. `profile` is the odd one and
-worth wording carefully: `USER.md` is what the agent knows about the *owner*, so it is not
-the agent's own the way the other three are.
+back into `edit` throws away the only part a reader wanted.
 
 **Do not show `name`.** It is the brain's own identifier for the tool — `commandExecution`
 on one, `Bash` on the next — and putting it in front of a reader means putting one

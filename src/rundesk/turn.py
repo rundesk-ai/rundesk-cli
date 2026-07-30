@@ -53,6 +53,10 @@ TERMINAL = "terminal"
 #: into, and left its own prompt and answer in the middle of it.
 SCHEDULE = "schedule"
 
+#: A private conversation surface for release-requested backend turns. Their run source is
+#: still `schedule`, but their conversation can never be an owner's schedule conversation.
+UPDATE = "update"
+
 #: The third, and the one this file does not otherwise name. Written out beside the other two
 #: because `began` refuses a word that is not one of `store.SOURCES`, and three spellings of
 #: that set — here, there, and in whatever a caller passes — is two too many.

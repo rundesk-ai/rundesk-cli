@@ -1,4 +1,4 @@
-# CLAUDE.md
+# CLAUDE
 
 Before you respond to the user, do any task, or any action, you must read and follow
 [AGENTS.md](./AGENTS.md) completely.

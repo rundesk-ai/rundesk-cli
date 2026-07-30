@@ -163,7 +163,8 @@ def logged(home, said: str, level: str = "INFO", clock=None) -> None:
         pass
 
 
-def carry(database, home, want: int, where=None, note=None, clock=None) -> int:
+def carry(database, home, want: int, where=None, note=None, clock=None,
+          fresh: bool = False) -> int:
     """Bring one agent's records up to date, and say what version they reached.
 
     Each step is one transaction that includes its own version stamp, so an update stopped
@@ -189,7 +190,7 @@ def carry(database, home, want: int, where=None, note=None, clock=None) -> int:
         for step in due:
             say(f"migrating {database.parent.name} to version {step.version}")
             try:
-                spent = _one(conn, step, Path(home))
+                spent = _one(conn, step, Path(home), fresh=fresh)
             except Failed as stopped:
                 logged(home, f"{step} did not finish — records are still at version "
                              f"{stopped.reached}: {stopped.why}", "ERROR", clock=clock)
@@ -403,7 +404,7 @@ def _an_agent(home: Path) -> bool:
     return any((home / one).exists() for one in OF_AN_AGENT)
 
 
-def _one(conn, step: Step, home: Path) -> list:
+def _one(conn, step: Step, home: Path, fresh: bool = False) -> list:
     """One step, whole or not at all.
 
     The version is read again **inside** the hold, not only before it. Two processes that both
@@ -421,6 +422,11 @@ def _one(conn, step: Step, home: Path) -> list:
         # A step may copy files. It may never delete one — what it hands back is removed
         # after the version has committed, which is what makes running again safe.
         spent = module.up(conn, home) or []
+        # A fresh agent walks the same schema steps as an upgrade, but a step may have
+        # follow-up work intended only for homes that predate it. The creator knows that
+        # distinction without guessing from owner-customized file contents.
+        if fresh and hasattr(module, "for_fresh_agent"):
+            module.for_fresh_agent(conn, home)
         conn.execute(f"PRAGMA user_version = {int(step.version)}")
     except BaseException as trouble:
         with contextlib.suppress(sqlite3.OperationalError):
