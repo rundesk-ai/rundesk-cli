@@ -268,6 +268,7 @@ def environment(
     channel: str,
     agent: str,
     channel_home: Path,
+    agent_name: str | None = None,
     allow=None,
     settings: dict | None = None,
     secret: dict | None = None,
@@ -300,6 +301,7 @@ def environment(
     said.update(process.environment(home, path=path))
     said["RUNDESK_CHANNEL"] = channel
     said["RUNDESK_AGENT"] = agent
+    said["RUNDESK_AGENT_NAME"] = agent_name or agent
     said["RUNDESK_CHANNEL_HOME"] = str(channel_home)
     if allow:
         # Who may use this channel is rundesk's to *enforce* and never the adapter's

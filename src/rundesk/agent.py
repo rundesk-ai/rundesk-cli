@@ -20,10 +20,14 @@ reached back for an agent would end it.
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import os
 import re
 import shutil
+import stat
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,6 +44,11 @@ NAMED = "{{name}}"
 
 #: The directories inside an agent's home that are the agent's own to work in.
 WORKING = "workspace", "skills"
+
+#: A fresh agent's human spelling while its records are being created. It is removed only
+#: after the database holds that spelling, so retrying an interrupted creation can finish
+#: without treating an ordinary slug-valued display name as incomplete.
+DISPLAY_PENDING = ".display-name.pending"
 
 
 #: Where an owner keeps the templates they made their own — **inside** where agents are
@@ -122,6 +131,80 @@ class NotAnAgentName(ValueError):
 
 class InUse(Exception):
     """Something is still using this name, so nothing belonging to it was moved."""
+
+
+def slug(name: str) -> str:
+    """The lowercase filesystem name given to a newly created agent (R-AGT-39).
+
+    An owner names an identity, not a path. Spaces and punctuation become one dash,
+    accents become their ASCII spelling where Unicode defines one, and the result is
+    checked by the same boundary every later command uses. Existing agent names are not
+    rewritten: this is creation-time normalization, not a migration of persisted state.
+    """
+    plain = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    made = re.sub(r"[^a-zA-Z0-9]+", "-", plain).strip("-").lower()
+    if not made:
+        raise NotAnAgentName(
+            f"'{name}' is not a usable name — include at least one letter or digit"
+        )
+    return checked(made)
+
+
+def creation_name(name: str, existing=()) -> str:
+    """The slug for a new agent, or the legacy spelling already holding that slug.
+
+    Older releases accepted uppercase, dots and underscores. On a case-sensitive
+    filesystem, blindly creating today's slug beside one of those would make two agents
+    from one human name; on macOS it would silently address the old directory instead.
+    Resolve that difference deliberately, and refuse an already-ambiguous legacy set.
+
+    Exact spelling wins first, then an unambiguous case-insensitive legacy match is
+    considered before ASCII slugging. Older releases admitted Unicode names that have no
+    ASCII spelling; one such directory must remain reachable and must never stop an
+    unrelated new agent from being made.
+    """
+    existing = tuple(existing)
+    # Exact spelling is an identity, even on a case-sensitive machine that has both
+    # `Winston` and `winston` from an older release. Only an alias may be ambiguous.
+    if name in existing:
+        return name
+    same = sorted(one for one in existing if one.casefold() == name.casefold())
+    if len(same) > 1:
+        raise NotAnAgentName(
+            f"'{name}' matches more than one existing agent: {', '.join(same)}"
+        )
+    if same:
+        return same[0]
+    made = slug(name)
+    matches = []
+    for one in existing:
+        try:
+            existing_slug = slug(one)
+        except NotAnAgentName:
+            continue
+        if existing_slug == made:
+            matches.append(one)
+    matches.sort()
+    if len(matches) > 1:
+        raise NotAnAgentName(
+            f"'{name}' matches more than one existing agent: {', '.join(matches)}"
+        )
+    return matches[0] if matches else made
+
+
+def command_name(name: str, existing=()) -> str:
+    """Resolve a command alias without renaming an unmatched legacy gateway.
+
+    Creation deliberately invents a lowercase slug. Other commands do not invent
+    identities: an old supervisor may still invoke ``serve Winston`` before that
+    gateway has an agent or any surviving state. Preserve that exact spelling when
+    there is no known alias target (R-AGT-13, R-AGT-40).
+    """
+    existing = tuple(existing)
+    resolved = creation_name(name, existing)
+    if resolved in existing:
+        return resolved
+    return checked(name)
 
 
 def agents_home() -> Path:
@@ -335,6 +418,45 @@ def known(where: Path | None = None) -> list[str]:
     )
 
 
+def identities(
+    where: Path | None = None,
+    run: Path | None = None,
+    logs: Path | None = None,
+) -> list[str]:
+    """Agent directories and legacy gateway spellings that commands can still address.
+
+    A gateway predating agents may be represented only by shared run state or history.
+    Those spellings must participate in alias resolution so ``Winston`` is not silently
+    split into a new ``winston`` identity during adoption (R-AGW-1, R-AGT-13).
+    """
+    found = set(known(where))
+    found.update(one.name for one in gateway.every(run))
+    log_home = logs or gateway.logs_home()
+    try:
+        entries = tuple(log_home.iterdir())
+    except OSError:
+        entries = ()
+    probe = "0"
+    suffixes = tuple(
+        path.name[len(probe):] for path, _ in _wrote_before(probe, log_home)
+    ) + (".out", ".err")
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        for suffix in suffixes:
+            match = re.fullmatch(rf"(.+){re.escape(suffix)}(?:\.\d+|\.changing)?", entry.name)
+            if not match:
+                continue
+            candidate = match.group(1)
+            try:
+                gateway.checked(candidate)
+            except gateway.NotAName:
+                continue
+            found.add(candidate)
+            break
+    return sorted(found)
+
+
 def exists(name: str, where: Path | None = None) -> bool:
     """Whether there is an agent of this name."""
     try:
@@ -343,7 +465,111 @@ def exists(name: str, where: Path | None = None) -> bool:
         return False
 
 
-def add(name: str, where: Path | None = None) -> list[str]:
+def creation_pending(name: str, where: Path | None = None) -> bool:
+    """Whether first creation still owes its human name to durable records."""
+    pending = directory(name, where) / DISPLAY_PENDING
+    return pending.is_symlink() or pending.exists()
+
+
+def _write_pending(pending: Path, display_name: str) -> None:
+    """Publish a complete first display spelling once, without replacing one on retry."""
+    beside = pending.with_name(f"{pending.name}.writing")
+    try:
+        opened = os.open(
+            beside,
+            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except OSError as why:
+        raise store.Unreadable(f"{beside} could not be safely opened: {why}") from why
+    with os.fdopen(opened, "r+b") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            opened_as = os.fstat(handle.fileno())
+            try:
+                published_as = pending.lstat()
+            except FileNotFoundError:
+                published_as = None
+            same_published_inode = (
+                published_as is not None
+                and stat.S_ISREG(published_as.st_mode)
+                and (opened_as.st_dev, opened_as.st_ino)
+                == (published_as.st_dev, published_as.st_ino)
+            )
+            if opened_as.st_nlink != 1 and not (
+                opened_as.st_nlink == 2 and same_published_inode
+            ):
+                raise store.Unreadable(
+                    f"{beside} is linked to something other than pending creation state"
+                )
+            if not pending.is_symlink() and not pending.exists():
+                handle.seek(0)
+                staged = _display_from_record(handle.read())
+                if staged is None:
+                    handle.seek(0)
+                    handle.truncate()
+                    handle.write(_display_record(display_name))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.link(beside, pending)
+            # Removed while the lock is still held. Another writer that already opened
+            # this inode sees the published marker; a later one gets a fresh staging file
+            # and sees it too. A crash leaves one fixed file a retry can safely resume.
+            _unlink_durable(beside)
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _unlink_durable(path: Path) -> None:
+    """Remove one state path and make that absence survive power loss."""
+    path.unlink(missing_ok=True)
+    folder = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(folder)
+    finally:
+        os.close(folder)
+
+
+def _display_record(display_name: str) -> bytes:
+    """A pending name framed so a retry can distinguish complete from partial."""
+    payload = display_name.encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest().encode("ascii")
+    return digest + b"\n" + payload
+
+
+def _display_from_record(record: bytes) -> str | None:
+    """A complete, checksummed pending name, or None for interrupted staging."""
+    try:
+        digest, payload = record.split(b"\n", 1)
+        if len(digest) != 64 or hashlib.sha256(payload).hexdigest().encode("ascii") != digest:
+            return None
+        display = payload.decode("utf-8")
+    except (ValueError, UnicodeError):
+        return None
+    return display if display and display == display.strip() else None
+
+
+def _pending_display(pending: Path) -> str | None:
+    """The complete pending spelling, refusing anything unsafe or unreadable."""
+    try:
+        mode = pending.lstat().st_mode
+    except FileNotFoundError:
+        return None
+    except OSError as why:
+        raise store.Unreadable(f"{pending} could not be read: {why}") from why
+    if not stat.S_ISREG(mode):
+        raise store.Unreadable(f"{pending} is not a regular file")
+    try:
+        record = pending.read_bytes()
+    except OSError as why:
+        raise store.Unreadable(f"{pending} could not be read: {why}") from why
+    display = _display_from_record(record)
+    if display is None:
+        raise store.Unreadable(f"{pending} does not hold a complete display name")
+    return display
+
+
+def add(name: str, where: Path | None = None, display_name: str | None = None) -> list[str]:
     """Make this agent, and the one gateway that runs it (R-AGW-1).
 
     What is written is what is not already there, and nothing else (R-AGT-4). Making an
@@ -361,6 +587,17 @@ def add(name: str, where: Path | None = None) -> list[str]:
     checked rather than rebuilt, which is what makes making an agent again a repair.
     """
     made = []
+    agent_dir = directory(name, where)
+    records = store.path_for(agent_dir)
+    fresh = not records.exists()
+    pending = agent_dir / DISPLAY_PENDING
+    if fresh and display_name is not None:
+        # Publish identity recovery before `home/` makes this count as an agent. If this
+        # process dies first, retry still sees a new name; if it dies afterwards, retry
+        # sees the durable marker and finishes the same creation.
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        _write_pending(pending, display_name.strip())
+    pending_display = _pending_display(pending)
     for path in made_of(name, where).values():
         if not path.exists():
             path.mkdir(parents=True, exist_ok=True)
@@ -368,15 +605,22 @@ def add(name: str, where: Path | None = None) -> list[str]:
     for called in knowledge():
         page = home(name, where) / called
         if not page.exists():
-            page.write_text(_copied(called, name), encoding="utf-8")
+            page.write_text(
+                _copied(called, pending_display or display_name or name),
+                encoding="utf-8",
+            )
             made.append(called)
-    records = store.path_for(directory(name, where))
-    fresh = not records.exists()
     # Fresh agents receive the baseline here. Existing populations are reconciled by both
     # upgrade routes after this release's library has been laid down (R-AGT-36).
     if fresh:
         made.extend(require_skills(name, where))
-    store.Store(records).made()
+    kept = store.Store(records)
+    kept.made()
+    if pending_display is not None:
+        # A retry reads the first creation's spelling, not whichever alias happened to be
+        # typed on the retry. The marker leaves only after the durable database write.
+        kept.remember_display_name(pending_display)
+        _unlink_durable(pending)
     if fresh:
         made.append(store.NAME)
     return sorted(made)
@@ -559,6 +803,14 @@ def forget(name: str, where: Path | None = None) -> list[str]:
         if path.exists():
             path.unlink()
             taken.append(path.name)
+    pending = stands / DISPLAY_PENDING
+    if pending.is_symlink() or pending.exists():
+        pending.unlink()
+        taken.append(pending.name)
+    writing = pending.with_name(f"{pending.name}.writing")
+    if writing.is_symlink() or writing.exists():
+        writing.unlink()
+        taken.append(writing.name)
     for path in (logs_home(name, where),):
         if path.exists():
             shutil.rmtree(path)
@@ -636,7 +888,8 @@ STANDING = instructions.RUNDESK_INSTRUCTIONS
 def instruction_variables(name: str, where: Path | None = None) -> dict[str, str]:
     """The agent-owned values Rundesk fills into every core instruction layer."""
     return {
-        "agent": name,
+        "agent": display_name(name, where) if exists(name, where) else name,
+        "agent_slug": name,
         "agent_home": str(home(name, where)),
         "workspace": str(workspace(name, where)),
     }
@@ -860,6 +1113,7 @@ def reachable(name: str, where: Path | None = None, carry=None) -> list:
             name=one, program=at,
             env=channels.environment(
                 home=run_home(name, where), channel=one, agent=name, channel_home=home,
+                agent_name=display_name(name, where),
                 allow=record.get("allow"), settings=record.get("settings"),
                 secret=record.get("secret")),
             answering=_answering(name, one, record, where, carry, answers),
@@ -880,6 +1134,11 @@ def _answering(name, one, record, where, carry, answers):
                                  restarting=restarting, note=note,
                                  querying=lambda asked: _queried(name, asked, where))
     return made
+
+
+def display_name(name: str, where: Path | None = None) -> str:
+    """The human name this agent's owner chose, never its directory guessed again."""
+    return reading(name, where).display_name()
 
 
 def _queried(name: str, asked: str, where: Path | None = None) -> str:

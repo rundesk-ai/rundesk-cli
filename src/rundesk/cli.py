@@ -1500,7 +1500,12 @@ def _brain_already_named(name: str, agents) -> bool:
         return True
 
 
-def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
+def _identities(agents, machine) -> list[str]:
+    """Every persisted spelling that command resolution must not split."""
+    return sorted({*agents.identities(), *machine.described(root=REPO_ROOT)})
+
+
+def cmd_add(args: argparse.Namespace, gateways, machine, agents) -> int:
     """Make an agent, and the one gateway that runs it (R-AGW-1).
 
     Making one that already exists puts back only what is missing (R-AGT-4). That is how an
@@ -1513,19 +1518,22 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
     while that gateway is running, because a gateway reading one directory while every
     command reads another is the fault that makes a schedule silently never run.
     """
-    name = args.name
-    if not name:
+    given = args.name
+    if not given:
         print("add: NAME REQUIRED — say what to call the agent", file=sys.stderr)
         print("        what there is already: rundesk agents", file=sys.stderr)
         return 1
     try:
-        agents.checked(name)
+        name = agents.creation_name(given, _identities(agents, machine))
     except agents.NotAnAgentName as why:
-        print(f"{name}: INVALID NAME — {why}", file=sys.stderr)
+        print(f"{given}: INVALID NAME — {why}", file=sys.stderr)
         return 1
     knew = agents.exists(name)
-    if knew and any((args.provider, args.model, getattr(args, "settings", None),
-                     getattr(args, "says", None) is not None)):
+    pending = agents.creation_pending(name)
+    if knew and not pending and any((
+        args.provider, args.model, getattr(args, "settings", None),
+        getattr(args, "says", None) is not None,
+    )):
         print(f"{name}: ALREADY MADE — use configure to change its defaults",
               file=sys.stderr)
         print(f"        like this:  rundesk configure {name} --provider <provider>",
@@ -1567,7 +1575,7 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
                   file=sys.stderr)
             return 1
     try:
-        made = agents.add(name)
+        made = agents.add(name, display_name=given)
     except config.Unreadable as why:
         # A configuration that cannot be read is never treated as absent: the skills this
         # agent would be given are stated there, and making it without them would be an
@@ -4092,10 +4100,14 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         parser.print_help()
         return 0
     named = getattr(args, "name", None)
-    if named is not None:
+    # Every command speaks in an agent's human name while the rest of the program speaks
+    # in its filesystem identity. Resolve that seam once: a case-insensitive slug reaches
+    # a legacy spelling already on disk, and a name with spaces reaches the same agent as
+    # its lowercase directory slug (R-AGT-40).
+    if named is not None and args.command != "add":
         try:
-            gateways.checked(named)
-        except gateways.NotAName as why:
+            args.name = agents.command_name(named, _identities(agents, machine))
+        except agents.NotAnAgentName as why:
             print(f"{named}: INVALID NAME — {why}", file=sys.stderr)
             return 1
     # What this install calls its jobs is *this process's* environment rather than a
@@ -4118,7 +4130,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
     if args.command == "agents":
         return cmd_agents(args, gateways, machine, agents)
     if args.command == "add":
-        return cmd_add(args, gateways, agents)
+        return cmd_add(args, gateways, machine, agents)
     if args.command == "configure":
         return cmd_configure(args, agents)
     if args.command == "doctor":
