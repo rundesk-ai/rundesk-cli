@@ -64,6 +64,7 @@ provider's own tools still reach whatever their owner reaches.
 | ✅ | R-AGT-41 | New agent templates name their agent with `{{agent}}`, while existing owner templates using `{{name}}` keep working | `an owner template uses the agent placeholder`, `a legacy name placeholder still names the agent` |
 | ✅ | R-AGT-42 | The shipped provider bootstrap requires complete agent rules to be read before any response or action | `provider bootstrap requires complete agent rules before action` |
 | ✅ | R-AGT-43 | A new agent keeps personal facts and response preferences in memory rather than a separate page | `a new home has no separate user page`, `a legacy user override does not restore the retired page` |
+| ✅ | R-AGT-44 | A skill keeps its instructions, scripts, references, assets, and other resources together wherever it is presented | `a complete skill package is valid`, `a grant reaches every resource in a skill package`, `revoking a complete skill package removes only access`, `installing and updating preserve a complete skill package`, `uninstalling removes a complete built in skill package`, `every shipped adapter presents a complete skill package`, `antigravity presents a complete skill package and prunes revoked link`, `a backup holds a complete skill package`, `a restored skill package keeps its executable command` |
 
 ## Open questions
 

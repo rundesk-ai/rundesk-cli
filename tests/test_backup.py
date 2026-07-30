@@ -32,6 +32,21 @@ AT = datetime.datetime(2026, 7, 27, 4, 0, 0, tzinfo=datetime.timezone.utc)
 SAID_AT = "2026-07-27 04:00:00"
 
 
+def complete_skill(data: Path) -> Path:
+    """One skill package with every standard resource and one runnable command."""
+    made = data / "skills" / "tidying"
+    (made / "scripts").mkdir(parents=True)
+    (made / "references").mkdir()
+    (made / "assets").mkdir()
+    (made / "SKILL.md").write_text("---\nname: tidying\n---\n")
+    command = made / "scripts" / "tidying"
+    command.write_text("#!/bin/sh\nprintf 'tidy\\n'\n")
+    command.chmod(0o751)
+    (made / "references" / "usage.md").write_text("# Usage\n")
+    (made / "assets" / "report.txt").write_text("{{ result }}\n")
+    return made
+
+
 class WithSomethingToBackUp(unittest.TestCase):
     """A data directory furnished the way an owner's is, and a place to put copies."""
 
@@ -82,6 +97,16 @@ class WhatABackupHolds(WithSomethingToBackUp):
         held = self.inside(self.taken())
         self.assertIn("data/skills/tidying/SKILL.md", held)
         self.assertIn(f"data/{config.NAMED}", held)
+
+    def test_a_backup_holds_a_complete_skill_package(self):
+        """R-AGT-44, R-BKP-1 — a backup of only SKILL.md would leave the restored agent
+        knowing about an integration whose executable capability was gone."""
+        complete_skill(self.data)
+        held = self.inside(self.taken())
+        self.assertIn("data/skills/tidying/SKILL.md", held)
+        self.assertIn("data/skills/tidying/scripts/tidying", held)
+        self.assertIn("data/skills/tidying/references/usage.md", held)
+        self.assertIn("data/skills/tidying/assets/report.txt", held)
 
     def test_a_backup_holds_nothing_of_the_program(self):
         """R-BKP-2 — an update replaces the program and a reinstall fetches it again, so a
@@ -509,6 +534,18 @@ class PuttingOneBack(WithSomethingToBackUp):
         self.assertEqual("be useful\n",
                          (self.data / "agents" / "ava" / "home" / "SOUL.md").read_text())
         self.assertTrue((self.data / "skills" / "tidying" / "SKILL.md").is_file())
+
+    def test_a_restored_skill_package_keeps_its_executable_command(self):
+        """R-AGT-44, R-BKP-6 — the package coming back is not enough if the command the
+        instructions name can no longer run."""
+        complete_skill(self.data)
+        at = self.taken()
+        shutil.rmtree(self.data / "skills" / "tidying")
+        self.assertIsNone(backup.restore(at, self.data, self.into, keep_one_first=False))
+        package = self.data / "skills" / "tidying"
+        self.assertEqual(0o751, (package / "scripts" / "tidying").stat().st_mode & 0o777)
+        self.assertTrue((package / "references" / "usage.md").is_file())
+        self.assertTrue((package / "assets" / "report.txt").is_file())
 
     def test_putting_one_back_brings_back_what_was_removed_and_takes_away_what_was_added(self):
         """R-BKP-16 — a restore replaces everything the owner keeps rather than merging, so

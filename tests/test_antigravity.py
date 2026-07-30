@@ -15,6 +15,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -253,8 +254,8 @@ class CommandPolicy(unittest.TestCase):
 
 
 class Skills(unittest.TestCase):
-    def test_grants_are_individual_symlinks_and_revoked_links_are_pruned(self):
-        """R-PRV-24."""
+    def test_antigravity_presents_a_complete_skill_package_and_prunes_revoked_link(self):
+        """R-AGT-44, R-PRV-24."""
         with tempfile.TemporaryDirectory() as made:
             base = Path(made)
             home = base / "home"
@@ -262,6 +263,14 @@ class Skills(unittest.TestCase):
             skill = granted / "one"
             skill.mkdir(parents=True)
             (skill / "SKILL.md").write_text("# One\n")
+            (skill / "scripts").mkdir()
+            command = skill / "scripts" / "one"
+            command.write_text("#!/bin/sh\nprintf 'ready\\n'\n")
+            command.chmod(0o751)
+            (skill / "references").mkdir()
+            (skill / "references" / "usage.md").write_text("# Usage\n")
+            (skill / "assets").mkdir()
+            (skill / "assets" / "report.txt").write_text("{{ result }}\n")
             home.mkdir(exist_ok=True)
             with mock.patch.dict(os.environ, {"RUNDESK_SKILLS": str(granted)},
                                  clear=False):
@@ -270,9 +279,11 @@ class Skills(unittest.TestCase):
             self.assertTrue(link.is_symlink())
             self.assertEqual(skill.resolve(), link.resolve())
             self.assertFalse((home / ".agents" / "skills").is_symlink())
+            self.assertEqual(0o751, (link / "scripts" / "one").stat().st_mode & 0o777)
+            self.assertTrue((link / "references" / "usage.md").is_file())
+            self.assertTrue((link / "assets" / "report.txt").is_file())
 
-            (skill / "SKILL.md").unlink()
-            skill.rmdir()
+            shutil.rmtree(skill)
             with mock.patch.dict(os.environ, {"RUNDESK_SKILLS": str(granted)},
                                  clear=False):
                 antigravity._present(str(home))

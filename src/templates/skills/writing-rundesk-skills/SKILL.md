@@ -8,9 +8,11 @@ description: How to write a skill for a rundesk agent and put it in this machine
 *This skill ships with rundesk and is replaced whenever rundesk updates. To make a version
 of your own, copy it under a different name — that copy is yours and is never touched.*
 
-A skill is a folder holding a `SKILL.md`. A brain reads its **description** on every turn
-and loads the **body** only when it decides the skill applies. Write for that: the
-description decides whether the skill is ever used, the body decides whether it helps.
+A skill is one portable folder. `SKILL.md` is its only required entry; scripts, references,
+assets and other resources needed to do the work belong beside it in that same folder. A
+brain reads the **description** on every turn and loads the **body** only when it decides
+the skill applies. Write for that: the description decides whether the skill is ever used,
+the body decides whether it helps.
 
 ## Where a skill lives
 
@@ -29,7 +31,23 @@ rundesk skills grant <agent> <name>
 it is granted, and granting is a link — so editing the library edits what every agent
 holding that skill reads, with nothing to re-run.
 
-## The shape
+## The package shape
+
+Follow the Agent Skills directory format:
+
+```text
+<name>/
+├── SKILL.md          required metadata and instructions
+├── scripts/          optional executable helpers
+├── references/       optional material loaded only when needed
+├── assets/           optional templates and static resources
+└── ...               other files the skill needs
+```
+
+The whole directory is the skill. Rundesk lays down, grants, updates, backs up and presents
+that directory together; do not put a companion command in the shared script library.
+
+`SKILL.md` begins with:
 
 ```markdown
 ---
@@ -112,6 +130,22 @@ skimmed rather than read, and acted on half-known. Never put the same thing in b
 body and a reference; one of the two will drift.
 
 Repeated helper code belongs in `scripts/` beside the skill, not pasted into the body.
+Keep commands self-contained and executable, give each a credential-free `--help`, and
+keep offline tests beside their implementation. Credentials never belong in the package;
+name the environment variable or owner-only configuration file the command reads.
+
+An agent turn receives its granted skills directory as `RUNDESK_SKILLS`. Invoke a bundled
+command through that provider-independent path:
+
+```sh
+"$RUNDESK_SKILLS/<name>/scripts/<command>" <arguments>
+```
+
+Use that path in examples. Do not rely on the current working directory, an owner-specific
+absolute path, or a duplicate launcher in `rundesk scripts --where`.
+
+Output templates, images and other files used to produce a result belong in `assets/`.
+Say exactly when to use each one; an asset is not reference material to load into context.
 
 ## What never goes in a skill
 

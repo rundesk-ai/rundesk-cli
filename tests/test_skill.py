@@ -9,6 +9,7 @@ what granting and revoking are incapable of touching.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
 import shutil
@@ -39,6 +40,27 @@ def a_skill(at: Path, name: str, described: str = None, says: str = "") -> Path:
     return made
 
 
+def a_complete_skill(at: Path, name: str) -> Path:
+    """One Agent Skills package, including every standard resource directory."""
+    made = a_skill(at, name, says=(
+        f'Run "$RUNDESK_SKILLS/{name}/scripts/{name}" and read '
+        "references/usage.md only when it fails."))
+    command = made / "scripts" / name
+    command.parent.mkdir()
+    command.write_text("#!/bin/sh\nprintf 'ready\\n'\n", encoding="utf-8")
+    command.chmod(0o751)
+    references = made / "references"
+    references.mkdir()
+    (references / "usage.md").write_text("# Usage\n\nKeep it bounded.\n", encoding="utf-8")
+    assets = made / "assets"
+    assets.mkdir()
+    (assets / "report.txt").write_text("{{ result }}\n", encoding="utf-8")
+    data = made / "data"
+    data.mkdir()
+    (data / "schema.json").write_text('{"version": 1}\n', encoding="utf-8")
+    return made
+
+
 class WithALibrary(unittest.TestCase):
     """A library and an agent's own skills directory, both scratch."""
 
@@ -49,6 +71,19 @@ class WithALibrary(unittest.TestCase):
         self.library.mkdir(parents=True)
         self.mine = self.where / "data" / "agents" / "ava" / "home" / "skills"
         self.mine.mkdir(parents=True)
+
+
+class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
+    def test_skill_authoring_guidance_defines_complete_packages(self):
+        """R-AGT-44 — the reusable format is shipped to every agent that writes skills,
+        rather than living only in a repository document people may not read."""
+        page = (REALLY_SHIPPED / "writing-rundesk-skills" / "SKILL.md").read_text()
+        for expected in (
+                "scripts/", "references/", "assets/",
+                '"$RUNDESK_SKILLS/<name>/scripts/<command>"',
+                "do not put a companion command in the shared script library"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, page)
 
 
 class WhatTheLibraryHolds(WithALibrary):
@@ -129,6 +164,11 @@ class WhatMakesASkill(WithALibrary):
         """R-AGT-27 — the case that has to pass, or every refusal above is untested."""
         self.assertIsNone(skill.valid(a_skill(self.library, "deploy")))
 
+    def test_a_complete_skill_package_is_valid(self):
+        """R-AGT-44 — SKILL.md makes the directory a skill; its bundled resources do not
+        need separate installation or registration."""
+        self.assertIsNone(skill.valid(a_complete_skill(self.library, "deploy")))
+
 
 class GivingAnAgentASkill(WithALibrary):
     def test_an_agent_is_given_a_skill_by_it_standing_in_its_own_directory(self):
@@ -148,6 +188,24 @@ class GivingAnAgentASkill(WithALibrary):
         (made / "SKILL.md").write_text(
             "---\nname: deploy\ndescription: Changed.\n---\n\nnew words\n", encoding="utf-8")
         self.assertIn("new words", (self.mine / "deploy" / "SKILL.md").read_text())
+
+    def test_a_grant_reaches_every_resource_in_a_skill_package(self):
+        """R-AGT-44 — granting the directory, rather than copying SKILL.md, is what keeps
+        an integration's instructions and executable capability on one lifecycle."""
+        made = a_complete_skill(self.library, "deploy")
+        skill.grant(self.mine, "deploy", self.library)
+        granted = self.mine / "deploy"
+        ran = subprocess.run(
+            [str(granted / "scripts" / "deploy")],
+            capture_output=True, text=True, check=True)
+        self.assertEqual("ready\n", ran.stdout)
+        self.assertEqual((made / "references" / "usage.md").read_text(),
+                         (granted / "references" / "usage.md").read_text())
+        self.assertEqual((made / "assets" / "report.txt").read_text(),
+                         (granted / "assets" / "report.txt").read_text())
+        self.assertEqual((made / "data" / "schema.json").read_text(),
+                         (granted / "data" / "schema.json").read_text())
+        self.assertEqual(0o751, (granted / "scripts" / "deploy").stat().st_mode & 0o777)
 
     def test_a_grant_survives_the_agent_directory_being_moved(self):
         """R-AGT-28 — written relative, so copying an agent to another machine does not
@@ -201,6 +259,18 @@ class TakingASkillAway(WithALibrary):
         self.assertEqual([], skill.granted(self.mine))
         self.assertTrue((self.library / "deploy" / "SKILL.md").is_file(),
                         "revoking reached into the library")
+
+    def test_revoking_a_complete_skill_package_removes_only_access(self):
+        """R-AGT-29, R-AGT-44 — revoking an integration removes the agent's route to its
+        whole package without deleting any part of the reusable library copy."""
+        package = a_complete_skill(self.library, "deploy")
+        skill.grant(self.mine, "deploy", self.library)
+        skill.revoke(self.mine, "deploy", self.library)
+        self.assertFalse((self.mine / "deploy").exists())
+        self.assertTrue((package / "scripts" / "deploy").is_file())
+        self.assertTrue((package / "references" / "usage.md").is_file())
+        self.assertTrue((package / "assets" / "report.txt").is_file())
+        self.assertTrue((package / "data" / "schema.json").is_file())
 
     def test_revoking_what_was_never_granted_says_so(self):
         """R-AGT-29 — rather than reporting a success it did not earn."""
@@ -285,6 +355,27 @@ class BringingTheBuiltInsForward(WithALibrary):
         self.assertIn("the new words",
                       (self.library / "writing-skills" / "SKILL.md").read_text())
 
+    def test_installing_and_updating_preserve_a_complete_skill_package(self):
+        """R-AGT-30, R-AGT-44 — a built-in is the complete directory, not the one file
+        that makes a brain index it."""
+        shipped = a_complete_skill(self.release, "writing-skills")
+        skill.lay_down(self.library)
+        installed = self.library / "writing-skills"
+        self.assertEqual("{{ result }}\n",
+                         (installed / "assets" / "report.txt").read_text())
+        self.assertEqual(0o751,
+                         (installed / "scripts" / "writing-skills").stat().st_mode & 0o777)
+
+        (shipped / "references" / "usage.md").write_text(
+            "# Usage\n\nNew release.\n", encoding="utf-8")
+        skill.lay_down(self.library, force=True)
+        self.assertIn("New release.",
+                      (installed / "references" / "usage.md").read_text())
+        self.assertEqual('{"version": 1}\n',
+                         (installed / "data" / "schema.json").read_text())
+        self.assertEqual(0o751,
+                         (installed / "scripts" / "writing-skills").stat().st_mode & 0o777)
+
     def test_updating_never_touches_a_skill_an_owner_wrote(self):
         """R-AGT-30 — the other half, and the one with the teeth. A refresh that reached
         anything not shipped would be an update deleting somebody's work."""
@@ -313,6 +404,14 @@ class BringingTheBuiltInsForward(WithALibrary):
         self.assertEqual([], skill.take_back(self.library))
         self.assertTrue((theirs / "SKILL.md").is_file(),
                         "uninstall took an owner skill it had preserved")
+
+    def test_uninstalling_removes_a_complete_built_in_skill_package(self):
+        """R-AGT-44, R-RM-7 — the complete built-in belongs to the release, so uninstall
+        neither strands its executable nor leaves a partial package behind."""
+        a_complete_skill(self.release, "writing-skills")
+        skill.lay_down(self.library)
+        self.assertEqual(["writing-skills"], skill.take_back(self.library))
+        self.assertFalse(self.library.exists())
 
     def test_every_known_historical_fingerprint_can_acquire_the_marker(self):
         """R-AGT-30 — a direct update may skip releases without stranding a built-in."""
@@ -570,6 +669,24 @@ class WhatEachShippedAdapterPlaces(WithALibrary):
                 root = self.standing(brain)
                 self.assertTrue((root / "deploy" / "SKILL.md").is_file(),
                                 f"{brain} would not find the skill its agent was given")
+
+    def test_every_shipped_adapter_presents_a_complete_skill_package(self):
+        """R-AGT-44, R-PRV-24 — every supported brain receives the same complete package,
+        including the executable bit its bundled command needs."""
+        a_complete_skill(self.library, "deploy")
+        skill.grant(self.mine, "deploy", self.library)
+        for brain in self.BRAINS:
+            with self.subTest(brain=brain):
+                package = self.standing(brain) / "deploy"
+                ran = subprocess.run(
+                    [str(package / "scripts" / "deploy")],
+                    capture_output=True, text=True, check=True)
+                self.assertEqual("ready\n", ran.stdout)
+                self.assertTrue((package / "references" / "usage.md").is_file())
+                self.assertTrue((package / "assets" / "report.txt").is_file())
+                self.assertTrue((package / "data" / "schema.json").is_file())
+                self.assertEqual(
+                    0o751, (package / "scripts" / "deploy").stat().st_mode & 0o777)
 
     def test_no_adapter_makes_a_directory_for_an_agent_given_nothing(self):
         """R-PRV-24 — an agent with no skills should have no vendor directory in its home
