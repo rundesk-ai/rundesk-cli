@@ -23,6 +23,9 @@ your account.
 3. Open **Bot** in the sidebar. Customize the bot's username and avatar if wanted.
 4. Under **Authorization Flow**, leave **Require OAuth2 Code Grant** off.
 
+Rundesk never edits the bot's username, avatar, or account profile. Those remain under
+the bot owner's control in Discord.
+
 **Public Bot** controls who may install the bot. It can stay off for a private bot that
 only the application owner or team installs. Turn it on if you want to use Discord's
 provided install link or let other server administrators install it.
