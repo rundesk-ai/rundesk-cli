@@ -28,9 +28,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import io
 import json
 import os
+import re
 import signal
 import sys
 import time
@@ -141,6 +143,14 @@ ACTIVITY_CHARS = 1500
 #: enough to read in a sidebar.
 THREAD_CHARS = 80
 
+#: The connected bot's name. Discord usernames are 2–32 characters and refuse the
+#: substring "discord"; the agent portion is derived from its slug and bounded here,
+#: where platform naming rules belong (R-DIS-32).
+BOT_PREFIX = "Rundesk – "
+BOT_NAME_CHARS = 32
+#: A profile label must not stand between a connected adapter and its `ready` record.
+BOT_NAME_SECONDS = 5.0
+
 #: How long to spend saying goodbye. Rundesk signals a channel and waits a few seconds
 #: before insisting, so anything slower than this is a message nobody receives — and
 #: holding the shutdown open for it would only turn a clean stop into a kill.
@@ -178,6 +188,27 @@ LIVE_KEPT = 200
 #: this is the whole of what this file decides about it.
 MARKS = {"finished": "✅", "stopped": "✋", "failed": "⚠️"}
 SEEN = "👀"
+
+
+def gateway_name(agent: str) -> str:
+    """How this agent's Discord gateway identifies itself (R-DIS-32).
+
+    Agent names are filesystem slugs, so title-casing their parts restores the words an
+    owner recognizes. Older agents may still contain dots or underscores and are handled
+    too. Discord refuses its own name anywhere in a username, so that rare agent slug is
+    shown as ``D-cord`` rather than making the whole rename fail.
+    """
+    words = [word for word in re.split(r"[-_.]+", agent.strip()) if word]
+    if not words:
+        return ""
+    shown = " ".join(word[:1].upper() + word[1:] for word in words)
+    shown = re.sub("discord", "D-cord", shown, flags=re.IGNORECASE)
+    room = BOT_NAME_CHARS - len(BOT_PREFIX)
+    if len(shown) > room:
+        mark = hashlib.sha256(agent.encode("utf-8")).hexdigest()[:4]
+        shown = shown[:room - len(mark) - 1].rstrip() + "-" + mark
+    return BOT_PREFIX + shown
+
 
 #: What this agent offers as Discord's own commands, described where they are offered
 #: (R-DIS-10, R-DIS-22). Slash commands rather than words typed in chat, because they
@@ -440,6 +471,10 @@ class Agent(discord.Client):
         #: Whether the owner has been told this agent came up. Once for this process,
         #: because coming up is what the message says happened (R-DIS-15).
         self.greeted = False
+        #: The profile name successfully applied by this process. `on_ready` runs again
+        #: after reconnects, while Discord's user event may not have refreshed this
+        #: client's cached object yet; this keeps a successful rename one operation.
+        self.profile_named = None
         #: Deferred slash interactions waiting for an authorized read-only answer.
         #: Bounded because the adapter lives for weeks and a broken gateway must not turn
         #: one unanswered interaction into permanent memory.
@@ -566,6 +601,7 @@ class Agent(discord.Client):
         # program's own lifetime is the signal: rundesk starts it with the agent and ends
         # it with the agent, so tying presence to anything else would say an agent is up
         # when the thing behind it has gone.
+        await Agent._name_gateway(self)
         with contextlib.suppress(Exception):
             await self.change_presence(status=discord.Status.online)
         # **The record every time, the message once.** This runs on every connection, not
@@ -602,6 +638,27 @@ class Agent(discord.Client):
                 await self._tell_the_owner(
                     "🟢 **Gateway online** — rundesk is up and listening."
                 )
+
+    async def _name_gateway(self) -> None:
+        """Give this bot the agent-specific name its owner sees (R-DIS-32).
+
+        A profile edit is global to the bot account, so every place that bot reaches sees
+        the same identity. Failure is non-fatal and visible in the gateway log; naming
+        must never make a reachable agent deaf.
+        """
+        wanted = gateway_name(os.environ.get("RUNDESK_AGENT") or "")
+        current = str(getattr(getattr(self, "user", None), "name", "") or "")
+        if not wanted or wanted == current or wanted == getattr(self, "profile_named", None):
+            if wanted == current:
+                self.profile_named = wanted
+            return
+        try:
+            await asyncio.wait_for(
+                self.user.edit(username=wanted), timeout=BOT_NAME_SECONDS)
+        except Exception as why:  # noqa: BLE001 — a platform boundary
+            note(f"could not name the bot {wanted!r}: {type(why).__name__}: {why}")
+            return
+        self.profile_named = wanted
 
     def _claim(self, what: str) -> bool:
         """True for exactly one adapter of this gateway, and false for every other.

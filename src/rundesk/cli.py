@@ -1513,15 +1513,15 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
     while that gateway is running, because a gateway reading one directory while every
     command reads another is the fault that makes a schedule silently never run.
     """
-    name = args.name
-    if not name:
+    given = args.name
+    if not given:
         print("add: NAME REQUIRED — say what to call the agent", file=sys.stderr)
         print("        what there is already: rundesk agents", file=sys.stderr)
         return 1
     try:
-        agents.checked(name)
+        name = agents.creation_name(given, agents.known())
     except agents.NotAnAgentName as why:
-        print(f"{name}: INVALID NAME — {why}", file=sys.stderr)
+        print(f"{given}: INVALID NAME — {why}", file=sys.stderr)
         return 1
     knew = agents.exists(name)
     if knew and any((args.provider, args.model, getattr(args, "settings", None),
@@ -4092,7 +4092,9 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         parser.print_help()
         return 0
     named = getattr(args, "name", None)
-    if named is not None:
+    # `add` accepts a human name and turns it into the safe gateway name in `cmd_add`.
+    # Every other command names something that already exists and checks it verbatim.
+    if named is not None and args.command != "add":
         try:
             gateways.checked(named)
         except gateways.NotAName as why:

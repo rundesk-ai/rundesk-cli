@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -122,6 +123,40 @@ class NotAnAgentName(ValueError):
 
 class InUse(Exception):
     """Something is still using this name, so nothing belonging to it was moved."""
+
+
+def slug(name: str) -> str:
+    """The lowercase filesystem name given to a newly created agent (R-AGT-39).
+
+    An owner names an identity, not a path. Spaces and punctuation become one dash,
+    accents become their ASCII spelling where Unicode defines one, and the result is
+    checked by the same boundary every later command uses. Existing agent names are not
+    rewritten: this is creation-time normalization, not a migration of persisted state.
+    """
+    plain = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    made = re.sub(r"[^a-zA-Z0-9]+", "-", plain).strip("-").lower()
+    if not made:
+        raise NotAnAgentName(
+            f"'{name}' is not a usable name — include at least one letter or digit"
+        )
+    return checked(made)
+
+
+def creation_name(name: str, existing=()) -> str:
+    """The slug for a new agent, or the legacy spelling already holding that slug.
+
+    Older releases accepted uppercase, dots and underscores. On a case-sensitive
+    filesystem, blindly creating today's slug beside one of those would make two agents
+    from one human name; on macOS it would silently address the old directory instead.
+    Resolve that difference deliberately, and refuse an already-ambiguous legacy set.
+    """
+    made = slug(name)
+    matches = sorted(one for one in existing if slug(one) == made)
+    if len(matches) > 1:
+        raise NotAnAgentName(
+            f"'{name}' matches more than one existing agent: {', '.join(matches)}"
+        )
+    return matches[0] if matches else made
 
 
 def agents_home() -> Path:

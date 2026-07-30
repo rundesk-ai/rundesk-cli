@@ -780,6 +780,8 @@ class FakeAgents:
     """
 
     checked = staticmethod(real_agent.checked)
+    slug = staticmethod(real_agent.slug)
+    creation_name = staticmethod(real_agent.creation_name)
     NotAnAgentName = real_agent.NotAnAgentName
     Where = real_agent.Where
 
@@ -1590,6 +1592,25 @@ class StandingGatewaysDown(unittest.TestCase):
 class MakingAnAgent(unittest.TestCase):
     """`add` is the one place an agent and its gateway come into being together."""
 
+    def test_an_agent_is_created_under_a_lowercase_slug(self):
+        """R-AGT-39 — the words an owner gives become one predictable directory and
+        gateway name, including whitespace and punctuation at their edges."""
+        agents = FakeAgents()
+        code, said = drive(
+            ["add", "  Écho's   Helper  ", "--provider", "codex"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["echo-s-helper"], agents.added)
+        self.assertIn("echo-s-helper: MADE", said)
+
+    def test_a_legacy_mixed_case_agent_is_not_duplicated_by_its_slug(self):
+        """R-AGT-39 — upgrades preserve the directory an existing agent owns."""
+        agents = FakeAgents(made=["Winston"])
+        agents.remember("Winston", provider="codex")
+        code, said = drive(["add", "winston"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["Winston"], agents.added)
+        self.assertEqual(["Winston"], agents.known())
+
     def test_making_an_agent_makes_it_and_says_where_it_stands(self):
         """R-AGW-1"""
         agents = FakeAgents()
@@ -1705,15 +1726,13 @@ class ConfiguringAnAgent(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("NAME REQUIRED", said)
 
-    def test_a_name_that_cannot_be_an_agents_is_refused_before_anything_is_made(self):
-        """R-AGT-5, R-AGT-6 — `ava.log` is the file a gateway named `ava` writes, so it is
-        not a name a second agent may have. `ava.ran` used to be one of these and is an
-        ordinary name again: what a schedule last did is a row, so nothing writes that file."""
+    def test_punctuation_that_used_to_collide_is_slugged_safely(self):
+        """R-AGT-39 — `ava.log` is the file a gateway named `ava` writes, while `ava-log`
+        is an independent agent directory and gateway name."""
         agents = FakeAgents()
         code, said = drive(["add", "ava.log", "--provider", "codex"], agents=agents)
-        self.assertEqual(1, code)
-        self.assertIn("INVALID NAME", said)
-        self.assertEqual([], agents.added, "it refused the name and made one anyway")
+        self.assertEqual(0, code, said)
+        self.assertEqual(["ava-log"], agents.added)
 
     def test_a_job_prefix_that_cannot_be_one_stops_the_command(self):
         """R-INS-18 — the variable a second install isolates itself with becomes a file

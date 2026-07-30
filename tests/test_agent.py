@@ -92,6 +92,35 @@ class WithSomewhereToKeepAgents(unittest.TestCase):
         return name
 
 
+class NamingANewAgent(unittest.TestCase):
+    def test_spaces_and_punctuation_become_one_dash(self):
+        """R-AGT-39"""
+        self.assertEqual("agent-name", agent.slug("  Agent -- Name  "))
+
+    def test_a_new_agents_name_is_lowercase(self):
+        """R-AGT-39"""
+        self.assertEqual("winston", agent.slug("Winston"))
+
+    def test_an_accented_name_has_a_stable_ascii_slug(self):
+        """R-AGT-39"""
+        self.assertEqual("echo", agent.slug("Écho"))
+
+    def test_a_name_with_no_letters_or_digits_is_refused(self):
+        """R-AGT-39"""
+        with self.assertRaises(agent.NotAnAgentName):
+            agent.slug(" -- ")
+
+    def test_an_existing_legacy_spelling_keeps_its_directory(self):
+        """R-AGT-39"""
+        self.assertEqual(
+            "Agent_Name", agent.creation_name("Agent Name", ["Agent_Name"]))
+
+    def test_ambiguous_legacy_spellings_are_refused(self):
+        """R-AGT-39"""
+        with self.assertRaises(agent.NotAnAgentName):
+            agent.creation_name("Agent Name", ["Agent_Name", "Agent.Name"])
+
+
 class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
     """The files a new agent's home is copied from, and an owner's right to replace them.
 
