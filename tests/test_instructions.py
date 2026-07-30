@@ -15,6 +15,7 @@ from rundesk import agent, channel, instructions, schedule  # noqa: E402
 
 CORE = {
     "agent": "ava",
+    "agent_slug": "ava",
     "agent_home": "/agents/ava/home",
     "workspace": "/agents/ava/home/workspace",
 }
@@ -25,7 +26,7 @@ class InstructionBuilder(unittest.TestCase):
 
     def test_standard_variables_use_agent_and_user(self):
         self.assertEqual((
-            "agent", "agent_home", "workspace", "channel_kind", "channel_config_name",
+            "agent", "agent_slug", "agent_home", "workspace", "channel_kind", "channel_config_name",
             "channel_name", "channel_id", "channel_parent_name", "channel_parent_id",
             "channel_thread_name", "channel_thread_id", "channel_where", "user",
             "user_id", "conversation_id", "schedule",
@@ -39,7 +40,7 @@ class InstructionBuilder(unittest.TestCase):
         self.assertIn("You are ava, an agent running inside rundesk.", built)
         self.assertIn("`/agents/ava/home`", built)
         self.assertIn("`/agents/ava/home/workspace`", built)
-        for placeholder in ("{agent}", "{agent_home}", "{workspace}"):
+        for placeholder in ("{agent}", "{agent_slug}", "{agent_home}", "{workspace}"):
             self.assertNotIn(placeholder, built)
 
     def test_standing_instruction_keeps_its_paragraph_boundaries(self):

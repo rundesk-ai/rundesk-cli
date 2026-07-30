@@ -2,7 +2,7 @@
 
 Who you are, what you are for, and how you answer.
 
-You are {agent}.
+You are {{agent}}.
 
 ## What you are for
 

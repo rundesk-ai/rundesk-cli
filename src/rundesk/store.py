@@ -580,6 +580,18 @@ class Store:
         kept["settings"] = json.loads(kept["settings"])
         return kept
 
+    def display_name(self) -> str:
+        """The owner's spelling for this agent, separate from its storage identity."""
+        with self._reading() as conn:
+            return str(conn.execute(
+                "SELECT display_name FROM agent WHERE id = 1"
+            ).fetchone()[0])
+
+    def remember_display_name(self, name: str) -> None:
+        """Keep the exact human name chosen when a new agent is first made."""
+        with self._writing() as conn:
+            conn.execute("UPDATE agent SET display_name = ? WHERE id = 1", (name,))
+
     def remember_agent(self, provider=None, model=None, instructions=None, settings=None,
                        replace_brain=False, forget_conversation=None):
         """Change what an entry point falls back to when it names no brain of its own.

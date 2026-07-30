@@ -695,14 +695,7 @@ def _turn(codex, where: str) -> int:
     # gone silent — which is its decision to make and never this adapter's.
     codex.finished.wait()
     if codex.tokens:
-        counted = codex.tokens
-        say(type="usage",
-            # `inputTokens` holds the cached ones, and cache reads are a fraction of the
-            # price of fresh input. Cache *writes* stay with fresh input, where they are
-            # billed. Left folded, most of the volume is priced as though it were new.
-            input=max(0, _n(counted, "inputTokens") - _n(counted, "cachedInputTokens")),
-            output=_n(counted, "outputTokens"),
-            cached=_n(counted, "cachedInputTokens"))
+        say(**_usage(codex.tokens))
     # No model: this brain names none in what it reports, so none is claimed. Saying the
     # one that was asked for would be reporting a request as a measurement.
     ended = {"type": "done", "ok": bool(codex.ok), "session": codex.thread or ""}
@@ -710,6 +703,21 @@ def _turn(codex, where: str) -> int:
         ended["why"] = codex.why
     say(**ended)
     return 0 if codex.ok else 1
+
+
+def _usage(counted: dict) -> dict:
+    """Codex's input subdivisions in the seam's four billing slots (R-USE-13)."""
+    cached = _n(counted, "cachedInputTokens")
+    written = _n(counted, "cacheWriteInputTokens")
+    usage = {
+        "type": "usage",
+        "input": max(0, _n(counted, "inputTokens") - cached - written),
+        "output": _n(counted, "outputTokens"),
+        "cached": cached,
+    }
+    if "cacheWriteInputTokens" in counted:
+        usage["written"] = written
+    return usage
 
 
 def _opening(where: str, posture: str, model, extra: dict) -> dict:

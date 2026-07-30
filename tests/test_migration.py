@@ -694,6 +694,15 @@ class CarryingTheShapeThatShippedForward(WithStepsOfThisCasesOwn):
         self.assertEqual("Claude AI usage limit reached|1784920200", one["why"])
         self.assertIsNone(one["because"], "a word was inferred from prose after the fact")
 
+    def test_an_existing_agents_directory_becomes_its_safe_display_fallback(self):
+        """R-AGT-39 — upgrade adds identity without renaming the directory, job, logs,
+        provider homes, or anything else already keyed by the legacy spelling."""
+        self.built_at_the_first_shape()
+        one = self.carried().execute(
+            "SELECT display_name FROM agent WHERE id = 1"
+        ).fetchone()
+        self.assertEqual("ops", one["display_name"])
+
     def test_a_run_still_names_the_schedule_that_started_it_after_the_shape_changes(self):
         """The loss this step exists not to cause. With foreign keys on — which is how the
         runner opens every step — dropping the table a run references performs an implicit
@@ -743,7 +752,7 @@ class CarryingTheShapeThatShippedForward(WithStepsOfThisCasesOwn):
         self.carried().close()
         pending = store.Store(self.at).pending_update_turns()
 
-        self.assertEqual([4], [one["migration"] for one in pending])
+        self.assertEqual([5], [one["migration"] for one in pending])
         self.assertIn("no user is present", pending[0]["instructions"])
         self.assertIn("remove `USER.md`", pending[0]["prompt"])
         self.assertIn("### `AGENTS.md`", pending[0]["prompt"])
@@ -766,7 +775,7 @@ class CarryingTheShapeThatShippedForward(WithStepsOfThisCasesOwn):
             self.assertEqual(
                 (templates / name).read_text(encoding="utf-8"),
                 text,
-                f"{name} changed without updating migration 004's durable request",
+                f"{name} changed without updating migration 005's durable request",
             )
 
     def test_a_new_bootstrap_does_not_hide_old_continuity_pages(self):
@@ -785,7 +794,7 @@ class CarryingTheShapeThatShippedForward(WithStepsOfThisCasesOwn):
 
         self.carried().close()
 
-        self.assertEqual([4], [
+        self.assertEqual([5], [
             one["migration"] for one in store.Store(self.at).pending_update_turns()
         ])
 
