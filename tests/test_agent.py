@@ -217,13 +217,13 @@ class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
                              held[called], f"{called} stopped being the install's")
 
     def test_a_legacy_name_placeholder_still_names_the_agent(self):
-        """R-AGT-40 — existing owner templates survive the clearer placeholder name."""
+        """R-AGT-41 — existing owner templates survive the clearer placeholder name."""
         self.own("SOUL.md", "# {{name}} answers only in haiku\n")
         self.made()
         self.assertEqual("# ava answers only in haiku\n", self.held()["SOUL.md"])
 
     def test_an_owner_template_uses_the_agent_placeholder(self):
-        """R-AGT-40 — the current placeholder says what value it represents."""
+        """R-AGT-41 — the current placeholder says what value it represents."""
         self.own("SOUL.md", "# {{agent}} answers only in haiku\n")
         self.made()
         self.assertEqual("# ava answers only in haiku\n", self.held()["SOUL.md"])

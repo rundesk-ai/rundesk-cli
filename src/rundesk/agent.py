@@ -1072,7 +1072,7 @@ def _copied(called: str, name: str, overrides: Path | None = None) -> str:
     contract an override has to honour, and honouring it is a choice: a template with no
     placeholder is one every agent gets verbatim, which is a legitimate thing to want.
     `{{name}}` remains an alias for owner templates written before the placeholder was
-    clarified (R-AGT-40). Replacing absent strings is harmless, so both forms can be
+    clarified (R-AGT-41). Replacing absent strings is harmless, so both forms can be
     supported without interpreting any other part of the page.
     """
     return (sourced(overrides)[called].read_text(encoding="utf-8")
