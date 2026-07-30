@@ -1,4 +1,4 @@
-"""Build Rundesk's core and trigger instructions for an agent brain (R-AGT-37)."""
+"""Build Rundesk's core and trigger instructions for an agent brain (R-AGT-38)."""
 
 from __future__ import annotations
 

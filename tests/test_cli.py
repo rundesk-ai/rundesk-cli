@@ -46,7 +46,9 @@ _REAL_PATIENCE = (cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS
 #: The real removal, put back when the file is done with.
 _REAL_REMOVAL = cli._remove_this_install
 _REAL_BACKUP_DIR = os.environ.get("RUNDESK_BACKUP_DIR")
+_REAL_DATA_DIR = os.environ.get("RUNDESK_DATA_DIR")
 _TEST_BACKUP_DIR = None
+_TEST_DATA_DIR = None
 
 
 def _never_the_real_installer(installer, asked):
@@ -70,7 +72,7 @@ _asked_of_the_installer: list = []
 
 
 def setUpModule():
-    global _TEST_BACKUP_DIR
+    global _TEST_BACKUP_DIR, _TEST_DATA_DIR
     cli._remove_this_install = _never_the_real_installer
     # The automatic surface walk invokes every operation, including the real backup
     # listing. Without this boundary it reads the owner's backup directory, and under the
@@ -79,6 +81,12 @@ def setUpModule():
     # never the owner's copies.
     _TEST_BACKUP_DIR = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-backups-"))
     os.environ["RUNDESK_BACKUP_DIR"] = str(_TEST_BACKUP_DIR)
+    # Configuration readers now require the complete file an install writes. The surface
+    # walk invokes real backup and skill policy, so it needs an isolated installed shape
+    # rather than falling through to the owner's live configuration.
+    _TEST_DATA_DIR = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-data-"))
+    os.environ["RUNDESK_DATA_DIR"] = str(_TEST_DATA_DIR)
+    config.ensure(_TEST_DATA_DIR)
     # Both turned down together. Turning the patience down alone left a wait that had room
     # for one look and a fraction of a second's margin on the second — so a case proving a
     # cycle waits passed on a quick machine and reported a failure on a loaded one.
@@ -94,6 +102,12 @@ def tearDownModule():
         os.environ["RUNDESK_BACKUP_DIR"] = _REAL_BACKUP_DIR
     if _TEST_BACKUP_DIR is not None:
         shutil.rmtree(_TEST_BACKUP_DIR, ignore_errors=True)
+    if _REAL_DATA_DIR is None:
+        os.environ.pop("RUNDESK_DATA_DIR", None)
+    else:
+        os.environ["RUNDESK_DATA_DIR"] = _REAL_DATA_DIR
+    if _TEST_DATA_DIR is not None:
+        shutil.rmtree(_TEST_DATA_DIR, ignore_errors=True)
 from rundesk import agent as real_agent  # noqa: E402
 from rundesk import skill as real_skill  # noqa: E402
 from rundesk import channel  # noqa: E402
@@ -803,6 +817,8 @@ class FakeAgents:
         self.refuses: BaseException | None = None
         #: What was made, adopted and taken away, in the order it was asked for.
         self.added, self.adopted, self.forgotten = [], [], []
+        #: Existing agents whose configured baseline an upgrade route reconciled.
+        self.required: list[str] = []
         for one in self._made:
             self._built(one)
 
@@ -880,6 +896,10 @@ class FakeAgents:
             self._made.append(name)
         self._built(name)
         return made
+
+    def require_skills(self, name):
+        self.required.append(name)
+        return []
 
     def adopt(self, name):
         self.adopted.append(name)
@@ -1083,14 +1103,14 @@ class FakeMachine:
         return self.backups_daily is not None
 
 
-def drive(argv, gateways=None, machine=None, agents=None, scripts=None):
+def drive(argv, gateways=None, machine=None, agents=None, skills=None, scripts=None):
     """Run the command line and hand back what it printed and what it returned."""
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
             code = cli.main(argv, gateways=gateways or FakeGateways(),
                             machine=machine or FakeMachine(), agents=agents or FakeAgents(),
-                            scripts=scripts or FakeScripts())
+                            skills=skills or FakeSkills(), scripts=scripts or FakeScripts())
         except SystemExit as usage:
             # What a shell sees. Argparse refuses by exiting rather than returning, and a
             # case proving something is refused by the grammar could not otherwise say
@@ -1100,7 +1120,7 @@ def drive(argv, gateways=None, machine=None, agents=None, scripts=None):
 
 
 class WhatThisInstallIsConfiguredWith(unittest.TestCase):
-    """`rundesk config` — the answer to a file that is allowed to say nothing."""
+    """`rundesk config` — the effective values stated in the install's file."""
 
     def setUp(self):
         self.where = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-config-"))
@@ -1109,10 +1129,10 @@ class WhatThisInstallIsConfiguredWith(unittest.TestCase):
         os.environ["RUNDESK_DATA_DIR"] = str(self.where)
         self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", was)
                         if was is not None else os.environ.pop("RUNDESK_DATA_DIR", None))
+        config.ensure(self.where)
 
     def test_what_an_install_is_configured_with_is_answerable(self):
-        """R-CMD-11 — every section may be empty and every value absent, so without this
-        an owner has no way to learn what is actually in force."""
+        """R-CMD-11 — one command validates and renders what the file says is in force."""
         code, said = drive(["config"])
         self.assertEqual(0, code)
         for section in config.SECTIONS:
@@ -1120,32 +1140,29 @@ class WhatThisInstallIsConfiguredWith(unittest.TestCase):
         self.assertIn("keep_days", said)
         self.assertIn("granted", said)
 
-    def test_a_value_that_was_stated_is_told_apart_from_one_that_defaulted(self):
-        """R-CMD-11 — the whole point: a backup an owner believed was kept for a year is
-        discovered to have been kept for thirty days exactly once, and too late."""
-        (self.where / "config.json").write_text(
-            '{"backups": {"keep_days": 400}}\n', encoding="utf-8")
+    def test_every_value_reported_is_stated_in_the_file(self):
+        """R-CMD-11 — the command validates and renders the same complete configuration an
+        owner can open; it does not reveal a second hidden source."""
 
         code, said = drive(["config"])
 
         self.assertEqual(0, code)
-        stated = next(one for one in said.splitlines() if "keep_days" in one)
-        defaulted = next(one for one in said.splitlines() if "granted" in one)
-        self.assertNotIn("(default)", stated)
-        self.assertIn("(default)", defaulted)
+        self.assertNotIn("(default)", said)
 
     def test_a_key_nothing_reads_is_said_rather_than_left_out(self):
         """R-CMD-11 — the silence this command exists to end, arriving by the one route
         printing the known keys cannot show.
 
-        `ensure` keeps an unknown key exactly as it was and every reader defaults straight
+        `ensure` keeps an unknown key exactly as it was and every reader passes straight
         past it, so a mistyped `keepDays` is a value an owner stated, can see in their own
         file, and which nothing on the machine has ever read. Omitting it is telling them
         their configuration is in force when it is not — the same failure as reporting
         defaults for an unreadable file, one key wide.
         """
-        (self.where / "config.json").write_text(
-            '{"backups": {"keepDays": 365}, "backupz": {"at": "05:00"}}\n', encoding="utf-8")
+        configured = json.loads((self.where / "config.json").read_text())
+        configured["backups"]["keepDays"] = 365
+        configured["backupz"] = {"at": "05:00"}
+        (self.where / "config.json").write_text(json.dumps(configured), encoding="utf-8")
 
         code, said = drive(["config"])
 
@@ -1153,8 +1170,7 @@ class WhatThisInstallIsConfiguredWith(unittest.TestCase):
         self.assertIn("backups.keepDays", said)
         self.assertIn("backupz", said)
         self.assertIn("keep_days  30", said)
-        self.assertIn("(default)", next(one for one in said.splitlines()
-                                        if "keep_days" in one and "keepDays" not in one))
+        self.assertNotIn("(default)", said)
 
     def test_an_unreadable_configuration_is_refused_rather_than_reported_as_defaults(self):
         """R-CMD-11, R-STO-13 — printing defaults for a file that exists and cannot be
@@ -1190,6 +1206,55 @@ class WhatTheInstallerDoesToTheLibrary(unittest.TestCase):
         self.assertEqual(tuple(agents.skills(name) for name in agents.known()),
                          getattr(skills, "retired_holding", None),
                          "the installer laid the new names down and retired nothing")
+        self.assertEqual(["ava", "bo"], agents.required,
+                         "the installer did not reconcile existing agents")
+
+    def test_laying_down_also_reconciles_every_existing_agent(self):
+        """R-AGT-36 — reinstalling over an existing installation applies the configured
+        baseline to agents that predate this release."""
+        agents = FakeAgents(made=("ava", "bo"))
+
+        code, said = drive(["skills", "--lay-down"], agents=agents,
+                           skills=FakeSkills(ships=("managing-rundesk",)))
+
+        self.assertEqual(0, code, said)
+        self.assertEqual(["ava", "bo"], agents.required)
+
+
+class WhatCanBeTakenFromAnAgent(unittest.TestCase):
+    def setUp(self):
+        self.where = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-required-skills-"))
+        self.addCleanup(shutil.rmtree, self.where, ignore_errors=True)
+        was = os.environ.get("RUNDESK_DATA_DIR")
+        os.environ["RUNDESK_DATA_DIR"] = str(self.where)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", was)
+                        if was is not None else os.environ.pop("RUNDESK_DATA_DIR", None))
+        config.ensure(self.where)
+
+    def test_a_skill_configured_for_every_agent_cannot_be_revoked(self):
+        """R-AGT-37 — otherwise `skills.granted` describes only the instant an agent was
+        made, not the required skills it claims every agent has."""
+        required = config.INITIAL["skills"]["granted"][0]
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(held=(required,), given={"skills": [required]})
+
+        code, said = drive(["skills", "revoke", "ava", required],
+                           agents=agents, skills=skills)
+
+        self.assertEqual(1, code)
+        self.assertIn("REQUIRED", said)
+        self.assertEqual([required], skills.granted(agents.skills("ava")))
+
+    def test_a_skill_not_required_by_the_configuration_can_be_revoked(self):
+        """R-AGT-29, R-AGT-37 — required grants do not turn every optional skill into one."""
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(held=("deploy",), given={"skills": ["deploy"]})
+
+        code, said = drive(["skills", "revoke", "ava", "deploy"],
+                           agents=agents, skills=skills)
+
+        self.assertEqual(0, code, said)
+        self.assertEqual([], skills.granted(agents.skills("ava")))
 
 
 class TheSharedIntegrationCommands(unittest.TestCase):

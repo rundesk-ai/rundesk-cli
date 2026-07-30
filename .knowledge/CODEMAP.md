@@ -120,10 +120,11 @@ file with it.
   copy of something already downloadable. **Never copies a database**; it asks `store` for a
   consistent one, because a file copied under a live writer opens, looks healthy and is wrong.
 - `src/rundesk/config.py` — how this install is configured, as opposed to how any one agent is.
-  One file under `data_home()`, sections at the top level. The install writes it with every section
-  this release knows and **nothing in them**, and an update adds a section that did not exist when
-  it was written — values are never touched either way, so the defaults stay in code where a later
-  release can still improve one. `rundesk config` says what is in force and which of it defaulted.
+  One file under `data_home()`, sections at the top level, and the source of every effective
+  install-wide value. The install writes it complete; an update adds values an older release
+  never wrote without changing anything already stated. `skills.granted` is the required
+  baseline reconciled onto every new and existing agent and protected from revocation while
+  configured.
   Distinct from `settings`, which already means what one agent or channel was told.
 - `src/rundesk/store.py` — everything one agent keeps, and **the only way in to it**. One database per
   agent, never one shared, so a turn's write is never in another agent's way. Reading and writing are told
@@ -253,8 +254,9 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   (R-AGT-30). `managing-rundesk` is how to operate rundesk, written for **an agent running inside
   it** — it was a document at the repository root that an agent had to be told to go and read,
   and the pointer named a path that existed on neither kind of install. As a skill it is handed
-  to the agent instead. **Not every shipped skill reaches every agent**: which a new one is given
-  is `config.skills()["granted"]`, defaulting to the four that work rundesk itself (R-AGT-36).
+  to the agent instead. **Not every shipped skill reaches every agent**: the required baseline
+  is `config.skills()["granted"]`, defaulting to the four that work rundesk itself and reconciled
+  onto existing agents during updates and reinstalls (R-AGT-36).
 - `docs/extending/` — the adapter and integration guides. They were built-in skills, laid down in
   every owner's library and granted to every agent, for a task almost none of them will ever do.
   A person building an adapter reads these against the repository; an agent does not need them in

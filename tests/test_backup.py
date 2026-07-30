@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import copy
 import os
 import shutil
 import sqlite3
@@ -935,15 +936,25 @@ class HowThisInstallIsConfigured(unittest.TestCase):
     def setUp(self):
         self.where = Path(tempfile.mkdtemp(prefix="rundesk-config-"))
         self.addCleanup(shutil.rmtree, self.where, ignore_errors=True)
+        config.ensure(self.where)
 
     def wrote(self, said) -> Path:
         at = self.where / config.NAMED
-        at.write_text(said if isinstance(said, str) else json.dumps(said))
+        if isinstance(said, str):
+            at.write_text(said)
+            return at
+        complete = copy.deepcopy(config.INITIAL)
+        for section, values in said.items():
+            if isinstance(values, dict) and isinstance(complete.get(section), dict):
+                complete[section].update(values)
+            else:
+                complete[section] = values
+        at.write_text(json.dumps(complete))
         return at
 
-    def test_an_install_that_was_configured_with_nothing_gets_every_default(self):
-        """R-BKP-13 — the ordinary case is an owner who has never written the file."""
-        self.assertEqual({"keep_days": config.KEEP_DAYS, "at": config.DAILY_AT},
+    def test_an_install_reads_backup_values_from_its_configuration(self):
+        """R-BKP-13 — the ordinary case is the complete file the install wrote."""
+        self.assertEqual(config.INITIAL["backups"],
                          config.backups(self.where))
 
     def test_how_long_backups_are_kept_is_the_owners_to_state(self):
@@ -982,7 +993,7 @@ class HowThisInstallIsConfigured(unittest.TestCase):
 
     def test_the_automatic_update_time_is_the_owners_to_state(self):
         """R-UPD-42"""
-        self.assertEqual({"at": config.UPDATE_AT}, config.updates(self.where))
+        self.assertEqual(config.INITIAL["updates"], config.updates(self.where))
         self.wrote({"updates": {"at": "2:30"}})
         self.assertEqual({"at": "02:30"}, config.updates(self.where))
 

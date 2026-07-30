@@ -828,7 +828,7 @@ class WhereAMessageCameFrom(unittest.TestCase):
                          discord._place(at, False, True))
 
     def test_discord_maps_its_places_to_the_shared_channel_hierarchy(self):
-        """R-DIS-21, R-AGT-37 — Discord nouns do not leak into shared variable names."""
+        """R-DIS-21, R-AGT-38 — Discord nouns do not leak into shared variable names."""
         thread = self.Thread("release", 42)
         thread.parent = self.Where("ops", 1180)
         at = self.message(thread, self.Where("Acme", 99), shown="Tim")

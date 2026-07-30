@@ -10,7 +10,7 @@ from unittest import mock
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import cli, update_request, updater  # noqa: E402
+from rundesk import cli, config, update_request, updater  # noqa: E402
 
 
 class DurableRequests(unittest.TestCase):
@@ -19,6 +19,7 @@ class DurableRequests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.addCleanup(os.environ.pop, "RUNDESK_DATA_DIR", None)
         os.environ["RUNDESK_DATA_DIR"] = self.temporary.name
+        config.ensure(pathlib.Path(self.temporary.name))
 
     def test_duplicate_requests_share_one_pending_update(self):
         """R-UPD-37"""
@@ -162,6 +163,7 @@ class DurableRequests(unittest.TestCase):
         with mock.patch.dict(os.environ, {
                     "RUNDESK_UPDATE_ROOT": str(target),
                     "RUNDESK_UPDATE_VERSION": "0.9.6",
+                    "RUNDESK_DATA_DIR": self.temporary.name,
                 }, clear=True), \
                 mock.patch.object(cli.updater, "run", return_value=0) as ran:
             self.assertEqual(0, cli.cmd_update(

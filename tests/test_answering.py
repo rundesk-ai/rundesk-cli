@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -21,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk import agent as agents  # noqa: E402
-from rundesk import answering, channel, store  # noqa: E402
+from rundesk import answering, channel, config, store  # noqa: E402
 
 #: When a conversation was opened. A calendar fact, never what anything is ordered by.
 AT = "2026-07-26T09:00:00Z"
@@ -117,6 +118,13 @@ class CarriesAConversation(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.where = Path(tempfile.mkdtemp(prefix="rundesk-answering-"))
         self.addCleanup(shutil.rmtree, self.where, True)
+        before = os.environ.get("RUNDESK_DATA_DIR")
+        data = self.where / "_data"
+        os.environ["RUNDESK_DATA_DIR"] = str(data)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", before)
+                        if before is not None
+                        else os.environ.pop("RUNDESK_DATA_DIR", None))
+        config.ensure(data)
         agents.add("ava", self.where)
         agents.remember("ava", self.where, provider="a-brain")
         self.whose = agents.directory("ava", self.where)
@@ -1677,6 +1685,16 @@ class WhatAChannelDoesNotWriteDown(CarriesAConversation):
 
 
 class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.data = Path(tempfile.mkdtemp(prefix="rundesk-update-data-"))
+        self.addCleanup(shutil.rmtree, self.data, True)
+        before = os.environ.get("RUNDESK_DATA_DIR")
+        os.environ["RUNDESK_DATA_DIR"] = str(self.data)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", before)
+                        if before is not None
+                        else os.environ.pop("RUNDESK_DATA_DIR", None))
+        config.ensure(self.data)
+
     async def test_a_completed_update_is_delivered_after_the_channel_reconnects(self):
         """R-UPD-40"""
         where = Path(tempfile.mkdtemp(prefix="rundesk-update-notice-"))

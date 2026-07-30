@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import agent, process, provider, store, transcript, turn  # noqa: E402
+from rundesk import agent, config, process, provider, store, transcript, turn  # noqa: E402
 
 PY = sys.executable
 
@@ -249,6 +249,7 @@ class WithAnAgentToRunTurnsFor(unittest.IsolatedAsyncioTestCase):
             self.addCleanup(os.environ.pop, said, None)
             os.environ[said] = str(at)
             at.mkdir(parents=True, exist_ok=True)
+        config.ensure(self.before / "data")
         self.brains = Path(tempfile.mkdtemp(prefix="rundesk-brains-"))
         self.addCleanup(shutil.rmtree, self.brains, True)
         agent.add("ava", self.where)

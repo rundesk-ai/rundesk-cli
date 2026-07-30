@@ -160,10 +160,10 @@ STOP
 # the set this release ships.
 #
 # Run while the program is still here, since it is the program that knows which those are.
-# The configuration file, but only where nobody ever wrote anything into it. An empty
-# skeleton is what this install put there and goes out with it (R-RM-7); one stated value
-# anywhere makes it the owner's and it stays. Left behind unconditionally, a fresh install
-# and an uninstall would leave a directory standing (R-RM-8).
+# The configuration file, but only where it still exactly matches what this release writes
+# for a new install. One changed value anywhere makes it the owner's and it stays. Left
+# behind unconditionally, a fresh install and an uninstall would leave a directory standing
+# (R-RM-7, R-RM-8).
 take_back_config() {
   local root="" candidate
   for candidate in "$APP_DIR" "$INSTALL_DIR" "${SCRIPT_DIR:-}"; do
@@ -179,7 +179,7 @@ sys.path.insert(0, sys.argv[1] + "/src")
 from rundesk import config
 
 if config.take_back():
-    print("took back the configuration nothing was written into")
+    print("took back the unchanged configuration this install wrote")
 CONFIG
   return 0
 }
@@ -575,12 +575,10 @@ echo "linked $BINDIR/rundesk -> $SHIM"
 "$BINDIR/rundesk" version >/dev/null 2>&1 || die "rundesk was installed but would not run."
 echo "checked that it runs"
 
-# The file this install is configured through, put there so an owner can find it. Written
-# with every section this release knows and nothing inside them: the shape is what makes it
-# discoverable, and leaving the values out is what keeps every default in code, where a
-# later release can improve one and have it reach an install that never stated its own.
+# The source of every install-wide value, put there complete so an owner can read and change
+# what is actually in force. A later release adds only values an older one never wrote.
 # Nothing already in the file is touched, so running the installer again is not a way to
-# lose what somebody configured.
+# lose what somebody configured (R-INS-19, R-UPD-48).
 if added="$(python3 - "$REPO_ROOT" <<'CONFIG' 2>/dev/null || true
 import sys
 sys.path.insert(0, sys.argv[1] + "/src")
@@ -589,7 +587,7 @@ from rundesk import config
 print(" ".join(config.ensure()))
 CONFIG
 )" && [[ -n "$added" ]]; then
-  echo "wrote the sections you can configure: $added"
+  echo "wrote configuration values for: $added"
 fi
 
 # The machine, not a gateway, owns the daily trigger. It only queues the same guarded

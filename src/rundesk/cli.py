@@ -1897,29 +1897,30 @@ def _provisioned(root: Path = REPO_ROOT) -> str | None:
     went_wrong = dependencies.provision(root)
     if went_wrong:
         return went_wrong
-    # A section this release added, into a file written before it existed. Values already
-    # there are never touched, so this cannot be how an owner's configuration is lost
-    # (R-UPD-48).
+    # Values this release knows and an earlier one never wrote. Values already there are
+    # never touched, so this cannot be how an owner's configuration is lost (R-UPD-48).
     config.ensure()
     skill.lay_down(force=True)
     # Then what this release stopped shipping under the name an earlier one used. After the
     # lay-down rather than before, because a grant is only carried once the name it is
     # carried to is actually standing in the library (R-AGT-35).
     skill.retire(holding=tuple(_agent.skills(name) for name in _agent.known()))
+    # Existing agents are brought forward too. Optional owner grants are not removed; the
+    # configured list is the minimum every agent must hold, not its complete grant set.
+    for name in _agent.known():
+        _agent.require_skills(name)
     return None
 
 
 def cmd_config(args: argparse.Namespace) -> int:
-    """What this install is configured with, and whether each value was stated or defaulted.
+    """What this install's configuration file says is in force.
 
-    **The command exists because the file is allowed to be silent.** Every section may be
-    empty and every value may be absent, and an owner reading it then has no way to tell
-    what is actually in force — which is how a backup they believed was kept for a year is
-    discovered, once, to have been kept for thirty days. So this answers with the value and
-    where it came from, and it is the only place the two are shown together.
+    Every effective value is stated in the file. Missing known values are unreadable rather
+    than silently supplied elsewhere, so the answer here and the behavior of the install
+    cannot disagree (R-CMD-11).
 
     **What was written and is not understood is said here too, and nowhere else.** `ensure`
-    preserves an unknown key faithfully and every reader defaults straight past it, so a
+    preserves an unknown key faithfully and every reader passes straight over it, so a
     mistyped `keepDays` is a value an owner stated, can see in their own file, and which
     nothing on the machine has ever read — the same silence this command was built to end,
     arriving by the one route printing the known keys cannot show.
@@ -1931,18 +1932,17 @@ def cmd_config(args: argparse.Namespace) -> int:
                "skills": config.skills()}
     except config.Unreadable as why:
         print(f"config: UNREADABLE — {why}", file=sys.stderr)
-        print("        every value below it is refused rather than defaulted",
+        print("        every value below it is refused rather than guessed",
               file=sys.stderr)
         return 1
-    print(at if at.is_file() else f"{at} (not written yet — every default applies)")
+    print(at)
     ignored = []
     for section in config.SECTIONS:
         print(f"\n  {section}")
         said = stated.get(section) or {}
         for key, value in sorted(now[section].items()):
             shown = " ".join(value) if isinstance(value, tuple) else value
-            print(f"    {key:<10} {shown}"
-                  f"{'' if key in said else '   (default)'}")
+            print(f"    {key:<10} {shown}")
         ignored += [f"{section}.{key}" for key in sorted(said)
                     if key not in now[section]]
     # A whole section this release has never heard of, which is the same silence one key
@@ -2221,6 +2221,11 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
         # lay-down, because a grant is only carried once the name it goes to is standing;
         # and a no-op on a fresh install, where nothing of ours is under an old name.
         skills.retire(holding=tuple(agents.skills(name) for name in agents.known()))
+        # `skills.granted` is a floor for every agent, including ones that predate the
+        # value. Re-running the installer is an upgrade route, so reconcile the existing
+        # population here as well as in `_provisioned` (R-AGT-36).
+        for name in agents.known():
+            agents.require_skills(name)
         print(" ".join(laid))
         return 0
     act = getattr(args, "act", None)
@@ -2240,9 +2245,18 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
                 skills.grant(whose, args.skill)
                 print(f"{args.name} was given {args.skill}")
             else:
+                # The configured baseline is a requirement, not a creation-time suggestion.
+                # Change the requirement first; until then this grant stays (R-AGT-37).
+                if args.skill in config.skills()["granted"]:
+                    print(f"{args.skill}: REQUIRED — config.json attaches it to every agent",
+                          file=sys.stderr)
+                    print(f"        remove it from {config.path()} before revoking it",
+                          file=sys.stderr)
+                    return 1
                 skills.revoke(whose, args.skill)
                 print(f"{args.name} no longer has {args.skill}")
-        except (skills.Unknown, skills.NotASkill, skills.InTheWay) as why:
+        except (skills.Unknown, skills.NotASkill, skills.InTheWay,
+                config.Unreadable) as why:
             print(f"{args.skill}: {why}", file=sys.stderr)
             return 1
         return 0

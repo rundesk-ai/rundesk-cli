@@ -532,7 +532,7 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
         self.assertEqual(channel.SAID_MOST, len(long["called"]))
 
     def test_adapter_context_uses_communication_agnostic_variables(self):
-        """R-CH-21, R-AGT-37 — adapters describe a hierarchy without platform nouns."""
+        """R-CH-21, R-AGT-38 — adapters describe a hierarchy without platform nouns."""
         arrived = channel.understood(json.dumps({
             "type": "arrived", "conversation": "thread-42", "user": "2207",
             "text": "hi", "called": "Tim", "where": "#ops on Acme",
