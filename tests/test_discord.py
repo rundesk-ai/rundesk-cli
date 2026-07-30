@@ -892,6 +892,77 @@ class WhereAMessageCameFrom(unittest.TestCase):
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class WhatAMessageRepliesTo(unittest.IsolatedAsyncioTestCase):
+    """R-DIS-32 — Discord's native reference becomes the shared reply shape."""
+
+    @staticmethod
+    def message(resolved=None, message_id=8839, kind=None):
+        if kind is None:
+            kind = discord.discord.MessageReferenceType.reply
+        reference = SimpleNamespace(
+            message_id=message_id, resolved=resolved, cached_message=None, type=kind,
+        )
+        return SimpleNamespace(reference=reference)
+
+    @staticmethod
+    def parent(text="the schedule report", shown="Winston", identifier=2207):
+        author = SimpleNamespace(
+            display_name=shown, name="winston", id=identifier,
+        )
+        return SimpleNamespace(author=author, content=text)
+
+    def test_a_resolved_reply_carries_the_parent_identity_author_and_body(self):
+        self.assertEqual({
+            "id": "8839", "resolved": True, "author": "Winston",
+            "text": "the schedule report",
+        }, discord._reply_to(self.message(self.parent())))
+
+    def test_a_deleted_or_unfetched_parent_still_carries_its_identity(self):
+        self.assertEqual({
+            "id": "8839", "resolved": False,
+        }, discord._reply_to(self.message()))
+
+    def test_a_non_reply_reference_is_not_presented_as_a_reply(self):
+        kind = SimpleNamespace(name="forward")
+        self.assertIsNone(discord._reply_to(self.message(self.parent(), kind=kind)))
+
+    def test_a_message_without_a_reference_has_no_reply_context(self):
+        self.assertIsNone(discord._reply_to(SimpleNamespace(reference=None)))
+
+    async def test_on_message_reports_the_reply_on_the_arrived_record(self):
+        parent = self.parent()
+        message = SimpleNamespace(
+            id=8841,
+            author=SimpleNamespace(
+                id=2207, bot=False, display_name="Tim", name="tim",
+            ),
+            guild=None,
+            channel=SimpleNamespace(id=1180, name=None),
+            mentions=[],
+            content="fix the second one",
+            attachments=[],
+            reference=self.message(parent).reference,
+        )
+        agent = SimpleNamespace(
+            chose=SimpleNamespace(
+                server=None, channel=None, dm=True, allow=("2207",),
+            ),
+            user=SimpleNamespace(id=42),
+            live={},
+            seen={},
+            _fetch=mock.AsyncMock(return_value=[]),
+            _no_longer_last=lambda _live: None,
+            _make_room=lambda _conversation: True,
+        )
+        with mock.patch.object(discord, "say") as reported:
+            await discord.Agent.on_message(agent, message)
+        self.assertEqual({
+            "id": "8839", "resolved": True, "author": "Winston",
+            "text": "the schedule report",
+        }, reported.call_args.kwargs["reply_to"])
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class AnAnswerTooLongForOneMessage(unittest.TestCase):
     """R-DIS-13 — split or attached, never cut in silence."""
 

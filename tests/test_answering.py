@@ -201,6 +201,39 @@ class WhereABrainIsAnswering(CarriesAConversation):
                                prompt=held.pop("prompt", "what changed?"), **held)
         return kept.schedule(named)
 
+    async def test_a_reply_tells_the_brain_which_message_the_follow_up_is_for(self):
+        """R-CH-28 — reply context is distinct from the new words and channel neutral."""
+        surface, brain = Surface(), Brain()
+        held = self.answering(surface, brain)
+        arrived = self.arrived(text="fix the second one")
+        arrived[channel.REPLY_TO] = {
+            "id": "8839", "resolved": True, "author": "Winston",
+            "text": "1. logs\n2. parser\n3. docs",
+        }
+        await self.carry(held, arrived)
+        prompt = brain.asked[0]["prompt"]
+        self.assertTrue(prompt.startswith("fix the second one\n\n"))
+        self.assertIn("replies to channel message 8839 from Winston", prompt)
+        self.assertIn("1. logs\n2. parser\n3. docs", prompt)
+        self.assertIn("orientation, not a new request", prompt)
+
+    async def test_an_unresolved_reply_still_starts_a_turn_and_says_what_is_missing(self):
+        """R-CH-29 — a deleted or unavailable parent never costs the new message."""
+        surface, brain = Surface(), Brain()
+        held = self.answering(surface, brain)
+        arrived = self.arrived(text="what about this?")
+        arrived[channel.REPLY_TO] = {"id": "8839", "resolved": False}
+        await self.carry(held, arrived)
+        self.assertIn("reply to channel message 8839", brain.asked[0]["prompt"])
+        self.assertIn("could not resolve its author or content", brain.asked[0]["prompt"])
+
+    async def test_an_ordinary_message_has_no_empty_reply_context(self):
+        """R-CH-28 — the ordinary prompt remains exactly the words somebody sent."""
+        surface, brain = Surface(), Brain()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual("what changed?", brain.asked[0]["prompt"])
+
     async def test_what_a_schedule_came_to_is_said_where_this_agent_is_reached(self):
         """R-SCH-31 — the first trigger with no person at the other end. Work that failed at
         three in the morning is no use in an account nobody opens until they think to.

@@ -48,6 +48,8 @@ it has not — what never differs is that the work runs and is answered.
 | ✅ | R-CH-24 | A gateway question starts no brain turn | `an authorized gateway query is answered without a brain turn` |
 | ✅ | R-CH-25 | A follow-up arriving while a turn finishes is either accepted as steering or becomes the next turn | `a follow up offered after provider input closed becomes the next turn` |
 | ✅ | R-CH-26 | A single-user channel can change the agent's default provider and start that conversation fresh | `an authorized provider command changes the default and starts fresh`, `a stranger cannot change the provider`, `an unrunnable provider is reported and changes nothing`, `provider change waits for the old turn then starts fresh`, `a shared channels members cannot change agent wide defaults`, `provider and conversation sessions change in one transaction` |
+| ✅ | R-CH-28 | An inbound reply tells the agent which earlier message it answers with bounded context when available | `a reply reference crosses the seam with bounded context`, `a reply tells the brain which message the follow up is for`, `an ordinary message has no empty reply context` |
+| ✅ | R-CH-29 | An unresolved reply reference still starts a turn and identifies the unavailable message | `an unresolved reply reference is kept without inventing context`, `an unresolved reply still starts a turn and says what is missing` |
 
 ## Open questions
 
