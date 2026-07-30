@@ -82,6 +82,15 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
             with self.subTest(expected=expected):
                 self.assertIn(expected, page)
 
+    def test_issue_and_pull_request_guidance_requires_the_agent_footer(self):
+        for skill_name in (
+                "filing-rundesk-issues", "writing-rundesk-pull-requests"):
+            with self.subTest(skill=skill_name):
+                page = (REALLY_SHIPPED / skill_name / "SKILL.md").read_text()
+                self.assertIn("🤖 by <Agent>", page)
+                self.assertIn("provider", page.lower())
+                self.assertIn("model", page.lower())
+
 
 class WhatTheLibraryHolds(WithALibrary):
     def test_the_provider_given_library_is_the_one_a_nested_command_reports(self):
