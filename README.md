@@ -22,31 +22,31 @@
   📖 <a href="#-documentation"><strong>Docs</strong></a>
 </p>
 
-**Run AI coding agents as durable, named teammates on your own Mac — then reach them from
-your terminal, Discord, or a schedule.**
+**Run self-improving AI coding agents as durable, named teammates on your own Mac — then
+reach them in Discord DMs, public channel threads, your terminal, or a schedule.**
 
-Rundesk keeps the coding CLI you already use running with its own workspace, rules, memory,
-skills, conversations, and history. It does not replace Codex, Claude Code, Grok, or Google
-Antigravity; it gives those tools a dependable home and a common operating layer.
+Rundesk gives the coding CLI you already use its own workspace, rules, memory, skills,
+conversations, and history. Agents preserve what they learn and can turn repeated work into
+reusable skills and integration CLIs, improving how they work over time. Rundesk does not
+replace Codex, Claude Code, Grok, or Google Antigravity; it gives those tools a dependable,
+token-efficient operating layer.
 
 ## ⚡ It's this simple
 
 ```sh
 rundesk add ava --provider codex
-rundesk ask ava "review this repository and tell me the highest-risk open issue"
-```
-
-That creates a working agent and starts a continuing conversation. Keep it available after
-the terminal closes:
-
-```sh
+rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
 rundesk start ava
 ```
 
-Or put the same agent on Discord:
+DM the agent for private work. Mention it in a public server channel and Rundesk opens a
+dedicated thread; inside that thread, the conversation continues without mentioning the
+agent again.
+
+The same agent is also available from the terminal:
 
 ```sh
-rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
+rundesk ask ava "review this repository and tell me the highest-risk open issue"
 ```
 
 ## ✨ Highlights
@@ -57,10 +57,14 @@ rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
   conversations, and logs.
 - **Always available.** macOS `launchd` keeps each agent's gateway running and brings it
   back after a crash, reboot, or automatic update.
-- **Terminal, chat, and scheduled work.** Continue the same agent from the command line,
-  Discord, recurring cron schedules, or one-time scheduled turns.
+- **Discord DMs and public threads.** Work privately in direct messages, or mention an
+  agent in a server channel to open a dedicated thread for that conversation.
+- **Terminal and scheduled work.** Continue the same agent from the command line,
+  recurring cron schedules, or one-time scheduled turns.
 - **A durable account of every turn.** Inspect messages, tool activity, outcomes, and
   token usage without relying on a provider's private session format.
+- **Token-efficient by design.** Rundesk preserves native provider sessions, caching, and
+  compaction instead of rebuilding the conversation inside a second agent loop.
 - **Reusable capabilities.** Grant agents on-demand skills and place shared integration
   CLIs on every agent's `PATH`.
 - **Self-improving by design.** Agents can turn repeated work into reusable skills and
@@ -84,6 +88,12 @@ session. Rundesk adds the parts needed to operate them over time:
 The provider and channel seams are programs, not in-process plugins. A custom adapter can be
 written in any language and receives the same scheduling, lifecycle, history, and channel
 behavior as a shipped adapter.
+
+Rundesk keeps its own prompt overhead small. Provider adapters resume each provider's native
+conversation, while skills use the provider's native discovery mechanism instead of being
+copied into every prompt. The provider remains responsible for its context, prompt caching,
+and compaction, so Rundesk adds durable memory and channel routing without rebuilding a
+second orchestration loop around every turn.
 
 ## 🚀 Quick start
 
@@ -244,8 +254,9 @@ You can also narrow it to direct messages, one server, or one channel.
 
 On Discord, Rundesk supports:
 
-- direct messages and server rooms;
-- a dedicated thread when the agent is mentioned in a room;
+- private direct messages and public server channels;
+- a dedicated thread when the agent is mentioned in a public channel;
+- continuing inside that thread without mentioning the agent again;
 - explicit per-channel user allowlists;
 - typing, state reactions, and optional live activity;
 - long answers and generated files as attachments;
