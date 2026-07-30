@@ -839,7 +839,7 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
         R-AGT-17's, tested on its own. Asserted here rather than assumed, so a change that
         dropped the standing words would fail every one of these rather than none.
         """
-        standing = agent.standing("ava")
+        standing = agent.standing("ava", self.where)
         self.assertTrue(said.startswith(standing),
                         "rundesk's own words did not come first")
         return said[len(standing):].strip()
@@ -1144,25 +1144,25 @@ class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):
     """R-AGT-17 — rundesk's own words reach a turn whatever anybody else said."""
 
     def test_the_agents_own_name_is_filled_in(self):
-        """The one thing that varies. A placeholder that survived would reach a brain as the
-        literal word, and an agent told it is called `{name}` is told nothing at all."""
-        said = agent.standing("ava")
+        """A placeholder that survived would reach the brain as a literal rather than the
+        identity and locations Rundesk resolved for this agent."""
+        said = agent.standing("ava", self.where)
         self.assertIn("You are ava,", said)
-        self.assertNotIn("{name}", said)
+        self.assertIn(str(agent.home("ava", self.where)), said)
+        self.assertIn(str(agent.workspace("ava", self.where)), said)
         self.assertNotIn("{", said, "a brace survived into what a brain is given")
         self.assertNotIn("}", said)
 
     def test_every_place_the_name_appears_is_filled_in(self):
-        """Not just the first: the commands it names are the ones a brain will type, and one
-        left as `{name}` is a command that cannot run."""
-        said = agent.standing("zebra")
-        self.assertEqual(0, said.count("{name}"))
+        """Not just the first: every command must name the agent it will actually query."""
+        said = agent.standing("zebra", self.where)
+        self.assertEqual(0, said.count("{agent}"))
         self.assertGreater(said.count("zebra"), 1)
         self.assertIn("rundesk messages zebra", said)
 
     def test_rundesks_own_words_reach_a_turn_that_was_told_nothing_else(self):
         self.made()
-        self.assertEqual(agent.standing("ava"), agent.told("ava", self.where))
+        self.assertEqual(agent.standing("ava", self.where), agent.told("ava", self.where))
 
     def test_what_an_owner_says_is_added_to_rundesks_rather_than_replacing_it(self):
         """The whole point. They answer different questions — ours says what the agent is and
@@ -1180,27 +1180,24 @@ class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):
         self.made()
         agent.remember("ava", self.where, instructions="be brief")
         said = agent.told("ava", self.where, said="and answer in French")
-        self.assertTrue(said.startswith(agent.standing("ava")))
+        self.assertTrue(said.startswith(agent.standing("ava", self.where)))
         self.assertLess(said.index("rundesk messages ava"), said.index("and answer in French"))
 
     def test_what_rundesk_says_is_the_same_words_every_turn(self):
         """What prompt caching keys on. Two turns for one agent must be byte-for-byte equal
         here, or the front of the prefix moves and every turn pays for it again."""
-        self.assertEqual(agent.standing("ava"), agent.standing("ava"))
-        self.assertNotEqual(agent.standing("ava"), agent.standing("bea"))
+        self.assertEqual(
+            agent.standing("ava", self.where), agent.standing("ava", self.where)
+        )
+        self.assertNotEqual(
+            agent.standing("ava", self.where), agent.standing("bea", self.where)
+        )
 
     def test_a_turn_is_told_how_to_find_what_it_did(self):
-        """The fact this exists to carry: look it up rather than guess, and where to read the
-        rest. Everything else rundesk can do is in the guide rather than in every prompt."""
-        said = agent.standing("ava")
+        """The core names the history commands and the skill holding broader guidance."""
+        said = agent.standing("ava", self.where)
         self.assertIn("rundesk messages ava", said)
-        # **Not a path.** This named a file, and after the layout split it named one that
-        # exists on neither kind of install — a downloaded one keeps the program under
-        # `app/`, and a checkout install symlinks the source, so `~/.rundesk` holds neither.
-        # Every agent was told, on every turn, to read something it could not find. What it
-        # names now travels with the agent instead of being somewhere to go and look.
         self.assertIn("managing-rundesk", said)
-        self.assertNotIn("~/.rundesk", said)
 
 
 if __name__ == "__main__":

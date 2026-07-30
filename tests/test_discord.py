@@ -873,12 +873,20 @@ class WhereAMessageCameFrom(unittest.TestCase):
             built = channel.preface(
                 {"kind": "discord", channel.INSTRUCTIONS: old},
                 "ava", "discord-" + shape, arrived,
+                core_variables={
+                    "agent_home": "/agents/ava/home",
+                    "workspace": "/agents/ava/home/workspace",
+                },
             )
             self.assertNotIn("reached over discord", built)
             changed = old + "\nOwner addition."
             kept = channel.preface(
                 {"kind": "discord", channel.INSTRUCTIONS: changed},
                 "ava", "discord-" + shape, arrived,
+                core_variables={
+                    "agent_home": "/agents/ava/home",
+                    "workspace": "/agents/ava/home/workspace",
+                },
             )
             self.assertIn("Owner addition.", kept)
 
