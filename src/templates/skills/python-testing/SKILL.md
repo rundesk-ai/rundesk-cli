@@ -1,6 +1,6 @@
 ---
 name: python-testing
-description: Python testing strategies using pytest, TDD, fixtures, mocking, parametrization, and coverage. Use when designing, writing, or reviewing Python tests, test suites, or test infrastructure.
+description: Python testing strategies using pytest, TDD, fixtures, mocking, parametrization, and coverage. Use when a project uses pytest or when designing, writing, reviewing, or selecting pytest-based test infrastructure.
 ---
 
 # Python Testing Patterns
@@ -11,7 +11,8 @@ Comprehensive testing strategies for Python applications using pytest, TDD metho
 
 ### Test-Driven Development (TDD)
 
-Always follow the TDD cycle:
+Follow the repository's testing workflow. When it uses test-first development, apply the
+red-green-refactor cycle:
 
 1. **RED**: Write a failing test for the desired behavior
 2. **GREEN**: Write minimal code to make the test pass
@@ -32,8 +33,8 @@ def add(a, b):
 
 ### Coverage Requirements
 
-- **Target**: 80%+ code coverage
-- **Critical paths**: 100% coverage required
+- Honor the repository's configured coverage gate; do not invent a percentage.
+- Prioritize critical paths, failure modes, and behavior boundaries over a headline number.
 - Use `pytest --cov` to measure coverage
 
 ```bash
@@ -312,8 +313,10 @@ def test_slow_operation():
 
 # Mark integration tests
 @pytest.mark.integration
-def test_api_integration():
-    response = requests.get("https://api.example.com")
+def test_api_integration(api_base_url):
+    # Point this fixture at an explicitly provisioned test service, never an arbitrary
+    # production or public endpoint.
+    response = requests.get(f"{api_base_url}/health", timeout=10)
     assert response.status_code == 200
 
 # Mark unit tests

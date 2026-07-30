@@ -11,7 +11,7 @@ import threading
 def fetch_url(url: str) -> str:
     """Fetch a URL (I/O-bound operation)."""
     import urllib.request
-    with urllib.request.urlopen(url) as response:
+    with urllib.request.urlopen(url, timeout=10) as response:
         return response.read().decode()
 
 def fetch_all_urls(urls: list[str]) -> dict[str, str]:

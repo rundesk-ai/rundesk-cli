@@ -6,6 +6,7 @@
 
 ```python
 import pytest
+import pytest_asyncio
 
 @pytest.mark.asyncio
 async def test_async_function():
@@ -23,7 +24,7 @@ async def test_async_with_fixture(async_client):
 ### Async Fixture
 
 ```python
-@pytest.fixture
+@pytest_asyncio.fixture
 async def async_client():
     """Async fixture providing async test client."""
     app = create_app()
@@ -175,13 +176,14 @@ class TestUserService:
 
 ### DO
 
-- **Follow TDD**: Write tests before code (red-green-refactor)
+- **Follow the project workflow**: Use red-green-refactor when the repository works test-first
 - **Test one thing**: Each test should verify a single behavior
 - **Use descriptive names**: `test_user_login_with_invalid_credentials_fails`
 - **Use fixtures**: Eliminate duplication with fixtures
-- **Mock external dependencies**: Don't depend on external services
+- **Control external dependencies**: Mock unit-test boundaries and provision explicit services
+  for integration tests
 - **Test edge cases**: Empty inputs, None values, boundary conditions
-- **Aim for 80%+ coverage**: Focus on critical paths
+- **Meet the configured coverage gate**: Focus on critical paths and failure modes
 - **Keep tests fast**: Use marks to separate slow tests
 
 ### DON'T
@@ -189,9 +191,10 @@ class TestUserService:
 - **Don't test implementation**: Test behavior, not internals
 - **Don't use complex conditionals in tests**: Keep tests simple
 - **Don't ignore test failures**: All tests must pass
-- **Don't test third-party code**: Trust libraries to work
+- **Test your integration contract**: Do not duplicate a third party's own internal tests
 - **Don't share state between tests**: Tests should be independent
-- **Don't catch exceptions in tests**: Use `pytest.raises`
+- **Prefer `pytest.raises` for expected exceptions**: Catch manually only when the behavior
+  under test requires it
 - **Don't use print statements**: Use assertions and pytest output
 - **Don't write tests that are too brittle**: Avoid over-specific mocks
 

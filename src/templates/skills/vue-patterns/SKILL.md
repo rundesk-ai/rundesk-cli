@@ -1,6 +1,6 @@
 ---
 name: vue-patterns
-description: Vue.js 3 Composition API patterns, component architecture, reactivity best practices, Pinia state management, Vue Router navigation, and Nuxt SSR patterns. Activates for Vue, Nuxt, Vite, or Pinia projects.
+description: Vue.js 3 Composition API patterns, component architecture, reactivity best practices, Pinia state management, Vue Router navigation, and Nuxt SSR patterns. Use when a project uses Vue, Nuxt, Pinia, or Vite with Vue.
 ---
 
 # Vue.js Patterns and Best Practices
@@ -86,7 +86,8 @@ const props = withDefaults(defineProps<Props>(), {
 });
 ```
 
-- Always provide `type`, and `required`/`default` where appropriate.
+- With runtime props, provide `type` and `required`/`default` where appropriate; type-based
+  declarations already express required and optional props.
 - Boolean props: `isXxx`, `hasXxx`, `canXxx`.
 - Never mutate props — emit events instead.
 - For v-model binding, use `defineModel()` (Vue 3.4+) or `modelValue` + `update:modelValue`.
@@ -190,7 +191,8 @@ export const useCartStore = defineStore("cart", () => {
 
 - Use Setup Store syntax (not Options Store).
 - Prefer actions for business-level mutations and `$patch()` for grouped updates.
-- Every async action: handle loading + success + error.
+- Every async action should expose the loading and error state its callers need; do not
+  swallow failures.
 
 ---
 

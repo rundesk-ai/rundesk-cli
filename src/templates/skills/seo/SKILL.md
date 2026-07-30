@@ -21,7 +21,8 @@ Improve search visibility through technical correctness, performance, and conten
 
 #### Crawlability
 
-- `robots.txt` should allow important pages and block low-value surfaces
+- `robots.txt` should allow important pages and manage crawler access; use `noindex` or
+  removal controls—not a robots block—when a URL must leave search results
 - no important page should be unintentionally `noindex`
 - important pages should be reachable within a shallow click depth
 - avoid redirect chains longer than two hops
