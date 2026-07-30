@@ -279,7 +279,7 @@ both — so a photograph sent with nothing typed is an ordinary message and not 
 {"type": "said",   "conversation": "1180", "run": "7-a3f1", "text": "I'll look at the logs."}
 {"type": "said",   "conversation": "1180", "place": null, "schedule": "nightly", "began": true, "text": "💻 Working on 'nightly' — I will report back when it is done."}
 {"type": "said",   "conversation": "1180", "place": null, "schedule": "nightly", "text": "Nothing broke overnight."}
-{"type": "answer", "conversation": "1180", "run": "7-a3f1", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png"}]}
+{"type": "answer", "conversation": "1180", "run": "7-a3f1", "provider": "stand-in", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png"}]}
 {"type": "state",  "conversation": "1180", "run": "7-a3f1", "state": "finished"}
 {"type": "query-result", "conversation": "1180", "query": "status", "ref": "8843", "text": "ava: RUNNING"}
 {"type": "configure-result", "conversation": "1180", "ref": "8844", "text": "Default provider changed to claude. The next message starts fresh."}
@@ -294,6 +294,10 @@ says arrives as the `answer` — which is the one somebody will reply to, and th
 anchoring to the message that asked. A brain that writes its reply a piece at a time
 sends no `said` at all and only an `answer`, so a surface that treats them identically is
 still correct and merely noisier.
+
+**Every `answer` names the resolved `provider`.** This is Rundesk's safe, stable label for
+the provider that ran the turn, so it is present even when the brain reports no model or
+usage. A custom adapter's filesystem location never appears in the label.
 
 **A `said` naming a `schedule` is the clock's, and it comes in pairs.** Work rundesk starts
 because the time came says so where that schedule reports — `{"type": "said", "schedule":

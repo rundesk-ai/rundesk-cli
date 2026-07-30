@@ -201,20 +201,32 @@ class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
         template of their own gets the factory set, byte for byte but for the one name."""
         self.made()
         for called, says in self.held().items():
-            self.assertEqual((agent.TEMPLATES / called).read_text().replace("{{name}}", "ava"),
+            self.assertEqual((agent.TEMPLATES / called).read_text().replace("{{agent}}", "ava"),
                              says, f"{called} is not what the install ships")
 
     def test_one_overridden_page_is_the_owners_and_the_rest_are_shipped(self):
         """R-AGT-22 — per page, not per set. Taking on all five to change one would mean
         never getting an improvement to any of them, which is a choice worth avoiding."""
-        self.own("SOUL.md", "# {{name}} answers only in haiku\n")
+        self.own("SOUL.md", "# {{agent}} answers only in haiku\n")
         self.made()
 
         held = self.held()
         self.assertEqual("# ava answers only in haiku\n", held["SOUL.md"])
         for called in ("AGENTS.md", "CLAUDE.md", "USER.md", "MEMORY.md"):
-            self.assertEqual((agent.TEMPLATES / called).read_text().replace("{{name}}", "ava"),
+            self.assertEqual((agent.TEMPLATES / called).read_text().replace("{{agent}}", "ava"),
                              held[called], f"{called} stopped being the install's")
+
+    def test_a_legacy_name_placeholder_still_names_the_agent(self):
+        """R-AGT-41 — existing owner templates survive the clearer placeholder name."""
+        self.own("SOUL.md", "# {{name}} answers only in haiku\n")
+        self.made()
+        self.assertEqual("# ava answers only in haiku\n", self.held()["SOUL.md"])
+
+    def test_an_owner_template_uses_the_agent_placeholder(self):
+        """R-AGT-41 — the current placeholder says what value it represents."""
+        self.own("SOUL.md", "# {{agent}} answers only in haiku\n")
+        self.made()
+        self.assertEqual("# ava answers only in haiku\n", self.held()["SOUL.md"])
 
     def test_an_override_that_never_names_the_agent_still_makes_a_working_agent(self):
         """R-AGT-25 — the substitution is the whole contract an override has to honour, and
@@ -243,7 +255,7 @@ class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
 
     def test_a_page_the_install_does_not_ship_reaches_a_new_agent(self):
         """R-AGT-24 — an override may add, not only replace."""
-        self.own("RULES.md", "# {{name}} never force-pushes\n")
+        self.own("RULES.md", "# {{agent}} never force-pushes\n")
         self.made()
         self.assertEqual("# ava never force-pushes\n", self.held()["RULES.md"])
 
@@ -527,7 +539,8 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         agent.add("ava", self.where)
         says = (agent.home("ava", self.where) / "SOUL.md").read_text()
         self.assertIn("ava", says)
-        self.assertNotIn(agent.NAMED, says, "a template reached the home unsubstituted")
+        self.assertNotIn(agent.AGENT, says, "a template reached the home unsubstituted")
+        self.assertNotIn(agent.NAMED, says, "a legacy placeholder reached the home unsubstituted")
 
     def test_a_template_keeps_the_human_name_separate_from_its_slug(self):
         """R-AGT-39"""

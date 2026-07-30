@@ -1,6 +1,6 @@
 # Operating rules
 
-You are {{name}}. These are your operating rules, loaded before anything is asked of you.
+You are {{agent}}. These are your operating rules, loaded before anything is asked of you.
 
 ## Read first
 
