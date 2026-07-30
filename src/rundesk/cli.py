@@ -1567,7 +1567,7 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
                   file=sys.stderr)
             return 1
     try:
-        made = agents.add(name)
+        made = agents.add(name, display_name=given)
     except config.Unreadable as why:
         # A configuration that cannot be read is never treated as absent: the skills this
         # agent would be given are stated there, and making it without them would be an
@@ -4092,12 +4092,14 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         parser.print_help()
         return 0
     named = getattr(args, "name", None)
-    # `add` accepts a human name and turns it into the safe gateway name in `cmd_add`.
-    # Every other command names something that already exists and checks it verbatim.
+    # Every command speaks in an agent's human name while the rest of the program speaks
+    # in its filesystem identity. Resolve that seam once: a case-insensitive slug reaches
+    # a legacy spelling already on disk, and a name with spaces reaches the same agent as
+    # its lowercase directory slug (R-AGT-40).
     if named is not None and args.command != "add":
         try:
-            gateways.checked(named)
-        except gateways.NotAName as why:
+            args.name = agents.creation_name(named, agents.known())
+        except agents.NotAnAgentName as why:
             print(f"{named}: INVALID NAME — {why}", file=sys.stderr)
             return 1
     # What this install calls its jobs is *this process's* environment rather than a

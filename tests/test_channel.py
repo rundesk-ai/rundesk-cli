@@ -420,6 +420,17 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
         told = json.loads(held.of("arrived")[0]["text"])
         self.assertEqual("ops", told["RUNDESK_CHANNEL"])
         self.assertEqual("ava", told["RUNDESK_AGENT"])
+        self.assertEqual("ava", told["RUNDESK_AGENT_NAME"])
+
+    async def test_an_adapter_is_told_display_name_and_slug_separately(self):
+        """R-AGT-39 — an adapter may show the human spelling without using it as a path."""
+        held = await self.hold(
+            self.stand_in("nosy"),
+            env=self.told(agent_name="iOS Helper"),
+        )
+        told = json.loads(held.of("arrived")[0]["text"])
+        self.assertEqual("ava", told["RUNDESK_AGENT"])
+        self.assertEqual("iOS Helper", told["RUNDESK_AGENT_NAME"])
 
     async def test_an_adapter_is_given_somewhere_of_its_own_that_lasts(self):
         """R-CAD-13 — a channel held open for weeks has things to remember between

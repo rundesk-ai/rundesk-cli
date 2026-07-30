@@ -2149,6 +2149,7 @@ class WhatTheOwnerIsTold(unittest.TestCase):
         """R-DIS-32"""
         self.assertEqual("Rundesk – Winston", discord.gateway_name("winston"))
         self.assertEqual("Rundesk – Agent Name", discord.gateway_name("agent-name"))
+        self.assertEqual("Rundesk – iOS Helper", discord.gateway_name("iOS Helper"))
 
     def test_a_discord_gateway_name_stays_inside_the_platform_limit(self):
         """R-DIS-32"""
@@ -2189,6 +2190,25 @@ class WhatTheOwnerIsTold(unittest.TestCase):
                 mock.patch.object(it.user, "edit", create=True) as edited:
             asyncio.run(discord.Agent.on_ready(it))
         edited.assert_not_called()
+
+    def test_the_persisted_display_name_wins_over_the_slug(self):
+        """R-DIS-32 — capitalization is owner data, not something reconstructed."""
+        changed = []
+
+        class User:
+            name = "rundesk"
+
+            async def edit(self, **given):
+                changed.append(given)
+
+        it = self.Connects()
+        it.user = User()
+        with mock.patch.dict(
+                os.environ,
+                {"RUNDESK_AGENT": "ios-helper", "RUNDESK_AGENT_NAME": "iOS Helper"},
+                clear=False), mock.patch.object(discord, "say"):
+            asyncio.run(discord.Agent.on_ready(it))
+        self.assertEqual([{"username": "Rundesk – iOS Helper"}], changed)
 
     def test_only_one_adapter_of_a_gateway_greets_the_owner(self):
         """R-DIS-15 — an agent reachable both by direct message and in rooms runs *two* of

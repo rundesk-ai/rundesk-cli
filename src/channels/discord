@@ -144,7 +144,7 @@ ACTIVITY_CHARS = 1500
 THREAD_CHARS = 80
 
 #: The connected bot's name. Discord usernames are 2–32 characters and refuse the
-#: substring "discord"; the agent portion is derived from its slug and bounded here,
+#: substring "discord"; the agent portion uses the persisted display name and is bounded here,
 #: where platform naming rules belong (R-DIS-32).
 BOT_PREFIX = "Rundesk – "
 BOT_NAME_CHARS = 32
@@ -193,10 +193,10 @@ SEEN = "👀"
 def gateway_name(agent: str) -> str:
     """How this agent's Discord gateway identifies itself (R-DIS-32).
 
-    Agent names are filesystem slugs, so title-casing their parts restores the words an
-    owner recognizes. Older agents may still contain dots or underscores and are handled
-    too. Discord refuses its own name anywhere in a username, so that rare agent slug is
-    shown as ``D-cord`` rather than making the whole rename fail.
+    New agents arrive with the exact display spelling their owner chose. The separator
+    handling remains for existing agents whose display fallback came from a legacy
+    directory. Discord refuses its own name anywhere in a username, so that rare agent
+    name is shown as ``D-cord`` rather than making the whole rename fail.
     """
     words = [word for word in re.split(r"[-_.]+", agent.strip()) if word]
     if not words:
@@ -646,7 +646,11 @@ class Agent(discord.Client):
         the same identity. Failure is non-fatal and visible in the gateway log; naming
         must never make a reachable agent deaf.
         """
-        wanted = gateway_name(os.environ.get("RUNDESK_AGENT") or "")
+        wanted = gateway_name(
+            os.environ.get("RUNDESK_AGENT_NAME")
+            or os.environ.get("RUNDESK_AGENT")
+            or ""
+        )
         current = str(getattr(getattr(self, "user", None), "name", "") or "")
         if not wanted or wanted == current or wanted == getattr(self, "profile_named", None):
             if wanted == current:

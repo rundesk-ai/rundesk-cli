@@ -78,7 +78,16 @@ class TheShapeOnDisk(WithAnAgentsOwnRecords):
         self.assertEqual("wal", kept.journal())
         self.assertEqual({"provider": None, "model": None, "instructions": None,
                           "settings": {}}, kept.agent())
+        self.assertTrue(kept.display_name())
         self.assertIsNone(kept.last_seen())
+
+    def test_an_agents_display_name_is_kept_without_changing_its_brain(self):
+        """R-AGT-39 — the human spelling is durable state beside, not inside, the slug."""
+        kept = self.built()
+        kept.remember_display_name("iOS Helper")
+        self.assertEqual("iOS Helper", kept.display_name())
+        self.assertEqual({"provider": None, "model": None, "instructions": None,
+                          "settings": {}}, kept.agent())
 
     def test_making_a_database_that_is_already_there_keeps_everything_in_it(self):
         """`made()` is what every entry point calls before it does anything, so it runs

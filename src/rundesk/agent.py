@@ -149,9 +149,28 @@ def creation_name(name: str, existing=()) -> str:
     filesystem, blindly creating today's slug beside one of those would make two agents
     from one human name; on macOS it would silently address the old directory instead.
     Resolve that difference deliberately, and refuse an already-ambiguous legacy set.
+
+    Exact case-insensitive legacy names are considered before ASCII slugging. Older
+    releases admitted Unicode names that have no ASCII spelling; one such directory must
+    remain reachable and must never stop an unrelated new agent from being made.
     """
+    same = sorted(one for one in existing if one.casefold() == name.casefold())
+    if len(same) > 1:
+        raise NotAnAgentName(
+            f"'{name}' matches more than one existing agent: {', '.join(same)}"
+        )
+    if same:
+        return same[0]
     made = slug(name)
-    matches = sorted(one for one in existing if slug(one) == made)
+    matches = []
+    for one in existing:
+        try:
+            existing_slug = slug(one)
+        except NotAnAgentName:
+            continue
+        if existing_slug == made:
+            matches.append(one)
+    matches.sort()
     if len(matches) > 1:
         raise NotAnAgentName(
             f"'{name}' matches more than one existing agent: {', '.join(matches)}"
@@ -378,7 +397,7 @@ def exists(name: str, where: Path | None = None) -> bool:
         return False
 
 
-def add(name: str, where: Path | None = None) -> list[str]:
+def add(name: str, where: Path | None = None, display_name: str | None = None) -> list[str]:
     """Make this agent, and the one gateway that runs it (R-AGW-1).
 
     What is written is what is not already there, and nothing else (R-AGT-4). Making an
@@ -403,7 +422,7 @@ def add(name: str, where: Path | None = None) -> list[str]:
     for called in knowledge():
         page = home(name, where) / called
         if not page.exists():
-            page.write_text(_copied(called, name), encoding="utf-8")
+            page.write_text(_copied(called, display_name or name), encoding="utf-8")
             made.append(called)
     records = store.path_for(directory(name, where))
     fresh = not records.exists()
@@ -411,7 +430,10 @@ def add(name: str, where: Path | None = None) -> list[str]:
     # upgrade routes after this release's library has been laid down (R-AGT-36).
     if fresh:
         made.extend(require_skills(name, where))
-    store.Store(records).made()
+    kept = store.Store(records)
+    kept.made()
+    if fresh and display_name is not None:
+        kept.remember_display_name(display_name.strip())
     if fresh:
         made.append(store.NAME)
     return sorted(made)
@@ -671,7 +693,8 @@ STANDING = instructions.RUNDESK_INSTRUCTIONS
 def instruction_variables(name: str, where: Path | None = None) -> dict[str, str]:
     """The agent-owned values Rundesk fills into every core instruction layer."""
     return {
-        "agent": name,
+        "agent": display_name(name, where) if exists(name, where) else name,
+        "agent_slug": name,
         "agent_home": str(home(name, where)),
         "workspace": str(workspace(name, where)),
     }
@@ -895,6 +918,7 @@ def reachable(name: str, where: Path | None = None, carry=None) -> list:
             name=one, program=at,
             env=channels.environment(
                 home=run_home(name, where), channel=one, agent=name, channel_home=home,
+                agent_name=display_name(name, where),
                 allow=record.get("allow"), settings=record.get("settings"),
                 secret=record.get("secret")),
             answering=_answering(name, one, record, where, carry, answers),
@@ -915,6 +939,11 @@ def _answering(name, one, record, where, carry, answers):
                                  restarting=restarting, note=note,
                                  querying=lambda asked: _queried(name, asked, where))
     return made
+
+
+def display_name(name: str, where: Path | None = None) -> str:
+    """The human name this agent's owner chose, never its directory guessed again."""
+    return reading(name, where).display_name()
 
 
 def _queried(name: str, asked: str, where: Path | None = None) -> str:

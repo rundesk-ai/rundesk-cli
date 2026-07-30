@@ -241,8 +241,13 @@ jobs:
           git archive "$previous" | tar -x -C "$old"
           "$old/install.sh"
           "$RUNDESK_BIN_DIR/rundesk" add existing --provider codex
+          # Older releases kept this exact mixed-case identifier on disk. It exercises the
+          # compatibility path a lowercase-only fixture cannot see.
+          "$RUNDESK_BIN_DIR/rundesk" add Legacy_Name --provider codex
           "$RUNDESK_BIN_DIR/rundesk" schedules existing add heartbeat \
             --when "0 6 * * *" --ask "report that the gateway is healthy"
+          "$RUNDESK_BIN_DIR/rundesk" schedules Legacy_Name add heartbeat \
+            --when "0 7 * * *" --ask "report that the legacy gateway is healthy"
           CONFIG="$RUNDESK_INSTALL_DIR/data/config.json" python3 - <<'CONFIG'
           import json, os
           from pathlib import Path
@@ -256,6 +261,8 @@ jobs:
           cp "$RUNDESK_INSTALL_DIR/data/config.json" "$RUNNER_TEMP/config.before"
           printf '%s\n' "kept by the owner" \
             > "$RUNDESK_INSTALL_DIR/data/agents/existing/home/owner-kept.txt"
+          printf '%s\n' "legacy name kept by the owner" \
+            > "$RUNDESK_INSTALL_DIR/data/agents/Legacy_Name/home/owner-kept.txt"
           echo "PREVIOUS_ROOT=$old" >> "$GITHUB_ENV"
 
       - name: The proposed release follows the real update handoff
@@ -313,12 +320,20 @@ jobs:
           CONFIG
           grep -qx "kept by the owner" \
             "$RUNDESK_INSTALL_DIR/data/agents/existing/home/owner-kept.txt"
+          grep -qx "legacy name kept by the owner" \
+            "$RUNDESK_INSTALL_DIR/data/agents/Legacy_Name/home/owner-kept.txt"
           "$RUNDESK_BIN_DIR/rundesk" version
           "$RUNDESK_BIN_DIR/rundesk" status
           "$RUNDESK_BIN_DIR/rundesk" agents | grep -q '^existing '
           "$RUNDESK_BIN_DIR/rundesk" skills |
             grep -qE '^managing-rundesk-schedules +rundesk +existing$'
           "$RUNDESK_BIN_DIR/rundesk" schedules existing | grep -q 'heartbeat'
+          "$RUNDESK_BIN_DIR/rundesk" agents "Legacy Name" | grep -q '^Legacy_Name '
+          "$RUNDESK_BIN_DIR/rundesk" agents "LEGACY-NAME" | grep -q '^Legacy_Name '
+          "$RUNDESK_BIN_DIR/rundesk" schedules "legacy name" | grep -q 'heartbeat'
+          "$RUNDESK_BIN_DIR/rundesk" add "LEGACY-NAME" | grep -q '^Legacy_Name: ALREADY MADE'
+          test -d "$RUNDESK_INSTALL_DIR/data/agents/Legacy_Name"
+          test ! -e "$RUNDESK_INSTALL_DIR/data/agents/legacy-name"
           "$RUNDESK_BIN_DIR/rundesk" serve existing &
           serving=$!
           for _ in $(seq 30); do
@@ -332,6 +347,22 @@ jobs:
           fi
           kill "$serving"
           wait "$serving" || { echo "::error::the existing gateway did not stop cleanly"; exit 1; }
+          "$RUNDESK_BIN_DIR/rundesk" serve "Legacy Name" &
+          legacy_serving=$!
+          for _ in $(seq 30); do
+            "$RUNDESK_BIN_DIR/rundesk" agents "legacy-name" |
+              grep -qE '^Legacy_Name +RUNNING' && break
+            sleep 1
+          done
+          if ! "$RUNDESK_BIN_DIR/rundesk" agents "LEGACY NAME" |
+              grep -qE '^Legacy_Name +RUNNING'; then
+            echo "::error::the legacy gateway did not run through its alias after the upgrade"
+            kill "$legacy_serving" 2>/dev/null || true
+            exit 1
+          fi
+          kill "$legacy_serving"
+          wait "$legacy_serving" ||
+            { echo "::error::the legacy gateway did not stop cleanly"; exit 1; }
           if command -v launchctl >/dev/null 2>&1; then
             test -f "$RUNDESK_JOBS_DIR/ai.rundesk-automatic-update.plist" ||
               { echo "::error::the upgrade did not schedule automatic updates"; exit 1; }

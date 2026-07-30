@@ -819,6 +819,7 @@ class FakeAgents:
         self.refuses: BaseException | None = None
         #: What was made, adopted and taken away, in the order it was asked for.
         self.added, self.adopted, self.forgotten = [], [], []
+        self.display_names: dict[str, str] = {}
         #: Existing agents whose configured baseline an upgrade route reconciled.
         self.required: list[str] = []
         for one in self._made:
@@ -886,7 +887,7 @@ class FakeAgents:
         """
         return self._at / name
 
-    def add(self, name):
+    def add(self, name, display_name=None):
         # The real one builds the records by walking the steps, so it raises on records
         # this rundesk will not read — which is the whole reason `cmd_add` wraps it. A
         # stand-in that quietly succeeded made that guard look untested.
@@ -896,8 +897,12 @@ class FakeAgents:
         made = [] if name in self._made else ["AGENTS.md", "home/"]
         if name not in self._made:
             self._made.append(name)
+            self.display_names[name] = display_name.strip() if display_name else name
         self._built(name)
         return made
+
+    def display_name(self, name):
+        return self.display_names.get(name, name)
 
     def require_skills(self, name):
         self.required.append(name)
@@ -1600,10 +1605,11 @@ class MakingAnAgent(unittest.TestCase):
             ["add", "  Écho's   Helper  ", "--provider", "codex"], agents=agents)
         self.assertEqual(0, code, said)
         self.assertEqual(["echo-s-helper"], agents.added)
+        self.assertEqual("Écho's   Helper", agents.display_names["echo-s-helper"])
         self.assertIn("echo-s-helper: MADE", said)
 
     def test_a_legacy_mixed_case_agent_is_not_duplicated_by_its_slug(self):
-        """R-AGT-39 — upgrades preserve the directory an existing agent owns."""
+        """R-AGT-40 — upgrades preserve the directory an existing agent owns."""
         agents = FakeAgents(made=["Winston"])
         agents.remember("Winston", provider="codex")
         code, said = drive(["add", "winston"], agents=agents)
@@ -1770,6 +1776,27 @@ class ConfiguringAnAgent(unittest.TestCase):
 
 class TheVerbsNameTheAgent(unittest.TestCase):
     """The gateway is how an agent runs, so every verb asks where *that* agent keeps things."""
+
+    def test_every_command_resolves_a_human_name_to_the_agents_slug(self):
+        """R-AGT-40 — `main` resolves the shared `name` argument before dispatch, so
+        every current and future command gets the directory identity rather than each
+        command growing its own spelling rules."""
+        agents = FakeAgents(made=["agent-name"])
+        gateways = FakeGateways()
+        code, said = drive(["agents", "Agent Name"], gateways, agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("agent-name", said)
+        self.assertNotIn("NO SUCH AGENT", said)
+
+    def test_a_command_reaches_a_legacy_mixed_case_agent_case_insensitively(self):
+        """R-AGT-40 — existing users keep their directories while commands gain the
+        same case-insensitive lookup as newly slugged agents."""
+        agents = FakeAgents(made=["Winston"])
+        gateways = FakeGateways()
+        code, said = drive(["agents", "WINSTON"], gateways, agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("Winston", said)
+        self.assertNotIn("NO SUCH AGENT", said)
 
     def test_a_verb_asks_where_the_agent_it_names_keeps_things(self):
         """R-AGT-9 — an agent's gateway keeps its state in the agent's own directory. A

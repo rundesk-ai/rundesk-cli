@@ -111,14 +111,23 @@ class NamingANewAgent(unittest.TestCase):
             agent.slug(" -- ")
 
     def test_an_existing_legacy_spelling_keeps_its_directory(self):
-        """R-AGT-39"""
+        """R-AGT-40"""
         self.assertEqual(
             "Agent_Name", agent.creation_name("Agent Name", ["Agent_Name"]))
 
     def test_ambiguous_legacy_spellings_are_refused(self):
-        """R-AGT-39"""
+        """R-AGT-40"""
         with self.assertRaises(agent.NotAnAgentName):
             agent.creation_name("Agent Name", ["Agent_Name", "Agent.Name"])
+
+    def test_a_legacy_unicode_name_stays_reachable(self):
+        """R-AGT-40 — older releases admitted Unicode names with no ASCII spelling."""
+        self.assertEqual("代理", agent.creation_name("代理", ["代理"]))
+
+    def test_a_legacy_unicode_name_does_not_block_an_unrelated_new_agent(self):
+        """R-AGT-40 — resolving the existing population skips only the legacy name
+        that cannot itself be represented as today's slug."""
+        self.assertEqual("new-agent", agent.creation_name("New Agent", ["代理"]))
 
 
 class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
@@ -483,6 +492,13 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         says = (agent.home("ava", self.where) / "SOUL.md").read_text()
         self.assertIn("ava", says)
         self.assertNotIn(agent.NAMED, says, "a template reached the home unsubstituted")
+
+    def test_a_template_keeps_the_human_name_separate_from_its_slug(self):
+        """R-AGT-39"""
+        agent.add("ios-helper", self.where, display_name="iOS Helper")
+        says = (agent.home("ios-helper", self.where) / "SOUL.md").read_text()
+        self.assertIn("iOS Helper", says)
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
 
     def test_an_install_with_nothing_to_make_an_agent_from_says_so(self):
         """R-AGT-11 — a home with no files in it and nothing to have copied there would
@@ -1152,6 +1168,14 @@ class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):
         self.assertIn(str(agent.workspace("ava", self.where)), said)
         self.assertNotIn("{", said, "a brace survived into what a brain is given")
         self.assertNotIn("}", said)
+
+    def test_the_human_name_is_shown_while_commands_keep_the_slug(self):
+        """R-AGT-39 — identity prose uses the display name; paths and commands remain
+        safe because they use the directory slug."""
+        agent.add("ios-helper", self.where, display_name="iOS Helper")
+        said = agent.standing("ios-helper", self.where)
+        self.assertIn("You are iOS Helper,", said)
+        self.assertIn("rundesk messages ios-helper", said)
 
     def test_every_place_the_name_appears_is_filled_in(self):
         """Not just the first: every command must name the agent it will actually query."""
