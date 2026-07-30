@@ -17,6 +17,8 @@
   &nbsp;·&nbsp;
   💬 <a href="#-channel-adapters"><strong>Channels</strong></a>
   &nbsp;·&nbsp;
+  🧩 <a href="#-documentation"><strong>Extending Rundesk</strong></a>
+  &nbsp;·&nbsp;
   📖 <a href="#-documentation"><strong>Docs</strong></a>
 </p>
 
