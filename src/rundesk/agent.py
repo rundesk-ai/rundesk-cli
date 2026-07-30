@@ -622,10 +622,10 @@ def chosen(name: str, where: Path | None = None) -> dict:
 
 #: What rundesk itself tells every turn, before anything anybody else says (R-AGT-17).
 #:
-#: **Small, and the same words every time.** It is the front of what a brain is given, which is
-#: the part prompt caching keys on — anything that varies per turn belongs after it, never
-#: inside it, or every turn pays for a prefix that no longer matches. Only the agent's own name
-#: is filled in, so one agent's is byte-for-byte identical from one turn to the next.
+#: **Stable for one agent.** It is the front of what a brain is given, which is the part
+#: prompt caching keys on — anything that varies per turn belongs after it, never inside it,
+#: or every turn pays for a prefix that no longer matches. The agent's name and resolved
+#: home/workspace paths are byte-for-byte identical from one turn to the next.
 #:
 #: Said here rather than left to the home an agent loads, because a home is the owner's to edit
 #: and this is the one thing that must be true whatever they wrote — an agent that has been
@@ -633,9 +633,18 @@ def chosen(name: str, where: Path | None = None) -> dict:
 STANDING = instructions.RUNDESK_INSTRUCTIONS
 
 
-def standing(name: str) -> str:
+def instruction_variables(name: str, where: Path | None = None) -> dict[str, str]:
+    """The agent-owned values Rundesk fills into every core instruction layer."""
+    return {
+        "agent": name,
+        "agent_home": str(home(name, where)),
+        "workspace": str(workspace(name, where)),
+    }
+
+
+def standing(name: str, where: Path | None = None) -> str:
     """Rundesk's own words to a turn, for this agent. One place, so it is one wording."""
-    return instructions.build(variables={"agent": name})
+    return instructions.build(variables=instruction_variables(name, where))
 
 
 def added_instructions(name: str, where: Path | None = None) -> str:
@@ -654,7 +663,7 @@ def told(name: str, where: Path | None = None, said: str = "",
     added. Empty layers disappear; no supplied instruction replaces one before it.
     """
     return instructions.build(
-        variables={"agent": name},
+        variables=instruction_variables(name, where),
         append=(regardless, added_instructions(name, where), said),
     )
 

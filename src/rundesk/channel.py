@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
 from rundesk import gateway, instructions, process, provider
@@ -437,7 +438,8 @@ def surface(kind: str) -> str:
     return kind
 
 
-def preface(record: dict, agent: str, name: str, it: dict, append: str = "") -> str:
+def preface(record: dict, agent: str, name: str, it: dict, *,
+            core_variables: Mapping[str, object], append: str = "") -> str:
     """Build core, channel, adapter, and owner instructions for this arrival (R-CH-22)."""
     stored = record.get(INSTRUCTIONS)
     stored = stored.strip() if isinstance(stored, str) and stored.strip() else ""
@@ -450,7 +452,7 @@ def preface(record: dict, agent: str, name: str, it: dict, append: str = "") -> 
     adapter_append = it.get(PROMPT_APPEND)
     adapter_append = adapter_append.strip() \
         if isinstance(adapter_append, str) and adapter_append.strip() else ""
-    variables = prompt_variables(record, agent, name, it)
+    variables = {**core_variables, **prompt_variables(record, agent, name, it)}
     return instructions.build(
         variables=variables,
         trigger=_trigger(it),
