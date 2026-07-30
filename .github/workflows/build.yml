@@ -242,8 +242,11 @@ jobs:
           "$old/install.sh"
           "$RUNDESK_BIN_DIR/rundesk" add existing --provider codex
           # Older releases kept this exact mixed-case identifier on disk. It exercises the
-          # compatibility path a lowercase-only fixture cannot see.
+          # compatibility path a lowercase-only fixture cannot see. The newest release now
+          # normalizes new names, so put the fixture back into that historical on-disk shape.
           "$RUNDESK_BIN_DIR/rundesk" add Legacy_Name --provider codex
+          mv "$RUNDESK_INSTALL_DIR/data/agents/legacy-name" \
+            "$RUNDESK_INSTALL_DIR/data/agents/Legacy_Name"
           "$RUNDESK_BIN_DIR/rundesk" schedules existing add heartbeat \
             --when "0 6 * * *" --ask "report that the gateway is healthy"
           "$RUNDESK_BIN_DIR/rundesk" schedules Legacy_Name add heartbeat \
