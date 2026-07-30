@@ -1024,7 +1024,7 @@ def _asked(it: dict) -> str:
                 f"This message replies to conversation message {identifier} "
                 "(quoted text unavailable)."
             )
-        said = f"{said}\n\n{context}"
+        said = f"{said}\n\n--\n\n{context}"
     return said.strip()
 
 

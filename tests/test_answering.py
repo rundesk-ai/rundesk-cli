@@ -213,7 +213,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
         await self.carry(held, arrived)
         prompt = brain.asked[0]["prompt"]
         self.assertEqual(
-            "fix the second one\n\n"
+            "fix the second one\n\n--\n\n"
             "This message replies to conversation message 8839 from Winston.\n"
             "Quoted message: 1. logs\n2. parser\n3. docs",
             prompt,
@@ -227,7 +227,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
         arrived[channel.REPLY_TO] = {"id": "8839", "resolved": False}
         await self.carry(held, arrived)
         self.assertEqual(
-            "what about this?\n\n"
+            "what about this?\n\n--\n\n"
             "This message replies to conversation message 8839 "
             "(quoted text unavailable).",
             brain.asked[0]["prompt"],
