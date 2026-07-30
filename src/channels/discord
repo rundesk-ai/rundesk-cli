@@ -624,10 +624,10 @@ class Agent(discord.Client):
                 # told which release is now listening, and the only one that can link it.
                 landed = _running_release()
                 await self._tell_the_owner(
-                    f"🟢 **I'm back** — new rundesk update installed, "
+                    f"👋 **I'm back** — new rundesk update installed, "
                     f"release notes for {landed}"
                     if landed else
-                    "🟢 **I'm back** — new rundesk update installed."
+                    "👋 **I'm back** — new rundesk update installed."
                 )
                 _finish_maintenance()
             else:
