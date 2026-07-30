@@ -130,8 +130,8 @@ file with it.
   agent, never one shared, so a turn's write is never in another agent's way. Reading and writing are told
   apart at the connection: a reader is opened read-only, so it cannot begin work that would make a turn
   wait — refused by the database rather than by convention. No statement is written anywhere else and no
-  connection ever leaves the module, both proved by looking. **Nothing reads it yet**; it is built and
-  proved before anything moves onto it, so deleting it would leave the product exactly as it is.
+  connection ever leaves the module, both proved by looking. Agent, gateway, turn, answering, backup and
+  command paths all use this seam; none reaches around it to the database.
 - `src/rundesk/migration.py` — moving what is already on a machine into the shape a newer rundesk
   expects. **A step is found, not listed**: each is `migrations/<version>.py`, ordered by that number, and
   what runs is whatever sits between the version on disk and the version installed. There is no table of
