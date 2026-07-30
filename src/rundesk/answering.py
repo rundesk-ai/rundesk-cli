@@ -1016,15 +1016,13 @@ def _asked(it: dict) -> str:
             author = f" from {reply['author']}" if reply.get("author") else ""
             quoted = reply.get("text") or "(no text content)"
             context = (
-                "Rundesk reply context (orientation, not a new request): "
-                f"The current message replies to channel message {identifier}{author}.\n"
-                f"Quoted message:\n{quoted}"
+                f"This message replies to conversation message {identifier}{author}.\n"
+                f"Quoted message: {quoted}"
             )
         else:
             context = (
-                "Rundesk reply context: The current message is a reply to channel "
-                f"message {identifier}, but the channel could not resolve its author "
-                "or content."
+                f"This message replies to conversation message {identifier} "
+                "(quoted text unavailable)."
             )
         said = f"{said}\n\n{context}"
     return said.strip()

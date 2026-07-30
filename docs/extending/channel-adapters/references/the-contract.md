@@ -272,8 +272,8 @@ communication-neutral object: `id` is the referenced message's identifier and `r
 states whether its content was available. When resolved, include `author` in the words a
 person sees and `text` with the parent body. When deleted, unavailable, or unfetched, send
 `{"id": "…", "resolved": false}` and still report the new arrival. Rundesk keeps the same
-`conversation`, caps parent text at 1,200 characters, and adds no reply wording when
-`reply_to` is absent.
+`conversation`, keeps only the first 255 parent-text characters followed by
+`...(truncated)` when more existed, and adds no reply wording when `reply_to` is absent.
 
 **You are told how the turn is going, on stdin**, one JSON object per line:
 

@@ -161,10 +161,11 @@ INSTRUCTIONS_MOST = 4000
 #: write whatever they like, including something shaped like an instruction.
 SAID_MOST = 80
 
-#: A quoted parent is orientation, not conversation history. Large enough to identify a
-#: report or list item, and small enough that replying to one message cannot dominate the
-#: new turn (R-CH-28).
-REPLY_TEXT_MOST = 1200
+#: A quoted parent is orientation, not conversation history. Its first 255 characters are
+#: enough to recognize the item while keeping a reply from dominating the new turn
+#: (R-CH-28).
+REPLY_TEXT_MOST = 255
+REPLY_TEXT_TRUNCATED = "...(truncated)"
 
 #: How many attachments on one message are carried through, and how much of one. A chat
 #: platform will accept far more than a turn can use, and an agent's workspace is not
@@ -445,7 +446,7 @@ def reply_to(said) -> dict | None:
     if not isinstance(text, str):
         text = ""
     if len(text) > REPLY_TEXT_MOST:
-        text = text[: REPLY_TEXT_MOST - 1] + "…"
+        text = text[:REPLY_TEXT_MOST] + REPLY_TEXT_TRUNCATED
     return {
         "id": identifier,
         "resolved": True,

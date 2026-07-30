@@ -212,10 +212,12 @@ class WhereABrainIsAnswering(CarriesAConversation):
         }
         await self.carry(held, arrived)
         prompt = brain.asked[0]["prompt"]
-        self.assertTrue(prompt.startswith("fix the second one\n\n"))
-        self.assertIn("replies to channel message 8839 from Winston", prompt)
-        self.assertIn("1. logs\n2. parser\n3. docs", prompt)
-        self.assertIn("orientation, not a new request", prompt)
+        self.assertEqual(
+            "fix the second one\n\n"
+            "This message replies to conversation message 8839 from Winston.\n"
+            "Quoted message: 1. logs\n2. parser\n3. docs",
+            prompt,
+        )
 
     async def test_an_unresolved_reply_still_starts_a_turn_and_says_what_is_missing(self):
         """R-CH-29 — a deleted or unavailable parent never costs the new message."""
@@ -224,8 +226,12 @@ class WhereABrainIsAnswering(CarriesAConversation):
         arrived = self.arrived(text="what about this?")
         arrived[channel.REPLY_TO] = {"id": "8839", "resolved": False}
         await self.carry(held, arrived)
-        self.assertIn("reply to channel message 8839", brain.asked[0]["prompt"])
-        self.assertIn("could not resolve its author or content", brain.asked[0]["prompt"])
+        self.assertEqual(
+            "what about this?\n\n"
+            "This message replies to conversation message 8839 "
+            "(quoted text unavailable).",
+            brain.asked[0]["prompt"],
+        )
 
     async def test_an_ordinary_message_has_no_empty_reply_context(self):
         """R-CH-28 — the ordinary prompt remains exactly the words somebody sent."""

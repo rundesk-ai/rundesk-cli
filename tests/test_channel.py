@@ -538,8 +538,10 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
         self.assertEqual("8840", said[channel.REPLY_TO]["id"])
         self.assertTrue(said[channel.REPLY_TO]["resolved"])
         self.assertEqual(channel.SAID_MOST, len(said[channel.REPLY_TO]["author"]))
-        self.assertEqual(channel.REPLY_TEXT_MOST, len(said[channel.REPLY_TO]["text"]))
-        self.assertTrue(said[channel.REPLY_TO]["text"].endswith("…"))
+        self.assertEqual(
+            "x" * 255 + "...(truncated)",
+            said[channel.REPLY_TO]["text"],
+        )
 
     def test_an_unresolved_reply_reference_is_kept_without_inventing_context(self):
         """R-CH-29 — unavailable parent content is orientation, never a dropped turn."""
