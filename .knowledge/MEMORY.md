@@ -708,5 +708,9 @@ re-checked since, so treat these as true-when-found rather than as current.*
   Point `PYTHONPYCACHEPREFIX` at a task-specific path under `/tmp` and leave cleanup outside
   the gate invocation.
 
+- **GitHub issue JSON calls expose the type as `issueType`, not `type`.** `gh issue list
+  --json type` exits before listing anything and prints the valid fields; request
+  `--json issueType` and read `.issueType.name`.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

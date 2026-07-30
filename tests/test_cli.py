@@ -4066,10 +4066,9 @@ class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
         self.assertIn("2 in / 15273 cached / 5550 written / 5 out", said)
 
     def test_a_brain_that_does_not_report_cache_writes_claims_none(self):
-        """R-USE-6 again, one field along. Most brains report no such split — grok,
-        antigravity and codex have no cache-creation field at all — and a `0 written` on
-        every one of them would say they wrote nothing to a cache rather than that they do
-        not say."""
+        """R-USE-6 again, one field along. Some brains and older adapter streams report
+        no cache-creation split, and a `0 written` on every one of them would say they
+        wrote nothing to a cache rather than that they do not say."""
         kept = self.agents.records("ava")
         run = kept.began("terminal", "grok", "work", "2026-07-26T09:00:00Z")
         kept.ended(run, "2026-07-26T09:00:01Z", "finished", exit_code=0,

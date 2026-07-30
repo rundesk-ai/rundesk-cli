@@ -514,7 +514,9 @@ class WhereABrainIsAnswering(CarriesAConversation):
         await self.carry(held, self.arrived())
         # Added to rundesk's own rather than replacing them (R-AGT-17); which of the
         # *situation* lines won is what this case is about.
-        said = brain.asked[0]["preface"].replace(agents.standing("ava"), "").strip()
+        said = brain.asked[0]["preface"].replace(
+            agents.standing("ava", self.where), ""
+        ).strip()
         self.assertEqual("You are ava, and you are brief.", said,
                          "the agent's own was passed over for rundesk's default sentence")
 
@@ -526,7 +528,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
                               record=dict(self.record, instructions="Keep it short here."))
         await self.carry(held, self.arrived())
         said = brain.asked[0]["preface"]
-        self.assertTrue(said.startswith(agents.standing("ava")))
+        self.assertTrue(said.startswith(agents.standing("ava", self.where)))
         self.assertIn("Keep it short here.", said)
         self.assertIn("what the agent says", said)
         self.assertLess(said.index("rundesk messages ava"), said.index("Keep it short here."))
@@ -550,6 +552,17 @@ class WhereABrainIsAnswering(CarriesAConversation):
         self.assertIn("in #ops on the Rundesk server", said)
         self.assertIn("responding to Tim", said)
 
+    async def test_channel_turns_fill_the_agents_resolved_locations(self):
+        """R-AGT-38 — channel composition receives local agent paths from the agent layer."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        said = brain.asked[0]["preface"]
+        self.assertIn(f"`{agents.home('ava', self.where)}`", said)
+        self.assertIn(f"`{agents.workspace('ava', self.where)}`", said)
+        self.assertNotIn("{agent_home}", said)
+        self.assertNotIn("{workspace}", said)
+
     async def test_a_surface_that_names_neither_is_answered_exactly_as_before(self):
         """R-CH-21 — an adapter that supplies no trigger context gets none invented."""
         brain, surface = Brain(), Surface()
@@ -557,7 +570,9 @@ class WhereABrainIsAnswering(CarriesAConversation):
         await self.carry(held, self.arrived())
         # Rundesk's own words come first on every turn now (R-AGT-17) and legitimately
         # contain ", in " — so the guard reads what the *surface* added, not the whole of it.
-        said = brain.asked[0]["preface"].replace(agents.standing("ava"), "").strip()
+        said = brain.asked[0]["preface"].replace(
+            agents.standing("ava", self.where), ""
+        ).strip()
         self.assertEqual("", said)
 
     async def test_a_channel_of_an_unnamed_kind_says_nothing_about_where_it_is(self):
@@ -570,7 +585,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
         self.assertEqual("what changed?", brain.asked[0]["prompt"])
         # Rundesk's own words and nothing else: nothing was invented about a surface that
         # said nothing about itself (R-CH-21, R-AGT-17).
-        self.assertEqual(agents.standing("ava"), brain.asked[0]["preface"])
+        self.assertEqual(agents.standing("ava", self.where), brain.asked[0]["preface"])
 
 
 class WhoMayBeAnswered(CarriesAConversation):
