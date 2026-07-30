@@ -248,6 +248,8 @@ Discord is the shipped first-class channel adapter:
 rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
 ```
 
+→ **[Set up the Discord bot](docs/discord.md)**
+
 The command securely asks for the bot token when needed, proves the connection before
 saving anything, and creates separate `discord-dms` and `discord-rooms` channels by default.
 You can also narrow it to direct messages, one server, or one channel.
@@ -352,6 +354,7 @@ removing optional skills an owner added.
 ## 📖 Documentation
 
 - **[CLI reference](CLI.md)** — every command and argument, generated from the parser
+- **[Discord setup](docs/discord.md)** — create, authorize, connect, and test an agent's bot
 - **[Provider adapter contract](docs/extending/provider-adapters/references/the-contract.md)** — put another coding CLI behind an agent
 - **[Channel adapter contract](docs/extending/channel-adapters/references/the-contract.md)** — reach an agent from another platform
 - **[Integration CLI guide](docs/extending/integration-clis/README.md)** — give every agent a custom command
