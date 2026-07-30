@@ -729,5 +729,10 @@ re-checked since, so treat these as true-when-found rather than as current.*
   --json type` exits before listing anything and prints the valid fields; request
   `--json issueType` and read `.issueType.name`.
 
+- **The disposable station defaults to the canonical checkout, not the shell's current
+  worktree.** Running `station.sh --install` from a feature worktree can therefore validate
+  and install a different revision while appearing isolated. Pass
+  `--checkout /absolute/path/to/the/worktree` on every station install or command.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

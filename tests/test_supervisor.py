@@ -343,7 +343,7 @@ class TakingItAllBack(WithAJobDirectory):
 
     def test_removing_one_install_leaves_the_shared_jobs_another_install_wrote(self):
         """R-RM-15 — reported (#129): a gateway's job carries the gateway's name, so two
-        installs never collide over one; the update worker and the automatic-update job
+        installs never collide over one; the shared workers and the automatic-update job
         carry neither, so a second install finds the first install's job exactly where its
         own would go. Removing it would stop the machine updating the install somebody
         actually uses."""
@@ -351,13 +351,19 @@ class TakingItAllBack(WithAJobDirectory):
         self.addCleanup(shutil.rmtree, theirs, True)
         (theirs / "rundesk").write_text("#!/usr/bin/env python3\n")
         supervisor.write_update_worker(theirs, self.logs, str(self.where))
+        supervisor.write_restart_worker(theirs, self.logs, str(self.where))
         supervisor.write_automatic_update("03:00", theirs, self.logs, str(self.where))
 
         left = supervisor.remove_our_shared_jobs(str(self.where), self.root, self.machine)
 
-        self.assertEqual([supervisor.update_label(), supervisor.automatic_update_label()], left)
+        self.assertEqual([
+            supervisor.update_label(), supervisor.restart_label(),
+            supervisor.automatic_update_label(),
+        ], left)
         self.assertTrue(supervisor.update_job_path(str(self.where)).exists(),
                         "it took another install's update worker")
+        self.assertTrue(supervisor.restart_job_path(str(self.where)).exists(),
+                        "it took another install's restart worker")
         self.assertTrue(supervisor.automatic_update_job_path(str(self.where)).exists(),
                         "it took another install's automatic-update job")
 
@@ -383,11 +389,13 @@ class TakingItAllBack(WithAJobDirectory):
         """R-RM-9 — the ordinary case, unchanged: an install that wrote them removes them,
         and leaves nothing of itself behind."""
         supervisor.write_update_worker(self.root, self.logs, str(self.where))
+        supervisor.write_restart_worker(self.root, self.logs, str(self.where))
         supervisor.write_automatic_update("03:00", self.root, self.logs, str(self.where))
 
         self.assertEqual([], supervisor.remove_our_shared_jobs(
             str(self.where), self.root, self.machine))
         self.assertFalse(supervisor.update_job_path(str(self.where)).exists())
+        self.assertFalse(supervisor.restart_job_path(str(self.where)).exists())
         self.assertFalse(supervisor.automatic_update_job_path(str(self.where)).exists())
 
     def test_shared_jobs_that_were_never_written_are_not_a_refusal(self):
@@ -999,6 +1007,7 @@ class WhatASecondInstallCallsItsJobs(WithAJobDirectory):
             "automatic update": supervisor.describe_automatic_update(
                 "03:00", self.root, self.logs),
             "update worker": supervisor.describe_update_worker(self.root, self.logs),
+            "restart worker": supervisor.describe_restart_worker(self.root, self.logs),
         }
         for what, job in jobs.items():
             with self.subTest(job=what):

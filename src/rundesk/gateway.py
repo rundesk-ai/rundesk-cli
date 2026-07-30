@@ -44,6 +44,7 @@ from rundesk import ROOT, __version__, data_home
 from rundesk import activity
 from rundesk import dependencies
 from rundesk import process
+from rundesk import restart_request
 from rundesk import schedule
 from rundesk import store
 from rundesk import update_request
@@ -1345,7 +1346,9 @@ class Gateway:
                 # to default it said nothing at all: a channel that connects, drops,
                 # refuses somebody and comes back, in complete silence, is a channel
                 # nobody can tell from one that never started (R-GW-18).
-                self.log.info)
+                self.log.info,
+                lambda run: restart_request.waiting(self.name, run),
+                lambda run: restart_request.ready(self.name, run))
             # Kept for as long as this adapter is up, so something other than an arriving
             # message can say a word on this surface — which is what a schedule finishing at
             # three in the morning needs and had no way to do (R-SCH-31).
@@ -1792,6 +1795,27 @@ class Gateway:
                         self.log.info("delivered update outcome for request %s", row["id"])
                     except Exception as why:  # noqa: BLE001 — retried after reconnect
                         self.log.warning("could not deliver update outcome: %s", why)
+            try:
+                restart = restart_request.deliverable(self.name)
+            except restart_request.Unreadable as why:
+                self.log.warning("could not read restart outcome: %s", why)
+                restart = None
+            if restart is not None:
+                origin = restart.get("origin") or {}
+                channel_name = origin.get("channel")
+                conversation = origin.get("conversation")
+                answering = self._reached.get(channel_name) if channel_name else None
+                if answering is not None and conversation:
+                    try:
+                        await answering.told_restart_finished(
+                            conversation, restart_request.summary(restart)
+                        )
+                        restart_request.delivered(self.name, restart["id"])
+                        self.log.info(
+                            "delivered restart outcome for request %s", restart["id"]
+                        )
+                    except Exception as why:  # noqa: BLE001 — retried after reconnect
+                        self.log.warning("could not deliver restart outcome: %s", why)
             await asyncio.sleep(2)
 
     def ask_to_stop(self, come_back: bool = False) -> None:

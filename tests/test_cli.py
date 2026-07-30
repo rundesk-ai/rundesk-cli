@@ -25,12 +25,14 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk import __version__  # noqa: E402
 from rundesk import cli  # noqa: E402
 from rundesk import config  # noqa: E402
+from rundesk import restart_request  # noqa: E402
 from rundesk import store  # noqa: E402
 from rundesk import update_request  # noqa: E402
 from rundesk import updater  # noqa: E402
@@ -1031,6 +1033,7 @@ class FakeMachine:
         self.stubborn = set(stubborn)
         self.uncertain = set(uncertain)
         self.did = []
+        self.restart_worker = False
 
     def _check(self, name):
         if self.missing:
@@ -1100,6 +1103,19 @@ class FakeMachine:
 
     def install_update_worker(self):
         self.did.append(("install_update_worker", None))
+        return self.Spoke(not self.refuses, "the machine said no" if self.refuses else "")
+
+    def restart_worker_loaded(self):
+        return self.restart_worker
+
+    def install_restart_worker(self):
+        self.did.append(("install_restart_worker", None))
+        if not self.refuses:
+            self.restart_worker = True
+        return self.Spoke(not self.refuses, "the machine said no" if self.refuses else "")
+
+    def kick_restart_worker(self):
+        self.did.append(("kick_restart_worker", None))
         return self.Spoke(not self.refuses, "the machine said no" if self.refuses else "")
 
     def install_automatic_update(self, at):
@@ -1497,6 +1513,58 @@ class StandingGatewaysDown(unittest.TestCase):
         machine = FakeMachine(jobs=["agent-one"])
         drive(["restart", "agent-one"], machine=machine)
         self.assertEqual([("stop", "agent-one"), ("start", "agent-one")], machine.did)
+
+    def test_a_busy_restart_is_queued_and_says_when_it_will_run(self):
+        """R-GW-43"""
+        name = "busy-agent"
+        self.addCleanup(restart_request.path(name).unlink, missing_ok=True)
+        self.addCleanup(
+            restart_request.path(name).with_suffix(".lock").unlink, missing_ok=True)
+        machine = FakeMachine(jobs=[name])
+        gateways = FakeGateways(
+            standing=[FakeGateways.Standing(name, running=True, pid=9)],
+            turning={name: [{"run": "one"}]},
+        )
+        with mock.patch.dict(os.environ, {"RUNDESK_RUN": ""}, clear=False):
+            code, said = drive(
+                ["restart", name], gateways, machine, agents=FakeAgents(made=[name])
+            )
+        self.assertEqual(0, code)
+        self.assertIn("RESTART QUEUED", said)
+        self.assertIn("automatically after active work finishes", said)
+        self.assertIn(("install_restart_worker", None), machine.did)
+        self.assertNotIn(("stop", name), machine.did)
+
+    def test_force_restarts_a_busy_gateway_immediately(self):
+        """R-GW-43"""
+        name = "busy-agent"
+        machine = FakeMachine(jobs=[name])
+        gateways = FakeGateways(
+            becomes=[True, False, False, True],
+            turning={name: [{"run": "one"}]},
+        )
+        code, said = drive(
+            ["restart", name, "--force"], gateways, machine,
+            agents=FakeAgents(made=[name]),
+        )
+        self.assertEqual(0, code)
+        self.assertIn("RESTARTED", said)
+        self.assertEqual([("stop", name), ("start", name)], machine.did)
+
+    def test_a_queued_restart_worker_recovers_after_stopping_halfway(self):
+        """R-GW-43"""
+        name = "busy-agent"
+        machine = FakeMachine(jobs=[name])
+        gateways = FakeGateways(becomes=[False, True])
+        args = argparse.Namespace(name=name, all=False, force=False, worker=True)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli._stand_down(
+                args, gateways, machine, FakeAgents(made=[name]), "restart"
+            )
+        self.assertEqual(0, code, err.getvalue())
+        self.assertEqual([("start", name)], machine.did)
+        self.assertIn("RESTARTED", out.getvalue())
 
     def test_a_cycle_that_could_not_start_it_again_is_a_failure(self):
         """R-GW-13 — stopping is half of a restart, and the half that leaves it down.
