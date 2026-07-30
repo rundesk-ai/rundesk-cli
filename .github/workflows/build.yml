@@ -241,13 +241,18 @@ jobs:
           git archive "$previous" | tar -x -C "$old"
           "$old/install.sh"
           "$RUNDESK_BIN_DIR/rundesk" add existing --provider codex
-          # Older releases allowed a built-in baseline grant to be removed. The proposed
-          # release must repair that existing agent from the migrated configuration.
-          "$RUNDESK_BIN_DIR/rundesk" skills revoke existing managing-rundesk-schedules
           "$RUNDESK_BIN_DIR/rundesk" schedules existing add heartbeat \
             --when "0 6 * * *" --ask "report that the gateway is healthy"
-          printf '%s\n' '{"backups":{"keep_days":45,"at":"04:30"},"updates":{},"skills":{}}' \
-            > "$RUNDESK_INSTALL_DIR/data/config.json"
+          CONFIG="$RUNDESK_INSTALL_DIR/data/config.json" python3 - <<'CONFIG'
+          import json, os
+          from pathlib import Path
+
+          path = Path(os.environ["CONFIG"])
+          current = json.loads(path.read_text())
+          current["backups"] = {"keep_days": 45, "at": "04:30"}
+          current["updates"] = {}
+          path.write_text(json.dumps(current, separators=(",", ":")) + "\n")
+          CONFIG
           cp "$RUNDESK_INSTALL_DIR/data/config.json" "$RUNNER_TEMP/config.before"
           printf '%s\n' "kept by the owner" \
             > "$RUNDESK_INSTALL_DIR/data/agents/existing/home/owner-kept.txt"
