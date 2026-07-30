@@ -21,6 +21,7 @@ reached back for an agent would end it.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import os
 import re
 import shutil
@@ -473,15 +474,26 @@ def creation_pending(name: str, where: Path | None = None) -> bool:
 def _write_pending(pending: Path, display_name: str) -> None:
     """Publish a complete first display spelling once, without replacing one on retry."""
     beside = pending.with_name(f"{pending.name}.writing")
-    with beside.open("a+", encoding="utf-8") as handle:
+    try:
+        opened = os.open(
+            beside,
+            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except OSError as why:
+        raise store.Unreadable(f"{beside} could not be safely opened: {why}") from why
+    with os.fdopen(opened, "r+b") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         try:
             if not pending.is_symlink() and not pending.exists():
                 handle.seek(0)
-                handle.truncate()
-                handle.write(display_name)
-                handle.flush()
-                os.fsync(handle.fileno())
+                staged = _display_from_record(handle.read())
+                if staged is None:
+                    handle.seek(0)
+                    handle.truncate()
+                    handle.write(_display_record(display_name))
+                    handle.flush()
+                    os.fsync(handle.fileno())
                 os.link(beside, pending)
             folder = os.open(pending.parent, os.O_RDONLY)
             try:
@@ -496,6 +508,25 @@ def _write_pending(pending: Path, display_name: str) -> None:
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def _display_record(display_name: str) -> bytes:
+    """A pending name framed so a retry can distinguish complete from partial."""
+    payload = display_name.encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest().encode("ascii")
+    return digest + b"\n" + payload
+
+
+def _display_from_record(record: bytes) -> str | None:
+    """A complete, checksummed pending name, or None for interrupted staging."""
+    try:
+        digest, payload = record.split(b"\n", 1)
+        if len(digest) != 64 or hashlib.sha256(payload).hexdigest().encode("ascii") != digest:
+            return None
+        display = payload.decode("utf-8")
+    except (ValueError, UnicodeError):
+        return None
+    return display if display and display == display.strip() else None
+
+
 def _pending_display(pending: Path) -> str | None:
     """The complete pending spelling, refusing anything unsafe or unreadable."""
     try:
@@ -507,10 +538,11 @@ def _pending_display(pending: Path) -> str | None:
     if not stat.S_ISREG(mode):
         raise store.Unreadable(f"{pending} is not a regular file")
     try:
-        display = pending.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as why:
+        record = pending.read_bytes()
+    except OSError as why:
         raise store.Unreadable(f"{pending} could not be read: {why}") from why
-    if not display or display != display.strip():
+    display = _display_from_record(record)
+    if display is None:
         raise store.Unreadable(f"{pending} does not hold a complete display name")
     return display
 

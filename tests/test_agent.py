@@ -554,6 +554,29 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         agent.add("ios-helper", self.where, display_name="IOS HELPER")
         self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
 
+    def test_retry_publishes_a_complete_staged_first_spelling(self):
+        """R-AGT-39 — interruption after fsync but before link keeps the first name."""
+        at = agent.directory("ios-helper", self.where)
+        at.mkdir(parents=True)
+        pending = at / agent.DISPLAY_PENDING
+        pending.with_name(f"{pending.name}.writing").write_bytes(
+            agent._display_record("iOS Helper")
+        )
+        agent.add("ios-helper", self.where, display_name="IOS HELPER")
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+
+    def test_pending_staging_never_follows_an_owners_symlink(self):
+        """R-AGT-4 — recovery state cannot overwrite another owner file."""
+        at = agent.directory("ios-helper", self.where)
+        at.mkdir(parents=True)
+        owner = at / "owner-kept.txt"
+        owner.write_text("KEEP ME")
+        pending = at / agent.DISPLAY_PENDING
+        pending.with_name(f"{pending.name}.writing").symlink_to(owner)
+        with self.assertRaises(store.Unreadable):
+            agent._write_pending(pending, "iOS Helper")
+        self.assertEqual("KEEP ME", owner.read_text())
+
     def test_interruption_before_marker_does_not_make_a_stranded_agent(self):
         """R-AGT-39 — no `home/` exists until display recovery is durable."""
         with mock.patch.object(
