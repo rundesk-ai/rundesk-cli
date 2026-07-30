@@ -404,7 +404,7 @@ class Store:
 
     # ── the shape on disk ─────────────────────────────────────────────────────────────────
 
-    def made(self) -> None:
+    def made(self, fresh_home: bool = False) -> None:
         """Bring this database into being, or check the one already there is one we know.
 
         A fresh one is stamped with the current version and needs no migration, so first use
@@ -413,14 +413,14 @@ class Store:
         want = version_wanted() if self._version is None else self._version
         self.at.parent.mkdir(parents=True, exist_ok=True)
         try:
-            self._made(want)
+            self._made(want, fresh_home=fresh_home)
         except sqlite3.DatabaseError as why:
             # Records that are there and are not a database at all — see `understood`, which
             # answers the same thing the same way. Nothing of the database's leaves here.
             self._noted(f"these records could not be read at all: {why}", "ERROR")
             raise Unreadable(f"{self.at} could not be read: {why}") from why
 
-    def _made(self, want: int) -> None:
+    def _made(self, want: int, fresh_home: bool = False) -> None:
         conn = self._open(writing=True)
         try:
             found = int(conn.execute("PRAGMA user_version").fetchone()[0])
@@ -431,7 +431,8 @@ class Store:
                 # description of the shape kept beside them. A step that has rotted is then
                 # found by whoever next makes an agent, and a fresh install cannot drift from
                 # an upgraded one, because there is only one way to arrive.
-                found = migration.carry(self.at, self.at.parent, want=want)
+                found = migration.carry(
+                    self.at, self.at.parent, want=want, fresh=fresh_home)
                 conn = self._open(writing=True)
             elif 0 < found < want:
                 found = self._settled(conn, found, want)
@@ -744,6 +745,61 @@ class Store:
         with self._reading() as conn:
             row = conn.execute("SELECT * FROM schedule WHERE name = ?", (name,)).fetchone()
         return self._schedule(row) if row else None
+
+    def pending_update_turns(self) -> list:
+        """Update migrations this agent has not completed, oldest first.
+
+        Kept apart from owner schedules because these are release work, not something an
+        owner asked to recur or appear in `rundesk schedules`. A row remains after it runs:
+        its completion makes the one-shot expired, while the run itself is the account of
+        what the release asked this agent to change.
+        """
+        with self._reading() as conn:
+            rows = conn.execute(
+                "SELECT * FROM update_turn WHERE completed_at IS NULL ORDER BY migration"
+            ).fetchall()
+        return [_plain(row) for row in rows]
+
+    def replace_update_bootstrap(self, migration: int, text: str) -> None:
+        """Atomically replace the provider bootstrap requested by a pending migration."""
+        target = self.at.parent / "home" / "CLAUDE.md"
+        coming = target.with_name(f".{target.name}.update-{migration}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            coming.write_text(text, encoding="utf-8")
+            os.replace(coming, target)
+        finally:
+            with contextlib.suppress(OSError):
+                if coming.exists():
+                    os.remove(coming)
+
+    def complete_update_turn(self, migration: int, at: str) -> bool:
+        """Expire one update turn only after its backend session returned (R-MIG-23)."""
+        with self._writing() as conn:
+            changed = conn.execute(
+                "UPDATE update_turn SET completed_at = ? "
+                "WHERE migration = ? AND completed_at IS NULL",
+                (at, migration),
+            ).rowcount
+        return changed == 1
+
+    def update_turn_returned(self, conversation: str) -> bool:
+        """Whether a backend update conversation already has a returned run.
+
+        The run account is the durable side of the boundary between an agent returning and
+        the request being expired. If that final write briefly fails, a successor settles
+        the request from this account instead of asking the agent to apply the migration
+        twice.
+        """
+        identifier = conversation_id("update", conversation)
+        with self._reading() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM run WHERE conversation_id = ? AND ended_at IS NOT NULL "
+                "AND outcome IS NOT NULL AND outcome <> 'stopped' "
+                "ORDER BY n DESC LIMIT 1",
+                (identifier,),
+            ).fetchone()
+        return row is not None
 
     @staticmethod
     def _schedule(row) -> dict:

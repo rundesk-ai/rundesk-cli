@@ -299,6 +299,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   mechanism keeping a ✅ honest, and it does not care that the row is ❌ or that the backticks are
   around a filename, a path or a script. Write those plainly in a note — `check-evidence` fails the
   gate with "is ❌ but names a test", which reads like the row is wrong when the punctuation is.
+- **`instructions.render()` preserves a template's trailing whitespace; `instructions.build()`
+  strips every rendered layer before joining it.** A test comparing a raw rendered layer with a
+  built preface differs only by the final newline and produces a page-long assertion diff; strip the
+  rendered layer when proving exact composition, or assert against the final built string.
+- **Schedule-trigger wording is asserted at both the builder seam and the gateway account seam.**
+  Changing `SCHEDULE_INSTRUCTIONS` can leave targeted instruction tests green while `test_gateway`
+  still expects a retired phrase; search the old distinctive wording across `tests/` before the
+  full gate.
 
 *The entries below are traps in a **vendor's CLI**. We cannot fix them, only re-verify — and a version
 bump can invalidate one in either direction. Each was probed when it was written; none has been

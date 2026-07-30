@@ -18,6 +18,7 @@ import os
 import pathlib
 import shutil
 import signal
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -25,6 +26,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from datetime import datetime
 from pathlib import Path
 
@@ -3126,6 +3128,290 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         self.assertEqual(["heard what changed?"], [one["text"] for one in said],
                          "what the brain answered is not readable afterwards")
 
+    async def test_an_update_migration_runs_once_as_a_backend_scheduled_turn(self):
+        """A release request is durable until the restarted gateway sees and completes it,
+        and it is never posted to a channel. It uses a fresh scheduled
+        conversation and remains expired after completion instead of running again."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        # The internal conversation and accounting must remain separate even when an owner
+        # used the same display name for an ordinary schedule.
+        self.records.remember_schedule(
+            "migration-91", None, store.stamped(), at="2099-01-01 00:00",
+            prompt="owner work",
+        )
+        with sqlite3.connect(str(self.records.at), isolation_level=None) as conn:
+            conn.execute(
+                "INSERT INTO update_turn (migration, prompt, instructions, bootstrap)"
+                " VALUES (91, ?, ?, ?)",
+                ("tighten this agent home", "this is an unattended update migration",
+                 "# replaced bootstrap\n"),
+            )
+        gw = self.made()
+        gw.claim()
+
+        run = await self._fired(gw)
+        gw._fire(schedule, datetime.now())
+        await asyncio.sleep(0.1)
+
+        self.assertEqual(("schedule", None), (run["source"], run["schedule_id"]))
+        conversation = next(one for one in self.records.conversations()
+                            if one["id"] == run["conversation_id"])
+        self.assertEqual(("update", "migration-91"),
+                         (conversation["channel"], conversation["space"]))
+        owner = self.records.schedule("migration-91")
+        self.assertIsNone(owner["last_outcome"])
+        self.assertIsNone(owner["last_auto_run_at"])
+        self.assertEqual(1, len(self.records.runs()), "the expired migration ran again")
+        self.assertEqual([], self.records.pending_update_turns())
+        with sqlite3.connect(str(self.records.at)) as conn:
+            completed = conn.execute(
+                "SELECT completed_at FROM update_turn WHERE migration = 91"
+            ).fetchone()[0]
+        self.assertIsNotNone(completed)
+        self.assertEqual(
+            "# replaced bootstrap\n",
+            (self.agents.home("ava", self.agents_at) / "CLAUDE.md").read_text(),
+        )
+
+    async def test_a_returned_update_is_settled_without_replaying_after_a_write_failure(self):
+        """The run is the durable proof across the narrow return/expire boundary. A failed
+        completion write is retried from that proof, never by running the migration again."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        with sqlite3.connect(str(self.records.at), isolation_level=None) as conn:
+            conn.execute(
+                "INSERT INTO update_turn (migration, prompt, instructions, bootstrap)"
+                " VALUES (96, 'migrate', 'backend only', '# bootstrap\\n')"
+            )
+        gw = self.made()
+        gw.claim()
+
+        with mock.patch.object(
+                self.records, "complete_update_turn", side_effect=OSError("briefly locked")):
+            await self._fired(gw)
+            deadline = time.time() + 2
+            while gw._update_turn_tasks and time.time() < deadline:
+                await asyncio.sleep(0.01)
+
+        self.assertEqual([96], [
+            one["migration"] for one in self.records.pending_update_turns()
+        ])
+        gw._fire(schedule, datetime.now())
+        await asyncio.sleep(0.1)
+
+        self.assertEqual([], self.records.pending_update_turns())
+        self.assertEqual(1, len(self.records.runs()), "the returned migration was replayed")
+
+    async def test_a_stopped_update_run_is_not_mistaken_for_a_returned_migration(self):
+        """Cancellation settles the run account as stopped, but not the migration request.
+        A successor must still be allowed to finish the agent-home work."""
+        conversation = "migration-98"
+        identifier = store.conversation_id("update", conversation)
+        self.records.opened(
+            identifier, "update", "schedule", conversation, store.stamped())
+        run = self.records.began(
+            "schedule", "stand-in", "default", store.stamped(),
+            conversation_id=identifier,
+        )
+        self.records.ended(run, store.stamped(), "stopped")
+
+        self.assertFalse(self.records.update_turn_returned(conversation))
+
+    async def test_pending_update_migrations_run_oldest_first(self):
+        """Two release prompts may accumulate while an agent is unrunnable. They must never
+        rewrite one home concurrently, and the later request must run after the first."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        with sqlite3.connect(str(self.records.at), isolation_level=None) as conn:
+            for version in (94, 95):
+                conn.execute(
+                    "INSERT INTO update_turn (migration, prompt, instructions, bootstrap)"
+                    " VALUES (?, 'migrate', 'backend only', '# bootstrap\\n')",
+                    (version,),
+                )
+        gw = self.made()
+        gw.claim()
+        gw._fire(schedule, datetime.now())
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            if not gw._update_turn_tasks and [
+                    one["migration"] for one in self.records.pending_update_turns()] == [95]:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(1, len(self.records.runs()))
+        self.assertEqual([95], [
+            one["migration"] for one in self.records.pending_update_turns()
+        ])
+        gw._fire(schedule, datetime.now())
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            if not gw._update_turn_tasks and not self.records.pending_update_turns():
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual([], self.records.pending_update_turns())
+        runs = list(reversed(self.records.runs()))
+        conversations = {
+            one["id"]: one for one in self.records.conversations(channel="update")
+        }
+        self.assertEqual(
+            ["migration-94", "migration-95"],
+            [conversations[one["conversation_id"]]["space"] for one in runs],
+        )
+
+    async def test_bootstrap_replacement_failure_is_atomic_and_retried(self):
+        """A failed script-owned replacement leaves the old bootstrap intact and the
+        request pending; a later tick can perform the replacement and run exactly once."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        bootstrap = self.agents.home("ava", self.agents_at) / "CLAUDE.md"
+        before = bootstrap.read_bytes()
+        with sqlite3.connect(str(self.records.at), isolation_level=None) as conn:
+            conn.execute(
+                "INSERT INTO update_turn (migration, prompt, instructions, bootstrap)"
+                " VALUES (99, 'migrate', 'backend only', ?)",
+                ("# replacement\n",),
+            )
+        gw = self.made()
+        gw.claim()
+
+        with mock.patch.object(
+                store.os, "replace", side_effect=OSError("replacement unavailable")):
+            gw._fire(schedule, datetime.now())
+            deadline = time.time() + 2
+            while gw._update_turn_tasks and time.time() < deadline:
+                await asyncio.sleep(0.01)
+
+        self.assertEqual(before, bootstrap.read_bytes())
+        self.assertFalse(
+            bootstrap.with_name(".CLAUDE.md.update-99").exists(),
+            "the failed atomic replacement left its temporary file behind",
+        )
+        self.assertEqual([99], [
+            one["migration"] for one in self.records.pending_update_turns()
+        ])
+        self.assertEqual([], self.records.runs())
+
+        await self._fired(gw)
+        self.assertEqual(b"# replacement\n", bootstrap.read_bytes())
+        self.assertEqual([], self.records.pending_update_turns())
+        self.assertEqual(1, len(self.records.runs()))
+
+    async def test_serve_cancels_and_awaits_a_backend_migration(self):
+        """Production shutdown owns backend tasks rather than relying on loop teardown."""
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def blocked(_one):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        with sqlite3.connect(str(self.records.at), isolation_level=None) as conn:
+            conn.execute(
+                "INSERT INTO update_turn (migration, prompt, instructions, bootstrap)"
+                " VALUES (97, 'migrate', 'backend only', '# bootstrap\\n')"
+            )
+        gw = self.made(asking=blocked)
+        serving = asyncio.ensure_future(gw.serve())
+        while gw._stopped is None:
+            await asyncio.sleep(0)
+        gw._fire(schedule, datetime.now())
+        await asyncio.wait_for(started.wait(), timeout=2)
+        gw.ask_to_stop()
+
+        await asyncio.wait_for(serving, timeout=5)
+        self.assertTrue(cancelled.is_set())
+        self.assertEqual({}, gw._update_turn_tasks)
+        self.assertEqual([97], [
+            one["migration"] for one in self.records.pending_update_turns()
+        ])
+
+    async def test_an_update_migration_that_cannot_start_remains_pending(self):
+        """A claim is not completion. An agent with no configured brain may become runnable
+        later, so the update request remains available rather than disappearing on the
+        first gateway that could not start it."""
+        with sqlite3.connect(str(self.records.at), isolation_level=None) as conn:
+            conn.execute(
+                "INSERT INTO update_turn (migration, prompt, instructions, bootstrap)"
+                " VALUES (92, 'migrate', 'backend only', '# bootstrap\\n')"
+            )
+        gw = self.made()
+        gw.claim()
+
+        gw._fire(schedule, datetime.now())
+        deadline = time.time() + 2
+        while gw._update_turn_tasks and time.time() < deadline:
+            await asyncio.sleep(0.01)
+
+        self.assertEqual([92], [
+            one["migration"] for one in self.records.pending_update_turns()
+        ])
+        self.assertEqual([], self.records.runs())
+
+    async def test_an_interrupted_update_migration_runs_after_the_gateway_returns(self):
+        """Shutdown may land after the backend task starts. Cancellation leaves the durable
+        request pending, and a successor runs it once instead of losing it at the claim."""
+        started = asyncio.Event()
+
+        async def accounted(_name, prompt, provider, **held):
+            """The turn seam with its real durable account, blocked after admission."""
+            identifier = store.conversation_id(held["on"], held["conversation"])
+            self.records.opened(
+                identifier, held["on"], held["kind"], held["conversation"], store.stamped())
+            asked = self.records.arrived(identifier, store.stamped(), prompt)
+            run = self.records.began(
+                held["source"], provider, "default", store.stamped(),
+                conversation_id=identifier, schedule_id=held["schedule_id"],
+                trigger_message_id=asked,
+            )
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                self.records.interrupted(run, store.stamped(), "gateway stopped")
+
+        self.agents.remember("ava", self.agents_at, provider="stand-in")
+        with sqlite3.connect(str(self.records.at), isolation_level=None) as conn:
+            conn.execute(
+                "INSERT INTO update_turn (migration, prompt, instructions, bootstrap)"
+                " VALUES (93, 'migrate', 'backend only', '# bootstrap\\n')"
+            )
+        first = self.made(asking=self.agents.asking(
+            "ava", self.agents_at, carry=accounted))
+        first.claim()
+        first._fire(schedule, datetime.now())
+        await asyncio.wait_for(started.wait(), timeout=2)
+        runs = self.records.runs()
+        self.assertTrue(runs and runs[0]["ended_at"] is None, "the real turn was not admitted")
+        task = first._update_turn_tasks[93]
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0)
+        interrupted = self.records.runs()[0]
+        self.assertEqual("stopped", interrupted["outcome"])
+        self.assertEqual([93], [
+            one["migration"] for one in self.records.pending_update_turns()
+        ])
+        first.release()
+
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        successor = self.made()
+        successor.claim()
+        successor._fire(schedule, datetime.now())
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            runs = self.records.runs()
+            if len(runs) == 2 and runs[0]["ended_at"]:
+                break
+            await asyncio.sleep(0.01)
+        run = self.records.runs()[0]
+
+        self.assertEqual("finished", run["outcome"])
+        self.assertEqual([], self.records.pending_update_turns())
+        self.assertEqual(2, len(self.records.runs()))
+
     async def test_a_turn_the_clock_started_says_so_in_the_account(self):
         """R-RUN-16 — the column somebody reads at three in the morning to find out whether
         they asked for what happened. It said `terminal`, because nothing could tell it
@@ -3197,7 +3483,7 @@ class WhenTheClockAsksATurn(WithARunDirectory):
                 if one["author"] == "rundesk"]
         self.assertEqual(1, len(told), f"what it was told is not in the account: {told}")
         self.assertIn("nightly", told[0])
-        self.assertIn("will not be answered", told[0])
+        self.assertIn("Nothing will answer", told[0])
 
     async def test_what_a_schedule_was_told_to_say_is_added_to_rundesks_own(self):
         """R-SCH-30, R-AGT-16, R-AGT-17, R-AGT-34 — what the owner wrote is added to
@@ -3228,9 +3514,9 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         told = [one["text"] for one in self.records.messages(run["conversation_id"])
                 if one["author"] == "rundesk"][0]
         self.assertIn("nightly", told, "it never said which schedule started this")
-        self.assertIn("will not be answered", told)
-        self.assertIn("write nothing until the work is finished", told)
-        self.assertLess(told.index("will not be answered"),
+        self.assertIn("Nothing will answer", told)
+        self.assertIn("Write nothing until the work is finished", told)
+        self.assertLess(told.index("Nothing will answer"),
                         told.index("Only look at the deploy log."),
                         "the owner's words came before rundesk's account of the situation")
 

@@ -240,7 +240,7 @@ recognised your vendor's names would be carrying your vocabulary forever, so it 
 them.
 
 The list is closed and short on purpose — `read`, `search`, `run`, `edit`, `list`, `make`,
-`delegate`, and the four continuity verbs below.
+`delegate`, and the three continuity verbs below.
 If what your tool did is not one of those, **leave `did` out**: `name` still carries your own word
 for it, and a reader that shows nothing is better than one taught to believe a word that
 means something else here. Do not stretch one to fit; tell us instead, and the list can
@@ -248,7 +248,7 @@ grow by a release rather than by every adapter guessing differently.
 
 **An agent editing a file it lives by is not the same news as an agent editing a file it was
 working on, and both reach you as `edit`.** `RUNDESK_CONTINUITY` hands you the pairing —
-`AGENTS.md=rules,MEMORY.md=memory,SOUL.md=identity,USER.md=profile` — so which files
+`AGENTS.md=rules,MEMORY.md=memory,SOUL.md=identity` — so which files
 these are stays rundesk's to change and never becomes a copy of its layout you are holding.
 When a write lands on one of them, report that verb in place of `edit`.
 

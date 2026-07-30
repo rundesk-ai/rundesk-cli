@@ -36,7 +36,7 @@ from rundesk import config
 
 #: What a new agent's home is copied from. Ordinary Markdown files rather than text built
 #: in code, because they are what an owner reads first and edits next, and a rule about how
-#: an agent is reached is worth keeping where it can be read.
+#: an agent is reached is worth keeping where it can be read (R-AGT-42).
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates" / "agent"
 
 #: The one thing new templates substitute on the way in. Everything else is copied as it
@@ -71,6 +71,7 @@ DISPLAY_PENDING = ".display-name.pending"
 #: It is still the owner's tier — above every agent, inside none of them, and outside the
 #: program, which is the whole reason an update cannot reach it (R-AGT-23).
 OVERRIDES = ".templates", "agent"
+RETIRED_TEMPLATES = frozenset({"USER.md"})
 
 
 def templates_home() -> Path:
@@ -102,9 +103,9 @@ def sourced(overrides: Path | None = None) -> dict:
 
     **The one place precedence is decided** (R-AGT-22), so `add` and a diagnosis can never
     disagree about which file an agent got. Per page rather than per set: an owner who wants
-    their own `SOUL.md` and nothing else writes one file, and the other four stay whatever
+    their own `SOUL.md` and nothing else writes one file, and the other three stay whatever
     the install ships — including whatever a later release improves them into. Taking on all
-    five to change one would mean never getting an improvement to any of them.
+    four to change one would mean never getting an improvement to any of them.
 
     An override directory that is missing, empty or unreadable is simply an owner who has
     not made one, which is the ordinary case and never an error.
@@ -112,7 +113,10 @@ def sourced(overrides: Path | None = None) -> dict:
     from_install = {called: TEMPLATES / called for called in shipped()}
     where = templates_home() if overrides is None else overrides
     try:
-        theirs = sorted(page for page in where.iterdir() if page.is_file())
+        theirs = sorted(
+            page for page in where.iterdir()
+            if page.is_file() and page.name not in RETIRED_TEMPLATES
+        )
     except OSError:
         return from_install
     return {**from_install, **{page.name: page for page in theirs}}
@@ -589,6 +593,7 @@ def add(name: str, where: Path | None = None, display_name: str | None = None) -
     a fresh install cannot drift from an upgraded one (R-MIG-9). Records already there are
     checked rather than rebuilt, which is what makes making an agent again a repair.
     """
+    new_home = not home(name, where).exists()
     made = []
     agent_dir = directory(name, where)
     records = store.path_for(agent_dir)
@@ -618,7 +623,7 @@ def add(name: str, where: Path | None = None, display_name: str | None = None) -
     if fresh:
         made.extend(require_skills(name, where))
     kept = store.Store(records)
-    kept.made()
+    kept.made(fresh_home=new_home or pending_display is not None)
     if pending_display is not None:
         # A retry reads the first creation's spelling, not whichever alias happened to be
         # typed on the retry. The marker leaves only after the durable database write.
@@ -1245,18 +1250,21 @@ def asking(name: str, where: Path | None = None, carry=None):
         if not named:
             raise gateway.Unrunnable(
                 f"schedule '{one.name}' names no brain, and neither does this agent")
-        row = reading(name, where).schedule(one.name) or {}
+        row = {} if one.backend else (reading(name, where).schedule(one.name) or {})
+        channel = turns.UPDATE if one.backend else turns.SCHEDULE
         return await carrying(
             name, one.prompt, named, where=where,
             model=one.model or kept.get("model"),
             settings=kept.get("settings"),
-            conversation=one.name, on=turns.SCHEDULE, kind=turns.SCHEDULE,
+            conversation=one.name, on=channel, kind=turns.SCHEDULE,
             fresh=True,
-            # The one line rundesk says to a turn nobody is waiting for, which is always
+            # Rundesk's schedule layer for a turn nobody is waiting for, which is always
             # there (R-AGT-34), and then this schedule's own words or the agent's added to
             # it (R-AGT-16).
-            preface=told(name, where, said=one.instructions or "",
-                         regardless=schedules.by_default(one.name)),
+            preface=told(
+                name, where, said=one.instructions or "",
+                regardless="" if one.backend else schedules.by_default(one.name),
+            ),
             source=turns.SCHEDULE,
             # What correlates this run with the schedule that started it, so what ran at
             # three in the morning is found by the name an owner already knows.

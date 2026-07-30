@@ -40,6 +40,10 @@ update already stands every gateway down for. A step forward exists; a step back
 | ✅ | R-MIG-19 | A copy of every agent's records is taken before any is moved, and put back when one cannot be | `an agent already carried is put back when a later one cannot be`, `an agent with no records yet is neither copied nor in the way` |
 | ✅ | R-MIG-20 | A copy is let go of once the move it insured is proved | `a copy is let go of once the move it insured is proved` |
 | ✅ | R-MIG-21 | An owner may ask which steps would run against each agent before any of them runs | `which steps would run is answerable without running any of them`, `asking what would run never makes records for an agent that has none` |
+| ✅ | R-MIG-22 | Only a migration carrying an agent task requests an unattended update turn for every pre-existing home | `this update requests one agent home migration turn`, `a new bootstrap does not hide old continuity pages`, `a new agent needs no update migration turn`, `an existing home without records still gets the update migration` |
+| ✅ | R-MIG-23 | Each update turn remains pending until its backend session returns, then is never replayed | `an update migration runs once as a backend scheduled turn`, `an update migration that cannot start remains pending`, `an interrupted update migration runs after the gateway returns`, `a returned update is settled without replaying after a write failure` |
+| ✅ | R-MIG-24 | An update turn has no user or reporting channel and starts a fresh private conversation, isolated from owner schedules | `an update migration runs once as a backend scheduled turn`, `this update requests one agent home migration turn`, `a backend update turn gets only its truthful delivery rule`, `serve cancels and awaits a backend migration` |
+| ✅ | R-MIG-25 | Accumulated update turns for one agent run oldest-first and never concurrently | `pending update migrations run oldest first` |
 
 ## Open questions
 

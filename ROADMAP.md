@@ -719,23 +719,23 @@ the one place an owner can edit is the one place that does not survive. Editing 
 is a different thing entirely: it changes one agent, after the fact, and the next agent still starts from the
 shipped words.
 
-**What ships stays the factory set.** Five ordinary Markdown files — `AGENTS.md`, `CLAUDE.md`, `SOUL.md`,
-`USER.md`, `MEMORY.md` — copied with one substitution (`{{agent}}`, with legacy `{{name}}`
-accepted, `agent.py:35`) and never text built in
+**What ships stays the factory set.** Four ordinary Markdown files — `AGENTS.md`, `CLAUDE.md`, `SOUL.md`,
+`MEMORY.md` — copied with one substitution (`{{agent}}`, with legacy `{{name}}` accepted,
+`agent.py:39`) and never text built in
 code, because they are what an owner reads first and edits next. This phase does not change that; it puts a
 second directory in front of it.
 
 ### What it must settle
 
 **An override is per file, not per set.** An owner who wants their own `SOUL.md` and nothing else writes one
-file, and the other four stay whatever the install ships — including whatever a later release improves them
-into. Taking on all five means never getting an improvement to any of them, which is a choice worth being able
+file, and the other three stay whatever the install ships — including whatever a later release improves them
+into. Taking on all four means never getting an improvement to any of them, which is a choice worth being able
 to avoid.
 
 ```text
 ~/.rundesk/templates/agent/
   SOUL.md              the owner's — used instead of the shipped one
-  (nothing else)       the other four come from the install, and keep improving
+  (nothing else)       the other three come from the install, and keep improving
 ```
 
 **Where they live is the owner's tier**, above agents rather than inside any of them: they belong to the
@@ -813,7 +813,7 @@ first would start holding by accident the day somebody moves it. Nothing in `ins
 this either: the templates stand among the agents, and everything beside the program is kept.
 
 **Not built:** deliverable 2, a way to write the factory set into the override directory to be edited. It
-needs a verb, and the surface decision for these two phases was to add none. An owner copies five files.
+needs a verb, and the surface decision for these two phases was to add none. An owner copies four files.
 
 ## Phase 10 — Provider Adapters: Audit the Seam
 
@@ -1034,7 +1034,7 @@ The traps are already paid for and are in `.knowledge/MEMORY.md`; re-read them b
 - Rundesk-managed config does not automatically discover ungranted owner-level skills.
 - **A canary skill is read by each shipped brain**, proved live, with the control proving it is not read when
   absent — and saved, sanitized output recording provider version, invocation and result.
-- A canary agent proves each provider follows `AGENTS.md` to `SOUL.md`, `USER.md` and `MEMORY.md` — which is
+- A canary agent proves each provider follows `AGENTS.md` to `SOUL.md` and `MEMORY.md` — which is
   `R-AGT-10`, ❌ today because a case needs a real provider and a credential the suite has neither of. This
   phase is where that row is earned or explicitly left.
 - No vendor's skills directory appears outside its own adapter.
