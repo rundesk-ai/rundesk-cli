@@ -546,11 +546,30 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         agent.add("ios-helper", self.where, display_name="IOS HELPER")
         self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
 
+    def test_retry_before_database_creation_preserves_the_first_spelling(self):
+        """R-AGT-39 — publishing pending identity state is exclusive and durable."""
+        at = agent.directory("ios-helper", self.where)
+        at.mkdir(parents=True)
+        agent._write_pending(at / agent.DISPLAY_PENDING, "iOS Helper")
+        agent.add("ios-helper", self.where, display_name="IOS HELPER")
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+
     def test_repair_alias_does_not_rewrite_a_completed_display_name(self):
         """R-AGT-4, R-AGT-39 — repair leaves the owner's existing identity alone."""
         agent.add("winston", self.where, display_name="winston")
         agent.add("winston", self.where, display_name="WINSTON")
         self.assertEqual("winston", agent.display_name("winston", self.where))
+
+    def test_removing_an_interrupted_agent_removes_pending_identity_state(self):
+        """R-AGW-2, R-AGW-4 — removal leaves no hidden name for a later agent."""
+        with mock.patch.object(
+            store.Store, "remember_display_name", side_effect=RuntimeError("interrupted")
+        ):
+            with self.assertRaises(RuntimeError):
+                agent.add("ios-helper", self.where, display_name="iOS Helper")
+        self.assertTrue(agent.creation_pending("ios-helper", self.where))
+        agent.forget("ios-helper", self.where)
+        self.assertFalse(agent.directory("ios-helper", self.where).exists())
 
     def test_an_install_with_nothing_to_make_an_agent_from_says_so(self):
         """R-AGT-11 — a home with no files in it and nothing to have copied there would

@@ -791,7 +791,9 @@ class FakeAgents:
         surface does with it is passed a fake library, so nothing here is read."""
         return pathlib.Path(self._at or "/nowhere/agents") / name / "home" / "skills"
 
-    def __init__(self, made=(), wrote=(), complaints=None, at=None, overrides=None):
+    def __init__(
+        self, made=(), wrote=(), complaints=None, at=None, overrides=None, pending=(),
+    ):
         #: Where this case's owner keeps templates of their own, or None for an owner who
         #: has made none — never the real one, which is what `agents_home` would resolve.
         self._overrides = pathlib.Path(overrides) if overrides else pathlib.Path(
@@ -809,6 +811,7 @@ class FakeAgents:
         self._unrunnable: list = []
         #: The agents that exist, and the directories each resolves.
         self._made = list(made)
+        self._pending = set(pending)
         #: What a gateway of this name wrote before there were agents to own it.
         self._wrote = list(wrote)
         self._complaints = dict(complaints or {})
@@ -835,6 +838,9 @@ class FakeAgents:
 
     def exists(self, name):
         return name in self._made
+
+    def creation_pending(self, name):
+        return name in self._pending
 
     def known(self):
         return sorted(self._made)
@@ -903,6 +909,7 @@ class FakeAgents:
         if name not in self._made:
             self._made.append(name)
             self.display_names[name] = display_name.strip() if display_name else name
+        self._pending.discard(name)
         self._built(name)
         return made
 
@@ -1631,6 +1638,15 @@ class MakingAnAgent(unittest.TestCase):
         self.assertEqual(0, code, said)
         self.assertEqual(["Winston"], agents.added)
         self.assertNotIn("winston", agents.known())
+
+    def test_retry_finishes_an_interrupted_creation_with_its_provider(self):
+        """R-AGT-39 — CLI guards must not strand a pending display-name write."""
+        agents = FakeAgents(made=["ios-helper"], pending=["ios-helper"])
+        code, said = drive(
+            ["add", "iOS Helper", "--provider", "codex"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["ios-helper"], agents.added)
+        self.assertNotIn("ios-helper", agents._pending)
 
     def test_making_an_agent_makes_it_and_says_where_it_stands(self):
         """R-AGW-1"""

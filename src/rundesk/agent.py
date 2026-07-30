@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -462,6 +463,54 @@ def exists(name: str, where: Path | None = None) -> bool:
         return False
 
 
+def creation_pending(name: str, where: Path | None = None) -> bool:
+    """Whether first creation still owes its human name to durable records."""
+    pending = directory(name, where) / DISPLAY_PENDING
+    return pending.is_symlink() or pending.exists()
+
+
+def _write_pending(pending: Path, display_name: str) -> None:
+    """Publish a complete first display spelling once, without replacing one on retry."""
+    beside = pending.with_name(
+        f"{pending.name}.{os.getpid()}.{time.monotonic_ns()}.writing"
+    )
+    try:
+        with beside.open("x", encoding="utf-8") as handle:
+            handle.write(display_name)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(beside, pending)
+        except FileExistsError:
+            pass
+        folder = os.open(pending.parent, os.O_RDONLY)
+        try:
+            os.fsync(folder)
+        finally:
+            os.close(folder)
+    finally:
+        beside.unlink(missing_ok=True)
+
+
+def _pending_display(pending: Path) -> str | None:
+    """The complete pending spelling, refusing anything unsafe or unreadable."""
+    try:
+        mode = pending.lstat().st_mode
+    except FileNotFoundError:
+        return None
+    except OSError as why:
+        raise store.Unreadable(f"{pending} could not be read: {why}") from why
+    if not stat.S_ISREG(mode):
+        raise store.Unreadable(f"{pending} is not a regular file")
+    try:
+        display = pending.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as why:
+        raise store.Unreadable(f"{pending} could not be read: {why}") from why
+    if not display or display != display.strip():
+        raise store.Unreadable(f"{pending} does not hold a complete display name")
+    return display
+
+
 def add(name: str, where: Path | None = None, display_name: str | None = None) -> list[str]:
     """Make this agent, and the one gateway that runs it (R-AGW-1).
 
@@ -493,17 +542,18 @@ def add(name: str, where: Path | None = None, display_name: str | None = None) -
     fresh = not records.exists()
     pending = directory(name, where) / DISPLAY_PENDING
     if fresh and display_name is not None:
-        pending.write_text(display_name.strip(), encoding="utf-8")
+        _write_pending(pending, display_name.strip())
     # Fresh agents receive the baseline here. Existing populations are reconciled by both
     # upgrade routes after this release's library has been laid down (R-AGT-36).
     if fresh:
         made.extend(require_skills(name, where))
     kept = store.Store(records)
     kept.made()
-    if pending.is_file():
+    pending_display = _pending_display(pending)
+    if pending_display is not None:
         # A retry reads the first creation's spelling, not whichever alias happened to be
         # typed on the retry. The marker leaves only after the durable database write.
-        kept.remember_display_name(pending.read_text(encoding="utf-8"))
+        kept.remember_display_name(pending_display)
         pending.unlink()
     if fresh:
         made.append(store.NAME)
@@ -687,6 +737,10 @@ def forget(name: str, where: Path | None = None) -> list[str]:
         if path.exists():
             path.unlink()
             taken.append(path.name)
+    pending = stands / DISPLAY_PENDING
+    if pending.is_symlink() or pending.exists():
+        pending.unlink()
+        taken.append(pending.name)
     for path in (logs_home(name, where),):
         if path.exists():
             shutil.rmtree(path)

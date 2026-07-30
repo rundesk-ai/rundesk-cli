@@ -1529,8 +1529,11 @@ def cmd_add(args: argparse.Namespace, gateways, machine, agents) -> int:
         print(f"{given}: INVALID NAME — {why}", file=sys.stderr)
         return 1
     knew = agents.exists(name)
-    if knew and any((args.provider, args.model, getattr(args, "settings", None),
-                     getattr(args, "says", None) is not None)):
+    pending = agents.creation_pending(name)
+    if knew and not pending and any((
+        args.provider, args.model, getattr(args, "settings", None),
+        getattr(args, "says", None) is not None,
+    )):
         print(f"{name}: ALREADY MADE — use configure to change its defaults",
               file=sys.stderr)
         print(f"        like this:  rundesk configure {name} --provider <provider>",
