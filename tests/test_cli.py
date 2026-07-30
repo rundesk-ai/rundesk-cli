@@ -734,11 +734,6 @@ class FakeSkills:
         self.laid = True
         return list(self._ships)
 
-    def retire(self, where=None, holding=()):
-        # Recorded rather than acted on: what retiring *does* is `tests/test_skill.py`'s,
-        # and what the surface asks for is this file's.
-        self.retired_holding = tuple(holding)
-        return []
 
     def take_back(self, where=None):
         return list(self._ships)
@@ -1205,28 +1200,6 @@ class WhatThisInstallIsConfiguredWith(unittest.TestCase):
 class WhatTheInstallerDoesToTheLibrary(unittest.TestCase):
     """`rundesk skills --lay-down` — the installer's own verb, and an upgrade route."""
 
-    def test_laying_down_also_retires_what_this_release_renamed(self):
-        """R-AGT-35 — re-running the documented `curl … | bash` over an existing install is
-        how an owner upgrades without ever typing `rundesk update`, and `skill.retire` was
-        otherwise reached from that one command only. Left out, they finish with both names
-        standing in the library and every old grant still resolving — to text no release
-        will bring forward again, which is the failure the requirement exists to stop.
-        """
-        skills = FakeSkills(ships=("managing-rundesk",))
-        agents = FakeAgents(made=("ava", "bo"))
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = cli.main(["skills", "--lay-down"], gateways=FakeGateways(),
-                            machine=FakeMachine(), agents=agents, skills=skills,
-                            scripts=FakeScripts())
-
-        self.assertEqual(0, code, err.getvalue())
-        self.assertIn("managing-rundesk", out.getvalue())
-        self.assertEqual(tuple(agents.skills(name) for name in agents.known()),
-                         getattr(skills, "retired_holding", None),
-                         "the installer laid the new names down and retired nothing")
-        self.assertEqual(["ava", "bo"], agents.required,
-                         "the installer did not reconcile existing agents")
 
     def test_laying_down_also_reconciles_every_existing_agent(self):
         """R-AGT-36 — reinstalling over an existing installation applies the configured

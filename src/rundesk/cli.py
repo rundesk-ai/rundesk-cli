@@ -1909,10 +1909,6 @@ def _provisioned(root: Path = REPO_ROOT) -> str | None:
     # never touched, so this cannot be how an owner's configuration is lost (R-UPD-48).
     config.ensure()
     skill.lay_down(force=True)
-    # Then what this release stopped shipping under the name an earlier one used. After the
-    # lay-down rather than before, because a grant is only carried once the name it is
-    # carried to is actually standing in the library (R-AGT-35).
-    skill.retire(holding=tuple(_agent.skills(name) for name in _agent.known()))
     # Existing agents are brought forward too. Optional owner grants are not removed; the
     # configured list is the minimum every agent must hold, not its complete grant set.
     for name in _agent.known():
@@ -2220,15 +2216,6 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
         # The installer's, and deliberately not an owner's verb: what a release ships is
         # not a thing anybody should have to ask for.
         laid = skills.lay_down()
-        # Then what an earlier release shipped under a name this one no longer uses. The
-        # installer is the *other* way an owner upgrades — re-running the documented
-        # `curl … | bash` over an existing install is not a rarity — and `skill.retire` was
-        # otherwise reached only from `rundesk update`. Without this, that owner is left
-        # with both names standing and every old grant resolving to text no release will
-        # bring forward again, which is exactly what R-AGT-35 exists to stop. After the
-        # lay-down, because a grant is only carried once the name it goes to is standing;
-        # and a no-op on a fresh install, where nothing of ours is under an old name.
-        skills.retire(holding=tuple(agents.skills(name) for name in agents.known()))
         # `skills.granted` is a floor for every agent, including ones that predate the
         # value. Re-running the installer is an upgrade route, so reconcile the existing
         # population here as well as in `_provisioned` (R-AGT-36).
