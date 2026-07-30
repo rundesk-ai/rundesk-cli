@@ -1,7 +1,7 @@
 ---
 id: DIS
 name: Discord, as an agent is reached on it
-last_verified: 2026-07-27
+last_verified: 2026-07-30
 ---
 
 ## What this is
@@ -54,7 +54,7 @@ so only a running commentary may grow.
 | ✅ | R-DIS-29 | A completed Discord answer leads its cost line with how big the conversation is, where the provider said so | `the footer leads with how big the conversation is`, `the whole footer an owner reads is the size what was written and the clock`, `a brain that does not report a conversation size gets the footer it always got` |
 | ✅ | R-DIS-30 | Discord holds the message it posted to say a scheduled run began, and posts that run's report as a reply to it | `a scheduled report is a reply to the message that said it started`, `a report for a schedule nobody announced quotes nothing`, `an ordinary remark still quotes nothing`, `a notice is answered once and never by the next firing`, `a notice that could not be posted is not held`, `an anchor is kept for the room being written in not the one named`, `a scheduled report still arrives when its notice is gone` |
 | ✅ | R-DIS-31 | A completed answer mentions the person it is replying to, and nothing else Discord posts mentions anybody | `an answer in a direct message mentions the person who asked`, `only the first piece of a split answer mentions anybody`, `an answer attached as a file still mentions who asked`, `an answer with no message to reply to mentions nobody`, `an answer whose question is in another room mentions nobody`, `a remark said mid turn mentions nobody`, `a scheduled report mentions nobody though it is a reply`, `the commentary and the mark on a failure mention nobody`, `a quiet channel still posts one message and it is the mentioned answer`, `a mentioned answer that cannot be delivered is said and the turn goes on`, `a message nobody asked to mention does not` |
-| ✅ | R-DIS-32 | A connected Discord bot identifies itself as Rundesk followed by the human name its owner chose | `a discord gateway is named for its agent`, `the persisted display name wins over the slug`, `a discord gateway name stays inside the platform limit`, `discords reserved word cannot make an agent name fail`, `connecting renames the bot once`, `an already named bot is not edited` |
+| ✅ | R-DIS-32 | A connected Discord bot keeps the username and profile identity its owner configured in Discord | `connecting never edits the bot profile` |
 | ✅ | R-DIS-33 | A completed Discord answer begins its completion line with the provider that ran the turn | `the whole footer an owner reads is the size what was written and the clock`, `provider and elapsed time are shown when usage was not reported` |
 | ✅ | R-DIS-34 | An inbound Discord reply carries its referenced message into Rundesk's shared reply context | `on message reports the reply on the arrived record`, `a resolved reply carries the parent identity author and body`, `a deleted or unfetched parent still carries its identity`, `a non reply reference is not presented as a reply`, `a message without a reference has no reply context` |
 
