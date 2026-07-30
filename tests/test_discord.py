@@ -893,7 +893,7 @@ class WhereAMessageCameFrom(unittest.TestCase):
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class WhatAMessageRepliesTo(unittest.IsolatedAsyncioTestCase):
-    """R-DIS-32 — Discord's native reference becomes the shared reply shape."""
+    """R-DIS-34 — Discord's native reference becomes the shared reply shape."""
 
     @staticmethod
     def message(resolved=None, message_id=8839, kind=None):
@@ -1079,8 +1079,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         asyncio.run(discord.Agent._doing(
             Turn(), {"type": "usage", "session": 122435, "output": 837}, held))
         asyncio.run(discord.Agent._answer(
-            Turn(), {"type": "answer", "text": "done"}, held))
-        self.assertEqual("-# · 122k session · 837 output · 28s elapsed",
+            Turn(), {"type": "answer", "provider": "stand-in", "text": "done"}, held))
+        self.assertEqual("-# stand-in · 122k session · 837 output · 28s elapsed",
                          posted[0].splitlines()[0])
 
     def test_a_brain_that_does_not_report_a_conversation_size_gets_the_footer_it_always_got(self):
@@ -1114,9 +1114,9 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         held.cost = "-# · 1.9k input · 94 output · 70k cached"
         now[0] += 120
         asyncio.run(discord.Agent._answer(
-            Turn(), {"type": "answer", "text": "done"}, held))
+            Turn(), {"type": "answer", "provider": "stand-in", "text": "done"}, held))
         self.assertEqual(
-            "-# · 1.9k input · 94 output · 70k cached · 2m elapsed",
+            "-# stand-in · 1.9k input · 94 output · 70k cached · 2m elapsed",
             posted[0].splitlines()[0])
 
     def test_repeated_taken_does_not_restart_elapsed_time(self):
@@ -1133,8 +1133,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         asyncio.run(discord.Agent._state(Turn(), {"state": "taken"}, held))
         self.assertEqual(100.0, held.started)
 
-    def test_elapsed_time_is_shown_when_usage_was_not_reported(self):
-        """R-DIS-24 — duration is useful even when a provider supplies no token counts."""
+    def test_provider_and_elapsed_time_are_shown_when_usage_was_not_reported(self):
+        """R-DIS-24, R-DIS-33 — provenance does not depend on optional usage metadata."""
         posted = []
 
         class Turn:
@@ -1145,8 +1145,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         held = discord.Live(clock=lambda: 140.0)
         held.started = 100.0
         asyncio.run(discord.Agent._answer(
-            Turn(), {"type": "answer", "text": "done"}, held))
-        self.assertEqual("-# · 40s elapsed", posted[0].splitlines()[0])
+            Turn(), {"type": "answer", "provider": "stand-in", "text": "done"}, held))
+        self.assertEqual("-# stand-in · 40s elapsed", posted[0].splitlines()[0])
 
     def test_a_small_count_is_not_rounded_into_a_zero(self):
         """R-USE-7 — everything was shown in thousands, so a turn that answered in
@@ -2195,9 +2195,17 @@ class WhatTheOwnerIsTold(unittest.TestCase):
     class Connects:
         """The surface `on_ready` touches."""
 
+        class User:
+            name = "Rundesk – Ava"
+
+            async def edit(self, **given):
+                pass
+
         def __init__(self, claims=True):
             self.greeted, self.said = False, []
             self._claims = claims
+            self.profile_named = None
+            self.user = self.User()
 
         def _claim(self, what):
             return self._claims
@@ -2207,6 +2215,71 @@ class WhatTheOwnerIsTold(unittest.TestCase):
 
         async def _tell_the_owner(self, said):
             self.said.append(said)
+
+    def test_a_discord_gateway_is_named_for_its_agent(self):
+        """R-DIS-32"""
+        self.assertEqual("Rundesk – Winston", discord.gateway_name("winston"))
+        self.assertEqual("Rundesk – Agent Name", discord.gateway_name("agent-name"))
+        self.assertEqual("Rundesk – iOS Helper", discord.gateway_name("iOS Helper", exact=True))
+
+    def test_a_discord_gateway_name_stays_inside_the_platform_limit(self):
+        """R-DIS-32"""
+        named = discord.gateway_name("an-agent-with-a-name-that-is-far-too-long")
+        self.assertLessEqual(len(named), discord.BOT_NAME_CHARS)
+        self.assertTrue(named.startswith(discord.BOT_PREFIX))
+        self.assertNotEqual(
+            named, discord.gateway_name("an-agent-with-a-name-that-is-far-too-loud"),
+            "two long agent names were clipped into one visible identity")
+
+    def test_discords_reserved_word_cannot_make_an_agent_name_fail(self):
+        """R-DIS-32"""
+        self.assertNotIn("discord", discord.gateway_name("discord-helper").lower())
+
+    def test_connecting_renames_the_bot_once(self):
+        """R-DIS-32 — reconnecting one gateway does not spend another profile edit."""
+        changed = []
+
+        class User:
+            name = "rundesk"
+
+            async def edit(self, **given):
+                changed.append(given)
+
+        it = self.Connects()
+        it.user = User()
+        with mock.patch.dict(os.environ, {"RUNDESK_AGENT": "winston"}, clear=False), \
+                mock.patch.object(discord, "say"):
+            asyncio.run(discord.Agent.on_ready(it))
+            asyncio.run(discord.Agent.on_ready(it))
+        self.assertEqual([{"username": "Rundesk – Winston"}], changed)
+
+    def test_an_already_named_bot_is_not_edited(self):
+        """R-DIS-32"""
+        it = self.Connects()
+        with mock.patch.dict(os.environ, {"RUNDESK_AGENT": "ava"}, clear=False), \
+                mock.patch.object(discord, "say"), \
+                mock.patch.object(it.user, "edit", create=True) as edited:
+            asyncio.run(discord.Agent.on_ready(it))
+        edited.assert_not_called()
+
+    def test_the_persisted_display_name_wins_over_the_slug(self):
+        """R-DIS-32 — capitalization is owner data, not something reconstructed."""
+        changed = []
+
+        class User:
+            name = "rundesk"
+
+            async def edit(self, **given):
+                changed.append(given)
+
+        it = self.Connects()
+        it.user = User()
+        with mock.patch.dict(
+                os.environ,
+                {"RUNDESK_AGENT": "ios-helper", "RUNDESK_AGENT_NAME": "iOS Helper"},
+                clear=False), mock.patch.object(discord, "say"):
+            asyncio.run(discord.Agent.on_ready(it))
+        self.assertEqual([{"username": "Rundesk – iOS Helper"}], changed)
 
     def test_only_one_adapter_of_a_gateway_greets_the_owner(self):
         """R-DIS-15 — an agent reachable both by direct message and in rooms runs *two* of

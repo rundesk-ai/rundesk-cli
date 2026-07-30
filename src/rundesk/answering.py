@@ -676,7 +676,7 @@ class Answering:
             self._note(f"channel '{self.channel}': a turn could not be carried: {went_wrong}")
             self._say(channel.FAILED, held, ref=held.ref, why=str(went_wrong))
         else:
-            self._answer(held, outcome)
+            self._answer(held, outcome, provider.label(chose.get("provider") or ""))
             self._say(channel.FINISHED if outcome.ok else channel.FAILED, held,
                       ref=held.ref, why=None if outcome.ok else _why(outcome))
         finally:
@@ -737,12 +737,14 @@ class Answering:
 
         held.saying.put_nowait((waiting.text, waiting.user, pending, accepted))
 
-    def _answer(self, held: Exchange, outcome) -> None:
-        """What the agent said, handed over once and whole (R-CH-8).
+    def _answer(self, held: Exchange, outcome, provider_name: str) -> None:
+        """What the agent said, handed over once and whole (R-CH-8, R-CH-28).
 
         Held until here rather than shown as it was written. A reply that rewrites itself
         in place is unreadable, and the adapter is never given the chance to try: nothing
-        of the brain's prose crosses the seam before this.
+        of the brain's prose crosses the seam before this. The resolved provider belongs
+        on this final record rather than on optional usage: every answer has one, even
+        when its brain reports no model or token counts.
         """
         # Whatever is still in hand: the last complete thing said, or every fragment of
         # a reply that was written a piece at a time. Either way it is the answer.
@@ -751,7 +753,7 @@ class Answering:
         if not text and not made:
             return
         self._tell(type="answer", conversation=held.conversation, run=held.run,
-                   text=text, attachments=made)
+                   provider=provider_name, text=text, attachments=made)
 
     def _made(self, outcome) -> list:
         """What the brain said it made, as things a surface may actually send.

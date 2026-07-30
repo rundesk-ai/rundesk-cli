@@ -26,11 +26,11 @@
 **Run self-improving AI coding agents as durable, named teammates on your own Mac — then
 reach them in Discord DMs, public channel threads, your terminal, or a schedule.**
 
-Rundesk gives the coding CLI you already use its own workspace, rules, memory, skills,
-conversations, and history. Agents preserve what they learn and can turn repeated work into
-reusable skills and integration CLIs, improving how they work over time. Rundesk does not
-replace Codex, Claude Code, Grok, or Google Antigravity; it gives those tools a dependable,
-token-efficient operating layer.
+Rundesk is a simple, lightweight agent gateway for the coding CLI you already use. It gives
+each agent its own workspace, rules, memory, skills, conversations, and history. Agents
+preserve what they learn and can turn repeated work into reusable skills and integration
+CLIs, improving how they work over time. Rundesk does not replace Codex, Claude Code, Grok,
+or Google Antigravity; it gives those tools a dependable, token-efficient operating layer.
 
 ## ⚡ It's this simple
 
@@ -122,6 +122,22 @@ Updates replace `app/`; uninstall leaves `data/` alone unless you explicitly ask
 When an update needs to migrate agent records, Rundesk first stops every gateway and keeps a
 rollback copy of each database. If any migration fails, it restores every agent's records and
 keeps the previous release in place.
+
+### Keep it recoverable
+
+```sh
+rundesk backups on
+rundesk backups
+```
+
+Rundesk can take a complete backup every day of every agent, workspace, skill, conversation,
+history record, and install-wide setting. Backups live outside both the program and its data,
+so updates, uninstall, and even an explicit data purge cannot remove them.
+
+The backup directory can also be a symlink into iCloud Drive. On another Mac signed into the
+same iCloud account, install Rundesk, point its backup directory at that folder, and run
+`rundesk backups restore <backup>` to restore the whole install. A restore says what it will
+replace before it proceeds.
 
 ### Create and check an agent
 
@@ -249,6 +265,8 @@ Discord is the shipped first-class channel adapter:
 rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
 ```
 
+→ **[Set up the Discord bot](docs/discord.md)**
+
 The command securely asks for the bot token when needed, proves the connection before
 saving anything, and creates separate `discord-dms` and `discord-rooms` channels by default.
 You can also narrow it to direct messages, one server, or one channel.
@@ -353,6 +371,7 @@ removing optional skills an owner added.
 ## 📖 Documentation
 
 - **[CLI reference](CLI.md)** — every command and argument, generated from the parser
+- **[Discord setup](docs/discord.md)** — create, authorize, connect, and test an agent's bot
 - **[Provider adapter contract](docs/extending/provider-adapters/references/the-contract.md)** — put another coding CLI behind an agent
 - **[Channel adapter contract](docs/extending/channel-adapters/references/the-contract.md)** — reach an agent from another platform
 - **[Integration CLI guide](docs/extending/integration-clis/README.md)** — give every agent a custom command

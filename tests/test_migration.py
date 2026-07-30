@@ -694,6 +694,15 @@ class CarryingTheShapeThatShippedForward(WithStepsOfThisCasesOwn):
         self.assertEqual("Claude AI usage limit reached|1784920200", one["why"])
         self.assertIsNone(one["because"], "a word was inferred from prose after the fact")
 
+    def test_an_existing_agents_directory_becomes_its_safe_display_fallback(self):
+        """R-AGT-39 — upgrade adds identity without renaming the directory, job, logs,
+        provider homes, or anything else already keyed by the legacy spelling."""
+        self.built_at_the_first_shape()
+        one = self.carried().execute(
+            "SELECT display_name FROM agent WHERE id = 1"
+        ).fetchone()
+        self.assertEqual("ops", one["display_name"])
+
     def test_a_run_still_names_the_schedule_that_started_it_after_the_shape_changes(self):
         """The loss this step exists not to cause. With foreign keys on — which is how the
         runner opens every step — dropping the table a run references performs an implicit

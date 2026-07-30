@@ -202,7 +202,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
         return kept.schedule(named)
 
     async def test_a_reply_tells_the_brain_which_message_the_follow_up_is_for(self):
-        """R-CH-28 — reply context is distinct from the new words and channel neutral."""
+        """R-CH-29 — reply context is distinct from the new words and channel neutral."""
         surface, brain = Surface(), Brain()
         held = self.answering(surface, brain)
         arrived = self.arrived(text="fix the second one")
@@ -220,7 +220,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
         )
 
     async def test_an_unresolved_reply_still_starts_a_turn_and_says_what_is_missing(self):
-        """R-CH-29 — a deleted or unavailable parent never costs the new message."""
+        """R-CH-30 — a deleted or unavailable parent never costs the new message."""
         surface, brain = Surface(), Brain()
         held = self.answering(surface, brain)
         arrived = self.arrived(text="what about this?")
@@ -234,7 +234,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
         )
 
     async def test_an_ordinary_message_has_no_empty_reply_context(self):
-        """R-CH-28 — the ordinary prompt remains exactly the words somebody sent."""
+        """R-CH-29 — the ordinary prompt remains exactly the words somebody sent."""
         surface, brain = Surface(), Brain()
         held = self.answering(surface, brain)
         await self.carry(held, self.arrived())
@@ -1257,6 +1257,13 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
         await self.carry(held, self.arrived())
         self.assertEqual({"type", "conversation", "run", "id", "ok", "summary"},
                          set(surface.of("result")[0]))
+
+    async def test_a_final_answer_names_the_provider_that_produced_it(self):
+        """R-CH-28 — provenance is Rundesk's fact, not optional brain metadata."""
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await self.carry(held, self.arrived())
+        self.assertEqual("a-brain", surface.of("answer")[0]["provider"])
 
     async def test_how_big_the_conversation_is_reaches_a_surface_with_what_it_cost(self):
         """R-USE-15, R-CH-13 — the field is named here or it never leaves, and a footer

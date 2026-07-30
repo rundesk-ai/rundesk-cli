@@ -720,7 +720,8 @@ is a different thing entirely: it changes one agent, after the fact, and the nex
 shipped words.
 
 **What ships stays the factory set.** Five ordinary Markdown files — `AGENTS.md`, `CLAUDE.md`, `SOUL.md`,
-`USER.md`, `MEMORY.md` — copied with one substitution (`{{name}}`, `agent.py:35`) and never text built in
+`USER.md`, `MEMORY.md` — copied with one substitution (`{{agent}}`, with legacy `{{name}}`
+accepted, `agent.py:35`) and never text built in
 code, because they are what an owner reads first and edits next. This phase does not change that; it puts a
 second directory in front of it.
 
@@ -760,7 +761,7 @@ never rewrites words a person may have changed.
 **`doctor` says where each file came from.** "Why does my new agent not have my rules" must be answerable
 without reading source — per file, shipped or the owner's, and the path of the one that was used.
 
-**An override that ignores `{{name}}` is still valid.** The substitution is the whole contract an override has
+**An override that ignores `{{agent}}` is still valid.** The substitution is the whole contract an override has
 to honour, and honouring it is optional: a template with no placeholder is a template every agent gets
 verbatim, which is a legitimate thing to want.
 
@@ -781,7 +782,7 @@ verbatim, which is a legitimate thing to want.
 
 - A home made with no overrides is byte-for-byte what the install ships.
 - One overridden file is the owner's and the rest are shipped, in the same home.
-- An override that never writes `{{name}}` still makes a working agent.
+- An override that never writes `{{agent}}` still makes a working agent.
 - An override directory that is empty, unreadable, or holds a name the install does not ship is reported
   truthfully and never leaves a half-made agent.
 - An update replaces the shipped templates and leaves every override untouched — the claim the phase exists

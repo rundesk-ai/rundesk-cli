@@ -69,7 +69,7 @@ NEEDED = {
 ATTACHED = "attachments"
 
 #: The message an arrival explicitly replies to, when a surface has that concept
-#: (R-CH-28, R-CH-29). One communication-agnostic shape lets any adapter supply the
+#: (R-CH-29, R-CH-30). One communication-agnostic shape lets any adapter supply the
 #: orientation without writing platform-specific prose into the prompt.
 REPLY_TO = "reply_to"
 
@@ -163,7 +163,7 @@ SAID_MOST = 80
 
 #: A quoted parent is orientation, not conversation history. Its first 255 characters are
 #: enough to recognize the item while keeping a reply from dominating the new turn
-#: (R-CH-28).
+#: (R-CH-29).
 REPLY_TEXT_MOST = 255
 REPLY_TEXT_TRUNCATED = "...(truncated)"
 
@@ -279,6 +279,7 @@ def environment(
     channel: str,
     agent: str,
     channel_home: Path,
+    agent_name: str | None = None,
     allow=None,
     settings: dict | None = None,
     secret: dict | None = None,
@@ -311,6 +312,7 @@ def environment(
     said.update(process.environment(home, path=path))
     said["RUNDESK_CHANNEL"] = channel
     said["RUNDESK_AGENT"] = agent
+    said["RUNDESK_AGENT_NAME"] = agent_name or agent
     said["RUNDESK_CHANNEL_HOME"] = str(channel_home)
     if allow:
         # Who may use this channel is rundesk's to *enforce* and never the adapter's
@@ -428,7 +430,7 @@ def attached(said) -> list:
 
 
 def reply_to(said) -> dict | None:
-    """A bounded reference to the message this one answers (R-CH-28, R-CH-29).
+    """A bounded reference to the message this one answers (R-CH-29, R-CH-30).
 
     The current message remains valid when this optional context is malformed. An
     unavailable parent keeps only its identity; author or text supplied beside

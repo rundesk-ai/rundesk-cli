@@ -213,6 +213,16 @@ def key(named: str) -> str:
     return f"{_plain(stands.name) or 'brain'}-{marked}"
 
 
+def label(named: str) -> str:
+    """A safe, stable provider name for a person to read (R-CH-28).
+
+    `key` already removes a custom adapter's path while keeping two same-named adapters
+    distinct. Plain that result too, because a shipped adapter is its filename and Unix
+    filenames may contain characters that can rewrite a channel's completion line.
+    """
+    return _plain(key(named)) or "brain"
+
+
 def _plain(name: str) -> str:
     """What is left of a name once anything that would not stand as one is taken out."""
     return "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in name).strip("-")

@@ -20,6 +20,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -92,6 +93,79 @@ class WithSomewhereToKeepAgents(unittest.TestCase):
         return name
 
 
+class NamingANewAgent(unittest.TestCase):
+    def test_spaces_and_punctuation_become_one_dash(self):
+        """R-AGT-39"""
+        self.assertEqual("agent-name", agent.slug("  Agent -- Name  "))
+
+    def test_a_new_agents_name_is_lowercase(self):
+        """R-AGT-39"""
+        self.assertEqual("winston", agent.slug("Winston"))
+
+    def test_an_accented_name_has_a_stable_ascii_slug(self):
+        """R-AGT-39"""
+        self.assertEqual("echo", agent.slug("Écho"))
+
+    def test_a_name_with_no_letters_or_digits_is_refused(self):
+        """R-AGT-39"""
+        with self.assertRaises(agent.NotAnAgentName):
+            agent.slug(" -- ")
+
+    def test_an_existing_legacy_spelling_keeps_its_directory(self):
+        """R-AGT-40"""
+        self.assertEqual(
+            "Agent_Name", agent.creation_name("Agent Name", ["Agent_Name"]))
+
+    def test_exact_case_wins_when_legacy_agents_differ_only_by_case(self):
+        """R-AGT-40 — exact supervisor invocations remain unambiguous on Linux."""
+        existing = ["Winston", "winston"]
+        self.assertEqual("Winston", agent.creation_name("Winston", existing))
+        self.assertEqual("winston", agent.creation_name("winston", existing))
+        with self.assertRaises(agent.NotAnAgentName):
+            agent.creation_name("WINSTON", existing)
+
+    def test_an_unmatched_command_preserves_a_legacy_gateway_name(self):
+        """R-AGT-13 — a pre-agent supervisor command must not change identity."""
+        self.assertEqual("Winston", agent.command_name("Winston"))
+
+    def test_ambiguous_legacy_spellings_are_refused(self):
+        """R-AGT-40"""
+        with self.assertRaises(agent.NotAnAgentName):
+            agent.creation_name("Agent Name", ["Agent_Name", "Agent.Name"])
+
+    def test_a_legacy_unicode_name_stays_reachable(self):
+        """R-AGT-40 — older releases admitted Unicode names with no ASCII spelling."""
+        self.assertEqual("代理", agent.creation_name("代理", ["代理"]))
+
+    def test_a_legacy_unicode_name_does_not_block_an_unrelated_new_agent(self):
+        """R-AGT-40 — resolving the existing population skips only the legacy name
+        that cannot itself be represented as today's slug."""
+        self.assertEqual("new-agent", agent.creation_name("New Agent", ["代理"]))
+
+
+class ResolvingLegacyGatewayNames(WithSomewhereToKeepAgents):
+    def test_shared_history_preserves_the_gateway_spelling_during_adoption(self):
+        """R-AGW-1, R-AGT-13 — pre-agent history is an existing identity."""
+        (self.before / "logs" / "Winston.log").write_text("kept")
+        names = agent.identities(self.where, self.before / "run", self.before / "logs")
+        self.assertIn("Winston", names)
+        self.assertEqual("Winston", agent.creation_name("winston", names))
+
+    def test_rotated_history_alone_preserves_the_gateway_spelling(self):
+        """R-AGW-5 — rotation may be the only surviving artifact."""
+        (self.before / "logs" / "Agent_Name.log.1").write_text("kept")
+        names = agent.identities(self.where, self.before / "run", self.before / "logs")
+        self.assertIn("Agent_Name", names)
+        self.assertEqual("Agent_Name", agent.creation_name("Agent Name", names))
+
+    def test_machine_error_output_alone_preserves_the_gateway_spelling(self):
+        """R-GW-36 — a gateway may fail before its own logger ever starts."""
+        (self.before / "logs" / "Winston.err").write_text("failed before logger")
+        names = agent.identities(self.where, self.before / "run", self.before / "logs")
+        self.assertIn("Winston", names)
+        self.assertEqual("Winston", agent.creation_name("winston", names))
+
+
 class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
     """The files a new agent's home is copied from, and an owner's right to replace them.
 
@@ -127,20 +201,32 @@ class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
         template of their own gets the factory set, byte for byte but for the one name."""
         self.made()
         for called, says in self.held().items():
-            self.assertEqual((agent.TEMPLATES / called).read_text().replace("{{name}}", "ava"),
+            self.assertEqual((agent.TEMPLATES / called).read_text().replace("{{agent}}", "ava"),
                              says, f"{called} is not what the install ships")
 
     def test_one_overridden_page_is_the_owners_and_the_rest_are_shipped(self):
         """R-AGT-22 — per page, not per set. Taking on all five to change one would mean
         never getting an improvement to any of them, which is a choice worth avoiding."""
-        self.own("SOUL.md", "# {{name}} answers only in haiku\n")
+        self.own("SOUL.md", "# {{agent}} answers only in haiku\n")
         self.made()
 
         held = self.held()
         self.assertEqual("# ava answers only in haiku\n", held["SOUL.md"])
         for called in ("AGENTS.md", "CLAUDE.md", "USER.md", "MEMORY.md"):
-            self.assertEqual((agent.TEMPLATES / called).read_text().replace("{{name}}", "ava"),
+            self.assertEqual((agent.TEMPLATES / called).read_text().replace("{{agent}}", "ava"),
                              held[called], f"{called} stopped being the install's")
+
+    def test_a_legacy_name_placeholder_still_names_the_agent(self):
+        """R-AGT-41 — existing owner templates survive the clearer placeholder name."""
+        self.own("SOUL.md", "# {{name}} answers only in haiku\n")
+        self.made()
+        self.assertEqual("# ava answers only in haiku\n", self.held()["SOUL.md"])
+
+    def test_an_owner_template_uses_the_agent_placeholder(self):
+        """R-AGT-41 — the current placeholder says what value it represents."""
+        self.own("SOUL.md", "# {{agent}} answers only in haiku\n")
+        self.made()
+        self.assertEqual("# ava answers only in haiku\n", self.held()["SOUL.md"])
 
     def test_an_override_that_never_names_the_agent_still_makes_a_working_agent(self):
         """R-AGT-25 — the substitution is the whole contract an override has to honour, and
@@ -169,7 +255,7 @@ class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
 
     def test_a_page_the_install_does_not_ship_reaches_a_new_agent(self):
         """R-AGT-24 — an override may add, not only replace."""
-        self.own("RULES.md", "# {{name}} never force-pushes\n")
+        self.own("RULES.md", "# {{agent}} never force-pushes\n")
         self.made()
         self.assertEqual("# ava never force-pushes\n", self.held()["RULES.md"])
 
@@ -453,7 +539,102 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         agent.add("ava", self.where)
         says = (agent.home("ava", self.where) / "SOUL.md").read_text()
         self.assertIn("ava", says)
-        self.assertNotIn(agent.NAMED, says, "a template reached the home unsubstituted")
+        self.assertNotIn(agent.AGENT, says, "a template reached the home unsubstituted")
+        self.assertNotIn(agent.NAMED, says, "a legacy placeholder reached the home unsubstituted")
+
+    def test_a_template_keeps_the_human_name_separate_from_its_slug(self):
+        """R-AGT-39"""
+        agent.add("ios-helper", self.where, display_name="iOS Helper")
+        says = (agent.home("ios-helper", self.where) / "SOUL.md").read_text()
+        self.assertIn("iOS Helper", says)
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+
+    def test_retry_repairs_display_name_after_interrupted_first_creation(self):
+        """R-AGT-39 — a failed final write cannot permanently lose owner spelling."""
+        with mock.patch.object(
+            store.Store, "remember_display_name", side_effect=RuntimeError("interrupted")
+        ):
+            with self.assertRaises(RuntimeError):
+                agent.add("ios-helper", self.where, display_name="iOS Helper")
+        agent.add("ios-helper", self.where, display_name="IOS HELPER")
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+
+    def test_retry_before_database_creation_preserves_the_first_spelling(self):
+        """R-AGT-39 — publishing pending identity state is exclusive and durable."""
+        at = agent.directory("ios-helper", self.where)
+        at.mkdir(parents=True)
+        agent._write_pending(at / agent.DISPLAY_PENDING, "iOS Helper")
+        agent.add("ios-helper", self.where, display_name="IOS HELPER")
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+
+    def test_retry_publishes_a_complete_staged_first_spelling(self):
+        """R-AGT-39 — interruption after fsync but before link keeps the first name."""
+        at = agent.directory("ios-helper", self.where)
+        at.mkdir(parents=True)
+        pending = at / agent.DISPLAY_PENDING
+        pending.with_name(f"{pending.name}.writing").write_bytes(
+            agent._display_record("iOS Helper")
+        )
+        agent.add("ios-helper", self.where, display_name="IOS HELPER")
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+        self.assertIn(
+            "iOS Helper",
+            (agent.home("ios-helper", self.where) / "SOUL.md").read_text(),
+        )
+
+    def test_pending_staging_never_follows_an_owners_symlink(self):
+        """R-AGT-4 — recovery state cannot overwrite another owner file."""
+        at = agent.directory("ios-helper", self.where)
+        at.mkdir(parents=True)
+        owner = at / "owner-kept.txt"
+        owner.write_text("KEEP ME")
+        pending = at / agent.DISPLAY_PENDING
+        pending.with_name(f"{pending.name}.writing").symlink_to(owner)
+        with self.assertRaises(store.Unreadable):
+            agent._write_pending(pending, "iOS Helper")
+        self.assertEqual("KEEP ME", owner.read_text())
+
+    def test_pending_staging_never_overwrites_an_owners_hard_link(self):
+        """R-AGT-4 — an existing linked inode is owner data, not scratch space."""
+        at = agent.directory("ios-helper", self.where)
+        at.mkdir(parents=True)
+        owner = at / "owner-kept.txt"
+        owner.write_text("KEEP ME")
+        pending = at / agent.DISPLAY_PENDING
+        os.link(owner, pending.with_name(f"{pending.name}.writing"))
+        with self.assertRaises(store.Unreadable):
+            agent._write_pending(pending, "iOS Helper")
+        self.assertEqual("KEEP ME", owner.read_text())
+
+    def test_interruption_before_marker_does_not_make_a_stranded_agent(self):
+        """R-AGT-39 — no `home/` exists until display recovery is durable."""
+        with mock.patch.object(
+            agent, "_write_pending", side_effect=RuntimeError("interrupted")
+        ):
+            with self.assertRaises(RuntimeError):
+                agent.add("ios-helper", self.where, display_name="iOS Helper")
+        self.assertFalse(agent.exists("ios-helper", self.where))
+        agent.add("ios-helper", self.where, display_name="iOS Helper")
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+
+    def test_repair_alias_does_not_rewrite_a_completed_display_name(self):
+        """R-AGT-4, R-AGT-39 — repair leaves the owner's existing identity alone."""
+        agent.add("winston", self.where, display_name="winston")
+        agent.add("winston", self.where, display_name="WINSTON")
+        self.assertEqual("winston", agent.display_name("winston", self.where))
+
+    def test_removing_an_interrupted_agent_removes_pending_identity_state(self):
+        """R-AGW-2, R-AGW-4 — removal leaves no hidden name for a later agent."""
+        with mock.patch.object(
+            store.Store, "remember_display_name", side_effect=RuntimeError("interrupted")
+        ):
+            with self.assertRaises(RuntimeError):
+                agent.add("ios-helper", self.where, display_name="iOS Helper")
+        self.assertTrue(agent.creation_pending("ios-helper", self.where))
+        pending = agent.directory("ios-helper", self.where) / agent.DISPLAY_PENDING
+        pending.with_name(f"{pending.name}.writing").write_text("stale")
+        agent.forget("ios-helper", self.where)
+        self.assertFalse(agent.directory("ios-helper", self.where).exists())
 
     def test_an_install_with_nothing_to_make_an_agent_from_says_so(self):
         """R-AGT-11 — a home with no files in it and nothing to have copied there would
@@ -1123,6 +1304,14 @@ class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):
         self.assertIn(str(agent.workspace("ava", self.where)), said)
         self.assertNotIn("{", said, "a brace survived into what a brain is given")
         self.assertNotIn("}", said)
+
+    def test_the_human_name_is_shown_while_commands_keep_the_slug(self):
+        """R-AGT-39 — identity prose uses the display name; paths and commands remain
+        safe because they use the directory slug."""
+        agent.add("ios-helper", self.where, display_name="iOS Helper")
+        said = agent.standing("ios-helper", self.where)
+        self.assertIn("You are iOS Helper,", said)
+        self.assertIn("rundesk messages ios-helper", said)
 
     def test_every_place_the_name_appears_is_filled_in(self):
         """Not just the first: every command must name the agent it will actually query."""

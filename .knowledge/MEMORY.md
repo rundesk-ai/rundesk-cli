@@ -88,6 +88,9 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   release preparation can inspect or edit a stale version while the new worktree is correct.
   Start the next command with the new worktree as its working directory, then verify its
   branch before editing.
+- **A station wrapper that consumes every leading `--*` option cannot forward
+  `install.sh --uninstall`.** Run the installer directly with the same fully redirected
+  station environment and job prefix; otherwise the temporary automatic-update job stays loaded.
 - **A fresh worktree has no `.venv`, so its Discord regression test skips and looks green.**
   Run the worktree's test path with the main checkout's `.venv/bin/python`; the interpreter
   supplies `discord.py` while the working directory and imported adapter remain the worktree's.
@@ -247,6 +250,9 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   The command prints its supported release fields and exits before anything chained after it
   runs. Use `tagName,name,publishedAt,url` and compare `tagName` with
   `gh release list --limit 1` when whether it is latest matters.
+- **`gh issue list --json type` fails even though `gh issue create --type` is valid.**
+  The issue classification field is named `issueType` in JSON output; use that when checking
+  existing issues before filing one.
 - **zsh expands an unquoted `?ref=main` in a `gh api` endpoint as a filename glob.** The
   request never reaches GitHub and fails with `no matches found`; quote the whole endpoint.
 - **macOS `tar` has no GNU `--wildcards` option.** Extracting one member from a generated
@@ -710,6 +716,10 @@ re-checked since, so treat these as true-when-found rather than as current.*
 - **A checkout path containing `bo` fails `test_cli` even when status lists no agent
   names.** Its R-CMD-5 case asserts that fixture agent `bo` appears nowhere in the whole
   status output, which includes the install path; use a worktree path without `bo`.
+
+- **GitHub issue JSON calls expose the type as `issueType`, not `type`.** `gh issue list
+  --json type` exits before listing anything and prints the valid fields; request
+  `--json issueType` and read `.issueType.name`.
 
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

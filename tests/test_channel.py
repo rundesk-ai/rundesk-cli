@@ -420,6 +420,17 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
         told = json.loads(held.of("arrived")[0]["text"])
         self.assertEqual("ops", told["RUNDESK_CHANNEL"])
         self.assertEqual("ava", told["RUNDESK_AGENT"])
+        self.assertEqual("ava", told["RUNDESK_AGENT_NAME"])
+
+    async def test_an_adapter_is_told_display_name_and_slug_separately(self):
+        """R-AGT-39 — an adapter may show the human spelling without using it as a path."""
+        held = await self.hold(
+            self.stand_in("nosy"),
+            env=self.told(agent_name="iOS Helper"),
+        )
+        told = json.loads(held.of("arrived")[0]["text"])
+        self.assertEqual("ava", told["RUNDESK_AGENT"])
+        self.assertEqual("iOS Helper", told["RUNDESK_AGENT_NAME"])
 
     async def test_an_adapter_is_given_somewhere_of_its_own_that_lasts(self):
         """R-CAD-13 — a channel held open for weeks has things to remember between
@@ -526,7 +537,7 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
         self.assertEqual([], said["attachments"])
 
     def test_a_reply_reference_crosses_the_seam_with_bounded_context(self):
-        """R-CH-28 — one small, shared shape tells every brain what was replied to."""
+        """R-CH-29 — one small, shared shape tells every brain what was replied to."""
         said = channel.understood(json.dumps({
             "type": "arrived", "conversation": "one", "user": "2207",
             "text": "fix the second one",
@@ -544,7 +555,7 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
         )
 
     def test_an_unresolved_reply_reference_is_kept_without_inventing_context(self):
-        """R-CH-29 — unavailable parent content is orientation, never a dropped turn."""
+        """R-CH-30 — unavailable parent content is orientation, never a dropped turn."""
         said = channel.understood(json.dumps({
             "type": "arrived", "conversation": "one", "user": "2207",
             "text": "what about this?", "reply_to": {
@@ -558,7 +569,7 @@ class ARecordNobodyHereKnows(DrivesAnAdapter):
         )
 
     def test_a_malformed_reply_reference_is_ignored_without_losing_the_message(self):
-        """R-CH-28 — optional context cannot make an otherwise valid arrival invalid."""
+        """R-CH-29 — optional context cannot make an otherwise valid arrival invalid."""
         said = channel.understood(json.dumps({
             "type": "arrived", "conversation": "one", "user": "2207",
             "text": "ordinary message", "reply_to": {"resolved": True},
