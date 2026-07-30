@@ -395,5 +395,42 @@ class HowMuchOfTheMachineATurnMayTouch(unittest.TestCase):
             self.assertRegex(named, r"^[a-z]+(-[a-z]+)*$")
 
 
+class WhatOneTurnCost(unittest.TestCase):
+    def test_cache_reads_writes_and_fresh_input_stay_in_four_slots(self):
+        """R-USE-13 — Codex reports cache reads and writes as subdivisions of input.
+        Losing the write field both drops one billed quantity and folds it into fresh
+        input, so the adapter boundary has to prove all four slots with nonzero values."""
+        self.assertEqual(
+            {"type": "usage", "input": 20, "output": 10,
+             "cached": 40, "written": 60},
+            codex._usage({
+                "inputTokens": 120,
+                "cachedInputTokens": 40,
+                "cacheWriteInputTokens": 60,
+                "outputTokens": 10,
+            }))
+
+    def test_an_older_stream_claims_no_cache_write_split(self):
+        """R-USE-13 — absence is unknown, not a measured zero."""
+        self.assertEqual(
+            {"type": "usage", "input": 60, "output": 10, "cached": 40},
+            codex._usage({
+                "inputTokens": 100,
+                "cachedInputTokens": 40,
+                "outputTokens": 10,
+            }))
+
+    def test_reported_subdivisions_cannot_make_fresh_input_negative(self):
+        """A malformed or newer stream cannot turn accounting into a negative cost."""
+        self.assertEqual(
+            0,
+            codex._usage({
+                "inputTokens": 50,
+                "cachedInputTokens": 40,
+                "cacheWriteInputTokens": 20,
+                "outputTokens": 10,
+            })["input"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

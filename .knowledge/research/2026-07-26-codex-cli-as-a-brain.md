@@ -35,8 +35,9 @@ present once.[3]
 **The cache is folded inside the input count.** `input_tokens` contains
 `cached_input_tokens`, so reporting it whole prices most of the volume at the fresh rate.
 0.145.0 also reports `cache_write_input_tokens` separately, which is the tokens written
-*into* the cache and billed above the standard rate — so it belongs with fresh input and
-never with cache reads.
+*into* the cache and billed above the standard rate. Codex's own conversion fixture proves
+both are subdivisions of input: 100 input and 10 output total 110 while the input details
+name 40 cached and 60 written.[5]
 
 **A private home isolates the sign-in, and sharing it is one file.** Codex keeps its
 credentials in `auth.json` inside the home it is given — a plain file, not a keychain — so
@@ -158,8 +159,6 @@ Rerun `.knowledge/scripts/probe-codex` when the version moves, and write what ch
 
 ## Open questions
 
-- Whether `cache_write_input_tokens` is inside `input_tokens` or beside it — it was nothing
-  in every turn measured, so nothing here depends on the answer yet.
 - Whether an owner sharing one sign-in across agents wants that arranged for them, and by
   what — nothing does it today, deliberately.
 - What an adapter on `app-server` costs to keep: it is a protocol with a lifecycle rather
@@ -175,3 +174,4 @@ Rerun `.knowledge/scripts/probe-codex` when the version moves, and write what ch
 2. OpenAI, Codex App Server — https://developers.openai.com/codex/app-server/
 3. The build this replaces, `probes/codex-usage.ts` — (internal)
 4. `.knowledge/scripts/probe-codex` against `codex-cli 0.145.0` on macOS, 2026-07-26 — (internal)
+5. Codex cache-write conversion fixture — https://github.com/openai/codex/blob/3d805abdf09093bfa806f359a5adc6514766c420/codex-rs/codex-api/src/sse/responses.rs#L810-L833
