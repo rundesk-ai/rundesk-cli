@@ -1219,6 +1219,13 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
         self.assertEqual({"type", "conversation", "run", "id", "ok", "summary"},
                          set(surface.of("result")[0]))
 
+    async def test_a_final_answer_names_the_provider_that_produced_it(self):
+        """R-CH-28 — provenance is Rundesk's fact, not optional brain metadata."""
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await self.carry(held, self.arrived())
+        self.assertEqual("a-brain", surface.of("answer")[0]["provider"])
+
     async def test_how_big_the_conversation_is_reaches_a_surface_with_what_it_cost(self):
         """R-USE-15, R-CH-13 — the field is named here or it never leaves, and a footer
         showing it would be dead the day it was written. A brain's own bookkeeping around

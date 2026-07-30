@@ -1136,13 +1136,18 @@ class Agent(discord.Client):
         message it names them, and where it replies to nothing it names nobody, so a room
         is not pinged by an answer nobody there asked for.
         """
-        # The cost first, then the answer, in one message (R-DIS-17). At the top rather
-        # than the bottom because a long answer pushes anything after it off a phone
-        # screen, and what a turn cost is worth seeing without scrolling.
+        # The provider and cost first, then the answer, in one message (R-DIS-17,
+        # R-DIS-32). At the top rather than the bottom because a long answer pushes
+        # anything after it off a phone screen, and which brain ran the turn and what it
+        # cost are worth seeing without scrolling.
         self._stop_typing(held)
         self._no_longer_last(held)
         whole = str(it.get("text") or "")
         footer = held.cost
+        provider_name = it.get("provider")
+        if isinstance(provider_name, str) and provider_name:
+            footer = (f"-# {provider_name}{footer[2:]}"
+                      if footer.startswith("-# ·") else f"-# {provider_name}")
         if held.started is not None:
             elapsed = f"{_duration(held.clock() - held.started)} elapsed"
             footer = f"{footer} · {elapsed}" if footer else f"-# · {elapsed}"

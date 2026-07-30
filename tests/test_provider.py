@@ -789,6 +789,13 @@ class AnAdapterThatCannotBeRun(DrivesAnAdapter):
         self.assertTrue(one.startswith("brain-"))
         self.assertEqual(one, provider.key("/opt/one/brain"), "it is not the same twice")
 
+    def test_a_provider_label_is_readable_without_exposing_or_rewriting_its_location(self):
+        """R-CH-28 — provenance may leave the machine; its filesystem path may not."""
+        one = provider.label("/opt/private/stand-in")
+        self.assertTrue(one.startswith("stand-in-"))
+        self.assertNotIn("/opt", one)
+        self.assertNotIn("\n", provider.label("stand-\nin"))
+
 
 class ATurnThatWentWrong(DrivesAnAdapter):
     async def test_a_turn_that_failed_says_so_rather_than_going_quiet(self):

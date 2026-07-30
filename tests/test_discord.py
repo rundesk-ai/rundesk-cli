@@ -1008,8 +1008,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         asyncio.run(discord.Agent._doing(
             Turn(), {"type": "usage", "session": 122435, "output": 837}, held))
         asyncio.run(discord.Agent._answer(
-            Turn(), {"type": "answer", "text": "done"}, held))
-        self.assertEqual("-# · 122k session · 837 output · 28s elapsed",
+            Turn(), {"type": "answer", "provider": "stand-in", "text": "done"}, held))
+        self.assertEqual("-# stand-in · 122k session · 837 output · 28s elapsed",
                          posted[0].splitlines()[0])
 
     def test_a_brain_that_does_not_report_a_conversation_size_gets_the_footer_it_always_got(self):
@@ -1043,9 +1043,9 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         held.cost = "-# · 1.9k input · 94 output · 70k cached"
         now[0] += 120
         asyncio.run(discord.Agent._answer(
-            Turn(), {"type": "answer", "text": "done"}, held))
+            Turn(), {"type": "answer", "provider": "stand-in", "text": "done"}, held))
         self.assertEqual(
-            "-# · 1.9k input · 94 output · 70k cached · 2m elapsed",
+            "-# stand-in · 1.9k input · 94 output · 70k cached · 2m elapsed",
             posted[0].splitlines()[0])
 
     def test_repeated_taken_does_not_restart_elapsed_time(self):
@@ -1062,8 +1062,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         asyncio.run(discord.Agent._state(Turn(), {"state": "taken"}, held))
         self.assertEqual(100.0, held.started)
 
-    def test_elapsed_time_is_shown_when_usage_was_not_reported(self):
-        """R-DIS-24 — duration is useful even when a provider supplies no token counts."""
+    def test_provider_and_elapsed_time_are_shown_when_usage_was_not_reported(self):
+        """R-DIS-24, R-DIS-32 — provenance does not depend on optional usage metadata."""
         posted = []
 
         class Turn:
@@ -1074,8 +1074,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         held = discord.Live(clock=lambda: 140.0)
         held.started = 100.0
         asyncio.run(discord.Agent._answer(
-            Turn(), {"type": "answer", "text": "done"}, held))
-        self.assertEqual("-# · 40s elapsed", posted[0].splitlines()[0])
+            Turn(), {"type": "answer", "provider": "stand-in", "text": "done"}, held))
+        self.assertEqual("-# stand-in · 40s elapsed", posted[0].splitlines()[0])
 
     def test_a_small_count_is_not_rounded_into_a_zero(self):
         """R-USE-7 — everything was shown in thousands, so a turn that answered in
