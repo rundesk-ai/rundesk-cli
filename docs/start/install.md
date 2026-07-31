@@ -5,6 +5,16 @@ sidebar:
   order: 2
 ---
 
+## Before you start
+
+- macOS
+- Python 3.9 or newer
+- At least one [supported provider CLI](/reference/providers/), installed and signed in
+
+Rundesk itself is standard-library Python with no build step.
+
+## Install
+
 ```sh
 curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash
 ```
@@ -20,7 +30,7 @@ the `rundesk` command on your `PATH` without editing your shell profile.
   data/         your agents, skills, scripts, history, and configuration
 ```
 
-The split is the point. `app/` is Rundesk's; `data/` is yours.
+`app/` is Rundesk's and `data/` is yours, which is what makes the rest of these true:
 
 - **Updates** replace `app/` and leave `data/` alone.
 - **Uninstall** leaves `data/` alone unless you explicitly ask to purge it.
@@ -32,8 +42,7 @@ The split is the point. `app/` is Rundesk's; `data/` is yours.
 rundesk doctor
 ```
 
-`doctor` runs the diagnostics that catch a broken install before it becomes an unattended
-failure at three in the morning.
+`doctor` runs the diagnostics that catch a broken install before you depend on it.
 
 ## Updates
 

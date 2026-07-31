@@ -52,12 +52,4 @@ The provider and channel seams are **programs, not in-process plugins**. A custo
 can be written in any language and receives the same scheduling, lifecycle, history, and
 channel behavior as a shipped one.
 
-## Requirements
-
-- macOS
-- Python 3.9 or newer
-- At least one [supported provider CLI](/reference/providers/), installed and signed in
-
-Rundesk itself is standard-library Python with no build step.
-
 Next: [install it](/start/install/).

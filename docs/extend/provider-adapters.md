@@ -25,8 +25,7 @@ rundesk add ava --provider /opt/my-provider --model fast-1 --set effort=high
    outcome, and token usage as records, and Rundesk stores them in its own normalized form.
 
 The second one is where adapters are usually left half-finished. An adapter that runs but
-reports nothing produces an agent that works and has no history — the turn happened, and
-there is no account of it.
+reports nothing produces an agent that works and has no history.
 
 ## The contract
 

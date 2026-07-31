@@ -38,5 +38,4 @@ need — it will follow the guard and testing conventions rather than inventing 
 ## Why this beats an in-process plugin
 
 The same reason provider and channel seams are programs: an executable can be written in any
-language, tested on its own, versioned on its own, and swapped without a Rundesk release. The
-shared library is a directory, not a registry you have to be admitted to.
+language, tested on its own, versioned on its own, and swapped without a Rundesk release.

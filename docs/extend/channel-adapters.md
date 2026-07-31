@@ -10,8 +10,6 @@ your desk. Like a provider adapter, it is **an executable** rather than code Run
 
 ## The division of labour
 
-This is the part worth understanding before you write anything:
-
 | The adapter owns | Rundesk owns |
 |---|---|
 | The vocabulary and behavior of the platform | Access control |

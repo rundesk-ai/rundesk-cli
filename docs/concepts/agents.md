@@ -32,11 +32,9 @@ One gateway per agent, owned by macOS `launchd`. That ownership is what makes it
 the operating system brings it back after a crash, a reboot, or an automatic update, without
 a supervisor process of Rundesk's own to also crash.
 
-Two consequences worth knowing:
-
 - **Agents are independent.** Restarting or stopping one does not disturb the others.
 - **Stopping is complete.** Ending a gateway ends the provider and every child process it
-  started. Nothing is left running behind your back.
+  started.
 
 ## Diagnostics before failure
 
@@ -50,5 +48,5 @@ discover that a CLI logged itself out.
 
 ## Removal
 
-Removing an agent preserves its home unless you explicitly ask to purge it. The identity goes
-away; the record of what it did does not, unless you say so.
+Removing an agent preserves its home unless you explicitly ask to purge it — the identity
+goes away, the record of what it did stays.

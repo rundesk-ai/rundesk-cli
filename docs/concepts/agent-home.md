@@ -6,8 +6,8 @@ sidebar:
 ---
 
 Every agent gets its own home directory. Four markdown files in it are loaded before anything
-is asked of the agent, and together they are the whole of its continuity — an agent starts
-fresh every session, and these files are what survives.
+is asked of the agent. An agent starts each session fresh, so these four files are its
+continuity.
 
 ```text
 AGENTS.md    the operating rules, loaded before anything is asked
@@ -55,5 +55,4 @@ Two files, two jobs, and every fact has exactly one home: `USER.md` for facts ab
 person, `MEMORY.md` for facts about the work. Lines added to `USER.md` are dated, so the
 owner can see what the agent concluded about them and correct it.
 
-A long memory file is one nobody has pruned. Under 50 lines is the working limit; past that,
-consolidate before adding.
+Under 50 lines is the working limit. Past that, consolidate before adding.

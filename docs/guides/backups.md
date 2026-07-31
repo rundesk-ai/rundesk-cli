@@ -40,8 +40,7 @@ Removing a single copy is separate, and only touches that one:
 rundesk backups remove <backup>
 ```
 
-Both `restore` and `remove` ask for confirmation. `--yes` skips the prompt, which is what you
-want in a script and not what you want at a terminal at midnight.
+Both `restore` and `remove` ask for confirmation. `--yes` skips the prompt, for scripts.
 
 ## Where copies live
 

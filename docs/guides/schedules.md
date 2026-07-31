@@ -32,7 +32,7 @@ than sitting in a log you have to remember to read.
 One-time schedules are also the right tool for a safety net: a check that needs to happen
 after something finishes, when that something may outlive the session that started it.
 
-## Two guarantees worth relying on
+## Two guarantees
 
 - **No overlap.** The same schedule never runs on top of itself. A nightly review that takes
   longer than usual does not get a second copy started underneath it.

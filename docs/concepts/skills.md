@@ -22,8 +22,7 @@ That says what exists on the machine and which of it an agent has.
 - **Built-in skills** ship with Rundesk and update with it.
 - **Owner-created skills** are yours and do not get overwritten by an update.
 
-The distinction is the whole reason updates are safe: Rundesk replaces what it laid down and
-nothing else.
+An update replaces what Rundesk laid down and nothing else, so your own skills survive it.
 
 ## What ships
 
@@ -50,5 +49,4 @@ agent. See [Integration CLIs](/extend/integration-clis/).
 ## Self-improving by design
 
 Agents can turn repeated work into new skills and integration CLIs themselves. A capability
-developed once by one agent can be granted to all of them — which is the difference between a
-tool you use and a teammate that gets better at the job.
+developed once by one agent can then be granted to all of them.
