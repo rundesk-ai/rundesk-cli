@@ -365,6 +365,13 @@ jobs:
               before = was.get(section, {})
               after = now.get(section, {})
               for key, expected in values.items():
+                  if (section == "skills" and key == "granted"
+                          and before.get(key) == list(config.PREVIOUS_DEFAULT_GRANTS)):
+                      if after.get(key) != expected:
+                          raise SystemExit(
+                              "::error::the upgrade did not advance the unchanged "
+                              "release-default skill grants")
+                      continue
                   if key in before and after.get(key) != before[key]:
                       raise SystemExit(
                           f"::error::the upgrade changed '{section}.{key}': "
@@ -392,6 +399,14 @@ jobs:
           printf '%s\n' "$held" |
             grep -qE '^managing-rundesk-schedules +rundesk +.*existing' ||
             { echo "::error::the existing agent lost its built-in skill grant"; exit 1; }
+          for skill in filing-github-issues writing-github-pull-requests; do
+            printf '%s\n' "$held" |
+              grep -qE "^${skill} +rundesk +.*Legacy_Name" ||
+              { echo "::error::the legacy agent did not receive ${skill}"; exit 1; }
+            printf '%s\n' "$held" |
+              grep -qE "^${skill} +rundesk +.*existing" ||
+              { echo "::error::the existing agent did not receive ${skill}"; exit 1; }
+          done
           "$RUNDESK_BIN_DIR/rundesk" schedules existing | grep -q 'heartbeat' ||
             { echo "::error::the existing schedule disappeared during upgrade"; exit 1; }
           "$RUNDESK_BIN_DIR/rundesk" agents "Legacy Name" | grep -q '^Legacy_Name:' ||
