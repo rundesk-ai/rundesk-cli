@@ -45,64 +45,36 @@ import Install from '@site/components/Install.astro';
 <Install />
 
 <div class="rd-pills">
-	<span class="rd-pill"><span class="rd-pill__dot"></span> macOS</span>
+	<span class="rd-pill">macOS</span>
 	<span class="rd-pill">Python 3.9+</span>
 	<span class="rd-pill">No build step</span>
 	<span class="rd-pill">MIT</span>
 </div>
 
 Rundesk keeps the coding CLI you already use — **Codex**, **Claude Code**, **Grok**, **Google
-Antigravity** — running with its own workspace, rules, memory, skills, conversations, and
-history. It does not replace them. It gives them a dependable home and a common operating
-layer.
-
-<CardGrid>
-	<Card title="Get started" icon="rocket">
-		Install Rundesk and bring up your first agent in a few minutes.
-
-		[Start here →](/start/what-rundesk-is/)
-	</Card>
-	<Card title="Understand the model" icon="open-book">
-		Agents, gateways, homes, and the four files that decide who an agent is.
-
-		[Concepts →](/concepts/agents/)
-	</Card>
-	<Card title="Reach it from anywhere" icon="comment">
-		Put an agent on Discord, or give it a schedule that runs while you sleep.
-
-		[Guides →](/guides/discord/)
-	</Card>
-	<Card title="Extend it" icon="puzzle">
-		Adapters are executables, so another brain or another platform is yours to add.
-
-		[Extend →](/extend/provider-adapters/)
-	</Card>
-</CardGrid>
+Antigravity** — running as a named teammate with a home of its own. It does not replace them.
+It gives them a dependable place to live and a common operating layer.
 
 ## Quick start
 
+Run the install command above, then three more to a working teammate.
+
 <Steps>
 
-1. **Install.** No shell profile is edited, and everything lands under `~/.rundesk`.
-
-   ```sh
-   curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash
-   ```
-
-2. **Create an agent** and check its provider can actually run.
+1. **Create an agent** and check its provider can actually run.
 
    ```sh
    rundesk add ava --provider codex
    rundesk doctor ava
    ```
 
-3. **Talk to it.** The answer streams back, and the next `ask` resumes the conversation.
+2. **Talk to it.** The answer streams back, and the next `ask` resumes the conversation.
 
    ```sh
    rundesk ask ava "review this repository and tell me the highest-risk open issue"
    ```
 
-4. **Keep it available** after the terminal closes. `launchd` owns the gateway from here.
+3. **Keep it available** after the terminal closes. `launchd` owns the gateway from here.
 
    ```sh
    rundesk start ava
@@ -118,38 +90,38 @@ Coding agents are excellent at a turn of work, but their native home is one term
 that ends when you close it. Rundesk adds the parts needed to operate them over time.
 
 <CardGrid>
-	<Card title="One identity, one home" icon="document">
-		Every agent has its own workspace, rules, memory, skills, conversations, and logs, and
-		keeps them across turns, surfaces, and restarts.
+	<Card title="One identity, one home">
+		Every agent has its own workspace, rules, memory, skills, and history, and keeps them
+		across turns, surfaces, and restarts.
 	</Card>
-	<Card title="Always available" icon="approve-check">
+	<Card title="Always available">
 		macOS `launchd` owns each agent's gateway and brings it back after a crash, reboot, or
 		automatic update. One gateway per agent, managed independently.
 	</Card>
-	<Card title="Terminal, chat, and cron" icon="random">
+	<Card title="Terminal, chat, and cron">
 		Continue the same conversation from the command line, from Discord, or from a
 		schedule. It is the same agent either way.
 	</Card>
-	<Card title="Bring your own brain" icon="setting">
+	<Card title="Bring your own brain">
 		Four provider CLIs ship first-class. Rundesk uses the login already on your machine and
 		never copies provider credentials.
 	</Card>
-	<Card title="A durable account of every turn" icon="document">
+	<Card title="A durable account of every turn">
 		Messages, tool activity, outcomes, errors, and token usage recorded per turn, in
 		Rundesk's own form rather than a provider's private session format.
 	</Card>
-	<Card title="Local and recoverable" icon="approve-check">
+	<Card title="Local and recoverable">
 		Program and data live in separate directories. Manual and daily backups, explicit
 		restore, and no hosted server required.
 	</Card>
 </CardGrid>
 
-## Browse the docs
+## Where to go next
 
 <CardGrid>
 	<LinkCard
 		title="Start here"
-		description="What Rundesk is, install, and your first agent."
+		description="What Rundesk is, how to install it, and your first agent."
 		href="/start/what-rundesk-is/"
 	/>
 	<LinkCard
@@ -159,23 +131,13 @@ that ends when you close it. Rundesk adds the parts needed to operate them over 
 	/>
 	<LinkCard
 		title="Guides"
-		description="Discord, schedules, and backups."
+		description="Discord, schedules, backups, and what to do when something breaks."
 		href="/guides/discord/"
 	/>
 	<LinkCard
 		title="Reference"
-		description="Providers, and every command generated from the parser."
+		description="Providers, configuration, and every command generated from the parser."
 		href="/reference/providers/"
-	/>
-	<LinkCard
-		title="Extend"
-		description="Provider adapters, channel adapters, and integration CLIs."
-		href="/extend/provider-adapters/"
-	/>
-	<LinkCard
-		title="Source"
-		description="The repository, its issues, and every release."
-		href="https://github.com/rundesk-ai/rundesk-cli"
 	/>
 </CardGrid>
 
