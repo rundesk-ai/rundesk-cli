@@ -224,7 +224,7 @@ provider. One file per contract, named for it:
 | `test_answering.py` | 101 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
 | `test_discord.py` | 168 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
 | `test_instructions.py` | 10 | Rundesk's core and trigger prompts, standard variables, and additive builder |
-| `test_ci.py` | 13 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, and the supported matrix |
+| `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and
 `.knowledge/scripts/check-evidence` fails the build when a row names one that does not exist.

@@ -207,6 +207,21 @@ class FastPullRequestFeedback(unittest.TestCase):
         self.assertIn("owner-kept.txt", upgrade)
         self.assertIn("serve existing", upgrade)
 
+    def test_install_gates_use_the_local_default_catalog_fixture(self):
+        """R-INS-16 — GitHub's anonymous API quota cannot decide whether a PR passes."""
+        source = (
+            "RUNDESK_DEFAULT_SKILLS_SOURCE: "
+            "${{ github.workspace }}/tests/fixtures/default-catalog"
+        )
+        fresh = self.workflow.split("  install-this-checkout:", 1)[1]
+        fresh = fresh.split("  # ------------------------------------------------------------------ upgrading", 1)[0]
+        upgrade = self.workflow.split("  upgrade-existing-install:", 1)[1]
+        upgrade = upgrade.split(
+            "  # ------------------------------------------------------------------ installing what is published", 1
+        )[0]
+        self.assertIn(source, fresh)
+        self.assertIn(source, upgrade)
+
     def test_every_workflow_pins_one_major_of_each_action_it_shares(self):
         """Build and release both check out and set Python up, and the two drifting apart
         is how a release job goes on running a runtime the build stopped exercising. Every

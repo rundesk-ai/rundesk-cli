@@ -146,6 +146,10 @@ jobs:
     name: install this checkout, use it, remove it — ${{ matrix.os }}
     timeout-minutes: 10
     runs-on: ${{ matrix.os }}
+    env:
+      # A pull-request gate proves the installer, not GitHub's anonymous API quota.
+      # Public catalog reachability belongs to the published-release canary.
+      RUNDESK_DEFAULT_SKILLS_SOURCE: ${{ github.workspace }}/tests/fixtures/default-catalog
     strategy:
       fail-fast: false
       matrix:
