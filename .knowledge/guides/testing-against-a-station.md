@@ -54,6 +54,11 @@ launchctl list | grep rundesk       # before and after anything that touches a j
 `launchctl list` is the only place the launchd half of this shows: an install elsewhere that takes a
 registration away leaves the other install's plist on disk, so nothing looks wrong afterwards.
 
+Do not simulate an upgrade by running a second checkout's `install.sh` over a station installed from
+the first. The automatic-update job records the checkout that wrote it, so the second correctly refuses
+to claim that job as its own. Test upgrade provisioning with the feature checkout's command under the
+same fully redirected environment, and let the checkout that installed the station uninstall it.
+
 ## Throwing it away
 
 **Uninstall it first, and delete the directory second.** The plists live in `$station/jobs`, so `rm -rf`

@@ -118,7 +118,7 @@ class WhatAnUpdateAdds(WithADataDirectory):
         config.ensure(self.where)
 
         self.assertEqual(
-            chosen + list(config.RUNDESK_REQUIRED_GRANTS),
+            list(config.RUNDESK_REQUIRED_GRANTS),
             json.loads(self.at.read_text())["skills"]["granted"],
         )
 
@@ -154,12 +154,10 @@ class WhichSkillsANewAgentGets(WithADataDirectory):
         removing the platform stewardship every Rundesk agent carries."""
         self.at.write_text('{"skills": {"granted": ["managing-rundesk"]}}\n', encoding="utf-8")
 
-        self.assertEqual(
-            ("managing-rundesk", *config.RUNDESK_REQUIRED_GRANTS),
-            config.skills(self.where)["granted"],
-        )
+        self.assertEqual(config.RUNDESK_REQUIRED_GRANTS,
+                         config.skills(self.where)["granted"])
 
-    def test_an_empty_optional_list_still_keeps_the_rundesk_required_skill(self):
+    def test_an_empty_optional_list_still_keeps_the_rundesk_operating_baseline(self):
         """R-AGT-36 — empty means no owner-selected baseline, not that an agent stops
         participating in Rundesk platform stewardship."""
         self.at.write_text('{"skills": {"granted": []}}\n', encoding="utf-8")

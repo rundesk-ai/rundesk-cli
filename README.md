@@ -207,9 +207,20 @@ state, history, and delivery.
 ### Skills and integration CLIs
 
 - A shared skill library with per-agent grants
-- Built-in skills that update with Rundesk and owner-created skills that do not
+- Required Rundesk operating skills that every agent retains
+- Versioned repository catalogs installed, updated, and removed as one collection
+- Owner-created skills that Rundesk never replaces
 - A shared executable library placed on every agent's `PATH`
 - Guidance for building guarded, offline-tested service integrations
+
+Install a catalog from its repository URL. Rundesk previews every declared skill first;
+confirmation makes them available in the shared library and grants none automatically:
+
+```sh
+rundesk skills install https://github.com/rundesk-ai/rundesk-skills-dev
+rundesk skills install https://github.com/rundesk-ai/rundesk-skills-dev --confirm
+rundesk skills grant ava python-patterns
+```
 
 ### Operations and data
 

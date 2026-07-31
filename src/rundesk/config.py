@@ -54,10 +54,18 @@ PREVIOUS_DEFAULT_GRANTS = (
     "filing-rundesk-issues",
 )
 
-#: Skills that are part of being a Rundesk agent rather than an owner's optional baseline.
-#: They are visible in `config.json`, reconciled onto every agent, and cannot be configured
-#: away or revoked (R-AGT-36, R-AGT-37).
-RUNDESK_REQUIRED_GRANTS = ("filing-rundesk-issues",)
+#: The operating baseline every Rundesk agent receives. The generic GitHub skills are here
+#: because the Rundesk issue and pull-request overlays delegate their shared workflow to
+#: them; a required skill whose prerequisite is optional is a broken baseline.
+RUNDESK_REQUIRED_GRANTS = (
+    "managing-rundesk",
+    "managing-rundesk-schedules",
+    "managing-rundesk-backups",
+    "filing-github-issues",
+    "filing-rundesk-issues",
+    "writing-github-pull-requests",
+    "writing-rundesk-pull-requests",
+)
 
 #: What a new configuration says in full (R-INS-19). This is an installation seed, never a
 #: runtime fallback: once written, `config.json` is what governs the install. Not every
@@ -66,15 +74,7 @@ INITIAL = {
     "backups": {"at": "04:00", "keep_days": 30},
     "updates": {"at": "03:00"},
     "skills": {
-        "granted": [
-            "managing-rundesk",
-            "managing-rundesk-schedules",
-            "managing-rundesk-backups",
-            "filing-github-issues",
-            "filing-rundesk-issues",
-            "writing-github-pull-requests",
-            "writing-rundesk-pull-requests",
-        ]
+        "granted": list(RUNDESK_REQUIRED_GRANTS)
     },
 }
 

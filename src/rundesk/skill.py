@@ -267,12 +267,18 @@ def ours(entry: Path, where: Path | None = None) -> bool:
     """
     if not entry.is_symlink():
         return False
-    where = (where or home()).resolve()
+    # Ask where the first link points, without resolving a library entry that is itself a
+    # catalog link. A grant Rundesk makes points into the library; whether that library
+    # entry is a directory or a managed link is a separate ownership question. Resolving
+    # both links at once lands under `data/catalogs/` and incorrectly makes revoke refuse
+    # the same catalog skill grant Rundesk created (R-CAT-3).
+    where = (where or home()).absolute()
     try:
-        target = entry.resolve()
+        named = Path(os.readlink(entry))
+        target = Path(os.path.abspath(entry.parent / named))
     except OSError:
         return False
-    return where in target.parents
+    return target == where or where in target.parents
 
 
 def _standing(skills_dir: Path, name: str) -> Path:

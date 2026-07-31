@@ -87,6 +87,19 @@ flowchart LR
   GH -->|"newest published version"| Cmd
 ```
 
+**Adding maintained skills.** A catalog repository is installed and updated as one collection, while
+each assistant still receives only the skills its owner grants. Rundesk's own operating skills remain
+part of every assistant's baseline and cannot be removed.
+
+```mermaid
+flowchart LR
+  Repo[("A versioned skill<br/>catalog repository")] -->|"install or update"| Lib["The shared skill library"]
+  Lib -->|"grant one skill"| Ava["assistant ava"]
+  Lib -->|"grant a different skill"| Ben["assistant ben"]
+  Core["Rundesk operating skills<br/>built in and required"] --> Ava
+  Core --> Ben
+```
+
 ## How it works
 
 - **rundesk** — the one command, and the whole surface. Every verb the finished product will have is
@@ -97,6 +110,9 @@ flowchart LR
   outright rather than interrupting one that is mid-task.
 - **Install / uninstall** — puts the command on your PATH, or removes it. It refuses to report success
   until the command it installed actually answers.
+- **Skill catalogs** — versioned repositories of complete skill packages. Installing one makes all of
+  its skills available without granting them; the repository is updated or removed as one unit, and
+  every installed catalog keeps its source and declared version.
 - **A gateway** — the part that stays running. There is one for each name, so later there can be one for
   each assistant, and any one of them can be restarted without disturbing the rest.
 - **Your machine keeps it up** — rundesk supervises nothing itself. It writes down what to run and hands

@@ -255,6 +255,9 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 - **`gh issue list --json type` fails even though `gh issue create --type` is valid.**
   The issue classification field is named `issueType` in JSON output; use that when checking
   existing issues before filing one.
+- **This installed `gh` does not accept `--repo` on `gh repo view`.** Pass the repository as
+  the positional argument (`gh repo view owner/repo --json ...`); the documented-looking flag
+  fails before any repository information is read.
 - **zsh expands an unquoted `?ref=main` in a `gh api` endpoint as a filename glob.** The
   request never reaches GitHub and fails with `no matches found`; quote the whole endpoint.
 - **In zsh, `path` is a special array tied to `PATH`.** Assigning a file path to a shell

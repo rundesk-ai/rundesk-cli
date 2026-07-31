@@ -61,8 +61,12 @@ rundesk messages [--most <n>] [--since <id>] [--channel <channel>] [--conversati
 rundesk resume <agent>                                                                                                                                                                                                  carry one run on from where it stopped   [planned]
 rundesk scripts [--where]                                                                                                                                                                                               the integration commands every agent can invoke
 rundesk search [--most <n>] <agent> <words>                                                                                                                                                                             what was said, by the words in it
+rundesk skills catalogs                                                                                                                                                                                                 the installed skill catalogs and their versions
 rundesk skills grant <agent> <skill>                                                                                                                                                                                    give an agent one of the skills in the library
+rundesk skills install [--confirm] <repository>                                                                                                                                                                         install every skill declared by a repository
+rundesk skills remove [--yes] <catalog>                                                                                                                                                                                 remove an installed catalog and its skills
 rundesk skills revoke <agent> <skill>                                                                                                                                                                                   take a skill away from an agent
+rundesk skills update <catalog>                                                                                                                                                                                         move an installed catalog to its newer version
 ```
 
 ## What it looks like
@@ -129,6 +133,7 @@ rundesk schedules ava off nightly
 --author <kind>                 only what this kind of author said — one of agent | rundesk | user
 --channel <channel>             only what was said on this channel, by the name it was added under
 --check                         say whether a newer release exists
+--confirm                       install after reviewing what the repository declares
 --conversation <conversation>   which conversation to carry on — this terminal's, when left out
 --conversation <where>          only what was said in one place on it — the direct message or room, either as the WHERE column prints it or in the platform's own word alone
 --expired                       instead, the one-time schedules whose moment has gone — whether each ran, or whether it passed while nothing was running
@@ -158,10 +163,12 @@ rundesk schedules ava off nightly
 -n, --lines <lines>             how many of the last lines to show, from each source
 <agent>                         which agent — the name it was made under
 <backup>                        which one, by the name it is listed under
+<catalog>                       which catalog
 <channel>                       what to call it, and what to name it by later
 <option>                        after `--`, whatever this kind of channel needs — carried to it exactly as typed, and never read here
 <program>                       after `--`, the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH
 <prompt>                        what to ask it, in quotes
+<repository>                    a GitHub repository URL, local directory or archive
 <run>                           which run — the id listed against each by `runs`
 <schedule>                      what to call it, and what to name it by later
 <skill>                         which skill, by the name it is under
