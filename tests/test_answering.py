@@ -11,13 +11,16 @@ Run: python3 tests/test_answering.py
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -354,7 +357,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
              answer["recipient"], answer["elapsed"]),
         )
 
-    async def test_a_scheduled_final_answer_attaches_its_absolute_local_link(self):
+    async def test_a_scheduled_final_answer_attaches_its_reserved_local_line(self):
         """R-CH-31, R-SCH-50 — the same final-answer convention applies when the
         clock started the turn and no inbound channel message exists."""
         self.spoken_on()
@@ -367,7 +370,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
         at = agents.paths("ava", self.where)["workspace"] / "overnight.pdf"
         at.write_bytes(b"a report")
         kept.answered(its_own, run, "2026-07-26T09:02:00Z",
-                      f"[Download the overnight report](<{at}>)")
+                      f"rundesk-attach: [Download the overnight report](<{at}>)")
         kept.ended(run, "2026-07-26T09:02:00Z", "finished")
         outcome = Outcome(run=run)
         surface = Surface()
@@ -378,8 +381,10 @@ class WhereABrainIsAnswering(CarriesAConversation):
 
         answer = surface.of("answer")[0]
         self.assertEqual("Download the overnight report", answer["text"])
-        self.assertEqual([{"name": at.name, "at": str(at.resolve())}],
-                         answer["attachments"])
+        self.assertEqual(at.name, answer["attachments"][0]["name"])
+        self.assertEqual(str(at.resolve()), answer["attachments"][0]["at"])
+        self.assertEqual(len(b"a report"), answer["attachments"][0]["bytes"])
+        self.assertRegex(answer["attachments"][0]["sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual([], [one for one in surface.of("said")
                               if not one.get("began")])
 
@@ -1750,6 +1755,29 @@ class WhatTheAgentMade(CarriesAConversation):
         await self.carry(held, self.arrived())
         self.assertEqual([], surface.of("answer")[0]["attachments"])
 
+    async def test_an_invalid_attachment_path_does_not_cost_the_answer(self):
+        """R-CH-8, R-CH-18 — an invalid filesystem string is one refused file,
+        not a failed completed turn."""
+        loop = agents.paths("ava", self.where)["workspace"] / "loop"
+        loop.parent.mkdir(parents=True, exist_ok=True)
+        loop.symlink_to(loop)
+        brain = Brain(outcome=Outcome(
+            text="the work still finished",
+            files=[
+                {"type": "file", "at": "/tmp/bad\0name"},
+                {"type": "file", "at": str(loop)},
+            ],
+        ))
+        surface = Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual("the work still finished", answer["text"])
+        self.assertEqual([], answer["attachments"])
+        self.assertIn(channel.FINISHED, surface.states)
+
     async def test_a_turn_that_only_made_something_still_arrives(self):
         """R-CH-8, R-CH-18 — a picture with no words is an answer."""
         at = self._made()
@@ -1759,11 +1787,11 @@ class WhatTheAgentMade(CarriesAConversation):
         await self.carry(held, self.arrived())
         self.assertEqual(1, len(surface.of("answer")), "the picture was never sent")
 
-    async def test_an_absolute_local_link_attaches_the_file_without_exposing_its_path(self):
+    async def test_a_reserved_local_attachment_line_hides_its_path(self):
         """R-CH-31 — the final answer itself declares delivery intent without making a
         provider understand which of its tools created the file."""
         at = self._made("reports/market intelligence (verified).pdf")
-        text = f"[Download the verified report](<{at}>)"
+        text = f"rundesk-attach: [Download the verified report](<{at}>)"
         brain, surface = Brain(outcome=Outcome(text=text)), Surface()
         held = self.answering(surface, brain)
 
@@ -1775,7 +1803,23 @@ class WhatTheAgentMade(CarriesAConversation):
         self.assertEqual([{
             "name": at.name,
             "at": str(at.resolve()),
+            "bytes": len(b"not really a picture"),
+            "sha256": hashlib.sha256(b"not really a picture").hexdigest(),
         }], answer["attachments"])
+
+    async def test_a_crlf_reserved_attachment_line_hides_its_path(self):
+        """R-CH-31 — platform line endings do not expose a declared local path."""
+        at = self._made("reports/windows-report.pdf")
+        text = f"Ready\r\nrundesk-attach: [Download](<{at}>)\r\nDone"
+        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual("Ready\r\nDownload\nDone", answer["text"])
+        self.assertNotIn(str(at), answer["text"])
+        self.assertEqual(1, len(answer["attachments"]))
 
     async def test_relative_and_remote_links_stay_links_and_attach_nothing(self):
         """R-CH-31 — only an absolute path is a declaration about this machine."""
@@ -1789,11 +1833,113 @@ class WhatTheAgentMade(CarriesAConversation):
         self.assertEqual(text, answer["text"])
         self.assertEqual([], answer["attachments"])
 
-    async def test_a_local_link_outside_the_agent_is_scrubbed_but_not_attached(self):
-        """R-CH-31, R-CH-18 — declaring a local link is not permission to disclose
+    async def test_ordinary_local_markdown_is_not_an_attachment_declaration(self):
+        """R-CH-31 — only the reserved whole line can move local bytes."""
+        at = self._made("ordinary.pdf")
+        examples = [
+            f"[Download](<{at}>)",
+            f'[Download](<{at}> "PDF report")',
+            f"[Download [PDF]](<{at}>)",
+            f"[Download]({at.parent}/report(1).pdf)",
+            f"<!-- [Download](<{at}>) -->",
+            f">     [Download](<{at}>)",
+            f"- Reports:\n    [Download](<{at}>)",
+        ]
+        for text in examples:
+            with self.subTest(text=text):
+                brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+                held = self.answering(surface, brain)
+
+                await self.carry(held, self.arrived())
+
+                answer = surface.of("answer")[0]
+                self.assertEqual(text, answer["text"])
+                self.assertEqual([], answer["attachments"])
+
+    async def test_a_protocol_relative_link_is_not_a_local_file(self):
+        """R-CH-31 — a remote URL without an explicit scheme remains a link."""
+        text = "[Download](//example.invalid/report.pdf)"
+        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual(text, answer["text"])
+        self.assertEqual([], answer["attachments"])
+
+    async def test_an_escaped_reserved_attachment_line_is_literal(self):
+        """R-CH-31 — the reserved protocol can be shown safely by escaping its prefix."""
+        at = self._made("example.pdf")
+        text = f"```text\n\\rundesk-attach: [example](<{at}>)\n```"
+        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual(text, answer["text"])
+        self.assertEqual([], answer["attachments"])
+
+    async def test_a_parent_changed_after_containment_is_not_sent(self):
+        """R-CH-18 — every path component remains beneath a held agent directory
+        while the accepted bytes are opened."""
+        workspace = agents.paths("ava", self.where)["workspace"]
+        parent = workspace / "exports"
+        parent.mkdir()
+        at = parent / "report.pdf"
+        at.write_bytes(b"approved")
+        outside = self.where / "outside"
+        outside.mkdir()
+        (outside / at.name).write_bytes(b"private replacement")
+        held_parent = workspace / "held-exports"
+        fingerprint = answering._fingerprint_beneath
+
+        def swap_before_open(where, inside):
+            parent.rename(held_parent)
+            parent.symlink_to(outside, target_is_directory=True)
+            return fingerprint(where, inside)
+
+        roots = [workspace, agents.paths("ava", self.where)["logs"],
+                 agents.paths("ava", self.where)["home"]]
+        with mock.patch.object(answering, "_fingerprint_beneath",
+                               side_effect=swap_before_open):
+            attachment, _why = answering._approved_attachment(
+                {"name": at.name, "at": str(at)}, roots)
+
+        self.assertIsNone(attachment)
+
+    async def test_attachment_verification_leaves_the_channel_event_loop_free(self):
+        """R-CH-18 — bounded file hashing does not stop unrelated channel work."""
+        at = self._made("slow.pdf")
+        entered = threading.Event()
+        release = threading.Event()
+        approved = answering._approved_attachment
+
+        def slow(*args):
+            entered.set()
+            release.wait(1)
+            return approved(*args)
+
+        brain = Brain(outcome=Outcome(
+            text="ready", files=[{"type": "file", "at": str(at)}]))
+        held = self.answering(Surface(), brain)
+
+        async def advance():
+            self.assertTrue(await asyncio.to_thread(entered.wait, 0.2))
+            release.set()
+
+        with mock.patch.object(answering, "_approved_attachment", side_effect=slow):
+            carrying = asyncio.create_task(self.carry(held, self.arrived()))
+            await asyncio.wait_for(advance(), timeout=0.3)
+            await carrying
+
+    async def test_a_reserved_local_line_outside_the_agent_is_not_attached(self):
+        """R-CH-31, R-CH-18 — a reserved line is not permission to disclose
         another directory, including by leaving its absolute path in the message."""
         at = self._made("private.pdf", inside=False)
-        brain = Brain(outcome=Outcome(text=f"[Private report](<{at}>)"))
+        brain = Brain(outcome=Outcome(
+            text=f"rundesk-attach: [Private report](<{at}>)"))
         surface = Surface()
         held = self.answering(surface, brain)
 
@@ -1804,11 +1950,32 @@ class WhatTheAgentMade(CarriesAConversation):
         self.assertEqual([], answer["attachments"])
         self.assertTrue(any("outside where this agent works" in one for one in self.told))
 
-    async def test_a_provider_file_and_local_link_to_it_are_attached_once(self):
-        """R-CH-31 — structured provider output and portable answer syntax merge."""
+    async def test_a_creator_provider_file_and_reserved_line_to_it_are_attached_once(self):
+        """R-CH-31 — built-in creator output and portable answer syntax merge once."""
         at = self._made("chart.png")
+        provider_alias = f"{at.parent}/./{at.name}"
         brain = Brain(outcome=Outcome(
-            text=f"[Chart](<{at}>)",
+            text=f"rundesk-attach: [Chart](<{at}>)",
+            files=[{"type": "file", "at": provider_alias}],
+        ))
+        surface = Surface()
+        held = self.answering(surface, brain)
+
+        with mock.patch.object(answering, "_approved_attachment",
+                               wraps=answering._approved_attachment) as approved:
+            await self.carry(held, self.arrived())
+
+        self.assertEqual(1, len(surface.of("answer")[0]["attachments"]))
+        self.assertEqual(1, approved.call_count)
+
+    async def test_case_aliases_from_creator_and_reserved_line_are_attached_once(self):
+        """R-CH-31 — filesystem spelling does not duplicate one created file."""
+        at = self._made("Chart.PNG")
+        alias = at.with_name("chart.png")
+        if not alias.exists():
+            self.skipTest("the test filesystem is case-sensitive")
+        brain = Brain(outcome=Outcome(
+            text=f"rundesk-attach: [Chart](<{alias}>)",
             files=[{"type": "file", "at": str(at)}],
         ))
         surface = Surface()
@@ -1818,12 +1985,13 @@ class WhatTheAgentMade(CarriesAConversation):
 
         self.assertEqual(1, len(surface.of("answer")[0]["attachments"]))
 
-    async def test_an_oversize_local_link_is_scrubbed_but_not_attached(self):
+    async def test_an_oversize_reserved_local_line_is_not_attached(self):
         """R-CH-31 — a declared attachment cannot evade the channel's file bound."""
         at = self._made("too-large.pdf")
         with at.open("wb") as made:
             made.truncate(channel.ATTACHED_BYTES + 1)
-        brain = Brain(outcome=Outcome(text=f"[Large report](<{at}>)"))
+        brain = Brain(outcome=Outcome(
+            text=f"rundesk-attach: [Large report](<{at}>)"))
         surface = Surface()
         held = self.answering(surface, brain)
 
@@ -1834,20 +2002,43 @@ class WhatTheAgentMade(CarriesAConversation):
         self.assertEqual([], answer["attachments"])
         self.assertTrue(any("too large to attach" in one for one in self.told))
 
-    async def test_local_links_are_bounded_to_the_channel_attachment_count(self):
+    async def test_reserved_local_lines_are_bounded_to_the_attachment_count(self):
         """R-CH-31 — one final answer cannot turn into an unbounded file batch."""
         made = [self._made(f"report-{number}.pdf")
                 for number in range(channel.ATTACHED_MOST + 1)]
-        text = " ".join(f"[Report {number}](<{at}>)"
-                        for number, at in enumerate(made))
+        text = "\n".join(f"rundesk-attach: [Report {number}](<{at}>)"
+                         for number, at in enumerate(made))
         brain, surface = Brain(outcome=Outcome(text=text)), Surface()
         held = self.answering(surface, brain)
 
-        await self.carry(held, self.arrived())
+        with mock.patch.object(answering, "_approved_attachment",
+                               wraps=answering._approved_attachment) as approved:
+            await self.carry(held, self.arrived())
 
         self.assertEqual(channel.ATTACHED_MOST,
                          len(surface.of("answer")[0]["attachments"]))
+        self.assertEqual(channel.ATTACHED_MOST, approved.call_count)
         self.assertTrue(any("sending only the first" in one for one in self.told))
+
+    async def test_duplicate_provider_files_do_not_crowd_out_a_reserved_line(self):
+        """R-CH-31 — cheap declaration deduplication happens before bounded I/O."""
+        provider_file = self._made("provider.png")
+        linked = self._made("report.pdf")
+        aliases = [f"{provider_file.parent}/{'./' * number}{provider_file.name}"
+                   for number in range(1, channel.ATTACHED_MOST + 1)]
+        brain = Brain(outcome=Outcome(
+            text=f"rundesk-attach: [Report](<{linked}>)",
+            files=[{"type": "file", "at": at} for at in aliases],
+        ))
+        surface = Surface()
+        held = self.answering(surface, brain)
+
+        with mock.patch.object(answering, "_approved_attachment",
+                               wraps=answering._approved_attachment) as approved:
+            await self.carry(held, self.arrived())
+
+        self.assertEqual(2, len(surface.of("answer")[0]["attachments"]))
+        self.assertEqual(2, approved.call_count)
 
 
 class InterruptedTurnsContinue(CarriesAConversation):

@@ -53,7 +53,7 @@ You are {agent}, an agent running inside rundesk. Rundesk is the system that run
 
 ## Attaching local files
 
-- To attach a local file to your final channel message, include a Markdown link whose destination is the file's absolute local path, such as `[Download the report](</absolute/path/report.pdf>)`. Rundesk attaches the file to the message and does not post the private path. Use the angle brackets shown here when the path contains spaces.
+- To attach a local file to your final channel message, put this reserved declaration on its own unindented line: `rundesk-attach: [Download the report](</absolute/path/report.pdf>)`. Rundesk replaces the line with its readable label, attaches the file, and does not post the private path. The prefix is a control record even inside Markdown code; ordinary Markdown links never attach local files. Prefix it with a backslash whenever showing the declaration literally.
 
 ## Recovering context you do not have
 
