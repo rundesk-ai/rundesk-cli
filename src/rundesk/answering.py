@@ -381,7 +381,7 @@ class Answering:
         if not self.connected:
             raise RuntimeError(f"channel '{self.channel}' is not connected")
         await self._sending(channel.spoken(
-            type="said", conversation=conversation, text=text,
+            type="said", conversation=conversation, text=text, continues=False,
         ))
         agents.records(self.name, self._where).answered(
             store.conversation_id(self.channel, conversation),
