@@ -762,6 +762,10 @@ re-checked since, so treat these as true-when-found rather than as current.*
   not install.** Do not add or install that dependency for a built-in skill; use
   `tests/test_skill.py` and its `skill.valid()` coverage, then run the repository gate.
 
+- **Parallel pushes from linked worktrees contend on the repository's shared config lock.** The
+  remote push can succeed while `git push -u` fails to save local upstream metadata; push linked
+  worktrees sequentially, or run `git branch --set-upstream-to=origin/<branch>` afterward.
+
 - **The disposable station defaults to the canonical checkout, not the shell's current
   worktree.** Running `station.sh --install` from a feature worktree can therefore validate
   and install a different revision while appearing isolated. Pass
