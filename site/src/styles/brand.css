@@ -420,49 +420,61 @@ starlight-sidebar-topics-list,
 	margin-top: 0.5rem;
 }
 
-/* Solid, not a gradient: a red ramp over near-black reads cheap, and only the
-   darker end of the ramp carries white text at 4.5:1 (#d81f20 is 5.1:1, the
-   brighter #fd3031 only 3.8:1). Hover darkens, which can only raise it. */
-.action.primary {
-	background: var(--rd-red-600);
-	color: #ffffff;
-	border: 0;
+/* The class is `sl-link-button`, not `action` — anything written against the
+   latter matches nothing and leaves Starlight's default in place, which is
+   `--sl-color-text-accent` behind `--sl-color-black`: bright red carrying
+   near-black text. Scoped under `.hero` for 0-3-0, because Starlight's own
+   `.sl-link-button:where(…).primary` is 0-2-0 and a tie would be decided by
+   whichever stylesheet the build happened to emit last. */
+.hero .sl-link-button {
+	font-family: var(--sl-font-mono);
+	font-size: 0.95rem;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	line-height: 1.2;
 	border-radius: var(--rd-radius);
-	padding: 0.72rem 1.4rem;
-	font-family: var(--sl-font-mono);
-	font-weight: 600;
-	font-size: 0.95rem;
-	letter-spacing: -0.01em;
-	line-height: 1.25;
-	display: inline-flex;
+	padding: 0.85rem 1.5rem;
+	gap: 0.5rem;
 	align-items: center;
-	gap: 0.55rem;
-	box-shadow: none;
-	transition: background-color 150ms ease;
+	transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
 }
 
-.action.primary:hover,
-.action.primary:focus-visible {
-	background: var(--rd-red-700);
+/* Solid rather than the accent: only the darker end of the ramp carries white at
+   4.5:1 — #d81f20 is 5.1:1, the brighter #fd3031 only 3.8:1. Hover darkens
+   further, which can only raise it. */
+.hero .sl-link-button.primary {
+	background: var(--rd-red-600);
+	border-color: var(--rd-red-600);
 	color: #ffffff;
 }
 
-/* Starlight sizes the icon off the label's font-size and leaves it on the text
-   baseline, which sits it low against a mono label. */
-.action.primary svg {
-	flex: none;
-	color: currentColor;
-	font-size: 1.1em;
+.hero .sl-link-button.primary:hover,
+.hero .sl-link-button.primary:focus-visible {
+	background: var(--rd-red-700);
+	border-color: var(--rd-red-700);
+	color: #ffffff;
 }
 
-.action.minimal {
-	padding-block: 0.72rem;
-	font-family: var(--sl-font-mono);
-	font-size: 0.95rem;
-	font-weight: 600;
-	letter-spacing: -0.01em;
-	align-items: center;
-	gap: 0.55rem;
+/* The secondary sits beside the primary, so it takes the same box and differs by
+   weight of colour rather than by shape. */
+.hero .sl-link-button.minimal {
+	padding-inline: 1.25rem;
+	border-color: var(--rd-ground-edge);
+	color: var(--sl-color-gray-1);
+}
+
+.hero .sl-link-button.minimal:hover {
+	border-color: var(--sl-color-gray-4);
+	color: var(--sl-color-white);
+}
+
+/* An inline SVG sits on the text baseline, which drops it below the centre of a
+   mono label. As a block in a centred flex row it lines up with the cap height. */
+.hero .sl-link-button svg {
+	display: block;
+	flex: none;
+	width: 1.05em;
+	height: 1.05em;
 }
 
 /* One bloom in the brand red gives the ground depth. Kept as a background layer
@@ -851,5 +863,5 @@ starlight-sidebar-topics-list,
 	.rd-term__cursor { animation: none; }
 	.card:hover,
 	.sl-link-card:hover,
-	.action.primary:hover { transform: none; }
+	.hero .sl-link-button:hover { transform: none; }
 }
