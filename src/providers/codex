@@ -138,6 +138,7 @@ class Codex:
         self.ok = None
         self.why = None
         self.tokens = None
+        self.session_tokens = None
         self._tools: dict = {}
         self._helpers: dict = {}  # child thread -> synthetic tool id, until it really ends
         self._proc = subprocess.Popen(
@@ -245,6 +246,13 @@ class Codex:
             # `last` is this turn's own, reported as such — so there is no running total
             # to subtract, and nothing to carry between turns to subtract it from.
             self.tokens = (params.get("tokenUsage") or {}).get("last")
+        elif method == "rawResponse/completed" and params.get("turnId") == self.turn:
+            # One upstream response, not the turn's aggregate bill. The final response's
+            # input is the context level this parent conversation ended on (R-USE-15).
+            # Replace rather than maximize or add: compaction is allowed to make it fall.
+            value = (params.get("usage") or {}).get("inputTokens")
+            if isinstance(value, int) and not isinstance(value, bool):
+                self.session_tokens = value
         elif method == "item/started":
             self._began(params.get("item") or {})
         elif method == "item/completed":
@@ -624,8 +632,7 @@ def _turn(codex, where: str) -> int:
     posture = SANDBOX.get(os.environ.get("RUNDESK_POSTURE", "work"), SANDBOX["work"])
     extra = _settings()
 
-    if codex.answered(codex.ask("initialize", {
-            "clientInfo": {"name": "rundesk", "version": "1"}})) is None:
+    if codex.answered(codex.ask("initialize", _initializing())) is None:
         say(type="done", ok=False, why="Codex would not start")
         return 1
     codex.tell("initialized")
@@ -695,7 +702,7 @@ def _turn(codex, where: str) -> int:
     # gone silent — which is its decision to make and never this adapter's.
     codex.finished.wait()
     if codex.tokens:
-        say(**_usage(codex.tokens))
+        say(**_usage(codex.tokens, codex.session_tokens))
     # No model: this brain names none in what it reports, so none is claimed. Saying the
     # one that was asked for would be reporting a request as a measurement.
     ended = {"type": "done", "ok": bool(codex.ok), "session": codex.thread or ""}
@@ -705,8 +712,16 @@ def _turn(codex, where: str) -> int:
     return 0 if codex.ok else 1
 
 
-def _usage(counted: dict) -> dict:
-    """Codex's input subdivisions in the seam's four billing slots (R-USE-13)."""
+def _initializing() -> dict:
+    """Opt into the notification carrying one upstream response's exact usage."""
+    return {
+        "clientInfo": {"name": "rundesk", "version": "1"},
+        "capabilities": {"experimentalApi": True},
+    }
+
+
+def _usage(counted: dict, session=None) -> dict:
+    """Codex's billing slots and terminal context level (R-USE-13, R-USE-15)."""
     cached = _n(counted, "cachedInputTokens")
     written = _n(counted, "cacheWriteInputTokens")
     usage = {
@@ -717,6 +732,8 @@ def _usage(counted: dict) -> dict:
     }
     if "cacheWriteInputTokens" in counted:
         usage["written"] = written
+    if isinstance(session, int) and not isinstance(session, bool):
+        usage["session"] = session
     return usage
 
 

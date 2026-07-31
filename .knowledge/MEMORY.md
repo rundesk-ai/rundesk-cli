@@ -89,8 +89,10 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   Start the next command with the new worktree as its working directory, then verify its
   branch before editing.
 - **A station wrapper that consumes every leading `--*` option cannot forward
-  `install.sh --uninstall`.** Run the installer directly with the same fully redirected
-  station environment and job prefix; otherwise the temporary automatic-update job stays loaded.
+  `install.sh --uninstall`, and its install mode resolves the canonical checkout rather
+  than the worktree it was invoked from.** Run both installer directions from the target
+  worktree directly with the same fully redirected station environment and job prefix;
+  otherwise the wrong source is tested or the temporary automatic-update job stays loaded.
 - **A fresh worktree has no `.venv`, so its Discord regression test skips and looks green.**
   Run the worktree's test path with the main checkout's `.venv/bin/python`; the interpreter
   supplies `discord.py` while the working directory and imported adapter remain the worktree's.

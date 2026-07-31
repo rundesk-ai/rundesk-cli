@@ -211,9 +211,19 @@ def records(line: str, seen: dict) -> list:
     if one.get("method") not in (
             "session/update", "_x.ai/session/update", "_x.ai/session_notification"):
         return []
-    update = (one.get("params") or {}).get("update")
+    params = one.get("params") or {}
+    update = params.get("update")
     if not isinstance(update, dict):
         return []
+    # ACP reports the parent conversation's current context as a gauge on each update.
+    # Keep the last value, including a lower one after compaction, and accept it only
+    # from the session this process was asked to carry (R-USE-14, R-USE-15).
+    meta = params.get("_meta")
+    value = meta.get("totalTokens") if isinstance(meta, dict) else None
+    belongs_to = str(params.get("sessionId") or "")
+    if isinstance(value, int) and not isinstance(value, bool) \
+            and (not seen.get("session") or belongs_to == str(seen["session"])):
+        seen["session_tokens"] = value
     kind = update.get("sessionUpdate")
 
     if kind == "agent_message_chunk":
@@ -316,6 +326,8 @@ def _ended(one: dict, seen: dict) -> list:
     named = _model(counted)
     if named:
         usage["model"] = named
+    if isinstance(seen.get("session_tokens"), int):
+        usage["session"] = seen["session_tokens"]
 
     return [usage, _finished(one.get("stop_reason"), seen)]
 

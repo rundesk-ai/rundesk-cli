@@ -18,6 +18,8 @@ Four details are easy to get subtly wrong:
   the stream's stated cwd while tools actually stand in Antigravity's scratch project.
 * A resumed ``result.usage`` is cumulative. The usage blocks on step updates are this
   invocation's deltas, so only those are added.
+* The last parent ``agent_response`` usage is the end-of-session context level. Earlier
+  responses are neither added nor allowed to replace it from a child conversation.
 * ``plan`` is a mode, not containment. Read posture combines it with the OS sandbox and
   leaves permission prompts unapproved; work posture uses the sandbox but approves tools.
 
@@ -222,6 +224,17 @@ def records(line: str, seen: dict) -> list:
         step_type = step.get("step_type")
 
         if step_type == "agent_response":
+            counted = step.get("usage")
+            belongs_to = str(step.get("conversation_id") or "")
+            parent = str(seen.get("session") or "")
+            if step.get("state") == "DONE" and isinstance(counted, dict) \
+                    and (not belongs_to or not parent or belongs_to == parent):
+                pieces = ("input_tokens", "cache_read_tokens")
+                if any(isinstance(counted.get(piece), int)
+                       and not isinstance(counted.get(piece), bool) for piece in pieces):
+                    # One response's prompt, not the accumulated turn bill. Assignment
+                    # preserves a decrease after compaction (R-USE-14, R-USE-15).
+                    seen["session_tokens"] = sum(_n(counted, piece) for piece in pieces)
             text = str(step.get("text_delta") or "")
             if text:
                 seen["text_seen"] = True
@@ -273,6 +286,8 @@ def records(line: str, seen: dict) -> list:
                  "output": seen["output"], "cached": seen["cached"]}
         if seen.get("model"):
             usage["model"] = seen["model"]
+        if isinstance(seen.get("session_tokens"), int):
+            usage["session"] = seen["session_tokens"]
         out.append(usage)
 
         ok = status == "SUCCESS"
@@ -305,6 +320,7 @@ def _new_seen(resume=None) -> dict:
         "input": 0,
         "output": 0,
         "cached": 0,
+        "session_tokens": None,
     }
 
 
