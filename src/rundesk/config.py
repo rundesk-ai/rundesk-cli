@@ -168,50 +168,6 @@ def ensure(where: Path | None = None) -> list[str]:
                     changed.append(section)
     if not changed and at.is_file():
         return []
-    if not _write(standing, at):
-        return []
-    return changed
-
-
-def rename_skills(changes: dict[str, str], where: Path | None = None) -> list[str]:
-    """Carry configured built-in names through an explicit release rename.
-
-    `skills.granted` names identities, not prose. Leaving an old identity there after its
-    package and every existing grant moved means new agents silently stop receiving what
-    the owner required. Only exact names in release-controlled rename data change; every
-    other configured value and unknown section is preserved.
-    """
-    if not changes:
-        return []
-    at = path(where)
-    try:
-        standing = read(where)
-    except Unreadable:
-        return []
-    skills_section = standing.get("skills")
-    if not isinstance(skills_section, dict):
-        return []
-    granted = skills_section.get("granted")
-    if not isinstance(granted, list) or any(not isinstance(one, str) for one in granted):
-        return []
-    carried = []
-    changed = []
-    for name in granted:
-        replacement = changes.get(name, name)
-        if replacement != name:
-            changed.append(name)
-        if replacement not in carried:
-            carried.append(replacement)
-    if not changed:
-        return []
-    standing["skills"]["granted"] = carried
-    if not _write(standing, at):
-        return []
-    return changed
-
-
-def _write(standing: dict, at: Path) -> bool:
-    """Write a complete configuration beside the old one and swap it in."""
     ordered = {one: standing[one] for one in SECTIONS if one in standing}
     ordered.update({one: standing[one] for one in standing if one not in SECTIONS})
     coming = at.with_name(f".{NAMED}.coming")
@@ -224,8 +180,8 @@ def _write(standing: dict, at: Path) -> bool:
     except OSError:
         with contextlib.suppress(OSError):
             coming.unlink()
-        return False
-    return True
+        return []
+    return changed
 
 
 def take_back(where: Path | None = None) -> bool:

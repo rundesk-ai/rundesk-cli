@@ -113,22 +113,6 @@ class WhatAnUpdateAdds(WithADataDirectory):
 
 
 class WhichSkillsANewAgentGets(WithADataDirectory):
-    def test_a_configured_renamed_built_in_follows_its_replacement(self):
-        """R-AGT-35 — existing grants and the baseline for future agents must name the
-        same replacement after a release changes a built-in package name."""
-        self.at.write_text(
-            '{"skills": {"granted": ["old-name", "kept", "new-name"]}, '
-            '"from-tomorrow": {"x": 1}}\n',
-            encoding="utf-8",
-        )
-
-        changed = config.rename_skills({"old-name": "new-name"}, self.where)
-
-        self.assertEqual(["old-name"], changed)
-        written = json.loads(self.at.read_text())
-        self.assertEqual(["new-name", "kept"], written["skills"]["granted"])
-        self.assertEqual({"x": 1}, written["from-tomorrow"])
-
     def test_a_new_agent_gets_the_set_written_in_the_install_configuration(self):
         """R-AGT-36 — the grant set is a value an owner can read and edit, not a hidden
         fallback that only the running code can name."""

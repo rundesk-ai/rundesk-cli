@@ -94,7 +94,7 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
 
 class WhatTheShippedPythonTestingSkillSays(unittest.TestCase):
     def test_python_testing_guidance_is_for_the_standard_library_runner(self):
-        page = (REALLY_SHIPPED / "python-unittest" / "SKILL.md").read_text()
+        page = (REALLY_SHIPPED / "python-testing" / "SKILL.md").read_text()
         for expected in (
                 "unittest.TestCase", "self.addCleanup", "self.subTest",
                 "unittest.IsolatedAsyncioTestCase", "Patch where the code under test looks"):
@@ -424,68 +424,17 @@ class BringingTheBuiltInsForward(WithALibrary):
         self.assertEqual(was, (theirs / "SKILL.md").read_text(),
                          "an update replaced an owner skill with a new built-in")
 
-    def test_a_removed_built_in_is_revoked_and_retired(self):
-        """R-AGT-35 — a release that stops shipping guidance must stop presenting it to
-        agents, or removing a built-in leaves every attached agent loading stale policy."""
+    def test_an_expired_built_in_name_is_no_longer_runtime_policy(self):
+        """R-AGT-35 — names absent from this release are ordinary owner data, even when
+        an ownership marker shows that an older release once placed them."""
         expired = a_skill(self.library, "expired-built-in", says="historical words")
         (expired / skill.OWNED).write_text("rundesk built-in\n", encoding="utf-8")
-        skill.grant(self.mine, "expired-built-in", self.library)
+        a_skill(self.release, "current-built-in")
 
-        self.assertEqual(["expired-built-in"], skill.retire([self.mine], self.library))
-        self.assertFalse(expired.exists())
-        self.assertFalse((self.mine / "expired-built-in").exists())
-
-    def test_a_renamed_built_in_moves_its_grant_before_retiring_the_old_name(self):
-        """R-AGT-35 — the replacement is attached first, so a rename never creates a
-        moment when an agent that held the old built-in has neither version."""
-        a_skill(self.release, "old-name", says="old words")
-        skill.lay_down(self.library)
-        skill.grant(self.mine, "old-name", self.library)
-        shutil.rmtree(self.release / "old-name")
-        a_skill(self.release, "new-name", says="new words")
-        (self.release / skill.RENAMED).write_text(
-            '{"old-name": "new-name"}\n', encoding="utf-8")
-
-        skill.lay_down(self.library, force=True)
-
-        self.assertEqual(["old-name"], skill.retire([self.mine], self.library))
-        self.assertEqual(["new-name"], skill.granted(self.mine))
-        self.assertIn("new words", (self.mine / "new-name" / skill.NAMED).read_text())
-        self.assertFalse((self.library / "old-name").exists())
-
-    def test_a_rename_blocked_by_an_owner_entry_leaves_the_working_grant(self):
-        """R-AGT-29, R-AGT-35 — an update cannot overwrite a hand-placed agent entry,
-        and it must not revoke the old working grant after the replacement was refused."""
-        old = a_skill(self.library, "old-name", says="old words")
-        (old / skill.OWNED).write_text("rundesk built-in\n", encoding="utf-8")
-        new = a_skill(self.library, "new-name", says="new words")
-        (new / skill.OWNED).write_text("rundesk built-in\n", encoding="utf-8")
-        skill.grant(self.mine, "old-name", self.library)
-        hand_placed = a_skill(self.mine, "new-name", says="owner words")
-        a_skill(self.release, "new-name")
-        (self.release / skill.RENAMED).write_text(
-            '{"old-name": "new-name"}\n', encoding="utf-8")
-
-        self.assertEqual([], skill.retire([self.mine], self.library))
-        self.assertTrue((self.mine / "old-name").is_symlink())
-        self.assertIn("owner words", (hand_placed / skill.NAMED).read_text())
-        self.assertTrue(old.is_dir())
-
-    def test_a_new_library_name_owned_by_the_owner_does_not_claim_the_old_one(self):
-        """R-AGT-30, R-AGT-35 — a replacement that could not be laid down is not a
-        replacement at all; the old package and its grant remain working."""
-        old = a_skill(self.library, "old-name", says="old words")
-        (old / skill.OWNED).write_text("rundesk built-in\n", encoding="utf-8")
-        skill.grant(self.mine, "old-name", self.library)
-        a_skill(self.library, "new-name", says="owner words")
-        a_skill(self.release, "new-name", says="release words")
-        (self.release / skill.RENAMED).write_text(
-            '{"old-name": "new-name"}\n', encoding="utf-8")
-
-        self.assertEqual([], skill.lay_down(self.library, force=True))
-        self.assertEqual([], skill.retire([self.mine], self.library))
-        self.assertTrue((self.mine / "old-name").is_symlink())
-        self.assertTrue(old.is_dir())
+        self.assertEqual(["current-built-in"], skill.lay_down(self.library, force=True))
+        self.assertEqual(["current-built-in"], skill.take_back(self.library))
+        self.assertTrue((expired / skill.NAMED).is_file(),
+                        "runtime policy still reached a name this release does not ship")
 
     def test_take_back_leaves_a_shipped_name_the_install_did_not_lay_down(self):
         """R-RM-7 — uninstall ownership is proved by a marker, not the release's names."""
