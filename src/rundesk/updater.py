@@ -25,7 +25,11 @@ from typing import Callable
 
 REPO_SLUG = "rundesk-ai/rundesk-cli"
 RELEASES_LATEST_URL = f"https://api.github.com/repos/{REPO_SLUG}/releases/latest"
-ARCHIVE_URL = f"https://github.com/{REPO_SLUG}/archive/refs/tags/{{tag}}.tar.gz"
+# The same single release asset a remote install fetches. GitHub counts this request, so
+# each remote update contributes once to the public installs badge (R-UPD-49).
+ARCHIVE_URL = (
+    f"https://github.com/{REPO_SLUG}/releases/download/{{tag}}/rundesk-cli.tar.gz"
+)
 RELEASE_URL = f"https://github.com/{REPO_SLUG}/releases/tag/{{tag}}"
 HTTP_TIMEOUT = 5
 DOWNLOAD_TIMEOUT = 60
@@ -592,8 +596,8 @@ def _download_and_apply(repo_root: Path, tag: str) -> int:
             # that is partly one release and partly another (R-UPD-25).
             print(f"{tag}: FAILED — {err}", file=sys.stderr)
             print("        this install is not safe to run; reinstall it:", file=sys.stderr)
-            print("        curl -fsSL https://github.com/" + REPO_SLUG
-                  + "/releases/latest/download/install.sh | bash", file=sys.stderr)
+            print("        curl -fsSL https://raw.githubusercontent.com/" + REPO_SLUG
+                  + "/main/install.sh | bash", file=sys.stderr)
             return 1
         except OSError as err:
             # What was already swapped has been put back, so this is the release it was on

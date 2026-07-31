@@ -1056,20 +1056,16 @@ class WhatOneTurnLooksLike(unittest.TestCase):
                          discord._as_a_line({"type": "usage", "input": 1200,
                                              "output": 340, "cached": 17000}))
 
-    def test_the_footer_shows_the_cache_writes_the_seam_hands_over(self):
-        """R-DIS-17, R-CH-13 — the two lists that have to agree, asked in one place. The
-        footer has named `written` as its fourth slot since v0.17.0 while the seam's
-        allowlist did not name it at all, so each suite went on passing and the line an
-        owner reads was short a quantity they were billed for. Driven through the real
-        allowlist rather than a hand-written record, because a record written here would
-        prove only the half of it this file owns."""
+    def test_the_footer_omits_cache_writes_the_seam_hands_over(self):
+        """R-DIS-17, R-CH-13 — cache writes remain part of the usage record, but the
+        compact final footer omits them even when the real seam hands them over."""
         crossed = []
         seam = answering._Shown(
             SimpleNamespace(record={}, _tell=lambda **it: crossed.append(it)),
             SimpleNamespace(conversation="4242", run="run-1"))
         seam({"type": "usage", "input": 1200, "output": 340, "cached": 17000,
               "written": 1500})
-        self.assertEqual("-# · 1.2k input · 340 output · 17k cached · 1.5k written",
+        self.assertEqual("-# · 1.2k input · 340 output · 17k cached",
                          discord._as_a_line(crossed[0]))
 
     def test_the_footer_leads_with_how_big_the_conversation_is(self):

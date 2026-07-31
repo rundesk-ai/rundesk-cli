@@ -301,6 +301,8 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   mechanism keeping a ✅ honest, and it does not care that the row is ❌ or that the backticks are
   around a filename, a path or a script. Write those plainly in a note — `check-evidence` fails the
   gate with "is ❌ but names a test", which reads like the row is wrong when the punctuation is.
+  Renaming that test without updating every PRD citation fails the same gate; search Evidence for
+  the old humanized test name in the same change.
 - **`instructions.render()` preserves a template's trailing whitespace; `instructions.build()`
   strips every rendered layer before joining it.** A test comparing a raw rendered layer with a
   built preface differs only by the final newline and produces a page-long assertion diff; strip the

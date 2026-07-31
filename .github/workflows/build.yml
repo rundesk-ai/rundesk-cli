@@ -18,11 +18,45 @@ concurrency:
   group: build-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# Five jobs, each answering one question, so a red tick says what is broken before you
-# open it: are the docs and contracts sound, does the code do what it claims, does this
-# checkout install, can the latest release upgrade to it, and does what is *published* install.
+# Each validation job answers one question, so a red tick says what is broken before
+# it is opened. The activity-delivery job is deliberately not a correctness gate: it
+# records that CI ran by fetching the same counted release asset as an install or update.
 
 jobs:
+  # ------------------------------------------------------------------ public activity
+  count-ci-delivery:
+    name: count this CI run in install activity
+    timeout-minutes: 2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch one counted release delivery
+        env:
+          COUNTED_DELIVERY_SINCE: "0.23.0"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          asset="https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/rundesk-cli.tar.gz"
+          archive="$RUNNER_TEMP/rundesk-cli.tar.gz"
+          if curl -fsSL "$asset" -o "$archive"; then
+            tar -tzf "$archive" >/dev/null
+          else
+            latest="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/rundesk-ai/rundesk-cli/releases/latest |
+              python -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')"
+            if python - "$latest" "$COUNTED_DELIVERY_SINCE" <<'CHECK'
+          import re
+          import sys
+          version = lambda value: tuple(map(int, re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", value).groups()))
+          raise SystemExit(0 if version(sys.argv[1]) >= version(sys.argv[2]) else 1)
+          CHECK
+            then
+              echo "::error::the counted CI delivery failed for $latest"
+              exit 1
+            fi
+            echo "::notice::counting starts with v$COUNTED_DELIVERY_SINCE"
+          fi
+
   # ------------------------------------------------------------------ the knowledge base
   # Its own job rather than a step inside the test run: the contracts are how this product
   # says what it guarantees, and a contract that has drifted should be as visible as a
@@ -122,6 +156,25 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: The release archive installs, answers, and removes cleanly
+        env:
+          GITHUB_REF_NAME: v0.0.0
+        run: |
+          set -euo pipefail
+          git archive --format=tar --prefix="rundesk-cli-${GITHUB_REF_NAME}/" "$GITHUB_SHA" |
+            gzip -9 > rundesk-cli.tar.gz
+          archive_unpack="$RUNNER_TEMP/release-archive"
+          mkdir -p "$archive_unpack"
+          tar -xzf rundesk-cli.tar.gz -C "$archive_unpack"
+          archive_root="$archive_unpack/rundesk-cli-${GITHUB_REF_NAME}"
+          export RUNDESK_INSTALL_DIR="$RUNNER_TEMP/archive-install"
+          export RUNDESK_BIN_DIR="$RUNNER_TEMP/archive-bin"
+          "$archive_root/install.sh"
+          "$RUNDESK_BIN_DIR/rundesk" version
+          "$archive_root/install.sh" --uninstall
+          test ! -e "$RUNDESK_BIN_DIR/rundesk" ||
+            { echo "::error::the archived install left its command behind"; exit 1; }
+
       - name: Installing leaves a command that answers
         run: |
           set -euo pipefail
@@ -198,6 +251,9 @@ jobs:
             test ! -d .venv || { echo "::error::a virtualenv was made for no declared requirements"; exit 1; }
             echo "nothing declared, and nothing installed — as intended"
           fi
+
+      - name: The final-message footer regression runs with Discord installed
+        run: .venv/bin/python tests/test_discord.py WhatOneTurnLooksLike.test_the_footer_omits_cache_writes_the_seam_hands_over
 
       - name: Uninstalling takes what it placed and leaves the checkout
         run: |
@@ -435,7 +491,7 @@ jobs:
           set -euo pipefail
           export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
           cd "$(mktemp -d)"   # no checkout, no install.sh, nothing of rundesk within reach
-          if ! curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash; then
+          if ! curl -fsSL https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh | bash; then
             echo "::error::the instruction every doc gives does not install rundesk"; exit 1
           fi
           "$RUNDESK_BIN_DIR/rundesk" version
@@ -509,6 +565,6 @@ jobs:
           set -euo pipefail
           export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
           cd "$(mktemp -d)"
-          curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash -s -- --uninstall
+          curl -fsSL https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh | bash -s -- --uninstall
           test ! -e "$RUNDESK_BIN_DIR/rundesk" || { echo "::error::the command is still on the PATH"; exit 1; }
           test ! -d "$HOME/.rundesk" || { echo "::error::the install directory was left behind"; exit 1; }

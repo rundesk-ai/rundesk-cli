@@ -2,7 +2,7 @@
 # rundesk installer — put the `rundesk` command on your PATH, or take it off again.
 #
 # Install (no checkout needed):
-#   curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh | bash
 #
 # From a local checkout, this symlinks THAT checkout, so development and installed
 # use share one layout and there is no second copy to drift.
@@ -10,7 +10,7 @@
 #
 # Uninstall:
 #   ./install.sh --uninstall [--purge]
-#   curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash -s -- --uninstall
+#   curl -fsSL https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh | bash -s -- --uninstall
 #
 # Env overrides: RUNDESK_INSTALL_DIR (default ~/.rundesk), RUNDESK_BIN_DIR.
 #
@@ -45,6 +45,8 @@ DATA_DIR="$INSTALL_DIR/data"
 # here so that what is kept can be *said*, never so that it can be removed.
 BACKUPS_DIR="${RUNDESK_BACKUP_DIR:-$INSTALL_DIR/backups}"
 MIN_PYTHON_MINOR=9
+# The first release whose install and update paths share one counted release asset.
+COUNTED_DELIVERY_SINCE="0.23.0"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -105,6 +107,23 @@ require_python() {
   minor="$(python3 -c 'import sys; print(sys.version_info[1])')"
   [[ "$minor" -ge "$MIN_PYTHON_MINOR" ]] ||
     die "Python 3.$MIN_PYTHON_MINOR or newer is required; found $(python3 --version)."
+}
+
+uses_counted_delivery() {
+  python3 - "$1" "$COUNTED_DELIVERY_SINCE" <<'PY'
+import re
+import sys
+
+
+def version(value):
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", value.strip())
+    if not match:
+        raise SystemExit(2)
+    return tuple(map(int, match.groups()))
+
+
+raise SystemExit(0 if version(sys.argv[1]) >= version(sys.argv[2]) else 1)
+PY
 }
 
 # Stop every gateway this install is keeping, and take its job away — before anything is
@@ -504,9 +523,22 @@ network, or there may be nothing published yet — both look the same from here.
 Retrying in a few minutes usually settles it."
   fi
   echo "downloading ${tag}"
-  source_url="https://github.com/$REPO_SLUG/archive/refs/tags/$tag.tar.gz"
-  curl -fsSL "$source_url" -o "$work/rundesk.tar.gz" ||
-    die "could not download rundesk from $REPO_SLUG."
+  # One release asset is one public install delivery. Both this path and `rundesk update`
+  # fetch it exactly once, while the stable bootstrap itself is not a counted asset
+  # (R-INS-20).
+  source_url="https://github.com/$REPO_SLUG/releases/download/$tag/rundesk-cli.tar.gz"
+  if ! curl -fsSL "$source_url" -o "$work/rundesk.tar.gz"; then
+    # A counted-era release must never silently become an uncounted delivery because its
+    # asset is missing or temporarily unreachable (R-INS-20).
+    if uses_counted_delivery "$tag"; then
+      die "could not download rundesk from $REPO_SLUG."
+    fi
+    # The bootstrap on `main` changes before the first counted release exists. Keep only
+    # those older releases installable through the generated archive they already expose.
+    legacy_url="https://github.com/$REPO_SLUG/archive/refs/tags/$tag.tar.gz"
+    curl -fsSL "$legacy_url" -o "$work/rundesk.tar.gz" ||
+      die "could not download rundesk from $REPO_SLUG."
+  fi
   echo "unpacking $(du -h "$work/rundesk.tar.gz" | cut -f1 | tr -d ' ')"
   tar -xzf "$work/rundesk.tar.gz" -C "$work"
   extracted="$(find "$work" -maxdepth 1 -type d -name 'rundesk-cli-*' | head -1)"
