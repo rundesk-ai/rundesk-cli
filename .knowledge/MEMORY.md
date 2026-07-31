@@ -748,5 +748,9 @@ re-checked since, so treat these as true-when-found rather than as current.*
   and install a different revision while appearing isolated. Pass
   `--checkout /absolute/path/to/the/worktree` on every station install or command.
 
+- **`status` is a read-only parameter in zsh.** A verification command that assigns
+  `status=$?` aborts before its later checks. Use a task-specific name such as
+  `launchd_exit=$?` for captured exit codes.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

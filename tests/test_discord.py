@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import importlib.machinery
 import importlib.util
 import inspect
@@ -26,6 +27,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -2584,6 +2586,131 @@ class WhatWasActuallyAsked(unittest.TestCase):
         """Guessing at which mention was ours is worse than leaving one in."""
         self.assertEqual("<@42> what changed?",
                          discord._without_mentions("<@42> what changed?", None))
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class OutboundAttachmentsAreBoundToValidatedBytes(unittest.TestCase):
+    """R-CH-18 — validation and delivery name the same immutable byte snapshot."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="rundesk-outbound-")
+        self.addCleanup(self.temporary.cleanup)
+        self.where = Path(self.temporary.name)
+
+    @staticmethod
+    def _declared(at):
+        payload = at.read_bytes()
+        return {
+            "name": at.name,
+            "at": str(at.resolve()),
+            "bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+    def test_an_attachment_changed_after_validation_is_not_sent(self):
+        parent = self.where / "exports"
+        parent.mkdir()
+        approved = parent / "approved.pdf"
+        approved.write_bytes(b"approved")
+        declared = self._declared(approved)
+        outside = self.where / "outside"
+        outside.mkdir()
+        (outside / approved.name).write_bytes(b"private replacement")
+        parent.rename(self.where / "held-exports")
+        parent.symlink_to(outside, target_is_directory=True)
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            attached = discord._outbound_attachment(declared)
+
+        self.assertIsNone(attached)
+
+    def test_the_verified_snapshot_does_not_change_with_its_source(self):
+        approved = self.where / "approved.pdf"
+        approved.write_bytes(b"approved")
+
+        attached = discord._outbound_attachment(self._declared(approved))
+        def close_snapshot():
+            attached.close()
+            attached.fp.close()
+        self.addCleanup(close_snapshot)
+        approved.write_bytes(b"changed later")
+        attached.fp.seek(0)
+
+        self.assertEqual(b"approved", attached.fp.read())
+
+    def test_discord_verification_leaves_the_event_loop_free(self):
+        approved = self.where / "approved.pdf"
+        approved.write_bytes(b"approved")
+        declared = self._declared(approved)
+        entered = threading.Event()
+        release = threading.Event()
+        verify = discord._outbound_attachment
+        sent = []
+
+        def slow(attachment):
+            entered.set()
+            release.wait(1)
+            return verify(attachment)
+
+        class Room:
+            id = 7
+
+            async def send(self, content, reference=None, mention_author=False, files=None):
+                sent.extend(files or ())
+                return SimpleNamespace(id=8)
+
+        class Turn:
+            async def _where_to_write(self, _it):
+                return Room()
+
+        async def prove():
+            async def advance():
+                self.assertTrue(await asyncio.to_thread(entered.wait, 0.2))
+                release.set()
+
+            with mock.patch.object(discord, "_outbound_attachment", side_effect=slow):
+                posting = asyncio.create_task(discord.Agent._post(
+                    Turn(), {"conversation": "7"}, "answer", files=[declared]))
+                await asyncio.wait_for(advance(), timeout=0.3)
+                await posting
+                self.assertTrue(sent)
+                self.assertTrue(all(attached.fp.closed for attached in sent))
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            asyncio.run(prove())
+
+    def test_a_later_attachment_failure_closes_an_earlier_snapshot(self):
+        """R-CH-12, R-CH-18 — partial preparation cannot leak verified bytes."""
+        approved = self.where / "approved.pdf"
+        approved.write_bytes(b"approved")
+        declared = self._declared(approved)
+        verify = discord._outbound_attachment
+        made = []
+
+        def prepare(attachment):
+            if made:
+                raise RuntimeError("second preparation failed")
+            ready = verify(attachment)
+            made.append(ready)
+            return ready
+
+        class Room:
+            id = 7
+
+            async def send(self, content, reference=None, mention_author=False, files=None):
+                return SimpleNamespace(id=8)
+
+        class Turn:
+            async def _where_to_write(self, _it):
+                return Room()
+
+        with contextlib.redirect_stderr(io.StringIO()), mock.patch.object(
+                discord, "_outbound_attachment", side_effect=prepare):
+            posted = asyncio.run(discord.Agent._post(
+                Turn(), {"conversation": "7"}, "answer", files=[declared, declared]))
+
+        self.assertEqual(8, posted.id)
+        self.assertTrue(made[0].fp.closed)
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")

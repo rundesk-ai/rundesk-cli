@@ -28,12 +28,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import io
 import json
 import os
 import re
 import signal
+import stat
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -1176,8 +1179,8 @@ class Agent(discord.Client):
             footer = f"{footer} · {elapsed}" if footer else f"-# · {elapsed}"
         if footer:
             whole = f"{footer}\n{whole}"
-        files = [one["at"] for one in (it.get("attachments") or [])
-                 if isinstance(one, dict) and isinstance(one.get("at"), str)]
+        files = [one for one in (it.get("attachments") or [])
+                 if isinstance(one, dict)]
         # Past a certain length an answer is a document rather than a message, and a
         # dozen numbered fragments is not something anybody reads (R-DIS-13).
         recipient = str(it.get("recipient") or "")
@@ -1312,44 +1315,121 @@ class Agent(discord.Client):
         if anchor is not None and str(anchor_in) != str(getattr(channel, "id", "")):
             anchor = None
         sending = []
-        for at in files:
-            try:
-                sending.append(discord.File(at))
-            except OSError as why:
-                note(f"could not attach {at}: {why}")
-        if text_as is not None:
-            sending.append(discord.File(io.BytesIO(text_as.encode("utf-8")),
-                                        filename="answer.md"))
-        # **The quote never costs the answer** (R-DIS-1, R-DIS-28). discord.py builds the
-        # reference without `fail_if_not_exists`, so Discord's own default applies: a
-        # message quoting one it can no longer resolve is refused outright, and the answer
-        # is lost to a line on our own stderr. The asker deleting their question is enough,
-        # and a turn here runs for minutes. Off, Discord drops the quote and still posts.
-        quoting = None if anchor is None else anchor.to_reference(fail_if_not_exists=False)
-        # **An ordinary mention is the reply's** (R-DIS-31).
-        # `mention_author` is Discord's `allowed_mentions.replied_user`, which names the
-        # author of the message being replied to — so it can only reach somebody through
-        # `quoting`, and the guard above drops an anchor standing in another room. Asked of
-        # `quoting` rather than of `anchor` for exactly that: an answer whose question is
-        # somewhere else quotes nobody and must therefore mention nobody.
-        mention_recipient = mention if isinstance(mention, str) and mention.isdigit() else ""
-        if mention_recipient:
-            # A schedule's anchor is rundesk's own notice, so mentioning the reply author
-            # would ping the bot and leave the owner untinted. The core supplies the one
-            # authorized recipient only where the channel has exactly one (R-SCH-50).
-            content = f"<@{mention_recipient}> {content}"
         try:
-            said = await channel.send(
-                content,
-                reference=quoting,
-                mention_author=(bool(mention) and not mention_recipient
-                                and quoting is not None),
-                files=sending or None,
-            )
-            note(f"wrote {len(content)} chars and {len(sending)} files", "INFO")
-            return said
-        except Exception as why:  # noqa: BLE001 — a platform boundary
-            note(f"could not write: {type(why).__name__}: {why}")
+            for attachment in files:
+                try:
+                    ready = await asyncio.to_thread(_outbound_attachment, attachment)
+                except Exception as why:  # noqa: BLE001 — an adapter boundary
+                    note(f"could not attach: {type(why).__name__}: {why}")
+                    continue
+                if ready:
+                    sending.append(ready)
+            if text_as is not None:
+                sending.append(discord.File(io.BytesIO(text_as.encode("utf-8")),
+                                            filename="answer.md"))
+            # **The quote never costs the answer** (R-DIS-1, R-DIS-28). discord.py builds
+            # the reference without `fail_if_not_exists`, so Discord's own default applies:
+            # a message quoting one it can no longer resolve is refused outright, and the
+            # answer is lost to a line on our own stderr. The asker deleting their question
+            # is enough, and a turn here runs for minutes. Off, Discord drops the quote and
+            # still posts.
+            quoting = None if anchor is None else anchor.to_reference(fail_if_not_exists=False)
+            # **An ordinary mention is the reply's** (R-DIS-31).
+            # `mention_author` is Discord's `allowed_mentions.replied_user`, which names the
+            # author of the message being replied to — so it can only reach somebody through
+            # `quoting`, and the guard above drops an anchor standing in another room. Asked
+            # of `quoting` rather than of `anchor` for exactly that: an answer whose question
+            # is somewhere else quotes nobody and must therefore mention nobody.
+            mention_recipient = mention if isinstance(mention, str) and mention.isdigit() else ""
+            if mention_recipient:
+                # A schedule's anchor is rundesk's own notice, so mentioning the reply author
+                # would ping the bot and leave the owner untinted. The core supplies the one
+                # authorized recipient only where the channel has exactly one (R-SCH-50).
+                content = f"<@{mention_recipient}> {content}"
+            try:
+                said = await channel.send(
+                    content,
+                    reference=quoting,
+                    mention_author=(bool(mention) and not mention_recipient
+                                    and quoting is not None),
+                    files=sending or None,
+                )
+                note(f"wrote {len(content)} chars and {len(sending)} files", "INFO")
+                return said
+            except Exception as why:  # noqa: BLE001 — a platform boundary
+                note(f"could not write: {type(why).__name__}: {why}")
+        finally:
+            # discord.File deliberately does not own file-like objects. These snapshots
+            # are ours, so close them after the upload attempt succeeds or fails.
+            for attached in sending:
+                opened = attached.fp
+                with contextlib.suppress(Exception):
+                    attached.close()
+                with contextlib.suppress(Exception):
+                    opened.close()
+        return None
+
+
+def _outbound_attachment(attachment):
+    """Open, verify, and snapshot exactly the bytes core approved for delivery."""
+    at = attachment.get("at")
+    expected_size = attachment.get("bytes")
+    expected_digest = attachment.get("sha256")
+    if (not isinstance(at, str) or not isinstance(expected_size, int)
+            or isinstance(expected_size, bool) or expected_size < 0
+            or expected_size > ATTACHED_BYTES
+            or not isinstance(expected_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_digest) is None):
+        note(f"could not attach {at}: missing or invalid verification")
+        return None
+    snapshot = tempfile.TemporaryFile()
+    digest = hashlib.sha256()
+    size = 0
+    directory = None
+    descriptor = None
+    try:
+        path = Path(at)
+        if not path.is_absolute() or not path.parts[1:]:
+            raise OSError("not an absolute file")
+        directory = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        for part in path.parts[1:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=directory)
+            os.close(directory)
+            directory = child
+        descriptor = os.open(
+            path.parts[-1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+            dir_fd=directory,
+        )
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("not a regular file")
+        with os.fdopen(descriptor, "rb") as source:
+            descriptor = None
+            while block := source.read(min(1024 * 1024, ATTACHED_BYTES + 1 - size)):
+                size += len(block)
+                if size > ATTACHED_BYTES:
+                    break
+                digest.update(block)
+                snapshot.write(block)
+    except (OSError, ValueError) as why:
+        note(f"could not attach {at}: {why}")
+        snapshot.close()
+        return None
+    finally:
+        if directory is not None:
+            os.close(directory)
+        if descriptor is not None:
+            os.close(descriptor)
+    if size != expected_size or digest.hexdigest() != expected_digest:
+        note(f"could not attach {at}: file changed after validation")
+        snapshot.close()
+        return None
+    snapshot.seek(0)
+    try:
+        return discord.File(snapshot, filename=Path(at).name)
+    except (OSError, ValueError) as why:
+        note(f"could not attach {at}: {why}")
+        snapshot.close()
         return None
 
 

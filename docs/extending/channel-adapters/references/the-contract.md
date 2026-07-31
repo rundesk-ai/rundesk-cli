@@ -265,8 +265,18 @@ attached arrives on `arrived` — download it yourself, put it somewhere under y
 `RUNDESK_CHANNEL_HOME`, and report `{"name": …, "at": …}` with an absolute path. Anything
 that is not a readable file here is dropped rather than passed on, because the brain that
 would open it runs here and has no credential for your platform. What the *agent* made
-arrives on `answer` the same way, already checked to be inside where that agent works —
-send it if your surface can, and ignore it if it cannot.
+arrives on `answer` with `name`, absolute `at`, `bytes`, and a lowercase `sha256`. Before
+sending, read the file once, verify both values, and send that same byte snapshot rather
+than reopening its path. Refuse symlink traversal in every path component while opening;
+together these prevent a concurrent turn from replacing an approved file or its parent.
+Ignore the attachment if verification fails, and ignore all attachments if your surface
+cannot send them.
+
+An agent declares a local file only with a whole, unindented final-answer line shaped as
+`rundesk-attach: [Download](</absolute/path>)`; Rundesk removes the reserved prefix and
+private destination before the `answer` reaches you. Ordinary Markdown never attaches a
+local file. The control line is recognized before Markdown formatting in every context;
+`\rundesk-attach:` is the literal escaped form.
 
 `conversation` is whatever your platform calls one exchange — a thread, a room, a chat, a
 phone number. Rundesk never parses it and never shows it to anyone; it is the key a
@@ -295,7 +305,7 @@ person sees and `text` with the parent body. When deleted, unavailable, or unfet
 {"type": "said",   "conversation": "1180", "run": "7-a3f1", "text": "I'll look at the logs."}
 {"type": "said",   "conversation": "1180", "place": null, "schedule": "nightly", "began": true, "text": "💻 Working on 'nightly' — I will report back when it is done."}
 {"type": "said",   "conversation": "1180", "place": null, "schedule": "nightly", "text": "Nothing broke overnight."}
-{"type": "answer", "conversation": "1180", "run": "7-a3f1", "provider": "stand-in", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png"}]}
+{"type": "answer", "conversation": "1180", "run": "7-a3f1", "provider": "stand-in", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png", "bytes": 1204, "sha256": "…"}]}
 {"type": "state",  "conversation": "1180", "run": "7-a3f1", "state": "finished"}
 {"type": "query-result", "conversation": "1180", "query": "status", "ref": "8843", "text": "ava: RUNNING"}
 {"type": "configure-result", "conversation": "1180", "ref": "8844", "text": "Default provider changed to claude. The next message starts fresh."}

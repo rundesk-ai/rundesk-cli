@@ -28,6 +28,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import os
+import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,6 +69,15 @@ AFTER_UPDATE = (
     "The external Rundesk update attempt has finished and the gateway is back online. "
     "Verify the installed version and update outcome, then continue and finish the user's "
     "original request. Do not stop at reporting status or repeat completed actions."
+)
+
+# A reserved whole line is a portable control record, not a guess about Markdown. It is
+# recognized before formatting in every context; prefix it with a backslash when showing
+# the protocol literally. Ordinary links, quotes, lists, and code contain no control line.
+_LOCAL_ATTACHMENT = re.compile(
+    r"^rundesk-attach:[ \t]+\[(?P<label>(?:\\.|[^]\\\r\n])*)\]"
+    r"\(<(?P<at>/(?!/)[^>\r\n]+)>\)[ \t]*\r?$",
+    re.MULTILINE,
 )
 
 
@@ -337,6 +350,8 @@ class Answering:
             # A scheduled turn is still a completed channel answer (R-SCH-50). Its outcome
             # is the only place the session-size figure survives: the durable run keeps the
             # billed pieces but deliberately does not store that provider snapshot.
+            text, linked = _attachment_lines(text)
+            attachments = await self._made([*linked, *getattr(result, "files", ())])
             tokens = getattr(result, "tokens", {})
             if isinstance(tokens, dict) and tokens.get("reported"):
                 usage = {key: tokens[key]
@@ -347,7 +362,7 @@ class Answering:
             final = {
                 "type": "answer", "conversation": where_it_goes,
                 "place": place or None, "run": outcome_run, "text": text,
-                "schedule": named,
+                "schedule": named, "attachments": attachments,
             }
             if run is not None:
                 final["provider"] = provider.label(run.get("provider") or "")
@@ -725,7 +740,7 @@ class Answering:
             self._note(f"channel '{self.channel}': a turn could not be carried: {went_wrong}")
             self._say(channel.FAILED, held, ref=held.ref, why=str(went_wrong))
         else:
-            self._answer(held, outcome, provider.label(chose.get("provider") or ""))
+            await self._answer(held, outcome, provider.label(chose.get("provider") or ""))
             self._say(channel.FINISHED if outcome.ok else channel.FAILED, held,
                       ref=held.ref, why=None if outcome.ok else _why(outcome))
         finally:
@@ -792,7 +807,7 @@ class Answering:
 
         held.saying.put_nowait((waiting.text, waiting.user, pending, accepted))
 
-    def _answer(self, held: Exchange, outcome, provider_name: str) -> None:
+    async def _answer(self, held: Exchange, outcome, provider_name: str) -> None:
         """What the agent said, handed over once and whole (R-CH-8, R-CH-28).
 
         Held until here rather than shown as it was written. A reply that rewrites itself
@@ -804,37 +819,55 @@ class Answering:
         # Whatever is still in hand: the last complete thing said, or every fragment of
         # a reply that was written a piece at a time. Either way it is the answer.
         text = "".join(one for _was, one in held.spoken).strip() or outcome.text.strip()
-        made = self._made(outcome)
+        text, linked = _attachment_lines(text)
+        made = await self._made([*linked, *outcome.files])
         if not text and not made:
             return
         self._tell(type="answer", conversation=held.conversation, run=held.run,
                    provider=provider_name, text=text, attachments=made)
 
-    def _made(self, outcome) -> list:
-        """What the brain said it made, as things a surface may actually send.
+    async def _made(self, declared) -> list:
+        """What the brain declared for delivery, as things a surface may actually send.
 
-        **Only from where this agent works.** A brain names a path and it is checked
-        against the agent's own directories before anything leaves the machine — it runs
-        as the owner and can read anything they can, so "the brain asked for it" is not
-        on its own a reason to put a file into a chat room (R-CH-13).
+        Provider file records and reserved local attachment lines in the final answer are
+        both explicit declarations. **Only from where this agent works.** A path is checked
+        against the agent's own directories before anything leaves the machine — the
+        brain runs as the owner and can read anything they can, so "the brain asked for
+        it" is not on its own a reason to put a file into a chat room (R-CH-13, R-CH-31).
         """
         whose = agents.paths(self.name, self._where)
         mine = [whose["workspace"], whose["logs"], whose["home"]]
         found = []
-        for one in outcome.files:
-            at = one.get("at")
-            if not isinstance(at, str) or not at:
+        seen = set()
+        seen_files = set()
+        candidates = []
+        declared_paths = set()
+        for candidate in declared:
+            at = candidate.get("at") if isinstance(candidate, dict) else None
+            identity = os.path.normpath(at) if isinstance(at, str) else None
+            if identity is not None and identity in declared_paths:
                 continue
-            stands = Path(at)
-            if not stands.is_absolute() or not stands.is_file():
+            if identity is not None:
+                declared_paths.add(identity)
+            candidates.append(candidate)
+            if len(candidates) > channel.ATTACHED_MOST:
+                break
+        for one in candidates[:channel.ATTACHED_MOST]:
+            attachment, why = await asyncio.to_thread(_approved_attachment, one, mine)
+            if why:
+                self._note(f"channel '{self.channel}': {why}")
+            if attachment is None:
                 continue
-            where = stands.resolve()
-            if not any(_within(where, one_of) for one_of in mine):
-                self._note(f"channel '{self.channel}': not sending {where}, which is "
-                           f"outside where this agent works")
+            file_identity = attachment.pop("_file_identity")
+            if attachment["at"] in seen or file_identity in seen_files:
                 continue
-            found.append({"name": str(one.get("name") or where.name), "at": str(where)})
-        return found[:channel.ATTACHED_MOST]
+            seen.add(attachment["at"])
+            seen_files.add(file_identity)
+            found.append(attachment)
+        if len(candidates) > channel.ATTACHED_MOST:
+            self._note(f"channel '{self.channel}': sending only the first "
+                       f"{channel.ATTACHED_MOST} attachments")
+        return found
 
     def _say(self, state: str, held: Exchange, ref=None, why=None) -> None:
         """How the turn stands, which is rundesk's to decide (R-CAD-3)."""
@@ -1041,13 +1074,92 @@ async def _saying(queue: asyncio.Queue):
         accepted()
 
 
-def _within(at: Path, inside: Path) -> bool:
-    """Whether this really is under that, once every link has been followed."""
+def _approved_attachment(declared, roots) -> tuple[dict | None, str | None]:
+    """Resolve, contain, and fingerprint one declaration without trusting its path."""
+    if not isinstance(declared, dict):
+        return None, None
+    at = declared.get("at")
+    if not isinstance(at, str) or not at or not Path(at).is_absolute():
+        return None, None
     try:
-        at.relative_to(inside.resolve())
-    except (ValueError, OSError):
-        return False
-    return True
+        where = Path(at).resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return None, None
+    inside = None
+    for candidate in roots:
+        try:
+            root = candidate.resolve(strict=True)
+            where.relative_to(root)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        inside = root
+        break
+    if inside is None:
+        return None, f"not sending {where}, which is outside where this agent works"
+    try:
+        fingerprint = _fingerprint_beneath(where, inside)
+    except OSError as why:
+        return None, f"not sending {where.name}: {why}"
+    if fingerprint is None:
+        return None, f"not sending {where.name}, which is too large to attach"
+    size, digest, file_identity = fingerprint
+    return {
+        "name": str(declared.get("name") or where.name),
+        "at": str(where),
+        "bytes": size,
+        "sha256": digest,
+        "_file_identity": file_identity,
+    }, None
+
+
+def _fingerprint_beneath(at: Path, inside: Path) -> tuple[int, str, tuple[int, int]] | None:
+    """Read through held directory descriptors, refusing links in every component."""
+    at.relative_to(inside)
+    parts = at.parts[1:]
+    if not parts:
+        raise OSError("not a regular file")
+    directory = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    descriptor = None
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=directory)
+            os.close(directory)
+            directory = child
+        descriptor = os.open(
+            parts[-1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+            dir_fd=directory,
+        )
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode):
+            raise OSError("not a regular file")
+        with os.fdopen(descriptor, "rb") as source:
+            descriptor = None
+            while block := source.read(min(1024 * 1024,
+                                            channel.ATTACHED_BYTES + 1 - size)):
+                size += len(block)
+                if size > channel.ATTACHED_BYTES:
+                    return None
+                digest.update(block)
+        return size, digest.hexdigest(), (status.st_dev, status.st_ino)
+    finally:
+        os.close(directory)
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _attachment_lines(text: str) -> tuple[str, list]:
+    """Extract reserved local attachment lines and leave only their labels."""
+    declared = []
+
+    def attachment(line) -> str:
+        at = line.group("at")
+        declared.append({"name": Path(at).name, "at": at})
+        return line.group("label")
+
+    return _LOCAL_ATTACHMENT.sub(attachment, text), declared
 
 
 def _asked(it: dict) -> str:
