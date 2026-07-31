@@ -50,6 +50,13 @@ class InstructionBuilder(unittest.TestCase):
             instructions.RUNDESK_INSTRUCTIONS,
         )
 
+    def test_every_agent_is_told_how_to_attach_a_local_file(self):
+        """R-CH-31 — one portable final-answer convention reaches every brain."""
+        built = instructions.build(variables=CORE)
+        self.assertIn("absolute local path", built)
+        self.assertIn("Markdown link", built)
+        self.assertIn("attaches the file to the message", built)
+
     def test_schedule_and_owner_instructions_append_in_order(self):
         built = instructions.build(
             variables={**CORE, "schedule": "nightly"},

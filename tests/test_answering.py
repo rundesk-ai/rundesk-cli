@@ -353,6 +353,33 @@ class WhereABrainIsAnswering(CarriesAConversation):
             (answer["text"], answer["provider"], answer["schedule"],
              answer["recipient"], answer["elapsed"]),
         )
+
+    async def test_a_scheduled_final_answer_attaches_its_absolute_local_link(self):
+        """R-CH-31, R-SCH-50 — the same final-answer convention applies when the
+        clock started the turn and no inbound channel message exists."""
+        self.spoken_on()
+        row = self.a_schedule()
+        kept = agents.records("ava", self.where)
+        its_own = kept.opened(store.conversation_id("schedule", "nightly"), "schedule",
+                              "schedule", "nightly", "2026-07-26T09:00:00Z")["id"]
+        run = kept.began("schedule", "a-brain", "safe", "2026-07-26T09:00:00Z",
+                         conversation_id=its_own, schedule_id=row["id"])
+        at = agents.paths("ava", self.where)["workspace"] / "overnight.pdf"
+        at.write_bytes(b"a report")
+        kept.answered(its_own, run, "2026-07-26T09:02:00Z",
+                      f"[Download the overnight report](<{at}>)")
+        kept.ended(run, "2026-07-26T09:02:00Z", "finished")
+        outcome = Outcome(run=run)
+        surface = Surface()
+        held = self.answering(surface, Brain())
+
+        await held.told_what_a_schedule_did("nightly", outcome)
+        await self._settled(held)
+
+        answer = surface.of("answer")[0]
+        self.assertEqual("Download the overnight report", answer["text"])
+        self.assertEqual([{"name": at.name, "at": str(at.resolve())}],
+                         answer["attachments"])
         self.assertEqual([], [one for one in surface.of("said")
                               if not one.get("began")])
 
@@ -1731,6 +1758,96 @@ class WhatTheAgentMade(CarriesAConversation):
         held = self.answering(surface, brain)
         await self.carry(held, self.arrived())
         self.assertEqual(1, len(surface.of("answer")), "the picture was never sent")
+
+    async def test_an_absolute_local_link_attaches_the_file_without_exposing_its_path(self):
+        """R-CH-31 — the final answer itself declares delivery intent without making a
+        provider understand which of its tools created the file."""
+        at = self._made("reports/market intelligence (verified).pdf")
+        text = f"[Download the verified report](<{at}>)"
+        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual("Download the verified report", answer["text"])
+        self.assertNotIn(str(at), answer["text"])
+        self.assertEqual([{
+            "name": at.name,
+            "at": str(at.resolve()),
+        }], answer["attachments"])
+
+    async def test_relative_and_remote_links_stay_links_and_attach_nothing(self):
+        """R-CH-31 — only an absolute path is a declaration about this machine."""
+        text = "Read [the notes](notes.md) or [the docs](https://example.invalid/docs)."
+        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual(text, answer["text"])
+        self.assertEqual([], answer["attachments"])
+
+    async def test_a_local_link_outside_the_agent_is_scrubbed_but_not_attached(self):
+        """R-CH-31, R-CH-18 — declaring a local link is not permission to disclose
+        another directory, including by leaving its absolute path in the message."""
+        at = self._made("private.pdf", inside=False)
+        brain = Brain(outcome=Outcome(text=f"[Private report](<{at}>)"))
+        surface = Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual("Private report", answer["text"])
+        self.assertEqual([], answer["attachments"])
+        self.assertTrue(any("outside where this agent works" in one for one in self.told))
+
+    async def test_a_provider_file_and_local_link_to_it_are_attached_once(self):
+        """R-CH-31 — structured provider output and portable answer syntax merge."""
+        at = self._made("chart.png")
+        brain = Brain(outcome=Outcome(
+            text=f"[Chart](<{at}>)",
+            files=[{"type": "file", "at": str(at)}],
+        ))
+        surface = Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        self.assertEqual(1, len(surface.of("answer")[0]["attachments"]))
+
+    async def test_an_oversize_local_link_is_scrubbed_but_not_attached(self):
+        """R-CH-31 — a declared attachment cannot evade the channel's file bound."""
+        at = self._made("too-large.pdf")
+        with at.open("wb") as made:
+            made.truncate(channel.ATTACHED_BYTES + 1)
+        brain = Brain(outcome=Outcome(text=f"[Large report](<{at}>)"))
+        surface = Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual("Large report", answer["text"])
+        self.assertEqual([], answer["attachments"])
+        self.assertTrue(any("too large to attach" in one for one in self.told))
+
+    async def test_local_links_are_bounded_to_the_channel_attachment_count(self):
+        """R-CH-31 — one final answer cannot turn into an unbounded file batch."""
+        made = [self._made(f"report-{number}.pdf")
+                for number in range(channel.ATTACHED_MOST + 1)]
+        text = " ".join(f"[Report {number}](<{at}>)"
+                        for number, at in enumerate(made))
+        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        self.assertEqual(channel.ATTACHED_MOST,
+                         len(surface.of("answer")[0]["attachments"]))
+        self.assertTrue(any("sending only the first" in one for one in self.told))
 
 
 class InterruptedTurnsContinue(CarriesAConversation):

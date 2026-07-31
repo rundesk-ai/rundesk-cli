@@ -51,6 +51,7 @@ it has not — what never differs is that the work runs and is answered.
 | ✅ | R-CH-28 | A final channel answer names its resolved provider without exposing the provider's location | `a final answer names the provider that produced it`, `a provider label is readable without exposing or rewriting its location` |
 | ✅ | R-CH-29 | An inbound reply separates its context, identifies the earlier conversation message, and bounds quoted text by REPLY_TEXT_MOST with an explicit truncation marker | `a reply reference crosses the seam with bounded context`, `a reply tells the brain which message the follow up is for`, `an ordinary message has no empty reply context` |
 | ✅ | R-CH-30 | An unresolved reply reference still starts a turn and identifies the unavailable message | `an unresolved reply reference is kept without inventing context`, `an unresolved reply still starts a turn and says what is missing` |
+| ✅ | R-CH-31 | An absolute local-file Markdown link in a final answer attaches that file without exposing its machine path | `an absolute local link attaches the file without exposing its path`, `a scheduled final answer attaches its absolute local link`, `a local link outside the agent is scrubbed but not attached`, `relative and remote links stay links and attach nothing`, `a provider file and local link to it are attached once`, `an oversize local link is scrubbed but not attached`, `local links are bounded to the channel attachment count`, `every agent is told how to attach a local file` |
 
 ## Open questions
 

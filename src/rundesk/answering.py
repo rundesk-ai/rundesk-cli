@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,6 +66,14 @@ AFTER_UPDATE = (
     "The external Rundesk update attempt has finished and the gateway is back online. "
     "Verify the installed version and update outcome, then continue and finish the user's "
     "original request. Do not stop at reporting status or repeat completed actions."
+)
+
+# An absolute destination is the portable, provider-independent declaration that a final
+# answer means to hand over a local file. Angle brackets are Markdown's form for a
+# destination containing spaces; the plain form remains useful for ordinary paths.
+_LOCAL_FILE_LINK = re.compile(
+    r"!?\[(?P<label>(?:\\.|[^]\\])*)\]\("
+    r"(?:<(?P<angled>/[^>\r\n]+)>|(?P<plain>/[^)\s\r\n]+))\)"
 )
 
 
@@ -337,6 +346,8 @@ class Answering:
             # A scheduled turn is still a completed channel answer (R-SCH-50). Its outcome
             # is the only place the session-size figure survives: the durable run keeps the
             # billed pieces but deliberately does not store that provider snapshot.
+            text, linked = _local_file_links(text)
+            attachments = self._made([*getattr(result, "files", ()), *linked])
             tokens = getattr(result, "tokens", {})
             if isinstance(tokens, dict) and tokens.get("reported"):
                 usage = {key: tokens[key]
@@ -347,7 +358,7 @@ class Answering:
             final = {
                 "type": "answer", "conversation": where_it_goes,
                 "place": place or None, "run": outcome_run, "text": text,
-                "schedule": named,
+                "schedule": named, "attachments": attachments,
             }
             if run is not None:
                 final["provider"] = provider.label(run.get("provider") or "")
@@ -804,24 +815,27 @@ class Answering:
         # Whatever is still in hand: the last complete thing said, or every fragment of
         # a reply that was written a piece at a time. Either way it is the answer.
         text = "".join(one for _was, one in held.spoken).strip() or outcome.text.strip()
-        made = self._made(outcome)
+        text, linked = _local_file_links(text)
+        made = self._made([*outcome.files, *linked])
         if not text and not made:
             return
         self._tell(type="answer", conversation=held.conversation, run=held.run,
                    provider=provider_name, text=text, attachments=made)
 
-    def _made(self, outcome) -> list:
-        """What the brain said it made, as things a surface may actually send.
+    def _made(self, declared) -> list:
+        """What the brain declared for delivery, as things a surface may actually send.
 
-        **Only from where this agent works.** A brain names a path and it is checked
-        against the agent's own directories before anything leaves the machine — it runs
-        as the owner and can read anything they can, so "the brain asked for it" is not
-        on its own a reason to put a file into a chat room (R-CH-13).
+        Provider file records and absolute local links in the final answer are both
+        explicit declarations. **Only from where this agent works.** A path is checked
+        against the agent's own directories before anything leaves the machine — the
+        brain runs as the owner and can read anything they can, so "the brain asked for
+        it" is not on its own a reason to put a file into a chat room (R-CH-13, R-CH-31).
         """
         whose = agents.paths(self.name, self._where)
         mine = [whose["workspace"], whose["logs"], whose["home"]]
         found = []
-        for one in outcome.files:
+        seen = set()
+        for one in declared:
             at = one.get("at")
             if not isinstance(at, str) or not at:
                 continue
@@ -833,7 +847,22 @@ class Answering:
                 self._note(f"channel '{self.channel}': not sending {where}, which is "
                            f"outside where this agent works")
                 continue
+            try:
+                size = where.stat().st_size
+            except OSError as why:
+                self._note(f"channel '{self.channel}': not sending {where.name}: {why}")
+                continue
+            if size > channel.ATTACHED_BYTES:
+                self._note(f"channel '{self.channel}': not sending {where.name}, which is "
+                           "too large to attach")
+                continue
+            if where in seen:
+                continue
+            seen.add(where)
             found.append({"name": str(one.get("name") or where.name), "at": str(where)})
+        if len(found) > channel.ATTACHED_MOST:
+            self._note(f"channel '{self.channel}': sending only the first "
+                       f"{channel.ATTACHED_MOST} attachments")
         return found[:channel.ATTACHED_MOST]
 
     def _say(self, state: str, held: Exchange, ref=None, why=None) -> None:
@@ -1048,6 +1077,24 @@ def _within(at: Path, inside: Path) -> bool:
     except (ValueError, OSError):
         return False
     return True
+
+
+def _local_file_links(text: str) -> tuple[str, list]:
+    """Extract absolute local Markdown destinations and leave only their labels.
+
+    The destination is machine-private and meaningless to a channel reader. The label
+    remains useful prose, while the resolved attachment appears beside the message. Web
+    and relative links are not declarations about this machine and remain untouched
+    (R-CH-31).
+    """
+    declared = []
+
+    def attachment(link) -> str:
+        at = link.group("angled") or link.group("plain")
+        declared.append({"name": Path(at).name, "at": at})
+        return link.group("label")
+
+    return _LOCAL_FILE_LINK.sub(attachment, text), declared
 
 
 def _asked(it: dict) -> str:
