@@ -552,6 +552,25 @@ class TheAnswerMentionsWhoAsked(unittest.TestCase):
                            self._held(_asking(4242)))
         self.assertEqual([], room.wrote)
         self.assertIn("could not write", said.getvalue())
+        self.assertIn("WARNING\t", said.getvalue())
+
+    def test_a_successful_delivery_marks_its_diagnostic_as_routine(self):
+        """R-GW-44 — stderr stays separate from protocol records while its severity is
+        explicit for the gateway that keeps it."""
+        room = _Wrote()
+        surface = _writing_surface(room)
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            asyncio.run(discord.Agent.told(surface, {
+                "type": "state", "state": "taken", "conversation": "4242",
+            }))
+            asyncio.run(discord.Agent._post(
+                surface, {"conversation": "4242"}, "delivered"))
+        self.assertIn(
+            "INFO\ttold state/taken for 4242 (0 chars, 0 files)",
+            said.getvalue(),
+        )
+        self.assertIn("INFO\twrote 9 chars and 0 files", said.getvalue())
 
     def test_a_message_nobody_asked_to_mention_does_not(self):
         """R-DIS-31 — `_post` is shared by every message this surface writes, so not
@@ -2165,6 +2184,30 @@ class WhichRoomAWordMeans(unittest.TestCase):
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class WhatTheOwnerIsTold(unittest.TestCase):
     """R-DIS-15, R-DIS-16 — coming up, going down, and closing the connection either way."""
+
+    def test_successfully_telling_the_owner_is_routine_channel_activity(self):
+        """R-GW-44 — a startup or shutdown notice that lands is not a warning."""
+        kept = []
+
+        class Person:
+            async def send(self, _said):
+                return None
+
+            def __str__(self):
+                return "owner"
+
+        class Surface:
+            chose = SimpleNamespace(allow=["42"])
+
+            async def fetch_user(self, _who):
+                return Person()
+
+        with mock.patch.object(
+                discord, "note",
+                side_effect=lambda said, level="WARNING": kept.append((said, level))):
+            asyncio.run(discord.Agent._tell_the_owner(Surface(), "Rundesk is online."))
+        self.assertEqual(
+            [("told the owner (owner): Rundesk is online.", "INFO")], kept)
 
     class Stand:
         """Exactly the surface `going` touches, and no more — a stand-in more generous
