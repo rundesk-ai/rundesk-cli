@@ -758,6 +758,10 @@ re-checked since, so treat these as true-when-found rather than as current.*
   --json type` exits before listing anything and prints the valid fields; request
   `--json issueType` and read `.issueType.name`.
 
+- **`gh repo view` takes the repository positionally and rejects `--repo`.** Use
+  `gh repo view owner/repository --json ...`; unlike issue and PR commands, this verb has no
+  repository flag.
+
 - **The disposable station defaults to the canonical checkout, not the shell's current
   worktree.** Running `station.sh --install` from a feature worktree can therefore validate
   and install a different revision while appearing isolated. Pass

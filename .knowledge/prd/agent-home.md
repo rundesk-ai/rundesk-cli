@@ -65,6 +65,8 @@ provider's own tools still reach whatever their owner reaches.
 | ✅ | R-AGT-42 | The shipped provider bootstrap requires complete agent rules to be read before any response or action | `provider bootstrap requires complete agent rules before action` |
 | ✅ | R-AGT-43 | A new agent keeps personal facts and response preferences in memory rather than a separate page | `a new home has no separate user page`, `a legacy user override does not restore the retired page` |
 | ✅ | R-AGT-44 | A skill keeps its instructions, scripts, references, assets, and other resources together wherever it is presented | `a complete skill package is valid`, `a grant reaches every resource in a skill package`, `revoking a complete skill package removes only access`, `installing and updating preserve a complete skill package`, `uninstalling removes a complete built in skill package`, `every shipped adapter presents a complete skill package`, `antigravity presents a complete skill package and prunes revoked link`, `a backup holds a complete skill package`, `a restored skill package keeps its executable command` |
+| ✅ | R-AGT-45 | An agent never treats its home or workspace root as a project repository | `core instructions prohibit git at home and workspace roots` |
+| ✅ | R-AGT-46 | Agent orientation and routing corrections stay silent unless the correct route blocks the requested outcome | `core instructions keep internal routing checks silent` |
 
 ## Open questions
 

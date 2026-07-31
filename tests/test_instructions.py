@@ -50,6 +50,29 @@ class InstructionBuilder(unittest.TestCase):
             instructions.RUNDESK_INSTRUCTIONS,
         )
 
+    def test_core_instructions_prohibit_git_at_home_and_workspace_roots(self):
+        """R-AGT-45 — an operational root must never be guessed into a repository."""
+        built = instructions.build(variables=CORE)
+        self.assertIn(
+            "Never run any Git command with your home or workspace root as its working tree.",
+            built,
+        )
+        self.assertIn(
+            "Never volunteer, narrate, or report the Git status of your home or workspace root.",
+            built,
+        )
+
+    def test_core_instructions_keep_internal_routing_checks_silent(self):
+        """R-AGT-46 — a self-created route miss is not progress or owner-facing friction."""
+        built = instructions.build(variables=CORE)
+        for rule in (
+            "route checks, and repository discovery are routine internal work",
+            "Correct an internal orientation or routing miss silently.",
+            "when the confirmed correct route remains unavailable and blocks",
+        ):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, built)
+
     def test_every_agent_is_told_how_to_attach_a_local_file(self):
         """R-CH-31 — one portable final-answer convention reaches every brain."""
         built = instructions.build(variables=CORE)
