@@ -860,6 +860,16 @@ class WhatFourSlotsOfUsageAddUpTo(unittest.TestCase):
         default of zero on the way in."""
         self.assertEqual({"reported": False}, turn._tokens([{"type": "text", "text": "x"}]))
 
+    def test_a_turn_records_the_final_conversation_size_without_adding_snapshots(self):
+        """R-USE-15 — session is the final level, even after compaction, while billed
+        quantities remain the sum of what each request reported."""
+        said = [{"type": "usage", "input": 4, "output": 2, "session": 120000},
+                {"type": "usage", "input": 3, "output": 5, "session": 80000}]
+        self.assertEqual(
+            {"reported": True, "input": 7, "output": 7, "session": 80000},
+            turn._tokens(said),
+        )
+
 
 class WhyATurnStopped(unittest.TestCase):
     """R-RUN-19. `_because` is the whole of the decision and is asked directly."""
@@ -1053,6 +1063,19 @@ class WhatATurnCost(WithAnAgentToRunTurnsFor):
         said = await self.ask("plain")
         self.assertEqual({"reported": True, "input": 100, "output": 8, "cached": 40,
                           "model": "stand-in-1"}, said.tokens)
+
+    async def test_a_turns_elapsed_time_ignores_wall_clock_jumps(self):
+        """R-SCH-50 — elapsed time is a duration from a monotonic clock; calendar time
+        moving backwards while the provider runs cannot change the scheduled footer."""
+        wall = [2_000.0]
+
+        def jumping_wall():
+            wall[0] -= 60
+            return wall[0]
+
+        ticks = iter((100.0, 128.0))
+        said = await self.ask("plain", now=jumping_wall, clock=lambda: next(ticks))
+        self.assertEqual(28.0, said.elapsed)
 
     async def test_tokens_are_recorded_as_the_brain_reported_them(self):
         """R-USE-2 — the arithmetic that turns a conversation's running total into a

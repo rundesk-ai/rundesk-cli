@@ -2088,12 +2088,12 @@ class Gateway:
                 # rundesk does not keep. Said from inside `_asked`, once the schedule's name
                 # is claimed: announced here instead, a firing refused for still running
                 # would have said work began that never did.
-                became = await self._asked(
+                result = await self._asked(
                     one, held, admitted=lambda: self._told_the_surface_it_started(one))
             else:
                 ran = await self.start(list(one.run), as_name=held,
                                        env=self._for_a_schedule(one.name))
-                became = ran.reason
+                result = ran.reason
         except AlreadyStarted:
             # R-SCH-7: said, not passed over. A schedule quietly skipping every time
             # because the last run never ended looks exactly like one that is working.
@@ -2143,9 +2143,10 @@ class Gateway:
                 self._remember_outcome(one.name, "could not start")
             await self._answered_any_notice(one, "could not start")
             return "could not start"
+        became = getattr(result, "became", result)
         if not one.backend:
             self._remember_outcome(one.name, became)
-            await self._told_the_surface(one, became)
+            await self._told_the_surface(one, result)
         return became
 
     async def _told_the_surface_it_started(self, one) -> None:
@@ -2197,7 +2198,7 @@ class Gateway:
         if one.name in self._announced:
             await self._told_the_surface(one, became)
 
-    async def _told_the_surface(self, one, became: str) -> None:
+    async def _told_the_surface(self, one, result) -> None:
         """Say what this schedule came to, on the surface it names.
 
         **The first trigger with no person at the other end.** Work that failed at three in the
@@ -2225,6 +2226,7 @@ class Gateway:
         messages are one delivery, and only the first of them is allowed to decide where.
         """
         where = self._announced.pop(one.name, None)
+        became = getattr(result, "became", result)
         answering = self._reached.get(one.channel) if one.channel else None
         if answering is None:
             if one.channel:
@@ -2235,7 +2237,7 @@ class Gateway:
                                  one.name, one.channel)
             return
         try:
-            await answering.told_what_a_schedule_did(one.name, became, where=where)
+            await answering.told_what_a_schedule_did(one.name, result, where=where)
         except Exception as why:  # noqa: BLE001 — a delivery boundary; see the docstring
             self.log.warning("channel '%s': could not say what '%s' did: %s",
                              one.channel, one.name, why)
@@ -2254,14 +2256,15 @@ class Gateway:
         said[SCHEDULE_IS] = named
         return said
 
-    async def _asked(self, one, held: str, admitted=None) -> str:
+    async def _asked(self, one, held: str, admitted=None):
         """Admit a turn for a schedule that asks one, and hand back how it ended.
 
         **Through a collaborator, never by reaching for one.** A turn needs an agent, a brain
         and an account of what it did, and a gateway knows none of those — so whoever knows
         what an agent is builds this and hands it over already made, exactly as the surfaces
-        this gateway holds open are handed over (R-AGT-9). What comes back only has to say how
-        it ended, which is the one thing every outcome here has in common.
+        this gateway holds open are handed over (R-AGT-9). The whole outcome comes back so
+        the final channel report retains the usage and provider facts the turn recorded
+        (R-SCH-50); this gateway still reads only `became` for its own schedule accounting.
 
         The overlap guard is the same one a program gets and is asked the same way: a turn is
         registered under the schedule's own name for as long as it runs, so a schedule cannot
@@ -2285,7 +2288,7 @@ class Gateway:
         try:
             if admitted is not None:
                 await admitted()
-            return (await self.asking(one)).became
+            return await self.asking(one)
         finally:
             self._asked_for.discard(held)
 

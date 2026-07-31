@@ -121,6 +121,8 @@ class Outcome:
     said: list = field(default_factory=list)
     #: What it cost, or that nobody said. Never a cost of nothing (R-USE-6, R-USE-7).
     tokens: dict = field(default_factory=lambda: {"reported": False})
+    #: How long this turn ran on a monotonic clock. Wall time may move while work runs.
+    elapsed: float | None = None
     #: Where the conversation got to, when the brain reported one and could carry on.
     handle: str | None = None
     #: Why it failed, in the brain's own words — and the tail of what it said went wrong.
@@ -183,6 +185,7 @@ async def carry(
     steering=None,
     root: Path | None = None,
     now=None,
+    clock=None,
     pick=None,
     asked_by: dict | None = None,
     admitted=None,
@@ -232,6 +235,9 @@ async def carry(
     whose = agents.paths(name, where)
     brain = provider.key(named)
     # **Named, never made.** An adapter is told where a home of its own *would* be and is
+    elapsed_clock = clock or time.monotonic
+    began_at = elapsed_clock()
+
     # free to use it for its own small bookkeeping — but rundesk does not create it, and no
     # brain is pointed at it. Pointed at one, a real brain does not merely keep a sign-in
     # there: it builds its whole state tree, to tens of megabytes an agent, and starts out
@@ -448,6 +454,7 @@ async def carry(
         # second copy of that expression would drift into a run recorded as finished and a
         # schedule reporting it as failed, or the other way round.
         outcome = Outcome(run=run, ok=ok, reason=result.reason, said=said, tokens=tokens,
+                          elapsed=max(0, elapsed_clock() - began_at),
                           handle=handle if carried else None, why=why,
                           because=_because(said),
                           trouble=[one for one in trouble if one.strip()][-TROUBLE_KEPT:])
@@ -979,6 +986,14 @@ def _tokens(said: list) -> dict:
                   if isinstance(one.get(what), int) and not isinstance(one.get(what), bool)]
         if values:
             adding[what] = sum(values)
+    # Session is a level, not another billed quantity (R-USE-15). A provider can report
+    # several snapshots while it works or a smaller one after compaction; the final one is
+    # how large the conversation ended, and adding snapshots would invent a quantity.
+    sessions = [one["session"] for one in counted
+                if isinstance(one.get("session"), int)
+                and not isinstance(one.get("session"), bool)]
+    if sessions:
+        adding["session"] = sessions[-1]
     model = [one.get("model") for one in counted if one.get("model")]
     if model:
         # Only ever what a brain said actually answered. One that names none leaves none
