@@ -19,19 +19,19 @@ concurrency:
   cancel-in-progress: true
 
 # Each validation job answers one question, so a red tick says what is broken before
-# it is opened. The activity-delivery job is deliberately not a correctness gate: it
-# records that CI ran by fetching the same counted release asset as an install or update.
+# it is opened. The published-archive check catches a missing or corrupt install artifact
+# independently of the source-tree installer checks below.
 
 jobs:
-  # ------------------------------------------------------------------ public activity
-  count-ci-delivery:
-    name: count this CI run in install activity
+  # ----------------------------------------------------------- published install archive
+  verify-published-install-archive:
+    name: published install archive downloads and opens
     timeout-minutes: 2
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch one counted release delivery
+      - name: Download and inspect the published install archive
         env:
-          COUNTED_DELIVERY_SINCE: "0.23.0"
+          ARCHIVE_REQUIRED_SINCE: "0.23.0"
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -44,17 +44,17 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/repos/rundesk-ai/rundesk-cli/releases/latest |
               python -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')"
-            if python - "$latest" "$COUNTED_DELIVERY_SINCE" <<'CHECK'
+            if python - "$latest" "$ARCHIVE_REQUIRED_SINCE" <<'CHECK'
           import re
           import sys
           version = lambda value: tuple(map(int, re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", value).groups()))
           raise SystemExit(0 if version(sys.argv[1]) >= version(sys.argv[2]) else 1)
           CHECK
             then
-              echo "::error::the counted CI delivery failed for $latest"
+              echo "::error::the published install archive is missing or invalid for $latest"
               exit 1
             fi
-            echo "::notice::counting starts with v$COUNTED_DELIVERY_SINCE"
+            echo "::notice::published install archives begin with v$ARCHIVE_REQUIRED_SINCE"
           fi
 
   # ------------------------------------------------------------------ the knowledge base
