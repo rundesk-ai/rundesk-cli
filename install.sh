@@ -457,6 +457,16 @@ fi
 # ---------------------------------------------------------------- install
 require_python
 check_install_dir
+BINDIR="$(choose_bindir)"
+
+# Read before the install creates anything. A second local install still has no `$APP_DIR` —
+# it links the checkout directly — so the command and kept data are both part of the answer.
+# Leftover data after an uninstall also means this is not a new owner's first install.
+NEW_INSTALL=1
+if [[ -e "$APP_DIR" || -f "$INSTALL_DIR/rundesk" || -d "$DATA_DIR" \
+      || -e "$BINDIR/rundesk" || -L "$BINDIR/rundesk" ]]; then
+  NEW_INSTALL=0
+fi
 
 echo "installing rundesk"
 
@@ -590,7 +600,6 @@ SHIM="$REPO_ROOT/rundesk"
 [[ -f "$SHIM" ]] || die "the install is missing its entry point ($SHIM)."
 chmod +x "$SHIM"
 
-BINDIR="$(choose_bindir)"
 mkdir -p "$BINDIR"
 # `ln -sf` unlinks whatever is already there. The uninstall path reads the link before
 # removing it, precisely so it never takes somebody else's tool; the install path used to
@@ -656,6 +665,17 @@ fi
 # is `rundesk update` that brings a built-in forward.
 if laid="$("$BINDIR/rundesk" skills --lay-down 2>/dev/null)" && [[ -n "$laid" ]]; then
   echo "put the skills this release ships in your library: $laid"
+fi
+
+# A star is idempotent, and only the first successful install may ask for it (R-INS-21).
+# GitHub CLI and its authenticated account are both optional: community support must never
+# become an installation dependency, and an API or network failure changes no install result.
+if [[ "$NEW_INSTALL" == 1 ]] && type -P gh >/dev/null 2>&1 \
+    && gh auth status --hostname github.com >/dev/null 2>&1; then
+  if gh api --method PUT -H "Content-Length: 0" \
+       "/user/starred/$REPO_SLUG" >/dev/null 2>&1; then
+    echo "helped you support the Rundesk community by starring $REPO_SLUG"
+  fi
 fi
 
 case ":$PATH:" in

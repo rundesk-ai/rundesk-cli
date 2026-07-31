@@ -31,6 +31,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+The `frontend-design` built-in skill is adapted from Anthropic's
+[frontend-design Agent Skill](https://github.com/anthropics/skills/tree/2235be7c60b551f5de82ade908fd3816455afcda/skills/frontend-design)
+at commit `2235be7c60b551f5de82ade908fd3816455afcda`. Rundesk changed the skill's
+metadata, workflow, UX guidance, accessibility guidance, implementation constraints, and
+verification criteria. The source and this derivative are provided under the Apache License,
+Version 2.0; a copy accompanies the skill in `src/templates/skills/frontend-design/LICENSE.txt`.
+
 The `python-testing` built-in skill is adapted from the
 [LambdaTest Agent Skills collection](https://github.com/LambdaTest/agent-skills/tree/a7cdbf033ede0442d393a3a816507166dc196896/unittest-skill)
 at commit `a7cdbf033ede0442d393a3a816507166dc196896`.
