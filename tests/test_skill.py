@@ -91,6 +91,30 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
                 self.assertIn("provider", page.lower())
                 self.assertIn("model", page.lower())
 
+    def test_repository_overlays_delegate_the_shared_github_workflow(self):
+        for overlay, shared in (
+                ("filing-rundesk-issues", "filing-github-issues"),
+                ("writing-rundesk-pull-requests", "writing-github-pull-requests")):
+            with self.subTest(skill=overlay):
+                page = (REALLY_SHIPPED / overlay / "SKILL.md").read_text()
+                self.assertIn(f"Read and follow `{shared}`", page)
+
+    def test_generic_github_guidance_defers_to_each_repository_and_verifies_the_result(self):
+        issue = (REALLY_SHIPPED / "filing-github-issues" / "SKILL.md").read_text()
+        pull = (REALLY_SHIPPED / "writing-github-pull-requests" / "SKILL.md").read_text()
+        for page in (issue, pull):
+            with self.subTest(skill="issue" if page is issue else "pull request"):
+                self.assertIn("CONTRIBUTING.md", page)
+                self.assertIn("--body-file", page)
+                self.assertIn("verify", page.lower())
+        self.assertIn("--state all", issue)
+        self.assertIn("SECURITY.md", issue)
+        self.assertIn("<base-remote>/<base>...HEAD", pull)
+        self.assertIn("headRepositoryOwner", pull)
+        self.assertIn("--head <branch>", pull)
+        self.assertIn("--head <user>:<branch>", pull)
+        self.assertIn("closingIssuesReferences", pull)
+
 
 class WhatTheShippedPythonTestingSkillSays(unittest.TestCase):
     def test_python_testing_guidance_is_for_the_standard_library_runner(self):

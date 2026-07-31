@@ -93,6 +93,32 @@ class WhatAnUpdateAdds(WithADataDirectory):
             json.loads(self.at.read_text())["backups"],
         )
 
+    def test_the_previous_unchanged_skill_default_is_brought_forward(self):
+        """R-UPD-50, R-AGT-36 — agents on the release default receive the new common
+        collaboration skills rather than keeping an accidental snapshot of an old default."""
+        self.at.write_text(json.dumps({
+            "skills": {"granted": list(config.PREVIOUS_DEFAULT_GRANTS)},
+        }) + "\n", encoding="utf-8")
+
+        changed = config.ensure(self.where)
+
+        self.assertIn("skills", changed)
+        self.assertEqual(
+            config.INITIAL["skills"]["granted"],
+            json.loads(self.at.read_text())["skills"]["granted"],
+        )
+
+    def test_an_owner_customized_skill_list_is_not_brought_to_the_new_default(self):
+        """R-UPD-48, R-UPD-50 — even a strict subset of the old release default is an owner choice,
+        so an update does not silently grant skills they removed."""
+        chosen = ["managing-rundesk", "filing-rundesk-issues"]
+        self.at.write_text(json.dumps({"skills": {"granted": chosen}}) + "\n",
+                           encoding="utf-8")
+
+        config.ensure(self.where)
+
+        self.assertEqual(chosen, json.loads(self.at.read_text())["skills"]["granted"])
+
     def test_a_configuration_that_cannot_be_read_is_left_exactly_as_it_is(self):
         """R-UPD-48, R-STO-13 — refused rather than replaced. Rewriting it would turn a
         typo an owner can fix into their whole configuration silently gone."""
