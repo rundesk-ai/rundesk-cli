@@ -64,6 +64,16 @@ export default defineConfig({
 						crossorigin: 'anonymous',
 					},
 				})),
+				// Starlight declares `summary_large_image` and had no image to put in it,
+				// so a link to these docs rendered as a bare row of text. Absolute, because
+				// a social card is fetched by somebody else's server.
+				...[
+					['og:image', 'https://docs.rundesk.ai/og.png'],
+					['og:image:width', '1200'],
+					['og:image:height', '630'],
+					['og:image:alt', 'Rundesk — run the coding CLI you already use as a durable, named teammate.'],
+				].map(([property, content]) => ({ tag: 'meta', attrs: { property, content } })),
+				{ tag: 'meta', attrs: { name: 'twitter:image', content: 'https://docs.rundesk.ai/og.png' } },
 			],
 			social: [
 				{

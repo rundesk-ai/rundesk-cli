@@ -3,10 +3,12 @@
   "type": "module",
   "version": "0.0.1",
   "scripts": {
-    "dev": "npm run sync:cli && astro dev",
-    "start": "npm run sync:cli && astro dev",
+    "dev": "npm run generate && astro dev",
+    "start": "npm run generate && astro dev",
+    "generate": "npm run sync:cli && npm run build:llms",
     "sync:cli": "node scripts/sync-cli-reference.mjs",
-    "prebuild": "npm run sync:cli",
+    "build:llms": "node scripts/build-llms.mjs",
+    "prebuild": "npm run generate",
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro"

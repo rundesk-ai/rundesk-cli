@@ -25,6 +25,11 @@ suite-logs/
 site/node_modules/
 site/.astro/
 
-# Copied out of CLI.md, which is itself generated from the parser. Committing it
+# Rendered from CLI.json, which is itself generated from the parser. Committing it
 # would create a third copy of the command surface, free to disagree with the other two.
 docs/reference/cli.md
+
+# Built from docs/ on every dev and build, for the same reason: an index kept by hand
+# is the document that goes stale first.
+site/public/llms.txt
+site/public/llms-full.txt
