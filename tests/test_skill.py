@@ -111,7 +111,8 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
         self.assertIn("SECURITY.md", issue)
         self.assertIn("<base-remote>/<base>...HEAD", pull)
         self.assertIn("headRepositoryOwner", pull)
-        self.assertIn("--head <head-owner>:<branch>", pull)
+        self.assertIn("--head <branch>", pull)
+        self.assertIn("--head <user>:<branch>", pull)
         self.assertIn("closingIssuesReferences", pull)
 
 

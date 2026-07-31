@@ -143,11 +143,16 @@ non-interactive commands from opening an editor.
 git push -u <push-remote> <branch>
 gh pr create --repo <owner/repo> \
   --base <base> \
-  --head <head-owner>:<branch> \
+  --head <branch> \
   --title '<title>' \
   --body-file <pr-body.md> \
   [--draft]
 ```
+
+The bare head is for a branch in the target repository. For a user-owned fork, use
+`--head <user>:<branch>`. `gh pr create` does not support an organization name in that
+qualified head form; if an organization-owned fork is required, stop rather than silently
+creating from another repository.
 
 Do not add reviewers, assignees, projects, or merge settings unless the owner or repository
 workflow asked for them. After creation, verify GitHub's stored result:
