@@ -256,9 +256,10 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   (R-AGT-30). `managing-rundesk` is how to operate rundesk, written for **an agent running inside
   it** — it was a document at the repository root that an agent had to be told to go and read,
   and the pointer named a path that existed on neither kind of install. As a skill it is handed
-  to the agent instead. **Not every shipped skill reaches every agent**: the required baseline
-  is `config.skills()["granted"]`, defaulting to the common Rundesk and GitHub workflows and reconciled
-  onto existing agents during updates and reinstalls (R-AGT-36).
+  to the agent instead. **Not every shipped skill reaches every agent**: the required set is
+  `config.skills()["granted"]`, combining Rundesk's unrevokable platform-stewardship floor with
+  the owner-configured baseline and reconciling both onto existing agents during updates and
+  reinstalls (R-AGT-36, R-AGT-37).
 - `docs/extending/` — the adapter and integration guides. They were built-in skills, laid down in
   every owner's library and granted to every agent, for a task almost none of them will ever do.
   A person building an adapter reads these against the repository; an agent does not need them in

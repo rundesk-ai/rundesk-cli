@@ -1261,6 +1261,23 @@ class WhatCanBeTakenFromAnAgent(unittest.TestCase):
         self.assertIn("REQUIRED", said)
         self.assertEqual([required], skills.granted(agents.skills("ava")))
 
+    def test_the_rundesk_required_skill_cannot_be_configured_away_and_revoked(self):
+        """R-AGT-37 — platform stewardship is product policy, not an optional baseline an
+        owner can remove from config before revoking it."""
+        (self.where / "config.json").write_text(
+            '{"skills": {"granted": []}}\n', encoding="utf-8")
+        required = config.RUNDESK_REQUIRED_GRANTS[0]
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(held=(required,), given={"skills": [required]})
+
+        code, said = drive(["skills", "revoke", "ava", required],
+                           agents=agents, skills=skills)
+
+        self.assertEqual(1, code)
+        self.assertIn("RUNDESK REQUIRED", said)
+        self.assertIn("cannot be configured away", said)
+        self.assertEqual([required], skills.granted(agents.skills("ava")))
+
     def test_a_skill_not_required_by_the_configuration_can_be_revoked(self):
         """R-AGT-29, R-AGT-37 — required grants do not turn every optional skill into one."""
         agents = FakeAgents(made=("ava",))

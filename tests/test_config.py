@@ -108,16 +108,19 @@ class WhatAnUpdateAdds(WithADataDirectory):
             json.loads(self.at.read_text())["skills"]["granted"],
         )
 
-    def test_an_owner_customized_skill_list_is_not_brought_to_the_new_default(self):
-        """R-UPD-48, R-UPD-50 — even a strict subset of the old release default is an owner choice,
-        so an update does not silently grant skills they removed."""
-        chosen = ["managing-rundesk", "filing-rundesk-issues"]
+    def test_an_owner_customized_skill_list_keeps_its_choices_and_the_required_floor(self):
+        """R-UPD-48, R-UPD-50, R-AGT-36 — optional choices survive while a product-required
+        skill is restored visibly rather than existing as hidden runtime policy."""
+        chosen = ["managing-rundesk"]
         self.at.write_text(json.dumps({"skills": {"granted": chosen}}) + "\n",
                            encoding="utf-8")
 
         config.ensure(self.where)
 
-        self.assertEqual(chosen, json.loads(self.at.read_text())["skills"]["granted"])
+        self.assertEqual(
+            chosen + list(config.RUNDESK_REQUIRED_GRANTS),
+            json.loads(self.at.read_text())["skills"]["granted"],
+        )
 
     def test_a_configuration_that_cannot_be_read_is_left_exactly_as_it_is(self):
         """R-UPD-48, R-STO-13 — refused rather than replaced. Rewriting it would turn a
@@ -146,18 +149,23 @@ class WhichSkillsANewAgentGets(WithADataDirectory):
         written = json.loads(self.at.read_text())["skills"]["granted"]
         self.assertEqual(tuple(written), config.skills(self.where)["granted"])
 
-    def test_which_skills_a_new_agent_gets_is_the_owners_to_state(self):
-        """R-AGT-36 — an owner running agents that do one job says so once."""
+    def test_optional_skills_are_the_owners_to_state_above_the_required_floor(self):
+        """R-AGT-36 — an owner running agents that do one job says so once, without
+        removing the platform stewardship every Rundesk agent carries."""
         self.at.write_text('{"skills": {"granted": ["managing-rundesk"]}}\n', encoding="utf-8")
 
-        self.assertEqual(("managing-rundesk",), config.skills(self.where)["granted"])
+        self.assertEqual(
+            ("managing-rundesk", *config.RUNDESK_REQUIRED_GRANTS),
+            config.skills(self.where)["granted"],
+        )
 
-    def test_an_empty_list_is_honoured_rather_than_read_as_saying_nothing(self):
-        """R-AGT-36 — somebody who wants agents made with no skills has stated something,
-        and turning it back into four is exactly the quiet override this file prevents."""
+    def test_an_empty_optional_list_still_keeps_the_rundesk_required_skill(self):
+        """R-AGT-36 — empty means no owner-selected baseline, not that an agent stops
+        participating in Rundesk platform stewardship."""
         self.at.write_text('{"skills": {"granted": []}}\n', encoding="utf-8")
 
-        self.assertEqual((), config.skills(self.where)["granted"])
+        self.assertEqual(config.RUNDESK_REQUIRED_GRANTS,
+                         config.skills(self.where)["granted"])
 
     def test_something_that_is_not_a_list_of_names_is_refused(self):
         """R-AGT-36 — never defaulted around: an owner who wrote a string meant something,

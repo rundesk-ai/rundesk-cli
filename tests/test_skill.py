@@ -99,6 +99,21 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
                 page = (REALLY_SHIPPED / overlay / "SKILL.md").read_text()
                 self.assertIn(f"Read and follow `{shared}`", page)
 
+    def test_rundesk_issue_guidance_makes_every_agent_a_bounded_platform_steward(self):
+        """R-AGT-36 — the skill every agent must retain says when it acts proactively and
+        keeps owner customization out of the platform tracker."""
+        page = (REALLY_SHIPPED / "filing-rundesk-issues" / "SKILL.md").read_text()
+        for expected in (
+                "Every Rundesk agent helps improve the platform",
+                "without a separate request",
+                "owner asked for or clearly needs a capability",
+                "recurring Rundesk friction has evidence",
+                "custom skill,",
+                "adapter, integration, or existing tool",
+                "built into Rundesk itself"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, page)
+
     def test_generic_github_guidance_defers_to_each_repository_and_verifies_the_result(self):
         issue = (REALLY_SHIPPED / "filing-github-issues" / "SKILL.md").read_text()
         pull = (REALLY_SHIPPED / "writing-github-pull-requests" / "SKILL.md").read_text()
@@ -717,6 +732,7 @@ class WhatMakingAnAgentGrants(WithALibrary):
         skill.SHIPPED = self.release
         self.addCleanup(setattr, skill, "SHIPPED", was)
         a_skill(self.release, "writing-skills")
+        a_skill(self.release, "filing-rundesk-issues")
         skill.lay_down(self.library)
         # What a new agent is given is stated rather than "everything shipped" (R-AGT-36),
         # so the scratch release has to be named or nothing here is granted at all.
@@ -748,7 +764,8 @@ class WhatMakingAnAgentGrants(WithALibrary):
 
         self.agents.add("ava")
 
-        self.assertEqual(["writing-skills"], skill.granted(self.agents.skills("ava")),
+        self.assertEqual(["filing-rundesk-issues", "writing-skills"],
+                         skill.granted(self.agents.skills("ava")),
                          "an agent was given a skill the configuration did not name")
 
     def test_an_existing_agent_is_reconciled_to_the_required_baseline(self):
@@ -765,7 +782,8 @@ class WhatMakingAnAgentGrants(WithALibrary):
 
         self.agents.require_skills("ava")
 
-        self.assertEqual(["later-addition", "owner-chose-this", "writing-skills"],
+        self.assertEqual(["filing-rundesk-issues", "later-addition", "owner-chose-this",
+                          "writing-skills"],
                          skill.granted(self.agents.skills("ava")))
 
     def test_an_agent_is_made_with_the_skills_written_into_a_new_configuration(self):
@@ -782,15 +800,15 @@ class WhatMakingAnAgentGrants(WithALibrary):
 
         self.assertEqual(sorted(required), skill.granted(self.agents.skills("ava")))
 
-    def test_an_owner_who_wants_no_skills_granted_gets_none(self):
-        """R-AGT-36 — an empty list is a thing somebody stated, and turning it back into
-        the default is the quiet override this whole file exists to prevent."""
+    def test_an_owner_who_wants_no_optional_skills_still_gets_rundesk_stewardship(self):
+        """R-AGT-36 — owner choice begins above the product skill every agent retains."""
         (self.where / "data" / "config.json").write_text(
             '{"skills": {"granted": []}}\n', encoding="utf-8")
 
         self.agents.add("ava")
 
-        self.assertEqual([], skill.granted(self.agents.skills("ava")))
+        self.assertEqual(["filing-rundesk-issues"],
+                         skill.granted(self.agents.skills("ava")))
 
     def test_a_configuration_that_cannot_be_read_refuses_to_make_the_agent(self):
         """R-AGT-36 — never treated as absent: the skills this agent would be given are
