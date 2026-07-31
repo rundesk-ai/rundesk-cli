@@ -271,6 +271,23 @@ def _recorder(name: str, logs: Path) -> logging.Logger:
     return keeping
 
 
+def _channel_note(log, name: str, said: str) -> None:
+    """Keep adapter diagnostics at the severity the adapter stated (R-GW-44).
+
+    Unclassified stderr remains a warning for adapters written before the level marker
+    existed. Silently demoting an unknown third-party adapter's failure would be worse
+    than retaining its existing severity.
+    """
+    line = said.rstrip()
+    level, marker, message = line.partition("\t")
+    if marker and level == "INFO":
+        log.info("channel '%s': %s", name, message)
+        return
+    if marker and level == "WARNING":
+        line = message
+    log.warning("channel '%s': %s", name, line)
+
+
 def home() -> Path:
     """Where a gateway keeps what it needs while it runs.
 
@@ -1366,8 +1383,8 @@ class Gateway:
                     # complained about is never showing it: every failure to post, every
                     # refusal, every reconnection is invisible for as long as the thing
                     # doing it is working (R-GW-18).
-                    on_error=lambda said, name=one.name: self.log.warning(
-                        "channel '%s': %s", name, said.rstrip()))
+                    on_error=lambda said, name=one.name: _channel_note(
+                        self.log, name, said))
             except (AlreadyStarted, Stopping):
                 self._reached.pop(one.name, None)
                 return
