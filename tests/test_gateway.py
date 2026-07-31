@@ -776,17 +776,19 @@ class WhatADeadGatewayLeftBehind(WithARunDirectory):
         gw = self.made()
         gw.claim()
         running = asyncio.ensure_future(gw.start(FOREVER, as_name="a-conversation", silence=None))
-        deadline = time.time() + 5
-        while not gw.running and time.time() < deadline:
+        deadline = time.monotonic() + 5
+        record = self.where / f"{gw.name}.json"
+        said = json.loads(record.read_text())
+        while "a-conversation" not in said["working"] and time.monotonic() < deadline:
             await asyncio.sleep(0.02)
-        said = json.loads((self.where / f"{gw.name}.json").read_text())
+            said = json.loads(record.read_text())
         self.assertIn("a-conversation", said["working"])
         self.assertEqual(
             next(iter(gw.running.values())).pid, said["working"]["a-conversation"]["pgid"]
         )
         await process.end_all(list(gw.running.values()))
         await running
-        after = json.loads((self.where / f"{gw.name}.json").read_text())
+        after = json.loads(record.read_text())
         self.assertEqual({}, after["working"], "work that finished was still recorded as running")
 
 
