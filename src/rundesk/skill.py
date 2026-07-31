@@ -101,6 +101,20 @@ def renamed() -> dict[str, str]:
     }
 
 
+def ready_renames(where: Path | None = None) -> dict[str, str]:
+    """Explicit renames whose replacement this install successfully laid down."""
+    where = where or home()
+    standing = library(where)
+    current = set(shipped())
+    return {
+        before: after for before, after in renamed().items()
+        if after in current
+        and after in standing
+        and not standing[after].is_symlink()
+        and _owned(standing[after], after)
+    }
+
+
 def library(where: Path | None = None) -> dict:
     """Every skill on this machine, by name, and the directory each really is.
 
@@ -240,16 +254,15 @@ def retire(skills_dirs: list[Path], where: Path | None = None) -> list[str]:
     where = where or home()
     standing = library(where)
     current = set(shipped())
-    changes = renamed()
+    declared = renamed()
+    changes = ready_renames(where)
     retired = []
     for name, package in standing.items():
         if name in current or package.is_symlink() or not _owned(package, name):
             continue
-        replacement = changes.get(name)
-        if replacement is not None:
-            new = standing.get(replacement)
-            if replacement not in current or new is None or not _owned(new, replacement):
-                continue
+        replacement = declared.get(name)
+        if replacement is not None and name not in changes:
+            continue
         blocked = False
         for skills_dir in skills_dirs:
             old_grant = skills_dir / name

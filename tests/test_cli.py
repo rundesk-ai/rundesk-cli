@@ -729,6 +729,9 @@ class FakeSkills:
     def shipped(self):
         return self._ships
 
+    def ready_renames(self, where=None):
+        return {}
+
     def granted(self, whose):
         return sorted(self._given.get(whose.name, ()))
 

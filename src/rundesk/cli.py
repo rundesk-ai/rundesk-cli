@@ -2016,6 +2016,7 @@ def _provisioned(root: Path = REPO_ROOT) -> str | None:
     # never touched, so this cannot be how an owner's configuration is lost (R-UPD-48).
     config.ensure()
     skill.lay_down(force=True)
+    config.rename_skills(skill.ready_renames())
     # Existing agents are brought forward too. Optional grants to skills that still exist
     # are not removed; the configured list is the minimum every agent must hold, not its
     # complete grant set.
@@ -2326,6 +2327,7 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
         # The installer's, and deliberately not an owner's verb: what a release ships is
         # not a thing anybody should have to ask for.
         laid = skills.lay_down()
+        config.rename_skills(skills.ready_renames())
         # Re-running the installer is an upgrade route, so retire removed built-ins and
         # migrate renamed grants here as well as in `_provisioned` (R-AGT-35).
         # `skills.granted` is a floor for every agent, including ones that predate the
