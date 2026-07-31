@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
+from rundesk import instructions
+
 #: The five fields a schedule is stated in, in order, and what each may say.
 FIELDS = (
     ("minute", 0, 59),
@@ -88,6 +90,9 @@ class Schedule:
     channel: str | None = None
     at: str | None = None
     ran_at: str | None = None
+    #: True only for a Rundesk-requested backend migration. It still uses a fresh scheduled
+    #: conversation, but no ordinary schedule delivery promise applies.
+    backend: bool = False
     _fields: tuple = field(default=(), repr=False, compare=False)
     #: Which fields were written as `*`. Kept because "was anything allowed here?" cannot
     #: be answered by counting what a field ended up allowing: `0-6` allows every day of
@@ -453,23 +458,35 @@ A_MINUTE = "%Y-%m-%d %H:%M"
 
 
 def by_default(named: str) -> str:
-    """The one line rundesk says to a turn the clock started, when nobody said anything.
+    """What rundesk says to a turn the clock started.
 
-    The same rule a surface's default sentence follows (`channel.by_default`): something that
-    says what the situation is beats something that says nothing, and an owner who disagrees
-    says so by writing their own — theirs then stands alone rather than being added to.
+    **Not an owner-written layer.** Where a channel turn arrived from is something an owner
+    may describe better. This one is not: that nobody is watching is true of every turn the
+    clock started, on every install, and an owner writing
+    "focus on the high-priority issues" is not disagreeing with it. So it is always present
+    and what an owner writes is added to it (R-AGT-34) — untouched, an ordinary line of
+    standing instructions silently deleted rundesk's only statement of the situation.
 
-    **What a brain actually needs to know, and nothing else.** That nothing asked, so there is
-    no question behind this to read between the lines of; that nobody is there, so asking one
-    back is a turn that ends waiting; and where what it says will go, so it can write for
-    somebody reading it later rather than for a person watching now. Three facts, because a
-    brain given a paragraph about being autonomous starts performing autonomy.
+    **What a brain actually needs to know, and nothing else.** The schedule task is the whole
+    request; nobody is there to answer or approve; one final report is delivered; and that
+    report names a no-action result or the approval-gated action that left it blocked. The
+    delivery rule is the fact a brain has no way of discovering — it is a property of how
+    rundesk carries a scheduled turn, and a brain that does not know it opens with a line of
+    orientation and buries the report underneath it.
+
+    The rule is written as *write nothing until the work is finished* rather than as *mark
+    your final message*, because a brain cannot honestly do the second: it says something,
+    then decides whether to call another tool, so which thought was its last is knowable only
+    once the turn is over. The first it can comply with — one thought, written at the end.
+
+    R-SCH-30, R-SCH-47, R-SCH-48, R-SCH-49.
     """
-    named = str(named or "").strip()
-    return (f"Nothing asked you this: the schedule '{named}' came due and started you. "
-            if named else "Nothing asked you this: a schedule came due and started you. ") + (
-        "Nobody is watching, so a question will not be answered — say what you found "
-        "instead. What you say is recorded, and posted where this agent is reached.")
+    if not isinstance(named, str) or not named.strip():
+        raise ValueError("a schedule name is required for its trigger instructions")
+    return instructions.render(
+        instructions.SCHEDULE_INSTRUCTIONS,
+        {"schedule": named.strip()},
+    )
 
 
 def describe(one: Schedule, moment: datetime) -> str:

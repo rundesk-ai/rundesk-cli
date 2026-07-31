@@ -44,7 +44,9 @@ from rundesk import ROOT, __version__, data_home
 from rundesk import activity
 from rundesk import dependencies
 from rundesk import process
+from rundesk import restart_request
 from rundesk import schedule
+from rundesk import store
 from rundesk import update_request
 from rundesk import updater
 
@@ -92,11 +94,16 @@ LOG_SOURCES = (GATEWAY_LOG, MACHINE_LOG, EVERY_LOG)
 #: rather than believed. `INTERRUPTED` is what it becomes.
 STARTED = "started"
 INTERRUPTED = "interrupted"
+#: What a run nobody is doing is settled as when the gateway that began it is gone. Says
+#: the gateway went rather than that the turn broke, because those are different news and
+#: only one of them means somebody should look at something.
+ABANDONED_WHY = "the gateway that began this turn went without settling it"
 
 #: What a schedule's work is called while a gateway holds it. One place, because a
 #: reconciliation matching an outcome to the work it named has to spell it the same way
 #: the start did, and two spellings would silently match nothing.
 SCHEDULED_AS = "schedule:"
+UPDATE_AS = "update:"
 
 #: How a scheduled program is told which schedule started it. Read by `rundesk ask`, which is
 #: the one program a schedule is likely to name, so a turn the clock started says so in the
@@ -262,6 +269,23 @@ def _recorder(name: str, logs: Path) -> logging.Logger:
         aloud.setFormatter(logging.Formatter(f"rundesk {name}: %(message)s"))
         keeping.addHandler(aloud)
     return keeping
+
+
+def _channel_note(log, name: str, said: str) -> None:
+    """Keep adapter diagnostics at the severity the adapter stated (R-GW-44).
+
+    Unclassified stderr remains a warning for adapters written before the level marker
+    existed. Silently demoting an unknown third-party adapter's failure would be worse
+    than retaining its existing severity.
+    """
+    line = said.rstrip()
+    level, marker, message = line.partition("\t")
+    if marker and level == "INFO":
+        log.info("channel '%s': %s", name, message)
+        return
+    if marker and level == "WARNING":
+        line = message
+    log.warning("channel '%s': %s", name, line)
 
 
 def home() -> Path:
@@ -1160,10 +1184,28 @@ class Gateway:
         #: Which schedules have a turn in flight. Kept apart from `running`, which holds
         #: programs a shutdown ends: a turn's brain is not a program this gateway started.
         self._asked_for: set[str] = set()
+        #: Backend update turns this gateway owns. They remain pending durably until one
+        #: returns, and shutdown cancels and awaits every task here.
+        self._update_turn_tasks: dict[int, asyncio.Task] = {}
+        #: Once a successful read finds none, none can appear until this gateway is down:
+        #: update migrations run only inside the update window that stands gateways down.
+        self._update_turns_drained = False
         #: The surfaces that are up right now, by name — what is held open and answering.
         #: `reachable` is what an agent *has*; this is what can be said something on, and the
         #: two differ for as long as an adapter is down and being started again.
         self._reached: dict = {}
+        #: Which schedules have said on a surface that they have started and not yet said
+        #: what they came to, and the conversation each notice went to (R-SCH-46). A notice
+        #: with no outcome under it is worse than no notice, so every way out of a run that
+        #: can still reach the surface answers whatever is in here — and a run whose gateway
+        #: went is one whose notice dies with the process that could have answered it, which
+        #: is why this is memory and not a record.
+        #:
+        #: The conversation is carried rather than resolved twice: where a schedule with no
+        #: place named reports is the newest conversation on the surface, and a run long
+        #: enough to be worth announcing is long enough for somebody to have spoken in
+        #: another room. `None` where the notice went by a place word instead.
+        self._announced: dict = {}
 
     # -- what it is made of -------------------------------------------------------
 
@@ -1215,6 +1257,7 @@ class Gateway:
                 "ended work left running by a gateway that is gone: %s", ", ".join(self.swept)
             )
         self._reconcile_what_never_finished()
+        self._settle_runs_nothing_is_doing()
         try:
             self._record()
         except OSError as err:
@@ -1320,7 +1363,9 @@ class Gateway:
                 # to default it said nothing at all: a channel that connects, drops,
                 # refuses somebody and comes back, in complete silence, is a channel
                 # nobody can tell from one that never started (R-GW-18).
-                self.log.info)
+                self.log.info,
+                lambda run: restart_request.waiting(self.name, run),
+                lambda run: restart_request.ready(self.name, run))
             # Kept for as long as this adapter is up, so something other than an arriving
             # message can say a word on this surface — which is what a schedule finishing at
             # three in the morning needs and had no way to do (R-SCH-31).
@@ -1338,8 +1383,8 @@ class Gateway:
                     # complained about is never showing it: every failure to post, every
                     # refusal, every reconnection is invisible for as long as the thing
                     # doing it is working (R-GW-18).
-                    on_error=lambda said, name=one.name: self.log.warning(
-                        "channel '%s': %s", name, said.rstrip()))
+                    on_error=lambda said, name=one.name: _channel_note(
+                        self.log, name, said))
             except (AlreadyStarted, Stopping):
                 self._reached.pop(one.name, None)
                 return
@@ -1426,6 +1471,38 @@ class Gateway:
             # all — putting the moment of reconciling there would read as a later firing to
             # the next gateway up, and everything due in between would be passed over.
             self._remember_outcome(named, INTERRUPTED)
+
+    def _settle_runs_nothing_is_doing(self) -> None:
+        """Settle a run the last gateway left marked as still going (R-GW-23).
+
+        The schedule beside it was already reconciled here; the run row was not. A run is
+        marked running when it starts and nothing rewrote it when the gateway died, was
+        stopped, or was replaced by an update — so `rundesk runs` reported a turn in
+        flight twenty-six hours after its transcript stopped being written, across three
+        releases, and it would have stayed there for ever. The record is what answers
+        "what is in flight" and "what did this cost", and a stranded row makes both untrue.
+
+        Called at the same point and for the same reason as the schedule reconciliation:
+        the claim has just established that nothing of the last gateway is running except
+        what it handed over, and this gateway has begun nothing of its own. What *is* still
+        turning says so for itself in the activity records, and is left exactly alone —
+        settling live work would be the same lie the other way up.
+        """
+        if self.records is None:
+            return
+        live = [row["run"] for row in activity.active(self.where)]
+        try:
+            settled = self.records.abandoned(
+                store.stamped(), ABANDONED_WHY, keep=live)
+        except Exception as why:  # noqa: BLE001 — a records boundary
+            # Never worth refusing to start over. This is an account of turns that are
+            # already over, and a gateway that would not come up because it could not
+            # tidy the last one's records is a worse outage than the bad rows.
+            self.log.warning("could not settle what the last gateway left running: %s", why)
+            return
+        if settled:
+            self.log.warning(
+                "settled %s run(s) left running by a gateway that is gone", settled)
 
     def _say_what_was_missed(self) -> None:
         """Say what fell due while nothing was running (R-SCH-5).
@@ -1685,10 +1762,15 @@ class Gateway:
             ticking.cancel()
             holding.cancel()
             notices.cancel()
+            for task in self._update_turn_tasks.values():
+                task.cancel()
             with contextlib.suppress(BaseException):
                 await holding
             with contextlib.suppress(BaseException):
                 await notices
+            if self._update_turn_tasks:
+                await asyncio.gather(
+                    *tuple(self._update_turn_tasks.values()), return_exceptions=True)
             # The handlers stay installed across `_go()`. Removing them here restores the
             # system default, which for these two signals is *terminate* — so a second
             # signal arriving during the shutdown window would kill the gateway outright,
@@ -1721,7 +1803,7 @@ class Gateway:
                 channel_name = origin.get("channel")
                 conversation = origin.get("conversation")
                 answering = self._reached.get(channel_name) if channel_name else None
-                if answering is not None and conversation:
+                if answering is not None and answering.connected and conversation:
                     try:
                         await answering.told_update_finished(
                             conversation, update_request.summary(row)
@@ -1730,6 +1812,27 @@ class Gateway:
                         self.log.info("delivered update outcome for request %s", row["id"])
                     except Exception as why:  # noqa: BLE001 — retried after reconnect
                         self.log.warning("could not deliver update outcome: %s", why)
+            try:
+                restart = restart_request.deliverable(self.name)
+            except restart_request.Unreadable as why:
+                self.log.warning("could not read restart outcome: %s", why)
+                restart = None
+            if restart is not None:
+                origin = restart.get("origin") or {}
+                channel_name = origin.get("channel")
+                conversation = origin.get("conversation")
+                answering = self._reached.get(channel_name) if channel_name else None
+                if answering is not None and answering.connected and conversation:
+                    try:
+                        await answering.told_restart_finished(
+                            conversation, restart_request.summary(restart)
+                        )
+                        restart_request.delivered(self.name, restart["id"])
+                        self.log.info(
+                            "delivered restart outcome for request %s", restart["id"]
+                        )
+                    except Exception as why:  # noqa: BLE001 — retried after reconnect
+                        self.log.warning("could not deliver restart outcome: %s", why)
             await asyncio.sleep(2)
 
     def ask_to_stop(self, come_back: bool = False) -> None:
@@ -1847,6 +1950,7 @@ class Gateway:
         """Start everything due at this moment, and say what happened to each."""
         if self._stopping:
             return
+        self._fire_update_turns(schedule, now)
         try:
             wanted, refused = schedule.read(self._schedules())
         except Unreadable as why:
@@ -1881,7 +1985,83 @@ class Gateway:
                 continue
             asyncio.ensure_future(self._run_scheduled(one, fired))
 
-    async def _run_scheduled(self, one, fired: datetime) -> None:
+    def _fire_update_turns(self, schedules, now) -> None:
+        """Start release-requested turns through scheduled-turn semantics.
+
+        R-MIG-23, R-MIG-24.
+
+        These are deliberately not ordinary schedules. An ordinary one-time schedule that
+        was missed is never replayed; an update migration must survive a slow restart and
+        reach every agent. A request stays pending until a non-stopped run returns, while
+        the synthetic expired schedule gives it the same fresh conversation, instructions
+        and run accounting as other unattended work.
+        """
+        if self.records is None or self._update_turns_drained:
+            return
+        try:
+            pending = self.records.pending_update_turns()
+        except Exception as why:  # noqa: BLE001 — the records seam owns the failure types
+            self.log.warning("could not read update migration turns: %s", why)
+            return
+        if not pending:
+            self._update_turns_drained = True
+            return
+        fired = now.replace(second=0, microsecond=0)
+        # One home is one mutable resource. Even if several releases accumulated while an
+        # agent was unrunnable, only the oldest request may rewrite it at a time.
+        for row in pending[:1]:
+            version = int(row["migration"])
+            if version in self._update_turn_tasks:
+                continue
+            conversation = f"migration-{version}"
+            try:
+                returned = self.records.update_turn_returned(conversation)
+            except Exception as why:  # noqa: BLE001 — the records seam owns failure types
+                self.log.warning("could not reconcile update migration %s: %s", version, why)
+                continue
+            if returned:
+                try:
+                    self.records.complete_update_turn(version, store.stamped())
+                except Exception as why:  # noqa: BLE001 — a durable-write boundary
+                    self.log.warning("could not complete update migration %s: %s",
+                                     version, why)
+                continue
+            one = schedules.Schedule(
+                name=conversation,
+                at=fired.strftime(schedules.A_MINUTE),
+                ran_at=fired.strftime(schedules.A_MINUTE),
+                prompt=row["prompt"],
+                instructions=row["instructions"],
+                backend=True,
+            )
+            task = asyncio.ensure_future(
+                self._run_update_turn(one, version, row["bootstrap"]))
+            self._update_turn_tasks[version] = task
+            task.add_done_callback(
+                lambda finished, requested=version:
+                self._update_turn_tasks.pop(requested, None)
+            )
+
+    async def _run_update_turn(self, one, version: int, bootstrap: str) -> None:
+        """Run and settle one backend-only update migration turn."""
+        self.log.info("update migration %s is due", version)
+        try:
+            self.records.replace_update_bootstrap(version, bootstrap)
+        except Exception as why:  # noqa: BLE001 — a filesystem boundary
+            self.log.error("update migration %s could not replace its bootstrap: %s",
+                           version, why)
+            return
+        became = await self._run_scheduled(one, datetime.now())
+        # A turn that could not begin remains pending for the next tick or gateway. Once a
+        # brain actually returned, its run is the durable outcome and this request expires.
+        if became in ("could not start", "still running", INTERRUPTED):
+            return
+        try:
+            self.records.complete_update_turn(version, store.stamped())
+        except Exception as why:  # noqa: BLE001 — a durable-write boundary
+            self.log.warning("could not complete update migration %s: %s", version, why)
+
+    async def _run_scheduled(self, one, fired: datetime) -> str:
         """Start what a schedule named, under the schedule's own name.
 
         Under its own name on purpose: that is what makes a schedule refuse to begin
@@ -1892,10 +2072,10 @@ class Gateway:
         the same either way — which is why the two are one function with one set of handlers
         rather than two that would drift about what an outcome is.
         """
-        held = f"{SCHEDULED_AS}{one.name}"
+        held = f"{UPDATE_AS if one.backend else SCHEDULED_AS}{one.name}"
         if not one.prompt and (not isinstance(one.run, (list, tuple)) or not one.run):
             self.log.error("schedule '%s' names nothing this gateway can start", one.name)
-            return
+            return "could not start"
         self.log.info("schedule '%s' is due", one.name)
         try:
             # One word out of both branches, because everything after this is the same for
@@ -1903,18 +2083,29 @@ class Gateway:
             # and a turn has two — what became of the process, and what became of the turn
             # it was carrying — and only the second is what a schedule reports (R-SCH-8).
             if one.prompt:
-                became = await self._asked(one, held)
+                # **Only a schedule that asks a turn says it has started** (R-SCH-46). A
+                # program has no report to anchor, so `💻 Working on…` for one is a promise
+                # rundesk does not keep. Said from inside `_asked`, once the schedule's name
+                # is claimed: announced here instead, a firing refused for still running
+                # would have said work began that never did.
+                result = await self._asked(
+                    one, held, admitted=lambda: self._told_the_surface_it_started(one))
             else:
                 ran = await self.start(list(one.run), as_name=held,
                                        env=self._for_a_schedule(one.name))
-                became = ran.reason
+                result = ran.reason
         except AlreadyStarted:
             # R-SCH-7: said, not passed over. A schedule quietly skipping every time
             # because the last run never ended looks exactly like one that is working.
+            #
+            # **And nothing is said on the surface.** This firing never announced itself,
+            # and the notice that may be standing there belongs to the run still going —
+            # answering it here would close off work that has not finished (R-SCH-46).
             self.log.warning("schedule '%s' skipped: what it started last time is still running",
                              one.name)
-            self._remember_outcome(one.name, "still running")
-            return
+            if not one.backend:
+                self._remember_outcome(one.name, "still running")
+            return "still running"
         except Stopping:
             # Nothing spawned, so there is no process for the shutdown to end and nothing
             # for a later sweep to find and reckon with — and the firing was already
@@ -1922,8 +2113,13 @@ class Gateway:
             # saying work is in flight that never began at all, and the one form of the
             # stale outcome that no reconciliation on the way back up can reach
             # (R-SCH-23).
-            self._remember_outcome(one.name, INTERRUPTED)
-            return
+            #
+            # **And no notice to answer, by construction.** This is raised by `start` and
+            # nowhere else, so only the program branch above can reach it — and a program
+            # schedule never says it has started, having no report to anchor (R-SCH-46).
+            if not one.backend:
+                self._remember_outcome(one.name, INTERRUPTED)
+            return INTERRUPTED
         except asyncio.CancelledError:
             # Not a failure to start, and told apart from one before the catch-all below
             # can call it that. This is what a run in flight *is* when the gateway goes:
@@ -1932,7 +2128,9 @@ class Gateway:
             # start', with no reason, one line after the log said it had started. A false
             # line in the one account that outlives the gateway (R-GW-18), and in the file
             # that is meant to say truthfully what each schedule last did.
-            self._remember_outcome(one.name, INTERRUPTED)
+            if not one.backend:
+                self._remember_outcome(one.name, INTERRUPTED)
+            await self._answered_any_notice(one, INTERRUPTED)
             raise
         except BaseException as would_not_start:  # noqa: BLE001 — see below
             # Nobody awaits this task, so anything raised here is raised nowhere at all:
@@ -1941,12 +2139,66 @@ class Gateway:
             # at LAST RUN '-' forever, indistinguishable from one that has never come due
             # — while failing again every single time it fell due (R-SCH-8).
             self.log.error("schedule '%s' could not be started: %s", one.name, would_not_start)
-            self._remember_outcome(one.name, "could not start")
-            return
-        self._remember_outcome(one.name, became)
-        await self._told_the_surface(one, became)
+            if not one.backend:
+                self._remember_outcome(one.name, "could not start")
+            await self._answered_any_notice(one, "could not start")
+            return "could not start"
+        became = getattr(result, "became", result)
+        if not one.backend:
+            self._remember_outcome(one.name, became)
+            await self._told_the_surface(one, result)
+        return became
 
-    async def _told_the_surface(self, one, became: str) -> None:
+    async def _told_the_surface_it_started(self, one) -> None:
+        """Say on the surface this schedule reports to that its run has begun (R-SCH-46).
+
+        The mirror of `_told_the_surface`, and it refuses in the same places: a schedule
+        naming no surface says nothing, and one naming a surface that is not up is said in
+        the log rather than invented. Only what actually went out is remembered, so the
+        outcome owes a reply to a notice and never to a delivery that never happened.
+
+        A notice that could not be shown changes nothing about the run. The work is under
+        way and the report at the end stands on its own, exactly as it did before there
+        were notices at all.
+        """
+        answering = self._reached.get(one.channel) if one.channel else None
+        if answering is None:
+            if one.channel:
+                self.log.warning(
+                    "schedule '%s': nothing said on '%s' about starting — that channel "
+                    "is not up", one.name, one.channel)
+            return
+        try:
+            said, where = await answering.told_a_schedule_started(one.name)
+            if said:
+                # Where it went, not that it went: the report is delivered to this same
+                # conversation rather than resolving the newest one again at the end
+                # (R-SCH-46).
+                self._announced[one.name] = where
+        except Exception as why:  # noqa: BLE001 — a delivery boundary; see the docstring
+            self.log.warning("channel '%s': could not say that '%s' started: %s",
+                             one.channel, one.name, why)
+
+    async def _answered_any_notice(self, one, became: str) -> None:
+        """Put an outcome under a start notice on a run that ended without reaching the
+        ordinary reporting below (R-SCH-46).
+
+        A run that failed, was interrupted or never got going has said `💻 Working on…` on
+        a surface and would otherwise leave it standing with nothing under it — which is a
+        promise rundesk made and did not keep, and reads exactly like an agent that hung.
+        A no-op where no notice went out, so nothing new is posted for a schedule that
+        never announced itself.
+
+        **A gateway going down is the one way out this cannot answer**, and knowingly: the
+        shutdown takes the channels before it cancels what is still running, so by the time
+        a run in flight is cancelled there is no surface left to say anything on and the log
+        says so. The notice goes down with the process that made it, and the schedule's next
+        firing posts its own — nothing is left standing that a later run would answer.
+        """
+        if one.name in self._announced:
+            await self._told_the_surface(one, became)
+
+    async def _told_the_surface(self, one, result) -> None:
         """Say what this schedule came to, on the surface it names.
 
         **The first trigger with no person at the other end.** Work that failed at three in the
@@ -1966,7 +2218,15 @@ class Gateway:
 
         A surface that will not take it changes nothing about what the schedule did: the work is
         over and the record of it is already written. Said in the log, and on.
+
+        **This is what answers a start notice** (R-SCH-46), so the notice is forgotten here
+        whether or not the report reaches anybody — a channel that went down between the two
+        must not leave a name standing that the schedule's *next* firing would answer. What
+        it is forgotten *with* is where it went, and that goes over with the report: the two
+        messages are one delivery, and only the first of them is allowed to decide where.
         """
+        where = self._announced.pop(one.name, None)
+        became = getattr(result, "became", result)
         answering = self._reached.get(one.channel) if one.channel else None
         if answering is None:
             if one.channel:
@@ -1977,7 +2237,7 @@ class Gateway:
                                  one.name, one.channel)
             return
         try:
-            await answering.told_what_a_schedule_did(one.name, became)
+            await answering.told_what_a_schedule_did(one.name, result, where=where)
         except Exception as why:  # noqa: BLE001 — a delivery boundary; see the docstring
             self.log.warning("channel '%s': could not say what '%s' did: %s",
                              one.channel, one.name, why)
@@ -1996,20 +2256,27 @@ class Gateway:
         said[SCHEDULE_IS] = named
         return said
 
-    async def _asked(self, one, held: str) -> str:
+    async def _asked(self, one, held: str, admitted=None):
         """Admit a turn for a schedule that asks one, and hand back how it ended.
 
         **Through a collaborator, never by reaching for one.** A turn needs an agent, a brain
         and an account of what it did, and a gateway knows none of those — so whoever knows
         what an agent is builds this and hands it over already made, exactly as the surfaces
-        this gateway holds open are handed over (R-AGT-9). What comes back only has to say how
-        it ended, which is the one thing every outcome here has in common.
+        this gateway holds open are handed over (R-AGT-9). The whole outcome comes back so
+        the final channel report retains the usage and provider facts the turn recorded
+        (R-SCH-50); this gateway still reads only `became` for its own schedule accounting.
 
         The overlap guard is the same one a program gets and is asked the same way: a turn is
         registered under the schedule's own name for as long as it runs, so a schedule cannot
         begin again over its own last one (R-SCH-6). A turn is not a program this gateway
         started, so it is not in `running` and a shutdown does not end it — what it *does* do
         is cancel the task waiting here, which is recorded as an interruption above.
+
+        **`admitted` is told the moment this run is really going to happen** (R-SCH-46) —
+        after the guard that refuses one still running, and before the brain is asked. That
+        is the only point at which saying so is true: earlier includes firings that are
+        about to be refused, and later is after the twenty minutes an owner spent wondering
+        whether anything had started.
         """
         if self.asking is None:
             raise Unrunnable(
@@ -2019,7 +2286,9 @@ class Gateway:
             raise AlreadyStarted(f"'{held}' is already running under gateway '{self.name}'")
         self._asked_for.add(held)
         try:
-            return (await self.asking(one)).became
+            if admitted is not None:
+                await admitted()
+            return await self.asking(one)
         finally:
             self._asked_for.discard(held)
 

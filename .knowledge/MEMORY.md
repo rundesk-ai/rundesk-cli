@@ -8,6 +8,65 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **Running `./rundesk` from a checkout tests new code against the live install's data, and
+  nothing warns you.** An agent's shell is a gateway's child, so it already carries
+  `RUNDESK_AGENTS_DIR`, `RUNDESK_HOME`, `RUNDESK_SCRIPTS` and `RUNDESK_RUN` — the *owner's*.
+  Measured: `./rundesk agents` from a checkout listed the machine's real agents and their PIDs;
+  the same command with those variables unset and pointed at a scratch root listed none.
+  `env | grep RUNDESK` before believing otherwise. The launchd half is worse, because a
+  directory cannot move it: a label belongs to the person, so a second install's `--uninstall`
+  boots out `ai.rundesk-automatic-update` — the live one — and leaves the other install's plist
+  on disk looking well (#146). Set `RUNDESK_JOB_PREFIX` for anything that touches a job, and
+  check `launchctl list | grep rundesk` before and after. The whole recipe is
+  [`guides/testing-against-a-station.md`](./guides/testing-against-a-station.md).
+
+- **A run's account holds no record of what its brain *said*, so "the account keeps every
+  raw event" is false for text.** `store.RECORD_KINDS` has no `text` member and
+  `turn._Account.add` returns before writing one — including its `raw` — because what was
+  said is a message and only what *happened* is a record. So the only place a brain's
+  individual thoughts survive is `logs/runs/<run>.jsonl`, which R-STO-5 and R-RUN-23
+  explicitly allow to be destroyed and swept — **and which R-RUN-22's `transcript.trim`
+  bounds on every single turn, in `carry`'s own `finally`, keeping the tail and discarding
+  the head.** That is the near one, not the seven-day sweep: measured runs on this machine
+  reach 3.7 MB against a 4 MB `CEILING_BYTES`, and a scheduled turn is `fresh=True`
+  (R-SCH-29), so those are that turn's own records. Anything narrowing what the message row
+  holds is narrowing the durable account, whatever the record table appears to promise —
+  and the early thoughts it drops are the ones the trim takes the minute the turn ends,
+  not in a week. Check with
+  `sqlite3 <agent>/state.db "select kind, count(*) from record where run_id=? group by kind"`
+  on a real run before believing otherwise — a 3.7 MB transcript beside a run with no text
+  record in it is what this looks like.
+- **`getattr(vendor_object, "name", default)` is a silent feature-killer, and a stand-in
+  carrying an attribute the real class does not have will agree with you for ever.**
+  `_post`'s anchor guard asked a `discord.Message` for `channel_id`, which discord.py has
+  never had, so `getattr` handed back `""`, `"" != conversation` was true of every message
+  ever posted, and no answer rundesk sent to Discord was a reply for months (#151). Nothing
+  raised, nothing logged, and the case covering it passed — it grepped the source for the
+  guard and built its message from a `class Message: channel_id`, a shape the platform does
+  not have. **Before trusting a defaulted `getattr` on somebody else's object, ask the
+  installed library whether the attribute exists** — `.venv/bin/python -c "import discord;
+  print(hasattr(discord.Message, 'channel_id'))"` — and build a stand-in only out of
+  attributes that answered yes. A guard whose wrong reading fails *open* takes the whole
+  feature with it and looks exactly like a feature nobody built.
+- **A rundesk agent running the gate fails four suites on its own environment, not on the
+  code.** A turn is handed `RUNDESK_AGENTS_DIR`, `RUNDESK_SKILL_LIBRARY`, `RUNDESK_SCRIPTS`
+  and friends, the suites inherit them, and `test_agent`, `test_skill`, `test_transcript`
+  and `test_process` then resolve to the owner's real data home — so their isolation cases
+  fail with paths under `~/.rundesk` where a scratch root was expected. Identical on a clean
+  `main`, and green on CI, which has none of them set. Prefix the gate with
+  `env -u RUNDESK_AGENTS_DIR -u RUNDESK_SKILL_LIBRARY -u RUNDESK_SCRIPTS -u RUNDESK_HOME
+  -u RUNDESK_SKILLS -u RUNDESK_PROVIDER_HOME -u RUNDESK_RUN -u RUNDESK_POSTURE
+  -u RUNDESK_RESUME -u RUNDESK_PREFACE -u RUNDESK_RAW -u RUNDESK_CWD` and it is green.
+  Do not spend an hour hunting a regression in these four first.
+- **A new field on a provider record reaches no surface until it is named in
+  `_Shown.AS_IT_HAPPENS`.** It is an allowlist of exactly which of each record's fields
+  cross the channel seam (R-CH-13), so an adapter can report a quantity, a channel can
+  render it, both suites can be green, and a chat footer still shows nothing — nothing
+  errors and nothing is logged. `written` cost the project two releases of exactly this:
+  it sat in the Discord footer's slot list from v0.17.0 and never once arrived, because
+  that list did not name it (#155). Add the field there in the same change, and prove it
+  end to end (`test_answering.py` drives the seam and never skips; a case that only calls
+  an adapter proves half, and skips wherever the dependency is absent).
 - **Antigravity's `-p` flag consumes its next argument; it is not the switch for a piped
   prompt.** `agy -p --output-format stream-json` asks the model about `--output-format`, and
   `agy ... -p ""` rejects an empty prompt. For the private stdin transport Rundesk requires,
@@ -29,9 +88,26 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   release preparation can inspect or edit a stale version while the new worktree is correct.
   Start the next command with the new worktree as its working directory, then verify its
   branch before editing.
+- **A station wrapper that consumes every leading `--*` option cannot forward
+  `install.sh --uninstall`, and its install mode resolves the canonical checkout rather
+  than the worktree it was invoked from.** Run both installer directions from the target
+  worktree directly with the same fully redirected station environment and job prefix;
+  otherwise the wrong source is tested or the temporary automatic-update job stays loaded.
 - **A fresh worktree has no `.venv`, so its Discord regression test skips and looks green.**
   Run the worktree's test path with the main checkout's `.venv/bin/python`; the interpreter
   supplies `discord.py` while the working directory and imported adapter remain the worktree's.
+- **A test class appended to the end of a suite file lands *after* the `__main__` guard and
+  never runs — and the suite still says `OK`.** `tests/test_gateway.py` reported the same 184
+  cases with a new four-case class in it, which reads exactly like a class that passed. Insert
+  a new class before the guard, and check the count moved before believing a green run.
+- **An agent running the gate on its own repository fails three cases that have nothing to
+  do with its change.** A rundesk turn's environment already carries `RUNDESK_HOME`,
+  `RUNDESK_AGENTS_DIR`, `RUNDESK_SCRIPTS` and nine more, and `test_process` and `test_cli`
+  read them straight through their fixtures — so `PATH` comes out as the *live* install's
+  scripts directory and the assertion points at product code that is fine. Unset every
+  `RUNDESK_*` variable for the gate command itself (`env -u RUNDESK_HOME -u … python3
+  .knowledge/scripts/gate`), not only for scratch installs. Costs a full 80-second run and
+  reads exactly like a real regression.
 - **`~/.rundesk` is the owner's live install. Never touch it.** It is a running product with
   real agents, real channels and real history in it — not a fixture. **Never install,
   uninstall, update, migrate, start, stop, add, remove or write anything there**, and never
@@ -105,6 +181,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `tests/test_install.py` drives a *copy* of the checkout for exactly that reason: run against the
   checkout itself it deletes the `.venv` a live install is made of. (`--help` no longer installs —
   R-INS-17 — but every other invocation still does.)
+- **A scratch root is not enough on a machine with a live install: the uninstall still takes the
+  live `ai.rundesk-automatic-update` job away.** launchd labels are per *user* and job files are
+  per *install*, so `remove_automatic_update` checks ownership of the scratch plist, passes, and
+  boots out the only registration the shared label can have. The live plist stays on disk, so
+  nothing looks wrong and the machine has silently stopped updating itself (#146). Check
+  `launchctl list | grep rundesk` before and after every install/uninstall verification, and put
+  back whatever went with
+  `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.rundesk-automatic-update.plist`.
 - **Waiting for the gate with `while pgrep -f "scripts/gate"` never ends, because the waiter
   matches itself.** The pattern is in the waiting shell's own command line, so `pgrep` finds it
   and every waiter keeps every other waiter alive — six were still spinning long after the runs
@@ -168,8 +252,26 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   The command prints its supported release fields and exits before anything chained after it
   runs. Use `tagName,name,publishedAt,url` and compare `tagName` with
   `gh release list --limit 1` when whether it is latest matters.
+- **`gh issue list --json type` fails even though `gh issue create --type` is valid.**
+  The issue classification field is named `issueType` in JSON output; use that when checking
+  existing issues before filing one.
 - **zsh expands an unquoted `?ref=main` in a `gh api` endpoint as a filename glob.** The
   request never reaches GitHub and fails with `no matches found`; quote the whole endpoint.
+- **In zsh, `path` is a special array tied to `PATH`.** Assigning a file path to a shell
+  variable named `path` replaces the command search path, so the next `gh`, `base64` or other
+  executable reports `command not found`. Use a task-specific name such as `skill_file`.
+- **The system skill creator's `quick_validate.py` is not zero-dependency.** It imports
+  PyYAML and fails with `ModuleNotFoundError: No module named 'yaml'` on the repository's
+  standard-library Python. Do not install around the repository contract; validate shipped
+  skill frontmatter with `tests/test_skill.py` and the full gate.
+- **GitHub's repository issue-types endpoint requires its current API version header.** A bare
+  `gh api repos/<owner>/<repo>/issue-types` used gh's older default and returned HTTP 404 even
+  though the types exist. Pass `-H 'X-GitHub-Api-Version: 2026-03-10'`; `gh issue view --json`
+  names the returned field `issueType`, not `type`.
+- **`gh pr list --head` does not accept the `owner:branch` syntax that `gh pr create --head`
+  accepts.** It returns no matches rather than flagging the qualifier. Search with the bare
+  branch, request `headRepositoryOwner`, and compare that field before treating a PR as the
+  same head.
 - **macOS `tar` has no GNU `--wildcards` option.** Extracting one member from a generated
   archive fails before reading it; list the archive, select the exact member name, then pass
   that name back to `tar -x`.
@@ -189,10 +291,41 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   adding it — which is the guard working, not a broken test. Add the variable to `describe()`'s
   `EnvironmentVariables` in the same change; a supervised gateway resolving a different place
   from the command that wrote its job is the failure it exists to prevent.
+- **A Markdown link out of `.knowledge` passes `doc-lint` and fails the gate.** `doc-lint
+  .knowledge` resolves a catalog link against the real checkout, so
+  `[docs/extending/](../../docs/extending/)` in `guides/README.md` is fine — and then
+  `test_doc_lint.py`, which is the gate's *teeth* check, copies `.knowledge` into a scratch
+  tree **on its own**, with no sibling `docs/`, `src/` or `tests/`. The link is now missing,
+  doc-lint reports a problem it is supposed to report nothing for, and the failure reads
+  `[FAIL] an internal source needs no link (exit=1, wanted_ok=True)` — which names a rule
+  about *sources* and says nothing about your catalog link, in a check whose other 43 cases
+  pass. Name a path outside `.knowledge` in backticks; never link it. Standalone doc-lint
+  cannot catch this, so run `.knowledge/scripts/test_doc_lint.py` before believing a green
+  linter.
+- **`skill.home()` resolves to the owner's live library when *every* `RUNDESK_*` variable is
+  unset — unsetting them is the opposite of isolation here.** It is
+  `RUNDESK_SKILL_LIBRARY or skills_home()`, and the fallback is `~/.rundesk/data/skills`,
+  which is the live install. So a scratch script that carefully scrubs the environment and
+  then calls any `skill` function without an explicit `where=` is pointed straight at the
+  owner's eighteen built-ins, and `retire`/`take_back` delete them. Scrub the inherited
+  variables and then **set `RUNDESK_DATA_DIR`, `RUNDESK_SKILL_LIBRARY` and
+  `RUNDESK_AGENTS_DIR` under a scratch root before importing the module**, and assert
+  `str(scratch) in str(skill.home())` as the first line that runs. Checking `env | grep
+  RUNDESK` is empty proves the danger, not the safety.
 - **A backticked anything in an Evidence cell is read as the name of a test.** That is the whole
   mechanism keeping a ✅ honest, and it does not care that the row is ❌ or that the backticks are
   around a filename, a path or a script. Write those plainly in a note — `check-evidence` fails the
   gate with "is ❌ but names a test", which reads like the row is wrong when the punctuation is.
+  Renaming that test without updating every PRD citation fails the same gate; search Evidence for
+  the old humanized test name in the same change.
+- **`instructions.render()` preserves a template's trailing whitespace; `instructions.build()`
+  strips every rendered layer before joining it.** A test comparing a raw rendered layer with a
+  built preface differs only by the final newline and produces a page-long assertion diff; strip the
+  rendered layer when proving exact composition, or assert against the final built string.
+- **Schedule-trigger wording is asserted at both the builder seam and the gateway account seam.**
+  Changing `SCHEDULE_INSTRUCTIONS` can leave targeted instruction tests green while `test_gateway`
+  still expects a retired phrase; search the old distinctive wording across `tests/` before the
+  full gate.
 
 *The entries below are traps in a **vendor's CLI**. We cannot fix them, only re-verify — and a version
 bump can invalidate one in either direction. Each was probed when it was written; none has been
@@ -295,6 +428,10 @@ re-checked since, so treat these as true-when-found rather than as current.*
   looked for `changes`, `files`, `artifacts` and `outputs`; Codex emits `savedPath`. Nothing
   errored — a generated image was simply never reported. Read a real item out of a run's
   `.brain` file before writing the name of a field.
+- **Codex raw response usage has two separate opt-ins.** `initialize` must enable
+  `capabilities.experimentalApi`, and a new `thread/start` must also set
+  `experimentalRawEvents`; the first only makes the second legal and emits nothing alone.
+  The thread keeps that setting when resumed, where the start-only field must not be sent.
 
 - **Do not test a model instruction with a question the conversation can already answer.** A first
   attempt asked for a codename the thread had been asked for before, so the model answered from its
@@ -554,6 +691,93 @@ re-checked since, so treat these as true-when-found rather than as current.*
   list, so the runner has nothing to remove on the path the claim is about, and every case still
   passes. What actually holds "both copies survive a failed step" is the `ROLLBACK` in `_one`;
   probe *that* (turn it into a `COMMIT`) and the copying cases fail as they should.
+
+- **`test_process` fails three cases when the gate is run by an agent rundesk is running.**
+  A gateway exports a dozen `RUNDESK_*` variables into the turn's environment — `RUNDESK_HOME`,
+  `RUNDESK_AGENTS_DIR`, `RUNDESK_CWD` and the rest — and those cases assert on a environment
+  built from a fixture's own paths, so they read the live install's instead and the diff looks
+  like a real defect in what a program is handed. It is not: clear the `RUNDESK_*` names and
+  all 101 pass. CI never sees it, because CI is not an agent. Check `env | grep RUNDESK`
+  before spending a diagnosis on it.
+
+- **`RUNDESK_DATA_DIR` does not isolate a scratch install when an agent is running the work.**
+  `agents_home()` is `RUNDESK_AGENTS_DIR or data_home()/agents`, and its own variable wins — so
+  a gateway, which exports `RUNDESK_AGENTS_DIR` into every turn, silently overrides the data
+  directory a scratch station just set. `rundesk add probe` then makes a **real agent in the
+  live install**, and `rundesk agents probe` is what says so, several commands too late. Set
+  both, or scrub every `RUNDESK_*` name:
+  `env $(env | grep -o '^RUNDESK_[A-Z_]*' | sed 's/^/-u /' | tr '\n' ' ') ./rundesk …` —
+  which is also what makes the gate pass under an agent (the note above).
+
+- **A `TestCase` helper called `_outcome` overwrites unittest's own, and the failure names
+  neither.** `unittest` keeps the running case's `_Outcome` object on `self._outcome`, so a
+  helper of that name shadows it and every case using it dies with `TypeError: '_Outcome'
+  object is not callable` — pointing at the call site, saying nothing about the collision.
+  Our own domain word for what a run came to makes this an easy name to reach for; `_became`
+  is free. The same trap is set for `_result`, `_subtest` and `_cleanups`.
+
+- **A schedule's `last_outcome` says `started` before the work begins, so polling it for
+  "an outcome" returns instantly and reads the wrong one.** `_remember_firing` writes it
+  ahead of the run on purpose (R-SCH-9). A test that fires the clock and waits for a final
+  outcome has to wait for something *other* than `started` — and then wait again, because
+  what is said on a surface is said after that write, so a case about delivery otherwise
+  reads the surface before anything could have reached it. `tests/test_gateway.py::_became`
+  does both; `_fired` waits for a run row, which a program schedule never writes at all.
+
+- **An `R-<AREA>-<n>` on an open branch is not reserved, and the branch finds out at rebase.**
+  Ids are permanent once merged, so whatever lands first takes the number and every other
+  branch holding it has to move — and doc-lint's contiguity rule means moving to the next
+  free one, never to a gap. Renumbering is a whole-tree edit with a trap in it: main is
+  already citing your old id for its own row, so a blind replace across the files you touch
+  renames somebody else's citations too. Replace only on lines that are not in
+  `git show origin/main:<file>`, then check what is left with
+  `grep -rn 'R-XXX-n' src tests .knowledge` — what remains should be exactly main's.
+
+- **A multi-line `from rundesk import (...)` in `agent.py` fails `test_store`.** The guard
+  `TheOnlyWayIn.test_the_product_reaches_what_an_agent_keeps` matches
+  `^\s*from\s+rundesk\s+import\s+[^\n]*\bstore\b` on one line, so wrapping the import puts
+  `store` on a continuation line and the case reads it as an agent with nowhere to keep
+  anything. Add a second `from rundesk import <name>` line instead of wrapping — which is
+  what `cli.py` does anyway.
+
+- **A full-gate command with an `rm -rf` cleanup trap is rejected before the gate starts.**
+  The shell safety layer rejects the command even when the target came from `mktemp -d`.
+  Point `PYTHONPYCACHEPREFIX` at a task-specific path under `/tmp` and leave cleanup outside
+  the gate invocation.
+
+- **`gh pr checks --required` exits nonzero when a branch has no required-check rules,
+  even when every reported CI check passed.** Inspect `statusCheckRollup` and reject any
+  conclusion other than `SUCCESS` or `SKIPPED` before merging; do not chain the
+  `--required` command ahead of the merge.
+
+- **A checkout path containing `bo` fails `test_cli` even when status lists no agent
+  names.** Its R-CMD-5 case asserts that fixture agent `bo` appears nowhere in the whole
+  status output, which includes the install path; use a worktree path without `bo`.
+
+- **GitHub issue JSON calls expose the type as `issueType`, not `type`.** `gh issue list
+  --json type` exits before listing anything and prints the valid fields; request
+  `--json issueType` and read `.issueType.name`.
+
+- **The system skill creator's `quick_validate.py` imports PyYAML, which this repository does
+  not install.** Do not add or install that dependency for a built-in skill; use
+  `tests/test_skill.py` and its `skill.valid()` coverage, then run the repository gate.
+
+- **Parallel pushes from linked worktrees contend on the repository's shared config lock.** The
+  remote push can succeed while `git push -u` fails to save local upstream metadata; push linked
+  worktrees sequentially, or run `git branch --set-upstream-to=origin/<branch>` afterward.
+
+- **`gh repo view` takes the repository positionally and rejects `--repo`.** Use
+  `gh repo view owner/repository --json ...`; unlike issue and PR commands, this verb has no
+  repository flag.
+
+- **The disposable station defaults to the canonical checkout, not the shell's current
+  worktree.** Running `station.sh --install` from a feature worktree can therefore validate
+  and install a different revision while appearing isolated. Pass
+  `--checkout /absolute/path/to/the/worktree` on every station install or command.
+
+- **`status` is a read-only parameter in zsh.** A verification command that assigns
+  `status=$?` aborts before its later checks. Use a task-specific name such as
+  `launchd_exit=$?` for captured exit codes.
 
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

@@ -11,17 +11,21 @@ Run: python3 tests/test_answering.py
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk import agent as agents  # noqa: E402
-from rundesk import answering, channel, store  # noqa: E402
+from rundesk import answering, channel, config, store  # noqa: E402
 
 #: When a conversation was opened. A calendar fact, never what anything is ordered by.
 AT = "2026-07-26T09:00:00Z"
@@ -35,10 +39,16 @@ class Outcome:
     """
 
     def __init__(self, run="1-aaaa", ok=True, reason="finished", text="", why=None,
-                 files=()):
+                 files=(), tokens=None, elapsed=120):
         self.run, self.ok, self.reason, self.why = run, ok, reason, why
         self.text = text
         self.files = list(files)
+        self.tokens = dict(tokens or {"reported": False})
+        self.elapsed = elapsed
+
+    @property
+    def became(self):
+        return "finished" if self.ok else self.reason
 
 
 class Brain:
@@ -117,6 +127,13 @@ class CarriesAConversation(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.where = Path(tempfile.mkdtemp(prefix="rundesk-answering-"))
         self.addCleanup(shutil.rmtree, self.where, True)
+        before = os.environ.get("RUNDESK_DATA_DIR")
+        data = self.where / "_data"
+        os.environ["RUNDESK_DATA_DIR"] = str(data)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", before)
+                        if before is not None
+                        else os.environ.pop("RUNDESK_DATA_DIR", None))
+        config.ensure(data)
         agents.add("ava", self.where)
         agents.remember("ava", self.where, provider="a-brain")
         self.whose = agents.directory("ava", self.where)
@@ -137,10 +154,12 @@ class CarriesAConversation(unittest.IsolatedAsyncioTestCase):
         records.opened(where_it_is, channel, "somewhere", conversation, AT)
         records.remember_session(where_it_is, brain, handle)
 
-    def answering(self, surface, brain, record=None, querying=None) -> answering.Answering:
+    def answering(self, surface, brain, record=None, querying=None,
+                  restart_waiting=None, restart_ready=None) -> answering.Answering:
         return answering.Answering(
             "ava", "ops", record if record is not None else self.record, surface,
-            where=self.where, carry=brain, note=self.told.append, querying=querying)
+            where=self.where, carry=brain, note=self.told.append, querying=querying,
+            restart_waiting=restart_waiting, restart_ready=restart_ready)
 
     async def carry(self, held, *records, wait=True):
         """Hand these to the channel, and let whatever they started finish."""
@@ -174,6 +193,37 @@ class CarriesAConversation(unittest.IsolatedAsyncioTestCase):
                 "text": text, "ref": ref}
 
 
+class QueuedRestartDelivery(CarriesAConversation):
+    async def test_a_queued_restart_waits_for_the_final_answer_delivery(self):
+        """R-GW-43"""
+        releasing = asyncio.Event()
+        final_attempted = asyncio.Event()
+        released = []
+
+        class SlowFinal(Surface):
+            async def __call__(mine, said):
+                record = json.loads(said)
+                if record.get("state") == channel.FINISHED:
+                    final_attempted.set()
+                    await releasing.wait()
+                await super().__call__(said)
+
+        surface = SlowFinal()
+        held = self.answering(
+            surface, Brain(),
+            restart_waiting=lambda run: run == "1-aaaa",
+            restart_ready=lambda run: released.append((run, list(surface.states))),
+        )
+        await held.heard(self.arrived())
+        await asyncio.wait_for(final_attempted.wait(), timeout=1)
+        self.assertEqual([], released, "the restart was released before the final answer")
+        releasing.set()
+        await self._settled(held)
+        self.assertEqual([
+            ("1-aaaa", [channel.TAKEN, channel.RUNNING, channel.FINISHED])
+        ], released)
+
+
 class WhereABrainIsAnswering(CarriesAConversation):
     """R-CH-21 — a brain was handed the words and nothing else, so it answered a room of
     forty people in exactly the voice it used for a direct message, and the person it was
@@ -192,6 +242,45 @@ class WhereABrainIsAnswering(CarriesAConversation):
         kept.remember_schedule(named, "0 3 * * *", store.stamped(),
                                prompt=held.pop("prompt", "what changed?"), **held)
         return kept.schedule(named)
+
+    async def test_a_reply_tells_the_brain_which_message_the_follow_up_is_for(self):
+        """R-CH-29 — reply context is distinct from the new words and channel neutral."""
+        surface, brain = Surface(), Brain()
+        held = self.answering(surface, brain)
+        arrived = self.arrived(text="fix the second one")
+        arrived[channel.REPLY_TO] = {
+            "id": "8839", "resolved": True, "author": "Winston",
+            "text": "1. logs\n2. parser\n3. docs",
+        }
+        await self.carry(held, arrived)
+        prompt = brain.asked[0]["prompt"]
+        self.assertEqual(
+            "fix the second one\n\n--\n\n"
+            "This message replies to conversation message 8839 from Winston.\n"
+            "Quoted message: 1. logs\n2. parser\n3. docs",
+            prompt,
+        )
+
+    async def test_an_unresolved_reply_still_starts_a_turn_and_says_what_is_missing(self):
+        """R-CH-30 — a deleted or unavailable parent never costs the new message."""
+        surface, brain = Surface(), Brain()
+        held = self.answering(surface, brain)
+        arrived = self.arrived(text="what about this?")
+        arrived[channel.REPLY_TO] = {"id": "8839", "resolved": False}
+        await self.carry(held, arrived)
+        self.assertEqual(
+            "what about this?\n\n--\n\n"
+            "This message replies to conversation message 8839 "
+            "(quoted text unavailable).",
+            brain.asked[0]["prompt"],
+        )
+
+    async def test_an_ordinary_message_has_no_empty_reply_context(self):
+        """R-CH-29 — the ordinary prompt remains exactly the words somebody sent."""
+        surface, brain = Surface(), Brain()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual("what changed?", brain.asked[0]["prompt"])
 
     async def test_what_a_schedule_came_to_is_said_where_this_agent_is_reached(self):
         """R-SCH-31 — the first trigger with no person at the other end. Work that failed at
@@ -229,6 +318,75 @@ class WhereABrainIsAnswering(CarriesAConversation):
         await held.told_what_a_schedule_did("nightly", "finished")
         await self._settled(held)
         self.assertIn("nothing broke overnight", surface.of("said")[0]["text"])
+
+    async def test_a_scheduled_turn_reports_as_a_final_answer_with_its_usage(self):
+        """R-SCH-50 — a turn the clock started is still a final channel answer, so the
+        surface receives its provider, session size, output, elapsed time, and recipient
+        instead of a plain remark carrying only its text."""
+        self.spoken_on()
+        row = self.a_schedule()
+        kept = agents.records("ava", self.where)
+        its_own = kept.opened(store.conversation_id("schedule", "nightly"), "schedule",
+                              "schedule", "nightly", "2026-07-26T09:00:00Z")["id"]
+        run = kept.began("schedule", "a-brain", "safe", "2026-07-26T09:00:00Z",
+                         conversation_id=its_own, schedule_id=row["id"])
+        kept.answered(its_own, run, "2026-07-26T09:02:00Z", "nothing broke overnight")
+        kept.ended(run, "2026-07-26T09:02:00Z", "finished",
+                   tokens={"input": 2, "output": 837, "cached": 121446,
+                           "reported": True})
+        outcome = Outcome(
+            run=run,
+            tokens={"input": 2, "output": 837, "cached": 121446,
+                    "session": 122435, "reported": True},
+        )
+
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_what_a_schedule_did("nightly", outcome)
+        await self._settled(held)
+
+        self.assertEqual([{
+            "type": "usage", "conversation": self.spoken_on(), "run": run,
+            "schedule": "nightly",
+            "input": 2, "output": 837, "cached": 121446, "session": 122435,
+        }], surface.of("usage"))
+        answer = surface.of("answer")[0]
+        self.assertEqual(
+            ("nothing broke overnight", "a-brain", "nightly", "2207", 120),
+            (answer["text"], answer["provider"], answer["schedule"],
+             answer["recipient"], answer["elapsed"]),
+        )
+
+    async def test_a_scheduled_final_answer_attaches_its_reserved_local_line(self):
+        """R-CH-31, R-SCH-50 — the same final-answer convention applies when the
+        clock started the turn and no inbound channel message exists."""
+        self.spoken_on()
+        row = self.a_schedule()
+        kept = agents.records("ava", self.where)
+        its_own = kept.opened(store.conversation_id("schedule", "nightly"), "schedule",
+                              "schedule", "nightly", "2026-07-26T09:00:00Z")["id"]
+        run = kept.began("schedule", "a-brain", "safe", "2026-07-26T09:00:00Z",
+                         conversation_id=its_own, schedule_id=row["id"])
+        at = agents.paths("ava", self.where)["workspace"] / "overnight.pdf"
+        at.write_bytes(b"a report")
+        kept.answered(its_own, run, "2026-07-26T09:02:00Z",
+                      f"rundesk-attach: [Download the overnight report](<{at}>)")
+        kept.ended(run, "2026-07-26T09:02:00Z", "finished")
+        outcome = Outcome(run=run)
+        surface = Surface()
+        held = self.answering(surface, Brain())
+
+        await held.told_what_a_schedule_did("nightly", outcome)
+        await self._settled(held)
+
+        answer = surface.of("answer")[0]
+        self.assertEqual("Download the overnight report", answer["text"])
+        self.assertEqual(at.name, answer["attachments"][0]["name"])
+        self.assertEqual(str(at.resolve()), answer["attachments"][0]["at"])
+        self.assertEqual(len(b"a report"), answer["attachments"][0]["bytes"])
+        self.assertRegex(answer["attachments"][0]["sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual([], [one for one in surface.of("said")
+                              if not one.get("began")])
 
     async def test_what_a_surface_is_shown_is_what_the_agent_said(self):
         """R-SCH-34 — a person reading a room wants what their agent found, not a line of
@@ -373,6 +531,129 @@ class WhereABrainIsAnswering(CarriesAConversation):
         self.assertTrue(any("nowhere to say" in one for one in self.told),
                         f"it said nothing about having nowhere: {self.told}")
 
+    async def test_a_scheduled_run_says_it_has_started_where_it_will_report(self):
+        """R-SCH-46 — where the pair goes is resolved here, once, and handed back for the
+        report to be delivered to, because a notice in one room and its outcome in another is
+        worse than neither."""
+        where_it_is = self.spoken_on()
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        self.assertEqual((True, where_it_is), await held.told_a_schedule_started("nightly"),
+                         "it did not hand back where the notice went")
+        await self._settled(held)
+        said = surface.of("said")
+        self.assertEqual(1, len(said), f"nothing was said on the surface: {surface.shown}")
+        self.assertEqual("💻 Working on 'nightly' — I will report back when it is done.",
+                         said[0]["text"])
+        self.assertEqual(where_it_is, said[0]["conversation"])
+        self.assertEqual("nightly", said[0]["schedule"])
+        self.assertTrue(said[0]["began"], "the surface cannot tell a notice from a report")
+
+    async def test_a_scheduled_run_says_which_schedule_its_report_is_for(self):
+        """R-SCH-46 — the name is how a surface finds the message it posted at the start. It is
+        a key and never something to read: what a place is called is already carried unread past
+        this file, and this is the same promise for the same reason (R-SCH-32)."""
+        self.spoken_on()
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_a_schedule_started("nightly")
+        await held.told_what_a_schedule_did("nightly", "finished")
+        await self._settled(held)
+        notice, report = surface.of("said")
+        self.assertEqual(("nightly", True), (notice["schedule"], notice["began"]))
+        self.assertEqual("nightly", report["schedule"])
+        self.assertIsNone(report.get("began"),
+                          "the report claims to be a notice, so it would anchor to itself")
+
+    async def test_a_scheduled_run_starting_is_said_in_the_place_the_schedule_named(self):
+        """R-SCH-32, R-SCH-46 — an owner naming a room is what makes a daily report land where
+        they meant, and a notice that ignored it would stand in a room the report never reaches."""
+        self.spoken_on("one")
+        wanted = self.spoken_on("two")
+        self.a_schedule(place="two")
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_a_schedule_started("nightly")
+        await self._settled(held)
+        said = surface.of("said")[0]
+        self.assertEqual(wanted, said["conversation"])
+        self.assertEqual("two", said["place"], "the surface was not told which place")
+
+    async def test_a_report_is_delivered_where_the_notice_went(self):
+        """R-SCH-46, R-SCH-32 — resolving the same *way* is not resolving to the same *answer*.
+        Where a schedule with no place named reports is the newest conversation on the surface,
+        and the owner writing in another room during the twenty minutes the run takes is what
+        makes that a different room. Asked again at the end, the notice stands in the first one
+        for ever with nothing under it while the report lands in the second, anchored to
+        nothing — so the notice decides where, once, and the report is delivered there."""
+        kept = agents.records("ava", self.where)
+        began_in = kept.opened(store.conversation_id("ops", "general"), "ops", "somewhere",
+                               "general", "2026-07-26T06:00:00Z")["id"]
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        said, where = await held.told_a_schedule_started("nightly")
+        self.assertTrue(said)
+        # The owner writes in another room while the run is going, which is all it takes for
+        # the newest conversation on this surface to be a different one.
+        kept.opened(store.conversation_id("ops", "random"), "ops", "somewhere", "random",
+                    "2026-07-26T06:10:00Z")
+        await held.told_what_a_schedule_did("nightly", "finished", where=where)
+        await self._settled(held)
+        notice, report = surface.of("said")
+        self.assertEqual(began_in, notice["conversation"])
+        self.assertEqual(began_in, report["conversation"],
+                         "the report went to whichever room was newest, not to its notice")
+        wrote = [one["text"] for one in kept.messages(began_in) if one["author"] == "agent"]
+        self.assertEqual([report["text"]], wrote,
+                         "what was delivered was written down in another conversation (R-SCH-33)")
+
+    async def test_a_report_for_a_schedule_that_named_a_place_goes_to_the_place(self):
+        """R-SCH-32, R-SCH-46 — a place is a word the owner said, carried to the adapter for
+        both messages, so there is nothing for the pair to disagree about and nothing to carry
+        over from the notice. The word wins over anything handed in beside it."""
+        self.spoken_on("one")
+        wanted = self.spoken_on("two")
+        self.a_schedule(place="two")
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_a_schedule_started("nightly")
+        await held.told_what_a_schedule_did("nightly", "finished", where="somewhere-else")
+        await self._settled(held)
+        notice, report = surface.of("said")
+        self.assertEqual((wanted, "two"), (notice["conversation"], notice["place"]))
+        self.assertEqual((wanted, "two"), (report["conversation"], report["place"]),
+                         "the report left the place its owner named")
+
+    async def test_a_surface_with_nowhere_to_deliver_says_nothing_when_a_run_starts(self):
+        """R-SCH-46 — nowhere to say what a run found is nowhere to say it began. Said rather
+        than invented, and handed back, because only a notice that went out is owed a reply."""
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        self.assertEqual((False, None), await held.told_a_schedule_started("nightly"))
+        await self._settled(held)
+        self.assertEqual([], surface.of("said"), "it invented somewhere to post")
+        self.assertTrue(any("nowhere to say that 'nightly' has started" in one
+                            for one in self.told),
+                        f"it said nothing about having nowhere: {self.told}")
+
+    async def test_what_rundesk_says_a_run_started_is_not_the_agents_own_record(self):
+        """R-SCH-33, R-SCH-46 — the report is written down where it was delivered so a person
+        replying to it reaches a brain whose session saw it. Nobody replies "nice work" to
+        rundesk saying work has begun, and writing it in would put a line the agent never said
+        into the account of what the agent said."""
+        where_it_is = self.spoken_on()
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_a_schedule_started("nightly")
+        await self._settled(held)
+        kept = agents.records("ava", self.where)
+        said = [one for one in kept.messages(where_it_is) if one["author"] == "agent"]
+        self.assertEqual([], said, "rundesk's own bookkeeping was written down as the agent's")
+
     async def test_a_channel_that_says_nothing_falls_to_what_the_agent_says(self):
         """R-AGT-16, R-CH-22 — the composition, rather than either half of it. `channel.py`
         has no idea what an agent keeps and `agent.py` has no idea what a surface is, so this
@@ -383,52 +664,66 @@ class WhereABrainIsAnswering(CarriesAConversation):
         await self.carry(held, self.arrived())
         # Added to rundesk's own rather than replacing them (R-AGT-17); which of the
         # *situation* lines won is what this case is about.
-        said = brain.asked[0]["preface"].replace(agents.standing("ava"), "").strip()
+        said = brain.asked[0]["preface"].replace(
+            agents.standing("ava", self.where), ""
+        ).strip()
         self.assertEqual("You are ava, and you are brief.", said,
                          "the agent's own was passed over for rundesk's default sentence")
 
-    async def test_what_this_channel_says_still_wins_over_the_agents(self):
-        """R-AGT-16, R-AGT-17, R-CH-22 — nearest situational wording wins without
-        replacing Rundesk's stable standing prefix."""
+    async def test_channel_and_agent_instructions_both_append(self):
+        """R-AGT-16, R-AGT-17, R-CH-22 — neither owner layer replaces another."""
         agents.remember("ava", self.where, instructions="what the agent says")
         brain, surface = Brain(), Surface()
         held = self.answering(surface, brain,
                               record=dict(self.record, instructions="Keep it short here."))
         await self.carry(held, self.arrived())
         said = brain.asked[0]["preface"]
-        self.assertTrue(said.startswith(agents.standing("ava")))
+        self.assertTrue(said.startswith(agents.standing("ava", self.where)))
         self.assertIn("Keep it short here.", said)
-        self.assertNotIn("what the agent says", said)
+        self.assertIn("what the agent says", said)
         self.assertLess(said.index("rundesk messages ava"), said.index("Keep it short here."))
+        self.assertLess(said.index("Keep it short here."), said.index("what the agent says"))
 
     async def test_a_brain_is_told_which_surface_and_conversation_it_is_answering_in(self):
         """R-CH-21 — the surface, the channel the owner named, the place as that surface
         shows it, and who is asking."""
         brain, surface = Brain(), Surface()
         held = self.answering(surface, brain)
-        await self.carry(held, dict(self.arrived(),
-                                    where="#ops on the Rundesk server", called="Tim"))
+        await self.carry(held, dict(
+            self.arrived(), direct=False,
+            where="#ops on the Rundesk server", called="Tim",
+        ))
         said = brain.asked[0]["preface"]
         self.assertEqual("what changed?", brain.asked[0]["prompt"],
                          "the situation was folded into what the person typed")
-        self.assertIn("over somewhere", said)
+        self.assertIn("through somewhere", said)
         self.assertNotIn("'ops'", said, "rundesk's own label for the connection is not "
                          "the agent's business, and collides with the platform's own word")
         self.assertIn("in #ops on the Rundesk server", said)
-        self.assertIn("from Tim", said)
+        self.assertIn("responding to Tim", said)
+
+    async def test_channel_turns_fill_the_agents_resolved_locations(self):
+        """R-AGT-38 — channel composition receives local agent paths from the agent layer."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        said = brain.asked[0]["preface"]
+        self.assertIn(f"`{agents.home('ava', self.where)}`", said)
+        self.assertIn(f"`{agents.workspace('ava', self.where)}`", said)
+        self.assertNotIn("{agent_home}", said)
+        self.assertNotIn("{workspace}", said)
 
     async def test_a_surface_that_names_neither_is_answered_exactly_as_before(self):
-        """R-CH-21 — separately optional. A surface with no name for the place or the
-        person still says which surface it is, and nothing is invented for the rest."""
+        """R-CH-21 — an adapter that supplies no trigger context gets none invented."""
         brain, surface = Brain(), Surface()
         held = self.answering(surface, brain)
         await self.carry(held, self.arrived())
         # Rundesk's own words come first on every turn now (R-AGT-17) and legitimately
         # contain ", in " — so the guard reads what the *surface* added, not the whole of it.
-        said = brain.asked[0]["preface"].replace(agents.standing("ava"), "").strip()
-        self.assertIn("over somewhere", said)
-        self.assertNotIn(", in ", said)
-        self.assertNotIn(", from ", said)
+        said = brain.asked[0]["preface"].replace(
+            agents.standing("ava", self.where), ""
+        ).strip()
+        self.assertEqual("", said)
 
     async def test_a_channel_of_an_unnamed_kind_says_nothing_about_where_it_is(self):
         """R-CH-21 — a half-written line about a surface with no name is worse than no
@@ -440,7 +735,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
         self.assertEqual("what changed?", brain.asked[0]["prompt"])
         # Rundesk's own words and nothing else: nothing was invented about a surface that
         # said nothing about itself (R-CH-21, R-AGT-17).
-        self.assertEqual(agents.standing("ava"), brain.asked[0]["preface"])
+        self.assertEqual(agents.standing("ava", self.where), brain.asked[0]["preface"])
 
 
 class WhoMayBeAnswered(CarriesAConversation):
@@ -759,6 +1054,50 @@ class StoppingWhatIsRunning(CarriesAConversation):
         stop.set()
         await self._settled(held)
 
+    async def test_a_stop_ends_the_backlog_and_does_not_promote_the_next_message(self):
+        """R-CH-9 — a turn ending starts whatever queued behind it, and a cancelled turn
+        ends like any other, so a stop drained the queue instead of ending it: the agent
+        went quiet for a beat and carried on with the next message. There was no way to
+        actually stop — *n* waiting messages needed *n* stops, each racing the turn it had
+        just started."""
+        stop = asyncio.Event()
+        brain, surface = Brain(holds=stop), Surface()
+        held = self.answering(surface, brain)
+        await held.heard(self.arrived(conversation="one", text="first"))
+        await brain.started.wait()
+        await held.heard(self.arrived(conversation="one", text="second"))
+        await asyncio.sleep(0.02)
+        await held.heard({"type": "control", "conversation": "one", "user": "2207",
+                          "control": "stop"})
+        await asyncio.sleep(0.1)
+        self.assertEqual([channel.TAKEN, channel.RUNNING, channel.STOPPED], surface.states,
+                         "the message waiting behind the stopped turn was started anyway")
+        self.assertEqual([], held.exchanges["one"].waiting)
+        stop.set()
+        await self._settled(held)
+
+    async def test_a_stop_leaves_another_conversations_backlog_alone(self):
+        """R-CH-9 — the gesture is aimed at one conversation. Ending every backlog on the
+        channel would make a stop in one room throw away what somebody had queued in
+        another."""
+        stop = asyncio.Event()
+        brain, surface = Brain(holds=stop), Surface()
+        held = self.answering(surface, brain)
+        await held.heard(self.arrived(conversation="one", text="first"))
+        await held.heard(self.arrived(conversation="two", text="first"))
+        await asyncio.sleep(0.02)
+        await held.heard(self.arrived(conversation="one", text="second"))
+        await held.heard(self.arrived(conversation="two", text="second"))
+        await asyncio.sleep(0.02)
+        await held.heard({"type": "control", "conversation": "one", "user": "2207",
+                          "control": "stop"})
+        await asyncio.sleep(0.05)
+        self.assertEqual([], held.exchanges["one"].waiting)
+        self.assertEqual(1, len(held.exchanges["two"].waiting),
+                         "a stop in one conversation dropped another's waiting message")
+        stop.set()
+        await self._settled(held)
+
     async def test_a_stopped_turn_is_marked_as_stopped_rather_than_failed(self):
         """R-CAD-3 — "it stopped" and "it broke" are different news about the same
         silence, and only one of them means somebody should look at something."""
@@ -809,8 +1148,27 @@ class ASecondMessageWhileOneIsRunning(CarriesAConversation):
         stop.set()
         await self._settled(held)
         self.assertEqual(["actually, stop at three"],
-                         [self.words(one) for one in brain.steered])
+                         [self.words(one.text) for one in brain.steered])
         self.assertEqual(1, len(brain.asked), "it started a second turn as well")
+
+    async def test_a_word_steered_into_a_running_turn_carries_who_said_it(self):
+        """R-STO-27 — what a person says mid-turn is a message of its own and is written
+        down as one, so it needs the identity the message that started the turn already
+        carries. Reported (#106): the same person appeared throughout one conversation
+        twice over — by their platform identity when they began a turn, and as the bare
+        word `user` whenever they spoke into one already running."""
+        stop = asyncio.Event()
+        brain = Brain(holds=stop, can={"steer": True})
+        held = self.answering(Surface(), brain)
+        await held.heard(self.arrived(text="count to ten", user="2207"))
+        await brain.started.wait()
+        await asyncio.sleep(0.02)
+        await held.heard(self.arrived(text="stop at three", user="2207"))
+        await asyncio.sleep(0.02)
+        stop.set()
+        await self._settled(held)
+        self.assertEqual(["2207"], [one.who for one in brain.steered],
+                         "a word said into a running turn reached it unattributed")
 
     async def test_a_brain_that_cannot_be_steered_answers_the_second_message_after(self):
         """A brain that will never read again must not be held open for words, so they
@@ -872,7 +1230,7 @@ class ASecondMessageWhileOneIsRunning(CarriesAConversation):
         await self._settled(held)
         self.assertEqual(1, len(brain.asked), "a burst became several turns")
         self.assertEqual(["and also this", "and this"],
-                         [self.words(one) for one in brain.steered])
+                         [self.words(one.text) for one in brain.steered])
 
     async def test_the_mark_stays_on_the_message_that_asked(self):
         """R-DIS-8 — a second message sent while a turn runs took the mark that belonged
@@ -1011,6 +1369,44 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
         self.assertEqual({"type", "conversation", "run", "id", "ok", "summary"},
                          set(surface.of("result")[0]))
 
+    async def test_a_final_answer_names_the_provider_that_produced_it(self):
+        """R-CH-28 — provenance is Rundesk's fact, not optional brain metadata."""
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await self.carry(held, self.arrived())
+        self.assertEqual("a-brain", surface.of("answer")[0]["provider"])
+
+    async def test_how_big_the_conversation_is_reaches_a_surface_with_what_it_cost(self):
+        """R-USE-15, R-CH-13 — the field is named here or it never leaves, and a footer
+        showing it would be dead the day it was written. A brain's own bookkeeping around
+        it still stays where it was said."""
+        brain = Brain(showing=[{"type": "usage", "input": 2, "output": 837,
+                                "cached": 121446, "session": 122435,
+                                "prompt_cache_key": "a private key"}])
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        shown = surface.of("usage")[0]
+        self.assertEqual(122435, shown["session"])
+        self.assertNotIn("prompt_cache_key", shown)
+
+    async def test_what_a_brain_wrote_into_its_cache_reaches_a_surface_too(self):
+        """R-CH-13, R-USE-13 — the fourth quantity a turn is billed for, and the one that
+        bills above fresh input. Discord has named `written` as the fourth slot of its
+        footer since v0.17.0 and could never once be given it, because this allowlist did
+        not name it: both suites green, nothing raised, nothing logged, and an owner shown
+        three of the four quantities they paid for."""
+        brain = Brain(showing=[{"type": "usage", "input": 2, "output": 88,
+                                "cached": 34200, "written": 1500,
+                                "prompt_cache_key": "a private key"}])
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        shown = surface.of("usage")[0]
+        self.assertEqual(1500, shown["written"],
+                         "cache writes still do not cross the seam")
+        self.assertNotIn("prompt_cache_key", shown)
+
     async def test_a_safe_helper_name_leaves_but_unrelated_tool_fields_do_not(self):
         """R-CH-13 — a helper name is deliberately allowed; provider extras stay private."""
         brain = Brain(showing=[
@@ -1058,9 +1454,9 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
                         "what it did was shown after what it said")
 
     async def test_a_surface_told_not_to_show_what_it_is_doing_still_answers(self):
-        """R-CH-6 — what an agent *is doing* is what an owner may turn off, and what it
-        *says* is not. Turning both off would be a channel that takes a message and never
-        replies to it, which is not a quieter agent but a broken one."""
+        """R-CH-6 — everything a turn shows on the way is what an owner may turn off, and
+        the answer is not. Turning that off too would be a channel that takes a message and
+        never replies to it, which is not a quieter agent but a broken one."""
         brain = Brain(showing=[{"type": "think", "text": "the error is in the parser"},
                                {"type": "tool", "id": "1", "did": "run"},
                                {"type": "usage", "input": 10, "output": 2}])
@@ -1071,6 +1467,75 @@ class WhatDoesNotLeaveTheMachine(CarriesAConversation):
         self.assertEqual([], [one for one in kinds if one in ("think", "tool", "usage")],
                          "a surface told not to be shown what it was doing was shown it")
         self.assertIn("answer", kinds, "turning activity off took the answer with it")
+
+    async def test_a_quiet_channel_posts_one_message_for_the_whole_turn(self):
+        """R-CH-27, R-CH-6 — the regression. A turn that thinks out loud four times posted
+        four remarks and then the answer into a room explicitly set to stay quiet, because
+        prose was routed on before the owner's choice was ever asked. Only the marks a
+        platform shows without posting anything — how the turn stands — are left."""
+        brain = Brain(showing=[
+            {"type": "text", "text": "I'll read the issue.", "whole": True},
+            {"type": "text", "text": "Now the code.", "whole": True},
+            {"type": "text", "text": "The routing is the cause.", "whole": True},
+            {"type": "text", "text": "Writing the fix.", "whole": True},
+            {"type": "think", "text": "the error is in the parser"},
+            {"type": "text", "text": "Done: one line.", "whole": True}],
+            outcome=Outcome(text="Done: one line."))
+        surface = Surface()
+        held = self.answering(surface, brain, record=dict(self.record, activity=False))
+        await self.carry(held, self.arrived())
+        posted = [one["type"] for one in surface.shown if one["type"] != "state"]
+        self.assertEqual(["answer"], posted,
+                         f"a channel told to stay quiet posted {posted}")
+        self.assertEqual(["Done: one line."],
+                         [one["text"] for one in surface.of("answer")],
+                         "the one message it posted was not the answer")
+
+    async def test_what_a_quiet_channel_says_at_the_end_is_still_only_its_last_thought(self):
+        """R-CH-27, R-CH-19 — what is said is still collected when none of it is posted.
+        Dropping the record instead of the delivery would make the answer every thought
+        the turn ever had, joined together — the room quieter and the message four times
+        longer, which is the opposite of what was asked for."""
+        brain = Brain(showing=[
+            {"type": "text", "text": "I'll read the issue.", "whole": True},
+            {"type": "text", "text": "Three files changed.", "whole": True}],
+            outcome=Outcome(text="I'll read the issue.Three files changed."))
+        surface = Surface()
+        held = self.answering(surface, brain, record=dict(self.record, activity=False))
+        await self.carry(held, self.arrived())
+        self.assertEqual(["Three files changed."],
+                         [one["text"] for one in surface.of("answer")])
+
+    async def test_a_quiet_channels_reply_written_a_piece_at_a_time_still_arrives_whole(self):
+        """R-CH-27, R-CH-7 — a brain that streams fragments and never marks one whole has
+        said nothing complete until it stops, and the pieces are still what the answer is
+        made of on a channel that posts nothing before it."""
+        brain = Brain(showing=[{"type": "text", "text": "Three "},
+                               {"type": "text", "text": "files changed."}],
+                      outcome=Outcome(text="Three files changed."))
+        surface = Surface()
+        held = self.answering(surface, brain, record=dict(self.record, activity=False))
+        await self.carry(held, self.arrived())
+        self.assertEqual([], surface.of("said"))
+        self.assertEqual(["Three files changed."],
+                         [one["text"] for one in surface.of("answer")])
+
+    async def test_a_channel_shown_what_it_is_doing_still_hears_every_thought(self):
+        """R-CH-6, R-CH-19 — the other half of the choice, and the one nobody asked to
+        change. A room that is watching a long turn is readable because each finished
+        thought arrives when it was had."""
+        brain = Brain(showing=[
+            {"type": "text", "text": "I'll read the issue.", "whole": True},
+            {"type": "text", "text": "Now the code.", "whole": True},
+            {"type": "text", "text": "Done: one line.", "whole": True}],
+            outcome=Outcome(text="Done: one line."))
+        surface = Surface()
+        held = self.answering(surface, brain)
+        await self.carry(held, self.arrived())
+        self.assertEqual(["I'll read the issue.", "Now the code."],
+                         [one["text"] for one in surface.of("said")])
+        self.assertEqual(["Done: one line."],
+                         [one["text"] for one in surface.of("answer")])
 
     async def test_a_finished_thing_said_mid_turn_is_shown_when_the_next_one_arrives(self):
         """R-CH-19 — an agent that says "I will look at the logs" and then, a minute
@@ -1290,6 +1755,29 @@ class WhatTheAgentMade(CarriesAConversation):
         await self.carry(held, self.arrived())
         self.assertEqual([], surface.of("answer")[0]["attachments"])
 
+    async def test_an_invalid_attachment_path_does_not_cost_the_answer(self):
+        """R-CH-8, R-CH-18 — an invalid filesystem string is one refused file,
+        not a failed completed turn."""
+        loop = agents.paths("ava", self.where)["workspace"] / "loop"
+        loop.parent.mkdir(parents=True, exist_ok=True)
+        loop.symlink_to(loop)
+        brain = Brain(outcome=Outcome(
+            text="the work still finished",
+            files=[
+                {"type": "file", "at": "/tmp/bad\0name"},
+                {"type": "file", "at": str(loop)},
+            ],
+        ))
+        surface = Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual("the work still finished", answer["text"])
+        self.assertEqual([], answer["attachments"])
+        self.assertIn(channel.FINISHED, surface.states)
+
     async def test_a_turn_that_only_made_something_still_arrives(self):
         """R-CH-8, R-CH-18 — a picture with no words is an answer."""
         at = self._made()
@@ -1298,6 +1786,259 @@ class WhatTheAgentMade(CarriesAConversation):
         held = self.answering(surface, brain)
         await self.carry(held, self.arrived())
         self.assertEqual(1, len(surface.of("answer")), "the picture was never sent")
+
+    async def test_a_reserved_local_attachment_line_hides_its_path(self):
+        """R-CH-31 — the final answer itself declares delivery intent without making a
+        provider understand which of its tools created the file."""
+        at = self._made("reports/market intelligence (verified).pdf")
+        text = f"rundesk-attach: [Download the verified report](<{at}>)"
+        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual("Download the verified report", answer["text"])
+        self.assertNotIn(str(at), answer["text"])
+        self.assertEqual([{
+            "name": at.name,
+            "at": str(at.resolve()),
+            "bytes": len(b"not really a picture"),
+            "sha256": hashlib.sha256(b"not really a picture").hexdigest(),
+        }], answer["attachments"])
+
+    async def test_a_crlf_reserved_attachment_line_hides_its_path(self):
+        """R-CH-31 — platform line endings do not expose a declared local path."""
+        at = self._made("reports/windows-report.pdf")
+        text = f"Ready\r\nrundesk-attach: [Download](<{at}>)\r\nDone"
+        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual("Ready\r\nDownload\nDone", answer["text"])
+        self.assertNotIn(str(at), answer["text"])
+        self.assertEqual(1, len(answer["attachments"]))
+
+    async def test_relative_and_remote_links_stay_links_and_attach_nothing(self):
+        """R-CH-31 — only an absolute path is a declaration about this machine."""
+        text = "Read [the notes](notes.md) or [the docs](https://example.invalid/docs)."
+        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual(text, answer["text"])
+        self.assertEqual([], answer["attachments"])
+
+    async def test_ordinary_local_markdown_is_not_an_attachment_declaration(self):
+        """R-CH-31 — only the reserved whole line can move local bytes."""
+        at = self._made("ordinary.pdf")
+        examples = [
+            f"[Download](<{at}>)",
+            f'[Download](<{at}> "PDF report")',
+            f"[Download [PDF]](<{at}>)",
+            f"[Download]({at.parent}/report(1).pdf)",
+            f"<!-- [Download](<{at}>) -->",
+            f">     [Download](<{at}>)",
+            f"- Reports:\n    [Download](<{at}>)",
+        ]
+        for text in examples:
+            with self.subTest(text=text):
+                brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+                held = self.answering(surface, brain)
+
+                await self.carry(held, self.arrived())
+
+                answer = surface.of("answer")[0]
+                self.assertEqual(text, answer["text"])
+                self.assertEqual([], answer["attachments"])
+
+    async def test_a_protocol_relative_link_is_not_a_local_file(self):
+        """R-CH-31 — a remote URL without an explicit scheme remains a link."""
+        text = "[Download](//example.invalid/report.pdf)"
+        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual(text, answer["text"])
+        self.assertEqual([], answer["attachments"])
+
+    async def test_an_escaped_reserved_attachment_line_is_literal(self):
+        """R-CH-31 — the reserved protocol can be shown safely by escaping its prefix."""
+        at = self._made("example.pdf")
+        text = f"```text\n\\rundesk-attach: [example](<{at}>)\n```"
+        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual(text, answer["text"])
+        self.assertEqual([], answer["attachments"])
+
+    async def test_a_parent_changed_after_containment_is_not_sent(self):
+        """R-CH-18 — every path component remains beneath a held agent directory
+        while the accepted bytes are opened."""
+        workspace = agents.paths("ava", self.where)["workspace"]
+        parent = workspace / "exports"
+        parent.mkdir()
+        at = parent / "report.pdf"
+        at.write_bytes(b"approved")
+        outside = self.where / "outside"
+        outside.mkdir()
+        (outside / at.name).write_bytes(b"private replacement")
+        held_parent = workspace / "held-exports"
+        fingerprint = answering._fingerprint_beneath
+
+        def swap_before_open(where, inside):
+            parent.rename(held_parent)
+            parent.symlink_to(outside, target_is_directory=True)
+            return fingerprint(where, inside)
+
+        roots = [workspace, agents.paths("ava", self.where)["logs"],
+                 agents.paths("ava", self.where)["home"]]
+        with mock.patch.object(answering, "_fingerprint_beneath",
+                               side_effect=swap_before_open):
+            attachment, _why = answering._approved_attachment(
+                {"name": at.name, "at": str(at)}, roots)
+
+        self.assertIsNone(attachment)
+
+    async def test_attachment_verification_leaves_the_channel_event_loop_free(self):
+        """R-CH-18 — bounded file hashing does not stop unrelated channel work."""
+        at = self._made("slow.pdf")
+        entered = threading.Event()
+        release = threading.Event()
+        approved = answering._approved_attachment
+
+        def slow(*args):
+            entered.set()
+            release.wait(1)
+            return approved(*args)
+
+        brain = Brain(outcome=Outcome(
+            text="ready", files=[{"type": "file", "at": str(at)}]))
+        held = self.answering(Surface(), brain)
+
+        async def advance():
+            self.assertTrue(await asyncio.to_thread(entered.wait, 0.2))
+            release.set()
+
+        with mock.patch.object(answering, "_approved_attachment", side_effect=slow):
+            carrying = asyncio.create_task(self.carry(held, self.arrived()))
+            await asyncio.wait_for(advance(), timeout=0.3)
+            await carrying
+
+    async def test_a_reserved_local_line_outside_the_agent_is_not_attached(self):
+        """R-CH-31, R-CH-18 — a reserved line is not permission to disclose
+        another directory, including by leaving its absolute path in the message."""
+        at = self._made("private.pdf", inside=False)
+        brain = Brain(outcome=Outcome(
+            text=f"rundesk-attach: [Private report](<{at}>)"))
+        surface = Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual("Private report", answer["text"])
+        self.assertEqual([], answer["attachments"])
+        self.assertTrue(any("outside where this agent works" in one for one in self.told))
+
+    async def test_a_creator_provider_file_and_reserved_line_to_it_are_attached_once(self):
+        """R-CH-31 — built-in creator output and portable answer syntax merge once."""
+        at = self._made("chart.png")
+        provider_alias = f"{at.parent}/./{at.name}"
+        brain = Brain(outcome=Outcome(
+            text=f"rundesk-attach: [Chart](<{at}>)",
+            files=[{"type": "file", "at": provider_alias}],
+        ))
+        surface = Surface()
+        held = self.answering(surface, brain)
+
+        with mock.patch.object(answering, "_approved_attachment",
+                               wraps=answering._approved_attachment) as approved:
+            await self.carry(held, self.arrived())
+
+        self.assertEqual(1, len(surface.of("answer")[0]["attachments"]))
+        self.assertEqual(1, approved.call_count)
+
+    async def test_case_aliases_from_creator_and_reserved_line_are_attached_once(self):
+        """R-CH-31 — filesystem spelling does not duplicate one created file."""
+        at = self._made("Chart.PNG")
+        alias = at.with_name("chart.png")
+        if not alias.exists():
+            self.skipTest("the test filesystem is case-sensitive")
+        brain = Brain(outcome=Outcome(
+            text=f"rundesk-attach: [Chart](<{alias}>)",
+            files=[{"type": "file", "at": str(at)}],
+        ))
+        surface = Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        self.assertEqual(1, len(surface.of("answer")[0]["attachments"]))
+
+    async def test_an_oversize_reserved_local_line_is_not_attached(self):
+        """R-CH-31 — a declared attachment cannot evade the channel's file bound."""
+        at = self._made("too-large.pdf")
+        with at.open("wb") as made:
+            made.truncate(channel.ATTACHED_BYTES + 1)
+        brain = Brain(outcome=Outcome(
+            text=f"rundesk-attach: [Large report](<{at}>)"))
+        surface = Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual("Large report", answer["text"])
+        self.assertEqual([], answer["attachments"])
+        self.assertTrue(any("too large to attach" in one for one in self.told))
+
+    async def test_reserved_local_lines_are_bounded_to_the_attachment_count(self):
+        """R-CH-31 — one final answer cannot turn into an unbounded file batch."""
+        made = [self._made(f"report-{number}.pdf")
+                for number in range(channel.ATTACHED_MOST + 1)]
+        text = "\n".join(f"rundesk-attach: [Report {number}](<{at}>)"
+                         for number, at in enumerate(made))
+        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+        held = self.answering(surface, brain)
+
+        with mock.patch.object(answering, "_approved_attachment",
+                               wraps=answering._approved_attachment) as approved:
+            await self.carry(held, self.arrived())
+
+        self.assertEqual(channel.ATTACHED_MOST,
+                         len(surface.of("answer")[0]["attachments"]))
+        self.assertEqual(channel.ATTACHED_MOST, approved.call_count)
+        self.assertTrue(any("sending only the first" in one for one in self.told))
+
+    async def test_duplicate_provider_files_do_not_crowd_out_a_reserved_line(self):
+        """R-CH-31 — cheap declaration deduplication happens before bounded I/O."""
+        provider_file = self._made("provider.png")
+        linked = self._made("report.pdf")
+        aliases = [f"{provider_file.parent}/{'./' * number}{provider_file.name}"
+                   for number in range(1, channel.ATTACHED_MOST + 1)]
+        brain = Brain(outcome=Outcome(
+            text=f"rundesk-attach: [Report](<{linked}>)",
+            files=[{"type": "file", "at": at} for at in aliases],
+        ))
+        surface = Surface()
+        held = self.answering(surface, brain)
+
+        with mock.patch.object(answering, "_approved_attachment",
+                               wraps=answering._approved_attachment) as approved:
+            await self.carry(held, self.arrived())
+
+        self.assertEqual(2, len(surface.of("answer")[0]["attachments"]))
+        self.assertEqual(2, approved.call_count)
 
 
 class InterruptedTurnsContinue(CarriesAConversation):
@@ -1392,6 +2133,16 @@ class WhatAChannelDoesNotWriteDown(CarriesAConversation):
 
 
 class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.data = Path(tempfile.mkdtemp(prefix="rundesk-update-data-"))
+        self.addCleanup(shutil.rmtree, self.data, True)
+        before = os.environ.get("RUNDESK_DATA_DIR")
+        os.environ["RUNDESK_DATA_DIR"] = str(self.data)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", before)
+                        if before is not None
+                        else os.environ.pop("RUNDESK_DATA_DIR", None))
+        config.ensure(self.data)
+
     async def test_a_completed_update_is_delivered_after_the_channel_reconnects(self):
         """R-UPD-40"""
         where = Path(tempfile.mkdtemp(prefix="rundesk-update-notice-"))
@@ -1432,6 +2183,28 @@ class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(brain.asked))
         self.assertEqual(answering.AFTER_UPDATE, brain.asked[0]["prompt"])
         self.assertEqual("rundesk", brain.asked[0]["prompt_author"])
+
+    async def test_a_completed_restart_is_delivered_without_starting_another_turn(self):
+        """R-GW-43"""
+        where = Path(tempfile.mkdtemp(prefix="rundesk-restart-notice-"))
+        self.addCleanup(shutil.rmtree, where, True)
+        agents.add("ava", where)
+        agents.remember("ava", where, provider="a-brain")
+        agents.records("ava", where).opened(
+            store.conversation_id("ops", "one"), "ops", "somewhere", "one", AT
+        )
+        brain, surface = Brain(), Surface()
+        held = answering.Answering(
+            "ava", "ops", {"kind": "somewhere", "allow": ["2207"]},
+            surface, where=where, carry=brain,
+        )
+        held.connected = True
+
+        await held.told_restart_finished("one", "Rundesk restart succeeded")
+
+        self.assertEqual("Rundesk restart succeeded", surface.of("said")[0]["text"])
+        self.assertFalse(surface.of("said")[0]["continues"])
+        self.assertEqual([], brain.asked)
 
 
 if __name__ == "__main__":

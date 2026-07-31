@@ -10,8 +10,14 @@ this CLI is `.knowledge/research/2026-07-26-claude-cli-as-a-brain.md`, and the s
 is measured against is `tests/samples/claude-stream.jsonl` — 184 real lines that cost real
 money and cannot be re-derived by reading anything.
 
-Four decisions in here are the whole of the difficulty, and each one reads plausible when
+Five decisions in here are the whole of the difficulty, and each one reads plausible when
 it is wrong:
+
+**Streaming input queues; steering interrupts first.** Anthropic's CLI reference says a user
+message sent during work stays queued as its own turn. The native SDK client gets different
+behaviour by sending an `interrupt` control request, draining that request's result, and then
+sending the replacement message on the same process and session. That is what this adapter does;
+merely holding stdin open would reproduce the queue this capability exists to avoid.
 
 **The reply arrives twice, and this takes the second copy.** Ten `text_delta` fragments and
 three whole `assistant` blocks carry the same 574 bytes; reporting both reports every
@@ -21,18 +27,31 @@ fragments do not survive it: a fragment is held to the end of the turn either wa
 completed thought can be shown the moment the next one lands. Claude says several complete
 things as it works, so this is the brain that is *better* read whole.
 
-**Usage comes from the `result` line and nowhere else.** `message_start` and
-`message_delta` each carry a full usage block too, and counting them is how a turn ends up
-reporting three times what it cost.
+**Usage is read, never added up.** `message_start` and `message_delta` carry a full usage
+block too, and *counting* them is how a turn ends up reporting three times what it cost.
+The output total comes from the `result` line, which is the one quantity that is genuinely
+a sum. The input side is taken from the last `assistant` line — the size the turn ended at
+— because the `result` line adds the same resent prefix up once per request, and a turn of
+58 requests reported 15,424,940 cached tokens for a conversation of 353,942.
 
 **Fresh and cached are never added together.** A captured turn shows 20 fresh tokens
 against 302,567 cache reads. Cache *creation* is billed above standard input, so it belongs
 with fresh; cache *reads* are the cheap volume and go on their own. Summing them reports
 320,020 tokens at one price, which is real and misleading.
 
+**Except once, and it is not a bill.** How big the conversation is now is the one thing a
+person reads a footer to find out, and no billed quantity answers it. This vendor describes
+one prompt in three pieces — fresh, read back, written — so adding those three back
+together on the final message reassembles that prompt rather than summing across requests.
+It is reported beside the four and never instead of them.
+
 **A posture is the allowlist, not the mode.** `--permission-mode` is a prompting policy —
 measured: under `plan` with no allowlist this CLI reached for `Write` and wrote a file
-outside the repository, and `plan` never returned. What holds is which tools exist.
+outside the repository, and `plan` never returned. The allowlist is what this adapter sets,
+but it is a *pre-approval* list rather than the tool list, and the thing that actually
+refuses a write is the vendor's permission system behind it — re-measured 2026-07-28, and
+written out in full at `ALLOWED`, because the previous wording here claimed the list was
+the whole of the guard and it is not.
 """
 
 from __future__ import annotations
@@ -50,11 +69,12 @@ CLAUDE = os.environ.get("RUNDESK_CLAUDE_BIN", "claude")
 
 #: What this brain can do, and only what was measured of it.
 #:
-#: `steer` is false because `claude -p` reads its prompt and runs to the end: there is no
-#: measured way to put a word into a turn that is already going. Asking for it would hold
-#: this adapter's input open for a brain that will never read again, which is a turn that
-#: never ends.
-CAN = {"tools": True, "resume": True, "usage": True, "model": True, "steer": False}
+#: `--input-format stream-json` alone is *not* steering: the CLI documents later user
+#: messages as queued turns. Its SDK control protocol is the missing half. This adapter
+#: sends `control_request: interrupt`, waits for the acknowledgement, then sends the new
+#: user message on the same process and session. That changes the work in flight instead
+#: of letting the old answer finish before the new words are considered.
+CAN = {"tools": True, "resume": True, "usage": True, "model": True, "steer": True}
 
 #: What a tool *did*, in rundesk's words rather than this vendor's. The list is closed and
 #: short on purpose, and a tool whose work is not one of these leaves `did` out rather than
@@ -78,23 +98,51 @@ DID = {
     "Edit": "edit",
     "Write": "edit",
     "NotebookEdit": "edit",
-    # **Measured, because the name is not the one the documentation suggests.** A
-    # subagent spawn arrives as `Agent`, not `Task`; probed 2026-07-27 against 2.1.220.
-    # Its own steps stream through the parent as ordinary tool calls, so without a verb
-    # here the only thing marking a delegation at all was this vendor's word for it.
+    # **Measured, because delegation answers to two different names and both are right.**
+    # A subagent spawn *arrives on the stream* as `Agent`, so that is the name a `did`
+    # mapping must key on; the *permission* surface calls the same thing `Task`, so that is
+    # the name `ALLOWED` must carry. Re-probed 2026-07-28 against 2.1.220: the init line
+    # advertises `Task` and no `Agent`, and the `tool_use` block for a spawn says `Agent`.
+    # Renaming either to match the other looks like a tidy-up and silently breaks it.
     "Agent": "delegate",
 }
 
-#: Which tools a turn may reach for, per posture (R-PRV-18). The allowlist is the only
-#: thing measured to hold, so this is the whole of how a posture is honoured.
+#: Where this brain names the file a write is about, per tool. Measured against 2.1.220:
+#: `Edit` and `Write` both take `file_path`, and `NotebookEdit` takes `notebook_path` —
+#: three tools, two words, and no way to tell which without looking. A tool that names its
+#: target somewhere else is simply not recognised, which costs the reported verb nothing:
+#: it stays the plain `edit` it would have been.
+EDITED_AT = ("file_path", "notebook_path")
+
+#: Which tools a turn is granted without being asked, per posture (R-PRV-18).
 #:
-#: `read` is deliberately not "everything except writes": a tool that is never granted
-#: cannot be called, and a list of what is allowed cannot be outgrown by a tool added next
-#: year the way a list of what is forbidden can.
+#: **This is a pre-approval list, not the tool list, and it is not the whole of how a
+#: posture is honoured.** Measured 2026-07-28 against 2.1.220, correcting what was written
+#: here before: the brain is offered every tool it has whatever this says, and a tool
+#: missing from this list is not withheld — it is merely not pre-approved, so calling it
+#: raises a permission request that nothing answers headlessly and is therefore refused.
+#:
+#: What that means in each direction, all of it measured rather than reasoned:
+#:
+#: - A tool that needs no permission runs under `read` whether or not it is named here.
+#:   `Skill` is not on this list and a granted skill invokes fine; read-only `Bash` is not
+#:   on this list and runs. So `read` permits arbitrary *read-only* shell.
+#: - Containment against writes comes from the vendor's permission system and its sandbox,
+#:   not from this list: under `read` a `Write` is denied, a `Write` from a delegated
+#:   subagent is denied, and a shell redirection is blocked by the sandbox's own guard.
+#: - `read` means read *this machine*, not read this workspace: `Read` reaches a file
+#:   outside the agent's home and returns it.
+#:
+#: The list is still worth having — it is what keeps a permission request from being raised
+#: for the ordinary read tools, and `Task` is here so a delegated read is not refused — but
+#: nothing should be inferred from a tool's absence from it.
 ALLOWED = {
     "read": ("Read", "NotebookRead", "Glob", "LS", "Grep", "WebSearch", "WebFetch",
              "ToolSearch", "Task"),
 }
+
+#: The narrowest posture there is, and where an unrecognised one lands (R-PRV-27).
+READ = "read"
 
 #: The posture that is not a list. `work` grants everything this brain has rather than the
 #: fourteen tools somebody thought of: an allowlist cannot be complete, so every tool the CLI
@@ -129,6 +177,10 @@ GONE = "no conversation found"
 #: answer to the only question that decides which configuration directory a turn can use.
 ASKING_AUTH = ("auth", "status")
 ASKING_AUTH_SECONDS = 30.0
+
+#: How long one answer on Claude's SDK control protocol is worth waiting for. A window on
+#: the acknowledgement, never on the turn itself.
+CONTROL_SECONDS = 120.0
 
 
 def say(**it) -> None:
@@ -185,7 +237,8 @@ def opening(posture: str, model, resume, extra: dict, session: str) -> list:
     without starting anything — which is the only way the traps below stay proven rather
     than remembered.
     """
-    argv = ["-p", "--output-format", "stream-json", "--verbose"]
+    argv = ["-p", "--input-format", "stream-json",
+            "--output-format", "stream-json", "--verbose"]
 
     # Measured: `--output-format stream-json` exits 1 under `-p` without `--verbose`. It is
     # above every branch below because there is no turn shape that does not need it.
@@ -202,8 +255,11 @@ def opening(posture: str, model, resume, extra: dict, session: str) -> list:
     # release, and every tool an MCP server brings, is one a working turn would be refused.
     # Measured 2026-07-27 against 2.1.220: with the work list passed and `TodoWrite` asked
     # for, the turn was refused it; with the bypass and no list at all, a `Write` that is on
-    # no list succeeded. `read` keeps its list and was measured to still refuse `Write`,
-    # which is the guard that makes widening `work` defensible.
+    # no list succeeded. `read` keeps its list and was measured again on 2026-07-28 to still
+    # refuse `Write` — directly and through a delegated subagent — which is the guard that
+    # makes widening `work` defensible. What holds that guard is the vendor's permission
+    # system rather than the list itself; see `ALLOWED` for what the list does and does not
+    # do, and for the read-only shell it does not stop.
     #
     # Passed as one comma-separated value rather than as many words: `--allowedTools` is
     # variadic and would otherwise swallow whatever came next — measured again while probing
@@ -271,16 +327,69 @@ def records(line: str, seen: dict) -> list:
     if kind == "result":
         return _ended(one, seen)
 
-    # `stream_event` in all its forms, `system/status`, `system/thinking_tokens` and
-    # `rate_limit_event`. The first is framing and duplicated text; the last is the
-    # account's state rather than this turn's activity.
+    if kind == "rate_limit_event":
+        return _allowance(one)
+
+    # `stream_event` in all its forms, `system/status` and `system/thinking_tokens`. The
+    # first is framing and duplicated text; the others say nothing this seam has a word for.
     return []
+
+
+#: What this vendor calls each allowance window, in rundesk's word for what kind of limit it
+#: is. Only the ones seen on a real stream — a window named here that this brain never sends
+#: is a guess, and guessing a vendor's shape is what costs a feature silently.
+OF = {"five_hour": "rate", "seven_day": "rate", "opus_seven_day": "rate"}
+
+
+def _allowance(one: dict) -> list:
+    """The account's own state, which this turn happened to be told about (R-PRV-28).
+
+    **Not this turn's activity, and not a failure.** A turn carrying one of these may have
+    succeeded perfectly; it is how much of an allowance is left and when the window resets.
+    This used to be dropped, on reasoning that was right as far as it went — it *is* account
+    state rather than activity — and the gap was that account state had nowhere to go, so
+    what reached an owner was whatever prose an adapter scraped after the fact.
+
+    Captured shape, from `tests/samples/claude-stream.jsonl`:
+
+        {"type": "rate_limit_event", "rate_limit_info": {
+            "status": "allowed", "resetsAt": 1784920200,
+            "rateLimitType": "five_hour", "overageStatus": "allowed", ...}}
+
+    Everything below is left out where this brain did not send it, rather than defaulted.
+    """
+    said = one.get("rate_limit_info")
+    if not isinstance(said, dict):
+        return []
+    scope = str(said.get("rateLimitType") or "")
+    it = {"type": "limit", "of": OF.get(scope, "rate")}
+    if scope:
+        it["scope"] = scope
+    # `allowed` is the ordinary state and says nothing worth reporting a state for; the
+    # other two are what an owner would want to hear about. A word this adapter has not
+    # seen leaves `state` out rather than being passed through as though it were ours.
+    state = {"allowed_warning": "near", "rejected": "reached"}.get(str(said.get("status")))
+    if state:
+        it["state"] = state
+    resets = said.get("resetsAt")
+    if isinstance(resets, int) and not isinstance(resets, bool):
+        it["resets_at"] = resets
+    if said.get("isUsingOverage") is True:
+        it["why"] = "this account is into its overage allowance"
+    return [it]
 
 
 def _assistant(one: dict, seen: dict) -> list:
     """What the brain said and what it reached for, from the line that carries both whole."""
     said = []
     seen["session"] = one.get("session_id") or seen.get("session")
+    # Where the turn got to, kept as a level and never added up. This line carries the
+    # whole message again each time it grows, so the last one to arrive is the size the
+    # turn ended at. A subagent's line is its own conversation and not this one, which
+    # `parent_tool_use_id` is how this vendor says.
+    counted = one.get("message", {}).get("usage")
+    if isinstance(counted, dict) and one.get("parent_tool_use_id") is None:
+        seen["ended_on"] = counted
     for block in one.get("message", {}).get("content", []):
         if not isinstance(block, dict):
             continue
@@ -301,6 +410,8 @@ def _assistant(one: dict, seen: dict) -> list:
             it = {"type": "tool", "id": str(block.get("id") or ""),
                   "name": str(block.get("name") or "")}
             did = DID.get(it["name"])
+            if did == "edit":
+                did = _continuity(block.get("input")) or did
             if did:
                 it["did"] = did
             if did == "delegate":
@@ -310,6 +421,45 @@ def _assistant(one: dict, seen: dict) -> list:
                     it["who"] = who
             said.append(it)
     return said
+
+
+def _continuity(inputs) -> str:
+    """What of its own an agent just changed, when that is what it changed (R-PRV-29).
+
+    An agent's continuity files are what it *is* between turns, so one of them being
+    rewritten is different news from a file it was working on being rewritten — and both
+    arrive here as the same `edit`. Which files those are is not this adapter's to know:
+    `RUNDESK_CONTINUITY` names them, so renaming one is a change in one place rather than
+    a verb that quietly stops being reported.
+
+    **Matched on where the file stands, never on what it is called.** Every checkout on the
+    machine has an `AGENTS.md`; an agent editing one has not rewritten its own rules, and
+    reporting that it did is worse than the plain `edit` it would otherwise get, because it
+    is untrue. What qualifies is the resolved path sitting directly in the agent's own
+    working directory — resolved on both sides, so a symlinked home is still the same home
+    and a link leading out of it is honestly not one of these files.
+
+    The path itself never leaves this function. What crosses the seam is one word, which is
+    what lets a surface say what changed without being told where anything lives.
+    """
+    if not isinstance(inputs, dict):
+        return ""
+    known = {}
+    for pair in (os.environ.get("RUNDESK_CONTINUITY") or "").split(","):
+        name, _, verb = pair.partition("=")
+        if name.strip() and verb.strip():
+            known[name.strip()] = verb.strip()
+    if not known:
+        return ""
+    where = os.path.realpath(os.environ.get("RUNDESK_CWD") or os.getcwd())
+    for named in EDITED_AT:
+        at = inputs.get(named)
+        if not isinstance(at, str) or not at.strip():
+            continue
+        at = os.path.realpath(os.path.join(where, at))
+        if os.path.dirname(at) == where:
+            return known.get(os.path.basename(at), "")
+    return ""
 
 
 def _returned(one: dict) -> list:
@@ -324,18 +474,90 @@ def _returned(one: dict) -> list:
     return said
 
 
+def _without_cancelled(one: dict) -> dict:
+    """Remove only tool results Claude made to account for a user interrupt.
+
+    Native interruption stops an in-flight tool by first emitting an ordinary-looking
+    failed `tool_result`. Its separate metadata is the distinction between that synthetic
+    result and a command that genuinely failed. The caller additionally requires an
+    interrupt to be pending, so a real permission refusal outside steering remains visible.
+
+    One vendor message may contain several parallel tools' results. Filtering blocks rather
+    than dropping the message preserves work that completed beside the canceled tool.
+    """
+    metadata = one.get("tool_result_meta")
+    if not isinstance(metadata, list):
+        return one
+    cancelled = {
+        str(meta.get("id") or "")
+        for meta in metadata
+        if isinstance(meta, dict) and meta.get("non_execution_kind") == "user-rejected"
+    }
+    if not cancelled:
+        return one
+    message = one.get("message")
+    if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+        return one
+    content = [
+        block for block in message["content"]
+        if not (
+            isinstance(block, dict)
+            and block.get("type") == "tool_result"
+            and block.get("is_error")
+            and str(block.get("tool_use_id") or "") in cancelled
+        )
+    ]
+    return {
+        **one,
+        "message": {**message, "content": content},
+        "tool_result_meta": [
+            meta for meta in metadata
+            if not (isinstance(meta, dict) and str(meta.get("id") or "") in cancelled)
+        ],
+    }
+
+
 def _ended(one: dict, seen: dict) -> list:
     """What the turn cost and that it is over — the only line either is taken from."""
     seen["ended"] = True
     seen["session"] = one.get("session_id") or seen.get("session")
     counted = one.get("usage") or {}
 
-    # Fresh is what was new: what was sent plus what was written into the cache, which is
-    # billed above standard input. Cached is what was re-read, and is reported apart
-    # because it is most of the volume at a fraction of the price.
-    fresh = _n(counted, "input_tokens") + _n(counted, "cache_creation_input_tokens")
-    usage = {"type": "usage", "input": fresh, "output": _n(counted, "output_tokens"),
-             "cached": _n(counted, "cache_read_input_tokens")}
+    # **Four quantities, four slots, none of them added together.** This vendor bills fresh
+    # input, cache writes, cache reads and output at three different rates, and this used to
+    # report the first two as one number — so a turn whose fresh input was 2 tokens was
+    # recorded, and shown in a chat footer, as 5,552. A cache write bills *above* standard
+    # input and a cache read at roughly a tenth of it, which is the same reasoning that
+    # already kept reads apart, applied in the other direction.
+    #
+    # **The input side is where the turn ended, not every request added up.** A prompt is
+    # sent again on every request of a turn, so the `result` line's cache reads are that
+    # prefix counted once per request: a measured turn of 58 requests reported 15,424,940
+    # cached where the conversation it ended on was 353,942. Nobody can read the first
+    # number as anything — it describes a bill, not a turn — so the three input quantities
+    # are taken from the last message instead, which is the size the turn actually reached.
+    # **Output stays the total**, because output is the one quantity never sent twice:
+    # every token is generated once, so adding them up is exactly what the turn wrote.
+    at_end = seen["ended_on"] if isinstance(seen.get("ended_on"), dict) else counted
+    usage = {"type": "usage",
+             "input": _n(at_end, "input_tokens"),
+             "output": _n(counted, "output_tokens"),
+             "cached": _n(at_end, "cache_read_input_tokens"),
+             "written": _n(at_end, "cache_creation_input_tokens")}
+
+    # **How big the conversation is now** (R-USE-15). The four slots above are what a turn
+    # is billed for, and none of them answers the question somebody reads a footer to ask:
+    # should I start a fresh conversation? Fresh input alone is 2 on any warm turn, which
+    # says nothing about a session at all.
+    #
+    # **Adding these three is not a sum across requests.** This vendor splits one prompt
+    # into three — what is fresh, what came back from the cache and what was written into
+    # it — so putting them back together reassembles the single prompt they describe, at
+    # the moment this turn ended. That is a level: after a compaction it goes down, which
+    # is the behaviour a gauge must have and a running total cannot.
+    session = _prompt(at_end)
+    if session is not None:
+        usage["session"] = session
     if seen.get("model"):
         usage["model"] = seen["model"]
 
@@ -353,7 +575,39 @@ def _ended(one: dict, seen: dict) -> list:
         # turn — a `result` line like any other — rather than on stderr where a reader
         # would look for it.
         seen["why"] = ended["why"]
+        word = _classified(ended["why"])
+        if word:
+            ended["because"] = word
     return [usage, ended]
+
+
+#: What this brain says when a turn stopped for a reason the seam has a word for, and the
+#: word. **Read off the failure prose, because that is the only place this vendor puts it**
+#: — a limit-stopped turn arrives as an ordinary `result` line with `is_error`, exactly like
+#: any other failure, and there is no field on it saying which kind it was.
+#:
+#: Matching prose is the weaker kind of evidence and is treated as such: an unrecognised
+#: failure simply leaves `because` out and behaves exactly as it did before, which is the
+#: same choice this adapter makes everywhere it cannot measure something. The phrases are
+#: kept narrow for that reason — a loose one costs a wrong word in a total, which is worse
+#: than an absent one because nothing can see it.
+CLASSIFIED = (
+    (("rate limit", "rate_limit", "too many requests"), "rate_limited"),
+    (("usage limit", "usage_limit", "quota", "allowance"), "usage_exhausted"),
+    (("credit balance", "insufficient credit", "out of credit"), "no_credit"),
+    (LOGGED_OUT, "signed_out"),
+    (("prompt is too long", "context low", "exceeds the context", "context window"),
+     "context_exceeded"),
+)
+
+
+def _classified(said: str) -> str | None:
+    """One of the seam's closed words for why this stopped, or none rather than a guess."""
+    lowered = said.lower()
+    for phrases, word in CLASSIFIED:
+        if any(phrase in lowered for phrase in phrases):
+            return word
+    return None
 
 
 def _n(counted: dict, what: str) -> int:
@@ -361,14 +615,202 @@ def _n(counted: dict, what: str) -> int:
     return int(value) if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-def _asked() -> str:
-    """What this turn was asked, read to the end of stdin.
+#: The three pieces this vendor splits one prompt into, and the whole of it. Named here
+#: because the same three are what makes a prompt whole and what makes the input side of a
+#: bill: read together they are one conversation, read apart they are three prices.
+PROMPT = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 
-    `steer` is false, so the prompt is plain text and the input closes after it. It goes to
-    the brain on *its* stdin too, never as an argument: what somebody asks their agent is
-    readable through the process list otherwise, and `--allowedTools` would eat it anyway.
+
+def _prompt(at_end: dict) -> int | None:
+    """How big the prompt this turn ended on was, or nothing rather than a guess.
+
+    Absent where this brain reported none of the pieces (R-USE-16) — the same choice
+    everything else in this adapter makes about a thing it cannot measure, because a
+    conversation reported as nought tokens is a measurement, stated plainly, and wrong.
+    A partial report is added as far as it goes and is a floor, which is what a count of
+    what was actually said always is.
     """
-    return sys.stdin.read()
+    said = [_n(at_end, what) for what in PROMPT
+            if isinstance(at_end.get(what), int) and not isinstance(at_end.get(what), bool)]
+    return sum(said) if said else None
+
+
+def _word(line: str):
+    """One thing Rundesk said, whether carried as its record or typed by hand."""
+    line = line.strip()
+    if not line:
+        return None
+    if not line.startswith("{"):
+        return line
+    try:
+        record = json.loads(line) or {}
+        word = record.get("text") or None
+        context = record.get("context") or None
+        if word is not None and context is not None:
+            return f"{word}\n\n{context}"
+        return word
+    except (AttributeError, ValueError):
+        return line
+
+
+def _first(stream):
+    """The first non-empty thing said, or none when input ended without one."""
+    for line in stream:
+        word = _word(line)
+        if word is not None:
+            return word
+    return None
+
+
+def _message(word: str) -> dict:
+    """One user message in Claude's SDK streaming-input shape."""
+    return {"type": "user", "message": {
+        "role": "user", "content": word,
+    }, "parent_tool_use_id": None, "session_id": ""}
+
+
+class Control:
+    """Claude's small bidirectional control protocol, kept vendor-side.
+
+    Ordinary stream-json input queues. The cooperative operation exposed by
+    `ClaudeSDKClient.interrupt()` is a JSONL control request to the same CLI process. The
+    stdout reader calls `heard`; the stdin feeder waits on the matching acknowledgement.
+    Interrupted result records are counted so the reader can keep the process open for the
+    replacement message rather than mistaking the interrupted subturn for Rundesk's end.
+    """
+
+    def __init__(self):
+        self._condition = threading.Condition()
+        self._next = 0
+        self._answers = {}
+        self._interrupted_results = 0
+        self.usage = {}
+
+    def request(self, stream, subtype: str) -> bool:
+        with self._condition:
+            self._next += 1
+            request = f"rundesk_{self._next}"
+            self._answers[request] = None
+            if subtype == "interrupt":
+                # Mark before writing: Claude may finish the interrupted request before
+                # the acknowledgement reaches the stdout reader.
+                self._interrupted_results += 1
+        try:
+            _write(stream, {"type": "control_request", "request_id": request,
+                            "request": {"subtype": subtype,
+                                        **({"hooks": None} if subtype == "initialize" else {})}})
+        except (OSError, ValueError):
+            with self._condition:
+                self._answers.pop(request, None)
+                if subtype == "interrupt" and self._interrupted_results > 0:
+                    self._interrupted_results -= 1
+            return False
+        with self._condition:
+            answered = self._condition.wait_for(
+                lambda: self._answers.get(request) is not None, timeout=CONTROL_SECONDS)
+            response = self._answers.pop(request, None)
+            accepted = bool(answered and response and response.get("subtype") == "success")
+            if not accepted and subtype == "interrupt":
+                # The result may have raced the failed acknowledgement and consumed this
+                # mark already. Never let the count go negative: a negative count is
+                # truthy and would make every later result look interrupted.
+                if self._interrupted_results > 0:
+                    self._interrupted_results -= 1
+            if accepted and subtype == "interrupt":
+                # Match the native SDK's sequence exactly: acknowledgement says the
+                # interrupt was accepted; the result says the interrupted request has
+                # actually drained. A replacement sent between those two is merely queued.
+                accepted = self._condition.wait_for(
+                    lambda: self._interrupted_results == 0, timeout=CONTROL_SECONDS)
+            return accepted
+
+    def heard(self, one: dict) -> bool:
+        """Accept one control response, and say whether it belonged to us."""
+        if one.get("type") != "control_response":
+            return False
+        response = one.get("response")
+        if not isinstance(response, dict):
+            return True
+        request = response.get("request_id")
+        with self._condition:
+            if request in self._answers:
+                self._answers[request] = response
+                self._condition.notify_all()
+        return True
+
+    def interrupted(self) -> bool:
+        """Whether this result ends the request that steering deliberately stopped."""
+        with self._condition:
+            if self._interrupted_results <= 0:
+                return False
+            self._interrupted_results -= 1
+            self._condition.notify_all()
+            return True
+
+    def interrupting(self) -> bool:
+        """Whether vendor records still belong to an accepted-or-pending interruption."""
+        with self._condition:
+            return self._interrupted_results > 0
+
+    def counted(self, one: dict) -> None:
+        """Accumulate one subturn's usage into this Rundesk turn."""
+        for name, value in (one.get("usage") or {}).items():
+            if isinstance(value, int) and not isinstance(value, bool):
+                self.usage[name] = self.usage.get(name, 0) + value
+
+    def with_usage(self, one: dict) -> dict:
+        """Put all interrupted and final work onto the one final result record."""
+        self.counted(one)
+        return {**one, "usage": dict(self.usage)}
+
+
+class Words:
+    """Every word sent to this adapter, retained so a lost session can be retried.
+
+    One thread owns the outer input for the adapter's whole life. Each Claude process gets
+    a reader starting at zero, so reopening a conversation after a stale `--resume` replays
+    the prompt and any steering that already arrived rather than losing the latter between
+    two processes.
+    """
+
+    def __init__(self, first: str, stream):
+        self.words = [first]
+        self.closed = False
+        self._condition = threading.Condition()
+        self._reader = threading.Thread(target=self._read, args=(stream,), daemon=True)
+        self._reader.start()
+
+    def _read(self, stream) -> None:
+        try:
+            for line in stream:
+                word = _word(line)
+                if word is None:
+                    continue
+                with self._condition:
+                    self.words.append(word)
+                    self._condition.notify_all()
+        finally:
+            with self._condition:
+                self.closed = True
+                self._condition.notify_all()
+
+    def each(self, stopping: threading.Event):
+        at = 0
+        while True:
+            with self._condition:
+                self._condition.wait_for(
+                    lambda: at < len(self.words) or self.closed or stopping.is_set())
+                if stopping.is_set():
+                    return
+                if at >= len(self.words):
+                    return
+                word = self.words[at]
+                at += 1
+            yield word
+
+    def wake(self) -> None:
+        with self._condition:
+            self._condition.notify_all()
 
 
 #: Where this brain looks for skills, relative to the directory a turn stands in.
@@ -444,17 +886,39 @@ def _present(where: str) -> None:
         went_wrong(f"this agent's skills could not be presented: {gone}")
 
 
+def posture_for(named) -> str:
+    """Which posture this turn runs under, given what the seam said (R-PRV-27).
+
+    **A posture this adapter has no answer for fails closed, to `read`.** It used to fall
+    back to `work`, on the reasoning that `work` is the seam's own default — but `work`
+    here is `--dangerously-skip-permissions`, so a typo, a posture the seam gains before
+    this adapter learns it, or a mangled environment turned the *narrowest* intent into a
+    full permission bypass, silently and on an unattended schedule. The two failures are
+    not equal: falling closed costs a turn some tools and says so, and falling open costs
+    the machine its guard and says nothing.
+
+    An empty or absent posture is not unrecognised — the seam's stated default is `work`,
+    and that is a decision rather than a mistake.
+
+    A pure function with the environment passed in, so the whole decision is testable
+    without starting a brain. Asked against both of the postures there are rather than
+    against `ALLOWED`, which no longer holds one of them: reading membership of the list
+    would have sent `work` down the unrecognised branch.
+    """
+    posture = (named or "").strip() or FULLY
+    if posture != FULLY and posture not in ALLOWED:
+        went_wrong(f"this adapter does not know the posture {posture!r}, so this turn ran "
+                   f"as {READ!r} — the narrowest posture it has, rather than the most "
+                   f"permissive one. Tools beyond reading were refused.")
+        return READ
+    return posture
+
+
 def carry() -> int:
     """One turn, from what rundesk set to what this brain said about it."""
     where = os.environ.get("RUNDESK_CWD") or os.getcwd()
     home = os.environ.get("RUNDESK_PROVIDER_HOME")
-    # Anything this adapter has no answer for falls back to `work`, which is the seam's own
-    # default. Asked against both of the postures there are rather than against `ALLOWED`,
-    # which no longer holds one of them: reading membership of the list would have sent
-    # `work` down the "unrecognised" branch and quietly given every turn the read tools.
-    posture = os.environ.get("RUNDESK_POSTURE") or FULLY
-    if posture not in ALLOWED and posture != FULLY:
-        posture = FULLY
+    posture = posture_for(os.environ.get("RUNDESK_POSTURE"))
 
     if shutil.which(CLAUDE) is None and not (os.sep in CLAUDE and os.access(CLAUDE, os.X_OK)):
         went_wrong(f"there is no {CLAUDE} on this machine's path — install the Claude Code "
@@ -462,10 +926,11 @@ def carry() -> int:
         say(type="done", ok=False, why="the Claude Code CLI is not on this machine's path")
         return 1
 
-    asked = _asked()
-    if not asked.strip():
+    first = _first(sys.stdin)
+    if first is None:
         say(type="done", ok=False, why="nothing was asked")
         return 1
+    words = Words(first, sys.stdin)
 
     session = str(uuid.uuid4())
     resume = os.environ.get("RUNDESK_RESUME")
@@ -481,7 +946,7 @@ def carry() -> int:
     else:
         env.pop("CLAUDE_CONFIG_DIR", None)
 
-    code, lost = _turn(argv, where, asked, env, session, may_start_again=bool(resume))
+    code, lost = _turn(argv, where, words, env, session, may_start_again=bool(resume))
     if lost and resume:
         # The conversation this turn was told to carry on is gone — cleaned up, or never
         # created because the turn that reported the handle had failed. Losing a handle
@@ -491,7 +956,7 @@ def carry() -> int:
         session = str(uuid.uuid4())
         argv = [CLAUDE] + opening(posture, os.environ.get("RUNDESK_MODEL"), None,
                                   _settings(), session)
-        code, _ = _turn(argv, where, asked, env, session)
+        code, _ = _turn(argv, where, words, env, session)
     return code
 
 
@@ -586,7 +1051,7 @@ def _lost(said: dict) -> bool:
     return not said.get("ok") and GONE in str(said.get("why") or "").lower()
 
 
-def _turn(argv: list, where: str, asked: str, env: dict, session: str,
+def _turn(argv: list, where: str, words: Words, env: dict, session: str,
           may_start_again: bool = False) -> tuple:
     """Run the brain, and report what it said as it says it.
 
@@ -597,6 +1062,7 @@ def _turn(argv: list, where: str, asked: str, env: dict, session: str,
     """
     raw = _raw()
     seen = {"session": session, "model": None, "ended": False}
+    control = Control()
     trouble = []
     try:
         brain = subprocess.Popen(
@@ -613,13 +1079,10 @@ def _turn(argv: list, where: str, asked: str, env: dict, session: str,
     draining = threading.Thread(target=_drained, args=(brain.stderr, trouble), daemon=True)
     draining.start()
 
-    try:
-        brain.stdin.write(asked)
-        brain.stdin.close()
-    except OSError:
-        # It went before it read the prompt. Whatever it said about that is on stderr and
-        # is collected by the thread above; there is nothing to be gained by raising here.
-        pass
+    finished = threading.Event()
+    feeding = threading.Thread(
+        target=_fed, args=(brain.stdin, words, finished, control), daemon=True)
+    feeding.start()
 
     # Everything streams as it arrives except the pair that ends a turn. Those are held
     # until the program is gone, because whether the conversation was lost is a thing this
@@ -631,13 +1094,42 @@ def _turn(argv: list, where: str, asked: str, env: dict, session: str,
         if raw:
             raw.write(line)
             raw.flush()
+        try:
+            vendor = json.loads(line)
+        except ValueError:
+            vendor = {}
+        if isinstance(vendor, dict) and control.heard(vendor):
+            continue
+        if isinstance(vendor, dict) and control.interrupting():
+            # The native interrupt accounts for its canceled tool as `user-rejected`.
+            # Remove only that block: parallel tools may have completed in the same record.
+            vendor = _without_cancelled(vendor)
+            line = json.dumps(vendor)
+        if isinstance(vendor, dict) and vendor.get("type") == "result":
+            if control.interrupted():
+                control.counted(vendor)
+                seen["ended"] = False
+                continue
+            line = json.dumps(control.with_usage(vendor))
         for it in records(line, seen):
+            if it["type"] == "done":
+                # Stream input can carry several user turns in one Claude process, so the
+                # process waits for another until its input closes. Rundesk asked for one
+                # turn. Close on that turn's result, not on the outer input: a channel
+                # deliberately keeps the latter open so it can steer.
+                finished.set()
+                words.wake()
+                _close(brain.stdin)
             if may_start_again and it["type"] in ("usage", "done"):
                 ending.append(it)
             else:
                 say(**it)
 
+    finished.set()
+    words.wake()
+    _close(brain.stdin)
     brain.stdout.close()
+    feeding.join(timeout=GOING_SECONDS)
     draining.join(timeout=GOING_SECONDS)
     if raw:
         raw.close()
@@ -655,6 +1147,38 @@ def _turn(argv: list, where: str, asked: str, env: dict, session: str,
         say(type="done", ok=False, why=_why(trouble, code))
         return code or 1, False
     return code, False
+
+
+def _fed(stream, words: Words, stopping: threading.Event, control: Control) -> None:
+    """Start Claude's SDK protocol, then interrupt before every later word."""
+    try:
+        if not control.request(stream, "initialize"):
+            went_wrong("Claude did not accept its streaming control protocol")
+            return
+        first = True
+        for word in words.each(stopping):
+            later = not first
+            if later and not control.request(stream, "interrupt"):
+                went_wrong("Claude did not complete the native mid-turn interrupt")
+                return
+            _write(stream, _message(word))
+            first = False
+    except (OSError, ValueError):
+        pass  # the result raced the last word; the provider has already finished
+    finally:
+        _close(stream)
+
+
+def _write(stream, record: dict) -> None:
+    stream.write(json.dumps(record, separators=(",", ":")) + "\n")
+    stream.flush()
+
+
+def _close(stream) -> None:
+    try:
+        stream.close()
+    except (OSError, ValueError):
+        pass
 
 
 def _said_how_to_sign_in(said: str, env: dict) -> None:

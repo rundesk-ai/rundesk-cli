@@ -25,11 +25,14 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk import __version__  # noqa: E402
 from rundesk import cli  # noqa: E402
+from rundesk import config  # noqa: E402
+from rundesk import restart_request  # noqa: E402
 from rundesk import store  # noqa: E402
 from rundesk import update_request  # noqa: E402
 from rundesk import updater  # noqa: E402
@@ -45,7 +48,9 @@ _REAL_PATIENCE = (cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS
 #: The real removal, put back when the file is done with.
 _REAL_REMOVAL = cli._remove_this_install
 _REAL_BACKUP_DIR = os.environ.get("RUNDESK_BACKUP_DIR")
+_REAL_DATA_DIR = os.environ.get("RUNDESK_DATA_DIR")
 _TEST_BACKUP_DIR = None
+_TEST_DATA_DIR = None
 
 
 def _never_the_real_installer(installer, asked):
@@ -69,7 +74,7 @@ _asked_of_the_installer: list = []
 
 
 def setUpModule():
-    global _TEST_BACKUP_DIR
+    global _TEST_BACKUP_DIR, _TEST_DATA_DIR
     cli._remove_this_install = _never_the_real_installer
     # The automatic surface walk invokes every operation, including the real backup
     # listing. Without this boundary it reads the owner's backup directory, and under the
@@ -78,6 +83,12 @@ def setUpModule():
     # never the owner's copies.
     _TEST_BACKUP_DIR = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-backups-"))
     os.environ["RUNDESK_BACKUP_DIR"] = str(_TEST_BACKUP_DIR)
+    # Configuration readers now require the complete file an install writes. The surface
+    # walk invokes real backup and skill policy, so it needs an isolated installed shape
+    # rather than falling through to the owner's live configuration.
+    _TEST_DATA_DIR = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-data-"))
+    os.environ["RUNDESK_DATA_DIR"] = str(_TEST_DATA_DIR)
+    config.ensure(_TEST_DATA_DIR)
     # Both turned down together. Turning the patience down alone left a wait that had room
     # for one look and a fraction of a second's margin on the second — so a case proving a
     # cycle waits passed on a quick machine and reported a failure on a loaded one.
@@ -93,6 +104,12 @@ def tearDownModule():
         os.environ["RUNDESK_BACKUP_DIR"] = _REAL_BACKUP_DIR
     if _TEST_BACKUP_DIR is not None:
         shutil.rmtree(_TEST_BACKUP_DIR, ignore_errors=True)
+    if _REAL_DATA_DIR is None:
+        os.environ.pop("RUNDESK_DATA_DIR", None)
+    else:
+        os.environ["RUNDESK_DATA_DIR"] = _REAL_DATA_DIR
+    if _TEST_DATA_DIR is not None:
+        shutil.rmtree(_TEST_DATA_DIR, ignore_errors=True)
 from rundesk import agent as real_agent  # noqa: E402
 from rundesk import skill as real_skill  # noqa: E402
 from rundesk import channel  # noqa: E402
@@ -445,7 +462,15 @@ class BuiltCommandTests(unittest.TestCase):
             finally:
                 cli.REPO_ROOT = was
         self.assertEqual(1, code)
-        self.assertIn("curl", err, "it failed and never said how to remove it anyway")
+        self.assertIn(
+            f"curl -fsSL {cli.PUBLISHED_INSTALLER} | bash -s -- --uninstall",
+            err,
+            "it failed and did not give the published removal instruction",
+        )
+        self.assertEqual(
+            cli.PUBLISHED_INSTALLER,
+            "https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh",
+        )
 
     def test_the_planned_list_and_the_built_commands_do_not_overlap(self):
         # A command that is both "coming soon" and handled would answer twice, and
@@ -453,7 +478,7 @@ class BuiltCommandTests(unittest.TestCase):
         built = {"version", "update", "uninstall", "add", "configure", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
                  "channels", "runs", "usage", "search", "messages", "skills", "scripts",
-                 "backups"}
+                 "backups", "config"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 
@@ -716,6 +741,11 @@ class FakeSkills:
         return sorted(self._given.get(whose.name, ()))
 
     def lay_down(self, where=None, force=False):
+        self.laid = True
+        return list(self._ships)
+
+
+    def take_back(self, where=None):
         return list(self._ships)
 
     def grant(self, whose, name):
@@ -755,6 +785,9 @@ class FakeAgents:
     """
 
     checked = staticmethod(real_agent.checked)
+    slug = staticmethod(real_agent.slug)
+    creation_name = staticmethod(real_agent.creation_name)
+    command_name = staticmethod(real_agent.command_name)
     NotAnAgentName = real_agent.NotAnAgentName
     Where = real_agent.Where
 
@@ -763,7 +796,9 @@ class FakeAgents:
         surface does with it is passed a fake library, so nothing here is read."""
         return pathlib.Path(self._at or "/nowhere/agents") / name / "home" / "skills"
 
-    def __init__(self, made=(), wrote=(), complaints=None, at=None, overrides=None):
+    def __init__(
+        self, made=(), wrote=(), complaints=None, at=None, overrides=None, pending=(),
+    ):
         #: Where this case's owner keeps templates of their own, or None for an owner who
         #: has made none — never the real one, which is what `agents_home` would resolve.
         self._overrides = pathlib.Path(overrides) if overrides else pathlib.Path(
@@ -781,6 +816,7 @@ class FakeAgents:
         self._unrunnable: list = []
         #: The agents that exist, and the directories each resolves.
         self._made = list(made)
+        self._pending = set(pending)
         #: What a gateway of this name wrote before there were agents to own it.
         self._wrote = list(wrote)
         self._complaints = dict(complaints or {})
@@ -792,6 +828,9 @@ class FakeAgents:
         self.refuses: BaseException | None = None
         #: What was made, adopted and taken away, in the order it was asked for.
         self.added, self.adopted, self.forgotten = [], [], []
+        self.display_names: dict[str, str] = {}
+        #: Existing agents whose configured baseline an upgrade route reconciled.
+        self.required: list[str] = []
         for one in self._made:
             self._built(one)
 
@@ -805,8 +844,15 @@ class FakeAgents:
     def exists(self, name):
         return name in self._made
 
+    def creation_pending(self, name):
+        return name in self._pending
+
     def known(self):
         return sorted(self._made)
+
+    def identities(self):
+        legacy = ["gateway"] if self._wrote else []
+        return sorted(set(self._made + legacy))
 
     def home(self, name):
         return self._at / name / "home"
@@ -857,7 +903,7 @@ class FakeAgents:
         """
         return self._at / name
 
-    def add(self, name):
+    def add(self, name, display_name=None):
         # The real one builds the records by walking the steps, so it raises on records
         # this rundesk will not read — which is the whole reason `cmd_add` wraps it. A
         # stand-in that quietly succeeded made that guard look untested.
@@ -867,8 +913,17 @@ class FakeAgents:
         made = [] if name in self._made else ["AGENTS.md", "home/"]
         if name not in self._made:
             self._made.append(name)
+            self.display_names[name] = display_name.strip() if display_name else name
+        self._pending.discard(name)
         self._built(name)
         return made
+
+    def display_name(self, name):
+        return self.display_names.get(name, name)
+
+    def require_skills(self, name):
+        self.required.append(name)
+        return []
 
     def adopt(self, name):
         self.adopted.append(name)
@@ -945,17 +1000,18 @@ class FakeAgents:
                 keeping[what] = value
         return keeping
 
-    def told(self, name, where=None, said="", otherwise=""):
-        """The same three tiers the real one has, over what this stand-in keeps.
+    def told(self, name, where=None, said="", regardless=""):
+        """The same additive tiers the real one has, over what this stand-in keeps.
 
         Written out rather than borrowed because the real one reads a store and this keeps a
-        dict — and kept to three lines, so the order is visible here rather than buried. A
+        dict — and kept short, so the order is visible here rather than buried. A
         stand-in that answered differently would let a case pass against an agent told the
         wrong thing (see `agent.told`)."""
-        if said and said.strip():
-            return said
         mine = self._chosen.get(name, {}).get("instructions")
-        return mine if mine and mine.strip() else otherwise
+        return "\n\n".join(
+            one.strip() for one in (regardless, mine, said)
+            if isinstance(one, str) and one.strip()
+        )
 
 
 class FakeMachine:
@@ -985,6 +1041,7 @@ class FakeMachine:
         self.stubborn = set(stubborn)
         self.uncertain = set(uncertain)
         self.did = []
+        self.restart_worker = False
 
     def _check(self, name):
         if self.missing:
@@ -1056,6 +1113,19 @@ class FakeMachine:
         self.did.append(("install_update_worker", None))
         return self.Spoke(not self.refuses, "the machine said no" if self.refuses else "")
 
+    def restart_worker_loaded(self):
+        return self.restart_worker
+
+    def install_restart_worker(self):
+        self.did.append(("install_restart_worker", None))
+        if not self.refuses:
+            self.restart_worker = True
+        return self.Spoke(not self.refuses, "the machine said no" if self.refuses else "")
+
+    def kick_restart_worker(self):
+        self.did.append(("kick_restart_worker", None))
+        return self.Spoke(not self.refuses, "the machine said no" if self.refuses else "")
+
     def install_automatic_update(self, at):
         self.did.append(("install_automatic_update", at))
         return self.Spoke(not self.refuses, "the machine said no" if self.refuses else "")
@@ -1071,20 +1141,153 @@ class FakeMachine:
         return self.backups_daily is not None
 
 
-def drive(argv, gateways=None, machine=None, agents=None, scripts=None):
+def drive(argv, gateways=None, machine=None, agents=None, skills=None, scripts=None):
     """Run the command line and hand back what it printed and what it returned."""
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
             code = cli.main(argv, gateways=gateways or FakeGateways(),
                             machine=machine or FakeMachine(), agents=agents or FakeAgents(),
-                            scripts=scripts or FakeScripts())
+                            skills=skills or FakeSkills(), scripts=scripts or FakeScripts())
         except SystemExit as usage:
             # What a shell sees. Argparse refuses by exiting rather than returning, and a
             # case proving something is refused by the grammar could not otherwise say
             # what the caller was left with.
             code = usage.code if isinstance(usage.code, int) else 1
     return code, out.getvalue() + err.getvalue()
+
+
+class WhatThisInstallIsConfiguredWith(unittest.TestCase):
+    """`rundesk config` — the effective values stated in the install's file."""
+
+    def setUp(self):
+        self.where = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-config-"))
+        self.addCleanup(shutil.rmtree, self.where, ignore_errors=True)
+        was = os.environ.get("RUNDESK_DATA_DIR")
+        os.environ["RUNDESK_DATA_DIR"] = str(self.where)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", was)
+                        if was is not None else os.environ.pop("RUNDESK_DATA_DIR", None))
+        config.ensure(self.where)
+
+    def test_what_an_install_is_configured_with_is_answerable(self):
+        """R-CMD-11 — one command validates and renders what the file says is in force."""
+        code, said = drive(["config"])
+        self.assertEqual(0, code)
+        for section in config.SECTIONS:
+            self.assertIn(section, said)
+        self.assertIn("keep_days", said)
+        self.assertIn("granted", said)
+
+    def test_every_value_reported_is_stated_in_the_file(self):
+        """R-CMD-11 — the command validates and renders the same complete configuration an
+        owner can open; it does not reveal a second hidden source."""
+
+        code, said = drive(["config"])
+
+        self.assertEqual(0, code)
+        self.assertNotIn("(default)", said)
+
+    def test_a_key_nothing_reads_is_said_rather_than_left_out(self):
+        """R-CMD-11 — the silence this command exists to end, arriving by the one route
+        printing the known keys cannot show.
+
+        `ensure` keeps an unknown key exactly as it was and every reader passes straight
+        past it, so a mistyped `keepDays` is a value an owner stated, can see in their own
+        file, and which nothing on the machine has ever read. Omitting it is telling them
+        their configuration is in force when it is not — the same failure as reporting
+        defaults for an unreadable file, one key wide.
+        """
+        configured = json.loads((self.where / "config.json").read_text())
+        configured["backups"]["keepDays"] = 365
+        configured["backupz"] = {"at": "05:00"}
+        (self.where / "config.json").write_text(json.dumps(configured), encoding="utf-8")
+
+        code, said = drive(["config"])
+
+        self.assertEqual(0, code)
+        self.assertIn("backups.keepDays", said)
+        self.assertIn("backupz", said)
+        self.assertIn("keep_days  30", said)
+        self.assertNotIn("(default)", said)
+
+    def test_an_unreadable_configuration_is_refused_rather_than_reported_as_defaults(self):
+        """R-CMD-11, R-STO-13 — printing defaults for a file that exists and cannot be
+        read is telling an owner their configuration is in force when it is not."""
+        (self.where / "config.json").write_text("{ not json\n", encoding="utf-8")
+
+        code, said = drive(["config"])
+
+        self.assertEqual(1, code)
+        self.assertIn("UNREADABLE", said)
+
+
+class WhatTheInstallerDoesToTheLibrary(unittest.TestCase):
+    """`rundesk skills --lay-down` — the installer's own verb, and an upgrade route."""
+
+
+    def test_laying_down_also_reconciles_every_existing_agent(self):
+        """R-AGT-36 — reinstalling over an existing installation applies the configured
+        baseline to agents that predate this release."""
+        agents = FakeAgents(made=("ava", "bo"))
+
+        code, said = drive(["skills", "--lay-down"], agents=agents,
+                           skills=FakeSkills(ships=("managing-rundesk",)))
+
+        self.assertEqual(0, code, said)
+        self.assertEqual(["ava", "bo"], agents.required)
+
+
+class WhatCanBeTakenFromAnAgent(unittest.TestCase):
+    def setUp(self):
+        self.where = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-required-skills-"))
+        self.addCleanup(shutil.rmtree, self.where, ignore_errors=True)
+        was = os.environ.get("RUNDESK_DATA_DIR")
+        os.environ["RUNDESK_DATA_DIR"] = str(self.where)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", was)
+                        if was is not None else os.environ.pop("RUNDESK_DATA_DIR", None))
+        config.ensure(self.where)
+
+    def test_a_skill_configured_for_every_agent_cannot_be_revoked(self):
+        """R-AGT-37 — otherwise `skills.granted` describes only the instant an agent was
+        made, not the required skills it claims every agent has."""
+        required = config.INITIAL["skills"]["granted"][0]
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(held=(required,), given={"skills": [required]})
+
+        code, said = drive(["skills", "revoke", "ava", required],
+                           agents=agents, skills=skills)
+
+        self.assertEqual(1, code)
+        self.assertIn("REQUIRED", said)
+        self.assertEqual([required], skills.granted(agents.skills("ava")))
+
+    def test_the_rundesk_required_skill_cannot_be_configured_away_and_revoked(self):
+        """R-AGT-37 — platform stewardship is product policy, not an optional baseline an
+        owner can remove from config before revoking it."""
+        (self.where / "config.json").write_text(
+            '{"skills": {"granted": []}}\n', encoding="utf-8")
+        required = config.RUNDESK_REQUIRED_GRANTS[0]
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(held=(required,), given={"skills": [required]})
+
+        code, said = drive(["skills", "revoke", "ava", required],
+                           agents=agents, skills=skills)
+
+        self.assertEqual(1, code)
+        self.assertIn("RUNDESK REQUIRED", said)
+        self.assertIn("cannot be configured away", said)
+        self.assertEqual([required], skills.granted(agents.skills("ava")))
+
+    def test_a_skill_not_required_by_the_configuration_can_be_revoked(self):
+        """R-AGT-29, R-AGT-37 — required grants do not turn every optional skill into one."""
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(held=("deploy",), given={"skills": ["deploy"]})
+
+        code, said = drive(["skills", "revoke", "ava", "deploy"],
+                           agents=agents, skills=skills)
+
+        self.assertEqual(0, code, said)
+        self.assertEqual([], skills.granted(agents.skills("ava")))
 
 
 class TheSharedIntegrationCommands(unittest.TestCase):
@@ -1336,6 +1539,58 @@ class StandingGatewaysDown(unittest.TestCase):
         drive(["restart", "agent-one"], machine=machine)
         self.assertEqual([("stop", "agent-one"), ("start", "agent-one")], machine.did)
 
+    def test_a_busy_restart_is_queued_and_says_when_it_will_run(self):
+        """R-GW-43"""
+        name = "busy-agent"
+        self.addCleanup(restart_request.path(name).unlink, missing_ok=True)
+        self.addCleanup(
+            restart_request.path(name).with_suffix(".lock").unlink, missing_ok=True)
+        machine = FakeMachine(jobs=[name])
+        gateways = FakeGateways(
+            standing=[FakeGateways.Standing(name, running=True, pid=9)],
+            turning={name: [{"run": "one"}]},
+        )
+        with mock.patch.dict(os.environ, {"RUNDESK_RUN": ""}, clear=False):
+            code, said = drive(
+                ["restart", name], gateways, machine, agents=FakeAgents(made=[name])
+            )
+        self.assertEqual(0, code)
+        self.assertIn("RESTART QUEUED", said)
+        self.assertIn("automatically after active work finishes", said)
+        self.assertIn(("install_restart_worker", None), machine.did)
+        self.assertNotIn(("stop", name), machine.did)
+
+    def test_force_restarts_a_busy_gateway_immediately(self):
+        """R-GW-43"""
+        name = "busy-agent"
+        machine = FakeMachine(jobs=[name])
+        gateways = FakeGateways(
+            becomes=[True, False, False, True],
+            turning={name: [{"run": "one"}]},
+        )
+        code, said = drive(
+            ["restart", name, "--force"], gateways, machine,
+            agents=FakeAgents(made=[name]),
+        )
+        self.assertEqual(0, code)
+        self.assertIn("RESTARTED", said)
+        self.assertEqual([("stop", name), ("start", name)], machine.did)
+
+    def test_a_queued_restart_worker_recovers_after_stopping_halfway(self):
+        """R-GW-43"""
+        name = "busy-agent"
+        machine = FakeMachine(jobs=[name])
+        gateways = FakeGateways(becomes=[False, True])
+        args = argparse.Namespace(name=name, all=False, force=False, worker=True)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli._stand_down(
+                args, gateways, machine, FakeAgents(made=[name]), "restart"
+            )
+        self.assertEqual(0, code, err.getvalue())
+        self.assertEqual([("start", name)], machine.did)
+        self.assertIn("RESTARTED", out.getvalue())
+
     def test_a_cycle_that_could_not_start_it_again_is_a_failure(self):
         """R-GW-13 — stopping is half of a restart, and the half that leaves it down.
 
@@ -1419,6 +1674,45 @@ class StandingGatewaysDown(unittest.TestCase):
 
 class MakingAnAgent(unittest.TestCase):
     """`add` is the one place an agent and its gateway come into being together."""
+
+    def test_an_agent_is_created_under_a_lowercase_slug(self):
+        """R-AGT-39 — the words an owner gives become one predictable directory and
+        gateway name, including whitespace and punctuation at their edges."""
+        agents = FakeAgents()
+        code, said = drive(
+            ["add", "  Écho's   Helper  ", "--provider", "codex"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["echo-s-helper"], agents.added)
+        self.assertEqual("Écho's   Helper", agents.display_names["echo-s-helper"])
+        self.assertIn("echo-s-helper: MADE", said)
+
+    def test_a_legacy_mixed_case_agent_is_not_duplicated_by_its_slug(self):
+        """R-AGT-40 — upgrades preserve the directory an existing agent owns."""
+        agents = FakeAgents(made=["Winston"])
+        agents.remember("Winston", provider="codex")
+        code, said = drive(["add", "winston"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["Winston"], agents.added)
+        self.assertEqual(["Winston"], agents.known())
+
+    def test_a_legacy_job_without_an_agent_keeps_its_exact_identity(self):
+        """R-AGW-1, R-AGT-13 — a supervisor job may be all that survives."""
+        agents = FakeAgents()
+        machine = FakeMachine(jobs=["Winston"])
+        code, said = drive(
+            ["add", "winston", "--provider", "codex"], machine=machine, agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["Winston"], agents.added)
+        self.assertNotIn("winston", agents.known())
+
+    def test_retry_finishes_an_interrupted_creation_with_its_provider(self):
+        """R-AGT-39 — CLI guards must not strand a pending display-name write."""
+        agents = FakeAgents(made=["ios-helper"], pending=["ios-helper"])
+        code, said = drive(
+            ["add", "iOS Helper", "--provider", "codex"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["ios-helper"], agents.added)
+        self.assertNotIn("ios-helper", agents._pending)
 
     def test_making_an_agent_makes_it_and_says_where_it_stands(self):
         """R-AGW-1"""
@@ -1535,15 +1829,28 @@ class ConfiguringAnAgent(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("NAME REQUIRED", said)
 
-    def test_a_name_that_cannot_be_an_agents_is_refused_before_anything_is_made(self):
-        """R-AGT-5, R-AGT-6 — `ava.log` is the file a gateway named `ava` writes, so it is
-        not a name a second agent may have. `ava.ran` used to be one of these and is an
-        ordinary name again: what a schedule last did is a row, so nothing writes that file."""
+    def test_punctuation_that_used_to_collide_is_slugged_safely(self):
+        """R-AGT-39 — `ava.log` is the file a gateway named `ava` writes, while `ava-log`
+        is an independent agent directory and gateway name."""
         agents = FakeAgents()
         code, said = drive(["add", "ava.log", "--provider", "codex"], agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["ava-log"], agents.added)
+
+    def test_a_job_prefix_that_cannot_be_one_stops_the_command(self):
+        """R-INS-18 — the variable a second install isolates itself with becomes a file
+        name and a launchd target, so one that could escape the jobs directory has to be
+        answered in our words before a command runs rather than planting a job."""
+        before = os.environ.get("RUNDESK_JOB_PREFIX")
+        os.environ["RUNDESK_JOB_PREFIX"] = "../elsewhere"
+        self.addCleanup(
+            lambda: os.environ.__setitem__("RUNDESK_JOB_PREFIX", before)
+            if before is not None else os.environ.pop("RUNDESK_JOB_PREFIX", None))
+        code, said = drive(["agents"])
         self.assertEqual(1, code)
-        self.assertIn("INVALID NAME", said)
-        self.assertEqual([], agents.added, "it refused the name and made one anyway")
+        self.assertIn("RUNDESK_JOB_PREFIX", said)
+        self.assertIn("INVALID", said)
+        self.assertNotIn("Traceback", said)
 
     def test_adopting_a_gateway_that_has_no_agent_brings_what_it_wrote_in(self):
         """R-AGW-1 — one place afterwards, rather than two that disagree."""
@@ -1566,6 +1873,27 @@ class ConfiguringAnAgent(unittest.TestCase):
 
 class TheVerbsNameTheAgent(unittest.TestCase):
     """The gateway is how an agent runs, so every verb asks where *that* agent keeps things."""
+
+    def test_every_command_resolves_a_human_name_to_the_agents_slug(self):
+        """R-AGT-40 — `main` resolves the shared `name` argument before dispatch, so
+        every current and future command gets the directory identity rather than each
+        command growing its own spelling rules."""
+        agents = FakeAgents(made=["agent-name"])
+        gateways = FakeGateways()
+        code, said = drive(["agents", "Agent Name"], gateways, agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("agent-name", said)
+        self.assertNotIn("NO SUCH AGENT", said)
+
+    def test_a_command_reaches_a_legacy_mixed_case_agent_case_insensitively(self):
+        """R-AGT-40 — existing users keep their directories while commands gain the
+        same case-insensitive lookup as newly slugged agents."""
+        agents = FakeAgents(made=["Winston"])
+        gateways = FakeGateways()
+        code, said = drive(["agents", "WINSTON"], gateways, agents=agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("Winston", said)
+        self.assertNotIn("NO SUCH AGENT", said)
 
     def test_a_verb_asks_where_the_agent_it_names_keeps_things(self):
         """R-AGT-9 — an agent's gateway keeps its state in the agent's own directory. A
@@ -1664,6 +1992,51 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
         self.assertIn("backups", said)
         self.assertIn("unavailable", said)
         self.assertIn("fit to run", said, "other health was lost with backup health")
+
+    def test_listing_the_backups_survives_a_directory_that_does_not_answer(self):
+        """R-BKP-29 — reported (#102): the guard R-BKP-28 was written for went only into
+        `status`. `backups` ran the identical enumeration on the main thread with no bound
+        at all, and sat for over five minutes at 0.0% CPU with no output and no error —
+        the one command that cannot answer without the guard."""
+        real_every = cli.backups.every
+        real_patience = cli.BACKUP_PATIENCE
+        entered, release = threading.Event(), threading.Event()
+
+        def blocked(_where):
+            entered.set()
+            release.wait(1)
+            return []
+
+        cli.backups.every = blocked
+        cli.BACKUP_PATIENCE = 0.02
+        began = time.monotonic()
+        try:
+            code, said = drive(["backups"])
+        finally:
+            release.set()
+            cli.backups.every = real_every
+            cli.BACKUP_PATIENCE = real_patience
+        self.assertTrue(entered.wait(0.1), "the listing never asked after the backups")
+        self.assertLess(time.monotonic() - began, 0.5, "the listing waited on storage")
+        self.assertEqual(1, code, "an unreachable directory was reported as success")
+        self.assertIn(str(_TEST_BACKUP_DIR), said, "it did not name what failed to answer")
+
+    def test_a_directory_that_does_not_answer_is_not_reported_as_no_backups(self):
+        """R-BKP-29 — an empty listing and an unreachable directory must not look the same.
+        While the two agree, an owner cannot tell a working daily backup from one that has
+        never landed, and only one of the two means their agents are unprotected."""
+        real_every = cli.backups.every
+        real_patience = cli.BACKUP_PATIENCE
+        cli.backups.every = lambda _where: threading.Event().wait(1) or []
+        cli.BACKUP_PATIENCE = 0.02
+        try:
+            code, said = drive(["backups"])
+        finally:
+            cli.backups.every = real_every
+            cli.BACKUP_PATIENCE = real_patience
+        self.assertEqual(1, code)
+        self.assertNotIn("no backups", said,
+                         "a directory that did not answer was reported as holding none")
 
     def test_agents_lists_simultaneous_turns_without_prompts_or_arguments(self):
         """R-AGW-13 — concurrent conversations are distinct and only safe identity is shown."""
@@ -2484,6 +2857,215 @@ class WhatAGatewayRunsOnItsOwn(unittest.TestCase):
         self.assertNotIn("→", rows["quiet"], "a schedule naming nowhere claimed somewhere")
         self.assertIn("runs", rows["tidy"])
 
+    def test_one_schedule_reads_back_everything_it_was_given(self):
+        """R-SCH-42 — the listing says one word for what a schedule starts, because a prompt
+        is a sentence and a program is a path. This is where they are read back, and until it
+        existed the only account of what a schedule asked was the one an owner remembered
+        typing."""
+        kept = self.agents.records("gateway")
+        kept.remember_channel("ops", "somewhere", ["2207"], store.stamped())
+        kept.remember_schedule("nightly", "0 3 * * *", store.stamped(),
+                               prompt="what changed overnight?", provider="claude",
+                               model="opus", instructions="be brief", channel="ops",
+                               place="#operations")
+        code, said = drive(["schedules", "gateway", "show", "nightly"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        for expected in ("what changed overnight?", "0 3 * * *", "claude/opus",
+                         "be brief", "ops", "#operations", "asks a turn"):
+            self.assertIn(expected, said, f"showing a schedule never said {expected!r}")
+
+    def test_a_place_a_schedule_has_no_channel_for_still_reads_back(self):
+        """R-SCH-42 — `add` permits `--in` without `--to`, so the word sits in the row doing
+        nothing. Saying only "nobody" would positively assert it was not there, in the one
+        command that exists so an owner never has to open that database — and a later
+        `--to` would then switch on delivery into a place `show` never disclosed."""
+        kept = self.agents.records("gateway")
+        kept.remember_schedule("orphan", "0 5 * * *", store.stamped(), prompt="check",
+                               place="#operations")
+        code, said = drive(["schedules", "gateway", "show", "orphan"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("#operations", said, "a place in the row was never shown")
+        self.assertIn("nobody", said, "it claimed a surface it has not got")
+
+    def test_a_schedule_that_is_not_there_is_said_rather_than_shown_as_empty(self):
+        """R-SCH-42 — the same answer `channels show` gives, and never an empty table, which
+        reads as a schedule that holds nothing."""
+        code, said = drive(["schedules", "gateway", "show", "nope"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT FOUND", said)
+
+    def test_a_schedule_nobody_can_understand_is_still_shown(self):
+        """R-SCH-42 — a cron nobody can parse is exactly when an owner needs to see the
+        characters they typed. Answering with nothing at all would send them to the database
+        this exists to replace."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "bad", "when": "99 * * * *", "run": ["/bin/echo"]}]})
+        code, said = drive(["schedules", "gateway", "show", "bad"], gateways, agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("99 * * * *", said, "it never showed what was actually typed")
+        self.assertIn("NOT UNDERSTOOD", said)
+
+    def test_showing_a_schedule_changes_nothing(self):
+        """R-SCH-42 — read through the reading path, for the reason `doctor` is (R-AGT-12):
+        the command an owner runs when a schedule looks wrong must not be the one that
+        quietly changes it."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]})
+        before = self.schedules_of("gateway")
+        drive(["schedules", "gateway", "show", "tidy"], gateways, agents=self.agents)
+        self.assertEqual(before, self.schedules_of("gateway"))
+
+    def test_a_schedule_is_changed_and_keeps_what_it_has_already_done(self):
+        """R-SCH-43 — the whole of why this exists rather than removing and adding again,
+        which takes a schedule's account of itself with it."""
+        gateways = self._gateways(
+            schedules={"gateway": [{"name": "nightly", "when": "0 3 * * *",
+                                    "ask": "what changed?"}]},
+            ran_schedules={"gateway": {"nightly": {"at": "2026-07-25 03:00",
+                                                   "outcome": "finished"}}})
+        code, said = drive(["schedules", "gateway", "edit", "nightly",
+                            "--ask", "what broke?"], gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("EDITED", said)
+        after = self.schedules_of("gateway")[0]
+        self.assertEqual("what broke?", after["prompt"])
+        self.assertEqual(("0 3 * * *", "2026-07-25 03:00", "finished"),
+                         (after["cron"], after["last_auto_run_at"], after["last_outcome"]),
+                         "changing one thing moved something nobody named")
+        self.assertIn("edited", self.written.read_text(), "the change was not written to the log")
+
+    def test_what_a_schedule_says_is_never_written_into_the_log(self):
+        """A prompt and standing instructions are an owner's own, and the log is read by
+        whoever can read the file. What belongs in an account is which fields moved."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "nightly", "when": "0 3 * * *", "ask": "what changed?"}]})
+        drive(["schedules", "gateway", "edit", "nightly", "--ask", "the secret question"],
+              gateways, agents=self.agents)
+        written = self.written.read_text()
+        self.assertIn("prompt", written)
+        self.assertNotIn("the secret question", written, "the log kept what was asked")
+
+    def test_changing_a_schedule_that_is_not_there_says_so(self):
+        """R-SCH-43 — a change to a name that is not there is a change that did nothing."""
+        code, said = drive(["schedules", "gateway", "edit", "nope", "--ask", "anything?"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT FOUND", said)
+
+    def test_a_change_naming_nothing_to_change_is_said_rather_than_reported_as_done(self):
+        """Nothing named is nothing changed, and saying EDITED would be a success with no
+        change behind it."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]})
+        code, said = drive(["schedules", "gateway", "edit", "tidy"], gateways, agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOTHING TO CHANGE", said)
+
+    def test_a_single_moment_is_refused_once_the_clock_has_started_a_schedule(self):
+        """R-SCH-38, R-SCH-43 — **the trap this option would otherwise walk into.** A single
+        moment is spent the instant anything durable says the clock started it, and that is
+        written for every firing a repeating schedule ever had. Set here it would be used
+        before it arrived: the listing would show a time that could never come round."""
+        gateways = self._gateways(
+            schedules={"gateway": [{"name": "nightly", "when": "0 3 * * *",
+                                    "ask": "what changed?"}]},
+            ran_schedules={"gateway": {"nightly": {"at": "2026-07-25 03:00",
+                                                   "outcome": "finished"}}})
+        code, said = drive(["schedules", "gateway", "edit", "nightly",
+                            "--at", "2099-01-01T09:00"], gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("R-SCH-38", said)
+        after = self.schedules_of("gateway")[0]
+        self.assertEqual("0 3 * * *", after["cron"])
+        self.assertIsNone(after["at"], "a moment that could never run was written anyway")
+
+    def test_a_repeating_time_and_a_single_moment_replace_each_other(self):
+        """R-SCH-36, R-SCH-43 — one is how an owner says the other has gone, and a row
+        holding both is one the records refuse."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "once", "at": "2098-01-01 09:00", "ask": "ready?"}]})
+        code, said = drive(["schedules", "gateway", "edit", "once", "--when", "0 3 * * *"],
+                           gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        after = self.schedules_of("gateway")[0]
+        self.assertEqual("0 3 * * *", after["cron"])
+        self.assertIsNone(after["at"])
+
+    def test_a_moment_already_behind_us_is_refused_as_it_is_on_the_way_in(self):
+        """R-SCH-43 — the same refusal `add` makes, because it is the same mistake."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "nightly", "when": "0 3 * * *", "ask": "what changed?"}]})
+        code, said = drive(["schedules", "gateway", "edit", "nightly",
+                            "--at", "2020-01-01T09:00"], gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("already passed", said)
+
+    def test_a_turn_becoming_a_program_never_leaves_a_brain_behind_it(self):
+        """R-SCH-43 — `--provider`, `--model` and `--instructions` reach a brain, and a
+        schedule that starts a program has none. An edit can arrive at that row two ways:
+        naming one of them on a program, and turning a turn into a program while the columns
+        it filled stay behind. The second leaves no option to point at, so the row after the
+        change is what is asked."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "nightly", "when": "0 3 * * *", "ask": "what changed?"}]})
+        self.agents.records("gateway").change_schedule("nightly", provider="claude",
+                                                       instructions="be brief")
+        code, said = drive(["schedules", "gateway", "edit", "nightly", "--", "/bin/echo", "hi"],
+                           gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("is for a turn", said)
+        self.assertEqual("what changed?", self.schedules_of("gateway")[0]["prompt"])
+        # And in one command, because clearing them on an owner's behalf would be losing
+        # something nobody asked to lose.
+        code, said = drive(["schedules", "gateway", "edit", "nightly", "--provider", "",
+                            "--instructions", "", "--", "/bin/echo", "hi"],
+                           gateways, agents=self.agents)
+        self.assertEqual(0, code, said)
+        after = self.schedules_of("gateway")[0]
+        self.assertEqual(["/bin/echo", "hi"], after["command"])
+        self.assertIsNone(after["prompt"])
+        self.assertIsNone(after["provider"])
+
+    def test_a_change_naming_a_channel_this_agent_has_not_got_is_refused(self):
+        """R-SCH-31, R-SCH-43 — refused where it is written rather than found at three in
+        the morning, exactly as adding one is."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "nightly", "when": "0 3 * * *", "ask": "what changed?"}]})
+        code, said = drive(["schedules", "gateway", "edit", "nightly", "--to", "nowhere"],
+                           gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("no channel called", said)
+        self.assertIsNone(self.schedules_of("gateway")[0]["channel"])
+
+    def test_a_prompt_that_is_nothing_but_space_is_refused_by_a_change_too(self):
+        """R-SCH-44 — `add` strips before it decides, so `--ask "   "` there is a schedule
+        naming neither a program nor a prompt and is refused. A change that did not strip
+        accepted it, and the schedule stayed enabled and fired nightly asking a brain a
+        blank line, with `show` rendering an empty `asks` row that reads as a display
+        fault."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "nightly", "when": "0 3 * * *", "ask": "what changed?"}]})
+        code, said = drive(["schedules", "gateway", "edit", "nightly", "--ask", "   "],
+                           gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("NOT CHANGED", said)
+        self.assertEqual("what changed?", self.schedules_of("gateway")[0]["prompt"],
+                         "a change that was refused wrote a blank prompt anyway")
+
+    def test_a_program_named_rather_than_located_is_refused_by_a_change_too(self):
+        """R-PROC-2, R-SCH-43 — a gateway runs with almost no PATH, so a bare name resolves
+        in the shell that typed it and nowhere else."""
+        gateways = self._gateways(schedules={"gateway": [
+            {"name": "tidy", "when": "0 3 * * *", "run": ["/bin/echo"]}]})
+        code, said = drive(["schedules", "gateway", "edit", "tidy", "--", "echo", "hi"],
+                           gateways, agents=self.agents)
+        self.assertEqual(1, code, said)
+        self.assertIn("is a name, not a location", said)
+        self.assertEqual(["/bin/echo"], self.schedules_of("gateway")[0]["command"])
+
     def test_a_schedule_reporting_to_a_channel_this_agent_has_not_got_is_refused(self):
         """R-SCH-31 — refused where it is written rather than found at three in the morning,
         the same way a program named rather than located is: a schedule reporting to a surface
@@ -2762,12 +3344,15 @@ raise SystemExit(1)
         drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
                "--allow", "2207"], self._gateways(), agents=self.agents)
         code, said = drive(["channels", "ava", "instructions", "ops",
-                            "You are in {where}. Others read this."],
+                            "You are in {channel_where}. Others read this."],
                            self._gateways(), agents=self.agents)
         self.assertEqual(0, code)
         self.assertIn("INSTRUCTED", said)
         kept = self.kept()
-        self.assertEqual("You are in {where}. Others read this.", kept[channel.INSTRUCTIONS])
+        self.assertEqual(
+            "You are in {channel_where}. Others read this.",
+            kept[channel.INSTRUCTIONS],
+        )
         _, back = drive(["channels", "ava", "instructions", "ops"], self._gateways(),
                         agents=self.agents)
         self.assertIn("Others read this", back)
@@ -3554,6 +4139,49 @@ class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
         self.assertEqual(0, code, said)
         self.assertIn("120 in / 10 cached / 30 out", said)
 
+    def test_messages_narrows_to_the_place_by_the_name_it_printed_for_it(self):
+        """R-STO-28 — reported (#103): every agent's own preamble instructs this flag, and
+        the only identifier an agent can see is the qualified one in the `WHERE` column.
+        Handing it straight back matched nothing and returned `NOTHING SAID YET` at exit 0
+        for a conversation with hundreds of messages — an agent confidently reporting that
+        work it did never happened, the one thing `messages` exists to prevent."""
+        self.furnished()
+        code, said = drive(["messages", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("ops/general", said, "the WHERE column no longer prints the two")
+
+        code, said = drive(["messages", "ava", "--conversation", "ops/general"],
+                           agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("what happened to the parser", said)
+        self.assertNotIn("NOTHING SAID YET", said)
+
+    def test_messages_still_narrows_by_the_platforms_own_word_alone(self):
+        """Both forms, because the bare one is what a channel adapter has to hand and is
+        what the preamble taught. Taking the qualified one must not cost the other."""
+        self.furnished()
+        code, said = drive(["messages", "ava", "--conversation", "general"],
+                           agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("what happened to the parser", said)
+
+    def test_a_conversation_nobody_has_is_told_apart_from_one_with_nothing_in_it(self):
+        """R-STO-28 — "there is no such conversation" and "nothing has been said here" send
+        a reader somewhere completely different, and a confident zero-exit answered both."""
+        self.furnished()
+        code, said = drive(["messages", "ava", "--conversation", "ops/no-such-room"],
+                           agents=self.agents)
+        self.assertEqual(1, code, "an unmatched conversation was reported as success")
+        self.assertIn("no conversation called ops/no-such-room", said)
+        self.assertNotIn("NOTHING SAID YET", said)
+
+    def test_an_agent_that_has_said_nothing_at_all_still_says_so_plainly(self):
+        """The empty listing is still the empty listing: an agent nobody has asked anything
+        is ordinary, and telling it that its records are wrong would be the same lie back."""
+        code, said = drive(["messages", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("NOTHING SAID YET", said)
+
     def test_a_run_whose_provider_reported_no_cache_at_all_claims_none(self):
         """R-USE-6 — absent is not zero. A provider that never mentions a cache and one
         that read nothing from it are different facts, and inventing a `0 cached` for the
@@ -3566,6 +4194,73 @@ class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
         self.assertEqual(0, code, said)
         self.assertIn("7 in / 3 out", said)
         self.assertNotIn("cached", said)
+
+    def test_what_one_run_cost_names_the_cache_writes_its_provider_reported(self):
+        """R-USE-13 — a cache write bills *above* fresh input where a read bills at a
+        fraction of it, so a row that folded writes into `in` priced the most expensive
+        tokens of the turn as its cheapest."""
+        kept = self.agents.records("ava")
+        run = kept.began("terminal", "claude", "work", "2026-07-26T09:00:00Z")
+        kept.ended(run, "2026-07-26T09:00:01Z", "finished", exit_code=0,
+                   tokens={"input": 2, "output": 5, "cached": 15273, "written": 5550,
+                           "reported": True})
+        code, said = drive(["runs", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("2 in / 15273 cached / 5550 written / 5 out", said)
+
+    def test_a_brain_that_does_not_report_cache_writes_claims_none(self):
+        """R-USE-6 again, one field along. Some brains and older adapter streams report
+        no cache-creation split, and a `0 written` on every one of them would say they
+        wrote nothing to a cache rather than that they do not say."""
+        kept = self.agents.records("ava")
+        run = kept.began("terminal", "grok", "work", "2026-07-26T09:00:00Z")
+        kept.ended(run, "2026-07-26T09:00:01Z", "finished", exit_code=0,
+                   tokens={"input": 7, "output": 3, "cached": 2, "reported": True})
+        code, said = drive(["runs", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("7 in / 2 cached / 3 out", said)
+        self.assertNotIn("written", said)
+
+    def test_a_total_sums_the_cache_writes_that_were_reported(self):
+        """R-USE-13 at the totals. The sum is knowingly a floor: every brain that does not
+        report the split, and every row written before there was a column, contributes
+        nothing rather than a guess."""
+        self.furnished()
+        kept = self.agents.records("ava")
+        run = kept.began("terminal", "claude", "work", "2026-07-26T09:00:03Z")
+        kept.ended(run, "2026-07-26T09:00:04Z", "finished", exit_code=0,
+                   tokens={"input": 2, "output": 5, "cached": 1, "written": 5550,
+                           "reported": True})
+        code, said = drive(["usage", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("WRITTEN", said)
+        self.assertIn("5550", said)
+
+    def test_what_a_run_came_to_names_the_reason_it_stopped(self):
+        """R-RUN-19. `failed` answers "did it work" and not "what do I do about it": an
+        account limit, a crashed adapter and a bad flag all read identically without the
+        word. Added rather than substituted, so the column still says what it always said
+        and can still be grepped for."""
+        kept = self.agents.records("ava")
+        run = kept.began("terminal", "claude", "work", "2026-07-26T09:00:00Z")
+        kept.ended(run, "2026-07-26T09:00:01Z", "failed", exit_code=1,
+                   why="Claude AI usage limit reached|1784920200",
+                   because="usage_exhausted")
+        code, said = drive(["runs", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("failed (usage_exhausted)", said)
+
+    def test_a_run_whose_brain_classified_nothing_keeps_its_prose_and_no_word(self):
+        """Every run written before there was a column for a reason, and every adapter that
+        never learns one. Nothing is inferred from the prose in `why`."""
+        kept = self.agents.records("ava")
+        run = kept.began("terminal", "codex", "work", "2026-07-26T09:00:00Z")
+        kept.ended(run, "2026-07-26T09:00:01Z", "failed", exit_code=1,
+                   why="the parser exploded")
+        code, said = drive(["runs", "ava"], agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("failed", said)
+        self.assertNotIn("failed (", said)
 
     def test_an_agent_that_has_run_nothing_says_so_and_says_what_to_do(self):
         """A listing that printed an empty table would read as a failure to answer."""
@@ -3598,7 +4293,7 @@ class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
         code, said = drive(["usage", "ava"], agents=self.agents)
         self.assertEqual(0, code, said)
         row = [one for one in said.splitlines() if one.startswith("ava")][0]
-        self.assertEqual(["ava", "3", "5", "0", "0", "2"], row.split(),
+        self.assertEqual(["ava", "3", "5", "0", "0", "0", "2"], row.split(),
                          "the count of runs that said nothing is not beside the total")
 
     def test_an_agent_that_has_run_nothing_has_no_totals_to_give(self):
@@ -3606,7 +4301,7 @@ class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
         code, said = drive(["usage", "ava"], agents=self.agents)
         self.assertEqual(0, code, said)
         row = [one for one in said.splitlines() if one.startswith("ava")][0]
-        self.assertEqual(["ava", "0", "-", "-", "-", "0"], row.split())
+        self.assertEqual(["ava", "0", "-", "-", "-", "-", "0"], row.split())
 
     def test_what_was_said_is_found_by_the_words_in_it(self):
         """R-STO-7 — whichever surface it arrived on, and whoever said it."""
@@ -3776,6 +4471,41 @@ class WhoSaidIt(unittest.TestCase):
         """Both present is the ordinary case for a channel message, and the name is the more
         specific of the two."""
         self.assertEqual("sam", cli._said_by({"who": "sam", "author": "user"}, "ava"))
+
+
+class WhatATurnLooksLikeOnATerminal(unittest.TestCase):
+    """R-PRV-29 — the second surface. Discord is not the only place a verb is read."""
+
+    def _watched(self, said: dict) -> str:
+        held = io.StringIO()
+        with contextlib.redirect_stderr(held):
+            cli._Shown()(said)
+        return held.getvalue().strip()
+
+    def test_a_tool_is_shown_by_its_verb_and_its_brains_name(self):
+        """Unchanged, and asserted so the case below is a difference rather than the only
+        behaviour there is. A terminal is the owner's own machine, so the vendor's word for
+        a tool is useful here in a way it never is in a room full of people."""
+        self.assertEqual("· run Bash",
+                         self._watched({"type": "tool", "name": "Bash", "did": "run"}))
+
+    def test_changing_what_the_agent_lives_by_reads_as_a_sentence_here_too(self):
+        """R-PRV-29 — this surface prints the seam's word raw, so a verb chosen only for
+        how it renders in Discord arrives here as `rules Write`. What changed is the whole
+        of the news; which tool wrote it is the half nobody wanted."""
+        from rundesk import provider
+
+        for name, verb in provider.CONTINUITY.items():
+            with self.subTest(name):
+                said = self._watched({"type": "tool", "name": "Write", "did": verb})
+                self.assertEqual(f"· updated {verb}", said)
+                self.assertNotIn("Write", said)
+
+    def test_a_tool_with_no_verb_at_all_still_says_something(self):
+        """R-PRV-8 — an adapter that gave no verb did something this vocabulary has no word
+        for, and the line still has to read."""
+        self.assertEqual("· using mcp__weather",
+                         self._watched({"type": "tool", "name": "mcp__weather"}))
 
 
 if __name__ == "__main__":

@@ -16,16 +16,18 @@ Run: python3 tests/test_transcript.py
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import agent, store, transcript  # noqa: E402
+from rundesk import agent, config, store, transcript  # noqa: E402
 
 AT = "2026-07-26T09:00:00Z"
 LATER = "2026-07-26T10:00:00Z"
@@ -43,15 +45,27 @@ class WithAnAgentThatHasRun(unittest.TestCase):
         # falls back to it, so a fixture that isolates the four and forgets this
         # one still reaches the owner's real library — `add` grants what the
         # release ships, and would link a scratch agent at what they actually have.
+        #
+        # **A fallback is only a fallback while nothing said otherwise**, which is why the
+        # library and the commands are named here too rather than left to derive. An agent
+        # runs this suite from inside rundesk, and a gateway hands every program it starts
+        # an explicit `RUNDESK_SKILL_LIBRARY` — read before the data root, so the scratch
+        # agent was granted the owner's real skills and then reported as missing every one
+        # of them. It failed for an agent and for nobody else.
         for said, at in (("RUNDESK_DATA_DIR", self.before / "data"),
                          ("RUNDESK_AGENTS_DIR", self.where),
                          ("RUNDESK_RUN_DIR", self.before / "run"),
                          ("RUNDESK_LOG_DIR", self.before / "logs"),
                          ("RUNDESK_SCHEDULES_DIR", self.before / "schedules"),
+                         ("RUNDESK_SKILL_LIBRARY", self.before / "data" / "skills"),
+                         ("RUNDESK_SCRIPTS", self.before / "data" / "scripts"),
                          ("RUNDESK_JOBS_DIR", self.before / "jobs")):
             self.addCleanup(os.environ.pop, said, None)
             os.environ[said] = str(at)
             at.mkdir(parents=True, exist_ok=True)
+        # Fresh-agent creation reads the install's required skill baseline. This fixture
+        # owns its data root, so it must own a complete configuration too.
+        config.ensure(self.before / "data")
         agent.add("ava", self.where)
         # With a brain, because an agent that has none is now a fault every diagnosis
         # reports (R-AGT-18) — and one case here asks a freshly made agent to have nothing
@@ -217,6 +231,126 @@ class WhatTheBrainItselfSaid(WithAnAgentThatHasRun):
         self.printed("9-zzzz")
         self.assertEqual([run, "9-zzzz"], sorted(transcript.known(self.logs())))
         self.assertEqual([run], [one["id"] for one in kept.runs()])
+
+
+class WhatAnAgentPrintedIsBounded(WithAnAgentThatHasRun):
+    """R-RUN-22, R-RUN-23 — reported (#101): nothing swept these and nothing bounded them.
+
+    Measured on a two-day-old agent: 807 MB across 384 files against 7.7 MB of records,
+    largest single transcript 51.9 MB, because a brain replays the whole prior thread when
+    it attaches and every run writes those same bytes to disk again.
+    """
+
+    def a_long_one(self, run: str, ceiling: int) -> Path:
+        """A transcript over the ceiling, whose every line says where in the file it is."""
+        at = transcript.printed(self.logs(), run)
+        at.parent.mkdir(parents=True, exist_ok=True)
+        with open(at, "wb") as writing:
+            line = 0
+            while writing.tell() <= ceiling * 2:
+                writing.write(b'{"type":"text","line":%d,"pad":"%s"}\n'
+                              % (line, b"x" * 200))
+                line += 1
+        self.lines = line
+        return at
+
+    def test_what_a_brain_printed_is_cut_down_to_the_ceiling(self):
+        """R-RUN-22 — a run whose transcript is tens of megabytes is not diagnosable by a
+        person or a grep either way, and it is the same historical bytes every time."""
+        run = self.a_run(self.kept())
+        at = self.a_long_one(run, 64 * 1024)
+        was = at.stat().st_size
+
+        elided = transcript.trim(self.logs(), run, ceiling=64 * 1024)
+        self.assertTrue(elided, "nothing was elided from a transcript over the ceiling")
+        self.assertLessEqual(at.stat().st_size, 64 * 1024 + 512,
+                             "the transcript is still over the ceiling")
+        self.assertLess(at.stat().st_size, was)
+
+    def test_the_end_of_a_run_is_what_is_kept_and_the_replay_is_what_goes(self):
+        """The beginning is the handshake and the prior thread replayed back — already on
+        disk under the runs it belongs to. The end is this turn, and its only copy."""
+        run = self.a_run(self.kept())
+        self.a_long_one(run, 64 * 1024)
+
+        transcript.trim(self.logs(), run, ceiling=64 * 1024)
+        lines = transcript.read(self.logs(), run).splitlines()
+        self.assertEqual(self.lines - 1, json.loads(lines[-1])["line"],
+                         "the end of the run did not survive")
+        self.assertEqual(0, sum(1 for one in lines if b'"line":0' in one),
+                         "the beginning was kept instead of the end")
+
+    def test_what_was_cut_away_says_so_where_the_transcript_is_read(self):
+        """Never a silent truncation. A file that simply begins mid-conversation is one a
+        reader takes at face value, and this one deliberately does not hold everything."""
+        run = self.a_run(self.kept())
+        transcript.trim(self.logs(), self.a_long_one(run, 64 * 1024) and run,
+                        ceiling=64 * 1024)
+        first = json.loads(transcript.read(self.logs(), run).splitlines()[0])
+        self.assertEqual("elided", first["type"])
+        self.assertGreater(first["bytes"], 0)
+
+    def test_every_line_left_is_still_a_whole_record(self):
+        """Cutting at a byte offset lands mid-record, and a `.jsonl` whose first line is
+        half a record is one nothing can read."""
+        run = self.a_run(self.kept())
+        self.a_long_one(run, 64 * 1024)
+        transcript.trim(self.logs(), run, ceiling=64 * 1024)
+        for line in transcript.read(self.logs(), run).splitlines():
+            json.loads(line)
+
+    def test_a_transcript_under_the_ceiling_is_left_exactly_as_it_is(self):
+        """Doing nothing is the ordinary outcome, and rewriting a small file every turn
+        would cost more than the ceiling saves."""
+        run = self.a_run(self.kept())
+        at = self.printed(run, b'{"type":"text"}\n')
+        transcript.trim(self.logs(), run, ceiling=64 * 1024)
+        self.assertEqual(b'{"type":"text"}\n', at.read_bytes())
+
+    def test_a_transcript_that_is_not_there_is_not_an_error(self):
+        """An adapter that keeps nothing is a perfectly good adapter, and reclaiming space
+        is never allowed to be the reason a turn fails."""
+        self.assertEqual(0, transcript.trim(self.logs(), "1-none"))
+
+    def test_what_a_brain_printed_longer_ago_than_the_window_is_swept(self):
+        """R-RUN-23 — the broom this module has always said it is swept by. These are
+        diagnostics and may be destroyed to reclaim space without costing the account
+        anything (R-STO-5); nothing swept them at all."""
+        kept = self.kept()
+        old, new = self.a_run(kept), self.a_run(kept)
+        for run in (old, new):
+            self.printed(run)
+            transcript.beside(self.logs(), run).write_bytes(b"a warning\n")
+        long_ago = time.time() - 30 * 86400
+        os.utime(transcript.printed(self.logs(), old), (long_ago, long_ago))
+
+        self.assertEqual([old], transcript.sweep(self.logs(), keep_days=7))
+        self.assertEqual([new], transcript.known(self.logs()))
+        self.assertFalse(transcript.beside(self.logs(), old).exists(),
+                         "half of a run's files were left behind")
+        self.assertTrue(transcript.beside(self.logs(), new).exists())
+
+    def test_sweeping_what_a_brain_printed_leaves_every_account_readable(self):
+        """R-STO-5 — the whole reason these are separable from the records. Sweeping is
+        reclaiming space, and it must cost an owner nothing they need."""
+        kept = self.kept()
+        run = self.a_run(kept)
+        kept.recorded(run, 1, AT, "tool", event={"name": "grep"}, raw='{"type":"tool"}')
+        self.printed(run)
+        long_ago = time.time() - 30 * 86400
+        os.utime(transcript.printed(self.logs(), run), (long_ago, long_ago))
+
+        self.assertEqual([run], transcript.sweep(self.logs(), keep_days=7))
+        self.assertEqual([("tool", '{"type":"tool"}')],
+                         [(one["kind"], one["raw"]) for one in kept.records(run)])
+        self.assertEqual([run], [one["id"] for one in kept.runs()])
+
+    def test_sweeping_where_nothing_was_ever_printed_is_ordinary(self):
+        """An agent that has never run, and a window nobody set — neither is an error."""
+        self.assertEqual([], transcript.sweep(self.logs()))
+        self.printed(self.a_run(self.kept()))
+        self.assertEqual([], transcript.sweep(self.logs(), keep_days=0),
+                         "a window of nothing swept everything rather than nothing")
 
 
 class WhatAnAgentKeepsAnAccountIn(WithAnAgentThatHasRun):

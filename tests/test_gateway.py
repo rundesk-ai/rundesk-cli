@@ -18,6 +18,7 @@ import os
 import pathlib
 import shutil
 import signal
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -25,13 +26,14 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import gateway, process, schedule, store  # noqa: E402
+from rundesk import activity, config, gateway, process, schedule, store  # noqa: E402
 
 PY = sys.executable
 
@@ -774,17 +776,19 @@ class WhatADeadGatewayLeftBehind(WithARunDirectory):
         gw = self.made()
         gw.claim()
         running = asyncio.ensure_future(gw.start(FOREVER, as_name="a-conversation", silence=None))
-        deadline = time.time() + 5
-        while not gw.running and time.time() < deadline:
+        deadline = time.monotonic() + 5
+        record = self.where / f"{gw.name}.json"
+        said = json.loads(record.read_text())
+        while "a-conversation" not in said["working"] and time.monotonic() < deadline:
             await asyncio.sleep(0.02)
-        said = json.loads((self.where / f"{gw.name}.json").read_text())
+            said = json.loads(record.read_text())
         self.assertIn("a-conversation", said["working"])
         self.assertEqual(
             next(iter(gw.running.values())).pid, said["working"]["a-conversation"]["pgid"]
         )
         await process.end_all(list(gw.running.values()))
         await running
-        after = json.loads((self.where / f"{gw.name}.json").read_text())
+        after = json.loads(record.read_text())
         self.assertEqual({}, after["working"], "work that finished was still recorded as running")
 
 
@@ -1427,6 +1431,11 @@ class AProgramTheGatewayStartsReadsWhatTheGatewayReads(WithARunDirectory):
         self.addCleanup(shutil.rmtree, self.elsewhere, True)
         self.addCleanup(os.environ.pop, "RUNDESK_AGENTS_DIR", None)
         os.environ["RUNDESK_AGENTS_DIR"] = str(self.elsewhere)
+        self.data_at = Path(tempfile.mkdtemp(prefix="rundesk-data-"))
+        self.addCleanup(shutil.rmtree, self.data_at, True)
+        self.addCleanup(os.environ.pop, "RUNDESK_DATA_DIR", None)
+        os.environ["RUNDESK_DATA_DIR"] = str(self.data_at)
+        config.ensure(self.data_at)
         self.agents = Path(tempfile.mkdtemp(prefix="rundesk-agents-"))
         self.addCleanup(shutil.rmtree, self.agents, True)
         agent.add("probe", self.agents)
@@ -2793,6 +2802,54 @@ class WhatAGatewaySaysAndWhereItLands(WithARunDirectory):
         self.assertIn("up", watching.getvalue(),
                       "a gateway run by hand went quiet")
 
+    def test_routine_channel_activity_is_logged_below_warning_severity(self):
+        """R-GW-44 — a successful delivery is useful diagnostic context, not a reason
+        for an owner to inspect the gateway."""
+
+        class Log:
+            def __init__(self):
+                self.info_lines = []
+                self.warning_lines = []
+
+            def info(self, template, *values):
+                self.info_lines.append(template % values)
+
+            def warning(self, template, *values):
+                self.warning_lines.append(template % values)
+
+        log = Log()
+        gateway._channel_note(log, "discord-dms", "INFO\twrote 262 chars and 0 files")
+        self.assertEqual(
+            ["channel 'discord-dms': wrote 262 chars and 0 files"],
+            log.info_lines,
+        )
+        self.assertEqual([], log.warning_lines)
+
+    def test_unclassified_channel_diagnostics_remain_warnings(self):
+        """An older or third-party adapter has not classified its stderr. Preserve the
+        attention-safe behavior instead of silently demoting a real failure."""
+
+        class Log:
+            def __init__(self):
+                self.info_lines = []
+                self.warning_lines = []
+
+            def info(self, template, *values):
+                self.info_lines.append(template % values)
+
+            def warning(self, template, *values):
+                self.warning_lines.append(template % values)
+
+        log = Log()
+        gateway._channel_note(log, "custom", "could not write")
+        gateway._channel_note(log, "custom", "WARNING\tconnection refused")
+        self.assertEqual([], log.info_lines)
+        self.assertEqual(
+            ["channel 'custom': could not write",
+             "channel 'custom': connection refused"],
+            log.warning_lines,
+        )
+
     def test_a_stream_that_cannot_say_whether_it_is_a_terminal_is_not_one(self):
         """R-GW-35 — anything may be standing in for stderr, including something that
         raises when asked. The unbounded copy is the thing being prevented, so the answer
@@ -2981,7 +3038,7 @@ if "--capabilities" in sys.argv:
 prompt = sys.stdin.read().strip()
 say = lambda **it: (sys.stdout.write(json.dumps(it) + "\n"), sys.stdout.flush())
 say(type="text", text="heard " + prompt)
-say(type="usage", input=100, output=8, cached=40, model="stand-in-1")
+say(type="usage", input=100, output=8, cached=40, session=148, model="stand-in-1")
 say(type="done", ok=True, session=(os.environ.get("RUNDESK_RESUME") or "") + "s")
 """ % PY
 
@@ -3005,14 +3062,38 @@ class ASurface:
     here that knew more would let a case pass against a message nobody could read.
     """
 
-    def __init__(self, refuses: bool = False):
-        self.told: list = []
-        self.refuses = refuses
+    #: Where a notice goes, which a real surface resolves once and hands back so the report
+    #: is delivered to the same conversation rather than to whichever is newest by then
+    #: (R-SCH-46).
+    NOTICE_WENT_TO = "the-room-the-notice-went-to"
 
-    async def told_what_a_schedule_did(self, named: str, became: str) -> None:
+    def __init__(self, refuses: bool = False, nowhere: bool = False):
+        self.told: list = []
+        #: The complete result handed to the surface, retained separately from the compact
+        #: outcome assertions older schedule cases make (R-SCH-50).
+        self.results: list = []
+        self.started: list = []
+        #: What each report was told to be delivered to, in order.
+        self.delivered_to: list = []
+        self.refuses = refuses
+        #: A surface with nowhere to deliver, which is what `told_a_schedule_started` hands
+        #: back when nothing has ever been said on it and no place was named (R-SCH-46).
+        self.nowhere = nowhere
+
+    async def told_what_a_schedule_did(self, named: str, result, where=None) -> None:
         if self.refuses:
             raise OSError("the platform would not take it")
-        self.told.append((named, became))
+        self.results.append(result)
+        self.told.append((named, getattr(result, "became", result)))
+        self.delivered_to.append(where)
+
+    async def told_a_schedule_started(self, named: str):
+        if self.refuses:
+            raise OSError("the platform would not take it")
+        if self.nowhere:
+            return False, None
+        self.started.append(named)
+        return True, self.NOTICE_WENT_TO
 
 
 class WhenTheClockAsksATurn(WithARunDirectory):
@@ -3030,6 +3111,11 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         self.addCleanup(shutil.rmtree, self.agents_at, True)
         self.addCleanup(os.environ.pop, "RUNDESK_AGENTS_DIR", None)
         os.environ["RUNDESK_AGENTS_DIR"] = str(self.agents_at)
+        self.data_at = Path(tempfile.mkdtemp(prefix="rundesk-data-"))
+        self.addCleanup(shutil.rmtree, self.data_at, True)
+        self.addCleanup(os.environ.pop, "RUNDESK_DATA_DIR", None)
+        os.environ["RUNDESK_DATA_DIR"] = str(self.data_at)
+        config.ensure(self.data_at)
         self.agents = agents
         agents.add("ava", self.agents_at)
         self.records = agents.records("ava", self.agents_at)
@@ -3095,6 +3181,290 @@ class WhenTheClockAsksATurn(WithARunDirectory):
                 if one["author"] == "agent"]
         self.assertEqual(["heard what changed?"], [one["text"] for one in said],
                          "what the brain answered is not readable afterwards")
+
+    async def test_an_update_migration_runs_once_as_a_backend_scheduled_turn(self):
+        """A release request is durable until the restarted gateway sees and completes it,
+        and it is never posted to a channel. It uses a fresh scheduled
+        conversation and remains expired after completion instead of running again."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        # The internal conversation and accounting must remain separate even when an owner
+        # used the same display name for an ordinary schedule.
+        self.records.remember_schedule(
+            "migration-91", None, store.stamped(), at="2099-01-01 00:00",
+            prompt="owner work",
+        )
+        with sqlite3.connect(str(self.records.at), isolation_level=None) as conn:
+            conn.execute(
+                "INSERT INTO update_turn (migration, prompt, instructions, bootstrap)"
+                " VALUES (91, ?, ?, ?)",
+                ("tighten this agent home", "this is an unattended update migration",
+                 "# replaced bootstrap\n"),
+            )
+        gw = self.made()
+        gw.claim()
+
+        run = await self._fired(gw)
+        gw._fire(schedule, datetime.now())
+        await asyncio.sleep(0.1)
+
+        self.assertEqual(("schedule", None), (run["source"], run["schedule_id"]))
+        conversation = next(one for one in self.records.conversations()
+                            if one["id"] == run["conversation_id"])
+        self.assertEqual(("update", "migration-91"),
+                         (conversation["channel"], conversation["space"]))
+        owner = self.records.schedule("migration-91")
+        self.assertIsNone(owner["last_outcome"])
+        self.assertIsNone(owner["last_auto_run_at"])
+        self.assertEqual(1, len(self.records.runs()), "the expired migration ran again")
+        self.assertEqual([], self.records.pending_update_turns())
+        with sqlite3.connect(str(self.records.at)) as conn:
+            completed = conn.execute(
+                "SELECT completed_at FROM update_turn WHERE migration = 91"
+            ).fetchone()[0]
+        self.assertIsNotNone(completed)
+        self.assertEqual(
+            "# replaced bootstrap\n",
+            (self.agents.home("ava", self.agents_at) / "CLAUDE.md").read_text(),
+        )
+
+    async def test_a_returned_update_is_settled_without_replaying_after_a_write_failure(self):
+        """The run is the durable proof across the narrow return/expire boundary. A failed
+        completion write is retried from that proof, never by running the migration again."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        with sqlite3.connect(str(self.records.at), isolation_level=None) as conn:
+            conn.execute(
+                "INSERT INTO update_turn (migration, prompt, instructions, bootstrap)"
+                " VALUES (96, 'migrate', 'backend only', '# bootstrap\\n')"
+            )
+        gw = self.made()
+        gw.claim()
+
+        with mock.patch.object(
+                self.records, "complete_update_turn", side_effect=OSError("briefly locked")):
+            await self._fired(gw)
+            deadline = time.time() + 2
+            while gw._update_turn_tasks and time.time() < deadline:
+                await asyncio.sleep(0.01)
+
+        self.assertEqual([96], [
+            one["migration"] for one in self.records.pending_update_turns()
+        ])
+        gw._fire(schedule, datetime.now())
+        await asyncio.sleep(0.1)
+
+        self.assertEqual([], self.records.pending_update_turns())
+        self.assertEqual(1, len(self.records.runs()), "the returned migration was replayed")
+
+    async def test_a_stopped_update_run_is_not_mistaken_for_a_returned_migration(self):
+        """Cancellation settles the run account as stopped, but not the migration request.
+        A successor must still be allowed to finish the agent-home work."""
+        conversation = "migration-98"
+        identifier = store.conversation_id("update", conversation)
+        self.records.opened(
+            identifier, "update", "schedule", conversation, store.stamped())
+        run = self.records.began(
+            "schedule", "stand-in", "default", store.stamped(),
+            conversation_id=identifier,
+        )
+        self.records.ended(run, store.stamped(), "stopped")
+
+        self.assertFalse(self.records.update_turn_returned(conversation))
+
+    async def test_pending_update_migrations_run_oldest_first(self):
+        """Two release prompts may accumulate while an agent is unrunnable. They must never
+        rewrite one home concurrently, and the later request must run after the first."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        with sqlite3.connect(str(self.records.at), isolation_level=None) as conn:
+            for version in (94, 95):
+                conn.execute(
+                    "INSERT INTO update_turn (migration, prompt, instructions, bootstrap)"
+                    " VALUES (?, 'migrate', 'backend only', '# bootstrap\\n')",
+                    (version,),
+                )
+        gw = self.made()
+        gw.claim()
+        gw._fire(schedule, datetime.now())
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            if not gw._update_turn_tasks and [
+                    one["migration"] for one in self.records.pending_update_turns()] == [95]:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(1, len(self.records.runs()))
+        self.assertEqual([95], [
+            one["migration"] for one in self.records.pending_update_turns()
+        ])
+        gw._fire(schedule, datetime.now())
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            if not gw._update_turn_tasks and not self.records.pending_update_turns():
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual([], self.records.pending_update_turns())
+        runs = list(reversed(self.records.runs()))
+        conversations = {
+            one["id"]: one for one in self.records.conversations(channel="update")
+        }
+        self.assertEqual(
+            ["migration-94", "migration-95"],
+            [conversations[one["conversation_id"]]["space"] for one in runs],
+        )
+
+    async def test_bootstrap_replacement_failure_is_atomic_and_retried(self):
+        """A failed script-owned replacement leaves the old bootstrap intact and the
+        request pending; a later tick can perform the replacement and run exactly once."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        bootstrap = self.agents.home("ava", self.agents_at) / "CLAUDE.md"
+        before = bootstrap.read_bytes()
+        with sqlite3.connect(str(self.records.at), isolation_level=None) as conn:
+            conn.execute(
+                "INSERT INTO update_turn (migration, prompt, instructions, bootstrap)"
+                " VALUES (99, 'migrate', 'backend only', ?)",
+                ("# replacement\n",),
+            )
+        gw = self.made()
+        gw.claim()
+
+        with mock.patch.object(
+                store.os, "replace", side_effect=OSError("replacement unavailable")):
+            gw._fire(schedule, datetime.now())
+            deadline = time.time() + 2
+            while gw._update_turn_tasks and time.time() < deadline:
+                await asyncio.sleep(0.01)
+
+        self.assertEqual(before, bootstrap.read_bytes())
+        self.assertFalse(
+            bootstrap.with_name(".CLAUDE.md.update-99").exists(),
+            "the failed atomic replacement left its temporary file behind",
+        )
+        self.assertEqual([99], [
+            one["migration"] for one in self.records.pending_update_turns()
+        ])
+        self.assertEqual([], self.records.runs())
+
+        await self._fired(gw)
+        self.assertEqual(b"# replacement\n", bootstrap.read_bytes())
+        self.assertEqual([], self.records.pending_update_turns())
+        self.assertEqual(1, len(self.records.runs()))
+
+    async def test_serve_cancels_and_awaits_a_backend_migration(self):
+        """Production shutdown owns backend tasks rather than relying on loop teardown."""
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def blocked(_one):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        with sqlite3.connect(str(self.records.at), isolation_level=None) as conn:
+            conn.execute(
+                "INSERT INTO update_turn (migration, prompt, instructions, bootstrap)"
+                " VALUES (97, 'migrate', 'backend only', '# bootstrap\\n')"
+            )
+        gw = self.made(asking=blocked)
+        serving = asyncio.ensure_future(gw.serve())
+        while gw._stopped is None:
+            await asyncio.sleep(0)
+        gw._fire(schedule, datetime.now())
+        await asyncio.wait_for(started.wait(), timeout=2)
+        gw.ask_to_stop()
+
+        await asyncio.wait_for(serving, timeout=5)
+        self.assertTrue(cancelled.is_set())
+        self.assertEqual({}, gw._update_turn_tasks)
+        self.assertEqual([97], [
+            one["migration"] for one in self.records.pending_update_turns()
+        ])
+
+    async def test_an_update_migration_that_cannot_start_remains_pending(self):
+        """A claim is not completion. An agent with no configured brain may become runnable
+        later, so the update request remains available rather than disappearing on the
+        first gateway that could not start it."""
+        with sqlite3.connect(str(self.records.at), isolation_level=None) as conn:
+            conn.execute(
+                "INSERT INTO update_turn (migration, prompt, instructions, bootstrap)"
+                " VALUES (92, 'migrate', 'backend only', '# bootstrap\\n')"
+            )
+        gw = self.made()
+        gw.claim()
+
+        gw._fire(schedule, datetime.now())
+        deadline = time.time() + 2
+        while gw._update_turn_tasks and time.time() < deadline:
+            await asyncio.sleep(0.01)
+
+        self.assertEqual([92], [
+            one["migration"] for one in self.records.pending_update_turns()
+        ])
+        self.assertEqual([], self.records.runs())
+
+    async def test_an_interrupted_update_migration_runs_after_the_gateway_returns(self):
+        """Shutdown may land after the backend task starts. Cancellation leaves the durable
+        request pending, and a successor runs it once instead of losing it at the claim."""
+        started = asyncio.Event()
+
+        async def accounted(_name, prompt, provider, **held):
+            """The turn seam with its real durable account, blocked after admission."""
+            identifier = store.conversation_id(held["on"], held["conversation"])
+            self.records.opened(
+                identifier, held["on"], held["kind"], held["conversation"], store.stamped())
+            asked = self.records.arrived(identifier, store.stamped(), prompt)
+            run = self.records.began(
+                held["source"], provider, "default", store.stamped(),
+                conversation_id=identifier, schedule_id=held["schedule_id"],
+                trigger_message_id=asked,
+            )
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                self.records.interrupted(run, store.stamped(), "gateway stopped")
+
+        self.agents.remember("ava", self.agents_at, provider="stand-in")
+        with sqlite3.connect(str(self.records.at), isolation_level=None) as conn:
+            conn.execute(
+                "INSERT INTO update_turn (migration, prompt, instructions, bootstrap)"
+                " VALUES (93, 'migrate', 'backend only', '# bootstrap\\n')"
+            )
+        first = self.made(asking=self.agents.asking(
+            "ava", self.agents_at, carry=accounted))
+        first.claim()
+        first._fire(schedule, datetime.now())
+        await asyncio.wait_for(started.wait(), timeout=2)
+        runs = self.records.runs()
+        self.assertTrue(runs and runs[0]["ended_at"] is None, "the real turn was not admitted")
+        task = first._update_turn_tasks[93]
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0)
+        interrupted = self.records.runs()[0]
+        self.assertEqual("stopped", interrupted["outcome"])
+        self.assertEqual([93], [
+            one["migration"] for one in self.records.pending_update_turns()
+        ])
+        first.release()
+
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        successor = self.made()
+        successor.claim()
+        successor._fire(schedule, datetime.now())
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            runs = self.records.runs()
+            if len(runs) == 2 and runs[0]["ended_at"]:
+                break
+            await asyncio.sleep(0.01)
+        run = self.records.runs()[0]
+
+        self.assertEqual("finished", run["outcome"])
+        self.assertEqual([], self.records.pending_update_turns())
+        self.assertEqual(2, len(self.records.runs()))
 
     async def test_a_turn_the_clock_started_says_so_in_the_account(self):
         """R-RUN-16 — the column somebody reads at three in the morning to find out whether
@@ -3167,13 +3537,13 @@ class WhenTheClockAsksATurn(WithARunDirectory):
                 if one["author"] == "rundesk"]
         self.assertEqual(1, len(told), f"what it was told is not in the account: {told}")
         self.assertIn("nightly", told[0])
-        self.assertIn("will not be answered", told[0])
+        self.assertIn("Nothing will answer", told[0])
 
-    async def test_what_a_schedule_was_told_to_say_wins_over_rundesks_own(self):
-        """R-SCH-30, R-AGT-16, R-AGT-17 — nearest first among the things that describe the
-        situation, and what the owner wrote is added to rundesk's own rather than replacing
-        them: ours says what the agent is and how to find what it did, theirs says what to do
-        about tonight, and an agent needs both."""
+    async def test_what_a_schedule_was_told_to_say_is_added_to_rundesks_own(self):
+        """R-SCH-30, R-AGT-16, R-AGT-17, R-AGT-34 — what the owner wrote is added to
+        rundesk's own rather than replacing them: ours says what the agent is, how to find
+        what it did and what the situation is, theirs says what to do about tonight, and an
+        agent needs both."""
         self.agents.remember("ava", self.agents_at, provider=self.brain())
         self.asks(instructions="Only look at the deploy log.")
         gw = self.made()
@@ -3185,8 +3555,28 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         self.assertTrue(told[0].startswith(self.agents.standing("ava")))
         self.assertTrue(told[0].endswith("Only look at the deploy log."))
 
-    async def test_a_schedule_that_says_nothing_falls_to_what_the_agent_says(self):
-        """R-AGT-16 — the tier in the middle, on the surface that has no other."""
+    async def test_a_schedule_told_what_to_do_is_still_told_nobody_is_watching(self):
+        """R-AGT-34, R-SCH-30 — the regression this whole tier change exists for. Standing
+        instructions as ordinary as one line about what to look at used to displace the only
+        statement rundesk makes about a scheduled turn, and nothing anywhere said so."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain(),
+                             instructions="You are ava, and you are always brief.")
+        self.asks(instructions="Only look at the deploy log.")
+        gw = self.made()
+        gw.claim()
+        run = await self._fired(gw)
+        told = [one["text"] for one in self.records.messages(run["conversation_id"])
+                if one["author"] == "rundesk"][0]
+        self.assertIn("nightly", told, "it never said which schedule started this")
+        self.assertIn("Nothing will answer", told)
+        self.assertIn("Write nothing until the work is finished", told)
+        self.assertLess(told.index("Nothing will answer"),
+                        told.index("Only look at the deploy log."),
+                        "the owner's words came before rundesk's account of the situation")
+
+    async def test_a_schedule_that_says_nothing_still_gets_what_the_agent_says(self):
+        """R-AGT-16 — the tier in the middle, on the surface that has no other. Still
+        reached now that rundesk's own line no longer waits for everyone else to be silent."""
         self.agents.remember("ava", self.agents_at, provider=self.brain(),
                              instructions="You are ava, and you are always brief.")
         self.asks()
@@ -3211,8 +3601,9 @@ class WhenTheClockAsksATurn(WithARunDirectory):
                         f"the schedule's own brain was passed over: {run['provider']}")
 
     async def test_what_a_schedule_came_to_is_said_on_the_surface_it_names(self):
-        """R-SCH-31 — the gateway is the only thing that can say it: a channel is held open
-        here, and a scheduled program is a child process that cannot reach one."""
+        """R-SCH-31, R-SCH-50 — the gateway is the only thing that can say it: a channel
+        is held open here, and it receives the complete turn result rather than losing the
+        usage facts before the answer can be rendered."""
         self.agents.remember("ava", self.agents_at, provider=self.brain())
         self.reachable_on("ops")
         self.asks(channel="ops")
@@ -3223,6 +3614,10 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         told = gw._reached["ops"].told
         self.assertEqual([("nightly", "finished")], told,
                          f"what the schedule came to never reached the surface: {told}")
+        result = gw._reached["ops"].results[0]
+        self.assertEqual((True, 8, 148), (result.tokens["reported"],
+                                          result.tokens["output"],
+                                          result.tokens["session"]))
 
     async def test_a_schedule_says_it_on_the_surface_it_names_and_no_other(self):
         """R-SCH-31 — it went to every surface the agent had, which is two notices about work
@@ -3289,6 +3684,144 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         self.assertEqual("finished", self.records.schedule("nightly")["last_outcome"],
                          "a surface refusing changed what the schedule recorded")
         self.assertIn("could not say what", gateway.log_path("ava", self.logs).read_text())
+
+    async def _became(self, gw, named: str, seconds: float = 30.0) -> str:
+        """Fire the clock and wait for this schedule to settle on a final outcome.
+
+        `_fired` waits for a *run*, which a schedule that starts a program never writes and
+        a firing that never reached a brain never writes either. What every one of them does
+        write is the outcome on the schedule itself — and `started` is written before the
+        work begins, so it is the one word that means this has not finished yet.
+
+        Whatever is said on a surface is said after that write, so the settle below is not
+        politeness: read straight off the outcome, a case about what reached the surface is
+        reading it before anything could have.
+        """
+        gw._fire(schedule, datetime.now())
+        deadline, became = time.time() + seconds, None
+        while time.time() < deadline:
+            with contextlib.suppress(Exception):
+                became = (self.records.schedule(named) or {}).get("last_outcome")
+                if became and became != "started":
+                    break
+            await asyncio.sleep(0.05)
+        else:
+            self.fail(f"schedule '{named}' never settled on an outcome (last said {became!r})")
+        for _ in range(200):
+            if not [one for one in asyncio.all_tasks() if one is not asyncio.current_task()]:
+                break
+            await asyncio.sleep(0.005)
+        return became
+
+    async def test_a_scheduled_run_says_it_started_before_it_says_what_it_found(self):
+        """R-SCH-46 — an owner cannot otherwise tell a schedule is running: work starts at six,
+        nothing is said for twenty minutes, and the report arrives beside answers to other
+        questions with nothing tying the two together."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.reachable_on("ops")
+        self.asks(channel="ops")
+        gw = self.made()
+        gw._reached["ops"] = ASurface()
+        gw.claim()
+        await self._fired(gw)
+        self.assertEqual(["nightly"], gw._reached["ops"].started,
+                         "nothing said the run had begun")
+        self.assertEqual([("nightly", "finished")], gw._reached["ops"].told,
+                         "what it found did not follow the notice that it had started")
+
+    async def test_a_run_carries_where_its_notice_went_to_its_report(self):
+        """R-SCH-46 — the gateway is what holds the two ends of a run together, so it is what
+        carries where the notice went across to the report. Left for the report to work out
+        again, the answer is whichever room somebody last spoke in — which a long run gives an
+        owner every chance to change, leaving a promise standing in one room for ever and its
+        outcome posted in another."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.reachable_on("ops")
+        self.asks(channel="ops")
+        gw = self.made()
+        gw._reached["ops"] = ASurface()
+        gw.claim()
+        await self._fired(gw)
+        self.assertEqual([ASurface.NOTICE_WENT_TO], gw._reached["ops"].delivered_to,
+                         "the report was left to resolve where it goes all over again")
+        self.assertEqual({}, gw._announced, "a notice already answered is still standing")
+
+    async def test_a_report_for_a_run_nobody_announced_resolves_where_it_goes(self):
+        """R-SCH-31, R-SCH-46 — a program schedule never announces, so there is nowhere carried
+        to deliver to and the report goes where every report went before there were notices."""
+        self.reachable_on("ops")
+        self.records.remember_schedule("tidy", "* * * * *", store.stamped(),
+                                       command=[PY, "-c", "pass"], channel="ops")
+        gw = self.made()
+        gw._reached["ops"] = ASurface()
+        gw.claim()
+        await self._became(gw, "tidy")
+        self.assertEqual([None], gw._reached["ops"].delivered_to,
+                         "a report nobody announced was pinned to a conversation anyway")
+
+    async def test_a_schedule_that_starts_a_program_says_nothing_when_it_starts(self):
+        """R-SCH-46 — a program has no report to anchor, so `Working on…` for one is a promise
+        rundesk does not keep. What it *came to* is still said, exactly as it was (R-SCH-31)."""
+        self.reachable_on("ops")
+        self.records.remember_schedule("tidy", "* * * * *", store.stamped(),
+                                       command=[PY, "-c", "pass"], channel="ops")
+        gw = self.made()
+        gw._reached["ops"] = ASurface()
+        gw.claim()
+        await self._became(gw, "tidy")
+        self.assertEqual([], gw._reached["ops"].started,
+                         "a program schedule promised a report it never delivers")
+        self.assertEqual(["tidy"], [named for named, _became in gw._reached["ops"].told],
+                         "a program schedule stopped saying what it came to")
+
+    async def test_a_run_that_could_not_start_still_replies_to_its_notice(self):
+        """R-SCH-46 — the notice must not be left standing with nothing under it. A brain that
+        could not be reached is exactly the case an owner is waiting on, and a `Working on…`
+        with no outcome beneath it reads as an agent that hung."""
+        async def would_not(one):
+            raise RuntimeError("the brain could not be reached")
+
+        self.reachable_on("ops")
+        self.asks(channel="ops")
+        gw = self.made(asking=would_not)
+        gw._reached["ops"] = ASurface()
+        gw.claim()
+        self.assertEqual("could not start", await self._became(gw, "nightly"))
+        self.assertEqual(["nightly"], gw._reached["ops"].started)
+        self.assertEqual([("nightly", "could not start")], gw._reached["ops"].told,
+                         "the notice was left with no outcome under it")
+
+    async def test_a_firing_refused_for_still_running_says_nothing_about_starting(self):
+        """R-SCH-6, R-SCH-46 — announced before the overlap guard, this firing would have said
+        work began that never did. And the notice standing on the surface belongs to the run
+        still going, so answering it here would close off work that has not finished."""
+        self.agents.remember("ava", self.agents_at, provider=self.brain())
+        self.reachable_on("ops")
+        self.asks(channel="ops")
+        gw = self.made()
+        gw._reached["ops"] = ASurface()
+        gw._asked_for.add(f"{gateway.SCHEDULED_AS}nightly")
+        gw.claim()
+        self.assertEqual("still running", await self._became(gw, "nightly"))
+        self.assertEqual([], gw._reached["ops"].started, "it said a refused firing had begun")
+        self.assertEqual([], gw._reached["ops"].told,
+                         "it answered a notice belonging to the run still going")
+
+    async def test_a_surface_with_nowhere_to_deliver_leaves_no_notice_to_answer(self):
+        """R-SCH-46 — nowhere to say it is nowhere to say it started, and only what actually
+        went out is owed a reply. A gateway that assumed the notice landed would post an
+        outcome into a room that never saw the thing it is answering."""
+        async def would_not(one):
+            raise RuntimeError("the brain could not be reached")
+
+        self.reachable_on("ops")
+        self.asks(channel="ops")
+        gw = self.made(asking=would_not)
+        gw._reached["ops"] = ASurface(nowhere=True)
+        gw.claim()
+        await self._became(gw, "nightly")
+        self.assertEqual([], gw._reached["ops"].told,
+                         "it answered a notice that never went out")
 
     async def test_a_schedule_that_names_rundesk_ask_is_admitted_as_the_clocks_work(self):
         """R-RUN-16, R-SCH-27, R-SCH-29 — the other half of the phase, and the one a stand-in
@@ -3385,6 +3918,158 @@ class WhenTheClockAsksATurn(WithARunDirectory):
             await asyncio.sleep(0.05)
         self.assertEqual("could not start", self.records.schedule("nightly")["last_outcome"])
         self.assertIn("nothing to ask one with", gateway.log_path("ava", self.logs).read_text())
+
+
+class ARunTheGatewayNeverSettled(WithARunDirectory):
+    """R-GW-23 — a run is marked running the moment it is admitted, and nothing rewrote
+    that if the gateway holding it died, was stopped, or was replaced by an update.
+
+    Reported (#105): one agent's `rundesk runs` still showed a turn in flight more than
+    twenty-six hours after its transcript stopped being written, across three releases.
+    The record is what answers "what is in flight" and "what did this cost"; a stranded
+    row makes both untrue and its cost stays unreported for ever.
+    """
+
+    def _left_running(self, provider="codex"):
+        """A run admitted and never ended — what a gateway that went mid-turn leaves."""
+        return self.records.began("channel", provider, "read", "2026-07-27T18:31:18Z")
+
+    def _row(self, run):
+        return next(one for one in self.records.runs(limit=200) if one["id"] == run)
+
+    def _turning(self, run, pid=None):
+        """The activity record a live turn publishes for itself."""
+        activity.began(self.where, {
+            "run": run, "source": "channel", "surface": "discord",
+            "conversation": "one", "pid": pid or os.getpid(), "since": 1,
+        })
+
+    def test_a_run_left_running_by_a_gone_gateway_is_settled_when_the_next_one_starts(self):
+        run = self._left_running()
+        self.made().claim()
+        row = self._row(run)
+        self.assertIsNotNone(row["ended_at"], "the run is still marked as running")
+        self.assertEqual("stopped", row["outcome"])
+        self.assertEqual(gateway.ABANDONED_WHY, row["why"])
+
+    def test_a_turn_that_is_genuinely_still_turning_is_left_running(self):
+        """Settling live work would be the same lie the other way up. What is turning
+        says so for itself, and this gateway asks that rather than a process table."""
+        run = self._left_running()
+        self._turning(run)
+        self.made().claim()
+        self.assertIsNone(self._row(run)["ended_at"],
+                          "a turn that is genuinely running was written off")
+
+    def test_settling_one_stranded_run_does_not_touch_a_run_that_already_ended(self):
+        """A settled run keeps what it was settled as — including what it cost."""
+        done = self._left_running(provider="claude")
+        self.records.ended(done, "2026-07-27T18:33:00Z", "finished",
+                           tokens={"input": 12, "output": 3, "reported": True})
+        stranded = self._left_running()
+        self.made().claim()
+        settled, kept = self._row(stranded), self._row(done)
+        self.assertEqual("stopped", settled["outcome"])
+        self.assertEqual("finished", kept["outcome"], "a finished run was overwritten")
+        self.assertEqual("2026-07-27T18:33:00Z", kept["ended_at"])
+        self.assertEqual(12, kept["tokens_in"])
+
+    def test_a_gateway_whose_records_will_not_settle_still_comes_up(self):
+        """A gateway that refused to start because it could not tidy the last one's
+        records is a worse outage than the bad rows it was trying to fix."""
+        class Refuses:
+            def __getattr__(self, named):
+                raise RuntimeError("records are unreadable")
+
+        gw = self.made()
+        gw.records = Refuses()
+        gw._settle_runs_nothing_is_doing()          # says so in the log, and returns
+        gw.claim()
+        self.assertIsNotNone(gw._lock, "the gateway refused to start over old records")
+
+
+class LifecycleOutcomesWaitForReachability(WithARunDirectory):
+    """R-UPD-40, R-GW-43 — lifecycle outcomes wait for their channel to reconnect."""
+
+    async def test_lifecycle_outcomes_are_not_offered_until_the_channel_is_ready(self):
+        """A disconnected channel is an expected wait state, not a failed delivery."""
+        class Surface:
+            def __init__(self):
+                self.connected = False
+                self.update_calls = 0
+                self.restart_calls = 0
+                self.update_refused = False
+                self.restart_refused = False
+
+            async def told_update_finished(self, _conversation, _text):
+                self.update_calls += 1
+                if not self.connected:
+                    raise RuntimeError("channel 'ops' is not connected")
+                if not self.update_refused:
+                    self.update_refused = True
+                    raise OSError("the platform is busy")
+
+            async def told_restart_finished(self, _conversation, _text):
+                self.restart_calls += 1
+                if not self.connected:
+                    raise RuntimeError("channel 'ops' is not connected")
+                if not self.restart_refused:
+                    self.restart_refused = True
+                    raise OSError("the platform is busy")
+
+        update = {
+            "id": "update-1",
+            "origin": {"channel": "ops", "conversation": "one"},
+        }
+        restart = {
+            "id": "restart-1",
+            "origin": {"channel": "ops", "conversation": "one"},
+        }
+        surface = Surface()
+        gw = self.made("ava")
+        gw._reached["ops"] = surface
+        sleeps = 0
+
+        async def advance(_seconds):
+            nonlocal sleeps
+            sleeps += 1
+            if sleeps == 30:
+                self.assertEqual(0, surface.update_calls)
+                self.assertEqual(0, surface.restart_calls)
+                update_delivered.assert_not_called()
+                restart_delivered.assert_not_called()
+                self.assertEqual([], warning.call_args_list,
+                                 "waiting for readiness wrote warning noise")
+                surface.connected = True
+            elif sleeps == 31:
+                self.assertEqual((1, 1), (surface.update_calls, surface.restart_calls))
+                update_delivered.assert_not_called()
+                restart_delivered.assert_not_called()
+            elif sleeps == 32:
+                gw._stopping = True
+
+        with (
+            mock.patch.object(gateway.update_request, "deliverable", return_value=update),
+            mock.patch.object(gateway.update_request, "summary", return_value="updated"),
+            mock.patch.object(gateway.update_request, "delivered") as update_delivered,
+            mock.patch.object(gateway.restart_request, "deliverable", return_value=restart),
+            mock.patch.object(gateway.restart_request, "summary", return_value="restarted"),
+            mock.patch.object(gateway.restart_request, "delivered") as restart_delivered,
+            mock.patch.object(gateway.asyncio, "sleep", new=advance),
+            mock.patch.object(gw.log, "warning") as warning,
+        ):
+            await gw._deliver_update_notices()
+
+        self.assertEqual(2, surface.update_calls,
+                         "the update did not retry exactly once after a ready failure")
+        self.assertEqual(2, surface.restart_calls,
+                         "the restart did not retry exactly once after a ready failure")
+        update_delivered.assert_called_once_with("update-1")
+        restart_delivered.assert_called_once_with("ava", "restart-1")
+        warnings = [call.args[0] % call.args[1:] for call in warning.call_args_list]
+        self.assertEqual(2, len(warnings), "a ready failure was not warned once per retry")
+        self.assertFalse(any("not connected" in line for line in warnings),
+                         "an expected wait state was logged as a delivery failure")
 
 
 if __name__ == "__main__":

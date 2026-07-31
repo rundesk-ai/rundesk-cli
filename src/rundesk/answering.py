@@ -28,6 +28,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import os
+import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,6 +69,15 @@ AFTER_UPDATE = (
     "The external Rundesk update attempt has finished and the gateway is back online. "
     "Verify the installed version and update outcome, then continue and finish the user's "
     "original request. Do not stop at reporting status or repeat completed actions."
+)
+
+# A reserved whole line is a portable control record, not a guess about Markdown. It is
+# recognized before formatting in every context; prefix it with a backslash when showing
+# the protocol literally. Ordinary links, quotes, lists, and code contain no control line.
+_LOCAL_ATTACHMENT = re.compile(
+    r"^rundesk-attach:[ \t]+\[(?P<label>(?:\\.|[^]\\\r\n])*)\]"
+    r"\(<(?P<at>/(?!/)[^>\r\n]+)>\)[ \t]*\r?$",
+    re.MULTILINE,
 )
 
 
@@ -113,7 +126,8 @@ class Answering:
     """
 
     def __init__(self, name: str, channel_name: str, record: dict, sending,
-                 where=None, carry=None, note=None, restarting=None, querying=None):
+                 where=None, carry=None, note=None, restarting=None, querying=None,
+                 restart_waiting=None, restart_ready=None):
         self.name = name
         self.channel = channel_name
         self.record = record
@@ -125,6 +139,8 @@ class Answering:
         #: keeps a gateway up is the machine's and this file has never heard
         #: of a gateway (R-CH-16).
         self._restarting = restarting
+        self._restart_waiting = restart_waiting or (lambda _run: False)
+        self._restart_ready = restart_ready or (lambda _run: None)
         #: Read-only gateway facts, resolved above this layer. Answering owns the
         #: authorization boundary but knows neither how an agent nor its gateway is
         #: represented (R-CAD-17).
@@ -199,25 +215,76 @@ class Answering:
 
     def _from(self, it: dict) -> str:
         """What this agent is told about the situation, before it reads the words
-        (R-CH-21, R-CH-22, R-AGT-16, R-AGT-17).
+        (R-CH-21, R-CH-22, R-AGT-16, R-AGT-17, R-AGT-38).
 
-        Three things could say it and what is nearest wins: this channel's own, then the
-        agent's, then the one line rundesk says when nobody has said anything. Rundesk's
-        stable standing words precede whichever situational tier wins.
+        Rundesk's core and channel instructions come first. A channel or adapter may
+        override only the channel layer or append to it; the agent owner's instructions
+        always append and never displace either core layer.
         """
-        said = self.record.get(channel.INSTRUCTIONS)
-        if isinstance(said, str) and said.strip():
-            # The channel is the nearest situational tier. Pass only the invariant prefix:
-            # handing the agent-level situation too would make both tiers reach the turn.
-            otherwise = agents.standing(self.name)
-        else:
-            otherwise = agents.told(
-                self.name, self._where, otherwise=channel.by_default(self.record, it))
         return channel.preface(
             self.record, self.name, self.channel, it,
-            otherwise=otherwise)
+            core_variables=agents.instruction_variables(self.name, self._where),
+            append=agents.added_instructions(self.name, self._where))
 
-    async def told_what_a_schedule_did(self, named: str, became: str) -> None:
+    #: What rundesk says on a surface when a scheduled run that will report there begins
+    #: (R-SCH-46). Rundesk's own bookkeeping and never the agent's prose: an owner cannot
+    #: otherwise tell that work started at six in the morning, and the first sign of it is
+    #: a report arriving twenty minutes later beside answers to other questions, with
+    #: nothing tying the two together.
+    STARTING = "💻 Working on '{named}' — I will report back when it is done."
+
+    async def told_a_schedule_started(self, named: str) -> tuple[bool, str | None]:
+        """Say on this surface that one of this agent's schedules has begun (R-SCH-46).
+
+        The sibling of `told_what_a_schedule_did`, and where it goes is resolved here **once
+        for both** — the place the owner named, and the newest conversation on this surface
+        only when they named none (R-SCH-32). Hands back whether anything went out and the
+        conversation it went to, because the report is delivered *there* rather than asking
+        the same question again twenty minutes later.
+
+        Resolving the same way is not resolving to the same answer: the newest conversation
+        is whichever room somebody last spoke in, and somebody speaking in another one is
+        exactly what a long run gives them time to do. Re-derived at the end, the notice
+        stands in one room for ever with nothing under it while the outcome lands in
+        another, anchored to nothing — which is worse than neither message.
+
+        **Only where a report is actually delivered.** Which schedules those are is not
+        known here: a schedule that starts a program has no report to anchor, and only the
+        gateway that started it knows which kind it was. So this is called for one kind and
+        not the other rather than deciding for itself.
+
+        **Nowhere to say it is nowhere to say it started.** A surface nobody has spoken on
+        and no place named has no room for the notice either, and hands back that it said
+        nothing — the caller owes a reply only to a notice that actually went out.
+
+        **A place named is carried, not resolved for.** A word an owner said is what the
+        adapter is handed for both messages, so the two reach the same room whether or not
+        rundesk has ever seen it; there is nothing to carry over and nothing that can drift.
+
+        **Not written down where it was delivered**, which is the one place this differs
+        from the report. R-SCH-33 exists so a person replying to what the agent *said*
+        reaches a brain whose session saw it; nobody replies "nice work" to rundesk saying
+        work has begun, and writing it in would put a line the agent never said into the
+        account of what it said.
+        """
+        kept = agents.reading(self.name, self._where)
+        row = kept.schedule(named) or {}
+        place = row.get("place")
+        where_it_goes, said = self._where_to_say(kept, place)
+        if where_it_goes is None and not place:
+            self._note(f"channel '{self.channel}': nowhere to say that '{named}' has "
+                       f"started — nothing has been said on this surface yet")
+            return False, None
+        # The schedule's name goes over with it, because that is what the surface holds the
+        # posted message under and what the report names to find it again (R-DIS-30). The
+        # surface is never asked to read it — it is a key, exactly as `place` is a word.
+        self._tell(type="said", conversation=where_it_goes, place=place or None,
+                   text=self.STARTING.format(named=named), schedule=named, began=True)
+        if where_it_goes is None and said:
+            self._note(said)
+        return True, where_it_goes
+
+    async def told_what_a_schedule_did(self, named: str, result, where=None) -> None:
         """Say on this surface what one of this agent's schedules came to (R-SCH-31).
 
         **The one thing here that nobody asked for.** Every other record this sends answers
@@ -225,9 +292,11 @@ class Answering:
         already looks, because work that failed at three in the morning is no use in an account
         nobody opens until they think to.
 
-        Said as a remark rather than as an answer: `said` is a complete thing the agent said
-        that is not anchored to a question, which is exactly what this is — there is no message
-        to reply to and no reaction to put on one.
+        **A turn's report is a completed answer** (R-SCH-50), with the provider, elapsed time,
+        and usage its outcome carried. The clock supplied no inbound question, but the channel
+        can still present the report like every other final answer and anchor it to the notice
+        that the run started. Program and startup outcomes have no turn outcome to enrich, so
+        those remain complete remarks.
 
         **Where** is the place the schedule named, and the newest conversation on this surface
         only when it named none. A channel reaching a whole server has many rooms, and picking
@@ -240,23 +309,73 @@ class Answering:
         the next message in that conversation reaches a brain whose session never saw this, so
         somebody saying "nice work" about it is asking about something the agent has no record
         of having said there.
+
+        **A reply to the notice that this run started, where one went out** (R-SCH-46). The
+        schedule's name is on the record and the surface anchors to whatever it is holding
+        under that name; a surface holding nothing posts it plainly, which is what every
+        report did before there were notices at all.
+
+        **`where` is where that notice went**, handed back when it went out and passed
+        straight through here — the one thing this does not work out for itself. Asking
+        again would ask a *different* question: the newest conversation is whichever room
+        somebody last spoke in, and a run long enough to be worth announcing is long enough
+        for that to have changed. A schedule that named a place carries the word instead,
+        and one that never announced resolves where it always did.
         """
         kept = agents.reading(self.name, self._where)
         row = kept.schedule(named) or {}
         place = row.get("place")
-        where_it_goes, said = self._where_to_say(kept, place)
+        if where and not place:
+            where_it_goes, said = where, ""
+        else:
+            where_it_goes, said = self._where_to_say(kept, place)
         if where_it_goes is None and not place:
             self._note(f"channel '{self.channel}': nowhere to say what '{named}' did — "
                        f"nothing has been said on this surface yet")
             return
+        became = getattr(result, "became", result)
         text = self._what_it_did(kept, named, became)
+        outcome_run = getattr(result, "run", None)
+        run = kept.run(outcome_run) if isinstance(outcome_run, str) else None
+        if run is None:
+            ran = kept.runs(schedule_id=row.get("id"), limit=1)
+            run = ran[0] if ran else None
         # The place goes over even when we resolved a conversation ourselves: only the adapter
         # can reach a room nobody has spoken in yet, and it is the one that knows what the word
         # means. A surface that cannot resolve one falls back to the conversation (R-CAD-16).
-        self._tell(type="said", conversation=where_it_goes, place=place or None, text=text)
+        if outcome_run is None:
+            self._tell(type="said", conversation=where_it_goes, place=place or None,
+                       text=text, schedule=named)
+        else:
+            # A scheduled turn is still a completed channel answer (R-SCH-50). Its outcome
+            # is the only place the session-size figure survives: the durable run keeps the
+            # billed pieces but deliberately does not store that provider snapshot.
+            text, linked = _attachment_lines(text)
+            attachments = await self._made([*linked, *getattr(result, "files", ())])
+            tokens = getattr(result, "tokens", {})
+            if isinstance(tokens, dict) and tokens.get("reported"):
+                usage = {key: tokens[key]
+                         for key in ("input", "output", "cached", "written", "session")
+                         if isinstance(tokens.get(key), int)}
+                self._tell(type="usage", conversation=where_it_goes,
+                           run=outcome_run, schedule=named, **usage)
+            final = {
+                "type": "answer", "conversation": where_it_goes,
+                "place": place or None, "run": outcome_run, "text": text,
+                "schedule": named, "attachments": attachments,
+            }
+            if run is not None:
+                final["provider"] = provider.label(run.get("provider") or "")
+            elapsed = getattr(result, "elapsed", None)
+            if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool):
+                final["elapsed"] = elapsed
+            allowed = self.record.get("allow")
+            if (isinstance(allowed, list) and len(allowed) == 1
+                    and isinstance(allowed[0], str) and allowed[0]):
+                final["recipient"] = allowed[0]
+            self._tell(**final)
         if where_it_goes is not None:
-            ran = kept.runs(schedule_id=row.get("id"), limit=1)
-            kept.answered(where_it_goes, ran[0]["id"] if ran else None,
+            kept.answered(where_it_goes, run["id"] if run else None,
                           store.stamped(), text)
         elif said:
             self._note(said)
@@ -305,6 +424,18 @@ class Answering:
         # request undelivered so the reconnected gateway tries again truthfully.
         await held.task
         raise RuntimeError("the post-update continuation was not admitted")
+
+    async def told_restart_finished(self, conversation: str, text: str) -> None:
+        """Deliver one queued restart outcome after reconnect (R-GW-43)."""
+        if not self.connected:
+            raise RuntimeError(f"channel '{self.channel}' is not connected")
+        await self._sending(channel.spoken(
+            type="said", conversation=conversation, text=text, continues=False,
+        ))
+        agents.records(self.name, self._where).answered(
+            store.conversation_id(self.channel, conversation),
+            None, store.stamped(), text,
+        )
 
     def _where_to_say(self, kept, place):
         """The conversation to say it in, and why there is none where there is none.
@@ -415,7 +546,24 @@ class Answering:
             if held is None or held.task is None or held.task.done():
                 return
             held.stopped = True
+            # **What was said behind this turn is stopped with it** (R-CH-9). A turn ending
+            # promotes whatever queued behind it, and a cancelled turn ends like any other —
+            # so a stop drained the backlog instead of ending it and the agent carried on a
+            # second later with the next message, leaving no way to actually stop short of
+            # one stop per queued message, each racing the turn it had just started.
+            #
+            # This conversation's only: `held` is one conversation's exchange, so a stop in
+            # one room ends that room's turn and backlog and leaves every other room's
+            # running turn and waiting messages untouched. Anything said *after* the stop
+            # queues afresh and is answered, because a person who stops and then says
+            # something new is asking for the new thing.
+            dropped, held.waiting = len(held.waiting), []
             held.task.cancel()
+            if dropped:
+                self._note(
+                    f"channel '{self.channel}': a stop ended the turn and dropped "
+                    f"{dropped} waiting message{'' if dropped == 1 else 's'}"
+                )
             return
         # Forgetting is about where the conversation had got to, and it ends no turn: a
         # person asking to start again is not asking to throw away the answer they are
@@ -577,6 +725,7 @@ class Answering:
                 resume_on_interrupt=lambda: (
                     self._stopping and not held.stopped and recovery_of is None
                 ),
+                stopped_by_owner=lambda: held.stopped,
                 **({"posture": recovery_of["posture"]} if recovery_of else {}),
             )
         except asyncio.CancelledError:
@@ -591,13 +740,19 @@ class Answering:
             self._note(f"channel '{self.channel}': a turn could not be carried: {went_wrong}")
             self._say(channel.FAILED, held, ref=held.ref, why=str(went_wrong))
         else:
-            self._answer(held, outcome)
+            await self._answer(held, outcome, provider.label(chose.get("provider") or ""))
             self._say(channel.FINISHED if outcome.ok else channel.FAILED, held,
                       ref=held.ref, why=None if outcome.ok else _why(outcome))
         finally:
             held.saying.put_nowait(None)
             held.saying = None
             held.can = {}
+            if self._restart_waiting(held.run):
+                # The provider has ended, but its answer and finished mark may still be
+                # waiting for the adapter. Release the external restart worker only
+                # after that outbound queue has drained (R-GW-43).
+                await self._showing.join()
+                self._restart_ready(held.run)
             if held.forgotten:
                 # After the turn, never before: this is the first moment at which
                 # nothing else is going to write where the conversation got to.
@@ -650,49 +805,69 @@ class Answering:
                     held.waiting.pop(index)
                     return
 
-        held.saying.put_nowait((waiting.text, pending, accepted))
+        held.saying.put_nowait((waiting.text, waiting.user, pending, accepted))
 
-    def _answer(self, held: Exchange, outcome) -> None:
-        """What the agent said, handed over once and whole (R-CH-8).
+    async def _answer(self, held: Exchange, outcome, provider_name: str) -> None:
+        """What the agent said, handed over once and whole (R-CH-8, R-CH-28).
 
         Held until here rather than shown as it was written. A reply that rewrites itself
         in place is unreadable, and the adapter is never given the chance to try: nothing
-        of the brain's prose crosses the seam before this.
+        of the brain's prose crosses the seam before this. The resolved provider belongs
+        on this final record rather than on optional usage: every answer has one, even
+        when its brain reports no model or token counts.
         """
         # Whatever is still in hand: the last complete thing said, or every fragment of
         # a reply that was written a piece at a time. Either way it is the answer.
         text = "".join(one for _was, one in held.spoken).strip() or outcome.text.strip()
-        made = self._made(outcome)
+        text, linked = _attachment_lines(text)
+        made = await self._made([*linked, *outcome.files])
         if not text and not made:
             return
         self._tell(type="answer", conversation=held.conversation, run=held.run,
-                   text=text, attachments=made)
+                   provider=provider_name, text=text, attachments=made)
 
-    def _made(self, outcome) -> list:
-        """What the brain said it made, as things a surface may actually send.
+    async def _made(self, declared) -> list:
+        """What the brain declared for delivery, as things a surface may actually send.
 
-        **Only from where this agent works.** A brain names a path and it is checked
-        against the agent's own directories before anything leaves the machine — it runs
-        as the owner and can read anything they can, so "the brain asked for it" is not
-        on its own a reason to put a file into a chat room (R-CH-13).
+        Provider file records and reserved local attachment lines in the final answer are
+        both explicit declarations. **Only from where this agent works.** A path is checked
+        against the agent's own directories before anything leaves the machine — the
+        brain runs as the owner and can read anything they can, so "the brain asked for
+        it" is not on its own a reason to put a file into a chat room (R-CH-13, R-CH-31).
         """
         whose = agents.paths(self.name, self._where)
         mine = [whose["workspace"], whose["logs"], whose["home"]]
         found = []
-        for one in outcome.files:
-            at = one.get("at")
-            if not isinstance(at, str) or not at:
+        seen = set()
+        seen_files = set()
+        candidates = []
+        declared_paths = set()
+        for candidate in declared:
+            at = candidate.get("at") if isinstance(candidate, dict) else None
+            identity = os.path.normpath(at) if isinstance(at, str) else None
+            if identity is not None and identity in declared_paths:
                 continue
-            stands = Path(at)
-            if not stands.is_absolute() or not stands.is_file():
+            if identity is not None:
+                declared_paths.add(identity)
+            candidates.append(candidate)
+            if len(candidates) > channel.ATTACHED_MOST:
+                break
+        for one in candidates[:channel.ATTACHED_MOST]:
+            attachment, why = await asyncio.to_thread(_approved_attachment, one, mine)
+            if why:
+                self._note(f"channel '{self.channel}': {why}")
+            if attachment is None:
                 continue
-            where = stands.resolve()
-            if not any(_within(where, one_of) for one_of in mine):
-                self._note(f"channel '{self.channel}': not sending {where}, which is "
-                           f"outside where this agent works")
+            file_identity = attachment.pop("_file_identity")
+            if attachment["at"] in seen or file_identity in seen_files:
                 continue
-            found.append({"name": str(one.get("name") or where.name), "at": str(where)})
-        return found[:channel.ATTACHED_MOST]
+            seen.add(attachment["at"])
+            seen_files.add(file_identity)
+            found.append(attachment)
+        if len(candidates) > channel.ATTACHED_MOST:
+            self._note(f"channel '{self.channel}': sending only the first "
+                       f"{channel.ATTACHED_MOST} attachments")
+        return found
 
     def _say(self, state: str, held: Exchange, ref=None, why=None) -> None:
         """How the turn stands, which is rundesk's to decide (R-CAD-3)."""
@@ -739,6 +914,8 @@ class Answering:
             except BaseException as why:  # noqa: BLE001 — a delivery boundary
                 self._note(f"channel '{self.channel}': could not show "
                            f"{it.get('type')}: {why}")
+            finally:
+                self._showing.task_done()
 
     # -- going away ------------------------------------------------------------------
 
@@ -774,12 +951,18 @@ class Answering:
 
 
 class _Shown:
-    """What the agent did, shown while it is still doing it (R-CH-6).
+    """What the agent did and said, shown while it is still doing it (R-CH-6).
 
-    **Prose is not passed on here.** `text` is what the brain *says*, and it arrives a
-    fragment at a time; it is collected by the turn and handed over whole at the end. What
-    is passed on is what the agent *did* — a tool it ran, a thought it closed, what it
-    cost — each of which is whole the moment it exists (R-CH-7).
+    **A part-written reply is not passed on here.** `text` arrives a fragment at a time;
+    it is collected by the turn and handed over whole at the end. What is passed on is
+    what is whole the moment it exists (R-CH-7) — a tool it ran, a thought it closed,
+    what it cost, and a complete thing said with more of the turn still to come.
+
+    **An owner who turned activity off turned all of it off**, prose included, and such a
+    channel posts one message for the turn: its answer (R-CH-6, R-CH-27). A quiet room that
+    answers late does look broken, which is why this is on unless somebody said so — but
+    somebody who said so chose silence over reassurance, and prose is the most text a turn
+    makes.
 
     Only ever the brain's own records: what rundesk makes of a turn does not come through
     here, and a watcher waiting for one of rundesk's own kinds would wait for ever.
@@ -798,12 +981,13 @@ class _Shown:
     #: tool's own arguments, a file it read, a command's whole output and whatever a
     #: vendor decides to attach next year are exactly the things that must not be posted
     #: into a chat room because somebody added a key. `text` is absent for a different
-    #: reason: prose is handed over whole at the end (R-CH-7).
+    #: reason: what is said is decided a record at a time by `_spoke`, because whether a
+    #: thing said is a remark or the answer is knowable only from what follows it (R-CH-19).
     AS_IT_HAPPENS = {
         "think": ("text",),
         "tool": ("id", "name", "did"),
         "result": ("id", "ok", "summary"),
-        "usage": ("input", "output", "cached", "model"),
+        "usage": ("input", "output", "cached", "written", "session", "model"),
     }
 
     #: How much of a summary a surface is shown. A brain is entitled to hand back the
@@ -817,16 +1001,14 @@ class _Shown:
     def __call__(self, said: dict) -> None:
         kind = said.get("type")
         if kind == "text":
+            # Always, whether or not this channel is shown the turn: what was said is the
+            # material the answer is made of, and only whether the earlier ones are posted
+            # depends on the owner's choice.
             self._spoke(said)
             return
         if kind not in self.AS_IT_HAPPENS:
             return
-        if not self._answering.record.get("activity", True):
-            # What the agent *is doing* is what an owner may turn off, and what it *says*
-            # is not. A room that goes quiet for four minutes and then answers looks
-            # broken, so this is on unless somebody said otherwise — but a room where it
-            # is noise is one where they said so once, and every turn in it is quiet
-            # rather than every message carrying a decision (R-CH-6).
+        if not self._shown():
             return
         it = {what: said[what] for what in self.AS_IT_HAPPENS[kind] if what in said}
         if kind == "tool" and it.get("did") == "delegate" and "who" in said:
@@ -838,6 +1020,10 @@ class _Shown:
         self._answering._tell(
             type=kind, conversation=self._held.conversation, run=self._held.run, **it)
 
+    def _shown(self) -> bool:
+        """Whether this channel is shown the turn while it runs (R-CH-6)."""
+        return bool(self._answering.record.get("activity", True))
+
     def _spoke(self, said: dict) -> None:
         """A thing the brain said, shown now if it is finished and there is more coming.
 
@@ -845,13 +1031,20 @@ class _Shown:
         means showing a sentence that changes under somebody reading it. A *complete*
         thing said while the turn runs is shown as soon as the next one arrives — which
         is what makes the last one the answer, and is only knowable once there is a next.
+
+        **Unless the owner turned activity off**, in which case none of them is posted and
+        the turn's one message is its answer (R-CH-27). What is said mid-turn is the most
+        text a turn produces, so leaving it out of that choice overrode it on the record
+        that mattered most. Kept either way: what was said is still written into the
+        account and into the run's records, and this decides only what is posted.
         """
         text = str(said.get("text") or "")
         if not said.get(self.WHOLE):
             self._held.spoken.append(("fragment", text))
             return
+        posts = self._shown()
         for was, older in list(self._held.spoken):
-            if was == "whole" and older.strip():
+            if posts and was == "whole" and older.strip():
                 self._answering._tell(type="said", conversation=self._held.conversation,
                                       run=self._held.run, text=older.strip())
             self._held.spoken.remove((was, older))
@@ -868,10 +1061,12 @@ async def _saying(queue: asyncio.Queue):
         offered = await queue.get()
         if offered is None:
             return
-        word, pending, accepted = offered
+        word, who, pending, accepted = offered
         if not pending():
             continue
-        yield word
+        # Said with who said it, so a word steered into a running turn is written down
+        # under the same identity as the message that started it (R-STO-27).
+        yield turn.Said(word, who)
         # Reached only when the consumer asks for another word, which happens after it
         # finished sending this one. If its send failed because the provider had already
         # closed input, the async-for loop exits and this retained message becomes the
@@ -879,17 +1074,96 @@ async def _saying(queue: asyncio.Queue):
         accepted()
 
 
-def _within(at: Path, inside: Path) -> bool:
-    """Whether this really is under that, once every link has been followed."""
+def _approved_attachment(declared, roots) -> tuple[dict | None, str | None]:
+    """Resolve, contain, and fingerprint one declaration without trusting its path."""
+    if not isinstance(declared, dict):
+        return None, None
+    at = declared.get("at")
+    if not isinstance(at, str) or not at or not Path(at).is_absolute():
+        return None, None
     try:
-        at.relative_to(inside.resolve())
-    except (ValueError, OSError):
-        return False
-    return True
+        where = Path(at).resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return None, None
+    inside = None
+    for candidate in roots:
+        try:
+            root = candidate.resolve(strict=True)
+            where.relative_to(root)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        inside = root
+        break
+    if inside is None:
+        return None, f"not sending {where}, which is outside where this agent works"
+    try:
+        fingerprint = _fingerprint_beneath(where, inside)
+    except OSError as why:
+        return None, f"not sending {where.name}: {why}"
+    if fingerprint is None:
+        return None, f"not sending {where.name}, which is too large to attach"
+    size, digest, file_identity = fingerprint
+    return {
+        "name": str(declared.get("name") or where.name),
+        "at": str(where),
+        "bytes": size,
+        "sha256": digest,
+        "_file_identity": file_identity,
+    }, None
+
+
+def _fingerprint_beneath(at: Path, inside: Path) -> tuple[int, str, tuple[int, int]] | None:
+    """Read through held directory descriptors, refusing links in every component."""
+    at.relative_to(inside)
+    parts = at.parts[1:]
+    if not parts:
+        raise OSError("not a regular file")
+    directory = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    descriptor = None
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=directory)
+            os.close(directory)
+            directory = child
+        descriptor = os.open(
+            parts[-1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+            dir_fd=directory,
+        )
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode):
+            raise OSError("not a regular file")
+        with os.fdopen(descriptor, "rb") as source:
+            descriptor = None
+            while block := source.read(min(1024 * 1024,
+                                            channel.ATTACHED_BYTES + 1 - size)):
+                size += len(block)
+                if size > channel.ATTACHED_BYTES:
+                    return None
+                digest.update(block)
+        return size, digest.hexdigest(), (status.st_dev, status.st_ino)
+    finally:
+        os.close(directory)
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _attachment_lines(text: str) -> tuple[str, list]:
+    """Extract reserved local attachment lines and leave only their labels."""
+    declared = []
+
+    def attachment(line) -> str:
+        at = line.group("at")
+        declared.append({"name": Path(at).name, "at": at})
+        return line.group("label")
+
+    return _LOCAL_ATTACHMENT.sub(attachment, text), declared
 
 
 def _asked(it: dict) -> str:
-    """What the person actually asked, including anything they attached (R-CH-17).
+    """What the person asked, including attachments and explicit reply context.
 
     A brain is given a prompt, so what somebody attached reaches it the only way
     anything reaches it: named in the words of the turn, by a path on this machine that
@@ -906,6 +1180,22 @@ def _asked(it: dict) -> str:
     if brought:
         named = "\n".join(f"- {one['name']}: {one['at']}" for one in brought)
         said = f"{said}\n\nAttached to this message, on this machine:\n{named}"
+    reply = it.get(channel.REPLY_TO)
+    if reply:
+        identifier = reply["id"]
+        if reply["resolved"]:
+            author = f" from {reply['author']}" if reply.get("author") else ""
+            quoted = reply.get("text") or "(no text content)"
+            context = (
+                f"This message replies to conversation message {identifier}{author}.\n"
+                f"Quoted message: {quoted}"
+            )
+        else:
+            context = (
+                f"This message replies to conversation message {identifier} "
+                "(quoted text unavailable)."
+            )
+        said = f"{said}\n\n--\n\n{context}"
     return said.strip()
 
 

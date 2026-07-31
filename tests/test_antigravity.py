@@ -15,6 +15,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -71,7 +72,7 @@ class StreamMapping(unittest.TestCase):
         )
         self.assertEqual(
             {"type": "usage", "input": 3390, "output": 380, "cached": 16274,
-             "model": "gemini-3.6-flash-low"},
+             "session": 19546, "model": "gemini-3.6-flash-low"},
             records[-2],
         )
         self.assertEqual(
@@ -84,6 +85,93 @@ class StreamMapping(unittest.TestCase):
             "HTML page.\n",
             joined,
         )
+
+    def test_a_turn_making_several_requests_reports_the_level_it_ended_at_and_not_the_sum(self):
+        """R-USE-15 — the last parent response's prompt pieces are one context level."""
+        seen = _seen()
+        antigravity.records(json.dumps({
+            "event": "init", "conversation_id": "conversation-alpha", "init": {},
+        }), seen)
+        for tokens in ({"input_tokens": 7000, "cache_read_tokens": 11000},
+                       {"input_tokens": 9000, "cache_read_tokens": 15000}):
+            antigravity.records(json.dumps({
+                "event": "step_update",
+                "step_update": {
+                    "conversation_id": "conversation-alpha",
+                    "step_index": 2, "state": "DONE",
+                    "step_type": "agent_response", "usage": tokens,
+                },
+            }), seen)
+        records = antigravity.records(json.dumps({
+            "event": "result",
+            "result": {"conversation_id": "conversation-alpha",
+                       "status": "SUCCESS", "response": "done"},
+        }), seen)
+        session = records[-2]["session"]
+        self.assertEqual(24000, session)
+        self.assertNotEqual(42000, session)
+
+    def test_a_compacted_conversation_is_reported_smaller_than_the_one_before_it(self):
+        """R-USE-15 — a terminal prompt level may decrease after compaction."""
+        seen = _seen()
+        antigravity.records(json.dumps({
+            "event": "init", "conversation_id": "conversation-alpha", "init": {},
+        }), seen)
+        for tokens in ({"input_tokens": 18000, "cache_read_tokens": 30000},
+                       {"input_tokens": 4000, "cache_read_tokens": 8000}):
+            antigravity.records(json.dumps({
+                "event": "step_update",
+                "step_update": {
+                    "conversation_id": "conversation-alpha",
+                    "step_index": 2, "state": "DONE",
+                    "step_type": "agent_response", "usage": tokens,
+                },
+            }), seen)
+        records = antigravity.records(json.dumps({
+            "event": "result",
+            "result": {"conversation_id": "conversation-alpha",
+                       "status": "SUCCESS", "response": "done"},
+        }), seen)
+        self.assertEqual(12000, records[-2]["session"])
+
+    def test_a_subagents_own_conversation_is_not_where_this_turn_ended(self):
+        """R-USE-14 — a response for another conversation cannot replace the parent."""
+        seen = _seen()
+        antigravity.records(json.dumps({
+            "event": "init", "conversation_id": "conversation-alpha", "init": {},
+        }), seen)
+        for conversation, tokens in (
+                ("conversation-alpha",
+                 {"input_tokens": 9000, "cache_read_tokens": 15000}),
+                ("child-conversation",
+                 {"input_tokens": 400000, "cache_read_tokens": 500000})):
+            antigravity.records(json.dumps({
+                "event": "step_update",
+                "step_update": {
+                    "conversation_id": conversation,
+                    "step_index": 2, "state": "DONE",
+                    "step_type": "agent_response", "usage": tokens,
+                },
+            }), seen)
+        records = antigravity.records(json.dumps({
+            "event": "result",
+            "result": {"conversation_id": "conversation-alpha",
+                       "status": "SUCCESS", "response": "done"},
+        }), seen)
+        self.assertEqual(24000, records[-2]["session"])
+
+    def test_a_stream_without_terminal_response_usage_claims_no_session_size(self):
+        """R-USE-16 — accumulated billing is not a substitute for context size."""
+        records = antigravity.records(json.dumps({
+            "event": "result",
+            "result": {
+                "conversation_id": "only-result", "status": "SUCCESS",
+                "response": "One whole answer.",
+                "usage": {"input_tokens": 4, "output_tokens": 2,
+                          "cache_read_tokens": 1},
+            },
+        }), _seen())
+        self.assertNotIn("session", records[-2])
 
     def test_resumed_result_total_is_not_counted_again(self):
         """R-USE-3 — result usage is cumulative after --conversation."""
@@ -112,7 +200,7 @@ class StreamMapping(unittest.TestCase):
         }), seen)
         self.assertEqual(
             {"type": "usage", "input": 12, "output": 3, "cached": 40,
-             "model": "gemini-3.6-flash-low"},
+             "session": 52, "model": "gemini-3.6-flash-low"},
             records[-2],
         )
 
@@ -253,8 +341,8 @@ class CommandPolicy(unittest.TestCase):
 
 
 class Skills(unittest.TestCase):
-    def test_grants_are_individual_symlinks_and_revoked_links_are_pruned(self):
-        """R-PRV-24."""
+    def test_antigravity_presents_a_complete_skill_package_and_prunes_revoked_link(self):
+        """R-AGT-44, R-PRV-24."""
         with tempfile.TemporaryDirectory() as made:
             base = Path(made)
             home = base / "home"
@@ -262,6 +350,14 @@ class Skills(unittest.TestCase):
             skill = granted / "one"
             skill.mkdir(parents=True)
             (skill / "SKILL.md").write_text("# One\n")
+            (skill / "scripts").mkdir()
+            command = skill / "scripts" / "one"
+            command.write_text("#!/bin/sh\nprintf 'ready\\n'\n")
+            command.chmod(0o751)
+            (skill / "references").mkdir()
+            (skill / "references" / "usage.md").write_text("# Usage\n")
+            (skill / "assets").mkdir()
+            (skill / "assets" / "report.txt").write_text("{{ result }}\n")
             home.mkdir(exist_ok=True)
             with mock.patch.dict(os.environ, {"RUNDESK_SKILLS": str(granted)},
                                  clear=False):
@@ -270,9 +366,11 @@ class Skills(unittest.TestCase):
             self.assertTrue(link.is_symlink())
             self.assertEqual(skill.resolve(), link.resolve())
             self.assertFalse((home / ".agents" / "skills").is_symlink())
+            self.assertEqual(0o751, (link / "scripts" / "one").stat().st_mode & 0o777)
+            self.assertTrue((link / "references" / "usage.md").is_file())
+            self.assertTrue((link / "assets" / "report.txt").is_file())
 
-            (skill / "SKILL.md").unlink()
-            skill.rmdir()
+            shutil.rmtree(skill)
             with mock.patch.dict(os.environ, {"RUNDESK_SKILLS": str(granted)},
                                  clear=False):
                 antigravity._present(str(home))

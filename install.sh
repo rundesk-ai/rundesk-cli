@@ -2,7 +2,7 @@
 # rundesk installer — put the `rundesk` command on your PATH, or take it off again.
 #
 # Install (no checkout needed):
-#   curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh | bash
 #
 # From a local checkout, this symlinks THAT checkout, so development and installed
 # use share one layout and there is no second copy to drift.
@@ -10,7 +10,7 @@
 #
 # Uninstall:
 #   ./install.sh --uninstall [--purge]
-#   curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash -s -- --uninstall
+#   curl -fsSL https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh | bash -s -- --uninstall
 #
 # Env overrides: RUNDESK_INSTALL_DIR (default ~/.rundesk), RUNDESK_BIN_DIR.
 #
@@ -45,6 +45,8 @@ DATA_DIR="$INSTALL_DIR/data"
 # here so that what is kept can be *said*, never so that it can be removed.
 BACKUPS_DIR="${RUNDESK_BACKUP_DIR:-$INSTALL_DIR/backups}"
 MIN_PYTHON_MINOR=9
+# The first release whose install and update paths share one counted release asset.
+COUNTED_DELIVERY_SINCE="0.22.4"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -107,6 +109,23 @@ require_python() {
     die "Python 3.$MIN_PYTHON_MINOR or newer is required; found $(python3 --version)."
 }
 
+uses_counted_delivery() {
+  python3 - "$1" "$COUNTED_DELIVERY_SINCE" <<'PY'
+import re
+import sys
+
+
+def version(value):
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", value.strip())
+    if not match:
+        raise SystemExit(2)
+    return tuple(map(int, match.groups()))
+
+
+raise SystemExit(0 if version(sys.argv[1]) >= version(sys.argv[2]) else 1)
+PY
+}
+
 # Stop every gateway this install is keeping, and take its job away — before anything is
 # deleted. A job outlives the command it names: the gateway keeps running, because
 # deleting a program does not stop one, and the machine goes on trying to start it again
@@ -133,10 +152,11 @@ from rundesk import supervisor
 if not supervisor.available():
     raise SystemExit(0)          # nothing of the kind on this machine
 taken, stubborn = supervisor.take_all_back()
-supervisor.remove_update_worker()
-supervisor.remove_automatic_update()
+left = supervisor.remove_our_shared_jobs()
 for name in taken:
     print(f"stopped gateway '{name}' and removed its job")
+for label in left:
+    print(f"left '{label}' alone — another install of rundesk wrote it")
 if stubborn:
     for name in stubborn:
         print(f"gateway '{name}' would not stop, and is still running")
@@ -159,6 +179,34 @@ STOP
 # the set this release ships.
 #
 # Run while the program is still here, since it is the program that knows which those are.
+# The configuration file, but only where it still exactly matches what this release writes
+# for a new install. One changed value anywhere makes it the owner's and it stays. Left
+# behind unconditionally, a fresh install and an uninstall would leave a directory standing
+# (R-RM-7, R-RM-8).
+take_back_config() {
+  local root="" candidate
+  for candidate in "$APP_DIR" "$INSTALL_DIR" "${SCRIPT_DIR:-}"; do
+    if [[ -n "$candidate" && -f "$candidate/src/rundesk/config.py" ]]; then
+      root="$candidate"; break
+    fi
+  done
+  [[ -n "$root" ]] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  # Pass the install's data root as a value. This helper can run inside an agent process
+  # carrying another install's RUNDESK_DATA_DIR, and removal must never resolve that ambient
+  # path after the shell has already selected the install being removed (R-RM-12, #220).
+  python3 - "$root" "$DATA_DIR" <<'CONFIG' 2>/dev/null || true
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1] + "/src")
+from rundesk import config
+
+if config.take_back(Path(sys.argv[2])):
+    print("took back the unchanged configuration this install wrote")
+CONFIG
+  return 0
+}
+
 take_back_skills() {
   local root="" candidate
   for candidate in "$APP_DIR" "$INSTALL_DIR" "${SCRIPT_DIR:-}"; do
@@ -171,12 +219,14 @@ take_back_skills() {
   local took
   # Never allowed to fail the removal: a library that cannot be written to is a thing to
   # leave behind and say nothing about, not a reason to stop taking rundesk off a machine.
-  took="$(python3 - "$root" <<'SKILLS' 2>/dev/null || true
+  # The same boundary as configuration: an inherited library belongs to some other install.
+  took="$(python3 - "$root" "$DATA_DIR/skills" <<'SKILLS' 2>/dev/null || true
 import sys
+from pathlib import Path
 sys.path.insert(0, sys.argv[1] + "/src")
 from rundesk import skill
 
-print(" ".join(skill.take_back()))
+print(" ".join(skill.take_back(Path(sys.argv[2]))))
 SKILLS
 )"
   [[ -n "$took" ]] && echo "took back the skills this release laid down: $took"
@@ -226,6 +276,10 @@ Environment:
   RUNDESK_INSTALL_DIR   where rundesk lives (default ~/.rundesk)
   RUNDESK_BIN_DIR       where the `rundesk` command is placed
   RUNDESK_BACKUP_DIR    where copies of what the owner keeps are kept; never deleted here
+  RUNDESK_JOB_PREFIX    what this install calls its launchd jobs (default ai.rundesk).
+                        A label belongs to the person, not to the install, so a second
+                        install on one machine sets this or its removal takes the first
+                        install's automatic updates away with it
 USAGE
 }
 
@@ -282,6 +336,7 @@ Stop it and try again, or see what is running with: rundesk status"
   fi
   # Before the program goes, because it is the program that knows which skills are its own.
   take_back_skills
+  take_back_config
   for dir in /usr/local/bin "$HOME/.local/bin" "${RUNDESK_BIN_DIR:-}"; do
     [[ -n "$dir" && -L "$dir/rundesk" ]] || continue
     target="$(readlink "$dir/rundesk")"
@@ -402,6 +457,16 @@ fi
 # ---------------------------------------------------------------- install
 require_python
 check_install_dir
+BINDIR="$(choose_bindir)"
+
+# Read before the install creates anything. A second local install still has no `$APP_DIR` —
+# it links the checkout directly — so the command and kept data are both part of the answer.
+# Leftover data after an uninstall also means this is not a new owner's first install.
+NEW_INSTALL=1
+if [[ -e "$APP_DIR" || -f "$INSTALL_DIR/rundesk" || -d "$DATA_DIR" \
+      || -e "$BINDIR/rundesk" || -L "$BINDIR/rundesk" ]]; then
+  NEW_INSTALL=0
+fi
 
 echo "installing rundesk"
 
@@ -474,9 +539,22 @@ network, or there may be nothing published yet — both look the same from here.
 Retrying in a few minutes usually settles it."
   fi
   echo "downloading ${tag}"
-  source_url="https://github.com/$REPO_SLUG/archive/refs/tags/$tag.tar.gz"
-  curl -fsSL "$source_url" -o "$work/rundesk.tar.gz" ||
-    die "could not download rundesk from $REPO_SLUG."
+  # One release asset is one public install delivery. Both this path and `rundesk update`
+  # fetch it exactly once, while the stable bootstrap itself is not a counted asset
+  # (R-INS-20).
+  source_url="https://github.com/$REPO_SLUG/releases/download/$tag/rundesk-cli.tar.gz"
+  if ! curl -fsSL "$source_url" -o "$work/rundesk.tar.gz"; then
+    # A counted-era release must never silently become an uncounted delivery because its
+    # asset is missing or temporarily unreachable (R-INS-20).
+    if uses_counted_delivery "$tag"; then
+      die "could not download rundesk from $REPO_SLUG."
+    fi
+    # The bootstrap on `main` changes before the first counted release exists. Keep only
+    # those older releases installable through the generated archive they already expose.
+    legacy_url="https://github.com/$REPO_SLUG/archive/refs/tags/$tag.tar.gz"
+    curl -fsSL "$legacy_url" -o "$work/rundesk.tar.gz" ||
+      die "could not download rundesk from $REPO_SLUG."
+  fi
   echo "unpacking $(du -h "$work/rundesk.tar.gz" | cut -f1 | tr -d ' ')"
   tar -xzf "$work/rundesk.tar.gz" -C "$work"
   extracted="$(find "$work" -maxdepth 1 -type d -name 'rundesk-cli-*' | head -1)"
@@ -522,7 +600,6 @@ SHIM="$REPO_ROOT/rundesk"
 [[ -f "$SHIM" ]] || die "the install is missing its entry point ($SHIM)."
 chmod +x "$SHIM"
 
-BINDIR="$(choose_bindir)"
 mkdir -p "$BINDIR"
 # `ln -sf` unlinks whatever is already there. The uninstall path reads the link before
 # removing it, precisely so it never takes somebody else's tool; the install path used to
@@ -544,6 +621,21 @@ echo "linked $BINDIR/rundesk -> $SHIM"
 # reports done and leaves something that cannot run is the worst of both.
 "$BINDIR/rundesk" version >/dev/null 2>&1 || die "rundesk was installed but would not run."
 echo "checked that it runs"
+
+# The source of every install-wide value, put there complete so an owner can read and change
+# what is actually in force. A later release adds only values an older one never wrote.
+# Nothing already in the file is touched, so running the installer again is not a way to
+# lose what somebody configured (R-INS-19, R-UPD-48).
+if added="$(python3 - "$REPO_ROOT" <<'CONFIG' 2>/dev/null || true
+import sys
+sys.path.insert(0, sys.argv[1] + "/src")
+from rundesk import config
+
+print(" ".join(config.ensure()))
+CONFIG
+)" && [[ -n "$added" ]]; then
+  echo "wrote configuration values for: $added"
+fi
 
 # The machine, not a gateway, owns the daily trigger. It only queues the same guarded
 # worker used by an agent-initiated update, so it remains alive while every gateway is
@@ -573,6 +665,17 @@ fi
 # is `rundesk update` that brings a built-in forward.
 if laid="$("$BINDIR/rundesk" skills --lay-down 2>/dev/null)" && [[ -n "$laid" ]]; then
   echo "put the skills this release ships in your library: $laid"
+fi
+
+# A star is idempotent, and only the first successful install may ask for it (R-INS-21).
+# GitHub CLI and its authenticated account are both optional: community support must never
+# become an installation dependency, and an API or network failure changes no install result.
+if [[ "$NEW_INSTALL" == 1 ]] && type -P gh >/dev/null 2>&1 \
+    && gh auth status --hostname github.com >/dev/null 2>&1; then
+  if gh api --method PUT -H "Content-Length: 0" \
+       "/user/starred/$REPO_SLUG" >/dev/null 2>&1; then
+    echo "helped you support the Rundesk community by starring $REPO_SLUG"
+  fi
 fi
 
 case ":$PATH:" in

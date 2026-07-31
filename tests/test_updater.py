@@ -190,10 +190,17 @@ class ReleaseNotesTests(unittest.TestCase):
             apply=lambda root, tag: 0, relaunch=_stays_here,
         )
         self.assertEqual(0, code, said)
-        self.assertIn("update: applied — now on 0.2.0", said)
+        # The number carries the link rather than a line beside it (#108), so an outcome
+        # summarising this run has nothing left to append and cannot say it twice.
         self.assertIn(
-            "https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.2.0", said
+            "update: applied — now on "
+            "[0.2.0](https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.2.0)",
+            said,
         )
+        self.assertEqual(1, said.count(
+            "https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.2.0"),
+            "the release was named more than once")
+        self.assertNotIn("what changed:", said)
 
     def test_an_update_that_did_not_land_never_names_a_release_as_applied(self):
         """The one claim this must not make. What could not be brought forward is put back,
@@ -594,6 +601,35 @@ class ReplacesTheInstallTests(unittest.TestCase):
 class DownloadTests(unittest.TestCase):
     """The whole path: fetch a tag, unpack it, and lay it over the install."""
 
+    def test_a_remote_update_downloads_the_counted_release_asset_once(self):
+        """R-UPD-49 — one remote update contributes one public install delivery."""
+        with tempfile.TemporaryDirectory() as work:
+            install = Path(work) / "install"
+            install.mkdir()
+            (install / "rundesk").write_text("# 0.1.0\n")
+            requested = []
+
+            def record(request, timeout=None):
+                requested.append(request.full_url)
+                raise urllib.error.URLError("stop after recording")
+
+            original = updater.urllib.request.urlopen
+            updater.urllib.request.urlopen = record
+            try:
+                with contextlib.redirect_stderr(io.StringIO()):
+                    code = updater.download_and_apply(install, "v0.2.0")
+            finally:
+                updater.urllib.request.urlopen = original
+
+            self.assertEqual(code, 1)
+            self.assertEqual(
+                requested,
+                [
+                    "https://github.com/rundesk-ai/rundesk-cli/releases/download/"
+                    "v0.2.0/rundesk-cli.tar.gz"
+                ],
+            )
+
     def test_a_release_is_downloaded_unpacked_and_laid_over_the_install(self):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
@@ -609,11 +645,24 @@ class DownloadTests(unittest.TestCase):
                 tar.add(staged / "rundesk-cli-0.2.0", arcname="rundesk-cli-0.2.0")
 
             served = archive.read_bytes()
-            code, said = _with_download(served, lambda: updater.download_and_apply(install, "v0.2.0"))
+            requested = []
+            code, said = _with_download(
+                served,
+                lambda: updater.download_and_apply(install, "v0.2.0"),
+                requested=requested,
+            )
 
             self.assertEqual(code, 0, said)
             self.assertIn("0.2.0", (install / "rundesk").read_text(), "the install was not replaced")
             self.assertIn("v0.2.0: UPDATED", said)
+            self.assertEqual(
+                requested,
+                [
+                    "https://github.com/rundesk-ai/rundesk-cli/releases/download/"
+                    "v0.2.0/rundesk-cli.tar.gz"
+                ],
+                "a successful update did not contribute exactly one delivery",
+            )
 
     def test_a_download_that_fails_leaves_the_install_as_it_was(self):
         with tempfile.TemporaryDirectory() as work:
@@ -629,7 +678,7 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual((install / "rundesk").read_text(), "# 0.1.0\n", "a failed update still changed the install")
 
 
-def _with_download(payload, call):
+def _with_download(payload, call, requested=None):
     """Run `call` with the network replaced by `payload` — bytes to serve, or an error to raise."""
     class _Response:
         def __init__(self, data): self._data = data
@@ -638,6 +687,8 @@ def _with_download(payload, call):
         def __exit__(self, *_): return False
 
     def fake_urlopen(_request, timeout=None):
+        if requested is not None:
+            requested.append(_request.full_url)
         if isinstance(payload, Exception):
             raise payload
         return _Response(payload)

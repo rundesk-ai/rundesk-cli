@@ -46,7 +46,13 @@ ADAPTERS = Path(__file__).resolve().parent.parent / "providers"
 #: and not the picture. Inferring it from what a tool printed was the alternative, and it
 #: would have meant sending anything a brain happened to name, which is a hole rather
 #: than a feature. A brain says so or nothing is sent.
-RECORDS = ("text", "think", "tool", "result", "usage", "file", "done")
+#: `limit` is the eighth, and it was added for the same shape of reason as `file`: brains
+#: report account state — how much of an allowance is left, when the window resets — and the
+#: seam had nowhere to put it, so a turn stopped by a limit reached an owner as whatever
+#: prose an adapter scraped from a failure line. It is not this turn's activity and it is
+#: not a failure: a turn carrying one may have succeeded, which is what makes it a record
+#: rather than an outcome (R-PRV-28).
+RECORDS = ("text", "think", "tool", "result", "usage", "file", "limit", "done")
 
 #: What a brain says on a `text` record when the thing it just said is *finished* rather
 #: than a piece of something still being written (R-PRV-22).
@@ -69,7 +75,35 @@ WHOLE = "whole"
 #: rather than stretching one to fit: a reader shown nothing is better than one taught
 #: to believe a word that means something else here. Growing it is a release, not a
 #: guess an adapter makes on its own.
-DID = ("read", "search", "run", "edit", "list", "make", "delegate")
+#:
+#: The last three are the same act as `edit` and are told apart on purpose (R-PRV-29):
+#: what an agent keeps of its own is what it *is* between turns, and a file it lives by
+#: being changed is not the same news as a file it was working on being changed. Which
+#: files those are, and how an adapter is sure it was one of them rather than a
+#: same-named file in some checkout, is `CONTINUITY` below.
+#:
+#: **Those four name what was changed rather than what was done, and are nouns for it.**
+#: The act is always the same one — a file was written — so the useful half is which file,
+#: and a surface reading these raw is left with something that reads: a terminal shows
+#: `updated memory` where a verb-shaped token would have shown `remember Write`.
+DID = ("read", "search", "run", "edit", "list", "make", "delegate",
+       "memory", "rules", "identity")
+
+#: What an agent keeps of its own, and what changing one is called (R-PRV-29). The names
+#: are Rundesk's — they are what a new agent is given and what `AGENTS.md` tells it to
+#: live by — so the mapping belongs here rather than in an adapter, which knows about a
+#: brain and nothing about what an agent is made of.
+#:
+#: **A file's name is not the test.** Every repository on the machine has an `AGENTS.md`;
+#: an agent editing one in a checkout has not rewritten its own rules, and saying it did
+#: is worse than the plain `edit` it would otherwise get, because it is untrue. What
+#: qualifies is the resolved path standing directly in the agent's own working directory
+#: — `RUNDESK_CWD`, which is the one thing every adapter is already told (R-PRV-3).
+CONTINUITY = {
+    "MEMORY.md": "memory",
+    "AGENTS.md": "rules",
+    "SOUL.md": "identity",
+}
 
 #: What an adapter may say it can do (R-PRV-15). Absent means no, so an adapter that
 #: answers with nothing at all is a whole brain with the work simply absent — which is
@@ -85,6 +119,15 @@ CAPABILITIES = ("tools", "resume", "model", "usage", "steer")
 #: What rundesk sends a brain that can be steered — the prompt, and anything after it.
 #: One kind, because there is one thing to say to a running brain: more words.
 SAY = "say"
+
+#: What Rundesk says alongside a word that reaches work already in flight. Kept apart from
+#: the person's text in the input record and the account: replacement-style transports
+#: need this to preserve R-PRV-19, while cooperative ones may ignore it.
+STEERING_CONTEXT = (
+    "This is mid-turn guidance within the original request. After addressing it, continue "
+    "working toward and finish the original request unless this guidance explicitly stops "
+    "or replaces that work."
+)
 
 #: How much of the machine a turn may touch, in rundesk's words rather than any vendor's
 #: (R-PRV-18). Two, because a posture nobody can act on is not worth carrying: an adapter
@@ -165,6 +208,16 @@ def key(named: str) -> str:
     return f"{_plain(stands.name) or 'brain'}-{marked}"
 
 
+def label(named: str) -> str:
+    """A safe, stable provider name for a person to read (R-CH-28).
+
+    `key` already removes a custom adapter's path while keeping two same-named adapters
+    distinct. Plain that result too, because a shipped adapter is its filename and Unix
+    filenames may contain characters that can rewrite a channel's completion line.
+    """
+    return _plain(key(named)) or "brain"
+
+
 def _plain(name: str) -> str:
     """What is left of a name once anything that would not stand as one is taken out."""
     return "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in name).strip("-")
@@ -206,6 +259,13 @@ def environment(
     # directory: an adapter that inferred it would be holding a copy of rundesk's layout,
     # which is the thing telling it `RUNDESK_CWD` exists to prevent.
     said["RUNDESK_SKILLS"] = str(skills)
+    # **Which of the files beside it an agent lives by, and what changing one is called**
+    # (R-PRV-29). Told for the same reason skills are: an adapter that carried these four
+    # names would be holding a copy of rundesk's layout, and renaming a continuity file
+    # here would silently stop being reported by every adapter at once. Offered, never
+    # required — one that ignores it reports the plain `edit` it always did.
+    said["RUNDESK_CONTINUITY"] = ",".join(
+        f"{name}={verb}" for name, verb in sorted(CONTINUITY.items()))
     said["RUNDESK_PROVIDER_HOME"] = str(provider_home)
     said["RUNDESK_RUN"] = run
     said["RUNDESK_POSTURE"] = posture
@@ -236,15 +296,20 @@ def environment(
     return said
 
 
-def spoken(text: str) -> bytes:
+def spoken(text: str, context: str | None = None) -> bytes:
     """One thing said *to* a brain, as a record it reads a line at a time (R-PRV-19).
 
     Records rather than plain text, and only for an adapter that said it can be steered.
     Its input has to stay open for more, so nothing can mean "the prompt ended" any more —
     a brain reading to the end of its input would wait for an end that is not coming. A
     line each, with the text encoded, so a prompt with newlines in it is still one thing.
+    Optional Rundesk-authored context is carried apart so an adapter can apply it without
+    changing the person's recorded words (R-RUN-9, R-PRV-10).
     """
-    return (json.dumps({"type": SAY, "text": text}) + "\n").encode("utf-8")
+    record = {"type": SAY, "text": text}
+    if context:
+        record["context"] = context
+    return (json.dumps(record) + "\n").encode("utf-8")
 
 
 def understood(said: bytes | str) -> dict | None:

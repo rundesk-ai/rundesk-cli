@@ -176,6 +176,7 @@ prompt = sys.stdin.read()
 told = {what: os.environ.get(what) for what in (
     "RUNDESK_CWD", "RUNDESK_PROVIDER_HOME", "RUNDESK_SKILLS", "RUNDESK_MODEL",
     "RUNDESK_RUN", "RUNDESK_RESUME", "RUNDESK_POSTURE", "RUNDESK_SETTINGS",
+    "RUNDESK_CONTINUITY",
 )}
 say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
 say(type="text", text=json.dumps({"told": told, "where": os.getcwd(), "prompt": prompt}))
@@ -212,9 +213,27 @@ sys.stdout.flush()
 sys.exit(1)
 '''
 
+#: Refuses the production steering shape unless later words carry Rundesk's context apart
+#: from the person's text. This gives the conformance driver teeth: a more generous driver
+#: would let a custom adapter pass here and fail only when a real turn steered it.
+STEER_CONTEXT = '''
+import json, sys
+
+if "--capabilities" in sys.argv:
+    print(json.dumps({"steer": True}))
+    sys.exit(0)
+
+said = [json.loads(line) for line in sys.stdin if line.strip()]
+later = said[1] if len(said) > 1 else {}
+ok = later.get("text") == "and one more thing" and bool(later.get("context"))
+print(json.dumps({"type": "done", "ok": ok}), flush=True)
+sys.exit(0 if ok else 1)
+'''
+
 STAND_INS = {
     "plain": PLAIN, "bare": BARE, "strange": STRANGE, "counting": COUNTING,
     "spawner": SPAWNER, "nosy": NOSY, "shouting": SHOUTING, "failing": FAILING,
+    "steer-context": STEER_CONTEXT,
 }
 
 
@@ -307,7 +326,8 @@ class DrivesAnAdapter(unittest.IsolatedAsyncioTestCase):
                 await program.send(provider.spoken(prompt))
                 for word in steering or []:
                     await asyncio.sleep(0.2)
-                    await program.send(provider.spoken(word))
+                    await program.send(provider.spoken(
+                        word, context=provider.STEERING_CONTEXT))
             await program.close_input()
         except process.NotListening:
             pass  # it answered and left while we were still writing; not a failure
@@ -347,6 +367,15 @@ class TheContract(DrivesAnAdapter):
         self.assertEqual(sorted(provider.CAPABILITIES), sorted(said))
         for what, answer in said.items():
             self.assertIsInstance(answer, bool, f"'{what}' was answered with something else")
+
+    def test_mid_turn_context_is_carried_apart_from_the_persons_words(self):
+        """R-PRV-19, R-RUN-9, R-PRV-10 — an adapter may need Rundesk's context to keep
+        replacement-style steering in the active task, but the person's words remain
+        independently readable and unchanged."""
+        said = json.loads(provider.spoken("what version?", context="continue the work"))
+        self.assertEqual({
+            "type": "say", "text": "what version?", "context": "continue the work",
+        }, said)
 
     async def test_an_adapter_carries_a_whole_turn(self):
         """R-PRV-4 — the one thing every adapter must do. A turn that reached its end
@@ -397,6 +426,13 @@ class TheContract(DrivesAnAdapter):
         turn = await self.carry(self.under_test(), steering=["and one more thing"])
         self.assertIsNotNone(turn.done, "it did not finish a turn run the way it asked for")
         self.assertTrue(turn.done.get("ok"), f"the turn failed: {turn.errors}")
+
+    async def test_the_conformance_driver_uses_the_real_mid_turn_record_shape(self):
+        """R-PRV-19 — the suite an adapter author runs must send the same optional context
+        production sends, or an adapter can pass here and reject a real steer."""
+        turn = await self.carry(
+            self.stand_in("steer-context"), steering=["and one more thing"])
+        self.assertTrue(turn.done and turn.done.get("ok"), turn.errors)
 
     async def test_an_adapter_works_where_it_is_told_and_not_where_it_pleases(self):
         """R-PRV-3, R-PRV-14 — an agent's workspace is its own, and an adapter reaching
@@ -503,6 +539,19 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
         said = json.loads(turn.of("text")[0]["text"])
         self.assertEqual(str(self.where / "cwd" / "skills"), said["told"]["RUNDESK_SKILLS"])
 
+    async def test_an_adapter_is_told_which_files_the_agent_lives_by(self):
+        """R-PRV-29 — an adapter that carried these four names would be holding a copy of
+        rundesk's layout, and renaming one here would silently stop being reported by
+        every adapter at once. Told rather than inferred, exactly as skills are."""
+        turn = await self.carry(self.stand_in("nosy"))
+        said = json.loads(turn.of("text")[0]["text"])
+        told = dict(pair.split("=", 1)
+                    for pair in said["told"]["RUNDESK_CONTINUITY"].split(","))
+        self.assertEqual(provider.CONTINUITY, told)
+        for verb in told.values():
+            self.assertIn(verb, provider.DID,
+                          "a file is named for a verb no surface can show")
+
     async def test_the_prompt_arrives_on_the_stream_meant_for_it(self):
         """R-PRV-4 — never on a command line, where the process list and the shell's
         history would both keep a copy of whatever was asked."""
@@ -559,9 +608,11 @@ class WhatAnAdapterIsTold(DrivesAnAdapter):
         expected = ["HOME", "PATH", "RUNDESK_HOME", "TERM", "LANG", "RUNDESK_CWD",
                     "RUNDESK_PROVIDER_HOME", "RUNDESK_SKILLS", "RUNDESK_RUN",
                     "RUNDESK_POSTURE", "RUNDESK_MODEL", "RUNDESK_RESUME",
-                    "RUNDESK_SCRIPTS", "RUNDESK_SKILL_LIBRARY"]
+                    "RUNDESK_SCRIPTS", "RUNDESK_SKILL_LIBRARY", "RUNDESK_CONTINUITY"]
         if os.environ.get("RUNDESK_AGENTS_DIR"):
             expected.append("RUNDESK_AGENTS_DIR")
+        if os.environ.get("RUNDESK_JOB_PREFIX"):
+            expected.append("RUNDESK_JOB_PREFIX")
         self.assertEqual(
             sorted(expected),
             sorted(told))
@@ -739,6 +790,13 @@ class AnAdapterThatCannotBeRun(DrivesAnAdapter):
         self.assertNotEqual(one, other)
         self.assertTrue(one.startswith("brain-"))
         self.assertEqual(one, provider.key("/opt/one/brain"), "it is not the same twice")
+
+    def test_a_provider_label_is_readable_without_exposing_or_rewriting_its_location(self):
+        """R-CH-28 — provenance may leave the machine; its filesystem path may not."""
+        one = provider.label("/opt/private/stand-in")
+        self.assertTrue(one.startswith("stand-in-"))
+        self.assertNotIn("/opt", one)
+        self.assertNotIn("\n", provider.label("stand-\nin"))
 
 
 class ATurnThatWentWrong(DrivesAnAdapter):

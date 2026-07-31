@@ -1,13 +1,13 @@
 # Research: The Claude Code CLI as an agent's brain
 
-**Last updated:** 2026-07-26
+**Last updated:** 2026-07-28
 **Question it answers:** What does the installed Claude Code CLI actually do when it is driven headlessly, and which of it has to be absorbed by an adapter?
 
 ## What they do
 
 Everything here is true of `claude 2.1.219` on macOS 25.5.0 unless a line says otherwise — the
-build every capture below was driven against, recorded in `cli-versions.lock`.[10] Two rows were
-measured later against **2.1.220**, which is what the machine now has; both say so, and neither
+build every capture below was driven against, recorded in `cli-versions.lock`.[10] Several findings
+were measured later against **2.1.220**, which is what the machine now has; they say so, and none
 contradicted the capture. Two labels are used and never blurred. **Measured** means a probe ran
 against a real account and its output was kept; the golden stream in `tests/samples/` is 184 lines
 of that output,[1] and `.knowledge/scripts/probe-claude` is a re-runnable probe beside it.[12]
@@ -24,7 +24,7 @@ and both halves are given.
 | Say which model answered | Measured: `system/init.model` is `claude-opus-5[1m]`, and `result.modelUsage` keys name every model that did work in the turn.[1] |
 | Keep one agent's sign-in from another's | Measured: `CLAUDE_CONFIG_DIR`. A fresh directory answers `{"is_error": true, "result": "Not logged in · Please run /login"}` and fills with `.claude.json`, `sessions/`, `projects/<cwd-slug>/` and `backups/`; nothing is inherited from `~/.claude`.[4] |
 | Choose how much of the machine it may touch | Measured: the **allowlist** holds, and `--dangerously-skip-permissions` lifts it. `--permission-mode` is not a posture — see below.[5] Re-measured 2026-07-27 on 2.1.220: a read-list turn asked to write was refused (`Permission to use Write has been denied because Claude Code is running in don't ask mode`) and no file appeared; with `--dangerously-skip-permissions`, or `--permission-mode bypassPermissions`, the same `Write` succeeded. A permission-free tool such as `TaskCreate` runs whatever the allowlist says, which is why asking for one proves nothing about containment. |
-| Be sent to mid-turn | Measured: no. `claude -p` reads its prompt and runs to the end; the shipped adapter's `interrupt()` is `child.kill('SIGINT')`, after which the session survives on disk and the next `--resume` picks it up.[3] |
+| Be sent to mid-turn | Supported through the CLI's SDK control protocol: send an `interrupt` control request, wait for its acknowledgement and interrupted result, then send the replacement user message on the same process and session.[14] Measured live against 2.1.220 on 2026-07-28: an active `sleep 8` tool call was interrupted at four seconds, returned a rejected tool result, and the same process answered the replacement instruction `STEERED` successfully at six seconds. Ordinary stream-JSON user messages alone do **not** steer; the CLI documents them as queued turns.[13] |
 
 ### The stream: sixteen line kinds, and what each is for
 
@@ -133,22 +133,20 @@ Measured, three separate findings:[5]
   CLI still reached for `Write` and `Bash` and wrote a file outside the repository. What holds is
   the allowlist.
 
-What does work is the boring path: **end the turn, then resume with the answer.** Measured on both
-Claude and Codex, and it is the whole of the answer-routing mechanism — no pending-ask record is
-needed to make an answer land.[5]
+What does work for a question is the boring path: **end the turn, then resume with the answer.**
+Measured on both Claude and Codex, and it needs no pending-ask record.[5]
 
-**Refuted.** The Node build's design doc `harness-loop-and-steering.md` §1 carried a capability
+**Half refuted, half confirmed later.** The Node build's design doc
+`harness-loop-and-steering.md` §1 carried a capability
 table built from vendor documentation and stamped "verified against `code.claude.com/docs`". It
 said Claude Code *alone* among the three had a clean cooperative interrupt —
 `ClaudeSDKClient.interrupt()`, drain the buffered output, continue the same session — and that
 `AskUserQuestion` and `ExitPlanMode` were capture points a daemon could render as buttons.[9]
-Both halves fell to probes: no question or plan is capturable headless at all,[5] and the shipped
-adapter's `interrupt()` is a `SIGINT` to the child, exactly the kill-and-resume every other brain
-gets.[3] No installed CLI, on this evidence, has a cooperative headless interrupt.
-
-Unexamined, and sitting in plain sight in the golden: `system/init` advertises
-`"capabilities": ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"]`.[1]
-Nothing in the Node build ever asked what those are.
+The capture points fell to probes: no question or plan is capturable headless at all.[5] The
+interrupt did not. Anthropic's current SDK source shows `ClaudeSDKClient.interrupt()` writing a
+`control_request` whose subtype is `interrupt` to the CLI's stream-JSON stdin, and waiting for the
+matching `control_response`.[14] That is a native cooperative path; it is not the older Node
+adapter's `child.kill('SIGINT')`.[3]
 
 ### A private home isolates the login too
 
@@ -346,11 +344,12 @@ at all, and without it the reply would arrive only whole on the `assistant` line
 ## Verdict for us
 
 **Claude is the brain that most rewards the seam and least stresses it.** Everything the contract
-in [the provider adapter contract](../../src/templates/skills/building-a-provider-adapter/references/the-contract.md) asks for is
+in [the provider adapter contract](../../docs/extending/provider-adapters/references/the-contract.md) asks for is
 available honestly: `tools`, `resume`, `usage` and `model` are all `true`, tool calls come with
 paired ids, the model is named rather than requested, and usage is already the turn's own — so
-none of the running-total arithmetic Codex forced on us is needed here. `steer` is `false`, and
-that is measured rather than conceded.
+none of the running-total arithmetic Codex forced on us is needed here. `steer` can be `true`
+through the native SDK control protocol: each later Rundesk word first interrupts the active
+Claude request, then becomes the next user message on that same open process and session.[14]
 
 Three things must live inside the adapter and reach nothing else: the dedupe (deltas, not
 `assistant` text), the usage split (`input + cache_creation` fresh, `cache_read` cached, and only
@@ -384,9 +383,9 @@ not say what it is true of is not a fixture.
 - **The `overhead.ts` numbers are lost.** The probe exists and was never recorded, so what the
   CLI's own baggage costs, and what standing instructions add on top of it, is unknown for this
   brain — while the same question has a hard answer for Codex (a 17.4k floor).[8]
-- **`interrupt_receipt_v1`, `interrupt_cancel_queued_v1` and `msg_lifecycle_v1`** are advertised in
-  every `system/init` line and were never investigated. If any of them is a cooperative interrupt
-  or a mid-turn message path, the `steer: false` above is wrong.
+- **The exact meaning of `interrupt_receipt_v1`, `interrupt_cancel_queued_v1` and
+  `msg_lifecycle_v1`.** They are advertised in every `system/init` line.[1] The SDK control request
+  settles the supported interrupt path without documenting each advertised capability separately.
 - **The cache tiers were never reasoned about.** All 17,453 created tokens landed in
   `ephemeral_1h_input_tokens` with the 5-minute tier at zero; whether they price differently, and
   whether a resumed conversation keeps hitting the 1-hour tier, decides whether resume is as cheap
@@ -415,3 +414,5 @@ not say what it is true of is not a fixture.
 10. `tests/samples/cli-versions.lock` — the CLI versions every capture here is true of — (internal)
 11. `../rundesk/probes/overhead.ts` — the prompt-overhead ladder, written and never recorded — (internal)
 12. `.knowledge/scripts/probe-claude` against `claude 2.1.220` on macOS 25.5.0, 2026-07-26 — (internal)
+13. Anthropic, Claude Code CLI reference — https://code.claude.com/docs/en/cli-usage
+14. Anthropic, Claude Agent SDK for Python, `_internal/query.py` — https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/_internal/query.py

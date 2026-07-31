@@ -18,11 +18,45 @@ concurrency:
   group: build-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# Five jobs, each answering one question, so a red tick says what is broken before you
-# open it: are the docs and contracts sound, does the code do what it claims, does this
-# checkout install, can the latest release upgrade to it, and does what is *published* install.
+# Each validation job answers one question, so a red tick says what is broken before
+# it is opened. The published-archive check catches a missing or corrupt install artifact
+# independently of the source-tree installer checks below.
 
 jobs:
+  # ----------------------------------------------------------- published install archive
+  verify-published-install-archive:
+    name: published install archive downloads and opens
+    timeout-minutes: 2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download and inspect the published install archive
+        env:
+          ARCHIVE_REQUIRED_SINCE: "0.22.4"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          asset="https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/rundesk-cli.tar.gz"
+          archive="$RUNNER_TEMP/rundesk-cli.tar.gz"
+          if curl -fsSL "$asset" -o "$archive"; then
+            tar -tzf "$archive" >/dev/null
+          else
+            latest="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/rundesk-ai/rundesk-cli/releases/latest |
+              python -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')"
+            if python - "$latest" "$ARCHIVE_REQUIRED_SINCE" <<'CHECK'
+          import re
+          import sys
+          version = lambda value: tuple(map(int, re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", value).groups()))
+          raise SystemExit(0 if version(sys.argv[1]) >= version(sys.argv[2]) else 1)
+          CHECK
+            then
+              echo "::error::the published install archive is missing or invalid for $latest"
+              exit 1
+            fi
+            echo "::notice::published install archives begin with v$ARCHIVE_REQUIRED_SINCE"
+          fi
+
   # ------------------------------------------------------------------ the knowledge base
   # Its own job rather than a step inside the test run: the contracts are how this product
   # says what it guarantees, and a contract that has drifted should be as visible as a
@@ -122,6 +156,25 @@ jobs:
         with:
           python-version: '3.13'
 
+      - name: The release archive installs, answers, and removes cleanly
+        env:
+          GITHUB_REF_NAME: v0.0.0
+        run: |
+          set -euo pipefail
+          git archive --format=tar --prefix="rundesk-cli-${GITHUB_REF_NAME}/" "$GITHUB_SHA" |
+            gzip -9 > rundesk-cli.tar.gz
+          archive_unpack="$RUNNER_TEMP/release-archive"
+          mkdir -p "$archive_unpack"
+          tar -xzf rundesk-cli.tar.gz -C "$archive_unpack"
+          archive_root="$archive_unpack/rundesk-cli-${GITHUB_REF_NAME}"
+          export RUNDESK_INSTALL_DIR="$RUNNER_TEMP/archive-install"
+          export RUNDESK_BIN_DIR="$RUNNER_TEMP/archive-bin"
+          "$archive_root/install.sh"
+          "$RUNDESK_BIN_DIR/rundesk" version
+          "$archive_root/install.sh" --uninstall
+          test ! -e "$RUNDESK_BIN_DIR/rundesk" ||
+            { echo "::error::the archived install left its command behind"; exit 1; }
+
       - name: Installing leaves a command that answers
         run: |
           set -euo pipefail
@@ -199,6 +252,9 @@ jobs:
             echo "nothing declared, and nothing installed — as intended"
           fi
 
+      - name: The final-message footer regression runs with Discord installed
+        run: .venv/bin/python tests/test_discord.py WhatOneTurnLooksLike.test_the_footer_omits_cache_writes_the_seam_hands_over
+
       - name: Uninstalling takes what it placed and leaves the checkout
         run: |
           set -euo pipefail
@@ -241,13 +297,31 @@ jobs:
           git archive "$previous" | tar -x -C "$old"
           "$old/install.sh"
           "$RUNDESK_BIN_DIR/rundesk" add existing --provider codex
+          # Older releases kept this exact mixed-case identifier on disk. It exercises the
+          # compatibility path a lowercase-only fixture cannot see. The newest release now
+          # normalizes new names, so put the fixture back into that historical on-disk shape.
+          "$RUNDESK_BIN_DIR/rundesk" add Legacy_Name --provider codex
+          mv "$RUNDESK_INSTALL_DIR/data/agents/legacy-name" \
+            "$RUNDESK_INSTALL_DIR/data/agents/Legacy_Name"
           "$RUNDESK_BIN_DIR/rundesk" schedules existing add heartbeat \
             --when "0 6 * * *" --ask "report that the gateway is healthy"
-          printf '%s\n' '{"backups":{"keep_days":45,"at":"04:30"}}' \
-            > "$RUNDESK_INSTALL_DIR/data/config.json"
+          "$RUNDESK_BIN_DIR/rundesk" schedules Legacy_Name add heartbeat \
+            --when "0 7 * * *" --ask "report that the legacy gateway is healthy"
+          CONFIG="$RUNDESK_INSTALL_DIR/data/config.json" python3 - <<'CONFIG'
+          import json, os
+          from pathlib import Path
+
+          path = Path(os.environ["CONFIG"])
+          current = json.loads(path.read_text())
+          current["backups"] = {"keep_days": 45, "at": "04:30"}
+          current["updates"] = {}
+          path.write_text(json.dumps(current, separators=(",", ":")) + "\n")
+          CONFIG
           cp "$RUNDESK_INSTALL_DIR/data/config.json" "$RUNNER_TEMP/config.before"
           printf '%s\n' "kept by the owner" \
             > "$RUNDESK_INSTALL_DIR/data/agents/existing/home/owner-kept.txt"
+          printf '%s\n' "legacy name kept by the owner" \
+            > "$RUNDESK_INSTALL_DIR/data/agents/Legacy_Name/home/owner-kept.txt"
           echo "PREVIOUS_ROOT=$old" >> "$GITHUB_ENV"
 
       - name: The proposed release follows the real update handoff
@@ -272,13 +346,80 @@ jobs:
       - name: Existing behavior and owner data still work
         run: |
           set -euo pipefail
-          cmp "$RUNNER_TEMP/config.before" "$RUNDESK_INSTALL_DIR/data/config.json"
+          # **Not byte-identical any more, and deliberately.** An upgrade fills values an
+          # earlier release never wrote (R-UPD-48). What has to hold is the thing the `cmp`
+          # here was really asking: nothing an owner stated moved. The expected values are
+          # read off the code rather than listed, or this check goes stale when one is added.
+          PROPOSED="$RUNNER_TEMP/proposed-release" python3 - <<'CONFIG'
+          import json, os, sys
+          from pathlib import Path
+
+          # The tree being proposed, not this checkout's working directory: the step above
+          # unpacked it, and it is what the install now running was replaced with.
+          sys.path.insert(0, str(Path(os.environ["PROPOSED"], "src")))
+          from rundesk import config
+
+          was = json.loads(Path(os.environ["RUNNER_TEMP"], "config.before").read_text())
+          now = json.loads(Path(os.environ["RUNDESK_INSTALL_DIR"], "data/config.json").read_text())
+          for section, values in config.INITIAL.items():
+              before = was.get(section, {})
+              after = now.get(section, {})
+              for key, expected in values.items():
+                  if (section == "skills" and key == "granted"
+                          and before.get(key) == list(config.PREVIOUS_DEFAULT_GRANTS)):
+                      if after.get(key) != expected:
+                          raise SystemExit(
+                              "::error::the upgrade did not advance the unchanged "
+                              "release-default skill grants")
+                      continue
+                  if key in before and after.get(key) != before[key]:
+                      raise SystemExit(
+                          f"::error::the upgrade changed '{section}.{key}': "
+                          f"{before[key]!r} -> {after.get(key)!r}")
+                  if key not in before and after.get(key) != expected:
+                      raise SystemExit(
+                          f"::error::the upgrade left '{section}.{key}' unstated")
+          missing = [one for one in config.SECTIONS if one not in now]
+          if missing:
+              raise SystemExit(f"::error::the upgrade left out {', '.join(missing)}")
+          print(f"configuration carried: {sorted(was)} kept, {sorted(set(now) - set(was))} added")
+          CONFIG
           grep -qx "kept by the owner" \
             "$RUNDESK_INSTALL_DIR/data/agents/existing/home/owner-kept.txt"
+          grep -qx "legacy name kept by the owner" \
+            "$RUNDESK_INSTALL_DIR/data/agents/Legacy_Name/home/owner-kept.txt"
           "$RUNDESK_BIN_DIR/rundesk" version
           "$RUNDESK_BIN_DIR/rundesk" status
-          "$RUNDESK_BIN_DIR/rundesk" agents | grep -q '^existing '
-          "$RUNDESK_BIN_DIR/rundesk" schedules existing | grep -q 'heartbeat'
+          "$RUNDESK_BIN_DIR/rundesk" agents | grep -q '^existing ' ||
+            { echo "::error::the existing agent disappeared during upgrade"; exit 1; }
+          held="$("$RUNDESK_BIN_DIR/rundesk" skills)"
+          printf '%s\n' "$held" |
+            grep -qE '^managing-rundesk-schedules +rundesk +.*Legacy_Name' ||
+            { echo "::error::the legacy agent lost its built-in skill grant"; exit 1; }
+          printf '%s\n' "$held" |
+            grep -qE '^managing-rundesk-schedules +rundesk +.*existing' ||
+            { echo "::error::the existing agent lost its built-in skill grant"; exit 1; }
+          for skill in filing-github-issues writing-github-pull-requests; do
+            printf '%s\n' "$held" |
+              grep -qE "^${skill} +rundesk +.*Legacy_Name" ||
+              { echo "::error::the legacy agent did not receive ${skill}"; exit 1; }
+            printf '%s\n' "$held" |
+              grep -qE "^${skill} +rundesk +.*existing" ||
+              { echo "::error::the existing agent did not receive ${skill}"; exit 1; }
+          done
+          "$RUNDESK_BIN_DIR/rundesk" schedules existing | grep -q 'heartbeat' ||
+            { echo "::error::the existing schedule disappeared during upgrade"; exit 1; }
+          "$RUNDESK_BIN_DIR/rundesk" agents "Legacy Name" | grep -q '^Legacy_Name:' ||
+            { echo "::error::a spaced alias did not reach Legacy_Name"; exit 1; }
+          "$RUNDESK_BIN_DIR/rundesk" agents "LEGACY-NAME" | grep -q '^Legacy_Name:' ||
+            { echo "::error::a case-insensitive slug did not reach Legacy_Name"; exit 1; }
+          "$RUNDESK_BIN_DIR/rundesk" schedules "legacy name" | grep -q 'heartbeat' ||
+            { echo "::error::an alias did not reach the legacy schedule"; exit 1; }
+          "$RUNDESK_BIN_DIR/rundesk" add "LEGACY-NAME" |
+            grep -q '^Legacy_Name: ALREADY MADE' ||
+            { echo "::error::repair through an alias did not preserve Legacy_Name"; exit 1; }
+          test -d "$RUNDESK_INSTALL_DIR/data/agents/Legacy_Name"
+          test ! -e "$RUNDESK_INSTALL_DIR/data/agents/legacy-name"
           "$RUNDESK_BIN_DIR/rundesk" serve existing &
           serving=$!
           for _ in $(seq 30); do
@@ -292,6 +433,22 @@ jobs:
           fi
           kill "$serving"
           wait "$serving" || { echo "::error::the existing gateway did not stop cleanly"; exit 1; }
+          "$RUNDESK_BIN_DIR/rundesk" serve "Legacy Name" &
+          legacy_serving=$!
+          for _ in $(seq 30); do
+            "$RUNDESK_BIN_DIR/rundesk" agents "legacy-name" |
+              grep -qE '^Legacy_Name: +RUNNING' && break
+            sleep 1
+          done
+          if ! "$RUNDESK_BIN_DIR/rundesk" agents "LEGACY NAME" |
+              grep -qE '^Legacy_Name: +RUNNING'; then
+            echo "::error::the legacy gateway did not run through its alias after the upgrade"
+            kill "$legacy_serving" 2>/dev/null || true
+            exit 1
+          fi
+          kill "$legacy_serving"
+          wait "$legacy_serving" ||
+            { echo "::error::the legacy gateway did not stop cleanly"; exit 1; }
           if command -v launchctl >/dev/null 2>&1; then
             test -f "$RUNDESK_JOBS_DIR/ai.rundesk-automatic-update.plist" ||
               { echo "::error::the upgrade did not schedule automatic updates"; exit 1; }
@@ -349,7 +506,7 @@ jobs:
           set -euo pipefail
           export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
           cd "$(mktemp -d)"   # no checkout, no install.sh, nothing of rundesk within reach
-          if ! curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash; then
+          if ! curl -fsSL https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh | bash; then
             echo "::error::the instruction every doc gives does not install rundesk"; exit 1
           fi
           "$RUNDESK_BIN_DIR/rundesk" version
@@ -423,6 +580,6 @@ jobs:
           set -euo pipefail
           export RUNDESK_BIN_DIR="$RUNNER_TEMP/bin"
           cd "$(mktemp -d)"
-          curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash -s -- --uninstall
+          curl -fsSL https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh | bash -s -- --uninstall
           test ! -e "$RUNDESK_BIN_DIR/rundesk" || { echo "::error::the command is still on the PATH"; exit 1; }
           test ! -d "$HOME/.rundesk" || { echo "::error::the install directory was left behind"; exit 1; }

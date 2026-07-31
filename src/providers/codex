@@ -138,6 +138,7 @@ class Codex:
         self.ok = None
         self.why = None
         self.tokens = None
+        self.session_tokens = None
         self._tools: dict = {}
         self._helpers: dict = {}  # child thread -> synthetic tool id, until it really ends
         self._proc = subprocess.Popen(
@@ -245,6 +246,13 @@ class Codex:
             # `last` is this turn's own, reported as such — so there is no running total
             # to subtract, and nothing to carry between turns to subtract it from.
             self.tokens = (params.get("tokenUsage") or {}).get("last")
+        elif method == "rawResponse/completed" and params.get("turnId") == self.turn:
+            # One upstream response, not the turn's aggregate bill. The final response's
+            # input is the context level this parent conversation ended on (R-USE-15).
+            # Replace rather than maximize or add: compaction is allowed to make it fall.
+            value = (params.get("usage") or {}).get("inputTokens")
+            if isinstance(value, int) and not isinstance(value, bool):
+                self.session_tokens = value
         elif method == "item/started":
             self._began(params.get("item") or {})
         elif method == "item/completed":
@@ -624,8 +632,7 @@ def _turn(codex, where: str) -> int:
     posture = SANDBOX.get(os.environ.get("RUNDESK_POSTURE", "work"), SANDBOX["work"])
     extra = _settings()
 
-    if codex.answered(codex.ask("initialize", {
-            "clientInfo": {"name": "rundesk", "version": "1"}})) is None:
+    if codex.answered(codex.ask("initialize", _initializing())) is None:
         say(type="done", ok=False, why="Codex would not start")
         return 1
     codex.tell("initialized")
@@ -695,14 +702,7 @@ def _turn(codex, where: str) -> int:
     # gone silent — which is its decision to make and never this adapter's.
     codex.finished.wait()
     if codex.tokens:
-        counted = codex.tokens
-        say(type="usage",
-            # `inputTokens` holds the cached ones, and cache reads are a fraction of the
-            # price of fresh input. Cache *writes* stay with fresh input, where they are
-            # billed. Left folded, most of the volume is priced as though it were new.
-            input=max(0, _n(counted, "inputTokens") - _n(counted, "cachedInputTokens")),
-            output=_n(counted, "outputTokens"),
-            cached=_n(counted, "cachedInputTokens"))
+        say(**_usage(codex.tokens, codex.session_tokens))
     # No model: this brain names none in what it reports, so none is claimed. Saying the
     # one that was asked for would be reporting a request as a measurement.
     ended = {"type": "done", "ok": bool(codex.ok), "session": codex.thread or ""}
@@ -710,6 +710,31 @@ def _turn(codex, where: str) -> int:
         ended["why"] = codex.why
     say(**ended)
     return 0 if codex.ok else 1
+
+
+def _initializing() -> dict:
+    """Opt into the notification carrying one upstream response's exact usage."""
+    return {
+        "clientInfo": {"name": "rundesk", "version": "1"},
+        "capabilities": {"experimentalApi": True},
+    }
+
+
+def _usage(counted: dict, session=None) -> dict:
+    """Codex's billing slots and terminal context level (R-USE-13, R-USE-15)."""
+    cached = _n(counted, "cachedInputTokens")
+    written = _n(counted, "cacheWriteInputTokens")
+    usage = {
+        "type": "usage",
+        "input": max(0, _n(counted, "inputTokens") - cached - written),
+        "output": _n(counted, "outputTokens"),
+        "cached": cached,
+    }
+    if "cacheWriteInputTokens" in counted:
+        usage["written"] = written
+    if isinstance(session, int) and not isinstance(session, bool):
+        usage["session"] = session
+    return usage
 
 
 def _opening(where: str, posture: str, model, extra: dict) -> dict:
@@ -726,7 +751,13 @@ def _opening(where: str, posture: str, model, extra: dict) -> dict:
     Set only where a conversation is *opened*, because that is the only place codex reads
     it — see `_opened`.
     """
-    opening = {"cwd": where, "sandbox": {posture: {}}}
+    # `experimentalApi` only makes the field legal. The per-thread switch is what
+    # actually emits `rawResponse/completed`; without both, app-server stays silent.
+    opening = {
+        "cwd": where,
+        "sandbox": {posture: {}},
+        "experimentalRawEvents": True,
+    }
     if model:
         opening["model"] = model
     if extra.get("config"):
@@ -752,7 +783,10 @@ def _opened(codex, opening: dict, resume):
         # the shape rundesk actually runs. An argument that is quietly dropped is worse
         # than one that was never sent, because it reads like it works. A conversation
         # keeps the wording it was opened with, which is part of what makes it one.
-        carried = {one: it for one, it in opening.items() if one != "developerInstructions"}
+        # Both are thread-creation-only. A thread opened by this adapter keeps raw events
+        # enabled when resumed; sending the start-only field to `thread/resume` is invalid.
+        start_only = {"developerInstructions", "experimentalRawEvents"}
+        carried = {one: it for one, it in opening.items() if one not in start_only}
         said = codex.answered(codex.ask("thread/resume", {**carried, "threadId": resume}))
         if said and "result" in said:
             return said["result"]

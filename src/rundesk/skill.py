@@ -20,7 +20,6 @@ brain went on reading whatever else it found.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import os
 import re
 import shutil
@@ -40,29 +39,6 @@ NAMED = "SKILL.md"
 #: A name matching what a release ships is not proof: a later release can introduce a
 #: name the owner already used, and that coincidence does not transfer ownership.
 OWNED = ".rundesk-built-in"
-
-#: Exact fingerprints of the built-ins shipped immediately before ownership markers
-#: existed. This is a one-release bridge for installs already on 0.10: only an untouched
-#: directory can acquire the marker. A modified built-in is left alone, and a newly shipped
-#: name can never appear here and claim an owner's work by coincidence.
-LEGACY = {
-    "building-a-channel-adapter": (
-        "eeea76bac1c12db493ad823b1d89d4d42740ab7b17173459b3c0705353332466",
-        "65c4e1f28f278ea29ac5e59317eb94ff99b6b43c1aeab855045f6823ac82db9b",
-    ),
-    "building-a-provider-adapter": (
-        "699c7b9408c743115eb32fdf4e4c242201ff5dbabc34833510e26f4aac025ab1",),
-    "managing-backups": (
-        "dbe161e30d98c0f1cef541de6b63791005f794c8f2c27d4811a4d630b55f096a",),
-    "reporting-a-rundesk-bug": (
-        "4a00da98050dd3debbcba46c52c48f1fdbfa7684605c3bfb9c7fcd378c29d87b",),
-    "using-rundesk": (
-        "fee454e2f180769ab22f8c0a44274467ddc9d7036b17e717250f851236a08c30",),
-    "writing-pull-requests": (
-        "e0053196a485e2553b7a47bf7b35ed3583c3553c83b5e6c38db86be85ae739d1",),
-    "writing-skills": (
-        "ba4d002a005251f87f0343c9305823d2a2052584dfb92fe7a0586b99f23e28a2",),
-}
 
 #: What a name may be, and it is the tightest of the three brains rather than ours: grok
 #: refuses anything else outright, and a name a loader rejects is a skill that is silently
@@ -226,25 +202,7 @@ def lay_down(where: Path | None = None, force: bool = False) -> list[str]:
 
 def _owned(at: Path, name: str) -> bool:
     """Whether Rundesk has evidence that this skill is its own."""
-    if (at / OWNED).is_file():
-        return True
-    expected = LEGACY.get(name, ())
-    if not expected or not at.is_dir() or at.is_symlink():
-        return False
-    return _fingerprint(at) in expected
-
-
-def _fingerprint(at: Path) -> str:
-    """The exact file tree of one legacy skill, or an empty fingerprint if unreadable."""
-    found = hashlib.sha256()
-    try:
-        files = sorted(one for one in at.rglob("*") if one.is_file() and one.name != OWNED)
-        for one in files:
-            found.update(str(one.relative_to(at)).encode("utf-8") + b"\0")
-            found.update(one.read_bytes() + b"\0")
-    except OSError:
-        return ""
-    return found.hexdigest()
+    return (at / OWNED).is_file()
 
 
 def take_back(where: Path | None = None) -> list[str]:

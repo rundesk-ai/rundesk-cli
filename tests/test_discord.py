@@ -17,14 +17,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import importlib.machinery
 import importlib.util
+import inspect
 import io
 import json
 import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,6 +39,10 @@ sys.path.insert(0, str(ROOT / "src"))
 #: The install's own virtualenv, exactly as the adapter finds it.
 for _packages in sorted((ROOT / ".venv" / "lib").glob("python3.*/site-packages")):
     sys.path.insert(0, str(_packages))
+
+#: The seam itself, because which fields reach this surface is decided there and rendered
+#: here — and a list kept in two places is a list that disagrees with itself (R-CH-13).
+from rundesk import answering, channel  # noqa: E402
 
 
 def _adapter():
@@ -175,22 +182,574 @@ class WhereItListens(unittest.TestCase):
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class AnAnswerRepliesToTheQuestion(unittest.TestCase):
+    """R-DIS-28 — an answer quotes the message that asked for it, unless that message is
+    somewhere other than where the answer is going.
+
+    **The stand-in message carries `channel.id` and nothing else**, because that is what a
+    real one carries. A stand-in given an attribute discord.py has never had is how this
+    went unnoticed: the guard asked for `channel_id`, every message answered `""`, and no
+    answer rundesk has ever posted was a reply."""
+
+    class Room:
+        """A place to write in, remembering only what it was asked to quote.
+
+        It carries `id` because a real channel does, and because that is what the guard
+        compares an anchor against: the room resolved for this write, which is the only
+        thing a delivery routed by a place name has to go on."""
+
+        def __init__(self, id):
+            self.id = id
+            self.quoted = []
+
+        async def send(self, content, reference=None, mention_author=False, files=None):
+            self.quoted.append(getattr(reference, "message", reference))
+            return SimpleNamespace(id=99)
+
+    class Forgetful:
+        """A room that has forgotten the message being quoted, which is what Discord does
+        when the asker deleted their question: it refuses the whole message rather than the
+        quote alone, unless the reference says not to.
+
+        It carries `id` because a real channel does, so the guard above keeps the anchor and
+        this case is about the refusal rather than about the guard."""
+
+        def __init__(self, id):
+            self.id, self.quoted, self.wrote = id, [], []
+
+        async def send(self, content, reference=None, mention_author=False, files=None):
+            if reference is not None and getattr(reference, "fail_if_not_exists", True):
+                raise RuntimeError("400 Bad Request (error code: 10008): Unknown message")
+            self.quoted.append(getattr(reference, "message", reference))
+            self.wrote.append(content)
+            return SimpleNamespace(id=99)
+
+    class Turn:
+        def __init__(self, room):
+            self.room = room
+
+        async def _where_to_write(self, it):
+            return self.room
+
+    @staticmethod
+    def _message(where):
+        """A message standing in a place — the shape of a real one, no more, down to the
+        reference a real one hands over when it is asked to be quoted."""
+        asking = SimpleNamespace(id=7, channel=SimpleNamespace(id=where))
+        asking.to_reference = lambda fail_if_not_exists=True: SimpleNamespace(
+            message=asking, fail_if_not_exists=fail_if_not_exists)
+        return asking
+
+    def _posted_to(self, conversation, anchor, room_is=None):
+        room = self.Room(conversation if room_is is None else room_is)
+        asyncio.run(discord.Agent._post(
+            self.Turn(room), {"conversation": str(conversation)}, "the answer",
+            anchor=anchor))
+        return room.quoted
+
+    def test_the_anchor_is_read_off_the_attribute_a_message_actually_has(self):
+        """A `discord.Message` has no `channel_id`, so `getattr(anchor, "channel_id", "")`
+        returned `""` for every message that ever passed through, `"" != conversation` was
+        always true, and the anchor was discarded unconditionally. Asked of the installed
+        library, because that is the fact the guard is wrong about."""
+        self.assertFalse(hasattr(_installed.Message, "channel_id"),
+                         "the guard may be read off channel_id after all")
+        self.assertTrue(hasattr(_installed.Message, "channel"))
+        self.assertIn("fail_if_not_exists",
+                      inspect.signature(_installed.Message.to_reference).parameters,
+                      "the installed discord.py cannot be told to keep a refused quote")
+
+    def test_an_answer_in_a_direct_message_is_a_reply_to_the_message_that_asked(self):
+        """R-DIS-28 — the conversation is the direct-message channel's id, which is where
+        the asking message stands. Scheduled reports and answers interleave in a one-to-one
+        conversation, and a reply is the only thing telling them apart."""
+        asking = self._message(4242)
+        self.assertEqual([asking], self._posted_to(4242, asking))
+
+    def test_an_answer_in_a_channel_is_a_reply_to_the_message_that_asked(self):
+        """R-DIS-28 — a turn already happening where the question was asked quotes it, so
+        it is findable in a busy room."""
+        asking = self._message(555)
+        self.assertEqual([asking], self._posted_to(555, asking))
+
+    def test_an_answer_still_arrives_when_the_message_it_quotes_is_gone(self):
+        """R-DIS-1, R-DIS-28 — the asker deleting their own question during a turn that
+        runs for minutes must not cost them the answer. discord.py builds the reference
+        without `fail_if_not_exists`, so Discord's default applied and it refused the whole
+        message: a short answer was lost outright and a split one lost the piece carrying
+        its cost line — the shape this guard exists to close, through another door. Built
+        with it off, the quote is what goes and the answer still arrives."""
+        asking = self._message(555)
+        room = self.Forgetful(555)
+        asyncio.run(discord.Agent._post(
+            self.Turn(room), {"conversation": "555"}, "the answer", anchor=asking))
+        self.assertEqual(["the answer"], room.wrote,
+                         "a quote Discord would not resolve took the answer with it")
+        self.assertEqual([asking], room.quoted)
+
+    def test_an_answer_does_not_quote_a_message_from_somewhere_else(self):
+        """R-DIS-1, R-DIS-28 — Discord refuses a whole message that quotes one in another
+        channel. So a turn in a thread ended with a ✅ on the question and no answer under
+        it: the mark went on the message in the channel, which works, and the reply quoting
+        that same message was rejected outright. Being named opens a thread, so the
+        conversation is the thread while the question stands in the parent."""
+        asking = self._message(555)
+        self.assertEqual([None], self._posted_to(90001, asking),
+                         "an answer still quotes a message outside the place it is sent")
+
+    def test_an_anchor_is_kept_for_the_room_being_written_in_not_the_one_named(self):
+        """R-DIS-30 — a schedule reporting into a place rundesk has never seen a word in sends
+        the word and no conversation at all, because only this surface can find that room. The
+        guard compared the anchor against the conversation, so the one delivery whose notice
+        most needed quoting was the one that dropped it."""
+        notice = self._message(777)
+        self.assertEqual([notice], self._posted_to(None, notice, room_is=777))
+
+    def test_only_the_first_piece_of_a_split_answer_carries_the_anchor(self):
+        """R-DIS-13, R-DIS-28 — a quote on every piece buries what it is quoting."""
+        quoted = []
+
+        class Splitting:
+            async def _post(self, it, text, anchor=None, **kw): quoted.append(anchor)
+            def _stop_typing(self, held): pass
+            def _no_longer_last(self, held): pass
+
+        held = discord.Live()
+        held.anchor = self._message(555)
+        asyncio.run(discord.Agent._answer(
+            Splitting(), {"type": "answer", "text": "\n".join(
+                "line %d" % i for i in range(400))}, held))
+        self.assertGreater(len(quoted), 1, "the answer was not long enough to split")
+        self.assertEqual([held.anchor] + [None] * (len(quoted) - 1), quoted)
+
+
+class _Wrote:
+    """A room that remembers, for every message written into it, whether it was a reply and
+    whether it told Discord to mention the person being replied to.
+
+    Carries `id` because a real channel does, and because that is what the anchor guard
+    compares an anchor against. What it hands back is shaped like a real posted message —
+    `channel` and `to_reference` — because a schedule's start notice is held and then
+    quoted by the report that follows it."""
+
+    def __init__(self, id=4242, refusing=False):
+        self.id, self.refusing = id, refusing
+        self.wrote = []          # (content, whether it quoted, whether it mentioned)
+
+    async def send(self, content, reference=None, mention_author=False, files=None):
+        if self.refusing:
+            raise RuntimeError("403 Forbidden (error code: 50013): Missing Permissions")
+        self.wrote.append((content, reference is not None, mention_author))
+        posted = SimpleNamespace(id=len(self.wrote), channel=self)
+        posted.to_reference = lambda fail_if_not_exists=True: SimpleNamespace(
+            message=posted, fail_if_not_exists=fail_if_not_exists)
+
+        async def edit(content=None):
+            return posted
+
+        posted.edit = edit
+        return posted
+
+    @property
+    def mentioned(self):
+        return [one or content.startswith("<@")
+                for content, _quoted, one in self.wrote]
+
+
+def _writing_surface(room, activity=None):
+    """The adapter's whole writing side, with only the room it writes into replaced.
+
+    Built here rather than as a class body because every method on it is the *real* one:
+    what is under test is which of the messages this surface writes reaches Discord asking
+    for a mention, and a stand-in `_post` would answer that question for itself."""
+
+    class Surface:
+        _post = discord.Agent._post
+        told = discord.Agent.told
+        _answer = discord.Agent._answer
+        _state = discord.Agent._state
+        _doing = discord.Agent._doing
+        _paced = discord.Agent._paced
+        _flush = discord.Agent._flush
+        _holding = discord.Agent._holding
+        _no_longer_last = discord.Agent._no_longer_last
+        _stop_typing = discord.Agent._stop_typing
+
+        def __init__(self):
+            self.live, self.scheduled, self.seen, self.started = {}, {}, {}, {}
+            self.chose = SimpleNamespace(
+                activity=discord.POSTS if activity is None else activity)
+
+        async def _where_to_write(self, it):
+            return room
+
+        async def _typing(self, it):
+            return
+
+        async def _react(self, it, held, mark, instead_of=None):
+            return
+
+    return Surface()
+
+
+def _asking(where=4242):
+    """A person's message, standing in a place — the shape of a real one and no more."""
+    return AnAnswerRepliesToTheQuestion._message(where)
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class TheAnswerMentionsWhoAsked(unittest.TestCase):
+    """R-DIS-31 — a message that mentions you is drawn by *your own* Discord client with a
+    tint across the whole row, which is a thing no bot can draw for itself. Applied to the
+    answer alone, the thing an owner asked for is the only coloured thing on the page; tint
+    the commentary too and nothing is tinted.
+
+    Proved through the real `_post`, because `mention_author` is the whole requirement and a
+    stand-in `_post` would be answering the question for itself."""
+
+    @staticmethod
+    def _answered(surface, text, held):
+        asyncio.run(discord.Agent._answer(
+            surface, {"type": "answer", "conversation": "4242", "text": text}, held))
+
+    def _held(self, anchor=None, clock=None):
+        held = discord.Live(clock=clock)
+        held.anchor = anchor
+        return held
+
+    def test_an_answer_in_a_direct_message_mentions_the_person_who_asked(self):
+        """R-DIS-28, R-DIS-31 — the reply is what carries the mention, so the answer is both
+        a reply to the question and the one message in the conversation an owner's own client
+        colours in."""
+        room = _Wrote()
+        self._answered(_writing_surface(room), "here is what I found",
+                       self._held(_asking(4242)))
+        self.assertEqual([("here is what I found", True, True)], room.wrote)
+
+    def test_only_the_first_piece_of_a_split_answer_mentions_anybody(self):
+        """R-DIS-13, R-DIS-31 — one reply is one notification however many messages it takes.
+        Mentioning on every piece is five pings for one answer, which is worse than the
+        undifferentiated wall this exists to fix."""
+        room = _Wrote()
+        whole = "\n".join("line %d" % i for i in range(400))
+        self._answered(_writing_surface(room), whole, self._held(_asking(4242)))
+        self.assertGreater(len(room.wrote), 1, "the answer was not long enough to split")
+        self.assertEqual([True] + [False] * (len(room.wrote) - 1), room.mentioned)
+        self.assertEqual(
+            whole.replace("\n", ""),
+            "".join(content for content, _q, _m in room.wrote).replace("\n", ""),
+            "the answer was not delivered whole")
+
+    def test_an_answer_attached_as_a_file_still_mentions_who_asked(self):
+        """R-DIS-13, R-DIS-31 — past a certain length an answer is a document rather than a
+        message, and the one line saying so is still the answer arriving."""
+        room = _Wrote()
+        self._answered(_writing_surface(room),
+                       "x" * (discord.LIMIT * discord.ATTACH_AFTER + 1),
+                       self._held(_asking(4242)))
+        self.assertEqual([True], room.mentioned)
+        self.assertIn("attached", room.wrote[0][0])
+
+    def test_an_answer_with_no_message_to_reply_to_mentions_nobody(self):
+        """R-DIS-31 — the mention follows the anchor. There is nobody to mention where there
+        is no question being replied to, and a room must not be pinged by an answer nobody
+        standing in it asked for."""
+        room = _Wrote()
+        self._answered(_writing_surface(room), "here is what I found", self._held(None))
+        self.assertEqual([("here is what I found", False, False)], room.wrote)
+
+    def test_an_answer_whose_question_is_in_another_room_mentions_nobody(self):
+        """R-DIS-28, R-DIS-31 — being named in a channel opens a thread while the question
+        stays in the channel above it, so the anchor is dropped rather than costing the whole
+        message. A mention that outlived the reply carrying it would ping somebody with a
+        message they cannot see the question for."""
+        room = _Wrote(id=90001)
+        self._answered(_writing_surface(room), "here is what I found",
+                       self._held(_asking(555)))
+        self.assertEqual([("here is what I found", False, False)], room.wrote)
+
+    def test_a_remark_said_mid_turn_mentions_nobody(self):
+        """R-CH-19, R-DIS-31 — a finished thought said while the work goes on is not the
+        answer, and a turn that thought out loud four times would be four notifications
+        before the reply arrived."""
+        room = _Wrote()
+        surface = _writing_surface(room)
+
+        async def carry():
+            await discord.Agent.told(surface, {
+                "type": "said", "conversation": "4242", "text": "I'll look at the logs."})
+            await asyncio.sleep(0)
+
+        asyncio.run(carry())
+        self.assertEqual([("I'll look at the logs.", False, False)], room.wrote)
+
+    def test_a_scheduled_final_mentions_its_recipient_and_not_the_notice_author(self):
+        """R-DIS-30, R-DIS-31, R-SCH-46, R-SCH-50 — the report replies to rundesk's own
+        notice, so reply-author mentions would ping the bot. Its explicit authorized
+        recipient gives the final answer the ordinary highlighted treatment instead."""
+        room = _Wrote()
+        surface = _writing_surface(room)
+
+        async def carry():
+            for one in (
+                    {"type": "said", "schedule": "nightly", "began": True,
+                     "text": "💻 Working on 'nightly' …"},
+                    {"type": "usage", "schedule": "nightly",
+                     "session": 122435, "output": 837},
+                    {"type": "answer", "schedule": "nightly", "recipient": "2207",
+                     "provider": "a-brain", "elapsed": 120,
+                     "text": "nothing broke overnight"}):
+                await discord.Agent.told(
+                    surface, dict({"conversation": "4242"}, **one))
+            await asyncio.sleep(0)
+
+        asyncio.run(carry())
+        (_notice, notice_quoted, _n), (found, report_quoted, _r) = room.wrote
+        self.assertFalse(notice_quoted, "the notice quoted something of its own")
+        self.assertTrue(report_quoted, "the report stopped replying to its notice")
+        self.assertEqual(
+            "<@2207> -# a-brain · 122k session · 837 output · 2m elapsed\n"
+            "nothing broke overnight",
+            found,
+        )
+        self.assertEqual([False, True], room.mentioned)
+
+    def test_a_scheduled_final_does_not_consume_a_newer_turn_in_its_room(self):
+        """R-DIS-35, R-SCH-50 — unattended usage and presentation have their own state;
+        a final arriving beside a newer interactive turn preserves that turn's anchor,
+        cost, timer, and typing task."""
+        room = _Wrote()
+        surface = _writing_surface(room)
+        interactive = discord.Live()
+        interactive.anchor = _asking(4242)
+        interactive.cost = "-# · 10k session · 20 output"
+        interactive.started = 10.0
+        typing = _Cancels()
+        interactive.typing = typing
+        surface.live["4242"] = interactive
+
+        async def carry():
+            surface.started["nightly"] = _asking(4242)
+            await discord.Agent.told(surface, {
+                "type": "usage", "conversation": "4242", "schedule": "nightly",
+                "session": 122435, "output": 837,
+            })
+            await discord.Agent.told(surface, {
+                "type": "answer", "conversation": "4242", "schedule": "nightly",
+                "recipient": "2207", "text": "nothing broke overnight",
+            })
+
+        asyncio.run(carry())
+        self.assertIs(interactive, surface.live["4242"])
+        self.assertEqual(("-# · 10k session · 20 output", 10.0, typing),
+                         (interactive.cost, interactive.started, interactive.typing))
+        self.assertFalse(typing.cancelled)
+
+    def test_the_commentary_and_the_mark_on_a_failure_mention_nobody(self):
+        """R-DIS-20, R-DIS-31 — what the agent is doing while it works, and the line saying
+        what failed, are both bookkeeping. Neither is the answer, so neither is coloured."""
+        room = _Wrote()
+        surface = _writing_surface(room)
+
+        async def carry():
+            await discord.Agent.told(surface, {
+                "type": "think", "conversation": "4242", "text": "weighing it up"})
+            await discord.Agent.told(surface, {
+                "type": "state", "conversation": "4242", "state": "failed",
+                "why": "the brain stopped answering"})
+            await asyncio.sleep(0)
+
+        asyncio.run(carry())
+        self.assertGreaterEqual(len(room.wrote), 2, "neither message was written")
+        self.assertNotIn(True, room.mentioned)
+
+    def test_a_quiet_channel_still_posts_one_message_and_it_is_the_mentioned_answer(self):
+        """R-CH-27, R-DIS-31 — an owner who asked not to be shown the work gets exactly one
+        message for the turn. That message is the answer, so it is the one that mentions —
+        the whole value of the tint is on the surface where there is least to tell apart."""
+        room = _Wrote()
+        surface = _writing_surface(room, activity=discord.OFF)
+        held = surface.live.setdefault("4242", discord.Live())
+        held.anchor = _asking(4242)
+
+        async def carry():
+            for one in ({"type": "think", "text": "weighing it up"},
+                        {"type": "tool", "name": "Read"},
+                        {"type": "answer", "text": "here is what I found"}):
+                await discord.Agent.told(
+                    surface, dict({"conversation": "4242"}, **one))
+            await asyncio.sleep(0)
+
+        asyncio.run(carry())
+        self.assertEqual([("here is what I found", True, True)], room.wrote)
+
+    def test_a_mentioned_answer_that_cannot_be_delivered_is_said_and_the_turn_goes_on(self):
+        """R-CH-12, R-DIS-31 — a delivery that fails is written to our own stderr and the
+        turn carries on. Asking for a mention is one more thing Discord may refuse, and it
+        must not become the first way a refusal ends a turn."""
+        room = _Wrote(refusing=True)
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self._answered(_writing_surface(room), "here is what I found",
+                           self._held(_asking(4242)))
+        self.assertEqual([], room.wrote)
+        self.assertIn("could not write", said.getvalue())
+        self.assertIn("WARNING\t", said.getvalue())
+
+    def test_a_successful_delivery_marks_its_diagnostic_as_routine(self):
+        """R-GW-44 — stderr stays separate from protocol records while its severity is
+        explicit for the gateway that keeps it."""
+        room = _Wrote()
+        surface = _writing_surface(room)
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            asyncio.run(discord.Agent.told(surface, {
+                "type": "state", "state": "taken", "conversation": "4242",
+            }))
+            asyncio.run(discord.Agent._post(
+                surface, {"conversation": "4242"}, "delivered"))
+        self.assertIn(
+            "INFO\ttold state/taken for 4242 (0 chars, 0 files)",
+            said.getvalue(),
+        )
+        self.assertIn("INFO\twrote 9 chars and 0 files", said.getvalue())
+
+    def test_a_message_nobody_asked_to_mention_does_not(self):
+        """R-DIS-31 — `_post` is shared by every message this surface writes, so not
+        mentioning is what it does unless a caller says otherwise. Written as a case because
+        the default is the whole of what keeps the answer the only tinted thing."""
+        room = _Wrote()
+        asyncio.run(discord.Agent._post(
+            _writing_surface(room), {"conversation": "4242"}, "-# ⚠ something went wrong",
+            anchor=_asking(4242)))
+        self.assertEqual([("-# ⚠ something went wrong", True, False)], room.wrote)
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class AScheduledRunReportsUnderItsOwnNotice(unittest.TestCase):
+    """R-DIS-30, R-SCH-46 — an owner scrolling a busy direct message sees that a schedule
+    began, and sees what it found attached to the thing that began it rather than floating
+    loose among answers to other questions.
+
+    Held in memory for as long as the run is: a gateway that restarts mid-run takes the run
+    with it, so there is no report left to anchor and nothing durable worth keeping."""
+
+    class Saying:
+        """Everything `told` reaches for on a `said` record, and nothing else."""
+
+        def __init__(self):
+            self.live: dict = {}
+            self.started: dict = {}
+            self.posted: list = []
+
+        _holding = discord.Agent._holding if discord is not None else None
+
+        def _stop_typing(self, held): pass
+
+        def _no_longer_last(self, held): pass
+
+        async def _flush(self, it, held): pass
+
+        async def _typing(self, it): return
+
+        async def _post(self, it, content, anchor=None, files=(), text_as=None):
+            self.posted.append((content, anchor))
+            return SimpleNamespace(id=len(self.posted))
+
+    @staticmethod
+    def _remark(text="what it found", **held) -> dict:
+        return dict({"type": "said", "conversation": "4242", "text": text}, **held)
+
+    def _said(self, *records):
+        saying = self.Saying()
+
+        async def carry():
+            for one in records:
+                await discord.Agent.told(saying, one)
+            await asyncio.sleep(0)
+
+        asyncio.run(carry())
+        return saying
+
+    def test_a_scheduled_report_is_a_reply_to_the_message_that_said_it_started(self):
+        """R-DIS-30 — the pair is self-describing only if the second quotes the first."""
+        saying = self._said(
+            self._remark("💻 Working on 'nightly' …", schedule="nightly", began=True),
+            self._remark("nothing broke overnight", schedule="nightly"))
+        (_notice, first), (found, quoted) = saying.posted
+        self.assertIsNone(first, "the notice quoted something of its own")
+        self.assertEqual("nothing broke overnight", found)
+        self.assertEqual(1, getattr(quoted, "id", None),
+                         "the report was not a reply to the notice that started it")
+
+    def test_a_report_for_a_schedule_nobody_announced_quotes_nothing(self):
+        """R-DIS-30 — a program schedule says nothing when it starts and still says what it
+        came to, and a gateway that restarted holds nothing. Both post plainly, which is what
+        every scheduled report did before there were notices at all."""
+        saying = self._said(self._remark("schedule 'tidy' finished", schedule="tidy"))
+        self.assertEqual([("schedule 'tidy' finished", None)], saying.posted)
+
+    def test_an_ordinary_remark_still_quotes_nothing(self):
+        """R-CH-19, R-DIS-30 — a finished thought said mid-turn names no schedule, and quoting
+        the question on every remark buries the question."""
+        saying = self._said(self._remark("I'll look at the logs."))
+        self.assertEqual([("I'll look at the logs.", None)], saying.posted)
+
+    def test_a_notice_is_answered_once_and_never_by_the_next_firing(self):
+        """R-DIS-30 — the same schedule fires again tomorrow. Left standing, its second report
+        would quote a message from a run that finished a day earlier."""
+        saying = self._said(
+            self._remark("💻 Working on 'nightly' …", schedule="nightly", began=True),
+            self._remark("nothing broke overnight", schedule="nightly"),
+            self._remark("nothing broke again", schedule="nightly"))
+        self.assertEqual([None, 1, None],
+                         [getattr(one, "id", one) for _text, one in saying.posted])
+        self.assertEqual({}, saying.started, "the notice was kept after it was answered")
+
+    def test_a_notice_that_could_not_be_posted_is_not_held(self):
+        """R-DIS-30 — `_post` hands back nothing when the platform refused, and holding that
+        would make the report a reply to a message that is not there."""
+        class Refusing(self.Saying):
+            async def _post(self, it, content, anchor=None, files=(), text_as=None):
+                self.posted.append((content, anchor))
+                return None
+
+        saying = Refusing()
+
+        async def carry():
+            await discord.Agent.told(saying, self._remark(
+                "💻 Working on 'nightly' …", schedule="nightly", began=True))
+            await asyncio.sleep(0)
+
+        asyncio.run(carry())
+        self.assertEqual({}, saying.started)
+
+    def test_a_scheduled_report_still_arrives_when_its_notice_is_gone(self):
+        """R-DIS-1, R-DIS-28, R-DIS-30 — the notice stands in the room for the length of the
+        run, which is exactly the window an owner has to tidy it away. Discord refuses a whole
+        message quoting one it cannot resolve, so a deleted notice would have taken the report
+        with it — a dangling notice is bad and a lost report is worse. The reference is built
+        with `fail_if_not_exists` off for every anchor there is, this one included: the quote
+        is what goes, and what the run found still arrives.
+
+        Through the real `_post` and the room that refuses the way Discord does, because what
+        is under test is the reference this delivery builds rather than the record it came
+        from."""
+        notice = AnAnswerRepliesToTheQuestion._message(4242)
+        room = AnAnswerRepliesToTheQuestion.Forgetful(4242)
+        asyncio.run(discord.Agent._post(
+            AnAnswerRepliesToTheQuestion.Turn(room),
+            {"conversation": "4242", "schedule": "nightly"},
+            "nothing broke overnight", anchor=notice))
+        self.assertEqual(["nothing broke overnight"], room.wrote,
+                         "a notice the owner deleted took the report down with it")
+        self.assertEqual([notice], room.quoted)
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class AnAnswerInAThread(unittest.TestCase):
     """R-DIS-1 — being named opens a thread and the turn happens there, while the message
     that asked stays in the channel above it."""
-
-    class Message:
-        def __init__(self, channel_id):
-            self.channel_id = channel_id
-
-    def test_an_answer_does_not_quote_a_message_from_somewhere_else(self):
-        """R-DIS-1 — Discord refuses a whole message that quotes one in another channel.
-        So a turn in a thread ended with a ✅ on the question and no answer under it: the
-        mark went on the message in the channel, which works, and the reply quoting that
-        same message was rejected outright."""
-        source = (ROOT / "src" / "channels" / "discord").read_text()
-        self.assertIn('str(getattr(anchor, "channel_id", "")) != str(', source,
-                      "an answer can still quote a message outside the place it is sent")
 
     def test_a_thread_is_a_conversation_of_its_own(self):
         """R-DIS-1, R-CH-3 — one thread is one conversation and one session, so the id a
@@ -283,8 +842,9 @@ class WhereAMessageCameFrom(unittest.TestCase):
     answered a room of forty people in the voice it used for a direct message."""
 
     class Where:
-        def __init__(self, name=None):
+        def __init__(self, name=None, identifier=None):
             self.name = name
+            self.id = identifier
 
     class Thread(Where):
         pass
@@ -327,6 +887,140 @@ class WhereAMessageCameFrom(unittest.TestCase):
         self.assertEqual("the thread 'what changed today?' under #ops on the "
                          "'Rundesk' server",
                          discord._place(at, False, True))
+
+    def test_discord_maps_its_places_to_the_shared_channel_hierarchy(self):
+        """R-DIS-21, R-AGT-38 — Discord nouns do not leak into shared variable names."""
+        thread = self.Thread("release", 42)
+        thread.parent = self.Where("ops", 1180)
+        at = self.message(thread, self.Where("Acme", 99), shown="Tim")
+        self.assertEqual({
+            "channel_name": "ops",
+            "channel_id": "1180",
+            "channel_parent_name": "Acme",
+            "channel_parent_id": "99",
+            "channel_thread_name": "release",
+            "channel_thread_id": "42",
+        }, discord._prompt_context(at, False, True))
+
+    def test_discord_maps_an_ordinary_room_without_inventing_a_thread(self):
+        at = self.message(self.Where("ops", 1180), self.Where("Acme", 99), shown="Tim")
+        self.assertEqual({
+            "channel_name": "ops",
+            "channel_id": "1180",
+            "channel_parent_name": "Acme",
+            "channel_parent_id": "99",
+            "channel_thread_name": "",
+            "channel_thread_id": "",
+        }, discord._prompt_context(at, False, False))
+
+    def test_discord_maps_a_direct_message_without_platform_containers(self):
+        at = self.message(self.Where(None, 1180), shown="Tim")
+        self.assertEqual({
+            "channel_name": "a direct message",
+            "channel_id": "1180",
+            "channel_parent_name": "",
+            "channel_parent_id": "",
+            "channel_thread_name": "",
+            "channel_thread_id": "",
+        }, discord._prompt_context(at, True, False))
+
+    def test_discords_exact_legacy_defaults_are_replaced_but_owner_edits_are_not(self):
+        """R-DIS-21, R-CH-22 — old adapter defaults do not duplicate the standardized
+        trigger, while text an owner changed stays additive."""
+        for shape, direct in ((discord.DMS, True), (discord.ROOMS, False)):
+            old = discord.LEGACY_INSTRUCTIONS[shape]
+            arrived = {"direct": direct, "where": "#ops", "called": "Tim",
+                       channel.PROMPT_REPLACES: old}
+            built = channel.preface(
+                {"kind": "discord", channel.INSTRUCTIONS: old},
+                "ava", "discord-" + shape, arrived,
+                core_variables={
+                    "agent_home": "/agents/ava/home",
+                    "workspace": "/agents/ava/home/workspace",
+                },
+            )
+            self.assertNotIn("reached over discord", built)
+            changed = old + "\nOwner addition."
+            kept = channel.preface(
+                {"kind": "discord", channel.INSTRUCTIONS: changed},
+                "ava", "discord-" + shape, arrived,
+                core_variables={
+                    "agent_home": "/agents/ava/home",
+                    "workspace": "/agents/ava/home/workspace",
+                },
+            )
+            self.assertIn("Owner addition.", kept)
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class WhatAMessageRepliesTo(unittest.IsolatedAsyncioTestCase):
+    """R-DIS-34 — Discord's native reference becomes the shared reply shape."""
+
+    @staticmethod
+    def message(resolved=None, message_id=8839, kind=None):
+        if kind is None:
+            kind = discord.discord.MessageReferenceType.reply
+        reference = SimpleNamespace(
+            message_id=message_id, resolved=resolved, cached_message=None, type=kind,
+        )
+        return SimpleNamespace(reference=reference)
+
+    @staticmethod
+    def parent(text="the schedule report", shown="Winston", identifier=2207):
+        author = SimpleNamespace(
+            display_name=shown, name="winston", id=identifier,
+        )
+        return SimpleNamespace(author=author, content=text)
+
+    def test_a_resolved_reply_carries_the_parent_identity_author_and_body(self):
+        self.assertEqual({
+            "id": "8839", "resolved": True, "author": "Winston",
+            "text": "the schedule report",
+        }, discord._reply_to(self.message(self.parent())))
+
+    def test_a_deleted_or_unfetched_parent_still_carries_its_identity(self):
+        self.assertEqual({
+            "id": "8839", "resolved": False,
+        }, discord._reply_to(self.message()))
+
+    def test_a_non_reply_reference_is_not_presented_as_a_reply(self):
+        kind = SimpleNamespace(name="forward")
+        self.assertIsNone(discord._reply_to(self.message(self.parent(), kind=kind)))
+
+    def test_a_message_without_a_reference_has_no_reply_context(self):
+        self.assertIsNone(discord._reply_to(SimpleNamespace(reference=None)))
+
+    async def test_on_message_reports_the_reply_on_the_arrived_record(self):
+        parent = self.parent()
+        message = SimpleNamespace(
+            id=8841,
+            author=SimpleNamespace(
+                id=2207, bot=False, display_name="Tim", name="tim",
+            ),
+            guild=None,
+            channel=SimpleNamespace(id=1180, name=None),
+            mentions=[],
+            content="fix the second one",
+            attachments=[],
+            reference=self.message(parent).reference,
+        )
+        agent = SimpleNamespace(
+            chose=SimpleNamespace(
+                server=None, channel=None, dm=True, allow=("2207",),
+            ),
+            user=SimpleNamespace(id=42),
+            live={},
+            seen={},
+            _fetch=mock.AsyncMock(return_value=[]),
+            _no_longer_last=lambda _live: None,
+            _make_room=lambda _conversation: True,
+        )
+        with mock.patch.object(discord, "say") as reported:
+            await discord.Agent.on_message(agent, message)
+        self.assertEqual({
+            "id": "8839", "resolved": True, "author": "Winston",
+            "text": "the schedule report",
+        }, reported.call_args.kwargs["reply_to"])
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
@@ -404,6 +1098,67 @@ class WhatOneTurnLooksLike(unittest.TestCase):
                          discord._as_a_line({"type": "usage", "input": 1200,
                                              "output": 340, "cached": 17000}))
 
+    def test_the_footer_omits_cache_writes_the_seam_hands_over(self):
+        """R-DIS-17, R-CH-13 — cache writes remain part of the usage record, but the
+        compact final footer omits them even when the real seam hands them over."""
+        crossed = []
+        seam = answering._Shown(
+            SimpleNamespace(record={}, _tell=lambda **it: crossed.append(it)),
+            SimpleNamespace(conversation="4242", run="run-1"))
+        seam({"type": "usage", "input": 1200, "output": 340, "cached": 17000,
+              "written": 1500})
+        self.assertEqual("-# · 1.2k input · 340 output · 17k cached",
+                         discord._as_a_line(crossed[0]))
+
+    def test_the_footer_leads_with_how_big_the_conversation_is(self):
+        """R-DIS-29, R-USE-15 — the footer is read to decide one thing: whether to start a
+        fresh conversation. `2 input` is what a warm turn's fresh tokens are and says
+        nothing about a session; the size it ended on does, and goes first. What the turn
+        itself wrote stays beside it, and the breakdown stays in `rundesk runs`."""
+        self.assertEqual(
+            "-# · 122k session · 837 output",
+            discord._as_a_line({"type": "usage", "session": 122435, "input": 2,
+                                "output": 837, "cached": 121446, "written": 987}))
+
+    def test_where_an_answer_is_posted_does_not_change_its_usage_summary(self):
+        """R-DIS-29 — direct messages and rooms show the same useful session-size view;
+        where an answer lands cannot silently replace it with the billing breakdown."""
+        usage = {"type": "usage", "session": 122435, "input": 2,
+                 "output": 837, "cached": 121446}
+        self.assertEqual(
+            ["-# · 122k session · 837 output"] * 2,
+            [discord._as_a_line(dict(usage, direct=direct))
+             for direct in (True, False)],
+        )
+
+    def test_the_whole_footer_an_owner_reads_is_the_size_what_was_written_and_the_clock(self):
+        """R-DIS-29, R-DIS-24 — end to end, from the record the adapter sent to the line
+        above the answer, because each half of this passes on its own while the line
+        somebody actually reads is wrong."""
+        posted = []
+
+        class Turn:
+            async def _post(self, it, text, **kw): posted.append(text)
+            def _stop_typing(self, held): pass
+            def _no_longer_last(self, held): pass
+
+        held = discord.Live(clock=lambda: 128.0)
+        held.started = 100.0
+        asyncio.run(discord.Agent._doing(
+            Turn(), {"type": "usage", "session": 122435, "output": 837}, held))
+        asyncio.run(discord.Agent._answer(
+            Turn(), {"type": "answer", "provider": "stand-in", "text": "done"}, held))
+        self.assertEqual("-# stand-in · 122k session · 837 output · 28s elapsed",
+                         posted[0].splitlines()[0])
+
+    def test_a_brain_that_does_not_report_a_conversation_size_gets_the_footer_it_always_got(self):
+        """R-DIS-29, R-USE-16 — a brain that cannot say how big its conversation is keeps
+        every slot it used to show rather than being cut down to `output` alone. Adding a
+        quantity for one brain may not take three away from another."""
+        self.assertEqual("-# · 1.2k input · 340 output · 17k cached",
+                         discord._as_a_line({"type": "usage", "input": 1200,
+                                             "output": 340, "cached": 17000}))
+
     def test_elapsed_time_is_compact_at_seconds_minutes_and_hours(self):
         """R-DIS-24 — the duration stays readable beside compact token counts."""
         self.assertEqual(["40s", "2m", "2h"],
@@ -427,9 +1182,9 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         held.cost = "-# · 1.9k input · 94 output · 70k cached"
         now[0] += 120
         asyncio.run(discord.Agent._answer(
-            Turn(), {"type": "answer", "text": "done"}, held))
+            Turn(), {"type": "answer", "provider": "stand-in", "text": "done"}, held))
         self.assertEqual(
-            "-# · 1.9k input · 94 output · 70k cached · 2m elapsed",
+            "-# stand-in · 1.9k input · 94 output · 70k cached · 2m elapsed",
             posted[0].splitlines()[0])
 
     def test_repeated_taken_does_not_restart_elapsed_time(self):
@@ -446,8 +1201,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         asyncio.run(discord.Agent._state(Turn(), {"state": "taken"}, held))
         self.assertEqual(100.0, held.started)
 
-    def test_elapsed_time_is_shown_when_usage_was_not_reported(self):
-        """R-DIS-24 — duration is useful even when a provider supplies no token counts."""
+    def test_provider_and_elapsed_time_are_shown_when_usage_was_not_reported(self):
+        """R-DIS-24, R-DIS-33 — provenance does not depend on optional usage metadata."""
         posted = []
 
         class Turn:
@@ -458,8 +1213,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         held = discord.Live(clock=lambda: 140.0)
         held.started = 100.0
         asyncio.run(discord.Agent._answer(
-            Turn(), {"type": "answer", "text": "done"}, held))
-        self.assertEqual("-# · 40s elapsed", posted[0].splitlines()[0])
+            Turn(), {"type": "answer", "provider": "stand-in", "text": "done"}, held))
+        self.assertEqual("-# stand-in · 40s elapsed", posted[0].splitlines()[0])
 
     def test_a_small_count_is_not_rounded_into_a_zero(self):
         """R-USE-7 — everything was shown in thousands, so a turn that answered in
@@ -470,6 +1225,15 @@ class WhatOneTurnLooksLike(unittest.TestCase):
                                    "cached": 13056})
         self.assertIn("13 output", said)
         self.assertNotIn("0k output", said)
+
+    def test_a_count_in_the_millions_is_not_shown_in_thousands(self):
+        """R-DIS-17 — a cache read is counted once per request, so a turn that made forty
+        of them reported `15425k cached`: a unit nobody carries that far, which a reader
+        has to divide in their head before it means anything. The decimal stays, because
+        rounding one away is half a million tokens."""
+        self.assertEqual(["999k", "1M", "1.4M", "15.4M"],
+                         [discord._amount(one)
+                          for one in (999_499, 999_500, 1_400_000, 15_424_940)])
 
     def test_a_turn_that_reported_no_cost_says_nothing_about_it(self):
         """An absent number is not a zero, and inventing one is claiming a measurement."""
@@ -505,7 +1269,7 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             live = {}
 
             async def _flush(self, it, held): pass
-            async def _post(self, it, text): posted.append(text)
+            async def _post(self, it, text, **kw): posted.append(text)
             def _no_longer_last(self, held): pass
             def _stop_typing(self, held): pass
             async def _typing(self, it): pass
@@ -540,26 +1304,26 @@ class WhatOneTurnLooksLike(unittest.TestCase):
 
     def test_one_activity_has_no_count(self):
         """R-DIS-20 — a count starts only when something actually repeats."""
-        self.assertEqual("-# 💻 ran a command",
+        self.assertEqual("-# 💻 ran command",
                          discord._render_activity(
-                             discord._group_activity([], ["-# 💻 ran a command"])))
+                             discord._group_activity([], ["-# 💻 ran command"])))
 
     def test_consecutive_activity_is_one_line_with_a_count(self):
         """R-DIS-20 — repeated activity remains legible and leaves room for the answer."""
         groups = discord._group_activity([], [
-            "-# 💻 ran a command", "-# 💻 ran a command", "-# 💻 ran a command"])
-        self.assertEqual("-# 💻 ran a command **(x3)**",
+            "-# 💻 ran command", "-# 💻 ran command", "-# 💻 ran command"])
+        self.assertEqual("-# 💻 ran command **(x3)**",
                          discord._render_activity(groups))
 
     def test_only_consecutive_activity_is_counted(self):
         """R-DIS-20 — a different category closes the group permanently."""
         groups = discord._group_activity([], [
-            "-# 💻 ran a command", "-# 💻 ran a command",
-            "-# 📖 read a file", "-# 💻 ran a command"])
+            "-# 💻 ran command", "-# 💻 ran command",
+            "-# 📖 read file", "-# 💻 ran command"])
         self.assertEqual(
-            "-# 💻 ran a command **(x2)**\n"
-            "-# 📖 read a file\n"
-            "-# 💻 ran a command",
+            "-# 💻 ran command **(x2)**\n"
+            "-# 📖 read file\n"
+            "-# 💻 ran command",
             discord._render_activity(groups))
 
     def test_a_growing_message_counts_across_separate_writes(self):
@@ -573,16 +1337,16 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         class Turn:
             chose = type("Choice", (), {"activity": discord.GROWS})()
 
-            async def _post(self, it, text):
+            async def _post(self, it, text, **kw):
                 raise AssertionError("an editable commentary was posted again")
 
         held = discord.Live()
         held.posted = Posted()
-        held.activity_groups = [("-# 💻 ran a command", 1)]
+        held.activity_groups = [("-# 💻 ran command", 1)]
         held.activity = discord._render_activity(held.activity_groups)
-        held.pending = ["-# 💻 ran a command"]
+        held.pending = ["-# 💻 ran command"]
         asyncio.run(discord.Agent._flush(Turn(), {}, held))
-        self.assertEqual(["-# 💻 ran a command **(x2)**"], edited)
+        self.assertEqual(["-# 💻 ran command **(x2)**"], edited)
 
     def test_activity_arriving_during_an_edit_gets_a_successor_write(self):
         """R-DIS-20 — a Discord await may not strand the newest count until the answer."""
@@ -600,7 +1364,7 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             class Turn:
                 chose = type("Choice", (), {"activity": discord.GROWS})()
 
-                async def _post(self, it, text):
+                async def _post(self, it, text, **kw):
                     raise AssertionError("an editable commentary was posted again")
 
                 async def _flush(self, it, held):
@@ -611,8 +1375,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
 
             held = discord.Live()
             held.posted = Posted()
-            held.activity_groups = [("-# 💻 ran a command", 1)]
-            held.pending = ["-# 💻 ran a command"]
+            held.activity_groups = [("-# 💻 ran command", 1)]
+            held.pending = ["-# 💻 ran command"]
             held.pacing = asyncio.create_task(discord.Agent._paced(Turn(), {}, held))
             await asyncio.wait_for(editing.wait(), timeout=2)
             await discord.Agent._doing(
@@ -626,17 +1390,17 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             return edited, held
 
         edited, held = asyncio.run(scenario())
-        self.assertEqual("-# 💻 ran a command **(x3)**", edited[-1])
+        self.assertEqual("-# 💻 ran command **(x3)**", edited[-1])
         self.assertEqual([], held.pending)
 
     def test_an_intervening_message_breaks_a_count_that_has_not_flushed_yet(self):
         """R-DIS-20 — a pending write may not merge activity across visible history."""
         held = discord.Live()
-        held.pending = ["-# 💻 ran a command"]
+        held.pending = ["-# 💻 ran command"]
         discord.Agent._no_longer_last(None, held)
-        held.pending.append("-# 💻 ran a command")
+        held.pending.append("-# 💻 ran command")
         self.assertEqual(
-            "-# 💻 ran a command\n-# 💻 ran a command",
+            "-# 💻 ran command\n-# 💻 ran command",
             discord._render_activity(discord._group_activity([], held.pending)))
 
     def test_a_subagent_start_and_finish_are_two_broad_categories(self):
@@ -647,8 +1411,8 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         finished = discord._activity_line(
             {"type": "result", "id": "helper-1", "ok": True,
              "summary": "private helper response"}, tools)
-        self.assertEqual("-# 🤖 Delegated to subagent", started)
-        self.assertEqual("-# 🤖 Subagent finished", finished)
+        self.assertEqual("-# 🤖 delegated to subagent", started)
+        self.assertEqual("-# 🤖 subagent finished", finished)
         self.assertNotIn("private helper response", finished)
 
     def test_a_safe_subagent_name_is_shown_without_its_provider_path(self):
@@ -662,19 +1426,19 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             "type": "result", "id": "helper-1", "ok": True,
             "summary": "private response",
         }, tools)
-        self.assertEqual("-# 🤖 Delegated to subagent: senior_code_reviewer", started)
-        self.assertEqual("-# 🤖 Subagent finished: senior_code_reviewer", finished)
+        self.assertEqual("-# 🤖 delegated to subagent: senior_code_reviewer", started)
+        self.assertEqual("-# 🤖 subagent finished: senior_code_reviewer", finished)
         self.assertNotIn("/root", started)
         self.assertNotIn("private response", finished)
 
     def test_named_subagents_still_collapse_as_one_broad_category(self):
         """R-DIS-20 — names add detail only while they do not defeat compact counts."""
         groups = discord._group_activity([], [
-            "-# 🤖 Delegated to subagent: Gibbs",
-            "-# 🤖 Delegated to subagent: Plato",
+            "-# 🤖 delegated to subagent: Gibbs",
+            "-# 🤖 delegated to subagent: Plato",
         ])
         self.assertEqual(
-            "-# 🤖 Delegated to subagent **(x2)**",
+            "-# 🤖 delegated to subagent **(x2)**",
             discord._render_activity(groups))
 
     def test_it_stops_saying_it_is_typing_the_moment_there_is_something_to_read(self):
@@ -756,7 +1520,7 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             live = {}
 
             async def _flush(self, it, held): pass
-            async def _post(self, it, text): return None
+            async def _post(self, it, text, **kw): return None
             def _no_longer_last(self, held): pass
             def _stop_typing(self, held): held.typing = None
             async def _typing(self, it): started.append(it)
@@ -770,14 +1534,67 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         # What ends it is a final state, which cancels it — that path is untouched here.
         held.typing.cancel()
 
+    def test_a_terminal_notice_does_not_claim_another_turn_is_running(self):
+        """R-DIS-35 — a restart outcome has no turn left to end its typing indicator."""
+        typed = []
+
+        class Notice:
+            live = {}
+            started = {}
+
+            async def _flush(self, it, held): pass
+            async def _post(self, it, text, **kw): return None
+            def _no_longer_last(self, held): pass
+            def _stop_typing(self, held): discord.Agent._stop_typing(self, held)
+            async def _typing(self, it): typed.append(it)
+
+        notice = Notice()
+        asyncio.run(discord.Agent.told(notice, {
+            "type": "said", "conversation": "c1", "text": "restart succeeded",
+            "continues": False,
+        }))
+
+        self.assertEqual([], typed)
+        self.assertNotIn("c1", notice.live)
+
+    def test_a_terminal_notice_does_not_erase_a_newer_running_turn(self):
+        """R-DIS-35 — a new turn may begin before a queued restart notice is delivered."""
+        async def scenario():
+            class Notice:
+                started = {}
+
+                async def _flush(self, it, held): pass
+                async def _post(self, it, text, **kw): return None
+                def _no_longer_last(self, held): pass
+                def _stop_typing(self, held): discord.Agent._stop_typing(self, held)
+                async def _typing(self, it): await asyncio.Event().wait()
+
+            held = discord.Live()
+            held.started = 1.0
+            held.typing = asyncio.create_task(asyncio.Event().wait())
+            notice = Notice()
+            notice.live = {"c1": held}
+
+            await discord.Agent.told(notice, {
+                "type": "said", "conversation": "c1", "text": "restart succeeded",
+                "continues": False,
+            })
+
+            self.assertIs(held, notice.live["c1"])
+            self.assertIsNotNone(held.typing)
+            self.assertFalse(held.typing.done())
+            held.typing.cancel()
+
+        asyncio.run(scenario())
+
     def test_a_commentary_stops_growing_once_something_is_said_under_it(self):
         """R-DIS-20 — a message something has been posted under is one the reader has
         already scrolled past. Editing it changes history rather than showing progress:
         the new line appears above whatever came after it, where nobody is looking. So
         the next thing to show has to begin a message of its own."""
         held = discord.Live()
-        held.posted, held.activity = object(), "-# 💻 ran a command"
-        held.activity_groups = [("-# 💻 ran a command", 1)]
+        held.posted, held.activity = object(), "-# 💻 ran command"
+        held.activity_groups = [("-# 💻 ran command", 1)]
         # Unbound on purpose: the decision uses nothing of the connection, which is what
         # makes it testable without one.
         discord.Agent._no_longer_last(None, held)
@@ -869,6 +1686,53 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         from rundesk import provider
 
         self.assertEqual(set(provider.DID), set(discord.SHOWN))
+
+    def test_activity_is_written_clipped_rather_than_as_prose(self):
+        """R-DIS-20 — a turn puts dozens of these in a column of subtext beside a column
+        of marks. At that width an article is a word carrying nothing, and one line
+        starting with a capital reads as the start of a sentence the rest are not."""
+        for verb, said in discord.SHOWN.items():
+            with self.subTest(verb):
+                self.assertNotRegex(said, r"\b(a|an|the)\b",
+                                    "an article in a line nobody reads as a sentence")
+                self.assertEqual(said[:1], said[:1].lower(),
+                                 "one line capitalised and the rest not")
+
+    def test_the_two_lines_a_delegation_is_bracketed_by_are_written_once(self):
+        """R-DIS-20 — each is said three times: the line, the heading a repeat is counted
+        under, and the prefix a helper's name is appended to. Three copies drifting apart
+        is a count that stops matching the line above it, with nothing to see in a diff."""
+        started = discord._activity_line(
+            {"type": "tool", "id": "h", "did": "delegate"}, {})
+        self.assertEqual(f"-# {discord.DELEGATED}", started)
+        self.assertEqual(started, discord._activity_category(started))
+        self.assertEqual(discord.SHOWN["delegate"],
+                         discord.DELEGATED[len(discord.DID["delegate"]) + 1:])
+
+    def test_changing_what_it_keeps_of_its_own_is_told_apart_from_any_other_edit(self):
+        """R-PRV-29 — the whole point of the four verbs. Shown beside `edit` they would be
+        the same pencil, and a reader could not tell a working file from the file the
+        agent lives by."""
+        from rundesk import provider
+
+        for verb in provider.CONTINUITY.values():
+            with self.subTest(verb):
+                said = discord.commentary({"type": "tool", "name": "Write", "did": verb})
+                self.assertIn(discord.DID[verb], said)
+                self.assertNotIn(discord.DID["edit"], said)
+                self.assertNotIn("Write", said, "a vendor's own word reached a reader")
+
+    def test_what_it_keeps_of_its_own_is_spoken_of_in_the_first_person(self):
+        """R-DIS-20 — an activity line is the agent saying what it just did. "Updated its
+        memory" reads as a process writing to a store; the agent changed what it will know
+        next time, and it is the one saying so."""
+        from rundesk import provider
+
+        for name, verb in provider.CONTINUITY.items():
+            with self.subTest(verb):
+                said = f" {discord.SHOWN[verb]} "
+                self.assertNotIn(" its ", said)
+                self.assertIn(" my ", said)
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
@@ -1204,6 +2068,58 @@ class _Collects:
         pass
 
 
+class _Surface:
+    """A Discord client as `_room_named` and `_where_to_write` use one.
+
+    **It records rather than refuses.** A fake that raises to prove a guard held proves
+    nothing: the adapter reaches for a person inside `contextlib.suppress(Exception)`, so a
+    raised `AssertionError` is swallowed and the call returns `None` either way — the same
+    answer a held guard gives. Every reach is written down instead, and the test asserts on
+    what came back and on what was never opened, which a deleted guard cannot fake.
+    """
+
+    def __init__(self, dm, allow, channel=None, conversation="the-conversation"):
+        self.guilds = ()
+        self.chose = SimpleNamespace(dm=dm, allow=list(allow), server=None)
+        self.channel = channel
+        self.conversation = conversation
+        self.channels_asked = []
+        self.people_asked = []
+        self.dms_opened = []
+
+    async def wait_until_ready(self):
+        return None
+
+    async def _room_named(self, said):
+        """The real one, so driving `_where_to_write` still tests the resolution itself."""
+        return await discord.Agent._room_named(self, said)
+
+    async def fetch_channel(self, where):
+        self.channels_asked.append(where)
+        if self.channel is None:
+            raise RuntimeError("not a channel")
+        return self.channel
+
+    async def fetch_user(self, where):
+        self.people_asked.append(where)
+        return _Person(self, where)
+
+    def get_channel(self, where):
+        return self.conversation
+
+
+class _Person:
+    """Someone a DM could be opened with — who records that it was."""
+
+    def __init__(self, surface, who):
+        self.surface = surface
+        self.id = who
+
+    async def create_dm(self):
+        self.surface.dms_opened.append(self.id)
+        return f"dm-with-{self.id}"
+
+
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class WhichRoomAWordMeans(unittest.TestCase):
     """R-CAD-16 — a schedule names a place, and this is what turns that word into a room."""
@@ -1230,10 +2146,117 @@ class WhichRoomAWordMeans(unittest.TestCase):
         """Spaces around it are typing, not the name."""
         self.assertTrue(discord.room_matches("  #operations  ", "operations"))
 
+    def test_a_dm_place_that_is_a_user_id_opens_that_persons_dm(self):
+        """R-CAD-16 — schedule `--in` is often the same user snowflake as `--allow`.
+
+        That is not a channel id. `fetch_channel` fails; without the user→DM path a finished
+        schedule reports "nowhere to write" and the owner never sees the answer. Winston
+        schedules that worked used a DM *channel* id; Markus's used a *user* id and silently
+        posted nowhere. Both words must resolve on a DM surface.
+        """
+        surface = _Surface(dm=True, allow=["279024636254224384"])
+        found, why = asyncio.run(
+            discord.Agent._room_named(surface, "279024636254224384"))
+        self.assertEqual("dm-with-279024636254224384", found)
+        self.assertIsNone(why)
+        self.assertEqual([279024636254224384], surface.people_asked)
+        self.assertEqual([279024636254224384], surface.dms_opened)
+
+    def test_a_dm_channel_id_still_resolves_as_a_channel(self):
+        """R-CAD-16 — the working Winston shape: place is the DM channel snowflake.
+
+        The channel is tried first and answers, so nobody is looked up and no DM is opened:
+        asserted on the empty records rather than on a fake that refuses to be called, which
+        the adapter's `suppress(Exception)` would swallow.
+        """
+        surface = _Surface(dm=True, allow=["279024636254224384"],
+                           channel="channel-1529678042396622928")
+        found, why = asyncio.run(
+            discord.Agent._room_named(surface, "1529678042396622928"))
+        self.assertEqual("channel-1529678042396622928", found)
+        self.assertIsNone(why)
+        self.assertEqual([1529678042396622928], surface.channels_asked)
+        self.assertEqual([], surface.people_asked)
+        self.assertEqual([], surface.dms_opened)
+
+    def test_a_user_id_is_not_opened_as_a_dm_from_a_room_channel(self):
+        """A failed room id must not become a private message (R-CH-4, R-CAD-16).
+
+        Driven through `_where_to_write`, because the guarantee is about where the report
+        landed, not about which method ran: a room channel handed a user snowflake writes in
+        the conversation it came from and opens no private message with anybody. If the
+        surface check were deleted the id is on the allow list, so a DM *would* open — this
+        fails on the DM that came back and on the DM that was opened.
+        """
+        surface = _Surface(dm=False, allow=["279024636254224384"])
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            where = asyncio.run(discord.Agent._where_to_write(
+                surface, {"place": "279024636254224384", "conversation": "77"}))
+        self.assertEqual("the-conversation", where)
+        self.assertEqual([], surface.people_asked)
+        self.assertEqual([], surface.dms_opened)
+        self.assertIn("could not find '279024636254224384'", said.getvalue())
+
+    def test_a_dm_place_refuses_a_user_who_is_not_allowed(self):
+        """Schedules must not open DMs with people the channel does not authorize.
+
+        The refusal is observable twice: the report goes to the conversation instead, and
+        the owner is told the id was declined rather than missing — "could not find" is the
+        sentence a typo produces, and sending an owner on a wrong-id hunt is the
+        misdiagnosis this path exists to end.
+        """
+        surface = _Surface(dm=True, allow=["111"])
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            where = asyncio.run(discord.Agent._where_to_write(
+                surface, {"place": "279024636254224384", "conversation": "77"}))
+        self.assertEqual("the-conversation", where)
+        self.assertEqual([], surface.people_asked)
+        self.assertEqual([], surface.dms_opened)
+        self.assertIn("is not on this channel's allowed list", said.getvalue())
+        self.assertNotIn("could not find", said.getvalue())
+
+    def test_a_room_that_is_simply_missing_is_not_reported_as_a_refusal(self):
+        """The other half of the refusal note: a word nobody can find still says so.
+
+        Without this the refusal sentence could swallow every failure and the two would be
+        indistinguishable again, in the other direction.
+        """
+        surface = _Surface(dm=True, allow=["279024636254224384"])
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            where = asyncio.run(discord.Agent._where_to_write(
+                surface, {"place": "#no-such-room", "conversation": "77"}))
+        self.assertEqual("the-conversation", where)
+        self.assertIn("could not find '#no-such-room'", said.getvalue())
+        self.assertNotIn("allowed list", said.getvalue())
+
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class WhatTheOwnerIsTold(unittest.TestCase):
     """R-DIS-15, R-DIS-16 — coming up, going down, and closing the connection either way."""
+
+    def test_successfully_telling_the_owner_is_routine_channel_activity(self):
+        """R-GW-44 — a startup or shutdown notice that lands is not a warning."""
+        kept = []
+
+        class Person:
+            async def send(self, _said):
+                return None
+
+            def __str__(self):
+                return "owner"
+
+        class Surface:
+            chose = SimpleNamespace(allow=["42"])
+
+            async def fetch_user(self, _who):
+                return Person()
+
+        with mock.patch.object(
+                discord, "note",
+                side_effect=lambda said, level="WARNING": kept.append((said, level))):
+            asyncio.run(discord.Agent._tell_the_owner(Surface(), "Rundesk is online."))
+        self.assertEqual(
+            [("told the owner (owner): Rundesk is online.", "INFO")], kept)
 
     class Stand:
         """Exactly the surface `going` touches, and no more — a stand-in more generous
@@ -1285,8 +2308,9 @@ class WhatTheOwnerIsTold(unittest.TestCase):
                     os.environ, {"RUNDESK_MAINTENANCE": str(marker)}, clear=False):
                 it = self.Stand()
                 asyncio.run(discord.Agent.going(it))
-        self.assertIn("maintenance", it.greeted[0].lower())
         self.assertIn("update", it.greeted[0].lower())
+        self.assertIn("back shortly", it.greeted[0].lower(),
+                      "the owner was not told the gateway is coming back")
         self.assertNotIn("offline", it.greeted[0].lower())
 
     def test_going_down_cancels_what_a_conversation_was_still_running(self):
@@ -1301,9 +2325,16 @@ class WhatTheOwnerIsTold(unittest.TestCase):
     class Connects:
         """The surface `on_ready` touches."""
 
+        class User:
+            name = "The Owner's Bot"
+
+            async def edit(self, **given):
+                pass
+
         def __init__(self, claims=True):
             self.greeted, self.said = False, []
             self._claims = claims
+            self.user = self.User()
 
         def _claim(self, what):
             return self._claims
@@ -1313,6 +2344,24 @@ class WhatTheOwnerIsTold(unittest.TestCase):
 
         async def _tell_the_owner(self, said):
             self.said.append(said)
+
+    def test_connecting_never_edits_the_bot_profile(self):
+        """R-DIS-32 — Discord account identity belongs to its owner, not Rundesk."""
+        changed = []
+
+        class User:
+            name = "The Owner's Bot"
+
+            async def edit(self, **given):
+                changed.append(given)
+
+        it = self.Connects()
+        it.user = User()
+        with mock.patch.dict(os.environ, {"RUNDESK_AGENT": "winston"}, clear=False), \
+                mock.patch.object(discord, "say"):
+            asyncio.run(discord.Agent.on_ready(it))
+            asyncio.run(discord.Agent.on_ready(it))
+        self.assertEqual([], changed)
 
     def test_only_one_adapter_of_a_gateway_greets_the_owner(self):
         """R-DIS-15 — an agent reachable both by direct message and in rooms runs *two* of
@@ -1329,7 +2378,7 @@ class WhatTheOwnerIsTold(unittest.TestCase):
         self.assertEqual(1, len(it.said))
         self.assertEqual([], second.said, "the second adapter greeted as well")
 
-    def test_a_gateway_returning_from_an_update_says_maintenance_is_complete(self):
+    def test_a_gateway_returning_from_an_update_says_the_update_landed(self):
         """R-UPD-43"""
         with tempfile.TemporaryDirectory() as temporary:
             marker = Path(temporary) / "maintenance"
@@ -1344,11 +2393,13 @@ class WhatTheOwnerIsTold(unittest.TestCase):
                     os.environ.pop(named, None)
                 it = self.Connects()
                 asyncio.run(discord.Agent.on_ready(it))
-        self.assertIn("maintenance is complete", it.said[0].lower())
+        self.assertIn("new rundesk update installed", it.said[0].lower())
+        self.assertTrue(it.said[0].startswith("👋 **I'm back**"))
+        self.assertNotIn("🟢", it.said[0])
         self.assertFalse(marker.exists(), "completed maintenance stayed attached to the gateway")
 
     def test_a_gateway_returning_from_an_update_links_the_version_now_listening(self):
-        """R-DIS-26 — the green notice is the only thing every returning gateway sends,
+        """R-DIS-26 — the return notice is the only thing every returning gateway sends,
         including after an unattended update no conversation started. Told the version and
         the link by rundesk: an adapter that asked a forge what is newest would name a
         release this gateway is not running."""
@@ -1368,7 +2419,7 @@ class WhatTheOwnerIsTold(unittest.TestCase):
             "[v0.15.0](https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.15.0)",
             it.said[0],
         )
-        self.assertIn("maintenance", it.said[0].lower())
+        self.assertIn("update installed", it.said[0].lower())
 
     def test_a_gateway_told_only_a_version_still_names_it(self):
         """An install with no link to offer says which release is listening in plain text.
@@ -1535,6 +2586,131 @@ class WhatWasActuallyAsked(unittest.TestCase):
         """Guessing at which mention was ours is worse than leaving one in."""
         self.assertEqual("<@42> what changed?",
                          discord._without_mentions("<@42> what changed?", None))
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class OutboundAttachmentsAreBoundToValidatedBytes(unittest.TestCase):
+    """R-CH-18 — validation and delivery name the same immutable byte snapshot."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="rundesk-outbound-")
+        self.addCleanup(self.temporary.cleanup)
+        self.where = Path(self.temporary.name)
+
+    @staticmethod
+    def _declared(at):
+        payload = at.read_bytes()
+        return {
+            "name": at.name,
+            "at": str(at.resolve()),
+            "bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+    def test_an_attachment_changed_after_validation_is_not_sent(self):
+        parent = self.where / "exports"
+        parent.mkdir()
+        approved = parent / "approved.pdf"
+        approved.write_bytes(b"approved")
+        declared = self._declared(approved)
+        outside = self.where / "outside"
+        outside.mkdir()
+        (outside / approved.name).write_bytes(b"private replacement")
+        parent.rename(self.where / "held-exports")
+        parent.symlink_to(outside, target_is_directory=True)
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            attached = discord._outbound_attachment(declared)
+
+        self.assertIsNone(attached)
+
+    def test_the_verified_snapshot_does_not_change_with_its_source(self):
+        approved = self.where / "approved.pdf"
+        approved.write_bytes(b"approved")
+
+        attached = discord._outbound_attachment(self._declared(approved))
+        def close_snapshot():
+            attached.close()
+            attached.fp.close()
+        self.addCleanup(close_snapshot)
+        approved.write_bytes(b"changed later")
+        attached.fp.seek(0)
+
+        self.assertEqual(b"approved", attached.fp.read())
+
+    def test_discord_verification_leaves_the_event_loop_free(self):
+        approved = self.where / "approved.pdf"
+        approved.write_bytes(b"approved")
+        declared = self._declared(approved)
+        entered = threading.Event()
+        release = threading.Event()
+        verify = discord._outbound_attachment
+        sent = []
+
+        def slow(attachment):
+            entered.set()
+            release.wait(1)
+            return verify(attachment)
+
+        class Room:
+            id = 7
+
+            async def send(self, content, reference=None, mention_author=False, files=None):
+                sent.extend(files or ())
+                return SimpleNamespace(id=8)
+
+        class Turn:
+            async def _where_to_write(self, _it):
+                return Room()
+
+        async def prove():
+            async def advance():
+                self.assertTrue(await asyncio.to_thread(entered.wait, 0.2))
+                release.set()
+
+            with mock.patch.object(discord, "_outbound_attachment", side_effect=slow):
+                posting = asyncio.create_task(discord.Agent._post(
+                    Turn(), {"conversation": "7"}, "answer", files=[declared]))
+                await asyncio.wait_for(advance(), timeout=0.3)
+                await posting
+                self.assertTrue(sent)
+                self.assertTrue(all(attached.fp.closed for attached in sent))
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            asyncio.run(prove())
+
+    def test_a_later_attachment_failure_closes_an_earlier_snapshot(self):
+        """R-CH-12, R-CH-18 — partial preparation cannot leak verified bytes."""
+        approved = self.where / "approved.pdf"
+        approved.write_bytes(b"approved")
+        declared = self._declared(approved)
+        verify = discord._outbound_attachment
+        made = []
+
+        def prepare(attachment):
+            if made:
+                raise RuntimeError("second preparation failed")
+            ready = verify(attachment)
+            made.append(ready)
+            return ready
+
+        class Room:
+            id = 7
+
+            async def send(self, content, reference=None, mention_author=False, files=None):
+                return SimpleNamespace(id=8)
+
+        class Turn:
+            async def _where_to_write(self, _it):
+                return Room()
+
+        with contextlib.redirect_stderr(io.StringIO()), mock.patch.object(
+                discord, "_outbound_attachment", side_effect=prepare):
+            posted = asyncio.run(discord.Agent._post(
+                Turn(), {"conversation": "7"}, "answer", files=[declared, declared]))
+
+        self.assertEqual(8, posted.id)
+        self.assertTrue(made[0].fp.closed)
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")

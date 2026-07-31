@@ -328,6 +328,7 @@ class WhichConversationIsToldAndWhichIsNot(unittest.TestCase):
 
     def opening(self):
         return {"cwd": "/tmp", "sandbox": {codex.SANDBOX["work"]: {}},
+                "experimentalRawEvents": True,
                 "developerInstructions": "You are in a room."}
 
     def test_a_new_conversation_is_told_when_it_is_opened(self):
@@ -336,6 +337,7 @@ class WhichConversationIsToldAndWhichIsNot(unittest.TestCase):
         codex._opened(fake, self.opening(), None)
         self.assertEqual("You are in a room.",
                          fake.sent("thread/start")["developerInstructions"])
+        self.assertTrue(fake.sent("thread/start")["experimentalRawEvents"])
 
     def test_a_conversation_being_carried_on_is_not_told_again(self):
         """Probed: passed to a resume they are accepted and then ignored. An argument that
@@ -346,6 +348,7 @@ class WhichConversationIsToldAndWhichIsNot(unittest.TestCase):
         codex._opened(fake, self.opening(), "an-old-thread")
         resumed = fake.sent("thread/resume")
         self.assertNotIn("developerInstructions", resumed)
+        self.assertNotIn("experimentalRawEvents", resumed)
         self.assertEqual("an-old-thread", resumed["threadId"])
         self.assertEqual("/tmp", resumed["cwd"], "the rest of the opening was lost with it")
         self.assertIsNone(fake.sent("thread/start"), "it opened a second conversation")
@@ -393,6 +396,103 @@ class HowMuchOfTheMachineATurnMayTouch(unittest.TestCase):
         self.assertEqual({"danger-full-access": {}}, got["sandbox"])
         for named in codex.SANDBOX.values():
             self.assertRegex(named, r"^[a-z]+(-[a-z]+)*$")
+
+
+class WhatOneTurnCost(unittest.TestCase):
+    def test_terminal_response_usage_is_negotiated(self):
+        """The context measurement is experimental in app-server 0.145.0 and is silent
+        unless the client opts in while initializing and when creating the thread."""
+        self.assertTrue(
+            codex._initializing()["capabilities"]["experimentalApi"])
+        self.assertTrue(codex._opening(
+            "/tmp", codex.SANDBOX["read"], None, {})["experimentalRawEvents"])
+
+    def measured(self, responses):
+        held = object.__new__(codex.Codex)
+        held.thread = "parent-thread"
+        held.turn = "parent-turn"
+        held.finished = threading.Event()
+        held.ok = None
+        held.why = None
+        held.tokens = None
+        held.session_tokens = None
+        held._tools = {}
+        held._helpers = {}
+        for thread, turn, tokens in responses:
+            held._heard("rawResponse/completed", {
+                "threadId": thread,
+                "turnId": turn,
+                "usage": {"inputTokens": tokens},
+            })
+        return held.session_tokens
+
+    def test_a_turn_making_several_requests_reports_the_level_it_ended_at_and_not_the_sum(self):
+        """R-USE-15 — each upstream response reports one prompt level. The last parent
+        response is where the turn ended; adding the levels counts earlier context again."""
+        session = self.measured([
+            ("parent-thread", "parent-turn", 18000),
+            ("parent-thread", "parent-turn", 24000),
+        ])
+        self.assertEqual(24000, session)
+        self.assertNotEqual(42000, session)
+
+    def test_a_compacted_conversation_is_reported_smaller_than_the_one_before_it(self):
+        """R-USE-15 — a level is allowed to fall after compaction."""
+        self.assertEqual(12000, self.measured([
+            ("parent-thread", "parent-turn", 48000),
+            ("parent-thread", "parent-turn", 12000),
+        ]))
+
+    def test_a_subagents_own_conversation_is_not_where_this_turn_ended(self):
+        """R-USE-14 — child threads share the app-server stream with their parent."""
+        self.assertEqual(24000, self.measured([
+            ("parent-thread", "parent-turn", 24000),
+            ("child-thread", "child-turn", 900000),
+        ]))
+
+    def test_a_stream_without_response_usage_claims_no_session_size(self):
+        """R-USE-16 — absence is unknown, never a measured zero."""
+        usage = codex._usage({
+            "inputTokens": 100,
+            "cachedInputTokens": 40,
+            "outputTokens": 10,
+        }, None)
+        self.assertNotIn("session", usage)
+
+    def test_cache_reads_writes_and_fresh_input_stay_in_four_slots(self):
+        """R-USE-13 — Codex reports cache reads and writes as subdivisions of input.
+        Losing the write field both drops one billed quantity and folds it into fresh
+        input, so the adapter boundary has to prove all four slots with nonzero values."""
+        self.assertEqual(
+            {"type": "usage", "input": 20, "output": 10,
+             "cached": 40, "written": 60},
+            codex._usage({
+                "inputTokens": 120,
+                "cachedInputTokens": 40,
+                "cacheWriteInputTokens": 60,
+                "outputTokens": 10,
+            }))
+
+    def test_an_older_stream_claims_no_cache_write_split(self):
+        """R-USE-13 — absence is unknown, not a measured zero."""
+        self.assertEqual(
+            {"type": "usage", "input": 60, "output": 10, "cached": 40},
+            codex._usage({
+                "inputTokens": 100,
+                "cachedInputTokens": 40,
+                "outputTokens": 10,
+            }))
+
+    def test_reported_subdivisions_cannot_make_fresh_input_negative(self):
+        """A malformed or newer stream cannot turn accounting into a negative cost."""
+        self.assertEqual(
+            0,
+            codex._usage({
+                "inputTokens": 50,
+                "cachedInputTokens": 40,
+                "cacheWriteInputTokens": 20,
+                "outputTokens": 10,
+            })["input"])
 
 
 if __name__ == "__main__":

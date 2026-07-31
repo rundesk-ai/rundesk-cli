@@ -78,7 +78,16 @@ class TheShapeOnDisk(WithAnAgentsOwnRecords):
         self.assertEqual("wal", kept.journal())
         self.assertEqual({"provider": None, "model": None, "instructions": None,
                           "settings": {}}, kept.agent())
+        self.assertTrue(kept.display_name())
         self.assertIsNone(kept.last_seen())
+
+    def test_an_agents_display_name_is_kept_without_changing_its_brain(self):
+        """R-AGT-39 — the human spelling is durable state beside, not inside, the slug."""
+        kept = self.built()
+        kept.remember_display_name("iOS Helper")
+        self.assertEqual("iOS Helper", kept.display_name())
+        self.assertEqual({"provider": None, "model": None, "instructions": None,
+                          "settings": {}}, kept.agent())
 
     def test_making_a_database_that_is_already_there_keeps_everything_in_it(self):
         """`made()` is what every entry point calls before it does anything, so it runs
@@ -709,6 +718,87 @@ class WhenTheClockStartsWork(WithAnAgentsOwnRecords):
         self.assertEqual([], [one for one in self.kept.schedules() if one["name"] == "weekly"])
 
 
+class WhenAScheduleIsChanged(WithAnAgentsOwnRecords):
+    def setUp(self):
+        super().setUp()
+        self.kept = self.built()
+        self.kept.remember_schedule("nightly", "0 3 * * *", AT, prompt="what changed?",
+                                    instructions="be brief", provider="claude")
+
+    def test_only_what_is_named_moves(self):
+        """The whole difference between changing a schedule and removing it to add it
+        again: everything not named stays exactly as it was, rather than being written back
+        from a caller's idea of what the row held."""
+        self.assertTrue(self.kept.change_schedule("nightly", prompt="what broke?"))
+        after = self.kept.schedule("nightly")
+        self.assertEqual("what broke?", after["prompt"])
+        self.assertEqual(("0 3 * * *", "be brief", "claude"),
+                         (after["cron"], after["instructions"], after["provider"]))
+
+    def test_a_change_keeps_every_record_of_what_the_schedule_has_already_done(self):
+        """What removing and adding again destroys, and the reason this exists."""
+        self.kept.schedule_fired("nightly", AT, "started")
+        self.kept.schedule_became("nightly", "finished")
+        made = self.kept.schedule("nightly")["created_at"]
+        self.kept.change_schedule("nightly", cron="30 6 * * *")
+        after = self.kept.schedule("nightly")
+        self.assertEqual((AT, "finished", made),
+                         (after["last_auto_run_at"], after["last_outcome"], after["created_at"]))
+
+    def test_setting_one_of_a_pair_clears_the_other(self):
+        """Both pairs the table insists on. A row holding a repeating time and a single
+        moment is one the database refuses, so a caller stating one is stating that the
+        other has gone — the alternative is an integrity error where an owner asked for a
+        change."""
+        self.kept.change_schedule("nightly", at="2099-01-01 09:00")
+        moved = self.kept.schedule("nightly")
+        self.assertEqual("2099-01-01 09:00", moved["at"])
+        self.assertIsNone(moved["cron"])
+        self.kept.change_schedule("nightly", command=["/bin/echo", "hi"])
+        became = self.kept.schedule("nightly")
+        self.assertEqual(["/bin/echo", "hi"], became["command"])
+        self.assertIsNone(became["prompt"])
+
+    def test_nothing_is_given_as_empty_and_left_alone_by_being_absent(self):
+        """The two instructions a caller has to be able to tell apart — leave it, and take
+        it off — which one default would make one keystroke."""
+        self.kept.change_schedule("nightly", instructions="")
+        self.assertIsNone(self.kept.schedule("nightly")["instructions"])
+        self.kept.change_schedule("nightly", provider="grok")
+        self.assertIsNone(self.kept.schedule("nightly")["instructions"],
+                          "a field nobody named was written anyway")
+
+    def test_a_change_that_would_leave_neither_of_a_pair_is_refused(self):
+        """Checked against the row after the change rather than against what was passed in:
+        only that knows which of the two this ends up being."""
+        with self.assertRaises(ValueError):
+            self.kept.change_schedule("nightly", prompt="")
+        self.assertEqual("what changed?", self.kept.schedule("nightly")["prompt"],
+                         "the refused change was written anyway")
+
+    def test_a_schedule_that_is_not_there_is_said_rather_than_reported_as_changed(self):
+        """Including one taken away between being read and being written: a change that did
+        nothing must say so rather than report a success nobody can find afterwards."""
+        self.assertFalse(self.kept.change_schedule("gone", prompt="anything?"))
+
+    def test_a_change_naming_a_channel_that_is_not_there_is_refused(self):
+        """The same reference that stops a schedule outliving the surface it reports to,
+        holding on the way through an edit as well as on the way in."""
+        with self.assertRaises(store.Refused):
+            self.kept.change_schedule("nightly", channel="nowhere")
+
+    def test_a_column_that_is_not_a_schedules_to_change_is_refused(self):
+        """`enabled` has two verbs of its own, and what a schedule has already done is not
+        an owner's to rewrite — so neither is reachable from here."""
+        for named in ({"enabled": 0}, {"last_outcome": "finished"},
+                      {"last_auto_run_at": AT}, {"created_at": AT}):
+            with self.assertRaises(ValueError):
+                self.kept.change_schedule("nightly", **named)
+        # A schedule's name is what its runs are recorded against, so it is not among them
+        # either — and it cannot be, being the one thing this is asked by.
+        self.assertNotIn("name", store.Store.CHANGEABLE)
+
+
 class WhereAConversationIsHappening(WithAnAgentsOwnRecords):
     def test_the_same_place_is_the_same_conversation_however_often_it_is_opened(self):
         """Every message that arrives asks this, so it is asked far more often than a
@@ -861,7 +951,8 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
              "can": {"steer": True}, "settings": {"effort": "high"}, "resumed": True,
              "started_at": AT, "ended_at": None, "outcome": None, "why": None,
              "exit_code": None, "tokens_in": None, "tokens_out": None,
-             "tokens_cached": None, "tokens_reported": False},
+             "tokens_cached": None, "tokens_written": None, "tokens_reported": False,
+             "because": None},
             kept.run(named))
         self.assertEqual([named], [one["id"] for one in kept.runs(conversation_id="c1")])
         self.assertIsNone(kept.run("404-zzzz"))
@@ -957,8 +1048,11 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
         told = self.a_run(kept)
         kept.ended(told, LATER, "done",
                    tokens={"input": 120, "output": 30, "cached": 10, "reported": True})
+        # `written` totals 0 rather than being absent: neither run reported the split, and
+        # a SUM over rows that all said nothing is a floor of nothing. What must not become
+        # zero is the *per-run* value, which stays NULL — see test_migration.
         self.assertEqual({"runs": 2, "reported": 1, "unreported": 1, "input": 120,
-                          "output": 30, "cached": 10}, kept.usage())
+                          "output": 30, "cached": 10, "written": 0}, kept.usage())
 
     def test_a_runs_account_is_read_back_in_the_order_the_work_happened(self):
         """`seq` is the order and a clock is not, so an account written by a machine whose
@@ -1570,6 +1664,48 @@ class ReadingBackWhatWasSaid(WithAnAgentsOwnRecords):
         self.assertEqual([tim], [one["id"] for one in found])
         self.assertEqual(["tim"], [one["who"] for one in found])
 
+    def test_a_place_is_narrowed_to_by_the_name_the_listing_prints_for_it(self):
+        """R-STO-28 — reported (#103): the `WHERE` column prints `<channel>/<space>` and the
+        filter matched the bare space alone, so the one identifier an agent can see and copy
+        back matched nothing at all — and the empty listing that came back reads as "this
+        conversation is empty", which is the single wrong answer `messages` exists to stop."""
+        kept = self.built()
+        kept.opened("dm-tim", "discord-dms", "dms", "482910337", AT)
+        kept.opened("dm-sam", "discord-dms", "dms", "913774028", AT)
+        tim = kept.arrived("dm-tim", AT, "nice work!", who="tim")
+        kept.arrived("dm-sam", LATER, "did you finish?", who="sam")
+        printed = kept.latest(conversation="482910337")[0]
+        qualified = f"{printed['channel']}/{printed['space']}"
+        self.assertEqual([tim], [one["id"] for one in kept.latest(conversation=qualified)],
+                         "the identifier the listing prints is not the one its filter takes")
+
+    def test_a_place_named_on_the_wrong_channel_is_not_narrowed_to(self):
+        """The qualified form is both halves or it is worth nothing: a space id that exists on
+        one channel must not answer for a channel it was never on."""
+        kept = self.built()
+        kept.opened("dm-tim", "discord-dms", "dms", "482910337", AT)
+        kept.arrived("dm-tim", AT, "nice work!", who="tim")
+        self.assertEqual([], kept.latest(conversation="discord-rooms/482910337"))
+
+    def test_a_place_whose_own_name_holds_a_slash_is_still_narrowed_to(self):
+        """A platform's own word for a place is the platform's own. Splitting the qualified
+        form on the last slash must not stop a bare value that contains one from matching."""
+        kept = self.built()
+        kept.opened("c-repo", "github", "room", "rundesk-ai/rundesk-cli", AT)
+        said = kept.arrived("c-repo", AT, "the gate is green")
+        self.assertEqual([said],
+                         [one["id"] for one in kept.latest(conversation="rundesk-ai/rundesk-cli")])
+
+    def test_a_place_that_exists_is_told_apart_from_one_that_does_not(self):
+        """R-STO-28 — "there is no such conversation" and "that conversation is empty" send a
+        reader somewhere completely different, and one empty list answered both."""
+        kept = self.built()
+        kept.opened("dm-tim", "discord-dms", "dms", "482910337", AT)
+        self.assertTrue(kept.has_conversation("482910337"))
+        self.assertTrue(kept.has_conversation("discord-dms/482910337"))
+        self.assertFalse(kept.has_conversation("no-such-place"))
+        self.assertFalse(kept.has_conversation("discord-rooms/482910337"))
+
     def test_two_people_on_one_channel_are_kept_apart_by_where_they_said_it(self):
         """The column an agent reads to know who it is talking to. Both are `user`, and what
         tells them apart is the place and the name their surface gave."""
@@ -1582,6 +1718,29 @@ class ReadingBackWhatWasSaid(WithAnAgentsOwnRecords):
         self.assertEqual({"tim", "sam"}, {one["who"] for one in found})
         self.assertEqual({"user"}, {one["author"] for one in found})
         self.assertEqual(2, len({one["space"] for one in found}))
+
+    def test_what_a_listing_shows_can_be_narrowed_to_one_person(self):
+        """R-STO-27 — reported (#106): `--author` filters on author *kind* while the WHO
+        column shows identity, so `--author user` returned rows displaying a platform id
+        and neither could answer "what did this one person say". Kind and identity are two
+        questions, and each now has its own way of being asked."""
+        kept = self.built()
+        kept.opened("room", "rooms", "rooms", "88213", AT)
+        tim = kept.arrived("room", AT, "ship it", who="tim")
+        kept.arrived("room", LATER, "not yet", who="sam")
+        kept.arrived("room", LATER, "standing instructions", author="rundesk")
+        found = kept.latest(who="tim")
+        self.assertEqual([tim], [one["id"] for one in found])
+        self.assertEqual(["user"], [one["author"] for one in found],
+                         "narrowing by identity changed what kind of author came back")
+
+    def test_narrowing_by_a_person_nobody_has_been_is_empty_rather_than_refused(self):
+        """Unlike `author` and `source`, this is not a closed set: it is whatever a surface
+        calls one person. Refusing an unknown one would mean keeping a list of everyone who
+        has ever spoken to this agent, and an id nobody has matching nothing is a true
+        answer to a question with no rows in it."""
+        kept, _ = self.furnished()
+        self.assertEqual([], kept.latest(who="nobody-by-that-name"))
 
     def test_a_narrowing_that_matches_nothing_is_empty_rather_than_everything(self):
         """The edge that turns a filter into a lie. A place nobody has spoken in must not

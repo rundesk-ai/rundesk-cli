@@ -20,25 +20,38 @@ reached back for an agent would end it.
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import os
 import re
 import shutil
+import stat
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-from rundesk import ROOT, __version__, data_home, gateway, migration, skill, store
+from rundesk import ROOT, __version__, data_home, gateway, instructions, migration, skill, store
+from rundesk import config
 
 #: What a new agent's home is copied from. Ordinary Markdown files rather than text built
 #: in code, because they are what an owner reads first and edits next, and a rule about how
-#: an agent is reached is worth keeping where it can be read.
+#: an agent is reached is worth keeping where it can be read (R-AGT-42).
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates" / "agent"
 
-#: The one thing substituted on the way in. Everything else is copied as it stands.
+#: The one thing new templates substitute on the way in. Everything else is copied as it
+#: stands. `NAMED` remains accepted for templates an owner wrote before this spelling was
+#: clarified.
+AGENT = "{{agent}}"
 NAMED = "{{name}}"
 
 #: The directories inside an agent's home that are the agent's own to work in.
 WORKING = "workspace", "skills"
+
+#: A fresh agent's human spelling while its records are being created. It is removed only
+#: after the database holds that spelling, so retrying an interrupted creation can finish
+#: without treating an ordinary slug-valued display name as incomplete.
+DISPLAY_PENDING = ".display-name.pending"
 
 
 #: Where an owner keeps the templates they made their own — **inside** where agents are
@@ -58,6 +71,7 @@ WORKING = "workspace", "skills"
 #: It is still the owner's tier — above every agent, inside none of them, and outside the
 #: program, which is the whole reason an update cannot reach it (R-AGT-23).
 OVERRIDES = ".templates", "agent"
+RETIRED_TEMPLATES = frozenset({"USER.md"})
 
 
 def templates_home() -> Path:
@@ -89,9 +103,9 @@ def sourced(overrides: Path | None = None) -> dict:
 
     **The one place precedence is decided** (R-AGT-22), so `add` and a diagnosis can never
     disagree about which file an agent got. Per page rather than per set: an owner who wants
-    their own `SOUL.md` and nothing else writes one file, and the other four stay whatever
+    their own `SOUL.md` and nothing else writes one file, and the other three stay whatever
     the install ships — including whatever a later release improves them into. Taking on all
-    five to change one would mean never getting an improvement to any of them.
+    four to change one would mean never getting an improvement to any of them.
 
     An override directory that is missing, empty or unreadable is simply an owner who has
     not made one, which is the ordinary case and never an error.
@@ -99,7 +113,10 @@ def sourced(overrides: Path | None = None) -> dict:
     from_install = {called: TEMPLATES / called for called in shipped()}
     where = templates_home() if overrides is None else overrides
     try:
-        theirs = sorted(page for page in where.iterdir() if page.is_file())
+        theirs = sorted(
+            page for page in where.iterdir()
+            if page.is_file() and page.name not in RETIRED_TEMPLATES
+        )
     except OSError:
         return from_install
     return {**from_install, **{page.name: page for page in theirs}}
@@ -121,6 +138,80 @@ class NotAnAgentName(ValueError):
 
 class InUse(Exception):
     """Something is still using this name, so nothing belonging to it was moved."""
+
+
+def slug(name: str) -> str:
+    """The lowercase filesystem name given to a newly created agent (R-AGT-39).
+
+    An owner names an identity, not a path. Spaces and punctuation become one dash,
+    accents become their ASCII spelling where Unicode defines one, and the result is
+    checked by the same boundary every later command uses. Existing agent names are not
+    rewritten: this is creation-time normalization, not a migration of persisted state.
+    """
+    plain = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    made = re.sub(r"[^a-zA-Z0-9]+", "-", plain).strip("-").lower()
+    if not made:
+        raise NotAnAgentName(
+            f"'{name}' is not a usable name — include at least one letter or digit"
+        )
+    return checked(made)
+
+
+def creation_name(name: str, existing=()) -> str:
+    """The slug for a new agent, or the legacy spelling already holding that slug.
+
+    Older releases accepted uppercase, dots and underscores. On a case-sensitive
+    filesystem, blindly creating today's slug beside one of those would make two agents
+    from one human name; on macOS it would silently address the old directory instead.
+    Resolve that difference deliberately, and refuse an already-ambiguous legacy set.
+
+    Exact spelling wins first, then an unambiguous case-insensitive legacy match is
+    considered before ASCII slugging. Older releases admitted Unicode names that have no
+    ASCII spelling; one such directory must remain reachable and must never stop an
+    unrelated new agent from being made.
+    """
+    existing = tuple(existing)
+    # Exact spelling is an identity, even on a case-sensitive machine that has both
+    # `Winston` and `winston` from an older release. Only an alias may be ambiguous.
+    if name in existing:
+        return name
+    same = sorted(one for one in existing if one.casefold() == name.casefold())
+    if len(same) > 1:
+        raise NotAnAgentName(
+            f"'{name}' matches more than one existing agent: {', '.join(same)}"
+        )
+    if same:
+        return same[0]
+    made = slug(name)
+    matches = []
+    for one in existing:
+        try:
+            existing_slug = slug(one)
+        except NotAnAgentName:
+            continue
+        if existing_slug == made:
+            matches.append(one)
+    matches.sort()
+    if len(matches) > 1:
+        raise NotAnAgentName(
+            f"'{name}' matches more than one existing agent: {', '.join(matches)}"
+        )
+    return matches[0] if matches else made
+
+
+def command_name(name: str, existing=()) -> str:
+    """Resolve a command alias without renaming an unmatched legacy gateway.
+
+    Creation deliberately invents a lowercase slug. Other commands do not invent
+    identities: an old supervisor may still invoke ``serve Winston`` before that
+    gateway has an agent or any surviving state. Preserve that exact spelling when
+    there is no known alias target (R-AGT-13, R-AGT-40).
+    """
+    existing = tuple(existing)
+    resolved = creation_name(name, existing)
+    if resolved in existing:
+        return resolved
+    return checked(name)
 
 
 def agents_home() -> Path:
@@ -334,6 +425,45 @@ def known(where: Path | None = None) -> list[str]:
     )
 
 
+def identities(
+    where: Path | None = None,
+    run: Path | None = None,
+    logs: Path | None = None,
+) -> list[str]:
+    """Agent directories and legacy gateway spellings that commands can still address.
+
+    A gateway predating agents may be represented only by shared run state or history.
+    Those spellings must participate in alias resolution so ``Winston`` is not silently
+    split into a new ``winston`` identity during adoption (R-AGW-1, R-AGT-13).
+    """
+    found = set(known(where))
+    found.update(one.name for one in gateway.every(run))
+    log_home = logs or gateway.logs_home()
+    try:
+        entries = tuple(log_home.iterdir())
+    except OSError:
+        entries = ()
+    probe = "0"
+    suffixes = tuple(
+        path.name[len(probe):] for path, _ in _wrote_before(probe, log_home)
+    ) + (".out", ".err")
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        for suffix in suffixes:
+            match = re.fullmatch(rf"(.+){re.escape(suffix)}(?:\.\d+|\.changing)?", entry.name)
+            if not match:
+                continue
+            candidate = match.group(1)
+            try:
+                gateway.checked(candidate)
+            except gateway.NotAName:
+                continue
+            found.add(candidate)
+            break
+    return sorted(found)
+
+
 def exists(name: str, where: Path | None = None) -> bool:
     """Whether there is an agent of this name."""
     try:
@@ -342,7 +472,111 @@ def exists(name: str, where: Path | None = None) -> bool:
         return False
 
 
-def add(name: str, where: Path | None = None) -> list[str]:
+def creation_pending(name: str, where: Path | None = None) -> bool:
+    """Whether first creation still owes its human name to durable records."""
+    pending = directory(name, where) / DISPLAY_PENDING
+    return pending.is_symlink() or pending.exists()
+
+
+def _write_pending(pending: Path, display_name: str) -> None:
+    """Publish a complete first display spelling once, without replacing one on retry."""
+    beside = pending.with_name(f"{pending.name}.writing")
+    try:
+        opened = os.open(
+            beside,
+            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except OSError as why:
+        raise store.Unreadable(f"{beside} could not be safely opened: {why}") from why
+    with os.fdopen(opened, "r+b") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            opened_as = os.fstat(handle.fileno())
+            try:
+                published_as = pending.lstat()
+            except FileNotFoundError:
+                published_as = None
+            same_published_inode = (
+                published_as is not None
+                and stat.S_ISREG(published_as.st_mode)
+                and (opened_as.st_dev, opened_as.st_ino)
+                == (published_as.st_dev, published_as.st_ino)
+            )
+            if opened_as.st_nlink != 1 and not (
+                opened_as.st_nlink == 2 and same_published_inode
+            ):
+                raise store.Unreadable(
+                    f"{beside} is linked to something other than pending creation state"
+                )
+            if not pending.is_symlink() and not pending.exists():
+                handle.seek(0)
+                staged = _display_from_record(handle.read())
+                if staged is None:
+                    handle.seek(0)
+                    handle.truncate()
+                    handle.write(_display_record(display_name))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.link(beside, pending)
+            # Removed while the lock is still held. Another writer that already opened
+            # this inode sees the published marker; a later one gets a fresh staging file
+            # and sees it too. A crash leaves one fixed file a retry can safely resume.
+            _unlink_durable(beside)
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _unlink_durable(path: Path) -> None:
+    """Remove one state path and make that absence survive power loss."""
+    path.unlink(missing_ok=True)
+    folder = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(folder)
+    finally:
+        os.close(folder)
+
+
+def _display_record(display_name: str) -> bytes:
+    """A pending name framed so a retry can distinguish complete from partial."""
+    payload = display_name.encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest().encode("ascii")
+    return digest + b"\n" + payload
+
+
+def _display_from_record(record: bytes) -> str | None:
+    """A complete, checksummed pending name, or None for interrupted staging."""
+    try:
+        digest, payload = record.split(b"\n", 1)
+        if len(digest) != 64 or hashlib.sha256(payload).hexdigest().encode("ascii") != digest:
+            return None
+        display = payload.decode("utf-8")
+    except (ValueError, UnicodeError):
+        return None
+    return display if display and display == display.strip() else None
+
+
+def _pending_display(pending: Path) -> str | None:
+    """The complete pending spelling, refusing anything unsafe or unreadable."""
+    try:
+        mode = pending.lstat().st_mode
+    except FileNotFoundError:
+        return None
+    except OSError as why:
+        raise store.Unreadable(f"{pending} could not be read: {why}") from why
+    if not stat.S_ISREG(mode):
+        raise store.Unreadable(f"{pending} is not a regular file")
+    try:
+        record = pending.read_bytes()
+    except OSError as why:
+        raise store.Unreadable(f"{pending} could not be read: {why}") from why
+    display = _display_from_record(record)
+    if display is None:
+        raise store.Unreadable(f"{pending} does not hold a complete display name")
+    return display
+
+
+def add(name: str, where: Path | None = None, display_name: str | None = None) -> list[str]:
     """Make this agent, and the one gateway that runs it (R-AGW-1).
 
     What is written is what is not already there, and nothing else (R-AGT-4). Making an
@@ -359,7 +593,19 @@ def add(name: str, where: Path | None = None) -> list[str]:
     a fresh install cannot drift from an upgraded one (R-MIG-9). Records already there are
     checked rather than rebuilt, which is what makes making an agent again a repair.
     """
+    new_home = not home(name, where).exists()
     made = []
+    agent_dir = directory(name, where)
+    records = store.path_for(agent_dir)
+    fresh = not records.exists()
+    pending = agent_dir / DISPLAY_PENDING
+    if fresh and display_name is not None:
+        # Publish identity recovery before `home/` makes this count as an agent. If this
+        # process dies first, retry still sees a new name; if it dies afterwards, retry
+        # sees the durable marker and finishes the same creation.
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        _write_pending(pending, display_name.strip())
+    pending_display = _pending_display(pending)
     for path in made_of(name, where).values():
         if not path.exists():
             path.mkdir(parents=True, exist_ok=True)
@@ -367,19 +613,22 @@ def add(name: str, where: Path | None = None) -> list[str]:
     for called in knowledge():
         page = home(name, where) / called
         if not page.exists():
-            page.write_text(_copied(called, name), encoding="utf-8")
+            page.write_text(
+                _copied(called, pending_display or display_name or name),
+                encoding="utf-8",
+            )
             made.append(called)
-    records = store.path_for(directory(name, where))
-    fresh = not records.exists()
-    # **Only an agent being made, never one being repaired.** Everything else `add` puts
-    # back is a thing that is missing; a grant that is missing may be one an owner took
-    # away on purpose, and nothing records which. Handing it back on a re-run would undo
-    # a decision by the same command an owner reaches for to fix something unrelated —
-    # which is the failure `_given_what_ships` was written to avoid, reached from the one
-    # call site that had not been thought about.
+    # Fresh agents receive the baseline here. Existing populations are reconciled by both
+    # upgrade routes after this release's library has been laid down (R-AGT-36).
     if fresh:
-        made.extend(_given_what_ships(name, where))
-    store.Store(records).made()
+        made.extend(require_skills(name, where))
+    kept = store.Store(records)
+    kept.made(fresh_home=new_home or pending_display is not None)
+    if pending_display is not None:
+        # A retry reads the first creation's spelling, not whichever alias happened to be
+        # typed on the retry. The marker leaves only after the durable database write.
+        kept.remember_display_name(pending_display)
+        _unlink_durable(pending)
     if fresh:
         made.append(store.NAME)
     return sorted(made)
@@ -391,9 +640,9 @@ def _what_is_wrong_with_its_skills(name: str, where: Path | None = None) -> list
     Two things, and neither is a fault of the agent's own making. A grant whose skill has
     gone — a built-in dropped by a release, or one an owner deleted from the library —
     leaves a link pointing at nothing, which every brain skips in silence. And a built-in
-    this release ships that this agent has never been given, because it was made before
-    the release that added it; there is no backfill on purpose (see `_given_what_ships`),
-    so a diagnosis is where an owner hears about it.
+    Rundesk or the install configuration requires that this agent does not hold, because it
+    was made before the requirement was added or its grant was changed outside the command.
+    A diagnosis is where an owner hears about it.
     """
     found = []
     mine = skills(name, where)
@@ -414,7 +663,14 @@ def _what_is_wrong_with_its_skills(name: str, where: Path | None = None) -> list
                 str(standing), f"the skill {called} was granted and {why}",
                 f"rundesk update"))
     held = skill.library()
-    for called in skill.shipped():
+    try:
+        # Install configuration is not under the agents directory. `where` redirects where
+        # this agent lives; the required baseline still belongs to the install (R-AGT-36).
+        wanted = config.skills()["granted"]
+    except config.Unreadable as why:
+        # The one place an owner hears it without having to be making an agent at the time.
+        return found + [Complaint(config.NAMED, str(why), f"edit {config.path(where)}")]
+    for called in wanted:
         if called in held and called not in skill.granted(mine):
             found.append(Complaint(
                 called, "this agent has not been given a skill this release ships",
@@ -422,25 +678,33 @@ def _what_is_wrong_with_its_skills(name: str, where: Path | None = None) -> list
     return found
 
 
-def _given_what_ships(name: str, where: Path | None = None) -> list[str]:
-    """The skills every agent starts with, granted as it is made.
+def require_skills(name: str, where: Path | None = None) -> list[str]:
+    """Attach every install-required skill this agent does not already hold.
 
     One of them is the skill that says how to write a skill, and it is the reason this
     happens without being asked for: an agent cannot be told to use `rundesk skills grant`
     to give itself the thing that explains what granting is. It is the bootstrap.
 
-    **Only as an agent is made.** There is deliberately no backfill on update, because
-    nothing records that a grant was taken away — a backfill would hand back, on every
-    update, the skill an owner had just removed. An agent made before a built-in existed
-    is told by a diagnosis, with the line to type.
+    **Which skills, and not simply every one that ships.** A release ships more than every
+    agent should carry — how to write a skill, how to write a pull request — and a skill an
+    agent will never reach for is not free: its description is read by the brain on every
+    turn. So the set is `config.skills()["granted"]`: Rundesk's mandatory floor plus the
+    optional baseline an owner states once in `config.json`. Creation, update, and installer
+    reconciliation all come through this one policy (R-AGT-36).
 
     A library that has nothing in it yet is a checkout somebody is working in rather than
     an install, and is not a half-made agent.
     """
     given = []
-    for called in skill.shipped():
+    mine = skills(name, where)
+    already = set(skill.granted(mine))
+    # `where` is an agents directory, never the install's data directory. The baseline is
+    # install-wide and resolves from the same file every agent shares (R-AGT-36).
+    for called in config.skills()["granted"]:
+        if called in already:
+            continue
         try:
-            skill.grant(skills(name, where), called)
+            skill.grant(mine, called)
         except (skill.Unknown, skill.NotASkill, skill.InTheWay, OSError):
             continue
         given.append(f"skills/{called}")
@@ -546,6 +810,14 @@ def forget(name: str, where: Path | None = None) -> list[str]:
         if path.exists():
             path.unlink()
             taken.append(path.name)
+    pending = stands / DISPLAY_PENDING
+    if pending.is_symlink() or pending.exists():
+        pending.unlink()
+        taken.append(pending.name)
+    writing = pending.with_name(f"{pending.name}.writing")
+    if writing.is_symlink() or writing.exists():
+        writing.unlink()
+        taken.append(writing.name)
     for path in (logs_home(name, where),):
         if path.exists():
             shutil.rmtree(path)
@@ -609,71 +881,51 @@ def chosen(name: str, where: Path | None = None) -> dict:
 
 #: What rundesk itself tells every turn, before anything anybody else says (R-AGT-17).
 #:
-#: **Small, and the same words every time.** It is the front of what a brain is given, which is
-#: the part prompt caching keys on — anything that varies per turn belongs after it, never
-#: inside it, or every turn pays for a prefix that no longer matches. Only the agent's own name
-#: is filled in, so one agent's is byte-for-byte identical from one turn to the next.
+#: **Stable for one agent.** It is the front of what a brain is given, which is the part
+#: prompt caching keys on — anything that varies per turn belongs after it, never inside it,
+#: or every turn pays for a prefix that no longer matches. The agent's name and resolved
+#: home/workspace paths are byte-for-byte identical from one turn to the next.
 #:
 #: Said here rather than left to the home an agent loads, because a home is the owner's to edit
 #: and this is the one thing that must be true whatever they wrote — an agent that has been
 #: given no rules at all still knows what it is running inside and how to find out what it did.
-STANDING = """\
-You are {name}, an agent running inside rundesk.
-
-Your memory is per conversation; rundesk's record is not. Work you did on a schedule, in \
-another chat or in the terminal is written down and is not in your memory here. So when \
-something refers to work you cannot place, look it up before answering rather than guessing \
-or saying you have no access:
-
-  rundesk messages {name}                      what was said, newest first
-  rundesk messages {name} --conversation <id>  this room or direct message alone
-  rundesk messages {name} --source schedule    only what the clock started
-
-Rundesk is what runs you, and the `rundesk` command is how it is operated — your schedules \
-and your channels. **Anything else on this machine offering \
-"schedules" or "tasks" is not this**, whatever it is called: `rundesk --help` is the authority, \
-and a question about your schedules is answered by `rundesk schedules {name}`.
-
-Everything else rundesk does is in your `using-rundesk` skill, and `rundesk --help` always \
-works."""
+STANDING = instructions.RUNDESK_INSTRUCTIONS
 
 
-def standing(name: str) -> str:
+def instruction_variables(name: str, where: Path | None = None) -> dict[str, str]:
+    """The agent-owned values Rundesk fills into every core instruction layer."""
+    return {
+        "agent": display_name(name, where) if exists(name, where) else name,
+        "agent_slug": name,
+        "agent_home": str(home(name, where)),
+        "workspace": str(workspace(name, where)),
+    }
+
+
+def standing(name: str, where: Path | None = None) -> str:
     """Rundesk's own words to a turn, for this agent. One place, so it is one wording."""
-    return STANDING.format(name=name)
+    return instructions.build(variables=instruction_variables(name, where))
 
 
-def told(name: str, where: Path | None = None, said: str = "", otherwise: str = "") -> str:
+def added_instructions(name: str, where: Path | None = None) -> str:
+    """What this agent's owner adds to Rundesk's instructions, or nothing."""
+    mine = chosen(name, where).get("instructions")
+    return mine if isinstance(mine, str) and mine.strip() else ""
+
+
+def told(name: str, where: Path | None = None, said: str = "",
+         regardless: str = "") -> str:
     """What a turn for this agent is told about its situation, before it reads a prompt.
 
-    **Rundesk's own words first, and then the nearest thing anybody else said** (R-AGT-16,
-    R-AGT-17). What an owner writes is *added to* ours rather than replacing it: they are
-    answering different questions — ours says what the agent is and how to find out what it
-    has done, theirs says what to do about the situation — and an agent that lost the first
-    because its owner supplied the second would be told where it is by nobody.
-
-    Among the rest the nearest still wins: the schedule's or the turn's own, then the surface
-    it arrived on, then the agent's, then whatever rundesk would have said about that
-    situation. `said` is whatever the nearer two came to and `otherwise` is rundesk's own
-    sentence about the situation, so every caller hands in what it knows and none of them has
-    to know the order.
-
-    Written once because the order is the guarantee. Each caller working it out would be four
-    orders that agree until one of them does not, and the way that fails is silent: an agent
-    told the wrong thing about where it is answers perfectly well, and wrongly.
+    **Rundesk's own words first, then every applicable layer** (R-AGT-16, R-AGT-17,
+    R-AGT-34, R-AGT-38). `regardless` is Rundesk's trigger-specific context. The agent
+    owner's stored instructions follow, then `said`, which is what this turn or schedule
+    added. Empty layers disappear; no supplied instruction replaces one before it.
     """
-    return "\n\n".join(part for part in (standing(name), _situation(name, where, said,
-                                                                    otherwise)) if part)
-
-
-def _situation(name: str, where: Path | None, said: str, otherwise: str) -> str:
-    """The nearest thing anybody said about *this* turn's situation, or nothing."""
-    if said and said.strip():
-        return said
-    mine = chosen(name, where).get("instructions")
-    if isinstance(mine, str) and mine.strip():
-        return mine
-    return otherwise
+    return instructions.build(
+        variables=instruction_variables(name, where),
+        append=(regardless, added_instructions(name, where), said),
+    )
 
 
 def remember(name: str, where: Path | None = None, provider: str | None = None,
@@ -820,13 +1072,16 @@ def _copied(called: str, name: str, overrides: Path | None = None) -> str:
     file it came from — editable there, readable as ordinary Markdown, and never a second
     version of the same words held in code.
 
-    **Writing `{{name}}` is optional** (R-AGT-25). The substitution is the whole of the
+    **Writing `{{agent}}` is optional** (R-AGT-25). The substitution is the whole of the
     contract an override has to honour, and honouring it is a choice: a template with no
     placeholder is one every agent gets verbatim, which is a legitimate thing to want.
-    `replace` on a string that does not contain it is the string, so this is already true
-    and is asserted rather than arranged.
+    `{{name}}` remains an alias for owner templates written before the placeholder was
+    clarified (R-AGT-41). Replacing absent strings is harmless, so both forms can be
+    supported without interpreting any other part of the page.
     """
-    return sourced(overrides)[called].read_text(encoding="utf-8").replace(NAMED, name)
+    return (sourced(overrides)[called].read_text(encoding="utf-8")
+            .replace(AGENT, name)
+            .replace(NAMED, name))
 
 
 @dataclass(frozen=True)
@@ -868,6 +1123,7 @@ def reachable(name: str, where: Path | None = None, carry=None) -> list:
             name=one, program=at,
             env=channels.environment(
                 home=run_home(name, where), channel=one, agent=name, channel_home=home,
+                agent_name=display_name(name, where),
                 allow=record.get("allow"), settings=record.get("settings"),
                 secret=record.get("secret")),
             answering=_answering(name, one, record, where, carry, answers),
@@ -883,11 +1139,19 @@ def _answering(name, one, record, where, carry, answers):
     be cycled. Both are handed in, so nothing here reaches down into a gateway and
     nothing there reaches back for an agent.
     """
-    def made(sending, restarting=None, note=None):
+    def made(sending, restarting=None, note=None,
+             restart_waiting=None, restart_ready=None):
         return answers.Answering(name, one, record, sending, where=where, carry=carry,
                                  restarting=restarting, note=note,
-                                 querying=lambda asked: _queried(name, asked, where))
+                                 querying=lambda asked: _queried(name, asked, where),
+                                 restart_waiting=restart_waiting,
+                                 restart_ready=restart_ready)
     return made
+
+
+def display_name(name: str, where: Path | None = None) -> str:
+    """The human name this agent's owner chose, never its directory guessed again."""
+    return reading(name, where).display_name()
 
 
 def _queried(name: str, asked: str, where: Path | None = None) -> str:
@@ -988,17 +1252,21 @@ def asking(name: str, where: Path | None = None, carry=None):
         if not named:
             raise gateway.Unrunnable(
                 f"schedule '{one.name}' names no brain, and neither does this agent")
-        row = reading(name, where).schedule(one.name) or {}
+        row = {} if one.backend else (reading(name, where).schedule(one.name) or {})
+        channel = turns.UPDATE if one.backend else turns.SCHEDULE
         return await carrying(
             name, one.prompt, named, where=where,
             model=one.model or kept.get("model"),
             settings=kept.get("settings"),
-            conversation=one.name, on=turns.SCHEDULE, kind=turns.SCHEDULE,
+            conversation=one.name, on=channel, kind=turns.SCHEDULE,
             fresh=True,
-            # This schedule's own, then the agent's, then the one line rundesk says to a
-            # turn nobody is waiting for (R-AGT-16).
-            preface=told(name, where, said=one.instructions or "",
-                         otherwise=schedules.by_default(one.name)),
+            # Rundesk's schedule layer for a turn nobody is waiting for, which is always
+            # there (R-AGT-34), and then this schedule's own words or the agent's added to
+            # it (R-AGT-16).
+            preface=told(
+                name, where, said=one.instructions or "",
+                regardless="" if one.backend else schedules.by_default(one.name),
+            ),
             source=turns.SCHEDULE,
             # What correlates this run with the schedule that started it, so what ran at
             # three in the morning is found by the name an owner already knows.

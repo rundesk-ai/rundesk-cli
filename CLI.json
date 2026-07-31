@@ -1,6 +1,6 @@
 {
   "generated_from": "rundesk.cli.build_parser",
-  "version": "0.15.0",
+  "version": "0.24.0",
   "groups": [
     {
       "title": "An agent, and its life",
@@ -185,7 +185,7 @@
           "planned": false,
           "operations": [
             {
-              "signature": "rundesk restart [--all] <agent>",
+              "signature": "rundesk restart [--all] [--force] <agent>",
               "does": "cycle an agent, leaving the others alone"
             }
           ],
@@ -193,6 +193,10 @@
             {
               "written": "--all",
               "means": "every agent on this machine"
+            },
+            {
+              "written": "--force",
+              "means": "restart now even when doing so interrupts active work"
             },
             {
               "written": "<agent>",
@@ -313,7 +317,7 @@
           "arguments": [
             {
               "written": "--activity, --no-activity",
-              "means": "show what the agent is doing while it works, not only what it finally says (default: on)"
+              "means": "show what the agent is doing and saying while it works; off means one message a turn, the answer (default: on)"
             },
             {
               "written": "--allow <user>",
@@ -355,6 +359,10 @@
               "does": "add a schedule"
             },
             {
+              "signature": "rundesk schedules <agent> edit [--when <cron>] [--at <moment>] [--ask <prompt>] [--provider <provider>] [--model <model>] [--instructions <text>] [--to <channel>] [--in <where>] <schedule> -- <program> [<arg> ...]",
+              "does": "change an existing schedule, keeping what it has done"
+            },
+            {
               "signature": "rundesk schedules <agent> off <schedule>",
               "does": "keep a schedule but stop it running"
             },
@@ -369,6 +377,10 @@
             {
               "signature": "rundesk schedules <agent> run <schedule>",
               "does": "run a schedule now, whether or not it is due"
+            },
+            {
+              "signature": "rundesk schedules <agent> show <schedule>",
+              "does": "one schedule, and everything it was given"
             }
           ],
           "arguments": [
@@ -386,7 +398,7 @@
             },
             {
               "written": "--in <where>",
-              "means": "which place on that channel to say it in — a room, a direct message, in whatever the surface calls them. Left out, it follows the conversation"
+              "means": "which place on that channel to say it in, in that surface's own words — for Discord: a room name or id, or on a DM channel the person's user id (the same id as --allow) or the DM channel id. Left out, it follows the conversation"
             },
             {
               "written": "--instructions <text>",
@@ -585,18 +597,30 @@
       "why": "",
       "verbs": [
         {
+          "verb": "config",
+          "summary": "How this install is configured, and where each value came from.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk config",
+              "does": "how this install is configured, and where each value came from"
+            }
+          ],
+          "arguments": []
+        },
+        {
           "verb": "messages",
           "summary": "What was said, newest first.",
           "planned": false,
           "operations": [
             {
-              "signature": "rundesk messages [--most <n>] [--since <id>] [--channel <channel>] [--conversation <where>] [--author <who>] [--source <how>] <agent>",
+              "signature": "rundesk messages [--most <n>] [--since <id>] [--channel <channel>] [--conversation <where>] [--author <kind>] [--who <identity>] [--source <how>] <agent>",
               "does": "what was said, newest first"
             }
           ],
           "arguments": [
             {
-              "written": "--author <who>",
+              "written": "--author <kind>",
               "means": "only what this kind of author said — one of agent | rundesk | user"
             },
             {
@@ -605,7 +629,7 @@
             },
             {
               "written": "--conversation <where>",
-              "means": "only what was said in one place on it — the direct message or room, in the platform's own word for it"
+              "means": "only what was said in one place on it — the direct message or room, either as the WHERE column prints it or in the platform's own word alone"
             },
             {
               "written": "--most <n>",
@@ -618,6 +642,10 @@
             {
               "written": "--source <how>",
               "means": "only messages belonging to work admitted this way — one of channel | schedule | terminal"
+            },
+            {
+              "written": "--who <identity>",
+              "means": "only what this one person said, as the WHO column names them"
             },
             {
               "written": "<agent>",
@@ -714,7 +742,7 @@
   "arguments": [
     {
       "written": "--activity, --no-activity",
-      "means": "show what the agent is doing while it works, not only what it finally says (default: on)"
+      "means": "show what the agent is doing and saying while it works; off means one message a turn, the answer (default: on)"
     },
     {
       "written": "--all",
@@ -733,7 +761,7 @@
       "means": "instead of --when: the one moment it runs, on this machine's own clock, as YYYY-MM-DDTHH:MM. It runs then and never again — a moment is given, never a phrase like 'tomorrow at nine'"
     },
     {
-      "written": "--author <who>",
+      "written": "--author <kind>",
       "means": "only what this kind of author said — one of agent | rundesk | user"
     },
     {
@@ -750,11 +778,15 @@
     },
     {
       "written": "--conversation <where>",
-      "means": "only what was said in one place on it — the direct message or room, in the platform's own word for it"
+      "means": "only what was said in one place on it — the direct message or room, either as the WHERE column prints it or in the platform's own word alone"
     },
     {
       "written": "--expired",
       "means": "instead, the one-time schedules whose moment has gone — whether each ran, or whether it passed while nothing was running"
+    },
+    {
+      "written": "--force",
+      "means": "restart now even when doing so interrupts active work"
     },
     {
       "written": "--fresh",
@@ -766,7 +798,7 @@
     },
     {
       "written": "--in <where>",
-      "means": "which place on that channel to say it in — a room, a direct message, in whatever the surface calls them. Left out, it follows the conversation"
+      "means": "which place on that channel to say it in, in that surface's own words — for Discord: a room name or id, or on a DM channel the person's user id (the same id as --allow) or the DM channel id. Left out, it follows the conversation"
     },
     {
       "written": "--instructions <text>",
@@ -835,6 +867,10 @@
     {
       "written": "--where",
       "means": "print the directory they are kept in, and nothing else"
+    },
+    {
+      "written": "--who <identity>",
+      "means": "only what this one person said, as the WHO column names them"
     },
     {
       "written": "--yes",

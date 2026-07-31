@@ -71,7 +71,11 @@ WAIT_MOST = 0.15
 MARK_FROM = "abcdefghijklmnopqrstuvwxyz0123456789"
 MARK_LENGTH = 4
 
-RECORD_KINDS = ("think", "tool", "result", "usage", "file", "done", "lost", "unknown")
+# `limit` is account state a brain volunteered rather than this turn's activity — how much of
+# an allowance is left, and when the window resets. It is non-fatal: a turn carrying one may
+# still have succeeded, which is what makes it a record of its own rather than a failure.
+RECORD_KINDS = ("think", "tool", "result", "usage", "file", "limit", "done", "lost",
+                "unknown")
 AUTHORS = ("user", "agent", "rundesk")
 
 # Appended to a stopped run's account rather than added to the schema. Recovery is lifecycle
@@ -213,6 +217,27 @@ def conversation_id(channel: str, space: str, thread: str = "") -> str:
     """
     said = "\x00".join((channel, space, thread)).encode("utf-8")
     return hashlib.sha256(said).hexdigest()[:16]
+
+
+def _one_conversation(named: str, of: str = "") -> tuple:
+    """Match one conversation by either name it goes by, as a clause and its values.
+
+    **The identifier a listing prints is the identifier its filter takes (R-STO-28).**
+    `messages` shows `<channel>/<space>` in its `WHERE` column while the filter matched
+    the bare space alone, so the one value an agent can see and copy back matched nothing
+    — and an empty listing reads as "this conversation is empty", which is the single
+    wrong answer `messages` exists to prevent.
+
+    Both forms, rather than the qualified one replacing the bare: a platform's own word
+    for a place may itself contain a slash, and splitting on the last one would then
+    quietly stop matching a value that used to work.
+    """
+    named = str(named)
+    channel, slash, space = named.rpartition("/")
+    if not slash:
+        return f"{of}space = ?", [named]
+    return (f"({of}space = ? OR ({of}channel = ? AND {of}space = ?))",
+            [named, channel, space])
 
 
 def _plain(row) -> dict:
@@ -379,7 +404,7 @@ class Store:
 
     # ── the shape on disk ─────────────────────────────────────────────────────────────────
 
-    def made(self) -> None:
+    def made(self, fresh_home: bool = False) -> None:
         """Bring this database into being, or check the one already there is one we know.
 
         A fresh one is stamped with the current version and needs no migration, so first use
@@ -388,14 +413,14 @@ class Store:
         want = version_wanted() if self._version is None else self._version
         self.at.parent.mkdir(parents=True, exist_ok=True)
         try:
-            self._made(want)
+            self._made(want, fresh_home=fresh_home)
         except sqlite3.DatabaseError as why:
             # Records that are there and are not a database at all — see `understood`, which
             # answers the same thing the same way. Nothing of the database's leaves here.
             self._noted(f"these records could not be read at all: {why}", "ERROR")
             raise Unreadable(f"{self.at} could not be read: {why}") from why
 
-    def _made(self, want: int) -> None:
+    def _made(self, want: int, fresh_home: bool = False) -> None:
         conn = self._open(writing=True)
         try:
             found = int(conn.execute("PRAGMA user_version").fetchone()[0])
@@ -406,7 +431,8 @@ class Store:
                 # description of the shape kept beside them. A step that has rotted is then
                 # found by whoever next makes an agent, and a fresh install cannot drift from
                 # an upgraded one, because there is only one way to arrive.
-                found = migration.carry(self.at, self.at.parent, want=want)
+                found = migration.carry(
+                    self.at, self.at.parent, want=want, fresh=fresh_home)
                 conn = self._open(writing=True)
             elif 0 < found < want:
                 found = self._settled(conn, found, want)
@@ -554,6 +580,18 @@ class Store:
         kept["settings"] = json.loads(kept["settings"])
         return kept
 
+    def display_name(self) -> str:
+        """The owner's spelling for this agent, separate from its storage identity."""
+        with self._reading() as conn:
+            return str(conn.execute(
+                "SELECT display_name FROM agent WHERE id = 1"
+            ).fetchone()[0])
+
+    def remember_display_name(self, name: str) -> None:
+        """Keep the exact human name chosen when a new agent is first made."""
+        with self._writing() as conn:
+            conn.execute("UPDATE agent SET display_name = ? WHERE id = 1", (name,))
+
     def remember_agent(self, provider=None, model=None, instructions=None, settings=None,
                        replace_brain=False, forget_conversation=None):
         """Change what an entry point falls back to when it names no brain of its own.
@@ -655,10 +693,11 @@ class Store:
         and which parts of it it can fill in, so a `{where.something}` an owner writes later
         is checked against what will actually be there rather than against a guess.
 
-        `activity` is whether this surface is shown what the agent is *doing* while it
-        works, as against what it finally says. On unless an owner says otherwise: a room
-        that goes quiet for four minutes and then answers looks broken, and the fix for a
-        room where that is noise is to say so once rather than to guess per message.
+        `activity` is whether this surface is shown the turn while it runs — what the agent
+        is doing and what it says on the way — as against only its answer (R-CH-6, R-CH-27).
+        On unless an owner says otherwise: a room that goes quiet for four minutes and then
+        answers looks broken, and the fix for a room where that is noise is to say so once
+        rather than to guess per message.
         """
         if not allow:
             raise ValueError("a channel nobody may use is refused rather than defaulted")
@@ -706,6 +745,61 @@ class Store:
         with self._reading() as conn:
             row = conn.execute("SELECT * FROM schedule WHERE name = ?", (name,)).fetchone()
         return self._schedule(row) if row else None
+
+    def pending_update_turns(self) -> list:
+        """Update migrations this agent has not completed, oldest first.
+
+        Kept apart from owner schedules because these are release work, not something an
+        owner asked to recur or appear in `rundesk schedules`. A row remains after it runs:
+        its completion makes the one-shot expired, while the run itself is the account of
+        what the release asked this agent to change.
+        """
+        with self._reading() as conn:
+            rows = conn.execute(
+                "SELECT * FROM update_turn WHERE completed_at IS NULL ORDER BY migration"
+            ).fetchall()
+        return [_plain(row) for row in rows]
+
+    def replace_update_bootstrap(self, migration: int, text: str) -> None:
+        """Atomically replace the provider bootstrap requested by a pending migration."""
+        target = self.at.parent / "home" / "CLAUDE.md"
+        coming = target.with_name(f".{target.name}.update-{migration}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            coming.write_text(text, encoding="utf-8")
+            os.replace(coming, target)
+        finally:
+            with contextlib.suppress(OSError):
+                if coming.exists():
+                    os.remove(coming)
+
+    def complete_update_turn(self, migration: int, at: str) -> bool:
+        """Expire one update turn only after its backend session returned (R-MIG-23)."""
+        with self._writing() as conn:
+            changed = conn.execute(
+                "UPDATE update_turn SET completed_at = ? "
+                "WHERE migration = ? AND completed_at IS NULL",
+                (at, migration),
+            ).rowcount
+        return changed == 1
+
+    def update_turn_returned(self, conversation: str) -> bool:
+        """Whether a backend update conversation already has a returned run.
+
+        The run account is the durable side of the boundary between an agent returning and
+        the request being expired. If that final write briefly fails, a successor settles
+        the request from this account instead of asking the agent to apply the migration
+        twice.
+        """
+        identifier = conversation_id("update", conversation)
+        with self._reading() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM run WHERE conversation_id = ? AND ended_at IS NOT NULL "
+                "AND outcome IS NOT NULL AND outcome <> 'stopped' "
+                "ORDER BY n DESC LIMIT 1",
+                (identifier,),
+            ).fetchone()
+        return row is not None
 
     @staticmethod
     def _schedule(row) -> dict:
@@ -781,6 +875,84 @@ class Store:
                 raise Taken(f"a schedule called '{name}' is already there") from clash
             raise Refused(f"'{name}' names something this agent has not got: {clash}") from clash
 
+    #: What `change_schedule` may move. `enabled` is not among them — it has two verbs of its
+    #: own — and neither are the columns that say what this schedule has already done, which
+    #: is the whole of what an edit keeps that removing and adding again destroys.
+    CHANGEABLE = ("cron", "at", "command", "prompt", "provider", "model",
+                  "instructions", "channel", "place")
+
+    def change_schedule(self, name: str, **fields) -> bool:
+        """Change what a schedule does, keeping every record of what it has already done.
+
+        Only what is named moves. A caller passing one field changes one column, so an edit
+        is never a rewrite of the row from a caller's idea of what the rest of it held —
+        which is what `remove` and `add` again amounts to, and why that path loses a
+        schedule's account of itself.
+
+        **Read, decided and written under one lock.** Both of the pairs the table insists on
+        — a repeating time or a single moment, a program or a prompt — are properties of the
+        row *after* the change, not of what was passed in, so they can only be checked
+        against what is actually there. Asking first and writing after would be two
+        decisions with a gap in the middle, and two edits at once would settle it by
+        whichever wrote last (the same trap `remember_agent` names).
+
+        Setting one of a pair clears the other, because the table would refuse the row
+        otherwise and an owner switching a schedule from a moment to a repeating time is
+        saying exactly that. Passing `None` leaves a column alone; passing an empty string
+        clears it, which is how an owner takes standing instructions off a schedule that
+        has them.
+
+        False where nothing of that name is there — including a schedule removed between
+        this being asked for and this being written, which is a change that did nothing and
+        must say so rather than reporting a success.
+        """
+        unknown = set(fields) - set(self.CHANGEABLE)
+        if unknown:
+            raise ValueError(f"a schedule has no {', '.join(sorted(unknown))} to change")
+        moving = {key: value for key, value in fields.items() if value is not None}
+        if not moving:
+            raise ValueError("nothing was named to change")
+        # One of a pair arriving clears the other. Said here rather than left to each caller:
+        # the table refuses a row holding both, and a caller that forgot would meet that as an
+        # integrity error rather than as the thing it actually asked for.
+        for one, other in (("cron", "at"), ("at", "cron"),
+                           ("command", "prompt"), ("prompt", "command")):
+            if moving.get(one):
+                moving[other] = None
+        try:
+            with self._writing() as conn:
+                row = conn.execute("SELECT * FROM schedule WHERE name = ?", (name,)).fetchone()
+                if row is None:
+                    return False
+                after = dict(_plain(row))
+                for key, value in moving.items():
+                    # Empty is how a caller says "take this off", for a word and for a
+                    # program alike — the column holds nothing rather than an empty thing.
+                    after[key] = value if value not in ("", []) else None
+                if after["command"] is not None and isinstance(after["command"], list):
+                    after["command"] = json.dumps(after["command"])
+                if (after["command"] is None) == (after["prompt"] is None):
+                    raise ValueError(
+                        "a schedule runs a command or asks a turn, never both or neither"
+                    )
+                if (after["cron"] is None) == (after["at"] is None):
+                    raise ValueError(
+                        "a schedule states a repeating time or a single moment, "
+                        "never both or neither"
+                    )
+                conn.execute(
+                    "UPDATE schedule SET cron = ?, at = ?, command = ?, prompt = ?,"
+                    " provider = ?, model = ?, instructions = ?, channel = ?, place = ?"
+                    " WHERE name = ?",
+                    tuple(after[one] for one in self.CHANGEABLE) + (name,),
+                )
+        except sqlite3.IntegrityError as clash:
+            # The one thing the database refuses here that the caller answers differently: a
+            # channel that is not there to report to. Told apart by asking, rather than by
+            # reading the driver's words.
+            raise Refused(f"'{name}' names something this agent has not got: {clash}") from clash
+        return True
+
     def enable_schedule(self, name: str, on: bool) -> None:
         """Keep a schedule and what it did, but stop it running."""
         with self._writing() as conn:
@@ -830,6 +1002,21 @@ class Store:
                 (channel, space, thread),
             ).fetchone()
         return _plain(row) if row else None
+
+    def has_conversation(self, named: str) -> bool:
+        """Is there a conversation of this name, by either way of naming one?
+
+        Asked so that a narrowed listing can tell "there is no such conversation" from
+        "that conversation has nothing in it" — two sentences an agent acts on completely
+        differently, and which returning an empty list for both made indistinguishable
+        (R-STO-28).
+        """
+        clause_for, held = _one_conversation(named)
+        with self._reading() as conn:
+            row = conn.execute(
+                f"SELECT 1 FROM conversation WHERE {clause_for} LIMIT 1", held
+            ).fetchone()
+        return row is not None
 
     def conversations(self, channel=None, space=None, limit: int = 50) -> list:
         where, values = [], []
@@ -961,7 +1148,7 @@ class Store:
         return [_plain(row) for row in rows]
 
     def latest(self, limit: int = 50, since=None, channel=None, author=None,
-               source=None, conversation=None) -> list:
+               source=None, conversation=None, who=None) -> list:
         """The newest things said, across every conversation this agent has had.
 
         **The question `search` cannot answer.** Searching needs a word, and the case this
@@ -993,13 +1180,22 @@ class Store:
             where.append("c.channel = ?")
             values.append(channel)
         if conversation is not None:
-            # The platform's own word for one place, never parsed here — which is how an
-            # agent in one of two DMs narrows to the one it is actually in.
-            where.append("c.space = ?")
-            values.append(conversation)
+            # Either way of naming one place: the platform's own word for it, or the
+            # qualified form the listing prints beside every row (R-STO-28).
+            clause_for, held = _one_conversation(conversation, "c.")
+            where.append(clause_for)
+            values.extend(held)
         if author is not None:
             where.append("m.author = ?")
             values.append(author)
+        if who is not None:
+            # Identity, not kind. `author` says *what sort of* speaker this was and is one
+            # of a closed set; this is the surface's own name for one person, so it is not
+            # checked against anything — an id nobody has simply matches nothing, which is
+            # a true answer, and refusing it would mean keeping a list of everyone who has
+            # ever spoken to this agent (R-STO-27).
+            where.append("m.who = ?")
+            values.append(str(who))
         if source is not None:
             # Asked of the run this message belongs to, which it reaches two ways: an
             # agent's answer carries `run_id`, and what a person said is what a run points
@@ -1084,7 +1280,7 @@ class Store:
             return named
 
     def ended(self, run_id, ended_at, outcome, exit_code=None, why=None,
-              tokens=None) -> None:
+              tokens=None, because=None) -> None:
         """How it finished, and what it cost. Written once, at the end.
 
         A cost that never arrived is left absent rather than recorded as nothing: a run that
@@ -1094,16 +1290,24 @@ class Store:
         than only in what the brain printed — because a turn that failed with its reason
         filed where nobody looks is a turn somebody is stuck on, and a run that never
         reached a brain has nothing printed at all.
+
+        `because` is the closed word for the same failure and never a replacement for that
+        sentence (R-RUN-19): prose says what this brain said, and the word is what anything
+        else can count, branch on or phrase well. An adapter that cannot classify a failure
+        leaves it absent, which is what every run written before there was a column for it
+        already is — nothing infers one from `why` afterwards, because reading a word out of
+        prose is guessing and a guessed reason inside a total cannot be seen.
         """
         tokens = tokens or {}
         with self._writing() as conn:
             conn.execute(
                 "UPDATE run SET ended_at = ?, outcome = ?, exit_code = ?, why = ?,"
-                " tokens_in = ?, tokens_out = ?, tokens_cached = ?,"
-                " tokens_reported = ? WHERE id = ?",
+                " because = ?, tokens_in = ?, tokens_out = ?, tokens_cached = ?,"
+                " tokens_written = ?, tokens_reported = ? WHERE id = ?",
                 (
-                    ended_at, outcome, exit_code, why,
+                    ended_at, outcome, exit_code, why, because,
                     tokens.get("input"), tokens.get("output"), tokens.get("cached"),
+                    tokens.get("written"),
                     1 if tokens.get("reported") else 0,
                     run_id,
                 ),
@@ -1124,6 +1328,33 @@ class Store:
             )
             if recoverable:
                 self._mark(conn, run_id, ended_at, RECOVERABLE)
+
+    def abandoned(self, ended_at: str, why: str, keep=()) -> int:
+        """Settle every run still marked as running that nothing is doing (R-GW-23).
+
+        A run is marked running when it starts, and a gateway that dies, is stopped or is
+        replaced by an update never gets to write the end of it — so the row stayed
+        `running` for ever. `rundesk runs` went on reporting a turn in flight more than a
+        day after its transcript stopped being written, and its cost stayed `not reported`,
+        which quietly undercounts every total read off it.
+
+        `keep` is what is genuinely still in flight, named by the caller because only it
+        can tell: this asks nothing about processes. Everything else is settled as
+        `stopped` rather than `failed` — the turn ended without saying so, which is the
+        same news `interrupted` already writes and not evidence that anything broke.
+
+        Returns how many were settled, so a caller can say so once rather than per row.
+        """
+        kept = tuple(str(one) for one in keep)
+        holes = ",".join("?" for _ in kept)
+        with self._writing() as conn:
+            done = conn.execute(
+                "UPDATE run SET ended_at = ?, outcome = ?, why = ?"
+                " WHERE ended_at IS NULL"
+                + (f" AND id NOT IN ({holes})" if kept else ""),
+                (ended_at, "stopped", why, *kept),
+            )
+            return int(done.rowcount or 0)
 
     def recoverable(self, channel: str) -> list:
         """Interrupted channel runs this surface may claim, oldest first (R-GW-22)."""
@@ -1218,7 +1449,12 @@ class Store:
                 " SUM(tokens_reported) AS reported,"
                 " SUM(COALESCE(tokens_in, 0)) AS input,"
                 " SUM(COALESCE(tokens_out, 0)) AS output,"
-                " SUM(COALESCE(tokens_cached, 0)) AS cached FROM run"
+                " SUM(COALESCE(tokens_cached, 0)) AS cached,"
+                # Summed the same way as the three beside it, so a total is what was
+                # reported and nothing else. Rows from before the column, and every brain
+                # that does not report the split, contribute nothing rather than a guess —
+                # `written` is one place where the sum is knowingly a floor.
+                " SUM(COALESCE(tokens_written, 0)) AS written FROM run"
             ).fetchone()
         kept = _plain(row)
         kept["reported"] = int(kept["reported"] or 0)

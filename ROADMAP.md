@@ -1,9 +1,9 @@
 # Roadmap — Agents to Provider-Controlled Channels
 
-**Revised:** 2026-07-26, against the ✅/❌ columns in [`.knowledge/prd/`](.knowledge/prd/README.md), the
-code, and a green `python3 .knowledge/scripts/gate` — not against this document's own prose, which had
-drifted in four places.
-**Released:** `v0.7.0` — schedules that run once, and the first release that moves an owner's records forward. **Status:** direction, not a ratified product contract — the contracts are.
+**Revised:** 2026-07-30, against `v0.22.1`, the ✅/❌ columns in
+[`.knowledge/prd/`](.knowledge/prd/README.md), and the code. **Status:** direction, not a
+ratified product contract — the contracts are.
+**Released:** `v0.22.1`.
 
 **Starting implementation? Read this file's Direction, then [What Remains, In Order](#what-remains-in-order),
 then the phase at the top of that table.** Phases 0–6 are done and compressed into
@@ -12,9 +12,9 @@ not the summaries here. Then [`CLI.md`](CLI.md) for every operation as it is typ
 [`.knowledge/guides/the-command-surface.md`](.knowledge/guides/the-command-surface.md) for why the surface is
 shaped that way.
 
-**The numbers ascend in the order the work happens**, and there are no gaps in them. They were labels once,
-with seven landing before six and thirteen running next; that cost every reader the same reconciliation, so
-they were renumbered in one pass. Phase 7 is where work stands today.
+**The numbers preserve the original dependency order, not release order.** Phases 7–9 and
+12 shipped while audits 10–11 remained open. Start from the remaining-work table, not the
+next number.
 
 This roadmap gets Rundesk from a proven process/gateway/schedule substrate to named agents reached through
 Discord, Slack, schedules and the terminal. It deliberately advances one testable concept at a time. The Node
@@ -161,7 +161,7 @@ One unambiguous green gate, and every operation the finished product will offer 
 - A planned command exited `2`, and so does a typo. Planned now ends on `EX_UNAVAILABLE` and names a command
   that works (R-CMD-8, R-CMD-9, R-CMD-10).
 
-**Contract:** [`command-surface`](.knowledge/prd/command-surface.md) — 10 ✅, 0 ❌.
+**Contract:** [`command-surface`](.knowledge/prd/command-surface.md) — 11 ✅, 0 ❌.
 
 ### 1 · The agent is the thing you operate — **done**
 
@@ -179,8 +179,8 @@ because there is no shared directory to claim it in.
 - Finding 33 was answered by `uninstall` running the installer's own removal and propagating what it returned.
 - A schedule can be run by hand without moving when it next falls due (R-SCH-21, R-SCH-22).
 
-**Contracts:** [`agent-home`](.knowledge/prd/agent-home.md) — 14 ✅, 1 ❌ ·
-[`agent-gateway`](.knowledge/prd/agent-gateway.md) — 9 ✅, 2 ❌.
+**Contracts:** [`agent-home`](.knowledge/prd/agent-home.md) — 43 ✅, 1 ❌ ·
+[`agent-gateway`](.knowledge/prd/agent-gateway.md) — 12 ✅, 2 ❌.
 
 **Left open, deliberately:** running a schedule by hand happens in the terminal, not inside the agent's
 gateway — there is still nothing to ask a running gateway with. Finding 28's larger half (a command reading a
@@ -217,13 +217,13 @@ visible drift rather than a silent gap. **Nothing is sent that the transcript do
 a human never wrote and leaving it out of the audit makes the audit a lie.
 
 **What proves the seam open rather than merely designed open:** `tests/strangers/driftwood-adapter` was
-written from [the guide](src/templates/skills/building-a-provider-adapter/references/the-contract.md) by an agent given the guide's text and
+written from [the guide](docs/extending/provider-adapters/references/the-contract.md) by an agent given the guide's text and
 nothing else, is committed exactly as handed over, and passes the same conformance suite unchanged. That is
 `R-PRV-2` — the one row that could not have been ticked from the inside. The claim was tested a second way by
 accident: the shipped adapter was rewritten from `codex exec` to `codex app-server`, a different protocol, and
 **one file changed**.
 
-**Contract:** [`provider-adapter`](.knowledge/prd/provider-adapter.md) — 21 ✅, 2 ❌. Also delivered:
+**Contract:** [`provider-adapter`](.knowledge/prd/provider-adapter.md) — 27 ✅, 2 ❌. Also delivered:
 `rundesk ask <agent> "…"` streamed to the terminal, and `--steer`, which was not planned and is proved against
 a real brain mid-turn.
 
@@ -254,12 +254,12 @@ The same shape as Phase 2, deliberately — two swappable edges and one core tha
   not into Discord as a special case.
 
 `tests/strangers/semaphore-channel` is the mirror of `driftwood`: written from
-[the guide](src/templates/skills/building-a-channel-adapter/references/the-contract.md) alone and passing the conformance suite unchanged.
+[the guide](docs/extending/channel-adapters/references/the-contract.md) alone and passing the conformance suite unchanged.
 That is `R-CAD-2`.
 
-**Contracts:** [`channel-adapter`](.knowledge/prd/channel-adapter.md) — 13 ✅, 2 ❌ ·
-[`channel-messaging`](.knowledge/prd/channel-messaging.md) — 19 ✅, 3 ❌ ·
-[`channel-discord`](.knowledge/prd/channel-discord.md) — 12 ✅, 9 ❌. The fourteen ❌ are honest and are
+**Contracts:** [`channel-adapter`](.knowledge/prd/channel-adapter.md) — 16 ✅, 2 ❌ ·
+[`channel-messaging`](.knowledge/prd/channel-messaging.md) — 27 ✅, 3 ❌ ·
+[`channel-discord`](.knowledge/prd/channel-discord.md) — 25 ✅, 9 ❌. The fourteen ❌ are honest and are
 catalogued [below](#what-those-phases-left--on-purpose).
 
 **Left open, deliberately:** the gateway announces itself once *per channel*, so two channels mean two notices
@@ -298,8 +298,8 @@ somebody's disk and every mistake becomes a migration.
   design had missed: a conversation key that is a *session handle* somebody passed to `--conversation`, which
   no migration written from the documentation would have expected.
 
-**Contracts:** [`agent-store`](.knowledge/prd/agent-store.md) — 23 ✅, 1 ❌ ·
-[`lifecycle-migration`](.knowledge/prd/lifecycle-migration.md) — 18 ✅, 0 ❌ ·
+**Contracts:** [`agent-store`](.knowledge/prd/agent-store.md) — 27 ✅, 1 ❌ ·
+[`lifecycle-migration`](.knowledge/prd/lifecycle-migration.md) — 25 ✅, 0 ❌ ·
 [`agent-run`](.knowledge/prd/agent-run.md) · [`agent-usage`](.knowledge/prd/agent-usage.md). The map from every
 old reader to its replacement is [`moving-onto-the-store`](.knowledge/guides/moving-onto-the-store.md).
 
@@ -331,7 +331,7 @@ field name is already in `MEMORY.md` as costing a whole feature silently.
 
 ### What those phases left ❌ on purpose
 
-Twenty-eight rows across the contracts are ❌, and every one is honest. Grouped by what would earn it — which
+Twenty-six rows across the contracts are ❌, and every one is honest. Grouped by what would earn it — which
 is also the list of what the phases below have to pick up:
 
 | Why it is ❌ | Rows | Earned by |
@@ -341,8 +341,8 @@ is also the list of what the phases below have to pick up:
 | Nothing can prove what cannot be written | R-CH-2, R-RUN-13, R-RUN-15, R-USE-11, R-STO-19 | A case that *adds* the forbidden thing and watches it fail — see `MEMORY.md` on the guard that passed green through the commit that broke it |
 | Waits on money, which nothing computes | R-USE-5, R-USE-8 | Nothing works a cost out from prices yet |
 | Waits on a brain making a file, which nobody has captured | R-PRV-20 | Phase 10 |
-| Waits on recovery, which is not built | R-GW-22, R-GW-24, R-SCH-20 | Phase 14 |
-| Waits on a provider and a credential the suite has neither of | R-AGT-10 | Phase 12's canary |
+| Needs a real power-loss boundary | R-SCH-20 | A controlled restart/power-loss probe |
+| Waits on a provider and a credential the suite has neither of | R-AGT-10 | A live canary outside the offline suite |
 | Inherited from what runs a program at all; no test of its own | R-PRV-13 | Phase 10 |
 | **Possibly earnable today, and worth checking first** | R-AGW-9 | Channels are rows in `state.db` now and removing an agent takes its directory, so the behaviour may already be there with no row turned. Both `agent-gateway` rows carry no evidence at all |
 
@@ -352,13 +352,16 @@ is also the list of what the phases below have to pick up:
 
 | | Phase | What lands |
 |---|---|---|
-| **7** | Move everything onto it | The gateway's own three directories — the last readers of `~/.rundesk/{run,logs,schedules}` — carried by `002.py` |
 | **10** | Provider adapters — audit the seam | A generic endpoint adapter, the decoupling test, and the contradictions settled |
 | **11** | Channel adapters — audit the seam, and prove it beyond chat | The same on the surfaces side, proved by a surface that is not a chat app: a board or a webhook fires work at an agent, and the outcome lands back on the task |
-| **12** | Skills a brain loads by itself | One skill, written once, discovered natively by every brain that has discovery — and a live probe proving each one sees it |
-| **13** | Know what an agent was granted | Inventory, search and explain: what each brain reports it has, and what this agent has actually run |
-| **14** | Questions, approvals, recovery | A brain pausing mid-turn for an answer, and surviving a restart while it waits |
+| **13** | Explain tool use without claiming enforcement | Query what an agent actually ran and describe provider-native permission posture without inventing a Rundesk grant boundary |
+| **14** | Questions and approvals | Route supported provider interactions safely; crash recovery already shipped |
 | **15** | Channel breadth | Slack, needing no provider or agent change |
+
+**Shipped outside the original phase list:** complete data backups and restore; install-wide
+configuration; shared integration scripts; supervisor-owned self-update requests; centralized
+core and trigger instructions; and the built-in, optional and third-party skill package model.
+Their ratified contracts and [`CODEMAP.md`](.knowledge/CODEMAP.md) are the current description.
 
 **What `v0.6.0` shipped, beyond the clock.** Written here because the phases below are ordered against it:
 
@@ -398,7 +401,7 @@ fixed, every phase after it ships changes an owner cannot safely take.
 **Nine comes straight after eight**, because its whole promise is that what an owner wrote survives an update.
 Proving that before eight would be proving it against the mechanism eight is changing.
 
-**Ten and eleven are audits, and they are phases** because three shipped adapters plus a stranger's is the
+**Ten and eleven are audits, and they are phases** because four shipped adapters plus a stranger's is the
 first point either seam can be judged rather than described. Their shared claim decides whether anybody else
 can build here: **a feature is written against the contract, never against the adapter that shipped first.**
 The test is the poorest possible adapter — declaring nothing, doing nothing — still getting every feature that
@@ -516,114 +519,19 @@ The gate is green — 19 suites, 1,170 cases, both linters and the evidence chec
 - **`--set` is not offered on a schedule.** What a brain is told to run with has no column, and an option
   that could only refuse is worse in the help than one that is absent.
 
-## Phase 7 — Move Everything Onto It
+## Phase 7 — Move Everything Onto It — **done**
 
-**Outcome:** what Phase 4 designed is what is on disk, and everything reads it through one seam.
+**Outcome:** what Phase 4 designed is what is on disk, and every durable record reads and
+writes through `store.py`.
 
-This phase writes no new design and builds no new seam. Where the design turns out to be wrong, that is a
-finding and the drafts move first, because the whole point of the phase before was that this one does not
-improvise. Read [`moving-onto-the-store`](.knowledge/guides/moving-onto-the-store.md) first: it holds the map
-from every remaining reader to the call that replaces it, and the traps already paid for.
+Agent, channel, session, run and schedule state are rows in the per-agent database. Runtime
+records and logs live inside that same agent's directory; the shared
+`~/.rundesk/{run,logs,schedules}` layout and its path helpers are gone. Migrations carry
+released shapes forward, and removal takes the whole agent without reaching into another.
 
-### Where it stands
-
-**Done.** Every JSON file an *agent* kept is gone and is rows: `agent.json`, `channels.json`,
-`sessions.json` (and `session.py` with it), `runs/<run>.jsonl`, `.raw` and `allocating.json`. A run is
-numbered inside the transaction that writes it. `transcript.py` is down to the two things that cannot be
-rows — what the brain printed and what it said went wrong — and both stand under `logs/`, so deleting that
-directory costs an owner nothing an account needed. `runs`, `usage` and `search` are built. The migration
-runner is wired into the update, in the window `R-UPD-21` already opens. R-MIG-1, R-MIG-6, R-MIG-17 and
-R-MIG-18 are green; R-AGW-5 is reversed, and removing an agent takes everything of its own.
-
-**And the schedules third is done, taken in Phase 6** because the clock could not start a turn without it.
-What a gateway is scheduled to do, what each schedule last did and when it was last up are rows;
-`~/.rundesk/schedules`, `RUNDESK_SCHEDULES_DIR` and four path helpers are gone; a `Gateway` is handed its
-records rather than a directory, and does not import `store` to use them. It also settled the shape the
-rest of this follows: **a gateway with no records is a whole gateway** — schedules belong to an agent, so a
-name that is not one has none, and the clock simply has nothing to start for it.
-
-**Not done — two directories, and they go together.** The gateway still keeps what it is *doing* in `run/`
-and what it *wrote* in `logs/`. `gateway.py:166` and `:268` fall back to `~/.rundesk/{logs,run}`, and
-`agent.resolved()` returns `Where(None, None)` for a name that is not an agent (`agent.py:239`) — which is
-what silently sends every unknown name there. The owner's ruling on Phase 6 stands and is why these were
-left: they are in active use, so they move deliberately rather than as a side effect.
-
-### What Phase 6 left on this phase's doorstep
-
-Both are recorded in [`SUGGESTIONS.md`](SUGGESTIONS.md) with reproductions, and the first is the reason to
-start here rather than with the directories:
-
-- **Finding 39 — a read-only command cannot open records whose `-shm` is absent.** `Store._reading` opens
-  `mode=ro`, and a read-only SQLite connection cannot open a WAL database when the shared-memory file is
-  not there: it has to create it and cannot. That is the state a clean close leaves behind, so `runs`,
-  `usage`, `search` and `schedules` traceback on records the product put into that state itself. It is the
-  store's own boundary, it is reachable today, and no case catches it because every case writes before it
-  reads in the same process.
-- **Finding 40 — nothing ends a turn's brain when its gateway goes.** The reporting is fixed: a gateway
-  counts an in-flight turn, exits non-zero and writes an interruption naming it. The ending is not, and the
-  same hole sits under a channel turn — `turn.carry` has no cleanup that ends its `process.Program` — so it
-  is one fix there rather than two here.
-
-### `001.py` was edited after `v0.5.0`, and that has to be settled first
-
-Phase 6 added `schedule.channel` by editing the schema step rather than adding one, on the owner's
-instruction and knowing the cost. **An agent made before that commit claims version 1 and does not have the
-column**, and nothing detects it: `_refused` compares versions, the version is unchanged, and the shape is
-accepted. `schedules add` on such an agent fails on a column that is not there.
-
-Nothing is released with the new schema, so the cheap answer is to re-make those agents — which is what the
-owner chose. What this phase has to decide is whether the *next* shape change gets a step, and whether
-`made()` should check that the shape it expects is actually present rather than trusting a number. The
-version was never meant to be the only evidence: `_refused` already asks whether the `agent` table is there,
-for exactly this reason, and it asks about one table out of ten.
-
-### What is left, in the order it is forced into
-
-1. **Findings 39 and 40**, above. 39 first: every verb this phase is about is a reader, and one of them
-   tracebacks today.
-2. **A step rather than an edit, if the shape changes again** — and the decision above about whether a version
-   number alone is enough evidence that a shape is there. This would be the runner's first real customer;
-   so far it has only carried steps a test wrote.
-3. **Move the gateway's two remaining readers over**, together, with a regression check each. What Phase 6
-   proved about the third is the shape to copy: a gateway is handed what it reads rather than a directory, and
-   never learns what holds it.
-4. **Delete the old layout and the code that defaulted to it**, including `agent.resolved()`'s empty answer.
-5. **Prove it against a scratch install built for the purpose**, not the owner's own — by hand as well as by
-   the suite. Driving it by hand is what found the defects a green suite did not, both times.
-
-### The decision this phase still carries out
-
-**Cross-agent stray sweeping is already dead, and this makes it permanent.** `_sweep_strays()` globs a
-directory that holds exactly one record (`gateway.py:781`), so the loop body never runs for a per-agent
-gateway. `R-GW-21` and `R-GW-23` are ✅ only because their tests share one `where`. Narrow both rows and stop
-the tests sharing it, in the commit that deletes the shared directory. The cost is real and is accepted: work
-left by an agent removed mid-run is never ended by anything.
-
-### Tests
-
-- Stopping an agent takes `gateway.json` and `gateway.lock` and touches nothing in `home/`, `logs/` or
-  `state.db`.
-- Nothing reads or writes `~/.rundesk/run` or `logs` any more, and a name that is not an agent gets an error
-  rather than the old layout. (`schedules` is already gone.)
-- A read-only verb answers on records whose `-wal` and `-shm` are absent, and still cannot write.
-- No lock file sits anywhere a record does, and the ones a transaction replaced are gone rather than unused.
-- A gateway's own log and what the machine caught before its logger existed are one file, and rotating it
-  never leaves the machine writing into the rotated copy.
-- Two agents' gateways writing at once never wait on each other.
-- One kind of thing has exactly one home; the older layout is gone rather than merely unused.
-- Data written by `v0.5.1` is readable by this one after an update, and says the new version.
-- A migration runs once; an update that stopped halfway does not run it again; one that fails leaves every
-  gateway down, the reason said, and the data as it was.
-- No SQL appears outside the one module that owns it.
-
-### Exit proof
-
-`~/.rundesk/{run,logs}` is gone rather than merely unused — `schedules` already is — and one agent's log tells
-the whole story of that agent. A phase that has moved the data but left one reader on the old layout has not moved the data.
-
-**Retention is still unanswered**, and it is the other thing between this and done — how long an account is
-kept, and whether an owner or a size decides. Phase 8 is where it is answered, because a copy kept until a
-move is proved is the same question.
+Finding 39 remains an environment-specific read defect on the supported system Python, and
+finding 40 remains a turn-cleanup defect. They are current ledger work, not unfinished storage
+migration.
 
 ## Phase 8 — Updates an Owner Can Trust — **done**
 
@@ -719,22 +627,23 @@ the one place an owner can edit is the one place that does not survive. Editing 
 is a different thing entirely: it changes one agent, after the fact, and the next agent still starts from the
 shipped words.
 
-**What ships stays the factory set.** Five ordinary Markdown files — `AGENTS.md`, `CLAUDE.md`, `SOUL.md`,
-`USER.md`, `MEMORY.md` — copied with one substitution (`{{name}}`, `agent.py:35`) and never text built in
+**What ships stays the factory set.** Four ordinary Markdown files — `AGENTS.md`, `CLAUDE.md`, `SOUL.md`,
+`MEMORY.md` — copied with one substitution (`{{agent}}`, with legacy `{{name}}` accepted,
+`agent.py:39`) and never text built in
 code, because they are what an owner reads first and edits next. This phase does not change that; it puts a
 second directory in front of it.
 
 ### What it must settle
 
 **An override is per file, not per set.** An owner who wants their own `SOUL.md` and nothing else writes one
-file, and the other four stay whatever the install ships — including whatever a later release improves them
-into. Taking on all five means never getting an improvement to any of them, which is a choice worth being able
+file, and the other three stay whatever the install ships — including whatever a later release improves them
+into. Taking on all four means never getting an improvement to any of them, which is a choice worth being able
 to avoid.
 
 ```text
 ~/.rundesk/templates/agent/
   SOUL.md              the owner's — used instead of the shipped one
-  (nothing else)       the other four come from the install, and keep improving
+  (nothing else)       the other three come from the install, and keep improving
 ```
 
 **Where they live is the owner's tier**, above agents rather than inside any of them: they belong to the
@@ -760,7 +669,7 @@ never rewrites words a person may have changed.
 **`doctor` says where each file came from.** "Why does my new agent not have my rules" must be answerable
 without reading source — per file, shipped or the owner's, and the path of the one that was used.
 
-**An override that ignores `{{name}}` is still valid.** The substitution is the whole contract an override has
+**An override that ignores `{{agent}}` is still valid.** The substitution is the whole contract an override has
 to honour, and honouring it is optional: a template with no placeholder is a template every agent gets
 verbatim, which is a legitimate thing to want.
 
@@ -781,7 +690,7 @@ verbatim, which is a legitimate thing to want.
 
 - A home made with no overrides is byte-for-byte what the install ships.
 - One overridden file is the owner's and the rest are shipped, in the same home.
-- An override that never writes `{{name}}` still makes a working agent.
+- An override that never writes `{{agent}}` still makes a working agent.
 - An override directory that is empty, unreadable, or holds a name the install does not ship is reported
   truthfully and never leaves a half-made agent.
 - An update replaces the shipped templates and leaves every override untouched — the claim the phase exists
@@ -812,14 +721,14 @@ first would start holding by accident the day somebody moves it. Nothing in `ins
 this either: the templates stand among the agents, and everything beside the program is kept.
 
 **Not built:** deliverable 2, a way to write the factory set into the override directory to be edited. It
-needs a verb, and the surface decision for these two phases was to add none. An owner copies five files.
+needs a verb, and the surface decision for these two phases was to add none. An owner copies four files.
 
 ## Phase 10 — Provider Adapters: Audit the Seam
 
 **Outcome:** somebody who has never seen this code can write a brain — or point at an endpoint — and have it
 work with every feature, and what rundesk keeps about a brain is stable enough to build on.
 
-**Why an audit is a phase.** Three shipped adapters and a stranger's is the first point the seam can be judged
+**Why an audit is a phase.** Four shipped adapters and a stranger's is the first point the seam can be judged
 honestly rather than from one example. It is also the point where the promises made early are checked against
 what shipped.
 
@@ -831,22 +740,24 @@ what shipped.
 2. **The decoupling test**: the poorest adapter imaginable — declaring `{}`, no tools, no usage, no model, no
    steering — still gets schedules, channels, history, search and `doctor`. Every feature works against the
    contract or degrades honestly, never against a shipped adapter.
-3. **A live defect fixed**: `make` is a legal verb in `provider.DID` and in the guide, and the conformance
-   suite's assertion omits it — so an adapter that emits it fails a suite it passes.
-4. **Two contradictions settled**: the shipped Codex adapter ignores `RUNDESK_PROVIDER_HOME` against the
+3. **Two contradictions settled**: the shipped Codex adapter ignores `RUNDESK_PROVIDER_HOME` against the
    guide's own advice, on measured grounds — either the guide moves or the adapter does. And a brain's
    identity is a fingerprint of its *file path*, so moving your program orphans its sessions.
-5. `R-PRV-13`, `-20`, `-22` closed or narrowed to what is true. `R-PRV-20` needs a capture of a brain making a
+4. `R-PRV-13` and `R-PRV-20` closed or narrowed to what is true. `R-PRV-20` needs a capture of a brain making a
    file — a live turn nobody has bought yet.
-6. **A new stranger's adapter**, written from the guide alone by someone without the code — the same bar Phase
+5. **A new stranger's adapter**, written from the guide alone by someone without the code — the same bar Phase
    2 set, re-run against a guide that has since changed.
-7. `doctor` and `agents` show what each brain declared it can do, without starting one.
-8. The guide's dead link fixed, and what an author is guaranteed across versions written down. In particular
+6. What an author is guaranteed across versions written down. In particular,
    **what `RUNDESK_PROVIDER_HOME` is actually for**, now that no shipped adapter uses it for credentials while
    the guide still describes it as "config, credentials, session files".
-9. **Something drives a shipped adapter into a `state.db` from a test.** All three were driven by hand and
+7. **Something drives a shipped adapter into a `state.db` from a test.** All four were driven by hand and
    their accounts inspected — runs, records, usage, session handles and resume all correct — but the suite
    proves the seam-to-store path with stand-ins only.
+
+The former `make`-verb conformance defect is fixed: the suite now reads verbs from
+`provider.DID`. Declared capabilities are deliberately not queried by `agents` or `doctor`
+without starting a provider; R-PRV-12 refuses that hidden execution, so it is not remaining
+Phase 10 work.
 
 ## Phase 11 — Channel Adapters: Audit the Seam, and Prove It Beyond Chat
 
@@ -952,7 +863,7 @@ Every requirement in `channel-messaging` today quietly assumes a person typed so
   (`R-CAD-8`), and the platform's own retry is what brings it back.
 - No word belonging to any board, tracker or webhook appears outside its own adapter.
 
-## Phase 12 — Skills a Brain Loads by Itself
+## Phase 12 — Skills a Brain Loads by Itself — **done**
 
 **Outcome:** an owner writes a skill once, in one format, and **every brain that agent reaches picks it up on
 its own** — discovered natively by the provider rather than pasted into a prompt by rundesk — with a probe
@@ -971,36 +882,37 @@ rundesk in the business of deciding what is relevant, and — worst — make the
 requires everything added to a turn to appear in its account. The brain's own discovery is what this phase
 delivers; if a brain has none, it has none, and that is reported rather than worked around.
 
-### The seam question this phase must answer first
+### The seam decision
 
 **A vendor's directory name may not appear above `src/providers/`.** That rule is what Phases 2, 5 and 10
-exist to hold, so `.claude/skills` cannot be written into `src/rundesk/`. Making skills provider-centric
-therefore requires the provider seam to carry *something* about them, which is a
-[`provider-adapter`](.knowledge/prd/provider-adapter.md) contract change and an owner decision:
+exist to hold, so `.claude/skills` cannot be written into `src/rundesk/`. The settled seam carries
+`RUNDESK_SKILLS`, pointing at the agent's granted skills, and each adapter presents them where its own brain
+looks:
 
-- **Recommended:** a `RUNDESK_SKILLS` variable pointing at the agent's `skills/`, handed over like
+- **Shipped:** a `RUNDESK_SKILLS` variable pointing at the agent's `skills/`, handed over like
   `RUNDESK_CWD` and `RUNDESK_PREFACE` already are, with **the adapter** placing or linking them where its own
   brain looks. Every vendor path stays in the one file that already knows that vendor, a stranger's adapter
   gets skills the day it reads one variable, and rundesk learns nothing about anybody's layout.
-- **The alternative** — an adapter *declaring* its discovery directory and rundesk doing the placement — puts
+- **Rejected:** an adapter *declaring* its discovery directory and rundesk doing the placement — puts
   the mechanism in the core and gives the core a per-vendor path to hold. Cheaper to write, and it is the
   shape the seam was built to prevent.
 
-Either way it is a new row in the contract and a new line in
-[`write-a-provider-adapter.md`](src/templates/skills/building-a-provider-adapter/references/the-contract.md), and the closed vocabularies
-are not reopened: a skill is not a record, a verb or a capability.
+The contract and adapter guide carry that decision, and the closed vocabularies are not
+reopened: a skill is not a record, a verb or a capability.
 
 ### What is built
 
 - **One `SKILL.md` format**, and a template an owner starts from. What a skill is, what it may assume, and
   what it may never contain — no credentials, no vendor flags.
 - **One canonical place per agent**: `home/skills/`, which already exists and is already the agent's own.
-- **Presentation to each shipped brain**, through whatever the seam decision above settles, for `codex`,
-  `claude` and `grok` — and honestly absent for a brain that discovers nothing.
+- **Presentation to each shipped brain** through the settled seam for `codex`, `claude`,
+  `grok` and `antigravity` — and honestly absent for a brain that discovers nothing.
 - **An agent does not inherit its owner's skills.** Rundesk-managed configuration must not turn on automatic
   discovery of ungranted owner-level skills; that is the isolation `R-AGT-8` and the Boundaries section
   already promise, one directory further in.
 - **`doctor` says, per brain, whether skills are discoverable, not discoverable, or unproven on this version.**
+- **Complete skill packages** carry their own guidance, scripts and integration metadata while
+  preserving one granted skill boundary.
 
 ### Probing — the part that decides whether any of this is true
 
@@ -1033,23 +945,22 @@ The traps are already paid for and are in `.knowledge/MEMORY.md`; re-read them b
 - Rundesk-managed config does not automatically discover ungranted owner-level skills.
 - **A canary skill is read by each shipped brain**, proved live, with the control proving it is not read when
   absent — and saved, sanitized output recording provider version, invocation and result.
-- A canary agent proves each provider follows `AGENTS.md` to `SOUL.md`, `USER.md` and `MEMORY.md` — which is
+- A canary agent proves each provider follows `AGENTS.md` to `SOUL.md` and `MEMORY.md` — which is
   `R-AGT-10`, ❌ today because a case needs a real provider and a credential the suite has neither of. This
   phase is where that row is earned or explicitly left.
 - No vendor's skills directory appears outside its own adapter.
 
 ### Exit proof
 
-One skill, written once by an owner, is picked up by every shipped brain that has discovery — proved by a
-live canary and its control, not by a link existing. Each supported provider has a current row marked proven,
-unsupported or unknown against a recorded version. **Rundesk does not claim that a provider loaded a rule or
-a skill based only on file presence**, and a brain that discovers nothing is reported as such rather than
-quietly given the text in its prompt.
+One skill, written once by an owner, is presented to every shipped brain that has native
+discovery. Offline tests prove placement and isolation; live probes are the only evidence
+that a brain actually loaded one. `R-AGT-10` therefore remains honestly ❌ in the offline
+contract rather than keeping the phase open.
 
-## Phase 13 — Know What an Agent Was Granted
+## Phase 13 — Explain Tool Use Without Claiming Enforcement
 
-**Outcome:** an owner can see what tools an agent's brains actually have, and what this agent was granted,
-without rundesk becoming a tool engine.
+**Outcome:** an owner can see what tools an agent actually used and what permission posture
+was requested, without Rundesk inventing a capability inventory or enforcement boundary.
 
 **Split from skills on purpose.** A skill is content an owner authors and a brain reads; a tool is a
 capability the brain already has and a permission question about it. They travel together in most products
@@ -1061,32 +972,34 @@ shell tools, does not dynamically load plugins, and does not execute arbitrary n
 run tools — the brain does, inside its own permission model, which the Boundaries section requires be kept
 intact.
 
-What already exists to build on: an adapter declares what it can do, `tools` among them, and a turn's record
-carries every `tool` and `result` the brain reported. So "what did this agent actually use" is a query
-against the store rather than anything new to capture.
+What already exists to build on: a turn's record carries every `tool` and `result` the
+brain reported. So "what did this agent actually use" is a query against the store rather
+than anything new to capture. `agent.diagnosed()` deliberately does not start a provider
+to ask what it declares; R-PRV-12 makes that refusal part of the contract.
 
 ### Deliverables
 
-1. **What each brain reports it has**, read through the seam and shown by `agents` and `doctor` without
-   starting a turn.
-2. **What this agent was granted**, if grants are to exist at all — and that is an owner decision, because a
-   grant is persisted state and a permission claim rundesk cannot enforce. A posture is carried to the
-   adapter today and no tool list is believed in; adding one that *looks* enforced would be worse than none.
-3. **What an agent has actually run**, from the account: which tools, how often, in which runs.
-4. A row saying plainly what a grant does and does not guarantee — it is not filesystem containment, and a
-   provider's native tools may reach sibling paths unless a later phase adds and proves an enforcement
-   boundary.
+1. **What an agent has actually run**, from the account: which tools, how often, in which runs.
+2. **What posture was requested**, sourced from the run rather than inferred from a provider's
+   tool list.
+3. A plain boundary statement: provider-native permissions enforce access; Rundesk does not
+   claim filesystem containment or a tool grant it cannot prove.
+4. Keep skill grants distinct. They decide which `SKILL.md` packages Rundesk presents, not
+   which native tools a provider may execute.
 
 ### Exit proof
 
-An owner asks what a brain can do and what this agent has done with it, and gets an answer that came from the
-adapter and the account rather than from a list rundesk keeps. Nothing claims a tool was prevented that was
-not.
+An owner asks what an agent did and gets an answer from the account. Nothing claims a tool
+exists, was granted or was prevented unless the provider's own enforced result proves it.
 
-## Phase 14 — Questions, Approvals and Recovery
+## Phase 14 — Questions and Approvals — **recovery shipped**
 
-**Outcome:** a supported provider can pause for remote input without weakening its native permission model,
-and Rundesk can recover truthfully after a gateway/channel restart.
+**Outcome:** a supported provider can pause for remote input without weakening its native
+permission model.
+
+Crash recovery is no longer waiting on this phase. `R-GW-22` and `R-GW-24` are ✅:
+gateways record where work had reached, distinguish repeated failures and stop restart
+loops. The remaining work is the interaction boundary itself.
 
 **It opens with a research phase, because the shape of what is possible is decided by somebody else.**
 Rundesk drives command-line programs rather than APIs, and a brain run non-interactively cannot do
@@ -1145,10 +1058,9 @@ taking words mid-turn says nothing about its permission model.
 
 ### Exit proof
 
-A manual canary completes one question and one approval through Discord, then repeats each across the
-supported restart boundary. The public always-online claim waits until interrupted work can resume rather than
-restart and repeated crashes stop looping — `R-GW-22` and `R-GW-24`, both ❌ today because nothing records
-where a piece of work had got to.
+A manual canary completes one question and one approval through Discord, then repeats each
+across the supported restart boundary. Duplicate, stale or unauthorized answers never act,
+and an unsupported provider reports that limit rather than weakening its permissions.
 
 ## Phase 15 — Add Channel Breadth One Adapter at a Time
 

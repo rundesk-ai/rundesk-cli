@@ -21,12 +21,19 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
+import threading
+import textwrap
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -66,6 +73,25 @@ def only(said: list, kind: str) -> list:
     return [one for one in said if one["type"] == kind]
 
 
+class Sink:
+    """A text pipe whose contents remain inspectable after the writer closes it."""
+
+    def __init__(self):
+        self.text = ""
+
+    def write(self, said: str) -> None:
+        self.text += said
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def getvalue(self) -> str:
+        return self.text
+
+
 class WhatTheGoldenSaysBack(unittest.TestCase):
     """The stream, driven end to end, as the seam's own records."""
 
@@ -103,22 +129,163 @@ class WhatTheGoldenSaysBack(unittest.TestCase):
         for one in spoken:
             self.assertIs(True, one.get(provider.WHOLE), f"{one['text'][:40]!r} was not whole")
 
-    def test_what_a_turn_cost_is_read_from_one_line_and_nowhere_else(self):
-        """Three lines in this stream carry a full usage block — `message_start`,
-        `message_delta` and `result`. Counting the framing ones as well is how a turn ends
-        up reporting many times what it cost."""
+    def test_what_a_turn_cost_is_reported_once_and_never_added_up(self):
+        """Several lines in this stream carry a full usage block — `message_start`,
+        `message_delta`, every `assistant` line and `result`. Counting them is how a turn
+        ends up reporting many times what it cost, so one record leaves the adapter and
+        the output total on it is the `result` line's: output is the one quantity never
+        sent twice, so adding it up is exactly what the turn wrote."""
         counted = only(self.said, "usage")
-        self.assertEqual(1, len(counted), "usage was taken from more than the result line")
+        self.assertEqual(1, len(counted), "usage was reported more than once")
         self.assertEqual(1510, counted[0]["output"])
 
-    def test_fresh_tokens_are_never_added_to_cached_ones(self):
-        """20 fresh against 302,567 cache reads on the captured turn. Cache creation is
-        billed above standard input and cache reads at a fraction of it, so summing them
-        reports 320,020 tokens at one price — real, and misleading."""
+    def test_four_billed_quantities_are_reported_in_four_slots(self):
+        """R-USE-13. This vendor prices fresh input, cache writes and cache reads
+        differently, and is the only shipped brain that reports all three. Summing any two
+        of them into one slot reports a number that is real and misleading; this used to
+        add the first two, so 2 fresh tokens were recorded as 90 input."""
         counted = only(self.said, "usage")[0]
-        self.assertEqual(20 + 17453, counted["input"], "what was new is not input + cache write")
-        self.assertEqual(302567, counted["cached"], "the cheap volume is not being kept apart")
-        self.assertNotEqual(20 + 17453 + 302567, counted["input"])
+        self.assertEqual(2, counted["input"], "cache writes are folded into fresh input")
+        self.assertEqual(88, counted["written"], "what was written to cache is not kept")
+        self.assertEqual(34200, counted["cached"], "the cheap volume is not being kept apart")
+        self.assertNotEqual(2 + 88, counted["input"])
+        self.assertNotEqual(2 + 88 + 34200, counted["input"])
+
+    def test_the_input_side_is_where_the_turn_ended_not_every_request_added_up(self):
+        """R-USE-14. A prompt is sent again on every request of a turn, so the `result`
+        line's input side is that prefix counted once per request: this captured turn adds
+        up to 302,567 cached where the conversation it ended on was 34,200, and a measured
+        58-request turn reported 15,424,940. Nobody can read the first number as anything
+        — it describes a bill, not a turn — so the size the turn reached is what is
+        reported, taken from the last `assistant` line rather than summed."""
+        counted = only(self.said, "usage")[0]
+        self.assertEqual(34200, counted["cached"], "the resent prefix is being added up")
+        self.assertNotEqual(302567, counted["cached"])
+        self.assertNotEqual(17453, counted["written"])
+
+    def test_a_subagents_own_conversation_is_not_where_this_turn_ended(self):
+        """R-USE-14. A subagent runs a conversation of its own and this vendor marks its
+        lines with `parent_tool_use_id`. Reading one as the size of this turn would report
+        a child's context as the parent's, which is a different conversation entirely."""
+        _said, seen = carried()
+        ended_on = seen.get("ended_on")
+        claude.records(json.dumps(
+            {"type": "assistant", "parent_tool_use_id": "toolu_1", "session_id": "s",
+             "message": {"content": [], "usage": {"cache_read_input_tokens": 999999}}}), seen)
+        self.assertEqual(ended_on, seen.get("ended_on"),
+                         "a subagent's line was taken as where this turn ended")
+
+    def test_a_turn_says_how_big_the_conversation_it_ended_on_was(self):
+        """R-USE-15. The question a footer is read to answer is "how big is this session
+        now", and no billed quantity answers it: fresh input is 2 here, and on any warm
+        turn. This vendor describes one prompt in three pieces, so putting the three back
+        together is the prompt it ended on — 2 fresh, 88 written, 34,200 read back."""
+        counted = only(self.said, "usage")[0]
+        self.assertEqual(34290, counted["session"])
+        self.assertEqual(counted["input"] + counted["written"] + counted["cached"],
+                         counted["session"], "the three pieces are not the whole prompt")
+
+    def test_a_turn_making_several_requests_reports_the_level_it_ended_at_and_not_the_sum(self):
+        """R-USE-15. This captured turn made several requests, and there are two ways to
+        add one up that both look like a session and are bills: the `result` line's own
+        input side counts the resent prefix once per request (320,040 here, and 15,424,940
+        on a measured 58-request turn), and adding every `assistant` line does it again
+        (569,147). A number of that size cannot even move downwards when a conversation is
+        compacted, which is the one behaviour the quantity exists to have."""
+        counted = only(self.said, "usage")[0]
+        self.assertEqual(34290, counted["session"])
+        self.assertNotEqual(20 + 17453 + 302567, counted["session"], "this is the bill")
+        self.assertNotEqual(36 + 53756 + 515355, counted["session"],
+                            "every request's prompt was added together")
+        self.assertLess(counted["session"], 320040)
+
+    def test_a_compacted_conversation_is_reported_smaller_than_the_one_before_it(self):
+        """R-USE-15. A gauge goes down when the thing it measures does, and a running total
+        cannot — which is the whole difference between the two. Compaction is when this
+        actually happens to somebody, so it is what the case drives."""
+        sizes = []
+        for read_back in (300000, 40000):
+            seen = {"session": "s", "model": None, "ended": False}
+            claude.records(json.dumps(
+                {"type": "assistant", "parent_tool_use_id": None, "session_id": "s",
+                 "message": {"content": [], "usage": {
+                     "input_tokens": 4, "cache_creation_input_tokens": 900,
+                     "cache_read_input_tokens": read_back}}}), seen)
+            said = claude.records(json.dumps(
+                {"type": "result", "session_id": "s", "is_error": False,
+                 "usage": {"output_tokens": 120}}), seen)
+            sizes.append(only(said, "usage")[0]["session"])
+        self.assertEqual([300904, 40904], sizes)
+        self.assertLess(sizes[1], sizes[0], "a compacted conversation did not get smaller")
+
+    def test_a_brain_that_reports_none_of_the_pieces_of_a_prompt_claims_no_size_for_the_conversation(self):
+        """R-USE-16. Absent means "could not tell", which is a different claim from nought
+        — and the four billed slots are unaffected, because a turn that reported no input
+        at all did report an output of 120."""
+        seen = {"session": "s", "model": None, "ended": False}
+        said = claude.records(json.dumps(
+            {"type": "result", "session_id": "s", "is_error": False,
+             "usage": {"output_tokens": 120}}), seen)
+        counted = only(said, "usage")[0]
+        self.assertNotIn("session", counted, "a conversation size was invented from nothing")
+        self.assertEqual(120, counted["output"])
+        self.assertEqual(0, counted["input"])
+
+    def test_account_state_a_brain_volunteers_is_reported_as_a_limit(self):
+        """R-PRV-28. The captured stream carries one of these and this adapter used to drop
+        it — on reasoning that was right as far as it went, that it is account state rather
+        than this turn's activity, and wrong only in that account state had nowhere to go.
+        What reached an owner instead was whatever prose could be scraped after the fact."""
+        found = only(self.said, "limit")
+        self.assertEqual(1, len(found), "the account state on this stream was dropped")
+        self.assertEqual("rate", found[0]["of"])
+        self.assertEqual("five_hour", found[0]["scope"])
+        self.assertEqual(1784920200, found[0]["resets_at"])
+
+    def test_an_allowance_that_is_merely_allowed_reports_no_state(self):
+        """`allowed` is the ordinary condition of an account and says nothing worth telling
+        an owner. `near` and `reached` are the two that are worth saying, so a stream that
+        only ever says `allowed` reports the window and its reset without claiming either."""
+        self.assertNotIn("state", only(self.said, "limit")[0])
+
+    def test_a_turn_carrying_a_limit_is_not_a_turn_that_failed(self):
+        """The distinction that makes this a record of its own rather than an outcome: the
+        captured turn reports an allowance *and* succeeds, so anything treating one as a
+        failure would fail every turn on an account that reports its state at all."""
+        self.assertTrue(only(self.said, "done")[0]["ok"])
+
+    def test_a_limit_a_brain_never_mentions_is_never_invented(self):
+        """R-USE-6's reasoning at the seam. A stream with no account state on it reports
+        none, rather than an `of: rate` with everything about it unknown."""
+        self.assertEqual([], claude.records('{"type":"system","subtype":"init"}', {}))
+        self.assertEqual([], claude.records('{"type":"rate_limit_event"}', {}))
+
+    def test_a_turn_stopped_for_a_reason_the_seam_has_a_word_for_records_that_word(self):
+        """R-RUN-19. This vendor puts a limit-stopped turn on an ordinary `result` line with
+        `is_error` — the same shape as a crash, a bad flag or a refusal — so the prose is
+        the only place the kind of failure appears. Matching it is weak evidence and is
+        treated as such: what is not recognised stays unclassified."""
+        for said, word in (
+            ("Claude AI usage limit reached|1784920200", "usage_exhausted"),
+            ("rate limit exceeded, please try again later", "rate_limited"),
+            ("Your credit balance is too low to run this", "no_credit"),
+            ("Invalid API key · Please run /login", "signed_out"),
+            ("prompt is too long: 400000 tokens > 200000 maximum", "context_exceeded"),
+        ):
+            ending = claude.records(json.dumps(
+                {"type": "result", "is_error": True, "result": said}), {})
+            done = [one for one in ending if one["type"] == "done"][0]
+            self.assertEqual(word, done.get("because"), said)
+            self.assertEqual(said, done["why"], "the brain's own words were replaced")
+
+    def test_a_failure_this_adapter_cannot_classify_says_nothing_rather_than_guessing(self):
+        """The guard on the one above, and the whole reason the phrases are kept narrow. A
+        wrong word inside a total cannot be seen; an absent one can."""
+        ending = claude.records(json.dumps(
+            {"type": "result", "is_error": True, "result": "the parser exploded"}), {})
+        done = [one for one in ending if one["type"] == "done"][0]
+        self.assertNotIn("because", done)
+        self.assertEqual("the parser exploded", done["why"])
 
     def test_the_model_that_answered_is_named(self):
         """R-PRV-9. Reported rather than requested: a silent substitution shows up here."""
@@ -148,12 +315,15 @@ class WhatTheGoldenSaysBack(unittest.TestCase):
         self.assertIsNone(did["TaskCreate"], "a tool with no verb here claimed one anyway")
 
     def test_a_line_kind_nobody_mapped_is_reported_as_nothing(self):
-        """R-PRV-5 from the adapter's side. Framing, status churn, a reasoning meter and
-        the account's rate-limit state are all dropped deliberately — and the raw stream is
-        kept beside the run either way, so a vendor changing shape is visible as drift."""
+        """R-PRV-5 from the adapter's side. Framing, status churn and a reasoning meter are
+        dropped deliberately — and the raw stream is kept beside the run either way, so a
+        vendor changing shape is visible as drift.
+
+        The account's rate-limit state used to be dropped here too, and is now a `limit`
+        record: it was never unmappable, only unhoused (R-PRV-28)."""
         for line in GOLDEN.read_text(encoding="utf-8").splitlines():
             one = json.loads(line)
-            if one.get("type") in ("stream_event", "rate_limit_event"):
+            if one.get("type") == "stream_event":
                 self.assertEqual([], claude.records(line, dict(self.seen)))
             if one.get("type") == "system" and one.get("subtype") in ("status", "thinking_tokens"):
                 self.assertEqual([], claude.records(line, dict(self.seen)))
@@ -298,6 +468,94 @@ class WhenItHandsWorkToAHelper(unittest.TestCase):
         }], claude.records(real, {"session": "s"}))
 
 
+class WhenItChangesWhatItKeepsOfItsOwn(unittest.TestCase):
+    """R-PRV-29 — the four files an agent lives by, told apart from every other file."""
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.home, True)
+        self.was = {name: os.environ.get(name)
+                    for name in ("RUNDESK_CWD", "RUNDESK_CONTINUITY")}
+        self.addCleanup(self._put_back)
+        os.environ["RUNDESK_CWD"] = str(self.home)
+        os.environ["RUNDESK_CONTINUITY"] = ",".join(
+            f"{name}={verb}" for name, verb in sorted(provider.CONTINUITY.items()))
+
+    def _put_back(self):
+        for name, value in self.was.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    def _wrote(self, at, tool="Write", named="file_path"):
+        real = json.dumps({"type": "assistant", "session_id": "s", "message": {
+            "content": [{"type": "tool_use", "id": "w-1", "name": tool,
+                         "input": {named: at}}]
+        }})
+        return claude.records(real, {"session": "s"})[0]
+
+    def test_each_continuity_file_is_reported_as_what_it_is(self):
+        """R-PRV-29 — a file the agent lives by being rewritten is not the same news as a
+        file it was working on being rewritten, and both arrive as the same tool."""
+        for name, verb in provider.CONTINUITY.items():
+            with self.subTest(name):
+                self.assertEqual(verb, self._wrote(str(self.home / name))["did"])
+
+    def test_the_same_name_in_a_checkout_is_an_ordinary_edit(self):
+        """R-PRV-29 — the trap this exists to avoid. Every repository on the machine has
+        an `AGENTS.md`; saying an agent rewrote its own rules because it edited one is
+        worse than the plain `edit` it would otherwise get, because it is untrue."""
+        checkout = self.home / "workspace" / "some-repo"
+        checkout.mkdir(parents=True)
+        self.assertEqual("edit", self._wrote(str(checkout / "AGENTS.md"))["did"])
+
+    def test_it_is_matched_where_the_agent_stands_rather_than_where_the_path_starts(self):
+        """R-PRV-29 — a brain naming a file relative to the working directory means the
+        same file as one naming it outright, and a home reached through a link is still
+        the same home."""
+        self.assertEqual("memory", self._wrote("MEMORY.md")["did"])
+        self.assertEqual("memory", self._wrote("./MEMORY.md")["did"])
+
+    def test_a_notebook_names_its_target_by_another_word(self):
+        """R-PRV-29 — measured against 2.1.220: `Edit` and `Write` say `file_path` and
+        `NotebookEdit` says `notebook_path`, so looking for one word finds two of three."""
+        at = str(self.home / "MEMORY.md")
+        self.assertEqual(
+            "memory", self._wrote(at, "NotebookEdit", "notebook_path")["did"])
+        self.assertEqual("memory", self._wrote(at, "Edit")["did"])
+
+    def test_a_file_beside_them_that_is_not_one_of_them_is_an_ordinary_edit(self):
+        """R-PRV-29 — standing in the agent's home is not on its own the test; being one
+        of the named files is."""
+        self.assertEqual("edit", self._wrote(str(self.home / "NOTES.md"))["did"])
+
+    def test_nothing_is_told_apart_when_nothing_named_them(self):
+        """R-PRV-3, R-PRV-29 — an adapter run by something that never named these files
+        reports the plain `edit` it always did, rather than carrying its own copy of what
+        rundesk keeps beside an agent."""
+        os.environ.pop("RUNDESK_CONTINUITY", None)
+        self.assertEqual("edit", self._wrote(str(self.home / "MEMORY.md"))["did"])
+
+    def test_only_a_write_is_told_apart_and_never_a_read(self):
+        """R-PRV-29 — reading these is what every turn does before it answers. Reported as
+        activity it would say the agent rewrote itself on every single turn."""
+        real = json.dumps({"type": "assistant", "session_id": "s", "message": {
+            "content": [{"type": "tool_use", "id": "r-1", "name": "Read",
+                         "input": {"file_path": str(self.home / "MEMORY.md")}}]
+        }})
+        self.assertEqual("read", claude.records(real, {"session": "s"})[0]["did"])
+
+    def test_where_the_file_was_is_never_carried_off_this_adapter(self):
+        """R-DIS-9, R-DIS-20, R-PRV-29 — a path may be private, and the reason a verb was
+        chosen rather than a path relayed is that a surface needs the first and must never
+        be handed the second."""
+        said = self._wrote(str(self.home / "SOUL.md"))
+        self.assertEqual("identity", said["did"])
+        self.assertNotIn("SOUL.md", json.dumps(said))
+        self.assertNotIn(str(self.home), json.dumps(said))
+
+
 class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
     """The command line, which is where this brain's two traps live."""
 
@@ -365,6 +623,42 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
         self.assertNotIn(" ", after, "the allowlist would swallow the flag after it")
         self.assertIn(",", after)
 
+    def test_a_posture_this_adapter_does_not_know_falls_to_the_narrowest_one(self):
+        """R-PRV-27. The failure that matters is which way an unknown posture falls. `work`
+        on this brain is `--dangerously-skip-permissions`, so falling open turns a typo — or
+        a posture the seam gains before this adapter learns it — into a full permission
+        bypass on an unattended schedule, with nothing said about it."""
+        for unknown in ("reed", "plan", "READ", "read-only", "worrk", "none"):
+            said = claude.posture_for(unknown)
+            self.assertEqual("read", said, f"{unknown!r} should fall closed, not open")
+            argv = self.opening(posture=said)
+            self.assertIn("--allowedTools", argv)
+            self.assertNotIn("--dangerously-skip-permissions", argv)
+
+    def test_falling_closed_is_said_out_loud_rather_than_done_quietly(self):
+        """A turn that lost tools it expected must be explicable. The narrowing goes to the
+        stream that is ours, so it reaches whoever reads the run rather than only the log."""
+        was, sys.stderr = sys.stderr, io.StringIO()
+        try:
+            claude.posture_for("reed")
+            said = sys.stderr.getvalue()
+        finally:
+            sys.stderr = was
+        self.assertIn("reed", said)
+        self.assertIn("read", said)
+
+    def test_the_two_postures_the_seam_has_are_passed_through_untouched(self):
+        """The guard on the one above: failing closed must not narrow a posture that is
+        perfectly good. An absent or empty posture is the seam's stated default, `work`,
+        which is a decision rather than a mistake and is not narrowed either. Blank counts
+        as absent, as it does for standing instructions two tests below — a variable set to
+        spaces is a variable nobody set."""
+        self.assertEqual("work", claude.posture_for("work"))
+        self.assertEqual("read", claude.posture_for("read"))
+        self.assertEqual("work", claude.posture_for(None))
+        self.assertEqual("work", claude.posture_for(""))
+        self.assertEqual("work", claude.posture_for("   \t "))
+
     def test_standing_instructions_are_added_and_never_substituted(self):
         """R-PRV-23. Measured: `--system-prompt` takes about 6,100 tokens of what this
         brain was built with away with it, while the rule still lands and the tools still
@@ -393,6 +687,7 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
         argv = self.opening()
         self.assertIn("--verbose", argv)
         self.assertIn("-p", argv)
+        self.assertEqual("stream-json", argv[argv.index("--input-format") + 1])
         self.assertEqual("stream-json", argv[argv.index("--output-format") + 1])
 
     def test_a_new_conversation_is_named_before_the_first_byte(self):
@@ -415,8 +710,7 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
         cannot eat it."""
         argv = self.opening(preface="stand here")
         self.assertNotIn("-p", argv[argv.index("-p") + 1:], "the prompt looks like a flag value")
-        source = AT.read_text(encoding="utf-8")
-        self.assertIn("sys.stdin.read()", source)
+        self.assertIn("--input-format", argv)
 
     def test_what_an_owner_set_reaches_the_brain_unread(self):
         """R-PRV-16. Their words for their brain: a new option on this CLI is theirs to
@@ -504,16 +798,162 @@ class WhatThisBrainCanDo(unittest.TestCase):
         for what, said in claude.CAN.items():
             self.assertIsInstance(said, bool, f"{what} is not a yes or a no")
 
-    def test_it_does_not_claim_it_can_be_sent_to_mid_turn(self):
-        """Measured: `claude -p` reads its prompt and runs to the end. Claiming `steer`
-        would have rundesk hold this adapter's input open for a brain that will never read
-        again, which is a turn that never ends."""
-        self.assertFalse(claude.CAN["steer"])
+    def test_it_claims_the_interrupt_protocol_as_mid_turn_steering(self):
+        """R-PRV-19. A control interrupt plus a new message changes the active work."""
+        self.assertTrue(claude.CAN["steer"])
+
+    def test_the_protocol_initializes_then_interrupts_before_the_later_word(self):
+        words = claude.Words("count to ten", io.StringIO(
+            '{"type":"say","text":"actually, stop at three",'
+            '"context":"continue the original request"}\n'))
+        output, control = Sink(), claude.Control()
+        thread = threading.Thread(
+            target=claude._fed,
+            args=(output, words, claude.threading.Event(), control))
+        thread.start()
+
+        def records():
+            return [json.loads(line) for line in output.getvalue().splitlines()]
+
+        for request in ("rundesk_1", "rundesk_2"):
+            limit = time.monotonic() + 1
+            while not any(one.get("request_id") == request for one in records()):
+                self.assertLess(time.monotonic(), limit, "the control request was not sent")
+                time.sleep(0.001)
+            control.heard({"type": "control_response", "response": {
+                "subtype": "success", "request_id": request, "response": {}}})
+            if request == "rundesk_2":
+                self.assertTrue(control.interrupted(),
+                                "the interrupted request's result was not drained")
+        thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+
+        said = records()
+        self.assertEqual(["control_request", "user", "control_request", "user"],
+                         [one["type"] for one in said])
+        self.assertEqual("initialize", said[0]["request"]["subtype"])
+        self.assertEqual("count to ten", said[1]["message"]["content"])
+        self.assertEqual("interrupt", said[2]["request"]["subtype"])
+        self.assertEqual(
+            "actually, stop at three\n\ncontinue the original request",
+            said[3]["message"]["content"],
+        )
+
+    def test_an_interrupted_result_is_not_the_end_and_its_usage_is_not_lost(self):
+        control = claude.Control()
+        control._interrupted_results = 1
+        interrupted = {"type": "result", "usage": {
+            "input_tokens": 3, "output_tokens": 5}}
+        final = {"type": "result", "usage": {
+            "input_tokens": 7, "output_tokens": 11}}
+        self.assertTrue(control.interrupted())
+        control.counted(interrupted)
+        self.assertEqual({"input_tokens": 10, "output_tokens": 16},
+                         control.with_usage(final)["usage"])
+
+    def test_a_control_response_is_kept_out_of_the_provider_record_stream(self):
+        control = claude.Control()
+        self.assertTrue(control.heard({"type": "control_response", "response": {
+            "subtype": "success", "request_id": "not-ours"}}))
+
+    def test_a_refused_interrupt_does_not_consume_the_real_ending(self):
+        output, control, accepted = Sink(), claude.Control(), []
+        thread = threading.Thread(
+            target=lambda: accepted.append(control.request(output, "interrupt")))
+        thread.start()
+        limit = time.monotonic() + 1
+        while not output.getvalue():
+            self.assertLess(time.monotonic(), limit, "the interrupt request was not sent")
+            time.sleep(0.001)
+        request = json.loads(output.getvalue())["request_id"]
+        control.heard({"type": "control_response", "response": {
+            "subtype": "error", "request_id": request, "error": "not active"}})
+        thread.join(timeout=1)
+        self.assertEqual([False], accepted)
+        self.assertFalse(control.interrupted(),
+                         "the next real result would be discarded as an interruption")
 
     def test_it_claims_the_four_things_the_golden_proves(self):
         for what in ("tools", "resume", "usage", "model"):
             self.assertTrue(claude.CAN[what], f"{what} is proven by the golden and not claimed")
 
+
+class WhenTheActiveClaudeRequestIsSteered(unittest.TestCase):
+    """The whole adapter/CLI exchange, using a deterministic local stand-in."""
+
+    FAKE = textwrap.dedent("""\
+        import json
+        import sys
+
+        def read():
+            return json.loads(sys.stdin.readline())
+
+        def write(record):
+            print(json.dumps(record), flush=True)
+
+        initialize = read()
+        write({"type": "control_response", "response": {
+            "subtype": "success", "request_id": initialize["request_id"], "response": {}}})
+
+        first = read()
+        write({"type": "system", "subtype": "init", "session_id": "same-session",
+               "model": "claude-test"})
+        write({"type": "assistant", "session_id": "same-session",
+               "message": {"content": [{"type": "text", "text": "working on the first"}]}})
+
+        interrupt = read()
+        write({"type": "control_response", "response": {
+            "subtype": "success", "request_id": interrupt["request_id"], "response": {}}})
+        write({"type": "user", "message": {"content": [{
+            "type": "tool_result", "tool_use_id": "tool-before-steer",
+            "content": "The user doesn't want to proceed with this tool use.",
+            "is_error": True
+        }, {
+            "type": "tool_result", "tool_use_id": "parallel-tool",
+            "content": "parallel work completed", "is_error": False
+        }]}, "tool_result_meta": [{
+            "id": "tool-before-steer", "non_execution_kind": "user-rejected"
+        }]})
+        write({"type": "result", "subtype": "error_during_execution", "is_error": True,
+               "session_id": "same-session", "result": "Request interrupted by user",
+               "usage": {"input_tokens": 3, "output_tokens": 5}})
+
+        replacement = read()
+        write({"type": "assistant", "session_id": "same-session",
+               "message": {"content": [{"type": "text", "text": "followed the correction"}]}})
+        write({"type": "result", "subtype": "success", "is_error": False,
+               "session_id": "same-session",
+               "usage": {"input_tokens": 7, "output_tokens": 11}})
+        """)
+
+    def test_one_process_is_interrupted_and_continues_with_the_new_instruction(self):
+        words = claude.Words("do the first thing", io.StringIO(
+            '{"type":"say","text":"do this instead"}\n'))
+        reported = []
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / "fake_claude.py"
+            fake.write_text(self.FAKE, encoding="utf-8")
+            with mock.patch.object(claude, "say",
+                                   side_effect=lambda **record: reported.append(record)):
+                code, lost = claude._turn(
+                    [sys.executable, str(fake)], directory, words, dict(os.environ),
+                    "same-session")
+
+        self.assertEqual((0, False), (code, lost))
+        self.assertEqual(["working on the first", "followed the correction"],
+                         [one["text"] for one in only(reported, "text")])
+        results = only(reported, "result")
+        self.assertEqual(["parallel-tool"], [one["id"] for one in results],
+                         "the canceled tool hid parallel work or appeared as a failure")
+        self.assertTrue(results[0]["ok"])
+        self.assertEqual(1, len(only(reported, "done")),
+                         "the interrupted request was mistaken for Rundesk's turn ending")
+        self.assertTrue(only(reported, "done")[0]["ok"])
+        self.assertEqual("same-session", only(reported, "done")[0]["session"])
+        usage = only(reported, "usage")
+        self.assertEqual(1, len(usage))
+        self.assertEqual((10, 16), (usage[0]["input"], usage[0]["output"]),
+                         "work before the interruption disappeared from the turn's cost")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

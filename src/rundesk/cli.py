@@ -40,6 +40,7 @@ from rundesk import gateway as _gateway  # noqa: E402
 from rundesk import migration  # noqa: E402
 from rundesk import process  # noqa: E402
 from rundesk import provider  # noqa: E402
+from rundesk import restart_request  # noqa: E402
 from rundesk import schedule as schedules  # noqa: E402
 from rundesk import script  # noqa: E402
 from rundesk import skill  # noqa: E402
@@ -51,8 +52,9 @@ from rundesk import update_request  # noqa: E402
 
 #: The installer as published, for the one case where this install has lost its own:
 #: removing rundesk is exactly when a broken install has to be removable.
-PUBLISHED_INSTALLER = ("https://github.com/rundesk-ai/rundesk-cli/releases/latest/"
-                       "download/install.sh")
+PUBLISHED_INSTALLER = (
+    "https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh"
+)
 
 #: Where this checkout lives — the thing an update replaces in place.
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -87,6 +89,13 @@ LOOK_AGAIN_SECONDS = 0.2
 #: can block inside the operating system indefinitely; status remains useful without it
 #: and reports that one answer as unavailable (R-BKP-28).
 BACKUP_STATUS_PATIENCE = 1.0
+
+#: How long a command whose whole job is the backups waits for the same directory. Longer
+#: than the glance health takes, because here the listing *is* the answer and a slow disk
+#: is not an unreachable one — but still bounded, because the directory that blocks never
+#: answers at all, and a command that waits forever cannot even name what it is waiting on
+#: (R-BKP-29).
+BACKUP_PATIENCE = 20.0
 
 #: What a command that exists but is not built yet exits with. Not 0, which a script
 #: would take as done; not 1, which is reserved for a command that ran and failed; and
@@ -390,12 +399,19 @@ def build_parser() -> argparse.ArgumentParser:
     cycled = sub.add_parser("restart", help="cycle an agent, leaving the others alone")
     cycled.add_argument("name", nargs="?", metavar="<agent>", help="which agent")
     cycled.add_argument("--all", action="store_true", help="every agent on this machine")
+    cycled.add_argument(
+        "--force", action="store_true",
+        help="restart now even when doing so interrupts active work",
+    )
+    cycled.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
 
     listed_agents = sub.add_parser("agents", help="every agent this install has, and what each is doing")
     listed_agents.add_argument("name", nargs="?", metavar="<agent>",
                                help="one agent — what it is, and where it keeps things")
 
     sub.add_parser("status", help="how rundesk itself is on this machine")
+
+    sub.add_parser("config", help="how this install is configured, and where each value came from")
 
     listed = sub.add_parser("schedules", help="what an agent runs on its own, and when")
     # The agent is the word after the verb, like every other verb here. As an option it
@@ -459,9 +475,10 @@ def build_parser() -> argparse.ArgumentParser:
     # channel reaching a whole server has many rooms, and which of them an owner meant is
     # theirs to say rather than rundesk's to guess from whoever spoke last.
     added.add_argument("--in", dest="place", metavar="<where>",
-                       help="which place on that channel to say it in — a room, a direct "
-                            "message, in whatever the surface calls them. Left out, it "
-                            "follows the conversation")
+                       help="which place on that channel to say it in, in that surface's "
+                            "own words — for Discord: a room name or id, or on a DM "
+                            "channel the person's user id (the same id as --allow) or the "
+                            "DM channel id. Left out, it follows the conversation")
     # After `--`, taken off before the parser sees it, and never read here. It was a
     # required greedy positional, which argparse can carry a tail into on its own — but the
     # moment this verb grew options of its own, an option *inside* the tail was read as one
@@ -473,6 +490,45 @@ def build_parser() -> argparse.ArgumentParser:
                        help="after `--`, the full path of what to start when it is due, and its "
                             "arguments — a bare name is refused, because a gateway runs with "
                             "almost no PATH")
+    # **Everything `add` took, and only what is named moves.** The listing says what kind of
+    # work a schedule is and when; this is where the prompt, the brain and where it reports
+    # are read back, because they are sentences and paths and none of them fits a column.
+    # Without it the only account of what a schedule does is the one an owner remembers
+    # typing — and the edit below would destroy it unseen.
+    shown = acts.add_parser("show", help="one schedule, and everything it was given")
+    shown.add_argument("schedule", metavar="<schedule>",
+                       help="which schedule, by the name it was added under")
+
+    changed = acts.add_parser("edit", help="change an existing schedule, keeping what it has done")
+    changed.add_argument("schedule", metavar="<schedule>",
+                         help="which schedule, by the name it was added under")
+    # Never `default=""` the way `add` spells the same option: not given and given as
+    # nothing are different instructions here — leave it alone, and take it off — and one
+    # default would make them the same keystroke.
+    changed.add_argument("--when", metavar="<cron>",
+                         help="a new repeating time, as five cron fields. Clears --at")
+    changed.add_argument("--at", dest="moment", metavar="<moment>",
+                         help="a new single moment, as YYYY-MM-DDTHH:MM. Clears --when, and "
+                              "is refused once the clock has started this schedule — a moment "
+                              "already used can never come round again (R-SCH-38)")
+    changed.add_argument("--ask", dest="prompt", metavar="<prompt>",
+                         help="what to ask instead. Turns a schedule that started a program "
+                              "into one that asks a turn")
+    changed.add_argument("--provider", metavar="<provider>",
+                         help="which brain answers it now")
+    changed.add_argument("--model", metavar="<model>", help="which model, in that brain's own words")
+    changed.add_argument("--instructions", dest="says", metavar="<text>",
+                         help="new standing instructions — given as \"\", it takes them off")
+    changed.add_argument("--to", dest="channel", metavar="<channel>",
+                         help="which channel to say what this came to on — given as \"\", it "
+                              "stops reporting to one")
+    changed.add_argument("--in", dest="place", metavar="<where>",
+                         help="which place on that channel — given as \"\", it follows the "
+                              "conversation again")
+    changed.add_argument(CARRIED, nargs="*", metavar="<program>",
+                         help="after `--`, a new program and its arguments. Turns a schedule "
+                              "that asked a turn into one that starts a program")
+
     for act, what in (("remove", "take a schedule away"),
                       ("on", "let a schedule run"),
                       ("off", "keep a schedule but stop it running"),
@@ -507,11 +563,18 @@ def build_parser() -> argparse.ArgumentParser:
                              "under")
     recent.add_argument("--conversation", metavar="<where>",
                         help="only what was said in one place on it — the direct message or "
-                             "room, in the platform's own word for it")
+                             "room, either as the WHERE column prints it or in the "
+                             "platform's own word alone")
     # The choices are read off the store's own closed sets rather than restated, and the
     # reference prints them, so neither says the list twice.
-    recent.add_argument("--author", choices=list(store.AUTHORS), metavar="<who>",
+    recent.add_argument("--author", choices=list(store.AUTHORS), metavar="<kind>",
                         help="only what this kind of author said")
+    # Kind and identity are two questions, and one flag answering both is how `--author
+    # user` came to return rows whose WHO column shows a platform id. This one is the
+    # identity in that column, and is not a closed set: it is whatever the surface calls
+    # one person.
+    recent.add_argument("--who", metavar="<identity>",
+                        help="only what this one person said, as the WHO column names them")
     recent.add_argument("--source", choices=list(store.SOURCES), metavar="<how>",
                         help="only messages belonging to work admitted this way")
 
@@ -603,10 +666,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="who may reach this agent through it — at least one, always; "
                              "repeatable")
     # On unless an owner says otherwise, because a room that goes quiet for four minutes
-    # and then answers looks broken. `BooleanOptionalAction` is what makes the flag read
-    # as the thing it settles rather than as an instruction: `--activity` and
-    # `--no-activity`, one of which is already true, so nobody has to remember which way
-    # round the default is.
+    # and then answers looks broken. Off settles the whole turn and not part of it — what
+    # the agent is doing *and* what it says on the way — so such a channel gets one message
+    # a turn (R-CH-6). `BooleanOptionalAction` is what makes the flag read as the thing it
+    # settles rather than as an instruction: `--activity` and `--no-activity`, one of which
+    # is already true, so nobody has to remember which way round the default is.
     # Read from a pipe rather than typed, for a script that has the credential in hand. A
     # flag with no value, deliberately: the moment one takes the credential *as* its value
     # it is in `ps` for every user on the machine and in a shell history for ever (R-CAD-11).
@@ -614,8 +678,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="read the credential this channel needs from standard input, "
                              "one line; asked for at the terminal when left out")
     joined.add_argument("--activity", action=argparse.BooleanOptionalAction, default=True,
-                        help="show what the agent is doing while it works, not only what "
-                             "it finally says (default: on)")
+                        help="show what the agent is doing and saying while it works; off "
+                             "means one message a turn, the answer (default: on)")
     # Declared so the reference shows it, and carried rather than read. Whatever the
     # platform needs is the adapter's own vocabulary, and the `--` in front is grammar:
     # without it the first thing that looks like an option is refused (R-CAD-13).
@@ -720,6 +784,8 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
 
 UPDATE_WAIT_SECONDS = 30 * 60
 UPDATE_POLL_SECONDS = 1.0
+RESTART_POLL_SECONDS = 1.0
+RESTART_DEFERRED = 75
 UPDATE_RUN_SECONDS = 30 * 60
 
 
@@ -743,6 +809,105 @@ def _origin_of_update(agents) -> dict:
                 break
         return origin
     return origin
+
+
+def _queue_restart(machine, name: str, origin: dict) -> int:
+    """Hand a busy gateway restart to a process that gateway does not own (R-GW-43)."""
+    if not machine.available():
+        print(f"{name}: RESTART NOT QUEUED — this machine has no usable supervisor",
+              file=sys.stderr)
+        return 1
+    try:
+        if not machine.loaded(name):
+            print(f"{name}: RESTART NOT QUEUED — it is not supervised", file=sys.stderr)
+            return 1
+        row, created = restart_request.queue(name, origin)
+        loaded = machine.restart_worker_loaded()
+        said = (
+            machine.kick_restart_worker()
+            if loaded else machine.install_restart_worker()
+        )
+    except machine.Unsure as why:
+        print(f"{name}: RESTART NOT QUEUED — {why}", file=sys.stderr)
+        return 1
+    except machine.NotOurs as why:
+        print(f"{name}: RESTART NOT QUEUED — {why}", file=sys.stderr)
+        return 1
+    except restart_request.Unreadable as why:
+        print(f"{name}: RESTART NOT QUEUED — {why}", file=sys.stderr)
+        return 1
+    if not said.ok:
+        why = said.said or "the supervisor refused the worker"
+        restart_request.finish(name, row["id"], "failed", why)
+        print(f"{name}: RESTART NOT QUEUED — {why}", file=sys.stderr)
+        return 1
+    state = "RESTART QUEUED" if created else "RESTART ALREADY QUEUED"
+    print(f"{name}: {state} — it will restart automatically after active work finishes")
+    return 0
+
+
+def _restart_in_flight(name: str, gateways, agents) -> list[str]:
+    run_home = agents.resolved(name).run
+    if not _standing(name, gateways, agents).running:
+        return []
+    found = [
+        one for one in gateways.what_is_working(name, run_home)
+        if not one.startswith("channel:")
+    ]
+    found.extend(f"turn:{row['run']}"
+                 for row in gateways.what_is_turning(name, run_home))
+    return sorted(found)
+
+
+def _run_restart_worker(gateways, machine, agents) -> int:
+    """Wait outside gateways, cycle each queued target, and persist the outcome."""
+    worst = 0
+    while True:
+        try:
+            pending = restart_request.active()
+        except restart_request.Unreadable as why:
+            print(f"restart worker: FAILED — {why}", file=sys.stderr)
+            return 1
+        if not pending:
+            return worst
+        progressed = False
+        for pending_row in pending:
+            name = pending_row["name"]
+            try:
+                request = (
+                    restart_request.claim(name)
+                    if pending_row.get("state") == "pending"
+                    else pending_row
+                )
+            except restart_request.Unreadable as why:
+                print(f"restart worker: FAILED — {why}", file=sys.stderr)
+                worst = 1
+                continue
+            if request is None:
+                continue
+            if not request.get("ready") or _restart_in_flight(name, gateways, agents):
+                continue
+            args = argparse.Namespace(
+                name=name, all=False, force=False, worker=True,
+            )
+            code = _stand_down(args, gateways, machine, agents, "restart")
+            if code == RESTART_DEFERRED:
+                continue
+            state = "succeeded" if code == 0 else "failed"
+            result = (
+                f"{name} restarted and is online"
+                if code == 0 else f"{name} could not be restarted; see its gateway log"
+            )
+            try:
+                restart_request.finish(name, request["id"], state, result)
+            except (restart_request.Unreadable, RuntimeError) as why:
+                print(f"restart worker: FAILED — {why}", file=sys.stderr)
+                worst = 1
+            else:
+                worst = max(worst, code)
+                progressed = True
+        if not progressed:
+            time.sleep(RESTART_POLL_SECONDS)
 
 
 def _queue_update(machine, origin: dict) -> int:
@@ -1443,7 +1608,12 @@ def _brain_already_named(name: str, agents) -> bool:
         return True
 
 
-def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
+def _identities(agents, machine) -> list[str]:
+    """Every persisted spelling that command resolution must not split."""
+    return sorted({*agents.identities(), *machine.described(root=REPO_ROOT)})
+
+
+def cmd_add(args: argparse.Namespace, gateways, machine, agents) -> int:
     """Make an agent, and the one gateway that runs it (R-AGW-1).
 
     Making one that already exists puts back only what is missing (R-AGT-4). That is how an
@@ -1456,19 +1626,22 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
     while that gateway is running, because a gateway reading one directory while every
     command reads another is the fault that makes a schedule silently never run.
     """
-    name = args.name
-    if not name:
+    given = args.name
+    if not given:
         print("add: NAME REQUIRED — say what to call the agent", file=sys.stderr)
         print("        what there is already: rundesk agents", file=sys.stderr)
         return 1
     try:
-        agents.checked(name)
+        name = agents.creation_name(given, _identities(agents, machine))
     except agents.NotAnAgentName as why:
-        print(f"{name}: INVALID NAME — {why}", file=sys.stderr)
+        print(f"{given}: INVALID NAME — {why}", file=sys.stderr)
         return 1
     knew = agents.exists(name)
-    if knew and any((args.provider, args.model, getattr(args, "settings", None),
-                     getattr(args, "says", None) is not None)):
+    pending = agents.creation_pending(name)
+    if knew and not pending and any((
+        args.provider, args.model, getattr(args, "settings", None),
+        getattr(args, "says", None) is not None,
+    )):
         print(f"{name}: ALREADY MADE — use configure to change its defaults",
               file=sys.stderr)
         print(f"        like this:  rundesk configure {name} --provider <provider>",
@@ -1510,7 +1683,13 @@ def cmd_add(args: argparse.Namespace, gateways, agents) -> int:
                   file=sys.stderr)
             return 1
     try:
-        made = agents.add(name)
+        made = agents.add(name, display_name=given)
+    except config.Unreadable as why:
+        # A configuration that cannot be read is never treated as absent: the skills this
+        # agent would be given are stated there, and making it without them would be an
+        # owner's decision silently ignored.
+        print(f"{name}: NOT MADE — {why}", file=sys.stderr)
+        return 1
     except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
         # Repairing an agent whose records this rundesk will not read must say so rather
         # than raise: the one thing an owner does when an agent is broken is make it again,
@@ -1692,11 +1871,12 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
             fresh=args.fresh or by_the_clock,
             watching=said,
             steering=_typed() if args.steer else None,
-            # What it is told before it reads a word: this turn's own, then the agent's,
-            # then what rundesk says about the situation — which for a person at a terminal
-            # is nothing, because they are here (R-AGT-16).
+            # What it is told before it reads a word: this turn's own, then the agent's
+            # (R-AGT-16) — and, where the clock started this, what rundesk says about that
+            # situation whatever they wrote (R-AGT-34). For a person at a terminal there is
+            # nothing to add, because they are here.
             preface=agents.told(name, said=args.says,
-                                otherwise=schedules.by_default(clock) if clock else ""),
+                                regardless=schedules.by_default(clock) if clock else ""),
             source=turn.SCHEDULE if clock else None,
         ))
     except provider.NotRunnable as why:
@@ -1755,6 +1935,12 @@ class _Shown:
             sys.stdout.flush()
         elif kind == "tool":
             did = said.get("did") or "using"
+            if did in provider.CONTINUITY.values():
+                # What changed, and not which tool changed it (R-PRV-29). These four name
+                # a file rather than an act, so the vendor's own word beside one reads as
+                # `rules Write` — and which tool wrote it is the half nobody wanted.
+                print(f"        · updated {did}", file=sys.stderr)
+                return
             print(f"        · {did} {said.get('name') or ''}".rstrip(), file=sys.stderr)
         elif kind == "result" and not said.get("ok"):
             print("        · that did not work", file=sys.stderr)
@@ -1771,6 +1957,10 @@ def _cost(tokens: dict) -> str:
         return "what it cost was never reported"
     said = (f"{tokens.get('input', 0)} in, {tokens.get('output', 0)} out, "
             f"{tokens.get('cached', 0)} cached")
+    # Only where the brain reported the split. Most do not, and a `0 written` on every one
+    # of them would read as "wrote nothing to the cache" rather than "does not say".
+    if tokens.get("written") is not None:
+        said += f", {tokens['written']} written"
     return f"{said}, {tokens['model']}" if tokens.get("model") else said
 
 
@@ -1823,8 +2013,59 @@ def _provisioned(root: Path = REPO_ROOT) -> str | None:
     went_wrong = dependencies.provision(root)
     if went_wrong:
         return went_wrong
+    # Values this release knows and an earlier one never wrote. Values already there are
+    # never touched, so this cannot be how an owner's configuration is lost (R-UPD-48).
+    config.ensure()
     skill.lay_down(force=True)
+    # Existing agents are brought forward too. Optional owner grants are not removed; the
+    # configured list is the minimum every agent must hold, not its complete grant set.
+    for name in _agent.known():
+        _agent.require_skills(name)
     return None
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    """What this install's configuration file says is in force.
+
+    Every effective value is stated in the file. Missing known values are unreadable rather
+    than silently supplied elsewhere, so the answer here and the behavior of the install
+    cannot disagree (R-CMD-11).
+
+    **What was written and is not understood is said here too, and nowhere else.** `ensure`
+    preserves an unknown key faithfully and every reader passes straight over it, so a
+    mistyped `keepDays` is a value an owner stated, can see in their own file, and which
+    nothing on the machine has ever read — the same silence this command was built to end,
+    arriving by the one route printing the known keys cannot show.
+    """
+    at = config.path()
+    try:
+        stated = config.read()
+        now = {"backups": config.backups(), "updates": config.updates(),
+               "skills": config.skills()}
+    except config.Unreadable as why:
+        print(f"config: UNREADABLE — {why}", file=sys.stderr)
+        print("        every value below it is refused rather than guessed",
+              file=sys.stderr)
+        return 1
+    print(at)
+    ignored = []
+    for section in config.SECTIONS:
+        print(f"\n  {section}")
+        said = stated.get(section) or {}
+        for key, value in sorted(now[section].items()):
+            shown = " ".join(value) if isinstance(value, tuple) else value
+            print(f"    {key:<10} {shown}")
+        ignored += [f"{section}.{key}" for key in sorted(said)
+                    if key not in now[section]]
+    # A whole section this release has never heard of, which is the same silence one key
+    # wide. Sorted rather than left in the file's order, because what is shown is never
+    # decided by how somebody's editor happened to write it.
+    ignored += [one for one in sorted(stated) if one not in config.SECTIONS]
+    if ignored:
+        print(f"\n  read by nothing on this machine: {', '.join(ignored)}")
+        print("    each was written, is kept exactly as it is, and no default it looks "
+              "like is taken from it")
+    return 0
 
 
 def cmd_backups(args: argparse.Namespace, gateways, machine, agents) -> int:
@@ -2002,37 +2243,59 @@ def _take_a_backup() -> int:
     # Pruned here rather than on a second schedule of its own: the thing that makes an old
     # copy old is a newer one arriving, so this is the moment the question has a new answer,
     # and a machine that has stopped taking backups stops deleting them too.
-    gone = backups.prune(backups_home(), config.backups()["keep_days"], note=_out_loud)
-    if gone:
-        print(f"        {len(gone)} older than "
-              f"{config.backups()['keep_days']} days were removed")
+    # Bounded like every other reading of this directory: the copy is already written and
+    # safe, so a directory that stops answering costs the tidying and never the backup
+    # itself, and the command says which of the two happened (R-BKP-29).
+    keep_days = config.backups()["keep_days"]
+    reached, gone = _answered_within(
+        BACKUP_PATIENCE,
+        lambda: backups.prune(backups_home(), keep_days, note=_out_loud),
+        "rundesk-backups-prune",
+    )
+    if not reached:
+        print(f"        WARNING: {backups_home()} did not answer within "
+              f"{BACKUP_PATIENCE:.0f}s, so older copies were left as they are",
+              file=sys.stderr)
+    elif gone:
+        print(f"        {len(gone)} older than {keep_days} days were removed")
     return 0
 
 
 def _list_backups() -> int:
     """Every copy there is, oldest first, with what each cost and what it holds."""
     where = backups_home()
-    found = backups.every(where)
-    if not found:
-        print("no backups")
-        print(f"        take one:  rundesk backups add")
-        return 0
-    rows = []
-    for one in found:
-        said = one.said or {}
-        rows.append((
+
+    def describe() -> list:
+        # Read and described inside the bound together, because the size of each copy is
+        # a `stat` of its own: a directory that answers `opendir` and then blocks on the
+        # files in it would otherwise hang after the guard had already let go (R-BKP-29).
+        return [(
             one.at.name,
             one.taken_at if one.readable else "-",
             updater.readable(one.held_bytes) if one.held_bytes is not None else "-",
             str(len(said.get("records", {}))) if one.readable else "-",
             said.get("why", "-") if one.readable else "UNREADABLE",
-        ))
-    _as_table(("BACKUP", "TAKEN", "SIZE", "AGENTS", "WHY"), rows)
+            one.why if not one.readable else None,
+        ) for one, said in ((one, one.said or {}) for one in backups.every(where))]
+
+    reached, rows = _answered_within(BACKUP_PATIENCE, describe, "rundesk-backups-list")
+    if not reached:
+        # Named, and never answered with the empty listing. "There are no backups" and
+        # "the place they are kept did not answer" send an owner somewhere completely
+        # different, and only one of them means their agents are unprotected (R-BKP-29).
+        print(f"backups: FAILED — {where} did not answer within "
+              f"{BACKUP_PATIENCE:.0f}s, so what is kept there is unknown", file=sys.stderr)
+        return 1
+    if not rows:
+        print("no backups")
+        print(f"        take one:  rundesk backups add")
+        return 0
+    _as_table(("BACKUP", "TAKEN", "SIZE", "AGENTS", "WHY"), [row[:5] for row in rows])
     print()
     print(f"kept in {where}")
-    unreadable = [one for one in found if not one.readable]
-    for one in unreadable:
-        print(f"        {one.at.name}: {one.why}", file=sys.stderr)
+    for row in rows:
+        if row[5] is not None:
+            print(f"        {row[0]}: {row[5]}", file=sys.stderr)
     return 0
 
 
@@ -2060,7 +2323,13 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
     if getattr(args, "lay_down", False):
         # The installer's, and deliberately not an owner's verb: what a release ships is
         # not a thing anybody should have to ask for.
-        print(" ".join(skills.lay_down()))
+        laid = skills.lay_down()
+        # `skills.granted` is a floor for every agent, including ones that predate the
+        # value. Re-running the installer is an upgrade route, so reconcile the existing
+        # population here as well as in `_provisioned` (R-AGT-36).
+        for name in agents.known():
+            agents.require_skills(name)
+        print(" ".join(laid))
         return 0
     act = getattr(args, "act", None)
     if act in ("grant", "revoke"):
@@ -2079,9 +2348,25 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
                 skills.grant(whose, args.skill)
                 print(f"{args.name} was given {args.skill}")
             else:
+                # Rundesk's product floor and the configured baseline are requirements, not
+                # creation-time suggestions. Only the owner-selected part can be changed
+                # before revocation (R-AGT-37).
+                if args.skill in config.RUNDESK_REQUIRED_GRANTS:
+                    print(f"{args.skill}: RUNDESK REQUIRED — every agent retains it",
+                          file=sys.stderr)
+                    print("        this skill cannot be configured away or revoked",
+                          file=sys.stderr)
+                    return 1
+                if args.skill in config.skills()["granted"]:
+                    print(f"{args.skill}: REQUIRED — config.json attaches it to every agent",
+                          file=sys.stderr)
+                    print(f"        remove it from {config.path()} before revoking it",
+                          file=sys.stderr)
+                    return 1
                 skills.revoke(whose, args.skill)
                 print(f"{args.name} no longer has {args.skill}")
-        except (skills.Unknown, skills.NotASkill, skills.InTheWay) as why:
+        except (skills.Unknown, skills.NotASkill, skills.InTheWay,
+                config.Unreadable) as why:
             print(f"{args.skill}: {why}", file=sys.stderr)
             return 1
         return 0
@@ -2096,7 +2381,12 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
     # a question only a reverse scan can answer and a stored answer would go stale the
     # first time somebody removed a link by hand.
     whose: dict = {name: skills.granted(agents.skills(name)) for name in agents.known()}
-    rows = [(name, "built-in" if name in ships else "yours",
+    # **What put it there, not whose it is.** `rundesk` is one this release ships and an
+    # update brings forward; `custom` is one somebody wrote, which nothing here ever
+    # touches. Said this way because the column has more answers coming — a skill that
+    # arrived with a plugin, or with a tool — and "yours" against "built-in" is a pair with
+    # nowhere for a third to stand.
+    rows = [(name, "rundesk" if name in ships else "custom",
              ", ".join(sorted(who for who, mine in whose.items() if name in mine)) or "-")
             for name in sorted(held)]
     _as_table(("SKILL", "FROM", "AGENTS"), rows)
@@ -2245,6 +2535,8 @@ def cmd_remove(args: argparse.Namespace, gateways, machine, agents) -> int:
 
 
 def cmd_restart(args: argparse.Namespace, gateways, machine, agents) -> int:
+    if getattr(args, "worker", False):
+        return _run_restart_worker(gateways, machine, agents)
     return _stand_down(args, gateways, machine, agents, "restart")
 
 
@@ -2301,6 +2593,38 @@ def _stand_down(args: argparse.Namespace, gateways, machine, agents, verb: str) 
                     print(f"{name}: NO JOB — nothing to stop")
                 continue
             if verb == "restart":
+                if (getattr(args, "worker", False)
+                        and not _standing(name, gateways, agents).running):
+                    # The external worker may have died after stopping the gateway and
+                    # before starting it. Its durable request is still running, so the
+                    # retry finishes the missing half instead of asking a stopped job to
+                    # stop again and calling the recoverable state a failure (R-GW-43).
+                    said = machine.start(name)
+                    if not said.ok:
+                        print(f"{name}: FAILED — queued restart found it stopped, and "
+                              f"the supervisor refused to start it: {said.said}",
+                              file=sys.stderr)
+                        worst = 1
+                        continue
+                    up = _came_up(name, gateways, agents)
+                    if up is None:
+                        print(f"{name}: FAILED — queued restart found it stopped, but "
+                              "it did not come back", file=sys.stderr)
+                        worst = 1
+                        continue
+                    print(f"{name}: RESTARTED (pid {up.pid})")
+                    continue
+                protected = _restart_in_flight(name, gateways, agents)
+                if protected and not getattr(args, "force", False):
+                    if getattr(args, "worker", False):
+                        return RESTART_DEFERRED
+                    worst = max(
+                        worst,
+                        _queue_restart(
+                            machine, name, _origin_of_update(agents),
+                        ),
+                    )
+                    continue
                 stopped = machine.stop(name)
                 if not stopped.ok:
                     print(f"rundesk {name}: could not ask it to stop — {stopped.said}",
@@ -2529,24 +2853,43 @@ def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
     return 1 if unfit else 0
 
 
-def _how_backups_stand(machine) -> str:
-    """Whether daily copies run and how many exist, without waiting forever (R-BKP-28)."""
+def _answered_within(patience: float, work, called: str) -> tuple:
+    """Do something that may block inside the operating system, and give up on it.
+
+    Returns `(True, what it gave back)`, or `(False, None)` when it did not answer in
+    time or failed. **The bound belongs to every command that touches the directory, not
+    only to health (R-BKP-29).** `status` grew this guard first, for a backup directory
+    symlinked into cloud storage that blocks in `opendir` forever; `backups` then sat on
+    the identical call with no bound at all, which is the one command that cannot answer
+    without it.
+
+    A Python thread cannot interrupt an operating-system `opendir`, but a daemon does not
+    keep this one-shot CLI process alive: the blocked call is abandoned with the process
+    rather than turning one unreachable filesystem into a command that never returns.
+    """
     answered: queue.Queue = queue.Queue(maxsize=1)
 
-    def count() -> None:
+    def carry() -> None:
         try:
-            answered.put(len(backups.every(backups_home())))
+            answered.put((True, work()))
         except BaseException:                           # pragma: no cover - defensive boundary
-            answered.put(None)
+            answered.put((False, None))
 
-    # A Python thread cannot interrupt an operating-system `opendir`, but a daemon does
-    # not keep this one-shot CLI process alive. Status can answer while the blocked call
-    # is abandoned with the process instead of turning one unavailable filesystem into
-    # an unavailable health command.
-    threading.Thread(target=count, name="rundesk-backup-status", daemon=True).start()
+    threading.Thread(target=carry, name=called, daemon=True).start()
     try:
-        count_kept = answered.get(timeout=BACKUP_STATUS_PATIENCE)
+        return answered.get(timeout=patience)
     except queue.Empty:
+        return (False, None)
+
+
+def _how_backups_stand(machine) -> str:
+    """Whether daily copies run and how many exist, without waiting forever (R-BKP-28)."""
+    reached, count_kept = _answered_within(
+        BACKUP_STATUS_PATIENCE,
+        lambda: len(backups.every(backups_home())),
+        "rundesk-backup-status",
+    )
+    if not reached:
         count_kept = None
     held = ("unavailable" if count_kept is None else
             (f"{count_kept} kept" if count_kept else "none yet"))
@@ -2951,10 +3294,14 @@ def cmd_schedules(args: argparse.Namespace, gateways, agents) -> int:
         return 1
     whose = agents.resolved(args.name)
     try:
-        kept = agents.records(args.name) if act in ("add", "remove", "on", "off") \
+        kept = agents.records(args.name) if act in ("add", "edit", "remove", "on", "off") \
             else agents.reading(args.name)
         if act == "add":
             return _add_schedule(args, gateways, kept, whose)
+        if act == "edit":
+            return _edit_schedule(args, gateways, kept, whose)
+        if act == "show":
+            return _show_schedule(args, kept)
         if act == "run":
             return _run_schedule(args, gateways, agents, kept, whose)
         if act in ("remove", "on", "off"):
@@ -3117,6 +3464,225 @@ def _change_schedule(args: argparse.Namespace, gateways, kept, whose, act: str) 
         told = f"schedule '{args.schedule}' turned {said.lower()}"
     unlogged = _note(gateways, args.name, told, whose)
     print(f"{args.name}/{args.schedule}: {said}")
+    return unlogged
+
+
+def _show_schedule(args: argparse.Namespace, kept) -> int:
+    """One schedule, and everything it was given — whole, and changing nothing.
+
+    The listing answers "what runs here, and when" in a row apiece, so what a schedule
+    *says* is deliberately not in it: a prompt is a sentence and a program is a path, and
+    neither fits a column beside six others. This is where they are read back, which until
+    now nothing did — the only account of what a schedule asks was the one an owner
+    remembered typing, and editing meant removing it and typing it again from that memory.
+
+    Read through the reading path and writes nothing, for the reason `doctor` does not
+    (R-AGT-12): the command an owner runs when a schedule looks wrong must not be the one
+    that quietly changes it.
+    """
+    from rundesk import schedule
+
+    row = kept.schedule(args.schedule)
+    if row is None:
+        print(f"{args.name}/{args.schedule}: NOT FOUND — no schedule by that name",
+              file=sys.stderr)
+        return 1
+    wanted, refused = schedule.read([row])
+    now = datetime.now()
+    ran = row.get("last_auto_run_at")
+    rows = [("state", "on" if row.get("enabled") else "off — kept, and not running")]
+    if wanted:
+        one = wanted[0]
+        rows.append(("when", (one.stated.strftime(schedule.A_MINUTE) + "  (once)")
+                     if one.once else str(one.when)))
+        rows.append(("next", schedule.describe(one, now)))
+    else:
+        # Shown rather than refused. A cron nobody can parse is exactly when an owner needs
+        # to see the characters they typed, and a command that answered such a schedule with
+        # nothing at all would send them back to the database this exists to replace.
+        rows.append(("when", str(row.get("cron") or row.get("at") or "-")))
+        rows.append(("next", "NOT UNDERSTOOD — " + (refused[0][1] if refused else "?")))
+    runs = row.get("command")
+    rows.append(("it", "asks a turn" if row.get("prompt") else "starts a program"))
+    rows.append(("asks" if row.get("prompt") else "runs",
+                 str(row.get("prompt") or " ".join(runs or []) or "-")))
+    if row.get("prompt"):
+        # Only of a schedule that asks one. On a program these three cannot be set at all,
+        # and rows saying so would be three lines of nothing on every schedule that runs one.
+        rows.append(("brain", "/".join(
+            one for one in (row.get("provider"), row.get("model")) if one)
+            or "whatever the agent uses"))
+        rows.append(("instructions", str(row.get("instructions") or "nothing of its own")))
+    place = str(row.get("place") or "")
+    if row.get("channel"):
+        rows.append(("reports to",
+                     str(row["channel"]) + (f", in {place}" if place else "")))
+    elif place:
+        # **A place with no surface to be a place on.** `add` permits `--in` without `--to`,
+        # so the word is sitting in the row doing nothing — and a line saying only "nobody"
+        # would positively assert it was not there, in the one command that exists so an
+        # owner never has to open that database. Said here, a later `--to` switches on
+        # delivery into a place they were shown rather than one they were told was absent.
+        rows.append(("reports to", f"nobody — and {place} is kept, reaching nothing until "
+                                   f"a channel is named"))
+    else:
+        rows.append(("reports to", "nobody — it is in the account either way"))
+    rows.append(("last run", f"{ran} — {row.get('last_outcome') or '?'}" if ran
+                 else "never"))
+    rows.append(("added", str(row.get("created_at") or "-")))
+    _as_table(("WHAT", "IS"), rows)
+    return 1 if refused else 0
+
+
+def _typed(one):
+    """What an owner typed, without the space around it — and still `None` when they did not
+    type it at all.
+
+    The three states a change has to keep apart: absent leaves a field alone, empty says it
+    off, and whitespace is empty (R-SCH-44). `add` has always stripped; a change that did
+    not accepted `--ask "   "`, which `add` refuses outright, and left the schedule enabled
+    and firing nightly asking a brain a blank line.
+    """
+    return one if one is None else one.strip()
+
+
+def _edit_schedule(args: argparse.Namespace, gateways, kept, whose) -> int:
+    """Change an existing schedule, keeping every record of what it has already done.
+
+    **Only what is named moves.** Everything else is left exactly as it was, which is the
+    whole difference between this and the path it replaces: removing a schedule and adding
+    it again takes its firing history and its last outcome with it, and could only ever
+    restore the parts an owner still remembered — because until `show` there was nothing
+    that would tell them the rest.
+
+    What `add` refuses, this refuses in the same words, because they are the same mistakes:
+    a moment already behind us, a channel this agent has not got, a program named rather
+    than located, and `--provider`/`--model`/`--instructions` on a schedule that starts a
+    program rather than asking a turn.
+    """
+    from rundesk import schedule
+
+    runs = list(args.options) + list(getattr(args, "handed_on", []))
+    row = kept.schedule(args.schedule)
+    if row is None:
+        print(f"{args.name}/{args.schedule}: NOT FOUND — no schedule by that name",
+              file=sys.stderr)
+        return 1
+    # Stripped as it arrives, the way `add` already does — every decision below is then
+    # asked of what was meant rather than of what was typed around it (R-SCH-44).
+    when, moment = _typed(args.when), _typed(args.moment)
+    prompt, to = _typed(args.prompt), _typed(args.channel)
+    given = {
+        "cron": when, "at": moment, "prompt": prompt,
+        "provider": _typed(args.provider), "model": _typed(args.model),
+        "instructions": _typed(args.says),
+        "channel": to, "place": _typed(args.place),
+    }
+    if runs:
+        given["command"] = runs
+    named = {key: value for key, value in given.items() if value is not None}
+    if not named:
+        print(f"{args.name}/{args.schedule}: NOTHING TO CHANGE — say what to change",
+              file=sys.stderr)
+        print(f"        what it is now:  rundesk schedules {args.name} show "
+              f"{args.schedule}", file=sys.stderr)
+        return 1
+    if when and moment:
+        print(f"{args.name}/{args.schedule}: NOT CHANGED — a schedule states a repeating "
+              f"time or a single moment, never both", file=sys.stderr)
+        return 1
+    if prompt and runs:
+        print(f"{args.name}/{args.schedule}: NOT CHANGED — a schedule starts a program or "
+              f"asks a turn, never both", file=sys.stderr)
+        return 1
+    if moment:
+        try:
+            made = schedule.Schedule(args.schedule, None, at=moment)
+        except schedule.NotASchedule as why:
+            print(f"{args.name}/{args.schedule}: NOT CHANGED — {why}", file=sys.stderr)
+            print(f"        say a moment ahead of now, as {schedule.SAID_AS}",
+                  file=sys.stderr)
+            return 1
+        if made.expired_at(datetime.now()):
+            print(f"{args.name}/{args.schedule}: NOT CHANGED — "
+                  f"{made.stated.strftime(schedule.A_MINUTE)} has already passed, so this "
+                  f"could never run", file=sys.stderr)
+            return 1
+        if (row.get("last_auto_run_at") or "").strip():
+            # **The trap this whole option would otherwise walk into.** A single moment is
+            # spent the instant anything durable says the clock started this schedule
+            # (R-SCH-38), and that is written for every firing a repeating schedule ever
+            # had. So a moment set on a schedule that has run would be `used` before it
+            # arrived: the listing would show a time, and it could never come round. Adding
+            # a new schedule is what an owner wants here, and it is said rather than left
+            # to be discovered at the moment nothing happens.
+            print(f"{args.name}/{args.schedule}: NOT CHANGED — the clock has already "
+                  f"started this schedule, and a single moment is spent once it has "
+                  f"(R-SCH-38), so it could never run", file=sys.stderr)
+            print(f"        add a new schedule for that moment:  rundesk schedules "
+                  f"{args.name} add <name> --at {moment}", file=sys.stderr)
+            return 1
+        named["at"] = made.stated.strftime(schedule.A_MINUTE)
+    if when:
+        try:
+            schedule.Schedule(args.schedule, when)
+        except schedule.NotASchedule as why:
+            print(f"{args.name}/{args.schedule}: NOT CHANGED — {why}", file=sys.stderr)
+            return 1
+    if to and kept.channel(to) is None:
+        print(f"{args.name}/{args.schedule}: NOT CHANGED — this agent has no channel "
+              f"called '{to}'", file=sys.stderr)
+        print(f"        what it has:  rundesk channels {args.name}", file=sys.stderr)
+        return 1
+    if runs and not process.located(runs[0]):
+        print(f"{args.name}/{args.schedule}: NOT CHANGED — '{runs[0]}' is a name, not a "
+              f"location; give the full path (try: command -v {runs[0]})", file=sys.stderr)
+        return 1
+    # **Asked of the schedule as it will be, not of what was typed.** These three reach a
+    # brain, and a schedule that starts a program has none for them to reach — which `add`
+    # already refuses. An edit can arrive at the same wrong row two ways: by naming one of
+    # them on a program, and by turning a turn into a program while the columns it filled
+    # stay behind. The second leaves no option to point at, so it is the row after the
+    # change that is asked, and what is already there counts exactly as what was typed.
+    asks_after = bool(named.get("prompt") or (row.get("prompt") and "command" not in named))
+    if not asks_after:
+        for option, key in (("--provider", "provider"), ("--model", "model"),
+                            ("--instructions", "instructions")):
+            after = named[key] if key in named else row.get(key)
+            if not (after or "").strip():
+                continue
+            print(f"{args.name}/{args.schedule}: NOT CHANGED — {option} is for a turn, and "
+                  f"this schedule "
+                  + ("starts a program" if row.get("command")
+                     else "would start a program after this change"), file=sys.stderr)
+            # Never cleared on an owner's behalf. Dropping standing instructions because a
+            # schedule changed shape is losing something nobody asked to lose — and saying
+            # it in one line means the whole change is still one command.
+            print('        say them off in the same breath:  --provider "" --model "" '
+                  '--instructions ""', file=sys.stderr)
+            return 1
+    try:
+        moved = kept.change_schedule(args.schedule, **named)
+    except store.Refused as why:
+        print(f"{args.name}/{args.schedule}: NOT CHANGED — {why}", file=sys.stderr)
+        return 1
+    except ValueError as why:
+        print(f"{args.name}/{args.schedule}: NOT CHANGED — {why}", file=sys.stderr)
+        return 1
+    if not moved:
+        # Removed between being read and being written. The change did nothing, and a
+        # command that reported one anyway would be a success nobody can find afterwards.
+        print(f"{args.name}/{args.schedule}: NOT FOUND — it was taken away while this was "
+              f"being changed", file=sys.stderr)
+        return 1
+    # The names of what moved and never the words in it. A prompt and standing instructions
+    # are an owner's own, and the log is read by whoever can read the file — what belongs in
+    # an account is that they changed and when, which is what this says.
+    changed = ", ".join(sorted(named))
+    unlogged = _note(gateways, args.name,
+                     f"schedule '{args.schedule}' edited ({changed})", whose)
+    print(f"{args.name}/{args.schedule}: EDITED — {changed}")
+    print(f"        what it is now:  rundesk schedules {args.name} show {args.schedule}")
     return unlogged
 
 
@@ -3345,10 +3911,26 @@ def cmd_runs(args: argparse.Namespace, gateways, agents) -> int:
     named = {row["id"]: row["name"] for row in kept.schedules()}
     _as_table(("RUN", "WHEN", "SOURCE", "ANSWERED BY", "OUTCOME", "COST"), [
         (one["id"], str(one["started_at"]), _admitted_by(one, named),
-         _answered_by(one["provider"]), str(one["outcome"] or "running"), _spent(one))
+         _answered_by(one["provider"]), _came_to(one), _spent(one))
         for one in found
     ])
     return 0
+
+
+def _came_to(one: dict) -> str:
+    """What became of this run, and the word for why where the brain gave one (R-RUN-19).
+
+    `failed` on its own answers "did it work" and not "what do I do about it" — a turn
+    stopped by an account limit reads exactly like a crashed adapter or a bad flag. The word
+    is added rather than substituted, so the outcome column still says the one thing it has
+    always said and can still be grepped for.
+
+    Absent for every run whose adapter did not classify the failure, which is every run
+    written before there was a column for it. Nothing is inferred from the prose in `why`.
+    """
+    became = str(one["outcome"] or "running")
+    word = one.get("because")
+    return f"{became} ({word})" if word else became
 
 
 def _admitted_by(one: dict, named: dict) -> str:
@@ -3398,7 +3980,14 @@ def _spent(one: dict) -> str:
     # that read nothing from it are different facts (R-USE-6).
     cached = one.get("tokens_cached")
     held = "" if cached is None else f" / {cached} cached"
-    return f"{one['tokens_in'] or 0} in{held} / {one['tokens_out'] or 0} out"
+    # **Cache writes are shown apart from fresh input** (R-USE-13), on the same rule as the
+    # line above and for the opposite reason: a write is billed *above* fresh input, so a
+    # run that folded them together priced its most expensive tokens as its cheapest. Absent
+    # on every brain that does not report the split, and on every row written before there
+    # was a column for it — where the two cannot be separated after the fact.
+    written = one.get("tokens_written")
+    made = "" if written is None else f" / {written} written"
+    return f"{one['tokens_in'] or 0} in{held}{made} / {one['tokens_out'] or 0} out"
 
 
 def cmd_usage(args: argparse.Namespace, gateways, agents) -> int:
@@ -3422,9 +4011,10 @@ def cmd_usage(args: argparse.Namespace, gateways, agents) -> int:
             "-" if spent["input"] is None else str(spent["input"]),
             "-" if spent["output"] is None else str(spent["output"]),
             "-" if spent["cached"] is None else str(spent["cached"]),
+            "-" if spent["written"] is None else str(spent["written"]),
             str(spent["unreported"]),
         ))
-    _as_table(("AGENT", "RUNS", "IN", "OUT", "CACHED", "NOT REPORTED"), rows)
+    _as_table(("AGENT", "RUNS", "IN", "OUT", "CACHED", "WRITTEN", "NOT REPORTED"), rows)
     return 0
 
 
@@ -3444,13 +4034,21 @@ def cmd_messages(args: argparse.Namespace, gateways, agents) -> int:
     try:
         found = kept.latest(limit=max(1, args.most), since=args.since,
                             channel=args.channel, author=args.author, source=args.source,
-                            conversation=args.conversation)
+                            conversation=args.conversation, who=args.who)
     except ValueError as why:
         # The closed sets say what they are rather than being quietly ignored, so a filter
         # nobody can spell is refused instead of answering a different question (R-STO-26).
         print(f"{args.name}: {why}", file=sys.stderr)
         return 1
     if not found:
+        if args.conversation and not kept.has_conversation(args.conversation):
+            # A conversation nobody has and a conversation with nothing in it are different
+            # answers, and returning the empty listing for both is how an agent comes to
+            # report that work it did never happened (R-STO-28).
+            print(f"{args.name}: no conversation called {args.conversation}", file=sys.stderr)
+            print("        the WHERE column names every one it has:  "
+                  f"rundesk messages {args.name}", file=sys.stderr)
+            return 1
         print(f"{args.name}: NOTHING SAID YET")
         print(f'        ask it something:  rundesk ask {args.name} "…"')
         return 0
@@ -3638,12 +4236,25 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         parser.print_help()
         return 0
     named = getattr(args, "name", None)
-    if named is not None:
+    # Every command speaks in an agent's human name while the rest of the program speaks
+    # in its filesystem identity. Resolve that seam once: a case-insensitive slug reaches
+    # a legacy spelling already on disk, and a name with spaces reaches the same agent as
+    # its lowercase directory slug (R-AGT-40).
+    if named is not None and args.command != "add":
         try:
-            gateways.checked(named)
-        except gateways.NotAName as why:
+            args.name = agents.command_name(named, _identities(agents, machine))
+        except agents.NotAnAgentName as why:
             print(f"{named}: INVALID NAME — {why}", file=sys.stderr)
             return 1
+    # What this install calls its jobs is *this process's* environment rather than a
+    # collaborator's decision, so it is read from the module and not from the supervisor
+    # passed in — and read once here, before a command runs, because a prefix that could
+    # escape the jobs directory must stop the command rather than plant a job somewhere.
+    try:
+        _supervisor.prefix()
+    except _supervisor.NotAPrefix as why:
+        print(f"RUNDESK_JOB_PREFIX: INVALID — {why}", file=sys.stderr)
+        return 1
     if args.command in PLANNED:
         return cmd_not_available(args.command, getattr(args, "act", None))
     if args.command == "version":
@@ -3655,7 +4266,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
     if args.command == "agents":
         return cmd_agents(args, gateways, machine, agents)
     if args.command == "add":
-        return cmd_add(args, gateways, agents)
+        return cmd_add(args, gateways, machine, agents)
     if args.command == "configure":
         return cmd_configure(args, agents)
     if args.command == "doctor":
@@ -3674,6 +4285,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         return cmd_restart(args, gateways, machine, agents)
     if args.command == "status":
         return cmd_status(args, gateways, machine, agents)
+    if args.command == "config":
+        return cmd_config(args)
     if args.command == "backups":
         return cmd_backups(args, gateways, machine, agents)
     if args.command == "skills":

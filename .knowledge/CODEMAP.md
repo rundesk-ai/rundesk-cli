@@ -47,7 +47,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 22 modules)
+## Backend / Services (src/rundesk/ — 24 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -62,14 +62,17 @@ file with it.
   holds. A new agent's home is copied from `src/templates/agent/` — stubs an owner reads and edits, kept beside the package rather than inside it, and what a home holds is read off that
   directory rather than listed in code. What a name may be is stricter here than for a gateway: one path
   component, standing where agents are kept, and never a word a gateway writes beside some other name.
+- `src/rundesk/instructions.py` — Rundesk's core and trigger instructions, their communication-agnostic
+  variables, and the builder that composes them with adapter and owner additions.
 - `src/rundesk/provider.py` — the seam a brain is reached through, and nothing about any
   particular brain. Resolves a provider — a shipped adapter, or a path to a program somebody wrote — into
   something runnable, builds the environment it is told everything through, asks what it can do, and reads
   one of its records. **Enumerates nothing**: no list of providers and no list of models, so one rundesk
   has never heard of is the ordinary case. A vendor name appearing in this file is the seam already failing.
-- `src/providers/` — the brains that ship, one program each. Not modules: nothing imports them
-  and they import nothing of ours, so a vendor's flags, stream shape, session file and usage arithmetic
-  live in one file and reach no further. Four so far — `codex`, `claude`, `grok` and `antigravity` — and adding the
+- `src/providers/` — the brains that ship, one program each. Not modules: nothing imports them and they
+  import nothing of Rundesk's, so a vendor's flags, system-prompt transport, stream shape, session file
+  and usage arithmetic live in one file and reach no further. Four so far —
+  `codex`, `claude`, `grok` and `antigravity` — and adding the
   latter three changed nothing above this line, which is the claim the seam was built to make. Each is
   driven offline by a suite of its own against real captured output in `tests/samples/`.
 - `src/rundesk/channel.py` — the seam a surface is reached through, and nothing about any
@@ -81,9 +84,9 @@ file with it.
   surface calls its places arrives as options this file hands straight back unread. It also holds the two
   decisions a surface does not get to make — what state a turn is in, and that what a brain *says* is
   handed over once and whole. A platform's word appearing in this file is the seam already failing.
-- `src/channels/` — the surfaces that ship, one program each. Not modules: nothing imports
-  them and they import nothing of ours, so a platform's ids, intents and limits live in one file and
-  reach no further.
+- `src/channels/` — the surfaces that ship, one program each. Not modules: nothing imports them and they
+  import nothing of Rundesk's, so a platform's ids, prompt additions, intents and limits live in one file
+  and reach no further.
 - `src/rundesk/answering.py` — what arrives on a channel, carried through to an answer: the mirror of
   `turn.py`, and the only module that knows `channel`, `turn` and `agent` all exist. Two things
   live here and nowhere else, because two surfaces deciding either separately would eventually disagree
@@ -117,14 +120,18 @@ file with it.
   copy of something already downloadable. **Never copies a database**; it asks `store` for a
   consistent one, because a file copied under a live writer opens, looks healthy and is wrong.
 - `src/rundesk/config.py` — how this install is configured, as opposed to how any one agent is.
-  One file under `data_home()`, sections at the top level, written by an owner and never written
-  back by us. Distinct from `settings`, which already means what one agent or channel was told.
+  One file under `data_home()`, sections at the top level, and the source of every effective
+  install-wide value. The install writes it complete; an update adds values an older release
+  never wrote without changing anything already stated. `skills.granted` is the required
+  baseline reconciled onto every new and existing agent and protected from revocation while
+  configured.
+  Distinct from `settings`, which already means what one agent or channel was told.
 - `src/rundesk/store.py` — everything one agent keeps, and **the only way in to it**. One database per
   agent, never one shared, so a turn's write is never in another agent's way. Reading and writing are told
   apart at the connection: a reader is opened read-only, so it cannot begin work that would make a turn
   wait — refused by the database rather than by convention. No statement is written anywhere else and no
-  connection ever leaves the module, both proved by looking. **Nothing reads it yet**; it is built and
-  proved before anything moves onto it, so deleting it would leave the product exactly as it is.
+  connection ever leaves the module, both proved by looking. Agent, gateway, turn, answering, backup and
+  command paths all use this seam; none reaches around it to the database.
 - `src/rundesk/migration.py` — moving what is already on a machine into the shape a newer rundesk
   expects. **A step is found, not listed**: each is `migrations/<version>.py`, ordered by that number, and
   what runs is whatever sits between the version on disk and the version installed. There is no table of
@@ -152,6 +159,8 @@ file with it.
 - `src/rundesk/update_request.py` — the durable handoff from an agent turn to the
   supervisor-owned update worker: one request, its origin, lifecycle, final outcome, and delivery state,
   all changed under one lock and atomically replaced.
+- `src/rundesk/restart_request.py` — one durable restart request per gateway: its safe
+  origin, readiness, lifecycle, final outcome, and delivery state, owned outside the gateway it may cycle.
 - `src/rundesk/dependencies.py` — what this install is made of beyond the standard library, and putting
   it there. One place decides what `requirements.txt` declares, what the virtualenv actually holds and
   how the second is made to satisfy the first — `install.sh` asked in shell and `gateway.fitness` asked
@@ -184,7 +193,7 @@ file with it.
 
 ## Documentation site (docs/ + site/)
 
-`docs/` is the published documentation for `docs.rundesk.ai` — 15 prose pages of plain
+`docs/` is the published documentation for `docs.rundesk.ai` — 19 prose pages of plain
 markdown across `start/`, `concepts/`, `guides/`, `reference/`, and `extend/`, plus
 `index.mdx`, the card-based overview a reader lands on. The prose pages have no build of their
 own and read as markdown.
@@ -221,35 +230,36 @@ consumes the JSON, so it stays offline and needs no Python.
 Nothing here reaches a user's machine. `install.sh` downloads a release tarball, so `site/`'s
 dependencies live only in a checkout and a Pages build.
 
-## Tests (tests/ — 25 files, ~1500 cases)
+## Tests (tests/ — 29 files, ~2000 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
 
 | File | Cases | Covers |
 |---|---|---|
-| `test_gateway.py` | 178 | `platform-gateway` — real processes, real signals, waits turned down |
-| `test_agent.py` | 80 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
-| `test_cli.py` | 228 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
-| `test_process.py` | 97 | `platform-process` — real process groups, grandchildren, drains and ceilings |
-| `test_updater.py` | 75 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
-| `test_update_request.py` | 9 | `lifecycle-update` — durable self-update handoff, duplicate requests, external ownership, and outcome delivery |
-| `test_dependencies.py` | 27 | `lifecycle-update` — what the install is made of: what is declared, what the virtualenv holds, and building one **without pip ever running** |
-| `test_install.py` | 53 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
-| `test_supervisor.py` | 39 | the launchd job — a fake `launchctl`, so it runs where there is none |
-| `test_schedule.py` | 32 | `platform-schedule` — pure time arithmetic, the clock passed in |
-| `test_provider.py` | 34 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
-| `test_claude.py` | 42 | `provider-adapter` — the arithmetic and the postures one shipped brain decides on its own, driven against 184 captured lines rather than an account |
-| `test_grok.py` | 33 | `provider-adapter` — a brain that reports no tools, and the two flags of its that are accepted and enforce nothing |
+| `test_gateway.py` | 196 | `platform-gateway` — real processes, real signals, waits turned down |
+| `test_agent.py` | 88 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
+| `test_cli.py` | 288 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
+| `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
+| `test_updater.py` | 81 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
+| `test_update_request.py` | 26 | `lifecycle-update` + queued restarts — durable external handoff, duplicate requests, safety waits, and outcome delivery |
+| `test_dependencies.py` | 28 | `lifecycle-update` — what the install is made of: what is declared, what the virtualenv holds, and building one **without pip ever running** |
+| `test_install.py` | 70 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
+| `test_supervisor.py` | 78 | the launchd job — a fake `launchctl`, so it runs where there is none |
+| `test_schedule.py` | 49 | `platform-schedule` — pure time arithmetic, the clock passed in |
+| `test_provider.py` | 37 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
+| `test_claude.py` | 65 | `provider-adapter` — the arithmetic and the postures one shipped brain decides on its own, driven against 184 captured lines rather than an account |
+| `test_grok.py` | 35 | `provider-adapter` — a brain that reports no tools, and the two flags of its that are accepted and enforce nothing |
 | `test_antigravity.py` | 18 | `provider-adapter` — piped prompt privacy, stream mapping, cumulative-resume usage, posture, skills and native-keyring environment, all offline |
-| `test_turn.py` | 54 | `agent-run` — one whole turn, and `rundesk ask` end to end |
+| `test_turn.py` | 107 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_activity.py` | 3 | live-turn concurrency, safe persisted fields, and update visibility |
-| `test_transcript.py` | 19 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
-| `test_store.py` | 102 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
-| `test_channel.py` | 65 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
-| `test_answering.py` | 64 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
-| `test_discord.py` | 69 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up |
-| `test_ci.py` | 11 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, and the supported matrix |
+| `test_transcript.py` | 28 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
+| `test_store.py` | 123 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
+| `test_channel.py` | 73 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
+| `test_answering.py` | 101 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
+| `test_discord.py` | 168 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
+| `test_instructions.py` | 10 | Rundesk's core and trigger prompts, standard variables, and additive builder |
+| `test_ci.py` | 13 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, and the supported matrix |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and
 `.knowledge/scripts/check-evidence` fails the build when a row names one that does not exist.
@@ -285,10 +295,17 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   site's reference page is built from this.
 - `src/templates/skills/` — **the skills this release ships.** Copied into the owner's library
   by the install and brought forward by an update, so a built-in is always the version installed
-  (R-AGT-30). `using-rundesk` is how to operate rundesk, written for **an agent running inside
+  (R-AGT-30). `managing-rundesk` is how to operate rundesk, written for **an agent running inside
   it** — it was a document at the repository root that an agent had to be told to go and read,
   and the pointer named a path that existed on neither kind of install. As a skill it is handed
-  to the agent instead. Each adapter skill carries its contract beside it in `references/`.
+  to the agent instead. **Not every shipped skill reaches every agent**: the required set is
+  `config.skills()["granted"]`, combining Rundesk's unrevokable platform-stewardship floor with
+  the owner-configured baseline and reconciling both onto existing agents during updates and
+  reinstalls (R-AGT-36, R-AGT-37).
+- `docs/extending/` — the adapter and integration guides. They were built-in skills, laid down in
+  every owner's library and granted to every agent, for a task almost none of them will ever do.
+  A person building an adapter reads these against the repository; an agent does not need them in
+  front of it on every turn (#95).
 - `.knowledge/scripts/gate` — everything that has to be true before work here is finished, in one
   command. The suites are **found**, not listed, and it fails when CI stops delegating to the same
   discovery rule, so the local gate and CI cannot come apart. Runs everything rather than stopping at the first

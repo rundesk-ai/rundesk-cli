@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import provider  # noqa: E402
+from rundesk import provider, turn  # noqa: E402
 
 AT = ROOT / "src" / "providers" / "grok"
 
@@ -38,12 +38,15 @@ def _adapter():
 grok = _adapter()
 
 
-def update(session_update: str, method="session/update", **fields) -> str:
-    return json.dumps({
-        "jsonrpc": "2.0", "method": method,
-        "params": {"sessionId": "session-one",
-                   "update": {"sessionUpdate": session_update, **fields}},
-    })
+def update(session_update: str, method="session/update", session="session-one",
+           meta=None, **fields) -> str:
+    params = {
+        "sessionId": session,
+        "update": {"sessionUpdate": session_update, **fields},
+    }
+    if meta is not None:
+        params["_meta"] = meta
+    return json.dumps({"jsonrpc": "2.0", "method": method, "params": params})
 
 
 STREAM = [
@@ -118,6 +121,42 @@ class WhatTheACPStreamSaysBack(unittest.TestCase):
         self.assertEqual("grok-4.5-build", counted["model"])
         self.assertEqual(26878, counted["input"] + counted["cached"] + counted["output"])
 
+    def test_a_turn_making_several_requests_reports_the_level_it_ended_at_and_not_the_sum(self):
+        """R-USE-15 — ACP's metadata is a running context gauge, not turn billing."""
+        said, _ = carried([
+            update("agent_message_chunk", meta={"totalTokens": 18000},
+                   content={"type": "text", "text": "working"}),
+            update("agent_message_chunk", meta={"totalTokens": 24000},
+                   content={"type": "text", "text": "done"}),
+            STREAM[-1],
+        ])
+        session = only(said, "usage")[0]["session"]
+        self.assertEqual(24000, session)
+        self.assertNotEqual(42000, session)
+
+    def test_a_compacted_conversation_is_reported_smaller_than_the_one_before_it(self):
+        """R-USE-15 — the last gauge replaces the earlier one even when it decreases."""
+        said, _ = carried([
+            update("agent_message_chunk", meta={"totalTokens": 48000},
+                   content={"type": "text", "text": "before"}),
+            update("agent_message_chunk", meta={"totalTokens": 12000},
+                   content={"type": "text", "text": "after"}),
+            STREAM[-1],
+        ])
+        self.assertEqual(12000, only(said, "usage")[0]["session"])
+
+    def test_a_subagents_own_conversation_is_not_where_this_turn_ended(self):
+        """R-USE-14 — another ACP session cannot replace the parent's context gauge."""
+        said, _ = carried([
+            update("agent_message_chunk", meta={"totalTokens": 24000},
+                   content={"type": "text", "text": "parent"}),
+            update("agent_message_chunk", session="child-session",
+                   meta={"totalTokens": 900000},
+                   content={"type": "text", "text": "child"}),
+            STREAM[-1],
+        ])
+        self.assertEqual(24000, only(said, "usage")[0]["session"])
+
     def test_the_resume_handle_is_the_session_the_protocol_used(self):
         ended = only(self.said, "done")
         self.assertEqual(1, len(ended))
@@ -128,6 +167,38 @@ class WhatTheACPStreamSaysBack(unittest.TestCase):
         for one in self.said:
             self.assertIn(one["type"], provider.RECORDS)
             self.assertIsNotNone(provider.understood(json.dumps(one)))
+
+
+class WhatAScheduledTurnOnThisBrainDelivers(unittest.TestCase):
+    """R-SCH-45 on the adapter that refuses `whole` on purpose.
+
+    The records here are this adapter's own, not a shape invented in `test_turn`: a reply
+    written a token at a time, on both sides of one tool call. Read on `whole` alone the
+    close of a scheduled turn is the whole turn — narration, no separator and all — which
+    is exactly the defect the close exists to fix, arriving on the brains that never mark
+    a finished thought.
+    """
+
+    def setUp(self):
+        self.said, _ = carried([
+            update("agent_message_chunk", content={"type": "text", "text": "I'll read "}),
+            update("agent_message_chunk",
+                   content={"type": "text", "text": "the instructions."}),
+            update("tool_call", toolCallId="call-read", title="read_file"),
+            update("tool_call_update", toolCallId="call-read", status="completed"),
+            update("agent_message_chunk", content={"type": "text", "text": "Done. "}),
+            update("agent_message_chunk", content={"type": "text", "text": "One report."}),
+        ])
+
+    def test_a_scheduled_turn_on_this_brain_says_its_report_and_not_its_working(self):
+        self.assertEqual("Done. One report.", turn._close(self.said))
+
+    def test_what_a_watched_turn_says_keeps_both_and_does_not_fuse_them(self):
+        """R-PRV-22 — the guard on the one above. Everything is still delivered to whoever
+        asked, and the two runs of fragments are two paragraphs rather than
+        `the instructions.Done.`"""
+        self.assertEqual("I'll read the instructions.\n\nDone. One report.",
+                         turn._reply(self.said))
 
 
 class ToolVocabulary(unittest.TestCase):
@@ -211,6 +282,11 @@ class WhenTheStreamGoesWrong(unittest.TestCase):
         ended = grok._finished("end_turn", {"session": "s"})
         self.assertEqual({"type": "done", "ok": True, "session": "s"}, ended)
         self.assertNotIn("usage", ended)
+
+    def test_a_stream_without_context_metadata_claims_no_session_size(self):
+        """R-USE-16 — billing totals are not substituted for an absent context gauge."""
+        said = grok.records(STREAM[-1], {"session": "session-one"})
+        self.assertNotIn("session", only(said, "usage")[0])
 
     def test_a_line_that_is_not_an_acp_update_is_understood_as_nothing(self):
         lines = (

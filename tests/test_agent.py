@@ -12,6 +12,7 @@ Run: python3 tests/test_agent.py
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -20,11 +21,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import agent, gateway, skill, store, updater  # noqa: E402
+from rundesk import agent, config, gateway, skill, store, updater  # noqa: E402
 
 
 #: The two files SQLite keeps beside a database, which are its bookkeeping and not the
@@ -78,6 +80,7 @@ class WithSomewhereToKeepAgents(unittest.TestCase):
             # to a log without making the directory and swallows the failure, so a case
             # that arranges a log in scratch gets silence instead of a log.
             at.mkdir(parents=True, exist_ok=True)
+        config.ensure(self.before / "data")
 
     def made(self, name: str = "ava") -> str:
         """An agent as an owner actually has one: with a brain (R-AGT-18).
@@ -89,6 +92,79 @@ class WithSomewhereToKeepAgents(unittest.TestCase):
         agent.add(name, self.where)
         agent.remember(name, self.where, provider="codex")
         return name
+
+
+class NamingANewAgent(unittest.TestCase):
+    def test_spaces_and_punctuation_become_one_dash(self):
+        """R-AGT-39"""
+        self.assertEqual("agent-name", agent.slug("  Agent -- Name  "))
+
+    def test_a_new_agents_name_is_lowercase(self):
+        """R-AGT-39"""
+        self.assertEqual("winston", agent.slug("Winston"))
+
+    def test_an_accented_name_has_a_stable_ascii_slug(self):
+        """R-AGT-39"""
+        self.assertEqual("echo", agent.slug("Écho"))
+
+    def test_a_name_with_no_letters_or_digits_is_refused(self):
+        """R-AGT-39"""
+        with self.assertRaises(agent.NotAnAgentName):
+            agent.slug(" -- ")
+
+    def test_an_existing_legacy_spelling_keeps_its_directory(self):
+        """R-AGT-40"""
+        self.assertEqual(
+            "Agent_Name", agent.creation_name("Agent Name", ["Agent_Name"]))
+
+    def test_exact_case_wins_when_legacy_agents_differ_only_by_case(self):
+        """R-AGT-40 — exact supervisor invocations remain unambiguous on Linux."""
+        existing = ["Winston", "winston"]
+        self.assertEqual("Winston", agent.creation_name("Winston", existing))
+        self.assertEqual("winston", agent.creation_name("winston", existing))
+        with self.assertRaises(agent.NotAnAgentName):
+            agent.creation_name("WINSTON", existing)
+
+    def test_an_unmatched_command_preserves_a_legacy_gateway_name(self):
+        """R-AGT-13 — a pre-agent supervisor command must not change identity."""
+        self.assertEqual("Winston", agent.command_name("Winston"))
+
+    def test_ambiguous_legacy_spellings_are_refused(self):
+        """R-AGT-40"""
+        with self.assertRaises(agent.NotAnAgentName):
+            agent.creation_name("Agent Name", ["Agent_Name", "Agent.Name"])
+
+    def test_a_legacy_unicode_name_stays_reachable(self):
+        """R-AGT-40 — older releases admitted Unicode names with no ASCII spelling."""
+        self.assertEqual("代理", agent.creation_name("代理", ["代理"]))
+
+    def test_a_legacy_unicode_name_does_not_block_an_unrelated_new_agent(self):
+        """R-AGT-40 — resolving the existing population skips only the legacy name
+        that cannot itself be represented as today's slug."""
+        self.assertEqual("new-agent", agent.creation_name("New Agent", ["代理"]))
+
+
+class ResolvingLegacyGatewayNames(WithSomewhereToKeepAgents):
+    def test_shared_history_preserves_the_gateway_spelling_during_adoption(self):
+        """R-AGW-1, R-AGT-13 — pre-agent history is an existing identity."""
+        (self.before / "logs" / "Winston.log").write_text("kept")
+        names = agent.identities(self.where, self.before / "run", self.before / "logs")
+        self.assertIn("Winston", names)
+        self.assertEqual("Winston", agent.creation_name("winston", names))
+
+    def test_rotated_history_alone_preserves_the_gateway_spelling(self):
+        """R-AGW-5 — rotation may be the only surviving artifact."""
+        (self.before / "logs" / "Agent_Name.log.1").write_text("kept")
+        names = agent.identities(self.where, self.before / "run", self.before / "logs")
+        self.assertIn("Agent_Name", names)
+        self.assertEqual("Agent_Name", agent.creation_name("Agent Name", names))
+
+    def test_machine_error_output_alone_preserves_the_gateway_spelling(self):
+        """R-GW-36 — a gateway may fail before its own logger ever starts."""
+        (self.before / "logs" / "Winston.err").write_text("failed before logger")
+        names = agent.identities(self.where, self.before / "run", self.before / "logs")
+        self.assertIn("Winston", names)
+        self.assertEqual("Winston", agent.creation_name("winston", names))
 
 
 class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
@@ -126,20 +202,36 @@ class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
         template of their own gets the factory set, byte for byte but for the one name."""
         self.made()
         for called, says in self.held().items():
-            self.assertEqual((agent.TEMPLATES / called).read_text().replace("{{name}}", "ava"),
+            self.assertEqual(agent._copied(called, "ava"),
                              says, f"{called} is not what the install ships")
 
     def test_one_overridden_page_is_the_owners_and_the_rest_are_shipped(self):
-        """R-AGT-22 — per page, not per set. Taking on all five to change one would mean
+        """R-AGT-22 — per page, not per set. Taking on all four to change one would mean
         never getting an improvement to any of them, which is a choice worth avoiding."""
-        self.own("SOUL.md", "# {{name}} answers only in haiku\n")
+        self.own("SOUL.md", "# {{agent}} answers only in haiku\n")
         self.made()
 
         held = self.held()
         self.assertEqual("# ava answers only in haiku\n", held["SOUL.md"])
-        for called in ("AGENTS.md", "CLAUDE.md", "USER.md", "MEMORY.md"):
-            self.assertEqual((agent.TEMPLATES / called).read_text().replace("{{name}}", "ava"),
+        self.assertEqual(
+            [], agent.records("ava", self.where).pending_update_turns(),
+            "a fresh owner-customized home was mistaken for an old agent",
+        )
+        for called in ("AGENTS.md", "CLAUDE.md", "MEMORY.md"):
+            self.assertEqual(agent._copied(called, "ava"),
                              held[called], f"{called} stopped being the install's")
+
+    def test_a_legacy_name_placeholder_still_names_the_agent(self):
+        """R-AGT-41 — existing owner templates survive the clearer placeholder name."""
+        self.own("SOUL.md", "# {{name}} answers only in haiku\n")
+        self.made()
+        self.assertEqual("# ava answers only in haiku\n", self.held()["SOUL.md"])
+
+    def test_an_owner_template_uses_the_agent_placeholder(self):
+        """R-AGT-41 — the current placeholder says what value it represents."""
+        self.own("SOUL.md", "# {{agent}} answers only in haiku\n")
+        self.made()
+        self.assertEqual("# ava answers only in haiku\n", self.held()["SOUL.md"])
 
     def test_an_override_that_never_names_the_agent_still_makes_a_working_agent(self):
         """R-AGT-25 — the substitution is the whole contract an override has to honour, and
@@ -168,9 +260,20 @@ class TemplatesAnOwnerMadeTheirOwn(WithSomewhereToKeepAgents):
 
     def test_a_page_the_install_does_not_ship_reaches_a_new_agent(self):
         """R-AGT-24 — an override may add, not only replace."""
-        self.own("RULES.md", "# {{name}} never force-pushes\n")
+        self.own("RULES.md", "# {{agent}} never force-pushes\n")
         self.made()
         self.assertEqual("# ava never force-pushes\n", self.held()["RULES.md"])
+
+    def test_a_legacy_user_override_does_not_restore_the_retired_page(self):
+        """R-AGT-43 — an owner may still have an override from an older release. It is not
+        copied into new homes, while unrelated owner-added pages remain supported."""
+        where = self.own("USER.md", "# old separate context\n")
+        (where / "RULES.md").write_text("# keep this addition\n", encoding="utf-8")
+
+        self.made()
+
+        self.assertNotIn("USER.md", self.held())
+        self.assertEqual("# keep this addition\n", self.held()["RULES.md"])
 
     def test_an_agent_made_before_a_page_was_added_is_not_reported_as_missing_it(self):
         """R-AGT-24 — the reason this decision is not cosmetic, and it only shows up once
@@ -266,6 +369,19 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         self.assertTrue(agent.workspace("ava", self.where).is_dir())
         self.assertTrue(agent.skills("ava", self.where).is_dir())
 
+    def test_a_new_home_has_no_separate_user_page(self):
+        """R-AGT-43 — personal facts and response preferences now live in MEMORY. The
+        factory home has one continuity page for them, not a second page that can disagree
+        with it."""
+        agent.add("ava", self.where)
+        self.assertEqual(
+            {"AGENTS.md", "CLAUDE.md", "MEMORY.md", "SOUL.md"},
+            {path.name for path in agent.home("ava", self.where).iterdir() if path.is_file()},
+        )
+        memory = (agent.home("ava", self.where) / "MEMORY.md").read_text()
+        self.assertIn("## Who you work for", memory)
+        self.assertIn("## How they want to be answered", memory)
+
     def test_what_an_agent_loads_holds_nothing_rundesk_keeps(self):
         """R-AGT-2 — the home is what the agent loads. A provider reading its own rules
         must not be reading rundesk's lock, log and schedules, which is what putting them
@@ -278,6 +394,14 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
     #: something pointed at them. Everything else in a home is reached only by being named
     #: from one of these, directly or through another that is.
     LOADED = ("AGENTS.md", "CLAUDE.md")
+
+    def test_provider_bootstrap_requires_complete_agent_rules_before_action(self):
+        """R-AGT-42 — the shipped provider bootstrap makes the shared agent rules the
+        first action rather than optional reading after a response has begun."""
+        says = (agent.TEMPLATES / "CLAUDE.md").read_text()
+        self.assertIn("Before you respond to the user, do any task, or any action", says)
+        self.assertIn("[AGENTS.md](./AGENTS.md) completely.", says)
+        self.assertIn("your next step must be to read it first, always.", says)
 
     def test_the_file_every_provider_loads_names_the_ones_none_of_them_do(self):
         """R-AGT-2 — the two files loaded because of where they stand are the only way the
@@ -306,7 +430,7 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
                 reached.add(called)
                 says = (home / called).read_text()
                 walking += [one for one in agent.knowledge() if one in says]
-            for wanted in ("SOUL.md", "USER.md", "MEMORY.md"):
+            for wanted in ("SOUL.md", "MEMORY.md"):
                 self.assertIn(wanted, reached,
                               f"nothing an agent loads reaches {wanted} from {start} — "
                               f"only {sorted(reached)} is reachable")
@@ -357,6 +481,30 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         self.assertEqual(store.VERSION, kept.version())
         self.assertEqual({"provider": None, "model": None, "instructions": None,
                           "settings": {}}, kept.agent())
+
+    def test_a_new_agent_needs_no_update_migration_turn(self):
+        """The templates and the records arrive together for a new agent. A migration turn
+        exists to reconcile homes from an older release, not to rewrite a home just made."""
+        agent.add("ava", self.where)
+        self.assertEqual([], agent.records("ava", self.where).pending_update_turns())
+
+    def test_an_existing_home_without_records_still_gets_the_update_migration(self):
+        """An agent from before records existed is not a fresh home. Repairing it creates
+        records but must retain the release request that reconciles its old continuity."""
+        loaded = agent.home("ava", self.where)
+        loaded.mkdir(parents=True)
+        (loaded / "AGENTS.md").write_text("# old rules\n", encoding="utf-8")
+        (loaded / "MEMORY.md").write_text("# old memory\n", encoding="utf-8")
+        (loaded / "SOUL.md").write_text("# old soul\n", encoding="utf-8")
+        (loaded / "CLAUDE.md").write_text("# old bootstrap\n", encoding="utf-8")
+        (loaded / "USER.md").write_text("# durable user fact\n", encoding="utf-8")
+
+        agent.add("ava", self.where)
+
+        self.assertEqual([5], [
+            one["migration"]
+            for one in agent.records("ava", self.where).pending_update_turns()
+        ])
 
     def test_making_an_agent_again_leaves_the_records_it_already_had(self):
         """R-AGT-4 — making one that exists is the repair, and a repair that rebuilt the
@@ -452,7 +600,117 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
         agent.add("ava", self.where)
         says = (agent.home("ava", self.where) / "SOUL.md").read_text()
         self.assertIn("ava", says)
-        self.assertNotIn(agent.NAMED, says, "a template reached the home unsubstituted")
+        self.assertNotIn(agent.AGENT, says, "a template reached the home unsubstituted")
+        self.assertNotIn(agent.NAMED, says, "a legacy placeholder reached the home unsubstituted")
+
+    def test_a_template_keeps_the_human_name_separate_from_its_slug(self):
+        """R-AGT-39"""
+        agent.add("ios-helper", self.where, display_name="iOS Helper")
+        says = (agent.home("ios-helper", self.where) / "SOUL.md").read_text()
+        self.assertIn("iOS Helper", says)
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+
+    def test_retry_repairs_display_name_after_interrupted_first_creation(self):
+        """R-AGT-39 — a failed final write cannot permanently lose owner spelling."""
+        with mock.patch.object(
+            store.Store, "remember_display_name", side_effect=RuntimeError("interrupted")
+        ):
+            with self.assertRaises(RuntimeError):
+                agent.add("ios-helper", self.where, display_name="iOS Helper")
+        agent.add("ios-helper", self.where, display_name="IOS HELPER")
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+        self.assertEqual(
+            [],
+            agent.records("ios-helper", self.where).pending_update_turns(),
+            "an interrupted fresh creation was mistaken for an existing-user migration",
+        )
+
+    def test_retry_before_database_creation_preserves_the_first_spelling(self):
+        """R-AGT-39 — publishing pending identity state is exclusive and durable."""
+        at = agent.directory("ios-helper", self.where)
+        at.mkdir(parents=True)
+        agent._write_pending(at / agent.DISPLAY_PENDING, "iOS Helper")
+        agent.add("ios-helper", self.where, display_name="IOS HELPER")
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+        self.assertEqual(
+            [],
+            agent.records("ios-helper", self.where).pending_update_turns(),
+            "a staged fresh creation was mistaken for an existing-user migration",
+        )
+
+    def test_retry_publishes_a_complete_staged_first_spelling(self):
+        """R-AGT-39 — interruption after fsync but before link keeps the first name."""
+        at = agent.directory("ios-helper", self.where)
+        at.mkdir(parents=True)
+        pending = at / agent.DISPLAY_PENDING
+        pending.with_name(f"{pending.name}.writing").write_bytes(
+            agent._display_record("iOS Helper")
+        )
+        agent.add("ios-helper", self.where, display_name="IOS HELPER")
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+        self.assertIn(
+            "iOS Helper",
+            (agent.home("ios-helper", self.where) / "SOUL.md").read_text(),
+        )
+        self.assertEqual(
+            [],
+            agent.records("ios-helper", self.where).pending_update_turns(),
+            "a recovered fresh creation was mistaken for an existing-user migration",
+        )
+
+    def test_pending_staging_never_follows_an_owners_symlink(self):
+        """R-AGT-4 — recovery state cannot overwrite another owner file."""
+        at = agent.directory("ios-helper", self.where)
+        at.mkdir(parents=True)
+        owner = at / "owner-kept.txt"
+        owner.write_text("KEEP ME")
+        pending = at / agent.DISPLAY_PENDING
+        pending.with_name(f"{pending.name}.writing").symlink_to(owner)
+        with self.assertRaises(store.Unreadable):
+            agent._write_pending(pending, "iOS Helper")
+        self.assertEqual("KEEP ME", owner.read_text())
+
+    def test_pending_staging_never_overwrites_an_owners_hard_link(self):
+        """R-AGT-4 — an existing linked inode is owner data, not scratch space."""
+        at = agent.directory("ios-helper", self.where)
+        at.mkdir(parents=True)
+        owner = at / "owner-kept.txt"
+        owner.write_text("KEEP ME")
+        pending = at / agent.DISPLAY_PENDING
+        os.link(owner, pending.with_name(f"{pending.name}.writing"))
+        with self.assertRaises(store.Unreadable):
+            agent._write_pending(pending, "iOS Helper")
+        self.assertEqual("KEEP ME", owner.read_text())
+
+    def test_interruption_before_marker_does_not_make_a_stranded_agent(self):
+        """R-AGT-39 — no `home/` exists until display recovery is durable."""
+        with mock.patch.object(
+            agent, "_write_pending", side_effect=RuntimeError("interrupted")
+        ):
+            with self.assertRaises(RuntimeError):
+                agent.add("ios-helper", self.where, display_name="iOS Helper")
+        self.assertFalse(agent.exists("ios-helper", self.where))
+        agent.add("ios-helper", self.where, display_name="iOS Helper")
+        self.assertEqual("iOS Helper", agent.display_name("ios-helper", self.where))
+
+    def test_repair_alias_does_not_rewrite_a_completed_display_name(self):
+        """R-AGT-4, R-AGT-39 — repair leaves the owner's existing identity alone."""
+        agent.add("winston", self.where, display_name="winston")
+        agent.add("winston", self.where, display_name="WINSTON")
+        self.assertEqual("winston", agent.display_name("winston", self.where))
+
+    def test_removing_an_interrupted_agent_removes_pending_identity_state(self):
+        """R-AGW-2, R-AGW-4 — removal leaves no hidden name for a later agent."""
+        with mock.patch.object(
+            store.Store, "remember_display_name", side_effect=RuntimeError("interrupted")
+        ):
+            with self.assertRaises(RuntimeError):
+                agent.add("ios-helper", self.where, display_name="iOS Helper")
+        self.assertTrue(agent.creation_pending("ios-helper", self.where))
+        pending = agent.directory("ios-helper", self.where) / agent.DISPLAY_PENDING
+        pending.with_name(f"{pending.name}.writing").write_text("stale")
+        agent.forget("ios-helper", self.where)
+        self.assertFalse(agent.directory("ios-helper", self.where).exists())
 
     def test_an_install_with_nothing_to_make_an_agent_from_says_so(self):
         """R-AGT-11 — a home with no files in it and nothing to have copied there would
@@ -491,10 +749,10 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
     def test_making_an_agent_again_puts_back_only_what_is_missing(self):
         """R-AGT-4"""
         agent.add("ava", self.where)
-        (agent.home("ava", self.where) / "USER.md").unlink()
+        (agent.home("ava", self.where) / "MEMORY.md").unlink()
         shutil.rmtree(agent.skills("ava", self.where))
 
-        self.assertEqual(agent.add("ava", self.where), ["USER.md", "skills/"])
+        self.assertEqual(agent.add("ava", self.where), ["MEMORY.md", "skills/"])
 
     def test_an_agent_is_only_one_that_has_a_home(self):
         """R-AGT-2 — a directory standing where agents are kept is not by itself an agent.
@@ -796,14 +1054,10 @@ class TheGatewayThatRunsIt(WithSomewhereToKeepAgents):
 
 
 class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
-    """R-AGT-16 — the fallback, and the fact that it is one place.
+    """R-AGT-16 — every applicable instruction is appended in one stable order.
 
-    Four things could say what a turn is told about its situation, and what is nearest wins:
-    the schedule's or the turn's own, then the surface it arrived on, then the agent's, then
-    the one line rundesk says about that situation. Each caller working the order out for
-    itself would be four orders that agree until one of them does not — and the way that
-    fails is silent, because an agent told the wrong thing about where it is answers perfectly
-    well and wrongly.
+    Rundesk's trigger context, the agent owner's instructions, and the turn's own
+    instructions answer different questions. None silently displaces another.
     """
 
     def situation(self, said: str) -> str:
@@ -813,26 +1067,26 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
         R-AGT-17's, tested on its own. Asserted here rather than assumed, so a change that
         dropped the standing words would fail every one of these rather than none.
         """
-        standing = agent.standing("ava")
+        standing = agent.standing("ava", self.where)
         self.assertTrue(said.startswith(standing),
                         "rundesk's own words did not come first")
         return said[len(standing):].strip()
 
-    def test_what_a_turn_was_told_itself_wins(self):
-        """R-AGT-16 — nearest first, so a schedule or a command can always override."""
+    def test_turn_instructions_append_after_agent_instructions(self):
+        """R-AGT-16 — a command adds instructions without displacing either earlier layer."""
         self.made()
         agent.remember("ava", self.where, instructions="what the agent says")
-        self.assertEqual("what this turn says",
+        self.assertEqual("what rundesk would say\n\nwhat the agent says\n\nwhat this turn says",
                          self.situation(agent.told("ava", self.where, said="what this turn says",
-                                    otherwise="what rundesk would say")))
+                                    regardless="what rundesk would say")))
 
-    def test_the_agents_own_is_next(self):
-        """R-AGT-16 — the tier that had a column, a writer and no reader at all."""
+    def test_agent_instructions_append_after_rundesk_context(self):
+        """R-AGT-16 — the stored owner layer follows, rather than replacing, core context."""
         self.made()
         agent.remember("ava", self.where, instructions="what the agent says")
-        self.assertEqual("what the agent says",
+        self.assertEqual("what rundesk would say\n\nwhat the agent says",
                          self.situation(agent.told("ava", self.where,
-                                                   otherwise="what rundesk would say")))
+                                                   regardless="what rundesk would say")))
 
     def test_rundesks_own_line_is_last(self):
         """R-AGT-16 — something that says what the situation is beats something that says
@@ -840,7 +1094,7 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
         self.made()
         self.assertEqual("what rundesk would say",
                          self.situation(agent.told("ava", self.where,
-                                                   otherwise="what rundesk would say")))
+                                                   regardless="what rundesk would say")))
 
     def test_nothing_anywhere_is_nothing_rather_than_a_guess(self):
         """R-AGT-16 — a person at a terminal is watching, so there is nothing to tell them
@@ -866,24 +1120,97 @@ class WhatEveryTurnForThisAgentIsTold(WithSomewhereToKeepAgents):
         agent.remember("ava", self.where, instructions="")
         self.assertEqual("what rundesk would say",
                          self.situation(agent.told("ava", self.where,
-                                                   otherwise="what rundesk would say")))
+                                                   regardless="what rundesk would say")))
 
     def test_a_turn_the_clock_started_is_told_nobody_is_watching(self):
-        """R-SCH-30 — the first trigger with no person at the other end. Three facts, and the
-        one that matters most is that a question will not be answered: a brain that asks one
-        into an empty room is a turn that ends waiting."""
+        """R-SCH-30 — the first trigger with no person at the other end. The fact that matters
+        most is that a question will not be answered: a brain that asks one into an empty room
+        is a turn that ends waiting."""
         from rundesk import schedule
         said = schedule.by_default("nightly")
         self.assertIn("nightly", said, "it never said which schedule started this")
-        self.assertIn("Nothing asked you", said)
-        self.assertIn("will not be answered", said)
+        self.assertIn("No user request started it", said)
+        self.assertIn("Nothing will answer", said)
         self.assertIn("recorded", said, "it never said what becomes of what it says")
 
-    def test_a_turn_the_clock_started_with_no_schedule_named_still_says_the_situation(self):
-        """R-SCH-30 — the sentence is about the situation, not about the name, so it still
-        says the thing that matters when there is no name to give."""
+    def test_a_turn_the_clock_started_is_told_what_it_delivers(self):
+        """R-SCH-30 — the one fact here a brain cannot find out for itself. Measured: two
+        schedules that displaced nothing were told nobody was watching and narrated anyway,
+        because the sentence answered *whether to ask a question* and said nothing about
+        *when to speak* — so three paragraphs of orientation reached the owner with the
+        report underneath them."""
         from rundesk import schedule
-        self.assertIn("will not be answered", schedule.by_default(""))
+        said = schedule.by_default("nightly")
+        self.assertIn("last complete message you write is delivered", said,
+                      "it never said what becomes of everything before the last")
+        self.assertIn("Write nothing until the work is finished", said,
+                      "a brain cannot tell which thought will be its last, so the rule it "
+                      "can actually follow has to be the one it is given")
+
+    def test_a_backend_update_turn_gets_only_its_truthful_delivery_rule(self):
+        """R-MIG-24 — an update turn is schedule-scoped but reports only to the account.
+        The ordinary promise that Rundesk posts its final message must not contradict that."""
+        from rundesk import schedule
+
+        self.made()
+        captured = {}
+
+        async def carrying(_name, _prompt, _provider, **held):
+            captured.update(held)
+            return object()
+
+        one = schedule.Schedule(
+            name="rundesk-update-5",
+            at="2026-07-30 12:00",
+            ran_at="2026-07-30 12:00",
+            prompt="migrate",
+            instructions="recorded only in this agent's account; never posted",
+            backend=True,
+        )
+        asyncio.run(agent.asking("ava", self.where, carry=carrying)(one))
+
+        preface = self.situation(captured["preface"])
+        self.assertEqual(
+            "recorded only in this agent's account; never posted",
+            preface,
+        )
+        self.assertNotIn("## Scheduled run", captured["preface"])
+
+    def test_what_rundesk_says_about_a_scheduled_turn_is_there_whatever_the_owner_wrote(self):
+        """R-AGT-34 — the tier this moved out of. As the situation tier's last resort, an
+        owner writing anything at all deleted it: a schedule told to focus on high-priority
+        issues was no longer told that nobody was watching or what it delivers."""
+        self.made()
+        agent.remember("ava", self.where, instructions="what the agent says")
+        for said in ("", "focus on the high-priority issues"):
+            told = self.situation(agent.told("ava", self.where, said=said,
+                                             regardless="nobody is watching"))
+            self.assertTrue(told.startswith("nobody is watching"),
+                            f"what rundesk says was displaced by {said!r}: {told!r}")
+
+    def test_what_an_owner_says_about_a_scheduled_turn_is_added_to_rundesks_own(self):
+        """R-AGT-34 — added, not replaced, and in that order: they answer different
+        questions. Rundesk's says what the situation *is* and the owner's says what to *do*
+        about it, and a turn needs both."""
+        self.made()
+        agent.remember("ava", self.where, instructions="what the agent says")
+        self.assertEqual("nobody is watching\n\nwhat the agent says\n\n"
+                         "focus on the high-priority issues",
+                         self.situation(agent.told(
+                             "ava", self.where, said="focus on the high-priority issues",
+                             regardless="nobody is watching")))
+        self.assertEqual("nobody is watching\n\nwhat the agent says",
+                         self.situation(agent.told("ava", self.where,
+                                                   regardless="nobody is watching")),
+                         "the agent's own tier stopped being reached")
+
+    def test_what_rundesk_always_says_is_nothing_where_there_is_nothing_to_say(self):
+        """R-AGT-34 — a person at a terminal is watching, so nothing is added and the turn is
+        told exactly what it was told before this existed."""
+        self.made()
+        agent.remember("ava", self.where, instructions="what the agent says")
+        self.assertEqual("what the agent says",
+                         self.situation(agent.told("ava", self.where, regardless="")))
 
 
 class AGatewayThatHasNoAgentYet(WithSomewhereToKeepAgents):
@@ -1074,25 +1401,33 @@ class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):
     """R-AGT-17 — rundesk's own words reach a turn whatever anybody else said."""
 
     def test_the_agents_own_name_is_filled_in(self):
-        """The one thing that varies. A placeholder that survived would reach a brain as the
-        literal word, and an agent told it is called `{name}` is told nothing at all."""
-        said = agent.standing("ava")
+        """A placeholder that survived would reach the brain as a literal rather than the
+        identity and locations Rundesk resolved for this agent."""
+        said = agent.standing("ava", self.where)
         self.assertIn("You are ava,", said)
-        self.assertNotIn("{name}", said)
+        self.assertIn(str(agent.home("ava", self.where)), said)
+        self.assertIn(str(agent.workspace("ava", self.where)), said)
         self.assertNotIn("{", said, "a brace survived into what a brain is given")
         self.assertNotIn("}", said)
 
+    def test_the_human_name_is_shown_while_commands_keep_the_slug(self):
+        """R-AGT-39 — identity prose uses the display name; paths and commands remain
+        safe because they use the directory slug."""
+        agent.add("ios-helper", self.where, display_name="iOS Helper")
+        said = agent.standing("ios-helper", self.where)
+        self.assertIn("You are iOS Helper,", said)
+        self.assertIn("rundesk messages ios-helper", said)
+
     def test_every_place_the_name_appears_is_filled_in(self):
-        """Not just the first: the commands it names are the ones a brain will type, and one
-        left as `{name}` is a command that cannot run."""
-        said = agent.standing("zebra")
-        self.assertEqual(0, said.count("{name}"))
+        """Not just the first: every command must name the agent it will actually query."""
+        said = agent.standing("zebra", self.where)
+        self.assertEqual(0, said.count("{agent}"))
         self.assertGreater(said.count("zebra"), 1)
         self.assertIn("rundesk messages zebra", said)
 
     def test_rundesks_own_words_reach_a_turn_that_was_told_nothing_else(self):
         self.made()
-        self.assertEqual(agent.standing("ava"), agent.told("ava", self.where))
+        self.assertEqual(agent.standing("ava", self.where), agent.told("ava", self.where))
 
     def test_what_an_owner_says_is_added_to_rundesks_rather_than_replacing_it(self):
         """The whole point. They answer different questions — ours says what the agent is and
@@ -1110,27 +1445,24 @@ class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):
         self.made()
         agent.remember("ava", self.where, instructions="be brief")
         said = agent.told("ava", self.where, said="and answer in French")
-        self.assertTrue(said.startswith(agent.standing("ava")))
+        self.assertTrue(said.startswith(agent.standing("ava", self.where)))
         self.assertLess(said.index("rundesk messages ava"), said.index("and answer in French"))
 
     def test_what_rundesk_says_is_the_same_words_every_turn(self):
         """What prompt caching keys on. Two turns for one agent must be byte-for-byte equal
         here, or the front of the prefix moves and every turn pays for it again."""
-        self.assertEqual(agent.standing("ava"), agent.standing("ava"))
-        self.assertNotEqual(agent.standing("ava"), agent.standing("bea"))
+        self.assertEqual(
+            agent.standing("ava", self.where), agent.standing("ava", self.where)
+        )
+        self.assertNotEqual(
+            agent.standing("ava", self.where), agent.standing("bea", self.where)
+        )
 
     def test_a_turn_is_told_how_to_find_what_it_did(self):
-        """The fact this exists to carry: look it up rather than guess, and where to read the
-        rest. Everything else rundesk can do is in the guide rather than in every prompt."""
-        said = agent.standing("ava")
+        """The core names the history commands and the skill holding broader guidance."""
+        said = agent.standing("ava", self.where)
         self.assertIn("rundesk messages ava", said)
-        # **Not a path.** This named a file, and after the layout split it named one that
-        # exists on neither kind of install — a downloaded one keeps the program under
-        # `app/`, and a checkout install symlinks the source, so `~/.rundesk` holds neither.
-        # Every agent was told, on every turn, to read something it could not find. What it
-        # names now travels with the agent instead of being somewhere to go and look.
-        self.assertIn("using-rundesk", said)
-        self.assertNotIn(".md", said)
+        self.assertIn("managing-rundesk", said)
 
 
 if __name__ == "__main__":

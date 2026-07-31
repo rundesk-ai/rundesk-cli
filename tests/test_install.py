@@ -9,6 +9,7 @@ Run: python3 tests/test_install.py
 
 from __future__ import annotations
 
+import json
 import os
 import plistlib
 import re
@@ -39,7 +40,8 @@ INSTALLER = REPO / "install.sh"
 
 
 def installer(*args: str, home: Path, bindir: Path, cwd: Path | None = None,
-              script: Path | None = None, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+              script: Path | None = None, extra_env: dict[str, str] | None = None,
+              gh: Path | None = None, without_gh: bool = False) -> subprocess.CompletedProcess:
     """Run the installer somewhere it cannot reach the real machine."""
     # An agent running this suite carries the live install's RUNDESK_DATA_DIR and friends.
     # Overriding only the program and HOME still let a scratch uninstall take the live
@@ -64,10 +66,20 @@ def installer(*args: str, home: Path, bindir: Path, cwd: Path | None = None,
         encoding="utf-8",
     )
     launchctl.chmod(0o755)
+    # A developer may be authenticated in GitHub CLI. No ordinary installer case may reach
+    # that account merely because the suite inherited PATH. Default to an offline CLI whose
+    # authentication check refuses; explicit cases pass their own stand-in or prove absence.
+    if gh is None and not without_gh:
+        unauthenticated = fake_tools / "gh"
+        unauthenticated.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        unauthenticated.chmod(0o755)
+    executable_path = f"{fake_tools}{os.pathsep}{inherited_path}"
+    if gh is not None:
+        executable_path = f"{gh.parent}{os.pathsep}{executable_path}"
     env = {
         **isolated,
         "HOME": str(home),
-        "PATH": f"{fake_tools}{os.pathsep}{inherited_path}",
+        "PATH": executable_path,
         "RUNDESK_BIN_DIR": str(bindir),
         "RUNDESK_INSTALL_DIR": str(home / ".rundesk"),
         "RUNDESK_JOBS_DIR": str(home / ".cache" / "rundesk-test-jobs"),
@@ -98,6 +110,34 @@ class Sandbox(unittest.TestCase):
 
     def uninstall(self, *args: str, **kw) -> subprocess.CompletedProcess:
         return installer("--uninstall", *args, home=self.home, bindir=self.bindir, **kw)
+
+    def fake_gh(self) -> Path:
+        """An offline GitHub CLI seam whose authentication and API outcomes are explicit."""
+        tool = self.root / "tools" / "gh"
+        tool.parent.mkdir(exist_ok=True)
+        tool.write_text(
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$*\" >> \"$RUNDESK_GH_LOG\"\n"
+            "case \"${1:-} ${2:-}\" in\n"
+            "  'auth status') exit \"${RUNDESK_GH_AUTH_EXIT:-1}\" ;;\n"
+            "  'api --method') exit \"${RUNDESK_GH_API_EXIT:-0}\" ;;\n"
+            "esac\n"
+            "exit 2\n",
+            encoding="utf-8",
+        )
+        tool.chmod(0o755)
+        return tool
+
+    def path_without_gh(self) -> str:
+        """Only the ordinary commands a local install uses, with no GitHub CLI."""
+        toolbox = self.root / "no-gh"
+        toolbox.mkdir()
+        for name in ("bash", "chmod", "cut", "dirname", "du", "grep", "ln", "mkdir",
+                     "pwd", "python3", "readlink", "rmdir", "tr", "wc"):
+            target = shutil.which(name)
+            self.assertIsNotNone(target, f"the test machine has no {name}")
+            (toolbox / name).symlink_to(target)
+        return str(toolbox)
 
 
 @unittest.skipUnless(shutil.which("launchctl"), "no supervisor on this machine to keep anything")
@@ -173,7 +213,14 @@ class RemovingWhatIsRunningTests(Sandbox):
         self.assertTrue(theirs.exists(), "it removed a job belonging to something else")
 
     def test_removing_a_scratch_install_leaves_another_installs_update_worker(self):
-        """R-UPD-35, R-RM-9"""
+        """R-UPD-35, R-RM-9, R-RM-15 — reported (#129).
+
+        Leaving the foreign worker was always right and is unchanged. What changed is what
+        happened next: the refusal escaped as an exception, so the removal ended partway
+        through and reported it as gateways that would not stop. Nothing on the machine
+        said that, and a redirected install could not be removed at all on any machine
+        that already had an ordinary one — which is every machine one is validated on.
+        """
         jobs = self.root / "jobs"
         jobs.mkdir()
         self.install(extra_env={"RUNDESK_JOBS_DIR": str(jobs)})
@@ -188,8 +235,13 @@ class RemovingWhatIsRunningTests(Sandbox):
 
         said = self.uninstall(extra_env={"RUNDESK_JOBS_DIR": str(jobs)})
 
-        self.assertNotEqual(0, said.returncode)
+        self.assertEqual(0, said.returncode,
+                         "leaving another install's worker alone ended the removal")
         self.assertTrue(worker.exists(), "it removed another install's update worker")
+        self.assertIn("another install of rundesk wrote it", said.stdout + said.stderr,
+                      "it did not say what it deliberately left behind")
+        self.assertFalse((self.bindir / "rundesk").exists(),
+                         "the removal did not finish")
 
 
 class WhatWasAskedForTests(Sandbox):
@@ -242,6 +294,75 @@ class WhatWasAskedForTests(Sandbox):
             (self.bindir / "rundesk").exists(),
             "a refused option still removed the command",
         )
+
+
+class CommunitySupportTests(Sandbox):
+    """R-INS-21 — a new owner can support Rundesk without a separate manual step."""
+
+    def install_with_gh(self, *, authenticated: bool = True,
+                        api_succeeds: bool = True) -> tuple[subprocess.CompletedProcess, Path]:
+        log = self.root / "gh.log"
+        log.touch()
+        done = self.install(
+            gh=self.fake_gh(),
+            extra_env={
+                "RUNDESK_GH_LOG": str(log),
+                "RUNDESK_GH_AUTH_EXIT": "0" if authenticated else "1",
+                "RUNDESK_GH_API_EXIT": "0" if api_succeeds else "1",
+            },
+        )
+        return done, log
+
+    def test_a_fresh_install_with_authenticated_github_cli_stars_rundesk(self):
+        done, log = self.install_with_gh()
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(
+            [
+                "auth status --hostname github.com",
+                "api --method PUT -H Content-Length: 0 /user/starred/rundesk-ai/rundesk-cli",
+            ],
+            log.read_text(encoding="utf-8").splitlines(),
+        )
+        self.assertIn("helped you support the Rundesk community", done.stdout)
+
+    def test_installing_again_makes_no_second_star_request(self):
+        first, log = self.install_with_gh()
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        requests_after_first = log.read_text(encoding="utf-8")
+        self.assertEqual(2, len(requests_after_first.splitlines()))
+
+        second, _ = self.install_with_gh()
+
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertEqual(requests_after_first, log.read_text(encoding="utf-8"))
+        self.assertNotIn("helped you support the Rundesk community", second.stdout)
+
+    def test_an_install_without_github_cli_still_succeeds(self):
+        done = self.install(
+            without_gh=True,
+            extra_env={"PATH": self.path_without_gh()},
+        )
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("helped you support the Rundesk community", done.stdout)
+
+    def test_an_install_without_github_authentication_does_not_star(self):
+        done, log = self.install_with_gh(authenticated=False)
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(
+            ["auth status --hostname github.com"],
+            log.read_text(encoding="utf-8").splitlines(),
+        )
+        self.assertNotIn("helped you support the Rundesk community", done.stdout)
+
+    def test_a_failed_star_request_does_not_fail_the_install(self):
+        done, log = self.install_with_gh(api_succeeds=False)
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(2, len(log.read_text(encoding="utf-8").splitlines()))
+        self.assertNotIn("helped you support the Rundesk community", done.stdout)
 
 
 class InstallTests(Sandbox):
@@ -621,6 +742,60 @@ class DependencyTests(Sandbox):
         self.assertEqual([], [name for name in shipped if (library / name).exists()],
                          "a skill this release laid down was left on the machine")
 
+    def test_a_redirected_uninstall_cannot_take_another_installs_data(self):
+        """R-RM-12 — reported (#220).
+
+        An agent inherits the live install's data and skill-library paths. Pointing only the
+        installer at a scratch root must still make every removal helper act on that scratch
+        install; otherwise validating an uninstall takes the live install's built-ins.
+        """
+        scratch = self.root / "scratch"
+        made = scratch / "app"
+        shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+
+        shipped = next(one.name for one in (REPO / "src" / "templates" / "skills").iterdir()
+                       if (one / "SKILL.md").is_file())
+        scratch_library = scratch / "data" / "skills"
+        foreign_data = self.root / "existing" / "data"
+        foreign_library = foreign_data / "skills"
+        for library, words in ((scratch_library, "scratch\n"),
+                               (foreign_library, "existing bytes must survive\n")):
+            built_in = library / shipped
+            built_in.mkdir(parents=True)
+            (built_in / "SKILL.md").write_text(words, encoding="utf-8")
+            (built_in / ".rundesk-built-in").write_text("rundesk built-in\n", encoding="utf-8")
+        sys.path.insert(0, str(REPO / "src"))
+        from rundesk import config
+        configuration = json.dumps(config.INITIAL, indent=2) + "\n"
+        (scratch / "data" / "config.json").write_text(configuration, encoding="utf-8")
+        (foreign_data / "config.json").write_text(configuration, encoding="utf-8")
+        foreign_before = {
+            path.relative_to(foreign_data): path.read_bytes()
+            for path in foreign_data.rglob("*") if path.is_file()
+        }
+
+        gone = installer(
+            "--uninstall", home=self.home, bindir=self.bindir, cwd=made,
+            script=made / "install.sh",
+            extra_env={
+                "RUNDESK_INSTALL_DIR": str(scratch),
+                "RUNDESK_DATA_DIR": str(foreign_data),
+                "RUNDESK_SKILL_LIBRARY": str(foreign_library),
+            },
+        )
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertFalse((scratch_library / shipped).exists(),
+                         "the redirected install left its own built-in behind")
+        self.assertFalse((scratch / "data" / "config.json").exists(),
+                         "the redirected install left its own unchanged configuration behind")
+        self.assertEqual(
+            foreign_before,
+            {path.relative_to(foreign_data): path.read_bytes()
+             for path in foreign_data.rglob("*") if path.is_file()},
+            "uninstalling the scratch install changed another install's data",
+        )
+
     def test_removing_rundesk_leaves_a_skill_the_owner_wrote_themselves(self):
         """R-RM-7 — the other half, and the line that matters: the set taken back is the set
         this release ships, so a skill of their own is not a name it touches. The built-ins
@@ -803,7 +978,8 @@ class WhatIsInstalledTests(unittest.TestCase):
         # *backwards* onto.
         script = INSTALLER.read_text()
         self.assertIn("releases/latest", script, "the installer does not ask what the newest release is")
-        self.assertIn("archive/refs/tags/", script, "the installer never downloads a released tag")
+        self.assertIn("/releases/download/$tag/", script,
+                      "the installer never downloads a released tag")
         self.assertNotIn("archive/refs/heads/main", script,
                          "a failed release lookup can still install unreleased work")
 
@@ -976,8 +1152,12 @@ class FakesTheFetch:
             "      forbidden|missing) exit 22 ;;\n"
             "      malformed) printf '%s\\n' 'not-json' > \"$out\" ;;\n"
             "      empty) printf '%s\\n' '{\"tag_name\":\"\"}' > \"$out\" ;;\n"
-            "      valid) printf '%s\\n' '{\"tag_name\":\"v9.9.9\"}' > \"$out\" ;;\n"
+            "      valid) printf '{\"tag_name\":\"%s\"}\\n' \"${RUNDESK_LOOKUP_TAG:-v9.9.9}\" > \"$out\" ;;\n"
             "    esac\n"
+            "    ;;\n"
+            "  https://github.com/*/releases/download/*)\n"
+            "    if [ \"${RUNDESK_COUNTED_ASSET_MISSING:-}\" = yes ]; then exit 22; fi\n"
+            "    cp \"$RUNDESK_RELEASE_ARCHIVE\" \"$out\"\n"
             "    ;;\n"
             "  *) cp \"$RUNDESK_RELEASE_ARCHIVE\" \"$out\" ;;\n"
             "esac\n"
@@ -992,8 +1172,14 @@ class FakesTheFetch:
         subprocess.run(["tar", "-czf", str(tarball), "-C", str(self.root), source.name], check=True)
         return tarball
 
-    def attempt(self, reply: str, tarball: Path):
-        case = self.root / reply
+    def attempt(
+        self,
+        reply: str,
+        tarball: Path,
+        counted_asset_missing: bool = False,
+        tag: str = "v9.9.9",
+    ):
+        case = self.root / f"{reply}-{tag}"
         home, bindir, loose = case / "home", case / "bin", case / "loose"
         home.mkdir(parents=True)
         bindir.mkdir()
@@ -1017,8 +1203,10 @@ class FakesTheFetch:
             extra_env={
                 "PATH": f"{self.fake_curl()}{os.pathsep}{os.environ['PATH']}",
                 "RUNDESK_LOOKUP_REPLY": reply,
+                "RUNDESK_LOOKUP_TAG": tag,
                 "RUNDESK_REQUEST_LOG": str(requests),
                 "RUNDESK_RELEASE_ARCHIVE": str(tarball),
+                "RUNDESK_COUNTED_ASSET_MISSING": "yes" if counted_asset_missing else "no",
             },
         )
         return done, marker, command, requests.read_text().splitlines()
@@ -1053,10 +1241,67 @@ class ReleaseLookupTests(FakesTheFetch, Sandbox):
         self.assertEqual(done.returncode, 0, f"{done.stdout}\n{done.stderr}")
         self.assertFalse(marker.exists(), "the valid release did not replace the existing install")
         self.assertEqual(
-            "https://github.com/rundesk-ai/rundesk-cli/archive/refs/tags/v9.9.9.tar.gz",
+            "https://github.com/rundesk-ai/rundesk-cli/releases/download/"
+            "v9.9.9/rundesk-cli.tar.gz",
             requests[-1],
         )
         self.assertFalse(any("refs/heads/main" in request for request in requests))
+
+    def test_a_remote_install_downloads_the_counted_release_asset_once(self):
+        """R-INS-20 — one remote install contributes one public install delivery."""
+        done, _, _, requests = self.attempt("valid", self.release_archive())
+        self.assertEqual(done.returncode, 0, f"{done.stdout}\n{done.stderr}")
+        deliveries = [
+            request for request in requests
+            if "/releases/download/" in request
+        ]
+        self.assertEqual(
+            deliveries,
+            [
+                "https://github.com/rundesk-ai/rundesk-cli/releases/download/"
+                "v9.9.9/rundesk-cli.tar.gz"
+            ],
+        )
+
+    def test_a_release_from_before_the_counted_asset_still_installs(self):
+        """The new bootstrap must remain compatible with every already-published release."""
+        done, marker, _, requests = self.attempt(
+            "valid",
+            self.release_archive(),
+            counted_asset_missing=True,
+            tag="v0.22.3",
+        )
+        self.assertEqual(done.returncode, 0, f"{done.stdout}\n{done.stderr}")
+        self.assertFalse(marker.exists(), "the legacy release did not replace the install")
+        self.assertEqual(
+            requests[-2:],
+            [
+                "https://github.com/rundesk-ai/rundesk-cli/releases/download/"
+                "v0.22.3/rundesk-cli.tar.gz",
+                "https://github.com/rundesk-ai/rundesk-cli/archive/refs/tags/"
+                "v0.22.3.tar.gz",
+            ],
+        )
+
+    def test_a_counted_release_never_falls_back_to_an_uncounted_download(self):
+        """R-INS-20 — a failed counted delivery is a failed install, not hidden activity."""
+        done, marker, _, requests = self.attempt(
+            "valid",
+            self.release_archive(),
+            counted_asset_missing=True,
+            tag="v0.22.4",
+        )
+        self.assertNotEqual(done.returncode, 0)
+        self.assertTrue(marker.exists(), "the failed counted delivery replaced the install")
+        self.assertEqual(
+            requests[-1],
+            "https://github.com/rundesk-ai/rundesk-cli/releases/download/"
+            "v0.22.4/rundesk-cli.tar.gz",
+        )
+        self.assertFalse(
+            any("archive/refs/tags/v0.22.4" in request for request in requests),
+            "the counted release silently installed through an uncounted fallback",
+        )
 
 
 class WhereADownloadedProgramLands(FakesTheFetch, Sandbox):
@@ -1122,13 +1367,21 @@ class WhereADownloadedProgramLands(FakesTheFetch, Sandbox):
 class OneInstructionTests(unittest.TestCase):
     """The single line a machine with nothing on it is given, and what has to hold for it to work.
 
-    The instruction is published in four places and resolves only because the release workflow
-    attaches that exact file. Nothing coupled the two, so deleting one line from `release.yml`
-    would have turned every documented instruction into a 404 with the whole gate still green.
+    The instruction is published in four places and uses the stable bootstrap on the default
+    branch. That bootstrap fetches the counted release asset, rather than itself being a second
+    counted download for every first install.
     """
 
-    #: `https://github.com/<slug>/releases/latest/download/<asset>`
-    PUBLISHED = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/releases/latest/download/([\w.-]+)")
+    #: Both the current bootstrap and the retired release-asset route. Recognizing only
+    #: the current form let a stale instruction survive after releases stopped carrying it.
+    PUBLISHED = re.compile(
+        r"https://(?:raw\.githubusercontent\.com/[\w.-]+/[\w.-]+/main/"
+        r"|github\.com/[\w.-]+/[\w.-]+/releases/latest/download/)install\.sh"
+    )
+    SLUG = re.compile(
+        r"https://(?:raw\.githubusercontent\.com|github\.com)/"
+        r"([\w.-]+/[\w.-]+)/"
+    )
 
     SKIP = {".git", ".venv", "__pycache__", "node_modules"}
 
@@ -1169,7 +1422,10 @@ class OneInstructionTests(unittest.TestCase):
         sys.path.insert(0, str(REPO / "src"))
         from rundesk import updater
 
-        (slug, _asset), = self._published()
+        (published,) = self._published()
+        found = self.SLUG.match(published)
+        self.assertIsNotNone(found, "the published instruction has no repository")
+        slug = found.group(1)
         declared = re.search(r'^REPO_SLUG="([^"]+)"', INSTALLER.read_text(), re.M)
         self.assertIsNotNone(declared, "the installer does not say which repository it installs from")
         self.assertEqual(declared.group(1), slug,
@@ -1185,16 +1441,48 @@ class OneInstructionTests(unittest.TestCase):
         self.assertNotIn("RUNDESK_REPO_SLUG", INSTALLER.read_text(),
                          "the installer can be pointed somewhere `rundesk update` will not follow")
 
-    def test_a_release_serves_the_file_the_one_instruction_asks_for(self):
-        # `releases/latest/download/<asset>` resolves only if the release carries that asset.
-        # Drop it from the workflow and every instruction above becomes a 404.
-        (_slug, asset), = self._published()
+    def test_a_release_serves_one_counted_program_archive(self):
+        """R-INS-20, R-UPD-49 — installs and updates share one counted delivery."""
         workflow = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         attached = re.search(r"^\s*files:\s*(.+)$", workflow, re.M)
-        self.assertIsNotNone(attached, "a release attaches no files, so the install instruction 404s")
+        self.assertIsNotNone(attached, "a release attaches no counted program archive")
         carried = {f.strip() for f in re.split(r"[,\n]", attached.group(1)) if f.strip()}
-        self.assertIn(asset, carried,
-                      f"the instruction downloads {asset}, which no release attaches")
+        self.assertEqual(carried, {"rundesk-cli.tar.gz"},
+                         "a delivery must increment the public count exactly once")
+        self.assertIn("git archive ", workflow,
+                      "the release names an archive it never builds")
+        self.assertIn(
+            '--prefix="rundesk-cli-${GITHUB_REF_NAME}/"',
+            workflow,
+            "the release archive root is not one the installer accepts",
+        )
+        self.assertIn("gzip -9 > rundesk-cli.tar.gz", workflow,
+                      "the release builds a differently named archive")
+
+        installer = INSTALLER.read_text(encoding="utf-8")
+        sys.path.insert(0, str(REPO / "src"))
+        from rundesk import updater
+
+        self.assertIn(
+            "/releases/download/$tag/rundesk-cli.tar.gz",
+            installer,
+            "the remote installer does not fetch the counted release asset",
+        )
+        self.assertEqual(
+            updater.ARCHIVE_URL,
+            "https://github.com/rundesk-ai/rundesk-cli/releases/download/"
+            "{tag}/rundesk-cli.tar.gz",
+            "updates do not fetch the same counted release asset",
+        )
+
+    def test_the_readme_still_calls_the_public_delivery_count_installs(self):
+        """Owner signoff: the public badge remains labelled installs."""
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "img.shields.io/github/downloads/rundesk-ai/rundesk-cli/"
+            "total?label=installs",
+            readme,
+        )
 
 
 class DownloadedInstallTests(Sandbox):

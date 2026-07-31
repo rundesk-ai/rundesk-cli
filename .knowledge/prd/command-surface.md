@@ -29,3 +29,4 @@ command is the only way into the product, so what it lists is what the product i
 | ✅ | R-CMD-8 | An operation that is not built ends differently from one named wrongly | `a command that is not there is told apart from one typed wrong` |
 | ✅ | R-CMD-9 | An operation that is not built points at a command that does work | `a planned command names something that does work` |
 | ✅ | R-CMD-10 | An operation that is not built says which part of it is missing | `a planned command says which of it is not there` |
+| ✅ | R-CMD-11 | An owner can ask which configuration values govern the install and which written values nothing reads | `what an install is configured with is answerable`, `every value reported is stated in the file`, `a key nothing reads is said rather than left out`, `an unreadable configuration is refused rather than reported as defaults` |

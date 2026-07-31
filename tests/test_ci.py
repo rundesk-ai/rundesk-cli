@@ -142,6 +142,61 @@ class FastPullRequestFeedback(unittest.TestCase):
             self.workflow,
         )
 
+    def test_ci_checks_the_published_install_archive_once(self):
+        activity = self.workflow.split("  verify-published-install-archive:", 1)[1]
+        activity = activity.split(
+            "  # ------------------------------------------------------------------ the knowledge base", 1
+        )[0]
+        asset = (
+            "https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/"
+            "rundesk-cli.tar.gz"
+        )
+        self.assertEqual(
+            activity.count(asset),
+            1,
+            "the published install archive check must fetch the artifact once",
+        )
+        self.assertEqual(
+            activity.count('curl -fsSL "$asset" -o "$archive"'),
+            1,
+            "the published install archive check fetched the artifact more than once",
+        )
+        self.assertIn('tar -tzf "$archive"', activity)
+        self.assertNotIn("matrix:", activity, "CI activity was multiplied by a test matrix")
+        installer = (ROOT / "install.sh").read_text(encoding="utf-8")
+        cutoff = re.search(r'^COUNTED_DELIVERY_SINCE="([^"]+)"$', installer, re.MULTILINE)
+        self.assertIsNotNone(cutoff)
+        self.assertIn(f'ARCHIVE_REQUIRED_SINCE: "{cutoff.group(1)}"', activity)
+        self.assertIn("the published install archive is missing or invalid", activity)
+
+    def test_the_installed_dependency_runs_the_discord_footer_regression(self):
+        installed = self.workflow.split("  install-this-checkout:", 1)[1]
+        installed = installed.split("  # ------------------------------------------------------------------ upgrading", 1)[0]
+        self.assertIn(
+            ".venv/bin/python tests/test_discord.py "
+            "WhatOneTurnLooksLike.test_the_footer_omits_cache_writes_the_seam_hands_over",
+            installed,
+            "CI never runs the footer regression with discord.py installed",
+        )
+
+    def test_ci_builds_and_installs_the_exact_release_archive(self):
+        installed = self.workflow.split("  install-this-checkout:", 1)[1]
+        installed = installed.split("  # ------------------------------------------------------------------ upgrading", 1)[0]
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        command = (
+            'git archive --format=tar --prefix="rundesk-cli-${GITHUB_REF_NAME}/" '
+            '"$GITHUB_SHA" |'
+        )
+        self.assertIn(command, release)
+        self.assertIn(command, installed)
+        self.assertIn(
+            '"$archive_root/install.sh" --uninstall',
+            installed,
+            "CI installs the release archive but never proves it can be removed",
+        )
+
     def test_every_pull_request_verifies_fresh_installs_and_upgrades_from_the_latest_release(self):
         """R-INS-16"""
         self.assertIn("install-this-checkout:", self.workflow)

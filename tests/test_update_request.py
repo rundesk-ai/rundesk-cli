@@ -10,7 +10,7 @@ from unittest import mock
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import cli, update_request  # noqa: E402
+from rundesk import cli, config, restart_request, update_request, updater  # noqa: E402
 
 
 class DurableRequests(unittest.TestCase):
@@ -19,6 +19,7 @@ class DurableRequests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.addCleanup(os.environ.pop, "RUNDESK_DATA_DIR", None)
         os.environ["RUNDESK_DATA_DIR"] = self.temporary.name
+        config.ensure(pathlib.Path(self.temporary.name))
 
     def test_duplicate_requests_share_one_pending_update(self):
         """R-UPD-37"""
@@ -27,6 +28,58 @@ class DurableRequests(unittest.TestCase):
         self.assertTrue(created)
         self.assertFalse(created_again)
         self.assertEqual(first["id"], second["id"])
+
+    def test_duplicate_restarts_share_one_pending_cycle_per_gateway(self):
+        """R-GW-43"""
+        first, created = restart_request.queue("ava", {"run": "one"})
+        second, created_again = restart_request.queue("ava", {"run": "two"})
+        other, other_created = restart_request.queue("bo", {"run": "three"})
+        self.assertTrue(created)
+        self.assertFalse(created_again)
+        self.assertTrue(other_created)
+        self.assertEqual(first["id"], second["id"])
+        self.assertNotEqual(first["id"], other["id"])
+
+    def test_channel_restart_waits_until_its_final_records_are_released(self):
+        """R-GW-43"""
+        restart_request.queue("ava", {
+            "agent": "ava", "run": "one", "channel": "discord",
+            "conversation": "room-7",
+        })
+        self.assertTrue(restart_request.waiting("ava", "one"))
+        restart_request.ready("ava", "some-other-run")
+        self.assertTrue(restart_request.waiting("ava", "one"))
+        restart_request.ready("ava", "one")
+        self.assertFalse(restart_request.waiting("ava", "one"))
+        self.assertTrue(restart_request.read("ava")["ready"])
+
+    def test_restart_outcome_is_delivered_once_to_its_origin_agent(self):
+        """R-GW-43"""
+        queued, _ = restart_request.queue("ava", {
+            "agent": "ava", "run": "one", "channel": "discord",
+            "conversation": "room-7",
+        })
+        restart_request.claim("ava")
+        restart_request.finish("ava", queued["id"], "succeeded", "ava is online")
+        self.assertIsNone(restart_request.deliverable("bo"))
+        self.assertEqual(queued["id"], restart_request.deliverable("ava")["id"])
+        restart_request.delivered("ava", queued["id"])
+        self.assertIsNone(restart_request.deliverable("ava"))
+
+    def test_restart_worker_waits_for_safety_then_cycles_and_finishes(self):
+        """R-GW-43"""
+        restart_request.queue("ava", {})
+        with mock.patch.object(
+                cli, "_restart_in_flight", side_effect=[["turn:one"], []]), \
+                mock.patch.object(cli.time, "sleep") as slept, \
+                mock.patch.object(cli, "_stand_down", return_value=0) as cycled:
+            self.assertEqual(0, cli._run_restart_worker(
+                mock.Mock(), mock.Mock(), mock.Mock()
+            ))
+        slept.assert_called_once()
+        self.assertEqual("restart", cycled.call_args.args[-1])
+        self.assertTrue(cycled.call_args.args[0].worker)
+        self.assertEqual("succeeded", restart_request.read("ava")["state"])
 
     def test_pending_running_and_final_outcomes_are_durable(self):
         """R-UPD-36"""
@@ -162,6 +215,7 @@ class DurableRequests(unittest.TestCase):
         with mock.patch.dict(os.environ, {
                     "RUNDESK_UPDATE_ROOT": str(target),
                     "RUNDESK_UPDATE_VERSION": "0.9.6",
+                    "RUNDESK_DATA_DIR": self.temporary.name,
                 }, clear=True), \
                 mock.patch.object(cli.updater, "run", return_value=0) as ran:
             self.assertEqual(0, cli.cmd_update(
@@ -375,6 +429,32 @@ class DurableRequests(unittest.TestCase):
         self.assertIn(
             "https://github.com/rundesk-ai/rundesk-cli/releases/tag/v0.15.0", said
         )
+
+    def test_a_worker_run_outcome_names_the_release_once_rather_than_twice(self):
+        """R-UPD-46, #108 — the worker persists what the update printed, and that already
+        names the release. Appending it again handed the owner the same URL on two
+        consecutive lines, which reads as two different things having happened."""
+        queued, _ = update_request.queue({"agent": "ava", "run": "one"})
+        update_request.claim()
+        where = updater.release_url("0.15.0")
+        row = update_request.finish(
+            queued["id"], "succeeded",
+            f"v0.15.0: UPDATED\nupdate: applied — now on [0.15.0]({where})",
+            "rundesk 0.15.0",
+        )
+        said = update_request.summary(row)
+        self.assertEqual(1, said.count(where), "the release was named twice")
+        self.assertNotIn("what changed:", said)
+
+    def test_an_outcome_whose_transcript_says_nothing_still_links_the_release(self):
+        """R-UPD-46 — the direct path and an agent-delivered row both come through here,
+        and one of them carries no transcript at all. Dropping the link whenever the
+        wrapper stopped adding it would lose it exactly where it is the only copy."""
+        queued, _ = update_request.queue({"agent": "ava", "run": "one"})
+        update_request.claim()
+        row = update_request.finish(queued["id"], "succeeded", "updated", "rundesk 0.15.0")
+        said = update_request.summary(row)
+        self.assertIn(f"[rundesk 0.15.0]({updater.release_url('0.15.0')})", said)
 
     def test_a_failed_or_rolled_back_outcome_never_links_a_release_as_landed(self):
         """R-UPD-47 — the version on a rolled-back request is the release the owner was

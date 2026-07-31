@@ -1,28 +1,30 @@
-# Your memory
+# MEMORY
 
-One line each, grouped below. Durable, learned, load-bearing — the test is in `AGENTS.md`.
-Delete a line the moment it stops being true; a long list is one nobody has pruned.
+What you have learned, across conversations you can no longer see. You write this file; the rules
+are in `AGENTS.md`, under Memory.
 
-Keep it under 50 lines. Past that, consolidate before adding.
+## Who you work for
+
+*The person or team. One line each: who they are, what they're working on, timezone if you ever
+act on a clock.*
+
+## How they want to be answered
+
+*Only where they differ from `SOUL.md`, How you answer — including words they never want to see.
+Name the person when it is theirs alone.*
 
 ## Decisions
 
-*Choices already made, so they don't get relitigated or quietly reversed.*
+*Choices already made, recorded so they don't get relitigated or quietly reversed.*
 
 ## Constraints
 
 *What can't change, what breaks, what the environment won't allow.*
 
-## Preferences
+## Conventions
 
-*How the user wants things done, learned from correction rather than stated in `USER.md`.*
+*How the work gets done here, learned from correction. Tools they keep to, tools they avoid.*
 
 ## Open loops
 
-*In flight and not finished. Close or delete each one — this section should empty out.*
-
-<!--
-Format, then delete this block:
-- Deploys go out Tuesday mornings, never Friday — 2026-07-26
-- Staging DB is a nightly copy of prod; writes to it are lost by morning
--->
+*Started and not finished. Each one closes or is deleted; this section empties out.*

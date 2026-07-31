@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import agent, provider, store, transcript, turn  # noqa: E402
+from rundesk import agent, config, process, provider, store, transcript, turn  # noqa: E402
 
 PY = sys.executable
 
@@ -76,6 +76,7 @@ sys.stdin.read()
 sys.stderr.write("a warning worth keeping\\n")
 sys.stderr.flush()
 sys.stdout.write(json.dumps({"type": "constellation", "shape": "orion"}) + "\\n")
+sys.stdout.write(json.dumps({"type": "text", "text": "answered"}) + "\\n")
 sys.stdout.write(json.dumps({"type": "done", "ok": True}) + "\\n")
 sys.stdout.flush()
 '''
@@ -88,6 +89,67 @@ if "--capabilities" in sys.argv:
     sys.exit(0)
 sys.stdin.read()
 sys.stdout.write(json.dumps({"type": "done", "ok": False}) + "\\n")
+sys.stdout.flush()
+'''
+
+#: A turn that claims it worked and answers nobody — a resumed session was measured doing
+#: exactly this, reporting four zeros and `ok` one second after it started.
+SILENT = '''
+import json, sys
+if "--capabilities" in sys.argv:
+    print("{}")
+    sys.exit(0)
+sys.stdin.read()
+sys.stdout.write(json.dumps(
+    {"type": "usage", "input": 0, "output": 0, "cached": 0, "written": 0}) + "\\n")
+sys.stdout.write(json.dumps({"type": "done", "ok": True, "session": "s"}) + "\\n")
+sys.stdout.flush()
+'''
+
+#: Answers a fresh session and hands a resumed one straight back untouched — what a real
+#: brain was measured doing when its session carried a notification left over from the
+#: turn before, and what makes the question disappear.
+STALE = '''
+import json, os, sys
+if "--capabilities" in sys.argv:
+    print(json.dumps({"resume": True, "usage": True}))
+    sys.exit(0)
+prompt = sys.stdin.read().strip()
+say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
+if os.environ.get("RUNDESK_RESUME"):
+    # A handle of its own, never the one it was handed. A stand-in that echoes what it was
+    # given makes both attempts report the same string, and every assertion about which
+    # handle the conversation kept then passes whichever one the code picks.
+    say(type="usage", input=0, output=0, cached=0, written=0)
+    say(type="done", ok=True, session="stale-" + os.environ["RUNDESK_RESUME"])
+    sys.exit(0)
+say(type="text", text="answered " + prompt)
+say(type="usage", input=12, output=3, model="stand-in-1")
+say(type="done", ok=True, session="a-session")
+'''
+
+#: Hands every session back untouched, resumed or not — so a second attempt is no better
+#: than the first and the turn has to settle as the failure it is.
+MUTE = '''
+import json, sys
+if "--capabilities" in sys.argv:
+    print(json.dumps({"resume": True, "usage": True}))
+    sys.exit(0)
+sys.stdin.read()
+say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
+say(type="usage", input=0, output=0, cached=0, written=0)
+say(type="done", ok=True, session="a-session")
+'''
+
+#: The same, saying only whitespace — which a surface posts nothing for.
+BLANK = '''
+import json, sys
+if "--capabilities" in sys.argv:
+    print("{}")
+    sys.exit(0)
+sys.stdin.read()
+sys.stdout.write(json.dumps({"type": "text", "text": "   \\n"}) + "\\n")
+sys.stdout.write(json.dumps({"type": "done", "ok": True}) + "\\n")
 sys.stdout.flush()
 '''
 
@@ -144,8 +206,28 @@ say(type="text", text="working on it")
 time.sleep(30)
 '''
 
+#: Thinks aloud while it works, then answers — the shape every real brain arrives in. Three
+#: finished thoughts with tool calls between them, the last of which is the report and is
+#: several paragraphs long.
+NARRATES = '''
+import json, sys
+if "--capabilities" in sys.argv:
+    print("{}")
+    sys.exit(0)
+sys.stdin.read()
+say = lambda **it: (sys.stdout.write(json.dumps(it) + "\\n"), sys.stdout.flush())
+say(type="text", text="I'll start by reading the repository instructions.", whole=True)
+say(type="tool", name="Read")
+say(type="text", text="Selected candidate: the first one.", whole=True)
+say(type="tool", name="Bash")
+say(type="text", text="Done.\\n\\nOne report, in two paragraphs.", whole=True)
+say(type="done", ok=True)
+'''
+
 BRAINS = {"plain": PLAIN, "quiet": QUIET, "nosy": NOSY, "strange": STRANGE,
-          "failing": FAILING, "steerable": STEERABLE, "finishes": FINISHES, "goes_on": GOES_ON}
+          "failing": FAILING, "steerable": STEERABLE, "finishes": FINISHES,
+          "goes_on": GOES_ON, "silent": SILENT, "blank": BLANK,
+          "stale": STALE, "mute": MUTE, "narrates": NARRATES}
 
 
 class WithAnAgentToRunTurnsFor(unittest.IsolatedAsyncioTestCase):
@@ -167,6 +249,7 @@ class WithAnAgentToRunTurnsFor(unittest.IsolatedAsyncioTestCase):
             self.addCleanup(os.environ.pop, said, None)
             os.environ[said] = str(at)
             at.mkdir(parents=True, exist_ok=True)
+        config.ensure(self.before / "data")
         self.brains = Path(tempfile.mkdtemp(prefix="rundesk-brains-"))
         self.addCleanup(shutil.rmtree, self.brains, True)
         agent.add("ava", self.where)
@@ -380,6 +463,27 @@ class WhatATurnRecords(WithAnAgentToRunTurnsFor):
         self.assertEqual(b"a warning worth keeping\n",
                          transcript.read(self.logs(), said.run, transcript.ERRORS))
 
+    async def test_a_turn_that_answered_nobody_is_not_a_turn_that_worked(self):
+        """R-RUN-21 — measured: a resumed session reported `done ok:true` with a usage
+        record of four zeros one second after it started, and said nothing else at all.
+        The run was written down as `finished` and the message that asked for it was
+        marked answered, so the person who asked was told their question had been dealt
+        with, the question was consumed, and nothing had happened to it. A program exiting
+        well is not an answer."""
+        said = await self.ask("silent")
+        self.assertFalse(said.ok, "a turn that said nothing was reported as working")
+        self.assertEqual("failed", self.settled(said.run)["outcome"])
+        self.assertEqual(turn.NOTHING_SAID, said.why,
+                         "nothing told the person why they got no answer")
+
+    async def test_whitespace_is_not_an_answer_either(self):
+        """R-RUN-21 — a surface posts nothing for it, so a turn that produced only
+        whitespace produced nothing, and reporting it as finished is the same lie in a
+        shape that is harder to see."""
+        said = await self.ask("blank")
+        self.assertFalse(said.ok)
+        self.assertEqual(turn.NOTHING_SAID, said.why)
+
     async def test_a_turn_that_failed_is_recorded_as_one(self):
         """R-RUN-4 — a brain that says the turn did not work is believed, whatever its
         exit code said."""
@@ -441,6 +545,47 @@ class WhatAdmittedThisTurn(WithAnAgentToRunTurnsFor):
         self.assertEqual("terminal", self.settled(said.run)["source"])
         self.assertIsNone(self.asked(said.run)["who"],
                           "a turn from a terminal claimed somebody had asked for it")
+
+
+class WhatATurnAnswersWith(WithAnAgentToRunTurnsFor):
+    """R-SCH-45 — one whole turn, and the one row somebody reads it back out of.
+
+    A scheduled run never passes through the surface that shows a watched turn working, so
+    the last-whole-thought behaviour a person already gets could not reach it: what it says
+    is read back out of the conversation afterwards, and that row held every thought the
+    brain had on the way. Nothing about a watched turn changes here.
+    """
+
+    async def answered(self, **extra) -> list:
+        """What this agent said in the run's conversation, as it will be read back."""
+        outcome = await self.ask("narrates", **extra)
+        self.assertTrue(outcome.ok, f"the turn did not finish: {outcome.why}")
+        return [one["text"] for one in self.talk(outcome.run) if one["author"] == "agent"]
+
+    async def test_a_turn_nobody_watched_says_its_last_thought_and_not_its_working(self):
+        """R-SCH-45 — the whole defect, end to end. Three finished thoughts with tool calls
+        between them is what a real scheduled run looks like, and its owner was handed all
+        three with the report at the bottom."""
+        self.assertEqual(["Done.\n\nOne report, in two paragraphs."],
+                         await self.answered(source=turn.SCHEDULE, conversation="nightly",
+                                             on=turn.SCHEDULE, kind=turn.SCHEDULE))
+
+    async def test_a_turn_somebody_asked_for_still_says_everything_it_said(self):
+        """R-PRV-22 — unchanged, and this is the case that says so. Somebody watching a turn
+        is watching it *because* the working is the point, and a surface has already sent
+        each finished thought on as the next one arrived."""
+        self.assertEqual(["I'll start by reading the repository instructions.\n\n"
+                          "Selected candidate: the first one.\n\n"
+                          "Done.\n\nOne report, in two paragraphs."],
+                         await self.answered())
+
+    async def test_a_turn_the_clock_started_still_records_everything_it_did(self):
+        """R-RUN-4 — what is narrowed is the one row holding what it *said*. What it did is
+        the run's account and is untouched, so the turn is still readable as a turn."""
+        outcome = await self.ask("narrates", source=turn.SCHEDULE, conversation="nightly",
+                                 on=turn.SCHEDULE, kind=turn.SCHEDULE)
+        self.assertEqual(["tool", "tool", "done"],
+                         [one["kind"] for one in self.account(outcome.run)])
 
 
 class CarryingAConversationOn(WithAnAgentToRunTurnsFor):
@@ -516,12 +661,421 @@ class CarryingAConversationOn(WithAnAgentToRunTurnsFor):
                          "the lookup is wrong, so finding nothing proved nothing")
 
 
+class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
+    """R-RUN-24 — measured on a live gateway twice in 82 minutes: a resumed session's
+    first record was a notification left over from the session before, and it ended the
+    turn 14 ms later with `ok`, four zeros of usage and nothing said at all. The prompt
+    was never read. Rundesk is the only layer that knows both that the turn said nothing
+    and what the person originally asked, and it discarded the question."""
+
+    def attempts(self, run: str) -> int:
+        """How many times the brain was actually started — one `done` each."""
+        return len([one for one in self.account(run) if one["type"] == "done"])
+
+    def asked_again(self, run: str) -> list:
+        return [one for one in self.account(run) if one["type"] == turn.RETRY]
+
+    async def test_a_resumed_turn_that_never_ran_is_asked_again_on_a_fresh_session(self):
+        """R-RUN-24 — the person who asked gets their answer instead of an activity mark
+        and silence, and the question is not consumed."""
+        first = await self.ask("stale")
+        self.assertEqual("a-session", self.handle_for("stale"),
+                         "there was no session to hand back, so nothing is being tested")
+
+        again = await self.ask("stale", prompt="submit ticket")
+        self.assertTrue(again.ok, "the question was consumed and nobody was told")
+        self.assertEqual("answered submit ticket", again.text)
+        self.assertIsNone(again.why)
+        self.assertEqual("finished", self.settled(again.run)["outcome"])
+        self.assertEqual("answered submit ticket", self.answer(again.run),
+                         "the person who asked has nothing in the conversation to read")
+        self.assertEqual(2, self.attempts(again.run))
+        self.assertNotEqual(first.run, again.run)
+
+    async def test_the_conversation_carries_on_from_the_fresh_session_not_the_stale_one(self):
+        """R-RUN-11, R-RUN-24 — a retried turn reports two sessions and only one of them
+        exists. Keep the one that was handed back and every later turn resumes a session
+        that is already dead: handed straight back, retried, answered on a new session, and
+        pinned to the dead one again — two brain starts a turn, for ever, with each turn
+        still answering so nothing looks wrong."""
+        await self.ask("stale")
+        again = await self.ask("stale")
+        self.assertEqual("a-session", again.handle,
+                         "the turn carried on from the session that had just failed it")
+        self.assertEqual("a-session", self.handle_for("stale"),
+                         "the conversation was pinned to the stale session")
+
+    async def test_being_asked_again_is_in_the_runs_own_account(self):
+        """R-RUN-24 — a brain started twice for one turn with nothing written down is a
+        turn nobody can explain the cost or the duration of afterwards."""
+        await self.ask("stale")
+        again = await self.ask("stale")
+        retried = self.asked_again(again.run)
+        self.assertEqual(1, len(retried), "the brain was run twice and the account says once")
+        self.assertEqual(turn.NEVER_RAN, retried[0]["why"])
+        # Both attempts, because both were billed. The first reported four zeros and the
+        # second is what the answer actually cost.
+        self.assertEqual(12, again.tokens["input"])
+        self.assertEqual(3, again.tokens["output"])
+
+    async def test_a_second_silence_is_the_answer_and_nothing_is_asked_a_third_time(self):
+        """R-RUN-24 — asked again once. A brain that says nothing whatever session it is
+        given must not be asked round a loop, and the turn settles as the failure it is
+        (R-RUN-21)."""
+        await self.ask("mute")
+        again = await self.ask("mute")
+        self.assertFalse(again.ok)
+        self.assertEqual(turn.NOTHING_SAID, again.why)
+        self.assertEqual("failed", self.settled(again.run)["outcome"])
+        self.assertEqual(2, self.attempts(again.run), "a turn was asked a third time")
+
+    async def test_a_turn_rundesk_asked_for_itself_is_not_asked_again(self):
+        """R-RUN-24, R-GW-22 — what rundesk writes into a turn itself is always a
+        continuation, and a continuation means nothing on a session that was not there for
+        what it continues. Asked again on a fresh one it answers about nothing, the turn is
+        recorded as finished, and the person is told interrupted work was picked up when it
+        was not."""
+        await self.ask("stale")
+        again = await self.ask("stale", prompt="carry on", prompt_author="rundesk")
+        self.assertFalse(again.ok)
+        self.assertEqual(turn.NOTHING_SAID, again.why)
+        self.assertEqual(1, self.attempts(again.run), "a continuation was begun again")
+        self.assertEqual([], self.asked_again(again.run))
+
+    async def test_a_recovery_turn_is_refused_rather_than_begun_again(self):
+        """R-GW-22 — an interrupted turn is taken up where it stopped, never begun again.
+        A recovery turn is already refused outright when there is no session to carry on
+        from, and a retry is that same refusal one attempt later: it would hand
+        `Continue the interrupted work` to a brain that knows nothing about it, record the
+        turn as finished, and move the conversation onto the fresh session it ended on —
+        while the interrupted run is already claimed and can never be offered again."""
+        await self.ask("stale")
+        self.assertEqual("a-session", self.handle_for("stale"))
+        recovered = await self.ask("stale", prompt="carry on", prompt_author="rundesk",
+                                   resume_required=True, recovery_of="an-earlier-run")
+        self.assertFalse(recovered.ok, "a recovery that answered nobody was reported as done")
+        self.assertEqual(1, self.attempts(recovered.run), "interrupted work was begun again")
+        self.assertEqual([], self.asked_again(recovered.run))
+        self.assertNotEqual("a-session", self.handle_for("stale"),
+                            "the conversation was moved onto a session started from nothing")
+
+    async def test_a_turn_that_was_not_resumed_is_not_asked_again(self):
+        """R-RUN-24 — nothing was handed back, so there is nothing a fresh session would
+        do differently. A brain asked to repeat work it has already refused to do costs
+        an owner twice for the same silence."""
+        first = await self.ask("mute")
+        self.assertFalse(first.ok)
+        self.assertFalse(self.settled(first.run)["resumed"])
+        self.assertEqual(1, self.attempts(first.run))
+        self.assertEqual([], self.asked_again(first.run))
+
+
+class WhenAResumedTurnIsWorthAskingAgain(unittest.TestCase):
+    """R-RUN-24 — narrow on purpose, because the cost of being wrong is a brain asked to
+    do the same work twice. `_never_ran` is the whole decision and is asked directly."""
+
+    NOTHING = [{"type": "usage", "input": 0, "output": 0, "cached": 0, "written": 0},
+               {"type": "done", "ok": True, "session": "s"}]
+
+    def never_ran(self, said, result=None, resumed=True) -> bool:
+        return turn._never_ran(
+            said, result or process.Result(process.FINISHED, 0), resumed=resumed)
+
+    def test_a_resumed_session_that_reported_nothing_and_said_nothing_never_ran(self):
+        self.assertTrue(self.never_ran(self.NOTHING))
+
+    def test_a_turn_that_was_not_resumed_had_no_stale_session_to_be_given_back(self):
+        self.assertFalse(self.never_ran(self.NOTHING, resumed=False))
+
+    def test_a_turn_that_spent_anything_at_all_read_something(self):
+        """One token in any of the four slots is a brain that reached the prompt. What it
+        did with it is its own business, and asking again would bill an owner twice."""
+        for what in ("input", "output", "cached", "written"):
+            said = [dict(self.NOTHING[0], **{what: 1}), self.NOTHING[1]]
+            self.assertFalse(self.never_ran(said), f"{what} was spent and it was asked again")
+
+    def test_a_brain_that_measured_nothing_is_not_a_brain_that_did_nothing(self):
+        """An adapter that omits usage says nothing about what happened, and silence about
+        cost is not evidence of a turn that never ran (R-USE-7)."""
+        self.assertFalse(self.never_ran([{"type": "done", "ok": True, "session": "s"}]))
+
+    def test_a_turn_that_answered_is_left_alone(self):
+        """Including one that answered with a file and typed nothing at all."""
+        for answer in ({"type": "text", "text": "here"}, {"type": "file", "path": "a.txt"}):
+            self.assertFalse(self.never_ran([self.NOTHING[0], answer, self.NOTHING[1]]))
+
+    def test_a_brain_that_said_why_it_stopped_stopped_for_a_reason_of_its_own(self):
+        """A refusal, an exhausted account or a lost context is a decision, not a turn
+        that was never run — and a fresh session would meet the same wall (R-RUN-19)."""
+        for word in turn.BECAUSE:
+            self.assertFalse(self.never_ran(
+                [self.NOTHING[0], {"type": "done", "ok": True, "because": word}]))
+
+    def test_a_turn_whose_brain_never_said_it_ended_is_not_asked_again(self):
+        """The shape a killed gateway leaves. Nothing said the turn is over, so nothing
+        here may declare it over and start it afresh."""
+        self.assertFalse(self.never_ran([self.NOTHING[0]]))
+        self.assertFalse(self.never_ran(
+            [self.NOTHING[0], {"type": "done", "ok": False}]))
+
+    def test_a_program_that_did_not_finish_well_failed_for_its_own_reason(self):
+        """A crash and a lost record are both failures a fresh session does not fix, and
+        a cancelled turn is one nobody is waiting on any more."""
+        self.assertFalse(self.never_ran(
+            self.NOTHING, result=process.Result(process.FAILED, 1)))
+        self.assertFalse(self.never_ran(
+            self.NOTHING, result=process.Result(process.FINISHED, 0, undelivered=1)))
+
+
+class WhatFourSlotsOfUsageAddUpTo(unittest.TestCase):
+    """R-USE-13. `_tokens` is the whole of the arithmetic and is asked directly — no agent,
+    no brain, and no fixture whose own numbers could make a wrong sum look right."""
+
+    def test_tokens_written_into_a_cache_are_recorded_apart_from_fresh_input(self):
+        """The other direction of R-USE-4, and the one that was wrong. A cache write bills
+        *above* standard input where a read bills at a fraction of it, so folding writes
+        into `input` recorded the most expensive tokens of a turn under its cheapest label.
+        These are the figures from the real turn it was found on: 2 fresh, 5,550 written."""
+        said = [{"type": "usage", "input": 2, "output": 5,
+                 "cached": 15273, "written": 5550}]
+        self.assertEqual({"reported": True, "input": 2, "output": 5,
+                          "cached": 15273, "written": 5550}, turn._tokens(said))
+
+    def test_a_brain_that_does_not_report_cache_writes_has_none_invented(self):
+        """R-USE-6, one field along. Some brains and older adapter streams report no
+        cache-creation split, and summing an absent one into zero would say they wrote
+        nothing to a cache rather than that they do not say."""
+        said = [{"type": "usage", "input": 7, "output": 3, "cached": 2}]
+        self.assertNotIn("written", turn._tokens(said))
+
+    def test_what_several_usage_records_written_add_up_to_is_summed_like_the_rest(self):
+        """A turn may report more than once. `written` sums the same way its three
+        neighbours do, rather than taking the last one and losing the others."""
+        said = [{"type": "usage", "input": 1, "written": 100},
+                {"type": "usage", "input": 2, "written": 250}]
+        self.assertEqual(350, turn._tokens(said)["written"])
+
+    def test_a_turn_that_reported_no_usage_at_all_invents_no_slot(self):
+        """R-USE-7 — unchanged by the fourth field, and the guard that it did not become a
+        default of zero on the way in."""
+        self.assertEqual({"reported": False}, turn._tokens([{"type": "text", "text": "x"}]))
+
+    def test_a_turn_records_the_final_conversation_size_without_adding_snapshots(self):
+        """R-USE-15 — session is the final level, even after compaction, while billed
+        quantities remain the sum of what each request reported."""
+        said = [{"type": "usage", "input": 4, "output": 2, "session": 120000},
+                {"type": "usage", "input": 3, "output": 5, "session": 80000}]
+        self.assertEqual(
+            {"reported": True, "input": 7, "output": 7, "session": 80000},
+            turn._tokens(said),
+        )
+
+
+class WhyATurnStopped(unittest.TestCase):
+    """R-RUN-19. `_because` is the whole of the decision and is asked directly."""
+
+    def ending(self, **said):
+        return [{"type": "text", "text": "before it stopped"},
+                {"type": "done", "ok": False, **said}]
+
+    def test_a_turn_stopped_for_a_reason_the_seam_has_a_word_for_records_that_word(self):
+        """`failed` alone answers "did it work" and not "what do I do about it": a turn an
+        account limit stopped reads exactly like a crashed adapter or a bad flag."""
+        for word in turn.BECAUSE:
+            self.assertEqual(word, turn._because(self.ending(because=word, why="…")))
+
+    def test_a_word_this_rundesk_does_not_know_is_dropped_rather_than_stored(self):
+        """The whole value of a closed set is that a reader can exhaust it, and one unknown
+        member sitting in the column takes that away. This is also the case that matters
+        most in practice — an adapter written against a *newer* rundesk reporting a word
+        this one has never heard of must not quietly corrupt an older install's totals."""
+        for word in ("rate-limited", "RATE_LIMITED", "throttled", "", "  ", "unknown"):
+            self.assertIsNone(turn._because(self.ending(because=word, why="…")))
+        self.assertIsNone(turn._because(self.ending(because=["rate_limited"], why="…")))
+        self.assertIsNone(turn._because(self.ending(because=True, why="…")))
+
+    def test_a_run_whose_brain_classified_nothing_keeps_its_prose_and_no_word(self):
+        """Additive, and this is what that means: an adapter that never learns any of these
+        words behaves exactly as it did before, and `why` is untouched either way."""
+        said = self.ending(why="the parser exploded")
+        self.assertIsNone(turn._because(said))
+        self.assertEqual("the parser exploded", turn._why(said))
+
+    def test_a_turn_that_never_ended_has_no_reason_to_give(self):
+        """Nothing to read it off. A turn with no `done` record at all is the shape a killed
+        gateway leaves, and it must not fall through to a word."""
+        self.assertIsNone(turn._because([{"type": "text", "text": "cut off"}]))
+
+
+class WhatOneReplyIsMadeOf(unittest.TestCase):
+    """R-PRV-22 read from the other end: an adapter marks a finished thought `whole`, and
+    what a person reads back is where that marking has to land.
+
+    No agent and no brain — `_reply` is the whole decision and is asked directly."""
+
+    def test_two_finished_thoughts_do_not_run_into_each_other(self):
+        """Measured on a real account: two `whole` records concatenated with nothing
+        between them produced `caught it running.The worker (PID 72422)` — the last word
+        of one thought fused to the first of the next, in the record and on the surface."""
+        said = [{"type": "text", "text": "caught it running.", "whole": True},
+                {"type": "text", "text": "The worker (PID 72422) is blocked.",
+                 "whole": True}]
+        self.assertEqual("caught it running.\n\nThe worker (PID 72422) is blocked.",
+                         turn._reply(said))
+
+    def test_a_reply_arriving_a_piece_at_a_time_is_still_one_sentence(self):
+        """The guard on the one above. Fragments are not thoughts: separating them would
+        break a single sentence into paragraphs, which is the opposite failure."""
+        said = [{"type": "text", "text": "one "},
+                {"type": "text", "text": "whole "},
+                {"type": "text", "text": "sentence"}]
+        self.assertEqual("one whole sentence", turn._reply(said))
+
+    def test_fragments_still_open_are_closed_by_the_thought_that_follows(self):
+        """A brain may do both. What is open when a finished thought lands is its own
+        paragraph, rather than being swallowed into the next one."""
+        said = [{"type": "text", "text": "half a "},
+                {"type": "text", "text": "sentence"},
+                {"type": "text", "text": "Then a finished thought.", "whole": True}]
+        self.assertEqual("half a sentence\n\nThen a finished thought.", turn._reply(said))
+
+    def test_fragments_on_each_side_of_a_tool_call_are_two_thoughts(self):
+        """The seam for a brain that never marks anything finished. Joined with nothing, a
+        grok turn reads back `caught it running.The worker` — the very shape the case above
+        exists to prevent, arriving by the other door."""
+        said = [{"type": "text", "text": "caught it "},
+                {"type": "text", "text": "running."},
+                {"type": "tool", "name": "Bash", "id": "one"},
+                {"type": "result", "id": "one", "ok": True},
+                {"type": "text", "text": "The worker (PID 72422) "},
+                {"type": "text", "text": "is blocked."}]
+        self.assertEqual("caught it running.\n\nThe worker (PID 72422) is blocked.",
+                         turn._reply(said))
+
+    def test_a_tool_a_brain_never_announced_still_ends_the_thought(self):
+        """An adapter may hear of a tool only once it is over, and report the terminal
+        update alone. The seam has to be found there too, or the thoughts on each side of
+        work nobody saw start fuse back together."""
+        said = [{"type": "text", "text": "looking"},
+                {"type": "result", "id": "one", "ok": True},
+                {"type": "text", "text": "found it"}]
+        self.assertEqual("looking\n\nfound it", turn._reply(said))
+
+    def test_nothing_but_text_records_reach_the_reply(self):
+        """A turn says more than it replies with: what it thought and what a tool returned
+        are kept, and are not what somebody asked for."""
+        said = [{"type": "think", "text": "working it out", "whole": True},
+                {"type": "text", "text": "the answer", "whole": True},
+                {"type": "tool", "name": "Read"},
+                {"type": "usage", "input": 1}]
+        self.assertEqual("the answer", turn._reply(said))
+
+    def test_what_a_brain_put_inside_one_thought_is_left_exactly_as_it_said_it(self):
+        """R-USE-2's reasoning, applied to prose: the blank lines *between* thoughts are
+        rundesk's, and the ones *within* one are the brain's."""
+        said = [{"type": "text", "text": "a heading\n\n- one\n- two\n", "whole": True},
+                {"type": "text", "text": "\nand after it", "whole": True}]
+        self.assertEqual("a heading\n\n- one\n- two\n\nand after it", turn._reply(said))
+
+    def test_a_turn_that_said_nothing_replies_with_nothing(self):
+        """`answered` writes nothing for an empty reply, so this must stay empty rather
+        than becoming a paragraph separator with nothing on either side of it."""
+        self.assertEqual("", turn._reply([]))
+        self.assertEqual("", turn._reply([{"type": "text", "text": "  ", "whole": True}]))
+        self.assertEqual("", turn._reply([{"type": "usage", "input": 1}]))
+
+
+class WhatATurnClosesOn(unittest.TestCase):
+    """R-SCH-45 — the same records, read for the last thought rather than for all of them.
+
+    No agent and no brain: `_close` is the whole decision and is asked directly. Read only
+    once the turn is over, because that is the only moment "which was last" is a fact — a
+    brain says something and then decides whether to call another tool, so it cannot mark
+    its own final message without predicting what it is about to do.
+    """
+
+    def test_the_close_of_a_turn_is_the_last_whole_thing_its_brain_said(self):
+        """The working narration is exactly what stands between an owner and the report:
+        measured on a real account, three paragraphs of orientation arrived above it."""
+        said = [{"type": "text", "text": "I'll start by reading the instructions.",
+                 "whole": True},
+                {"type": "tool", "name": "Read"},
+                {"type": "text", "text": "Selected candidate: the first one.", "whole": True},
+                {"type": "text", "text": "Nothing needs your decision.", "whole": True}]
+        self.assertEqual("Nothing needs your decision.", turn._close(said))
+
+    def test_an_answer_written_in_one_go_survives_every_paragraph_of_it(self):
+        """The objection this design had to answer. One finished thought is one record,
+        however long it is, so what is dropped is only a thought said before further tool
+        calls — never the paragraphs inside the answer itself."""
+        said = [{"type": "text", "text": "working on it", "whole": True},
+                {"type": "text", "text": "a heading\n\n- one\n- two\n\nand after it",
+                 "whole": True}]
+        self.assertEqual("a heading\n\n- one\n- two\n\nand after it", turn._close(said))
+
+    def test_a_reply_no_brain_ever_called_finished_is_still_the_close(self):
+        """An adapter that never marks a thought `whole` says one thing in fragments, and
+        that one thing is what it closed on — not nothing, which is what reading only
+        `whole` records would deliver. Nothing was said before further tool calls here, so
+        there is no working to drop and the whole of it is the close."""
+        said = [{"type": "text", "text": "one "},
+                {"type": "text", "text": "whole "},
+                {"type": "text", "text": "sentence"}]
+        self.assertEqual("one whole sentence", turn._close(said))
+
+    def test_a_brain_that_never_marks_a_thought_finished_still_drops_its_working(self):
+        """**The guarantee on the two adapters that cannot mark a thought `whole`** —
+        `grok`, which refuses it on purpose, and `antigravity`, whose deltas carry it only
+        on a terminal fallback nothing reaching here ever takes. Read on `whole` alone this
+        close is the entire turn, narration and all, and a schedule on either brain still
+        delivers its working. Going to work is the seam that makes it the report."""
+        said = [{"type": "text", "text": "I'll start by reading "},
+                {"type": "text", "text": "the repository instructions."},
+                {"type": "tool", "name": "Read", "id": "one"},
+                {"type": "result", "id": "one", "ok": True},
+                {"type": "text", "text": "Selected candidate: the first one."},
+                {"type": "tool", "name": "Bash", "id": "two"},
+                {"type": "result", "id": "two", "ok": True},
+                {"type": "text", "text": "Done. "},
+                {"type": "text", "text": "One report."}]
+        self.assertEqual("Done. One report.", turn._close(said))
+        self.assertNotEqual(turn._reply(said), turn._close(said))
+
+    def test_what_a_brain_said_after_its_last_finished_thought_is_the_close(self):
+        """A brain cut off part-way through writing its next thought still said that much,
+        and it is the last thing it said."""
+        said = [{"type": "text", "text": "the thought before", "whole": True},
+                {"type": "text", "text": "and then it was "},
+                {"type": "text", "text": "interrupted"}]
+        self.assertEqual("and then it was interrupted", turn._close(said))
+
+    def test_a_turn_that_said_nothing_closes_on_nothing(self):
+        """`answered` writes nothing for an empty close, exactly as it does for an empty
+        reply — a turn that produced no answer must not gain one here."""
+        self.assertEqual("", turn._close([]))
+        self.assertEqual("", turn._close([{"type": "text", "text": "  ", "whole": True}]))
+        self.assertEqual("", turn._close([{"type": "tool", "name": "Read"}]))
+
+
 class WhatATurnCost(WithAnAgentToRunTurnsFor):
     async def test_every_run_records_what_it_cost_in_tokens(self):
         """R-USE-1"""
         said = await self.ask("plain")
         self.assertEqual({"reported": True, "input": 100, "output": 8, "cached": 40,
                           "model": "stand-in-1"}, said.tokens)
+
+    async def test_a_turns_elapsed_time_ignores_wall_clock_jumps(self):
+        """R-SCH-50 — elapsed time is a duration from a monotonic clock; calendar time
+        moving backwards while the provider runs cannot change the scheduled footer."""
+        wall = [2_000.0]
+
+        def jumping_wall():
+            wall[0] -= 60
+            return wall[0]
+
+        ticks = iter((100.0, 128.0))
+        said = await self.ask("plain", now=jumping_wall, clock=lambda: next(ticks))
+        self.assertEqual(28.0, said.elapsed)
 
     async def test_tokens_are_recorded_as_the_brain_reported_them(self):
         """R-USE-2 — the arithmetic that turns a conversation's running total into a
@@ -594,6 +1148,40 @@ class BeingSentToMidTurn(WithAnAgentToRunTurnsFor):
         sent = [one["text"] for one in self.talk(said.run) if one["author"] == "user"]
         self.assertEqual(["first", "second"], sent,
                          "a word said mid-turn is not in the account of the turn it reached")
+
+    async def test_a_steerable_turns_continuation_context_is_in_its_account(self):
+        """R-PRV-19, R-RUN-9, R-PRV-10 — replacement-style transports need recorded
+        context to preserve the seam's continue-unless-replaced meaning. Putting it inside
+        one adapter instead made the run account a lie."""
+        said = await turn.carry("ava", "first", self.brain("steerable"), where=self.where,
+                                steering=self.words("second"))
+        rundesk_said = [one["text"] for one in self.talk(said.run)
+                        if one["author"] == "rundesk"]
+        self.assertEqual([provider.STEERING_CONTEXT], rundesk_said)
+
+    async def test_a_word_said_mid_turn_is_recorded_under_who_said_it(self):
+        """R-STO-27 — reported (#106): the same person was recorded two ways in one
+        conversation. What started a turn carried their platform identity; what they said
+        into a turn already running carried none, so it read as the bare kind `user` and
+        the column could not be grouped, counted or filtered on."""
+        said = await turn.carry(
+            "ava", "first", self.brain("steerable"), where=self.where,
+            on="ops", kind="somewhere", conversation="one",
+            asked_by={"channel": "ops", "on": "one", "user": "2207"},
+            steering=self.words(turn.Said("second", "2207")),
+        )
+        spoke = [one for one in self.talk(said.run) if one["author"] == "user"]
+        self.assertEqual(["first", "second"], [one["text"] for one in spoke])
+        self.assertEqual(["2207", "2207"], [one["who"] for one in spoke],
+                         "the same person was written down two different ways")
+
+    async def test_a_word_said_by_nobody_named_is_recorded_without_an_identity(self):
+        """The terminal, where the only speaker is whoever is at it. An identity invented
+        for them would be a name nothing else can match."""
+        said = await turn.carry("ava", "first", self.brain("steerable"), where=self.where,
+                                steering=self.words("second"))
+        spoke = [one for one in self.talk(said.run) if one["author"] == "user"]
+        self.assertEqual([None, None], [one["who"] for one in spoke])
 
     async def test_a_brain_that_cannot_be_steered_is_not_left_waiting_for_more(self):
         """R-PRV-19 — holding input open for a brain that will never read again is a turn
@@ -720,6 +1308,18 @@ class AskingAnAgentFromATerminal(WithAnAgentToRunTurnsFor):
             "You are running unattended overnight."))
         self.assertEqual("what changed?", json.loads(said)["prompt"].strip(),
                          "standing instructions were folded into what was asked")
+
+    def test_command_instructions_append_after_the_agents_instructions(self):
+        """R-AGT-16 — one turn's instructions never replace the agent owner's."""
+        self.ask("configure", "ava", "--provider", self.brain("nosy"))
+        agent.remember("ava", self.where, instructions="Agent default.")
+        code, said, why = self.ask(
+            "ask", "ava", "what changed?", "--instructions", "Turn addition."
+        )
+        self.assertEqual(0, code, why)
+        preface = json.loads(said)["told"]["RUNDESK_PREFACE"]
+        self.assertLess(preface.index("Agent default."), preface.index("Turn addition."))
+        self.assertTrue(preface.startswith(agent.standing("ava")))
 
     def test_a_turn_is_always_told_rundesks_own_words_whatever_else_it_was_told(self):
         """R-PRV-3, R-PRV-23 — unset rather than empty, so an adapter reading it can
@@ -851,6 +1451,30 @@ class ATurnTheGatewayStoodDownOn(WithAnAgentToRunTurnsFor):
         self.assertIsNotNone(runs[0]["ended_at"], "the run is still marked as running")
         self.assertEqual("stopped", runs[0]["outcome"])
         self.assertIn("gateway stopped", (runs[0]["why"] or ""))
+
+    async def test_a_turn_a_person_stopped_is_not_recorded_as_a_gateway_outage(self):
+        """Reported (#124): a person's `/stop` cancels a turn exactly as a shutdown does,
+        so every stop was written down as `the gateway stopped while this turn was
+        running` — while the gateway was still up and answered the next message in the
+        same conversation seconds later. `outcome` is right either way; only `why` was
+        untrue, and it makes "did my gateway fall over last night?" unanswerable from the
+        records, which is the question the field exists for."""
+        going = asyncio.ensure_future(self.ask(
+            "goes_on", conversation="one", on="ops", kind="somewhere",
+            asked_by={"channel": "ops", "on": "one", "user": "2207"},
+            stopped_by_owner=lambda: True,
+        ))
+        await asyncio.sleep(1.5)
+        going.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await going
+
+        runs = list(self.kept().runs())
+        self.assertEqual(1, len(runs), "the turn never got as far as being admitted")
+        self.assertEqual("stopped", runs[0]["outcome"])
+        self.assertEqual(turn.STOPPED_WHY, runs[0]["why"])
+        self.assertNotIn("gateway stopped", (runs[0]["why"] or ""),
+                         "an owner's stop was recorded as a gateway outage")
 
     async def test_a_gateway_cancelled_channel_turn_is_left_for_one_successor(self):
         """R-GW-22 — gateway loss is marked apart from a person's explicit stop."""
