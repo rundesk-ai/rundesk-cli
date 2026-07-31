@@ -2185,6 +2185,30 @@ class WhichRoomAWordMeans(unittest.TestCase):
 class WhatTheOwnerIsTold(unittest.TestCase):
     """R-DIS-15, R-DIS-16 — coming up, going down, and closing the connection either way."""
 
+    def test_successfully_telling_the_owner_is_routine_channel_activity(self):
+        """R-GW-44 — a startup or shutdown notice that lands is not a warning."""
+        kept = []
+
+        class Person:
+            async def send(self, _said):
+                return None
+
+            def __str__(self):
+                return "owner"
+
+        class Surface:
+            chose = SimpleNamespace(allow=["42"])
+
+            async def fetch_user(self, _who):
+                return Person()
+
+        with mock.patch.object(
+                discord, "note",
+                side_effect=lambda said, level="WARNING": kept.append((said, level))):
+            asyncio.run(discord.Agent._tell_the_owner(Surface(), "Rundesk is online."))
+        self.assertEqual(
+            [("told the owner (owner): Rundesk is online.", "INFO")], kept)
+
     class Stand:
         """Exactly the surface `going` touches, and no more — a stand-in more generous
         than the real thing is what hides a whole feature behind a green suite."""
