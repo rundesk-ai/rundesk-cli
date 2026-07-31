@@ -751,7 +751,13 @@ def _opening(where: str, posture: str, model, extra: dict) -> dict:
     Set only where a conversation is *opened*, because that is the only place codex reads
     it — see `_opened`.
     """
-    opening = {"cwd": where, "sandbox": {posture: {}}}
+    # `experimentalApi` only makes the field legal. The per-thread switch is what
+    # actually emits `rawResponse/completed`; without both, app-server stays silent.
+    opening = {
+        "cwd": where,
+        "sandbox": {posture: {}},
+        "experimentalRawEvents": True,
+    }
     if model:
         opening["model"] = model
     if extra.get("config"):
@@ -777,7 +783,10 @@ def _opened(codex, opening: dict, resume):
         # the shape rundesk actually runs. An argument that is quietly dropped is worse
         # than one that was never sent, because it reads like it works. A conversation
         # keeps the wording it was opened with, which is part of what makes it one.
-        carried = {one: it for one, it in opening.items() if one != "developerInstructions"}
+        # Both are thread-creation-only. A thread opened by this adapter keeps raw events
+        # enabled when resumed; sending the start-only field to `thread/resume` is invalid.
+        start_only = {"developerInstructions", "experimentalRawEvents"}
+        carried = {one: it for one, it in opening.items() if one not in start_only}
         said = codex.answered(codex.ask("thread/resume", {**carried, "threadId": resume}))
         if said and "result" in said:
             return said["result"]

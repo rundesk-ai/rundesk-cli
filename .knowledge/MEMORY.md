@@ -411,6 +411,10 @@ re-checked since, so treat these as true-when-found rather than as current.*
   looked for `changes`, `files`, `artifacts` and `outputs`; Codex emits `savedPath`. Nothing
   errored — a generated image was simply never reported. Read a real item out of a run's
   `.brain` file before writing the name of a field.
+- **Codex raw response usage has two separate opt-ins.** `initialize` must enable
+  `capabilities.experimentalApi`, and a new `thread/start` must also set
+  `experimentalRawEvents`; the first only makes the second legal and emits nothing alone.
+  The thread keeps that setting when resumed, where the start-only field must not be sent.
 
 - **Do not test a model instruction with a question the conversation can already answer.** A first
   attempt asked for a codename the thread had been asked for before, so the model answered from its

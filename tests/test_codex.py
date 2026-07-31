@@ -328,6 +328,7 @@ class WhichConversationIsToldAndWhichIsNot(unittest.TestCase):
 
     def opening(self):
         return {"cwd": "/tmp", "sandbox": {codex.SANDBOX["work"]: {}},
+                "experimentalRawEvents": True,
                 "developerInstructions": "You are in a room."}
 
     def test_a_new_conversation_is_told_when_it_is_opened(self):
@@ -336,6 +337,7 @@ class WhichConversationIsToldAndWhichIsNot(unittest.TestCase):
         codex._opened(fake, self.opening(), None)
         self.assertEqual("You are in a room.",
                          fake.sent("thread/start")["developerInstructions"])
+        self.assertTrue(fake.sent("thread/start")["experimentalRawEvents"])
 
     def test_a_conversation_being_carried_on_is_not_told_again(self):
         """Probed: passed to a resume they are accepted and then ignored. An argument that
@@ -346,6 +348,7 @@ class WhichConversationIsToldAndWhichIsNot(unittest.TestCase):
         codex._opened(fake, self.opening(), "an-old-thread")
         resumed = fake.sent("thread/resume")
         self.assertNotIn("developerInstructions", resumed)
+        self.assertNotIn("experimentalRawEvents", resumed)
         self.assertEqual("an-old-thread", resumed["threadId"])
         self.assertEqual("/tmp", resumed["cwd"], "the rest of the opening was lost with it")
         self.assertIsNone(fake.sent("thread/start"), "it opened a second conversation")
@@ -398,9 +401,11 @@ class HowMuchOfTheMachineATurnMayTouch(unittest.TestCase):
 class WhatOneTurnCost(unittest.TestCase):
     def test_terminal_response_usage_is_negotiated(self):
         """The context measurement is experimental in app-server 0.145.0 and is silent
-        unless the client opts in while initializing."""
+        unless the client opts in while initializing and when creating the thread."""
         self.assertTrue(
             codex._initializing()["capabilities"]["experimentalApi"])
+        self.assertTrue(codex._opening(
+            "/tmp", codex.SANDBOX["read"], None, {})["experimentalRawEvents"])
 
     def measured(self, responses):
         held = object.__new__(codex.Codex)
