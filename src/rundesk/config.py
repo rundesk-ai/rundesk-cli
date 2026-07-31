@@ -18,15 +18,18 @@ added later neither collides with what is here nor makes the reader guess what o
 **An owner writes this file by hand**, which is the whole reason it is JSON in the open
 rather than a row in a database. So no *reader* here ever writes it back: a reader that
 rewrites what it parsed is a reader that eventually reformats somebody's choices away.
-Exactly two functions write. `ensure` puts in values an install has never stated and touches
-nothing already there; `take_back` removes the untouched configuration the install wrote.
+Exactly two functions write. `ensure` puts in values an install has never stated and restores
+the Rundesk-required skill floor; `take_back` removes the untouched configuration the install
+wrote.
 
-**The file is the source of truth.** The initial values below exist only to write a new
-configuration and fill a value an older release never wrote. Runtime readers require the
-value in the file; they never fall back around a missing one. A missing or unreadable value
-is refused and said out loud, because silently reaching into Python makes `config.json`
-untrue about what governs the install (R-STO-13 says the same thing about an agent's
-records).
+**The file is the source of truth for owner choices.** The initial values below exist only
+to write a new configuration and fill a value an older release never wrote. Runtime readers
+require those values in the file; they never fall back around a missing one. The sole floor
+outside owner choice is `RUNDESK_REQUIRED_GRANTS`: product policy every install must retain,
+also written visibly into the file and repaired there if removed. A missing or unreadable
+owner value is refused and said out loud, because silently reaching into Python makes
+`config.json` untrue about what governs the install (R-STO-13 says the same thing about an
+agent's records).
 """
 
 from __future__ import annotations
@@ -50,6 +53,11 @@ PREVIOUS_DEFAULT_GRANTS = (
     "managing-rundesk-backups",
     "filing-rundesk-issues",
 )
+
+#: Skills that are part of being a Rundesk agent rather than an owner's optional baseline.
+#: They are visible in `config.json`, reconciled onto every agent, and cannot be configured
+#: away or revoked (R-AGT-36, R-AGT-37).
+RUNDESK_REQUIRED_GRANTS = ("filing-rundesk-issues",)
 
 #: What a new configuration says in full (R-INS-19). This is an installation seed, never a
 #: runtime fallback: once written, `config.json` is what governs the install. Not every
@@ -129,11 +137,13 @@ def updates(where: Path | None = None) -> dict:
 
 
 def skills(where: Path | None = None) -> dict:
-    """Which skills every agent is required to hold, read completely from the file.
+    """Which skills every agent is required to hold.
 
-    This is the install-wide baseline rather than every skill the release ships. A new
-    agent receives each one, and the command refuses to revoke one while it remains named
-    here (R-AGT-36).
+    This is Rundesk's product floor plus the install-wide baseline, rather than every skill
+    the release ships. A new agent receives each one, and the command refuses to revoke
+    them. The owner's baseline is read completely from the file; the product floor is also
+    kept there visibly by `ensure`, but remains in force if the file is edited between
+    repairs (R-AGT-36, R-AGT-37).
     """
     said = _section("skills", where)
     if not isinstance(said, dict):
@@ -143,22 +153,24 @@ def skills(where: Path | None = None) -> dict:
 
 
 def _granted(said, where) -> tuple[str, ...]:
-    """A list of skill names, including an explicitly empty one."""
+    """The owner's list plus Rundesk's required floor, with no duplicate grant."""
     if not isinstance(said, list) or any(not isinstance(one, str) for one in said):
         raise Unreadable(f"{path(where)}: 'skills.granted' must be a list of skill names, "
                          f"and is {said!r}")
-    return tuple(said)
+    return tuple(said) + tuple(
+        called for called in RUNDESK_REQUIRED_GRANTS if called not in said
+    )
 
 
 def ensure(where: Path | None = None) -> list[str]:
     """Put the file there with every effective value, and say which sections changed.
 
     Run by the install, and again by an update so a file written by an older release grows
-    every section and key that release did not know. Owner-stated values are untouched;
-    the one exception is an exact prior release default, which advances to the new default
-    because it is still the release's choice rather than a customization. This migrates
-    v0.20.0's empty objects and common skill defaults without replacing an owner choice
-    (R-UPD-48, R-UPD-50).
+    every section and key that release did not know. Owner-stated values are untouched
+    except for Rundesk's required skill floor. An exact prior release default also advances
+    to the new default because it is still the release's choice rather than a customization.
+    This migrates v0.20.0's empty objects and common skill defaults without replacing an
+    owner choice (R-UPD-48, R-UPD-50).
     """
     at = path(where)
     try:
@@ -185,6 +197,14 @@ def ensure(where: Path | None = None) -> list[str]:
         skills["granted"] = copy.deepcopy(INITIAL["skills"]["granted"])
         if "skills" not in changed:
             changed.append("skills")
+    if isinstance(skills, dict) and isinstance(skills.get("granted"), list):
+        granted = skills["granted"]
+        if all(isinstance(one, str) for one in granted):
+            for called in RUNDESK_REQUIRED_GRANTS:
+                if called not in granted:
+                    granted.append(called)
+                    if "skills" not in changed:
+                        changed.append("skills")
     if not changed and at.is_file():
         return []
     ordered = {one: standing[one] for one in SECTIONS if one in standing}
