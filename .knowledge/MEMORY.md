@@ -758,6 +758,10 @@ re-checked since, so treat these as true-when-found rather than as current.*
   --json type` exits before listing anything and prints the valid fields; request
   `--json issueType` and read `.issueType.name`.
 
+- **The system skill creator's `quick_validate.py` imports PyYAML, which this repository does
+  not install.** Do not add or install that dependency for a built-in skill; use
+  `tests/test_skill.py` and its `skill.valid()` coverage, then run the repository gate.
+
 - **The disposable station defaults to the canonical checkout, not the shell's current
   worktree.** Running `station.sh --install` from a feature worktree can therefore validate
   and install a different revision while appearing isolated. Pass

@@ -138,6 +138,23 @@ class WhatTheShippedPdfCreationSkillSays(unittest.TestCase):
                 self.assertIn(expected, page)
 
 
+class WhatTheShippedFrontendDesignSkillSays(unittest.TestCase):
+    def test_frontend_design_covers_visual_ux_responsive_and_accessible_quality(self):
+        """R-AGT-27, R-AGT-30 — the built-in teaches the complete design outcome."""
+        page = (REALLY_SHIPPED / "frontend-design" / "SKILL.md").read_text()
+        for expected in (
+                "one visual thesis", "Design every consequential state",
+                "Build a coherent visual system", "Make accessibility part of the design",
+                "Mobile and desktop layouts", "Keyboard navigation", "reduced motion"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, page)
+
+    def test_frontend_design_is_available_without_becoming_a_default_grant(self):
+        """R-AGT-30, R-AGT-36 — optional built-ins are available without becoming policy."""
+        self.assertIsNone(skill.valid(REALLY_SHIPPED / "frontend-design"))
+        self.assertNotIn("frontend-design", config.INITIAL["skills"]["granted"])
+
+
 class WhatTheLibraryHolds(WithALibrary):
     def test_the_provider_given_library_is_the_one_a_nested_command_reports(self):
         was = os.environ.get("RUNDESK_SKILL_LIBRARY")
