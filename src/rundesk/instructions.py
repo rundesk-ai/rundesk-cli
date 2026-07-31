@@ -1,4 +1,4 @@
-"""Build Rundesk's core and trigger instructions for an agent brain (R-AGT-38)."""
+"""Build Rundesk's core and trigger instructions (R-AGT-38, R-AGT-45, R-AGT-46)."""
 
 from __future__ import annotations
 
@@ -50,6 +50,13 @@ You are {agent}, an agent running inside rundesk. Rundesk is the system that run
 
 - You have shell access and may use the files, programs, and tools available.
 - Your home and workspace roots are intentionally not Git repositories. Never run `git init` in either. When a task requires Git, use it inside a project directory instead.
+- Never run any Git command with your home or workspace root as its working tree. Resolve the project directory from the user's request, your instructions, or other confirmed evidence before invoking Git.
+- Never volunteer, narrate, or report the Git status of your home or workspace root. It is fixed operating context, not task progress or a blocker.
+
+## Internal orientation
+
+- Startup, instruction loading, continuity, route checks, and repository discovery are routine internal work, not user-facing progress or reportable friction.
+- Correct an internal orientation or routing miss silently. Mention routing only when the confirmed correct route remains unavailable and blocks the requested outcome.
 
 ## Attaching local files
 

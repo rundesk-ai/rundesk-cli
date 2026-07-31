@@ -2348,8 +2348,15 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
                 skills.grant(whose, args.skill)
                 print(f"{args.name} was given {args.skill}")
             else:
-                # The configured baseline is a requirement, not a creation-time suggestion.
-                # Change the requirement first; until then this grant stays (R-AGT-37).
+                # Rundesk's product floor and the configured baseline are requirements, not
+                # creation-time suggestions. Only the owner-selected part can be changed
+                # before revocation (R-AGT-37).
+                if args.skill in config.RUNDESK_REQUIRED_GRANTS:
+                    print(f"{args.skill}: RUNDESK REQUIRED — every agent retains it",
+                          file=sys.stderr)
+                    print("        this skill cannot be configured away or revoked",
+                          file=sys.stderr)
+                    return 1
                 if args.skill in config.skills()["granted"]:
                     print(f"{args.skill}: REQUIRED — config.json attaches it to every agent",
                           file=sys.stderr)
