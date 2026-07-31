@@ -1,19 +1,16 @@
 ---
-title: Put an agent on Discord
-description: Reach an agent from your phone, with per-channel allowlists and separate instructions for public rooms.
+title: Using an agent on Discord
+description: What an agent can do once it is connected — threads, allowlists, public-room instructions, and switching provider from chat.
 sidebar:
-  order: 1
+  order: 2
 ---
 
-Discord is the shipped first-class channel adapter. One command puts an agent there.
+Discord is the shipped first-class channel adapter.
 
-```sh
-rundesk channels ava add discord --kind discord --allow <your-discord-user-id>
-```
-
-The command asks for the bot token securely when it needs one, **proves the connection before
-saving anything**, and creates separate `discord-dms` and `discord-rooms` channels by default.
-You can narrow it instead to direct messages only, to one server, or to one channel.
+:::note
+This page is about what an agent does once it is connected. To create the bot and connect it,
+start with [set up the Discord bot](/guides/discord-setup/).
+:::
 
 ## What works on Discord
 

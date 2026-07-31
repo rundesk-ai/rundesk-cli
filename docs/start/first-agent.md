@@ -71,6 +71,6 @@ unless you supply replacements with `--model` and `--set`.
 
 ## Where next
 
-- [Put the agent on Discord](/guides/discord/) so you can reach it from your phone
+- [Put the agent on Discord](/guides/discord-setup/) so you can reach it from your phone
 - [Give it a schedule](/guides/schedules/) so it works while you sleep
 - [Understand its home](/concepts/agent-home/) — the files that make it *this* agent

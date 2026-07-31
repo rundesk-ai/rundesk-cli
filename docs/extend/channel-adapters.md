@@ -38,4 +38,4 @@ If you are working with a Rundesk agent, grant it the `building-a-channel-adapte
 
 Discord is the reference implementation and worth reading before writing your own — it
 exercises threads, allowlists, reactions, live activity, attachments in both directions, and
-per-channel instructions. See [Put an agent on Discord](/guides/discord/).
+per-channel instructions. See [Using an agent on Discord](/guides/discord/).

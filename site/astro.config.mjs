@@ -135,12 +135,13 @@ export default defineConfig({
 					},
 					{
 						label: 'Guides',
-						link: '/guides/discord/',
+						link: '/guides/discord-setup/',
 						items: [
 							{
 								label: 'Everyday work',
 								items: [
-									{ label: 'Put an agent on Discord', slug: 'guides/discord' },
+									{ label: 'Set up the Discord bot', slug: 'guides/discord-setup' },
+									{ label: 'Using an agent on Discord', slug: 'guides/discord' },
 									{ label: 'Schedule work', slug: 'guides/schedules' },
 									{ label: 'Read what happened', slug: 'guides/history' },
 									{ label: 'Back up and restore', slug: 'guides/backups' },
