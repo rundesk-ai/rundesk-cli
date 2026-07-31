@@ -640,9 +640,9 @@ def _what_is_wrong_with_its_skills(name: str, where: Path | None = None) -> list
     Two things, and neither is a fault of the agent's own making. A grant whose skill has
     gone — a built-in dropped by a release, or one an owner deleted from the library —
     leaves a link pointing at nothing, which every brain skips in silence. And a built-in
-    the install configuration requires that this agent does not hold, because it was made
-    before the requirement was added or its grant was changed outside the command. A
-    diagnosis is where an owner hears about it.
+    Rundesk or the install configuration requires that this agent does not hold, because it
+    was made before the requirement was added or its grant was changed outside the command.
+    A diagnosis is where an owner hears about it.
     """
     found = []
     mine = skills(name, where)
@@ -688,10 +688,9 @@ def require_skills(name: str, where: Path | None = None) -> list[str]:
     **Which skills, and not simply every one that ships.** A release ships more than every
     agent should carry — how to write a skill, how to write a pull request — and a skill an
     agent will never reach for is not free: its description is read by the brain on every
-    turn. So the set is `config.skills()["granted"]`, which an owner states once in
-    `config.json`. A fresh configuration names the four every agent needs to work with
-    rundesk itself. Creation, update, and installer reconciliation all come through this one
-    policy (R-AGT-36).
+    turn. So the set is `config.skills()["granted"]`: Rundesk's mandatory floor plus the
+    optional baseline an owner states once in `config.json`. Creation, update, and installer
+    reconciliation all come through this one policy (R-AGT-36).
 
     A library that has nothing in it yet is a checkout somebody is working in rather than
     an install, and is not a half-made agent.

@@ -1,6 +1,6 @@
 ---
 name: filing-rundesk-issues
-description: Apply Rundesk-specific ownership, evidence, privacy, issue-type, label, and identity rules when filing or correcting an issue in rundesk-ai/rundesk-cli. Use whenever a rundesk command behaves wrongly, crashes, reports something untrue, conflicts with its help, or lacks a needed capability; whenever someone asks to file Rundesk work; and alongside filing-github-issues for every Rundesk issue.
+description: Apply Rundesk-specific platform stewardship, ownership, evidence, privacy, taxonomy, and identity rules for rundesk-ai/rundesk-cli. Use whenever Rundesk behaves wrongly, lacks a core capability an owner clearly needs, or creates recurring evidence-backed friction; whenever someone asks to file Rundesk work; and alongside filing-github-issues for every Rundesk issue, even when nobody separately asks for one.
 ---
 
 # Filing an issue against Rundesk
@@ -11,6 +11,26 @@ your own, copy it under a different name — that copy is yours and is never tou
 Read and follow `filing-github-issues` for the shared workflow: repository discovery, duplicate
 search, evidence structure, public-data redaction, templates, filing, and verification. This
 page contains only the additions for **`rundesk-ai/rundesk-cli`**, a public repository.
+
+## Steward the platform
+
+Every Rundesk agent helps improve the platform. You are authorized to file or update a sanitized
+Rundesk issue without a separate request when at least one of these is true:
+
+- you confirmed a defect owned by Rundesk;
+- the owner asked for or clearly needs a capability that belongs in Rundesk itself; or
+- recurring Rundesk friction has evidence and a concrete safer or more efficient platform fix.
+
+This is the narrow Rundesk exception to `filing-github-issues` requiring the owner to ask before
+an external issue is created. It does not authorize speculative issues, personal preferences,
+one-off annoyances, disclosure of private data, or public security reports. Search first and add
+evidence to an existing issue instead of duplicating it.
+
+Before filing a Feature, test whether the outcome can reasonably be delivered by a custom skill,
+script, adapter, integration, or existing tool. If it can, it is owner customization rather than
+a Rundesk Feature; do not file it against Rundesk. File a Feature only when the capability must be
+built into Rundesk itself—for example, because it changes a CLI, gateway, install, update, store,
+schedule, provider, or channel contract, or must be guaranteed uniformly across installations.
 
 ## Prove Rundesk owns it
 
