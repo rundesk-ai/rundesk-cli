@@ -86,6 +86,9 @@ def installer(*args: str, home: Path, bindir: Path, cwd: Path | None = None,
         # Never the real requirements file: installing it here would reach the network and
         # take a minute, in a suite that must do neither.
         "RUNDESK_REQUIREMENTS": str(home / "no-requirements.txt"),
+        # The production default is GitHub. Installer tests prove the same complete
+        # catalog path against a local repository and never depend on the network.
+        "RUNDESK_DEFAULT_SKILLS_SOURCE": str(REPO / "tests" / "fixtures" / "default-catalog"),
         **requested,
     }
     return subprocess.run(
@@ -443,6 +446,18 @@ class InstallTests(Sandbox):
             (self.home / ".rundesk").exists(),
             "automatic update setup left an empty directory behind",
         )
+
+    def test_a_fresh_install_includes_the_general_catalog_without_granting_it(self):
+        """R-CAT-11 — the catalog is available by default, while grants stay explicit."""
+        installed = self.install()
+        self.assertEqual(installed.returncode, 0, installed.stdout + installed.stderr)
+        data = self.home / ".rundesk" / "data"
+        provenance = json.loads(
+            (data / "catalogs" / "rundesk-skills" / "provenance.json").read_text()
+        )
+        self.assertTrue(provenance["seeded"])
+        self.assertTrue((data / "skills" / "fixture-guidance").is_symlink())
+        self.assertEqual([], list((data / "agents").glob("*/home/skills/fixture-guidance")))
 
     def test_the_installed_command_is_reachable_by_name_from_any_directory(self):
         self.install()

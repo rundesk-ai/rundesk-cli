@@ -812,6 +812,19 @@ class FakeCatalogs:
             raise self.Unknown(f"there is no installed catalog called {name}")
         return [called for called, _ in one.manifest.skills]
 
+    def refresh(self, granted=()):
+        self.did.append(("refresh", set(granted)))
+        one = self._held.get("rundesk-skills")
+        if one is None:
+            one = self.One(name="rundesk-skills", source=real_catalog.DEFAULT_SOURCE)
+            self._held[one.name] = one
+            return (real_catalog.Refreshed(one.name, None, one.version),)
+        return (real_catalog.Refreshed(one.name, one.version, one.version),)
+
+    def take_back_seeded(self):
+        one = self._held.pop("rundesk-skills", None)
+        return [] if one is None else [called for called, _ in one.manifest.skills]
+
     def installed(self):
         return dict(self._held)
 
@@ -1292,14 +1305,31 @@ class WhatTheInstallerDoesToTheLibrary(unittest.TestCase):
         baseline to agents that predate this release."""
         agents = FakeAgents(made=("ava", "bo"))
 
+        catalogs = FakeCatalogs()
         code, said = drive(["skills", "--lay-down"], agents=agents,
-                           skills=FakeSkills(ships=("managing-rundesk",)))
+                           skills=FakeSkills(ships=("managing-rundesk",)),
+                           catalogs=catalogs)
 
         self.assertEqual(0, code, said)
         self.assertEqual(["ava", "bo"], agents.required)
+        self.assertEqual(("refresh", set()), catalogs.did[-1])
 
 
 class WhatSkillCatalogsDo(unittest.TestCase):
+    def test_refresh_reports_default_install_and_checks_with_every_agent_grant(self):
+        """R-CAT-11, R-CAT-12 — lifecycle refresh owns seeding and update checks."""
+        catalogs = FakeCatalogs()
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(held=("python-patterns",),
+                            given={"skills": ["python-patterns"]})
+
+        with contextlib.redirect_stdout(io.StringIO()) as said:
+            code = cli._refresh_skill_catalogs(agents, skills, catalogs)
+
+        self.assertEqual(0, code)
+        self.assertIn("installed by default", said.getvalue())
+        self.assertEqual(("refresh", {"python-patterns"}), catalogs.did[-1])
+
     def test_installing_first_previews_the_repository_and_changes_nothing(self):
         """R-CAT-2 — remote content is described before it is written."""
         catalogs = FakeCatalogs()

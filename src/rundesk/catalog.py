@@ -35,6 +35,9 @@ GITHUB = re.compile(
 )
 VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 ARCHIVE_URL = "https://api.github.com/repos/{slug}/tarball"
+DEFAULT_NAME = "rundesk-skills"
+DEFAULT_SOURCE = "https://github.com/rundesk-ai/rundesk-skills"
+DEFAULT_SOURCE_ENV = "RUNDESK_DEFAULT_SKILLS_SOURCE"
 
 
 class NotACatalog(Exception):
@@ -73,6 +76,16 @@ class Installed:
     source: str
     at: Path
     manifest: Manifest
+
+
+@dataclass(frozen=True)
+class Refreshed:
+    """What one repository check found, including a failure that did not stop the rest."""
+
+    name: str
+    before: str | None
+    after: str | None
+    why: str | None = None
 
 
 def home(where: Path | None = None) -> Path:
@@ -193,7 +206,7 @@ def inspect(source, fetch=None) -> Manifest:
 
 
 def install(source, where: Path | None = None, skills_dir: Path | None = None,
-            fetch=None) -> Installed:
+            fetch=None, seeded: bool = False) -> Installed:
     """Install every declared skill from one repository, or write nothing."""
     root = home(where)
     library = skills_dir if skills_dir is not None else skill.home()
@@ -214,7 +227,7 @@ def install(source, where: Path | None = None, skills_dir: Path | None = None,
             (target / OWNED).write_text("rundesk skill catalog\n", encoding="utf-8")
             _stash(retired, target / PREVIOUS)
             shutil.copytree(fetched, target / APP)
-            _write_provenance(target, str(source), manifest.version)
+            _write_provenance(target, str(source), manifest.version, seeded=seeded)
             _link_all(read(target / APP), target, library)
         except Exception:
             _unlink_owned(target, library)
@@ -223,6 +236,35 @@ def install(source, where: Path | None = None, skills_dir: Path | None = None,
             raise
         shutil.rmtree(target / PREVIOUS, ignore_errors=True)
     return installed(root)[manifest.name]
+
+
+def refresh(where: Path | None = None, skills_dir: Path | None = None,
+            granted=(), fetch=None, default_source=None) -> tuple[Refreshed, ...]:
+    """Seed Rundesk's general catalog, then check every repository already installed.
+
+    Repositories are independent update units. One unreachable or invalid source is
+    reported without keeping the remaining installed repositories from being checked.
+    """
+    root = home(where)
+    library = skills_dir if skills_dir is not None else skill.home()
+    source = default_source or os.environ.get(DEFAULT_SOURCE_ENV) or DEFAULT_SOURCE
+    results = []
+    standing = installed(root)
+    if DEFAULT_NAME not in standing:
+        try:
+            landed = install(source, root, library, fetch=fetch, seeded=True)
+        except (NotACatalog, InTheWay, OSError) as why:
+            results.append(Refreshed(DEFAULT_NAME, None, None, str(why)))
+        else:
+            results.append(Refreshed(landed.name, None, landed.version))
+    for name, before in sorted(standing.items()):
+        try:
+            after = update(name, root, library, granted=granted, fetch=fetch)
+        except (NotACatalog, InTheWay, InUse, Unknown, RollbackFailed, OSError) as why:
+            results.append(Refreshed(name, before.version, None, str(why)))
+        else:
+            results.append(Refreshed(name, before.version, after.version))
+    return tuple(results)
 
 
 def update(name: str, where: Path | None = None, skills_dir: Path | None = None,
@@ -234,6 +276,7 @@ def update(name: str, where: Path | None = None, skills_dir: Path | None = None,
     if current is None:
         raise Unknown(f"there is no installed catalog called {name}")
     source = current.source
+    seeded = provenance(current.at).get("seeded")
     with tempfile.TemporaryDirectory(prefix="rundesk-catalog-") as temporary:
         fetched = (fetch or _fetch)(source, Path(temporary))
         coming_manifest = read(fetched)
@@ -264,7 +307,7 @@ def update(name: str, where: Path | None = None, skills_dir: Path | None = None,
             os.replace(coming, current.at / APP)
             activated = True
             _relink(current.manifest, coming_manifest, current.at, library)
-            _write_provenance(current.at, source, coming_manifest.version)
+            _write_provenance(current.at, source, coming_manifest.version, seeded=seeded)
         except Exception as original:
             try:
                 if activated and (current.at / APP).exists():
@@ -276,7 +319,7 @@ def update(name: str, where: Path | None = None, skills_dir: Path | None = None,
                     _unlink_owned(current.at, library)
                     _link_all(current.manifest, current.at, library)
                 _restore_stash(previous / "retired", library)
-                _write_provenance(current.at, source, current.version)
+                _write_provenance(current.at, source, current.version, seeded=seeded)
             except Exception as rollback:
                 raise RollbackFailed(
                     f"updating {name} failed ({original}); restoring {current.version} "
@@ -304,6 +347,16 @@ def remove(name: str, where: Path | None = None, skills_dir: Path | None = None,
     with contextlib.suppress(OSError):
         root.rmdir()
     return sorted(names)
+
+
+def take_back_seeded(where: Path | None = None,
+                     skills_dir: Path | None = None) -> list[str]:
+    """Remove only the general catalog Rundesk seeded, for a matching uninstall."""
+    root = home(where)
+    current = installed(root).get(DEFAULT_NAME)
+    if current is None or provenance(current.at).get("seeded") is not True:
+        return []
+    return remove(DEFAULT_NAME, root, skills_dir)
 
 
 def whose(entry: Path, where: Path | None = None) -> str | None:
@@ -424,11 +477,15 @@ def _linked_to(entry: Path, target: Path) -> bool:
         return False
 
 
-def _write_provenance(at: Path, source: str, version: str) -> None:
+def _write_provenance(at: Path, source: str, version: str, seeded: bool | None = None) -> None:
     page = at / PROVENANCE
     coming = at / f".{PROVENANCE}.coming"
     coming.write_text(
-        json.dumps({"source": source, "version": version}, indent=2, sort_keys=True) + "\n",
+        json.dumps({
+            "source": source,
+            "version": version,
+            **({"seeded": seeded} if seeded is not None else {}),
+        }, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     os.replace(coming, page)

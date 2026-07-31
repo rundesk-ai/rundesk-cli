@@ -174,6 +174,59 @@ class InstallingACatalog(WithCatalogs):
 
 
 class UpdatingACatalog(WithCatalogs):
+    def test_refresh_seeds_the_general_catalog_for_an_existing_install(self):
+        """R-CAT-11 — an upgrade gives an existing install the default collection."""
+        source = a_catalog(self.sources, name=catalog.DEFAULT_NAME)
+
+        checked = catalog.refresh(
+            self.catalogs, self.library, default_source=source,
+        )
+
+        self.assertEqual(
+            (catalog.Refreshed(catalog.DEFAULT_NAME, None, "1.0.0"),), checked
+        )
+        self.assertIn(catalog.DEFAULT_NAME, catalog.installed(self.catalogs))
+
+    def test_refresh_checks_every_installed_repository_by_manifest_version(self):
+        """R-CAT-12 — one Rundesk update checks every installed repository."""
+        general = a_catalog(self.sources / "general", name=catalog.DEFAULT_NAME)
+        development = a_catalog(
+            self.sources / "development", name="development", names=("vue-patterns",)
+        )
+        catalog.install(general, self.catalogs, self.library, seeded=True)
+        catalog.install(development, self.catalogs, self.library)
+        for source in (general, development):
+            said = json.loads((source / catalog.MANIFEST).read_text())
+            said["version"] = "1.1.0"
+            (source / catalog.MANIFEST).write_text(json.dumps(said), encoding="utf-8")
+
+        checked = catalog.refresh(self.catalogs, self.library)
+
+        self.assertEqual(
+            [("development", "1.0.0", "1.1.0"),
+             (catalog.DEFAULT_NAME, "1.0.0", "1.1.0")],
+            [(one.name, one.before, one.after) for one in checked],
+        )
+
+    def test_one_failed_repository_does_not_keep_the_others_from_being_checked(self):
+        """R-CAT-12 — repositories remain independent failure boundaries."""
+        general = a_catalog(self.sources / "general", name=catalog.DEFAULT_NAME)
+        development = a_catalog(
+            self.sources / "development", name="development", names=("vue-patterns",)
+        )
+        catalog.install(general, self.catalogs, self.library, seeded=True)
+        catalog.install(development, self.catalogs, self.library)
+        (general / "skills" / "python-patterns" / "SKILL.md").unlink()
+        said = json.loads((development / catalog.MANIFEST).read_text())
+        said["version"] = "1.1.0"
+        (development / catalog.MANIFEST).write_text(json.dumps(said), encoding="utf-8")
+
+        checked = catalog.refresh(self.catalogs, self.library)
+
+        by_name = {one.name: one for one in checked}
+        self.assertIsNotNone(by_name[catalog.DEFAULT_NAME].why)
+        self.assertEqual("1.1.0", by_name["development"].after)
+
     def test_a_newer_repository_version_replaces_every_installed_skill(self):
         """R-CAT-7 — the repository is the version and update unit."""
         self.install(a_catalog(self.sources / "old", version="1.0.0",
@@ -210,12 +263,12 @@ class UpdatingACatalog(WithCatalogs):
         write = catalog._write_provenance
         calls = 0
 
-        def fail_once(at, source, version):
+        def fail_once(at, source, version, seeded=None):
             nonlocal calls
             calls += 1
             if calls == 1:
                 raise OSError("disk stopped accepting the update")
-            return write(at, source, version)
+            return write(at, source, version, seeded=seeded)
 
         with mock.patch.object(catalog, "_write_provenance", side_effect=fail_once):
             with self.assertRaises(OSError):
@@ -244,12 +297,12 @@ class UpdatingACatalog(WithCatalogs):
         write = catalog._write_provenance
         calls = 0
 
-        def fail_once(at, source, version):
+        def fail_once(at, source, version, seeded=None):
             nonlocal calls
             calls += 1
             if calls == 1:
                 raise OSError("disk stopped accepting the update")
-            return write(at, source, version)
+            return write(at, source, version, seeded=seeded)
 
         with mock.patch.object(catalog, "_write_provenance", side_effect=fail_once):
             with self.assertRaises(OSError):
@@ -275,6 +328,24 @@ class UpdatingACatalog(WithCatalogs):
 
 
 class RemovingACatalog(WithCatalogs):
+    def test_uninstall_takes_back_only_the_general_catalog_rundesk_seeded(self):
+        """R-CAT-11 — an automatic default has a matching automatic removal."""
+        source = a_catalog(self.sources, name=catalog.DEFAULT_NAME)
+        catalog.install(source, self.catalogs, self.library, seeded=True)
+
+        removed = catalog.take_back_seeded(self.catalogs, self.library)
+
+        self.assertEqual(["python-patterns"], removed)
+        self.assertEqual({}, catalog.installed(self.catalogs))
+
+    def test_uninstall_leaves_a_manually_installed_same_named_catalog(self):
+        """R-CAT-5 — a repository an owner installed never becomes Rundesk's to remove."""
+        source = a_catalog(self.sources, name=catalog.DEFAULT_NAME)
+        catalog.install(source, self.catalogs, self.library)
+
+        self.assertEqual([], catalog.take_back_seeded(self.catalogs, self.library))
+        self.assertIn(catalog.DEFAULT_NAME, catalog.installed(self.catalogs))
+
     def test_removing_refuses_while_one_of_its_skills_is_granted(self):
         """R-CAT-9 — removal cannot leave an agent with a broken grant."""
         self.install(a_catalog(self.sources))

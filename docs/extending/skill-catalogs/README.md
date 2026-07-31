@@ -58,6 +58,8 @@ package-local scripts, references, or assets.
 
 Increment `version` whenever installed catalog content changes. `rundesk skills update`
 only activates a repository whose declared version is newer than the installed version.
+Rundesk also performs that same comparison for every installed repository after each
+successful `rundesk update`, including an update where the CLI itself is already current.
 
 ## Repository shape
 
@@ -102,3 +104,15 @@ rundesk skills remove example-skills --yes
 
 An update or removal is refused if it would take away a skill still granted to any agent.
 Catalog installation also refuses to replace an owner-authored package with the same name.
+
+## Default catalog and lifecycle
+
+Fresh installs seed `https://github.com/rundesk-ai/rundesk-skills`. The same step runs after
+every successful Rundesk update, so an existing installation receives the general catalog
+without a separate migration command. It is still a regular external catalog: its skills
+are optional per-agent grants and its repository version is independent from Rundesk's.
+
+Every installed catalog is checked from the repository URL in its provenance. Repositories
+are independent: a download or validation failure is reported, the last working version
+stays active, and Rundesk continues checking the rest. A removed default catalog is seeded
+again at the next install or successful Rundesk update.

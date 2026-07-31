@@ -29,7 +29,5 @@ library. The repository moves and is removed as one catalog while each skill is 
 | ✅ | R-CAT-8 | A failed catalog update leaves the previously working version available | `a failed update leaves the working version`, `a failure after activation rolls back files links and provenance`, `failed adoption restores the retired built in` |
 | ✅ | R-CAT-9 | Updating or removing a catalog cannot remove a skill while any agent holds it | `an update cannot remove a granted skill`, `removing refuses while one of its skills is granted`, `updating tells the catalog which skills are granted` |
 | ✅ | R-CAT-10 | A repository containing one skill uses the same manifest contract as a multi-skill collection | `one skill uses the same manifest contract` |
-
-## Open questions
-
-- When curated catalogs should update automatically rather than only when explicitly requested.
+| ✅ | R-CAT-11 | Fresh and existing installations receive the general `rundesk-skills` catalog automatically without granting its skills | `refresh seeds the general catalog for an existing install`, `uninstall takes back only the general catalog rundesk seeded`, `laying down also reconciles every existing agent` |
+| ✅ | R-CAT-12 | Every successful Rundesk update checks every installed repository and activates only newer manifest versions | `refresh checks every installed repository by manifest version`, `one failed repository does not keep the others from being checked`, `refresh reports default install and checks with every agent grant` |

@@ -208,13 +208,15 @@ state, history, and delivery.
 
 - A shared skill library with per-agent grants
 - Required Rundesk operating skills that every agent retains
-- Versioned repository catalogs installed, updated, and removed as one collection
+- The general `rundesk-skills` catalog included automatically on every install
+- Versioned repository catalogs updated with every Rundesk update and removed as collections
 - Owner-created skills that Rundesk never replaces
 - A shared executable library placed on every agent's `PATH`
 - Guidance for building guarded, offline-tested service integrations
 
-Install a catalog from its repository URL. Rundesk previews every declared skill first;
-confirmation makes them available in the shared library and grants none automatically:
+Every install includes the general [`rundesk-skills`](https://github.com/rundesk-ai/rundesk-skills)
+catalog without granting its skills automatically. Install another catalog from its repository
+URL; Rundesk previews every declared skill before confirmation:
 
 ```sh
 rundesk skills install https://github.com/rundesk-ai/rundesk-skills
@@ -278,6 +280,11 @@ Not yet. Rundesk currently depends on macOS `launchd` to own its gateways. Follo
 Updates replace `~/.rundesk/app` and leave `~/.rundesk/data` untouched. When records need
 to move forward, Rundesk stops every gateway and keeps a rollback copy of each database.
 If a migration fails, it restores the records and previous release.
+
+After the Rundesk transaction succeeds—even when Rundesk was already current—it installs
+the default general catalog if absent and checks every installed catalog's repository. A
+catalog changes only when its `manifest.json` declares a newer version; one failed catalog
+is reported without preventing the others from being checked.
 
 </details>
 

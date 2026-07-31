@@ -730,7 +730,7 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
+def cmd_update(args: argparse.Namespace, gateways, machine, agents, catalogs=catalog) -> int:
     if args.after_replacing is not None:
         # This process *is* the release that just landed, so what it does to an owner's
         # records is what the release that shipped it says it should be (R-UPD-33). The
@@ -747,8 +747,12 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
             # opened — linking that would name the version an owner has just left (R-UPD-46).
             landed=__version__,
         )
-        if code == 0 and not os.environ.get("RUNDESK_UPDATE_WORKER"):
-            return _install_automatic_updates(machine)
+        if code == 0:
+            cataloged = _refresh_skill_catalogs(agents, skill, catalogs)
+            if not os.environ.get("RUNDESK_UPDATE_WORKER"):
+                scheduled = _install_automatic_updates(machine)
+                return cataloged or scheduled
+            return cataloged
         return code
     if args.worker:
         return _run_update_worker(gateways, machine, agents)
@@ -791,8 +795,9 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
         preview=lambda: _what_an_update_would_do(agents, update_root),
     )
     if code == 0:
+        cataloged = _refresh_skill_catalogs(agents, skill, catalogs)
         scheduled = _install_automatic_updates(machine)
-        return scheduled if scheduled else code
+        return cataloged or scheduled
     return code
 
 
@@ -2322,6 +2327,27 @@ def _all_granted_skills(agents, skills) -> set[str]:
     }
 
 
+def _refresh_skill_catalogs(agents, skills, catalogs) -> int:
+    """Seed the general collection and check every installed repository version."""
+    try:
+        checked = catalogs.refresh(granted=_all_granted_skills(agents, skills))
+    except (catalogs.NotACatalog, OSError) as why:
+        print(f"skills: CATALOGS NOT UPDATED — {why}", file=sys.stderr)
+        return 1
+    failed = False
+    for one in checked:
+        if one.why:
+            failed = True
+            print(f"skills: {one.name} NOT UPDATED — {one.why}", file=sys.stderr)
+        elif one.before is None:
+            print(f"skills: {one.name} {one.after}: installed by default")
+        elif one.before == one.after:
+            print(f"skills: {one.name} {one.after}: up to date")
+        else:
+            print(f"skills: {one.name}: {one.before} -> {one.after}")
+    return 1 if failed else 0
+
+
 def _install_skill_catalog(args: argparse.Namespace, catalogs) -> int:
     try:
         if not args.confirm:
@@ -2419,12 +2445,16 @@ def cmd_skills(args: argparse.Namespace, agents, skills, catalogs) -> int:
         # goes with it (R-RM-7). Left behind, it is a piece of rundesk on a machine somebody
         # has removed rundesk from — and it keeps the whole install directory standing after
         # an uninstall that said it had left nothing.
-        print(" ".join(skills.take_back()))
+        taken = catalogs.take_back_seeded()
+        taken.extend(skills.take_back())
+        print(" ".join(taken))
         return 0
     if getattr(args, "lay_down", False):
         # The installer's, and deliberately not an owner's verb: what a release ships is
         # not a thing anybody should have to ask for.
         laid = skills.lay_down()
+        if _refresh_skill_catalogs(agents, skills, catalogs):
+            return 1
         # `skills.granted` is a floor for every agent, including ones that predate the
         # value. Re-running the installer is an upgrade route, so reconcile the existing
         # population here as well as in `_provisioned` (R-AGT-36).
@@ -4370,7 +4400,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
     if args.command == "version":
         return cmd_version(args)
     if args.command == "update":
-        return cmd_update(args, gateways, machine, agents)
+        return cmd_update(args, gateways, machine, agents, catalogs)
     if args.command == "uninstall":
         return cmd_uninstall(args)
     if args.command == "agents":
