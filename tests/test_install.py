@@ -459,6 +459,25 @@ class InstallTests(Sandbox):
         self.assertTrue((data / "skills" / "fixture-guidance").is_symlink())
         self.assertEqual([], list((data / "agents").glob("*/home/skills/fixture-guidance")))
 
+    def test_an_install_refuses_a_default_catalog_name_owned_by_the_user(self):
+        """R-CAT-5 — automatic seeding never turns a custom package into catalog content."""
+        library = self.home / ".rundesk" / "data" / "skills"
+        custom = library / "fixture-guidance"
+        custom.mkdir(parents=True)
+        page = custom / "SKILL.md"
+        mine = "---\nname: fixture-guidance\ndescription: Mine.\n---\n"
+        page.write_text(mine, encoding="utf-8")
+
+        installed = self.install()
+
+        self.assertEqual(1, installed.returncode)
+        self.assertIn(
+            "the skill fixture-guidance is already there and this catalog does not own it",
+            installed.stdout + installed.stderr,
+        )
+        self.assertEqual(mine, page.read_text(encoding="utf-8"))
+        self.assertFalse((self.home / ".rundesk" / "data" / "catalogs").exists())
+
     def test_the_installed_command_is_reachable_by_name_from_any_directory(self):
         self.install()
         elsewhere = self.root / "somewhere-else"

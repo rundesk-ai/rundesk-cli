@@ -276,6 +276,7 @@ jobs:
       RUNDESK_BIN_DIR: ${{ github.workspace }}/.compat/bin
       RUNDESK_INSTALL_DIR: ${{ github.workspace }}/.compat/existing-install
       RUNDESK_JOBS_DIR: ${{ github.workspace }}/.compat/jobs
+      RUNDESK_DEFAULT_SKILLS_SOURCE: ${{ github.workspace }}/tests/fixtures/default-catalog
     strategy:
       fail-fast: false
       matrix:
@@ -393,6 +394,13 @@ jobs:
           "$RUNDESK_BIN_DIR/rundesk" agents | grep -q '^existing ' ||
             { echo "::error::the existing agent disappeared during upgrade"; exit 1; }
           held="$("$RUNDESK_BIN_DIR/rundesk" skills)"
+          catalogs="$("$RUNDESK_BIN_DIR/rundesk" skills catalogs)"
+          printf '%s\n' "$catalogs" |
+            grep -qE '^rundesk-skills +1\.0\.0 +.*default-catalog +1$' ||
+            { echo "::error::the existing install did not receive the default catalog"; exit 1; }
+          printf '%s\n' "$held" |
+            grep -qE '^fixture-guidance +rundesk-skills ' ||
+            { echo "::error::the default catalog skill is not available after upgrade"; exit 1; }
           printf '%s\n' "$held" |
             grep -qE '^managing-rundesk-schedules +rundesk +.*Legacy_Name' ||
             { echo "::error::the legacy agent lost its built-in skill grant"; exit 1; }

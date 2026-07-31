@@ -168,11 +168,12 @@ class InstallingACatalog(WithCatalogs):
         """R-CAT-5 — an explicit repository never makes a name proof of ownership."""
         owner = self.library / "python-patterns"
         owner.mkdir(parents=True)
-        (owner / "SKILL.md").write_text(
-            "---\nname: python-patterns\ndescription: Mine.\n---\n", encoding="utf-8"
-        )
+        page = owner / "SKILL.md"
+        mine = "---\nname: python-patterns\ndescription: Mine.\n---\n"
+        page.write_text(mine, encoding="utf-8")
         with self.assertRaises(catalog.InTheWay):
             self.install(a_catalog(self.sources))
+        self.assertEqual(mine, page.read_text(encoding="utf-8"))
         self.assertFalse(self.catalogs.exists())
 
     def test_a_retired_built_in_is_adopted_without_breaking_its_grant(self):

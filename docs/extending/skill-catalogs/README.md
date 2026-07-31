@@ -56,10 +56,11 @@ package-local scripts, references, or assets.
 - `skills` is a non-empty list. Every entry names a complete Agent Skill directory inside
   the repository; its `name`, directory name, and `SKILL.md` name must agree.
 
-Increment `version` whenever installed catalog content changes. `rundesk skills update`
-only activates a repository whose declared version is newer than the installed version.
-Rundesk also performs that same comparison for every installed repository after each
-successful `rundesk update`, including an update where the CLI itself is already current.
+Increment `version` whenever published catalog content changes. `rundesk skills update`
+refuses an older repository version and atomically activates a newer one. A check of the
+same version still restores the repository's exact files, which repairs local package drift.
+Rundesk checks every installed repository after each successful `rundesk update`, including
+an update where the CLI itself is already current.
 
 ## Repository shape
 
@@ -133,7 +134,17 @@ rundesk skills remove example-skills --yes
 ```
 
 An update or removal is refused if it would take away a skill still granted to any agent.
-Catalog installation also refuses to replace an owner-authored package with the same name.
+
+### Name collisions
+
+If any declared skill name is already occupied by a custom package or another catalog,
+installation fails with the conflicting skill name. The entire catalog remains uninstalled:
+Rundesk neither overwrites the custom package nor installs the non-conflicting subset. Rename
+or move the custom package deliberately before trying again; installation never adopts it
+automatically merely because its name matches.
+
+The same rule protects a later catalog update that introduces a colliding name. The previously
+working catalog release and the custom package both stay in place.
 
 ## Default catalog and lifecycle
 
@@ -146,3 +157,8 @@ Every installed catalog is checked from the repository URL in its provenance. Re
 are independent: a download or validation failure is reported, the last working version
 stays active, and Rundesk continues checking the rest. A removed default catalog is seeded
 again at the next install or successful Rundesk update.
+
+Catalog refresh is a separate failure boundary after the CLI release and agent records have
+successfully moved forward. If default seeding or one repository check fails, Rundesk reports
+that catalog failure and exits non-zero without rolling back an otherwise healthy CLI update.
+Running the update again retries every catalog after the collision or network problem is fixed.

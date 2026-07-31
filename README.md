@@ -295,8 +295,9 @@ If a migration fails, it restores the records and previous release.
 
 After the Rundesk transaction succeeds—even when Rundesk was already current—it installs
 the default general catalog if absent and checks every installed catalog's repository. A
-catalog changes only when its `manifest.json` declares a newer version; one failed catalog
-is reported without preventing the others from being checked.
+newer version replaces the catalog atomically; checking the same version also restores its
+exact files to remove local drift. One failed catalog is reported without preventing the
+others from being checked or rolling back an otherwise healthy CLI update.
 
 </details>
 

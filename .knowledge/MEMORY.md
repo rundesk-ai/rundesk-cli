@@ -782,5 +782,8 @@ re-checked since, so treat these as true-when-found rather than as current.*
   `status=$?` aborts before its later checks. Use a task-specific name such as
   `launchd_exit=$?` for captured exit codes.
 
+- **The test counts in `CODEMAP.md` can be stale before a change starts.** Do not increment the
+  recorded number by the cases just added; run the suite and copy the actual `Ran N tests` count.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

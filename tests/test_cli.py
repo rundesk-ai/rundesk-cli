@@ -1360,6 +1360,19 @@ class WhatSkillCatalogsDo(unittest.TestCase):
         self.assertIn("none were granted", said)
         self.assertEqual([], skills.granted(agents.skills("ava")))
 
+    def test_confirming_a_colliding_repository_fails_with_the_skill_name(self):
+        """R-CAT-5 — refusal tells the owner which custom package blocked installation."""
+        catalogs = FakeCatalogs()
+        conflict = "the skill python-patterns is already there and this catalog does not own it"
+
+        with mock.patch.object(catalogs, "install", side_effect=catalogs.InTheWay(conflict)):
+            code, said = drive([
+                "skills", "install", "https://github.com/example/example-skills", "--confirm",
+            ], catalogs=catalogs)
+
+        self.assertEqual(1, code)
+        self.assertIn(f"skills: NOT INSTALLED — {conflict}", said)
+
     def test_updating_tells_the_catalog_which_skills_are_granted(self):
         """R-CAT-9 — the surface supplies the cross-agent grant boundary."""
         one = FakeCatalogs.One()
