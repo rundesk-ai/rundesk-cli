@@ -257,9 +257,9 @@ def say(**it) -> None:
     sys.stdout.flush()
 
 
-def note(said: str) -> None:
-    """Ours, kept apart from what we report, and never mistaken for it."""
-    sys.stderr.write(said + "\n")
+def note(said: str, level: str = "WARNING") -> None:
+    """Ours, severity stated, kept apart from what we report (R-GW-44)."""
+    sys.stderr.write(f"{level}\t{said}\n")
     sys.stderr.flush()
 
 
@@ -821,7 +821,7 @@ class Agent(discord.Client):
                  f"{'/' + str(it.get('state')) if kind == 'state' else ''}"
                  f" for {it.get('conversation')}"
                  f" ({len(str(it.get('text') or ''))} chars,"
-                 f" {len(it.get('attachments') or [])} files)")
+                 f" {len(it.get('attachments') or [])} files)", "INFO")
         held = self.live.setdefault(str(it.get("conversation")), Live())
         if kind == "state":
             await self._state(it, held)
@@ -1312,7 +1312,7 @@ class Agent(discord.Client):
                 mention_author=bool(mention) and quoting is not None,
                 files=sending or None,
             )
-            note(f"wrote {len(content)} chars and {len(sending)} files")
+            note(f"wrote {len(content)} chars and {len(sending)} files", "INFO")
             return said
         except Exception as why:  # noqa: BLE001 — a platform boundary
             note(f"could not write: {type(why).__name__}: {why}")

@@ -552,6 +552,25 @@ class TheAnswerMentionsWhoAsked(unittest.TestCase):
                            self._held(_asking(4242)))
         self.assertEqual([], room.wrote)
         self.assertIn("could not write", said.getvalue())
+        self.assertIn("WARNING\t", said.getvalue())
+
+    def test_a_successful_delivery_marks_its_diagnostic_as_routine(self):
+        """R-GW-44 — stderr stays separate from protocol records while its severity is
+        explicit for the gateway that keeps it."""
+        room = _Wrote()
+        surface = _writing_surface(room)
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            asyncio.run(discord.Agent.told(surface, {
+                "type": "state", "state": "taken", "conversation": "4242",
+            }))
+            asyncio.run(discord.Agent._post(
+                surface, {"conversation": "4242"}, "delivered"))
+        self.assertIn(
+            "INFO\ttold state/taken for 4242 (0 chars, 0 files)",
+            said.getvalue(),
+        )
+        self.assertIn("INFO\twrote 9 chars and 0 files", said.getvalue())
 
     def test_a_message_nobody_asked_to_mention_does_not(self):
         """R-DIS-31 — `_post` is shared by every message this surface writes, so not

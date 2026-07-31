@@ -103,8 +103,18 @@ is what lets a credential in a file be found by the check that has to prove it.
 {"type": "gone",     "why": "the socket closed"}
 ```
 
-**stderr is yours.** Say what went wrong there; it is kept, and it is never mistaken for
-what you reported.
+**stderr is yours.** It is kept and never mistaken for what you reported. An unprefixed
+line is a warning, preserving the behavior of existing adapters. Prefix routine diagnostic
+context with `INFO` and a tab; prefix an explicit warning with `WARNING` and a tab:
+
+```text
+INFO	connected to #operations
+WARNING	message delivery was refused
+```
+
+The marker is removed before the line reaches the gateway log. Use `INFO` for successful
+reads, writes, and connection bookkeeping; reserve `WARNING` for something an owner may
+need to inspect.
 
 That is the whole of what you say. Six kinds of record, and only `arrived` starts a brain turn.
 

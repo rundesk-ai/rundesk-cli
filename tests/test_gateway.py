@@ -2800,6 +2800,54 @@ class WhatAGatewaySaysAndWhereItLands(WithARunDirectory):
         self.assertIn("up", watching.getvalue(),
                       "a gateway run by hand went quiet")
 
+    def test_routine_channel_activity_is_logged_below_warning_severity(self):
+        """R-GW-44 — a successful delivery is useful diagnostic context, not a reason
+        for an owner to inspect the gateway."""
+
+        class Log:
+            def __init__(self):
+                self.info_lines = []
+                self.warning_lines = []
+
+            def info(self, template, *values):
+                self.info_lines.append(template % values)
+
+            def warning(self, template, *values):
+                self.warning_lines.append(template % values)
+
+        log = Log()
+        gateway._channel_note(log, "discord-dms", "INFO\twrote 262 chars and 0 files")
+        self.assertEqual(
+            ["channel 'discord-dms': wrote 262 chars and 0 files"],
+            log.info_lines,
+        )
+        self.assertEqual([], log.warning_lines)
+
+    def test_unclassified_channel_diagnostics_remain_warnings(self):
+        """An older or third-party adapter has not classified its stderr. Preserve the
+        attention-safe behavior instead of silently demoting a real failure."""
+
+        class Log:
+            def __init__(self):
+                self.info_lines = []
+                self.warning_lines = []
+
+            def info(self, template, *values):
+                self.info_lines.append(template % values)
+
+            def warning(self, template, *values):
+                self.warning_lines.append(template % values)
+
+        log = Log()
+        gateway._channel_note(log, "custom", "could not write")
+        gateway._channel_note(log, "custom", "WARNING\tconnection refused")
+        self.assertEqual([], log.info_lines)
+        self.assertEqual(
+            ["channel 'custom': could not write",
+             "channel 'custom': connection refused"],
+            log.warning_lines,
+        )
+
     def test_a_stream_that_cannot_say_whether_it_is_a_terminal_is_not_one(self):
         """R-GW-35 — anything may be standing in for stderr, including something that
         raises when asked. The unbounded copy is the thing being prevented, so the answer
