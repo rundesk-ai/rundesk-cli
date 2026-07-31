@@ -832,6 +832,13 @@ class Agent(discord.Client):
         elif kind == "configure-result":
             await self._configuration_result(it)
         elif kind == "said":
+            # A queued terminal notice may race with a new turn admitted after reconnect.
+            # Remember that turn before the notice briefly stops its indicator below.
+            turn_was_running = (
+                held.started is not None
+                or held.typing is not None
+                or held.pacing is not None
+            )
             # A finished thing the agent said while it was still working, in a message of
             # its own. Not the answer and not anchored to anything: it is a remark, and
             # quoting the question on every remark buries the question.
@@ -863,15 +870,15 @@ class Agent(discord.Client):
             if began and named and notice is not None:
                 self._holding(named, notice)
             self._no_longer_last(held)
-            # **And start again, because the turn has not ended.** The line above stops it
-            # so nobody is told the agent is typing while they read what it just said — and
-            # the comment used to promise that "the next thing said starts the indicator
-            # again". Nothing does: typing is only ever started from a `taken` or `running`
-            # state record, and an agent that says something and then carries on working
-            # sends neither. So the indicator went out at the first remark and stayed out
-            # for the rest of the turn, however long it went on. What ends it for real is a
-            # final state, which cancels it a few lines below.
-            held.typing = held.typing or asyncio.ensure_future(self._typing(it))
+            # **And start again only when a turn continues.** Ordinary remarks are said
+            # while work is still running, so their indicator resumes without another
+            # state record. A terminal notice arrives outside any turn and has no final
+            # state coming behind it; restarting here would claim work was happening for
+            # ever (R-DIS-35).
+            if it.get("continues", True) or turn_was_running:
+                held.typing = held.typing or asyncio.ensure_future(self._typing(it))
+            else:
+                self.live.pop(str(it.get("conversation")), None)
         elif kind in ("think", "tool", "result", "usage"):
             await self._doing(it, held)
 

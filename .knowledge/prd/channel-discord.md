@@ -57,6 +57,7 @@ so only a running commentary may grow.
 | ✅ | R-DIS-32 | A connected Discord bot keeps the username and profile identity its owner configured in Discord | `connecting never edits the bot profile` |
 | ✅ | R-DIS-33 | A completed Discord answer begins its completion line with the provider that ran the turn | `the whole footer an owner reads is the size what was written and the clock`, `provider and elapsed time are shown when usage was not reported` |
 | ✅ | R-DIS-34 | An inbound Discord reply carries its referenced message into Rundesk's shared reply context | `on message reports the reply on the arrived record`, `a resolved reply carries the parent identity author and body`, `a deleted or unfetched parent still carries its identity`, `a non reply reference is not presented as a reply`, `a message without a reference has no reply context` |
+| ✅ | R-DIS-35 | A terminal Discord notice neither claims an idle turn is running nor erases a newer turn that is running | `a terminal notice does not claim another turn is running`, `a terminal notice does not erase a newer running turn` |
 
 ## Open questions
 
