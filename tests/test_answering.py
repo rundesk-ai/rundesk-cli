@@ -1849,6 +1849,7 @@ class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
         await held.told_restart_finished("one", "Rundesk restart succeeded")
 
         self.assertEqual("Rundesk restart succeeded", surface.of("said")[0]["text"])
+        self.assertFalse(surface.of("said")[0]["continues"])
         self.assertEqual([], brain.asked)
 
 
