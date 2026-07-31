@@ -40,7 +40,8 @@ INSTALLER = REPO / "install.sh"
 
 
 def installer(*args: str, home: Path, bindir: Path, cwd: Path | None = None,
-              script: Path | None = None, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+              script: Path | None = None, extra_env: dict[str, str] | None = None,
+              gh: Path | None = None, without_gh: bool = False) -> subprocess.CompletedProcess:
     """Run the installer somewhere it cannot reach the real machine."""
     # An agent running this suite carries the live install's RUNDESK_DATA_DIR and friends.
     # Overriding only the program and HOME still let a scratch uninstall take the live
@@ -65,10 +66,20 @@ def installer(*args: str, home: Path, bindir: Path, cwd: Path | None = None,
         encoding="utf-8",
     )
     launchctl.chmod(0o755)
+    # A developer may be authenticated in GitHub CLI. No ordinary installer case may reach
+    # that account merely because the suite inherited PATH. Default to an offline CLI whose
+    # authentication check refuses; explicit cases pass their own stand-in or prove absence.
+    if gh is None and not without_gh:
+        unauthenticated = fake_tools / "gh"
+        unauthenticated.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        unauthenticated.chmod(0o755)
+    executable_path = f"{fake_tools}{os.pathsep}{inherited_path}"
+    if gh is not None:
+        executable_path = f"{gh.parent}{os.pathsep}{executable_path}"
     env = {
         **isolated,
         "HOME": str(home),
-        "PATH": f"{fake_tools}{os.pathsep}{inherited_path}",
+        "PATH": executable_path,
         "RUNDESK_BIN_DIR": str(bindir),
         "RUNDESK_INSTALL_DIR": str(home / ".rundesk"),
         "RUNDESK_JOBS_DIR": str(home / ".cache" / "rundesk-test-jobs"),
@@ -99,6 +110,34 @@ class Sandbox(unittest.TestCase):
 
     def uninstall(self, *args: str, **kw) -> subprocess.CompletedProcess:
         return installer("--uninstall", *args, home=self.home, bindir=self.bindir, **kw)
+
+    def fake_gh(self) -> Path:
+        """An offline GitHub CLI seam whose authentication and API outcomes are explicit."""
+        tool = self.root / "tools" / "gh"
+        tool.parent.mkdir(exist_ok=True)
+        tool.write_text(
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$*\" >> \"$RUNDESK_GH_LOG\"\n"
+            "case \"${1:-} ${2:-}\" in\n"
+            "  'auth status') exit \"${RUNDESK_GH_AUTH_EXIT:-1}\" ;;\n"
+            "  'api --method') exit \"${RUNDESK_GH_API_EXIT:-0}\" ;;\n"
+            "esac\n"
+            "exit 2\n",
+            encoding="utf-8",
+        )
+        tool.chmod(0o755)
+        return tool
+
+    def path_without_gh(self) -> str:
+        """Only the ordinary commands a local install uses, with no GitHub CLI."""
+        toolbox = self.root / "no-gh"
+        toolbox.mkdir()
+        for name in ("bash", "chmod", "cut", "dirname", "du", "grep", "ln", "mkdir",
+                     "pwd", "python3", "readlink", "rmdir", "tr", "wc"):
+            target = shutil.which(name)
+            self.assertIsNotNone(target, f"the test machine has no {name}")
+            (toolbox / name).symlink_to(target)
+        return str(toolbox)
 
 
 @unittest.skipUnless(shutil.which("launchctl"), "no supervisor on this machine to keep anything")
@@ -255,6 +294,75 @@ class WhatWasAskedForTests(Sandbox):
             (self.bindir / "rundesk").exists(),
             "a refused option still removed the command",
         )
+
+
+class CommunitySupportTests(Sandbox):
+    """R-INS-21 — a new owner can support Rundesk without a separate manual step."""
+
+    def install_with_gh(self, *, authenticated: bool = True,
+                        api_succeeds: bool = True) -> tuple[subprocess.CompletedProcess, Path]:
+        log = self.root / "gh.log"
+        log.touch()
+        done = self.install(
+            gh=self.fake_gh(),
+            extra_env={
+                "RUNDESK_GH_LOG": str(log),
+                "RUNDESK_GH_AUTH_EXIT": "0" if authenticated else "1",
+                "RUNDESK_GH_API_EXIT": "0" if api_succeeds else "1",
+            },
+        )
+        return done, log
+
+    def test_a_fresh_install_with_authenticated_github_cli_stars_rundesk(self):
+        done, log = self.install_with_gh()
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(
+            [
+                "auth status --hostname github.com",
+                "api --method PUT -H Content-Length: 0 /user/starred/rundesk-ai/rundesk-cli",
+            ],
+            log.read_text(encoding="utf-8").splitlines(),
+        )
+        self.assertIn("helped you support the Rundesk community", done.stdout)
+
+    def test_installing_again_makes_no_second_star_request(self):
+        first, log = self.install_with_gh()
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        requests_after_first = log.read_text(encoding="utf-8")
+        self.assertEqual(2, len(requests_after_first.splitlines()))
+
+        second, _ = self.install_with_gh()
+
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertEqual(requests_after_first, log.read_text(encoding="utf-8"))
+        self.assertNotIn("helped you support the Rundesk community", second.stdout)
+
+    def test_an_install_without_github_cli_still_succeeds(self):
+        done = self.install(
+            without_gh=True,
+            extra_env={"PATH": self.path_without_gh()},
+        )
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("helped you support the Rundesk community", done.stdout)
+
+    def test_an_install_without_github_authentication_does_not_star(self):
+        done, log = self.install_with_gh(authenticated=False)
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(
+            ["auth status --hostname github.com"],
+            log.read_text(encoding="utf-8").splitlines(),
+        )
+        self.assertNotIn("helped you support the Rundesk community", done.stdout)
+
+    def test_a_failed_star_request_does_not_fail_the_install(self):
+        done, log = self.install_with_gh(api_succeeds=False)
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(2, len(log.read_text(encoding="utf-8").splitlines()))
+        self.assertNotIn("helped you support the Rundesk community", done.stdout)
 
 
 class InstallTests(Sandbox):
