@@ -92,6 +92,28 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
                 self.assertIn("model", page.lower())
 
 
+class WhatTheShippedPythonTestingSkillSays(unittest.TestCase):
+    def test_python_testing_guidance_is_for_the_standard_library_runner(self):
+        page = (REALLY_SHIPPED / "python-testing" / "SKILL.md").read_text()
+        for expected in (
+                "unittest.TestCase", "self.addCleanup", "self.subTest",
+                "unittest.IsolatedAsyncioTestCase", "Patch where the code under test looks"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, page)
+        self.assertNotIn("pytest", page.lower())
+
+
+class WhatTheShippedPdfCreationSkillSays(unittest.TestCase):
+    def test_pdf_creation_requires_local_generation_and_visual_verification(self):
+        page = (REALLY_SHIPPED / "pdf-creation" / "SKILL.md").read_text()
+        for expected in (
+                "Create the PDF entirely on the local machine",
+                "SimpleDocTemplate", "LongTable", "pdftoppm",
+                "Inspect every rendered page", "Escape untrusted or literal content"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, page)
+
+
 class WhatTheLibraryHolds(WithALibrary):
     def test_the_provider_given_library_is_the_one_a_nested_command_reports(self):
         was = os.environ.get("RUNDESK_SKILL_LIBRARY")
