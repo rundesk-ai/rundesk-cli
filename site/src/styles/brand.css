@@ -11,6 +11,18 @@
 	--rd-ground-raised: #070c1e;
 	--rd-ground-edge: #131a30;
 
+	/* The terminal and the install panel stay dark on both themes — a shell is
+	   dark, and a light one reads as a screenshot of the wrong thing. These are
+	   literals rather than the ground tokens above, which do flip. */
+	--rd-shell: #01040f;
+	--rd-shell-raised: #0a1024;
+	--rd-shell-edge: #232b45;
+	--rd-shell-ink: #c0c4d4;
+	--rd-shell-bright: #eceef5;
+	--rd-shell-dim: #7e86a0;
+
+	--rd-lift: 0 1rem 2.5rem rgb(0 0 0 / 0.45);
+
 	--sl-nav-height: 7.5rem;
 	--rd-bar-height: 4rem;
 	--rd-areas-height: 3.5rem;
@@ -41,6 +53,13 @@
 }
 
 :root[data-theme='light'] {
+	/* Every panel on the site is painted from these, so leaving them at their
+	   dark values renders near-black cards under near-black text. */
+	--rd-ground: #ffffff;
+	--rd-ground-raised: #f7f8fc;
+	--rd-ground-edge: #dfe3ee;
+	--rd-lift: 0 0.75rem 2rem rgb(11 15 30 / 0.1);
+
 	--sl-color-accent-low: #ffd7d7;
 	--sl-color-accent: var(--rd-red-600);
 	--sl-color-accent-high: #a51516;
@@ -156,6 +175,9 @@ starlight-sidebar-topics-list,
 .hero img {
 	max-height: 13rem;
 	width: auto;
+}
+
+:root[data-theme='dark'] .hero img {
 	filter: drop-shadow(0 0 4rem rgb(253 48 49 / 0.22));
 }
 
@@ -180,7 +202,7 @@ starlight-sidebar-topics-list,
 .card {
 	--sl-card-border: transparent;
 	--sl-card-bg: transparent;
-	border-color: var(--sl-color-gray-6);
+	border-color: var(--rd-ground-edge);
 	background: var(--rd-ground-raised);
 	border-radius: 0.75rem;
 }
@@ -199,7 +221,7 @@ starlight-sidebar-topics-list,
 /* LinkCards carry the section index, so the whole card is the target and it has
    to say so on hover. */
 .sl-link-card {
-	border-color: var(--sl-color-gray-6);
+	border-color: var(--rd-ground-edge);
 	background: var(--rd-ground-raised);
 	border-radius: 0.75rem;
 	transition: border-color 150ms ease, transform 150ms ease;
@@ -265,11 +287,11 @@ starlight-sidebar-topics-list,
 /* The product is a command line, so the landing image is a command line. */
 .rd-term {
 	width: 100%;
-	max-width: 30rem;
-	border: 1px solid var(--sl-color-gray-5);
+	max-width: 34rem;
+	border: 1px solid var(--rd-shell-edge);
 	border-radius: 0.75rem;
 	overflow: hidden;
-	background: color-mix(in srgb, var(--rd-ground) 88%, #000);
+	background: var(--rd-shell);
 	box-shadow:
 		0 1.5rem 4rem rgb(0 0 0 / 0.55),
 		0 0 0 1px rgb(253 48 49 / 0.08),
@@ -282,15 +304,15 @@ starlight-sidebar-topics-list,
 	align-items: center;
 	gap: 0.4rem;
 	padding: 0.6rem 0.85rem;
-	background: color-mix(in srgb, var(--rd-ground-raised) 92%, #fff 2%);
-	border-bottom: 1px solid var(--sl-color-gray-6);
+	background: var(--rd-shell-raised);
+	border-bottom: 1px solid var(--rd-shell-edge);
 }
 
 .rd-term__dot {
 	width: 0.6rem;
 	height: 0.6rem;
 	border-radius: 50%;
-	background: var(--sl-color-gray-5);
+	background: var(--rd-shell-edge);
 }
 
 .rd-term__dot:first-child {
@@ -300,16 +322,16 @@ starlight-sidebar-topics-list,
 .rd-term__name {
 	margin-inline-start: auto;
 	font-size: 0.7rem;
-	color: var(--sl-color-gray-3);
+	color: var(--rd-shell-dim);
 	letter-spacing: 0.04em;
 }
 
 .rd-term__body {
 	margin: 0;
-	padding: 1rem 1.1rem 1.2rem;
+	padding: 1.15rem 1.25rem 1.35rem;
 	background: transparent;
-	font-size: 0.74rem;
-	line-height: 1.7;
+	font-size: 0.82rem;
+	line-height: 1.75;
 	overflow-x: auto;
 }
 
@@ -317,7 +339,7 @@ starlight-sidebar-topics-list,
 	background: none;
 	border: none;
 	padding: 0;
-	color: var(--sl-color-gray-2);
+	color: var(--rd-shell-ink);
 	font-family: var(--__sl-font-mono, ui-monospace, monospace);
 }
 
@@ -348,7 +370,7 @@ starlight-sidebar-topics-list,
 .rd-term .s { color: #9ece6a; }
 .rd-term .a { color: var(--rd-red-400); }
 .rd-term .ok { color: #7ddba0; }
-.rd-term .dim { color: var(--sl-color-gray-4); font-style: italic; }
+.rd-term .dim { color: var(--rd-shell-dim); font-style: italic; }
 
 .rd-term__cursor {
 	display: inline-block;
@@ -385,19 +407,13 @@ starlight-sidebar-topics-list,
 	align-items: center;
 	gap: 0.4rem;
 	padding: 0.25rem 0.7rem;
-	border: 1px solid var(--sl-color-gray-5);
+	border: 1px solid var(--rd-ground-edge);
 	border-radius: 999px;
+	font-family: var(--sl-font-mono);
 	font-size: var(--sl-text-xs);
+	letter-spacing: 0.02em;
 	color: var(--sl-color-gray-2);
 	background: color-mix(in srgb, var(--rd-ground-raised) 70%, transparent);
-}
-
-.rd-pill__dot {
-	width: 0.4rem;
-	height: 0.4rem;
-	border-radius: 50%;
-	background: #7ddba0;
-	box-shadow: 0 0 0.5rem #7ddba0;
 }
 
 /* ======================================================== card motion == */
@@ -410,11 +426,11 @@ starlight-sidebar-topics-list,
 .card:hover {
 	transform: translateY(-3px);
 	border-color: color-mix(in srgb, var(--rd-red-500) 40%, transparent);
-	box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 0.45);
+	box-shadow: var(--rd-lift);
 }
 
 .sl-link-card:hover {
-	box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 0.45);
+	box-shadow: var(--rd-lift);
 }
 
 /* The primary action is the one thing on the page that should look clickable
@@ -599,14 +615,21 @@ starlight-sidebar-topics-list,
 	max-height: none;
 }
 
+/* The wordmark is white letterforms, so light needs the repainted copy rather
+   than a filter — see `scripts/make-light-logos.mjs`. */
+:root[data-theme='dark'] .rd-hero-word[data-theme='light'],
+:root[data-theme='light'] .rd-hero-word[data-theme='dark'] {
+	display: none;
+}
+
 /* The command most people came for, framed as a panel rather than buried in the
    page's other code blocks. */
 .rd-install {
 	margin-block: 0 1rem;
-	border: 1px solid var(--sl-color-gray-5);
+	border: 1px solid var(--rd-shell-edge);
 	border-radius: 0.75rem;
 	overflow: hidden;
-	background: color-mix(in srgb, var(--rd-ground) 90%, #000);
+	background: var(--rd-shell);
 }
 
 .rd-install__bar {
@@ -615,7 +638,7 @@ starlight-sidebar-topics-list,
 	gap: 1.25rem;
 	padding: 0 1.1rem;
 	height: 3rem;
-	border-bottom: 1px solid var(--sl-color-gray-6);
+	border-bottom: 1px solid var(--rd-shell-edge);
 	font-family: var(--__sl-font-mono, ui-monospace, monospace);
 	font-size: 0.75rem;
 	letter-spacing: 0.1em;
@@ -623,12 +646,12 @@ starlight-sidebar-topics-list,
 }
 
 .rd-install__label {
-	color: var(--sl-color-gray-2);
+	color: var(--rd-shell-bright);
 	font-weight: 700;
 }
 
 .rd-install__tab {
-	color: var(--sl-color-accent-high);
+	color: var(--rd-red-400);
 	font-weight: 700;
 	align-self: stretch;
 	display: flex;
@@ -642,7 +665,7 @@ starlight-sidebar-topics-list,
 }
 
 .rd-install__plat {
-	color: var(--sl-color-gray-3);
+	color: var(--rd-shell-dim);
 	font-weight: 600;
 }
 
@@ -654,8 +677,7 @@ starlight-sidebar-topics-list,
 .rd-install__note {
 	margin: 0 0 0.6rem;
 	font-size: 0.8rem;
-	font-style: italic;
-	color: var(--sl-color-gray-4);
+	color: var(--rd-shell-dim);
 }
 
 .rd-install__line {
@@ -673,7 +695,7 @@ starlight-sidebar-topics-list,
 	border: none;
 	padding: 0;
 	font-size: 0.9rem;
-	color: var(--sl-color-gray-1);
+	color: var(--rd-shell-bright);
 }
 
 .rd-install__prompt {
@@ -685,10 +707,10 @@ starlight-sidebar-topics-list,
 .rd-install__copy {
 	flex: none;
 	padding: 0.4rem 0.75rem;
-	border: 1px solid var(--sl-color-gray-5);
+	border: 1px solid var(--rd-shell-edge);
 	border-radius: 0.4rem;
 	background: transparent;
-	color: var(--sl-color-gray-2);
+	color: var(--rd-shell-ink);
 	font: inherit;
 	font-size: 0.72rem;
 	letter-spacing: 0.08em;
@@ -699,7 +721,7 @@ starlight-sidebar-topics-list,
 
 .rd-install__copy:hover {
 	border-color: color-mix(in srgb, var(--rd-red-500) 55%, transparent);
-	color: var(--sl-color-white);
+	color: #ffffff;
 }
 
 .rd-install__copy[data-copied] {

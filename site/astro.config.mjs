@@ -41,8 +41,10 @@ export default defineConfig({
 			tagline: 'Teammates that remember, adapt, and grow.',
 			logo: {
 				// The lockup cut out of the repository banner, so the header carries the
-				// real letterforms rather than a webfont chosen to look near enough.
-				src: './src/assets/rundesk-lockup.png',
+				// real letterforms rather than a webfont chosen to look near enough. The
+				// light copy is derived by `scripts/make-light-logos.mjs`.
+				dark: './src/assets/rundesk-lockup.png',
+				light: './src/assets/rundesk-lockup-light.png',
 				alt: 'Rundesk',
 				replacesTitle: true,
 			},
