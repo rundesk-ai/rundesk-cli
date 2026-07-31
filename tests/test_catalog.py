@@ -114,6 +114,24 @@ class WhatACatalogIs(WithCatalogs):
 
 
 class InstallingACatalog(WithCatalogs):
+    def test_a_script_backed_skill_is_copied_complete_and_never_executed(self):
+        """R-CAT-13 — installation treats integration commands as inert package files."""
+        source = a_catalog(self.sources)
+        command = source / "skills" / "python-patterns" / "scripts" / "python-patterns"
+        command.parent.mkdir()
+        marker = self.root / "repository-code-ran"
+        command.write_text(
+            f"#!/bin/sh\ntouch {marker}\nprintf 'ready\\n'\n", encoding="utf-8"
+        )
+        command.chmod(0o755)
+
+        self.install(source)
+
+        installed = self.library / "python-patterns" / "scripts" / "python-patterns"
+        self.assertTrue(installed.is_file())
+        self.assertTrue(os.access(installed, os.X_OK))
+        self.assertFalse(marker.exists(), "catalog installation executed repository content")
+
     def test_installing_exposes_every_skill_without_granting_any(self):
         """R-CAT-3 — installation fills the library; grants remain an agent decision."""
         self.install(a_catalog(self.sources, names=("python-patterns", "vue-patterns")))
@@ -239,6 +257,45 @@ class UpdatingACatalog(WithCatalogs):
         )
         self.assertEqual("1.1.0", landed.version)
         self.assertEqual(["frontend-design", "python-patterns"], sorted(skill.library(self.library)))
+
+    def test_a_catalog_check_removes_local_package_drift(self):
+        """R-CAT-14 — repository contents replace every locally changed package file."""
+        older = a_catalog(self.sources / "old", version="1.0.0")
+        old_command = older / "skills" / "python-patterns" / "scripts" / "python-patterns"
+        old_command.parent.mkdir()
+        old_command.write_text("#!/bin/sh\nprintf 'old\\n'\n", encoding="utf-8")
+        old_command.chmod(0o755)
+        self.install(older)
+
+        installed = self.library / "python-patterns"
+        (installed / "SKILL.md").write_text("locally edited\n", encoding="utf-8")
+        (installed / "scripts" / "python-patterns").write_text(
+            "#!/bin/sh\nprintf 'locally edited\\n'\n", encoding="utf-8"
+        )
+        (installed / "local-only.txt").write_text("drift\n", encoding="utf-8")
+
+        latest = a_catalog(self.sources / "latest", version="1.0.0")
+        new_command = latest / "skills" / "python-patterns" / "scripts" / "python-patterns"
+        new_command.parent.mkdir()
+        new_command.write_text("#!/bin/sh\nprintf 'new\\n'\n", encoding="utf-8")
+        new_command.chmod(0o755)
+        (latest / "skills" / "python-patterns" / "reference.md").write_text(
+            "new file\n", encoding="utf-8"
+        )
+
+        catalog.update(
+            "development", self.catalogs, self.library,
+            fetch=lambda source, work: latest,
+        )
+
+        self.assertIn("name: python-patterns", (installed / "SKILL.md").read_text())
+        self.assertEqual(
+            "#!/bin/sh\nprintf 'new\\n'\n",
+            (installed / "scripts" / "python-patterns").read_text(),
+        )
+        self.assertTrue(os.access(installed / "scripts" / "python-patterns", os.X_OK))
+        self.assertEqual("new file\n", (installed / "reference.md").read_text())
+        self.assertFalse((installed / "local-only.txt").exists())
 
     def test_a_failed_update_leaves_the_working_version(self):
         """R-CAT-8 — a catalog update has a working version or changes nothing."""

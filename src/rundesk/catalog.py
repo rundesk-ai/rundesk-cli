@@ -93,8 +93,8 @@ def home(where: Path | None = None) -> Path:
     return where if where is not None else data_home() / "catalogs"
 
 
-def read(at: Path) -> Manifest:
-    """Read and validate the complete contract declared by one catalog."""
+def read(at: Path, validate_packages: bool = True) -> Manifest:
+    """Read one catalog contract, validating its packages unless recovering an update."""
     page = at / MANIFEST
     try:
         said = json.loads(page.read_text(encoding="utf-8"))
@@ -130,9 +130,10 @@ def read(at: Path) -> Manifest:
             raise NotACatalog(
                 f"{name} calls {relative!r} {called}, but the directory is {skill_at.name}"
             )
-        why = skill.valid(skill_at)
-        if why:
-            raise NotACatalog(f"{name}'s {called} is not a usable skill: {why}")
+        if validate_packages:
+            why = skill.valid(skill_at)
+            if why:
+                raise NotACatalog(f"{name}'s {called} is not a usable skill: {why}")
         if called in names:
             raise NotACatalog(f"{name} declares {called} more than once")
         names.add(called)
@@ -164,6 +165,12 @@ def _inside(root: Path, relative, name: str) -> Path:
 
 def installed(where: Path | None = None) -> dict[str, Installed]:
     """Every usable catalog Rundesk laid down, by declared name."""
+    return _installed(where, validate_packages=True)
+
+
+def _installed(where: Path | None = None,
+               validate_packages: bool = True) -> dict[str, Installed]:
+    """Managed catalogs, optionally tolerating package drift so an update can repair it."""
     root = home(where)
     try:
         entries = sorted(root.iterdir())
@@ -173,7 +180,7 @@ def installed(where: Path | None = None) -> dict[str, Installed]:
     for entry in entries:
         if not entry.is_dir() or not (entry / OWNED).is_file() or not (entry / APP).is_dir():
             continue
-        manifest = read(entry / APP)
+        manifest = read(entry / APP, validate_packages=validate_packages)
         recorded = provenance(entry)
         source = recorded["source"]
         if recorded.get("version") != manifest.version:
@@ -213,7 +220,7 @@ def install(source, where: Path | None = None, skills_dir: Path | None = None,
     with tempfile.TemporaryDirectory(prefix="rundesk-catalog-") as temporary:
         fetched = (fetch or _fetch)(source, Path(temporary))
         manifest = read(fetched)
-        if manifest.name in installed(root):
+        if manifest.name in _installed(root, validate_packages=False):
             raise InTheWay(
                 f"{manifest.name} is already installed; use: rundesk skills update {manifest.name}"
             )
@@ -249,7 +256,7 @@ def refresh(where: Path | None = None, skills_dir: Path | None = None,
     library = skills_dir if skills_dir is not None else skill.home()
     source = default_source or os.environ.get(DEFAULT_SOURCE_ENV) or DEFAULT_SOURCE
     results = []
-    standing = installed(root)
+    standing = _installed(root, validate_packages=False)
     if DEFAULT_NAME not in standing:
         try:
             landed = install(source, root, library, fetch=fetch, seeded=True)
@@ -272,7 +279,7 @@ def update(name: str, where: Path | None = None, skills_dir: Path | None = None,
     """Move one catalog to a newer declared version, putting the working release back on failure."""
     root = home(where)
     library = skills_dir if skills_dir is not None else skill.home()
-    current = installed(root).get(name)
+    current = _installed(root, validate_packages=False).get(name)
     if current is None:
         raise Unknown(f"there is no installed catalog called {name}")
     source = current.source
@@ -282,7 +289,11 @@ def update(name: str, where: Path | None = None, skills_dir: Path | None = None,
         coming_manifest = read(fetched)
         if coming_manifest.name != name:
             raise NotACatalog(f"{source} now calls itself {coming_manifest.name}, not {name}")
-        if not updater.is_newer(coming_manifest.version, current.version):
+        # The repository release is authoritative even when its version is unchanged:
+        # checking it again repairs local edits, additions, and deletions. Only an older
+        # repository version is ignored.
+        if (coming_manifest.version != current.version
+                and not updater.is_newer(coming_manifest.version, current.version)):
             return current
         removed = {called for called, _ in current.manifest.skills} - {
             called for called, _ in coming_manifest.skills

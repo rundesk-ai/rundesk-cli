@@ -78,6 +78,36 @@ Paths must stay inside the repository. Each skill directory is one complete port
 package; keep its scripts, references, assets, and other required resources beside its
 `SKILL.md`.
 
+## Integration packages and environments
+
+A script-backed skill remains an inert package during install and update. Rundesk validates and
+copies its complete directory, preserves executable files, and never runs repository setup code.
+The package owns its launcher and support code; credentials, mutable state, and caches stay outside
+the catalog because an update atomically replaces catalog files.
+
+The repository release is authoritative: every catalog check replaces changed scripts, adds new
+files, removes files absent from the repository, and discards local edits inside catalog-managed
+skills—even when the manifest version is unchanged. Keep anything that must survive an update in
+the external config, cache, or state locations below.
+
+First-party integrations use this boundary:
+
+- no shared runtime environment; each launcher resolves only its own package files;
+- system Python standard library only, so installation downloads no dependencies;
+- isolated credentials by default under
+  `${XDG_CONFIG_HOME:-$HOME/.config}/rundesk/integrations/<skill>/env`;
+- an explicit `RUNDESK_INTEGRATIONS_ENV` shared dotenv for owners who prefer one managed file;
+- `${XDG_CACHE_HOME:-$HOME/.cache}/rundesk/integrations/<skill>/` for disposable cache;
+- `${XDG_STATE_HOME:-$HOME/.local/state}/rundesk/integrations/<skill>/` for non-secret state.
+
+Do not install dependencies into the machine's Python or create an undocumented environment shared
+by skills. Until Rundesk defines a declarative isolated third-party runtime, publish standard-library
+code or a self-contained executable. The complete author contract and a copyable package shape live
+in the public [integration catalog environment guide](https://github.com/rundesk-ai/rundesk-skills-integrations/blob/main/ENVIRONMENTS.md).
+
+The Apple integrations use the same isolation model while relying on documented macOS system
+frameworks. See the [Apple environment guide](https://github.com/rundesk-ai/rundesk-skills-apple/blob/main/ENVIRONMENTS.md).
+
 ## Install and grants
 
 Install by repository URL, not by a catalog/skill pair:

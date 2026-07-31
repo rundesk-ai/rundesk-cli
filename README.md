@@ -227,6 +227,18 @@ rundesk skills grant ava python-patterns
 Catalog repositories use one [`manifest.json` contract](docs/extending/skill-catalogs/README.md)
 whether they publish one skill or a collection.
 
+First-party optional integrations use the same contract:
+
+- [Apple skills](https://github.com/rundesk-ai/rundesk-skills-apple) — Calendar, Contacts,
+  Mail, and Messages on macOS.
+- [Integration skills](https://github.com/rundesk-ai/rundesk-skills-integrations) —
+  Cloudflare, Confluence, Coolify, Jira, and Sentry.
+
+Each command is packaged inside its skill. Service integrations use the system Python standard
+library; Apple integrations use macOS system frameworks and tools. Neither catalog installs
+dependencies. Credentials use isolated owner configuration by default with an explicit shared
+dotenv option.
+
 ### Operations and data
 
 - Install, automatic daily updates, version checks, status, and doctor commands
