@@ -11,9 +11,8 @@
 	--rd-ground-raised: #070c1e;
 	--rd-ground-edge: #131a30;
 
-	/* The terminal and the install panel stay dark on both themes — a shell is
-	   dark, and a light one reads as a screenshot of the wrong thing. These are
-	   literals rather than the ground tokens above, which do flip. */
+	/* The terminal and install panels stay dark on both themes, so they carry
+	   their own palette rather than the ground tokens, which flip. */
 	--rd-shell: #01040f;
 	--rd-shell-raised: #0a1024;
 	--rd-shell-edge: #232b45;
@@ -28,15 +27,12 @@
 	--rd-areas-height: 3.5rem;
 }
 
-/* Dark is the brand. Accent ramps run warm off the logo red; grays carry the
-   banner's blue cast so the chrome sits on the same ground as the mark. */
 :root[data-theme='dark'] {
 	--sl-color-accent-low: #3c0709;
 	--sl-color-accent: var(--rd-red-600);
 	/* Starlight drives links, primary buttons and the active sidebar item off
-	   accent-high. Its default is a pale tint, which reads as pink rather than
-	   as the logo. #ff4d4e is the banner red lifted just far enough to clear
-	   4.5:1 on the ground (5.9:1), so it holds both as text and as a fill. */
+	   accent-high, and its default reads pink. #ff4d4e is the banner red at
+	   5.9:1 on the ground, so it holds as text and as a fill. */
 	--sl-color-accent-high: #ff4d4e;
 
 	--sl-color-white: #ffffff;
@@ -53,8 +49,8 @@
 }
 
 :root[data-theme='light'] {
-	/* Every panel on the site is painted from these, so leaving them at their
-	   dark values renders near-black cards under near-black text. */
+	/* Every panel is painted from these; left at their dark values they render
+	   near-black under near-black text. */
 	--rd-ground: #ffffff;
 	--rd-ground-raised: #f7f8fc;
 	--rd-ground-edge: #dfe3ee;
@@ -77,9 +73,6 @@
 
 /* ------------------------------------------------------------ typography -- */
 
-/* Two voices from one family. Plex Sans carries the prose; Plex Mono carries
-   every piece of chrome and the top two heading levels, so the page reads as
-   the terminal product it documents rather than as a generic docs theme. */
 :root {
 	--sl-font: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
 	--sl-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -90,7 +83,7 @@
 .content-panel h1 {
 	font-family: var(--sl-font-mono);
 	font-weight: 600;
-	/* Mono sets wide. Without negative tracking a heading runs a third longer
+	/* Mono sets wide; without negative tracking a heading runs a third longer
 	   than the sans equivalent and stops holding together as one shape. */
 	letter-spacing: -0.035em;
 }
@@ -123,20 +116,35 @@
 	line-height: 1.72;
 }
 
+.sl-markdown-content h2::before {
+	content: '';
+	display: inline-block;
+	width: 0.2rem;
+	height: 0.9em;
+	margin-inline-end: 0.6rem;
+	vertical-align: -0.04em;
+	border-radius: 999px;
+	background: linear-gradient(180deg, var(--rd-red-500), transparent);
+}
+
+.sl-markdown-content table {
+	width: 100%;
+}
+
+.sl-markdown-content th:first-child,
+.sl-markdown-content td:first-child {
+	white-space: nowrap;
+}
+
 /* ---------------------------------------------------------------- chrome -- */
 
-/* The title is the lockup itself, so there is no text to colour — only a height
-   to hold it at. */
 .site-title img {
 	height: 1.55rem;
 	width: auto;
 }
 
-/* `rundesk` is the product; this site is its documentation. The badge says which
-   one you are looking at, next to the mark where the question gets asked.
-
-   Hung off `.title-wrapper` rather than `.site-title`, so it sits beside the
-   lockup instead of inside the link back to the overview. */
+/* Hung off `.title-wrapper` rather than `.site-title`, so the badge sits beside
+   the lockup instead of inside the link back to the overview. */
 .title-wrapper {
 	align-items: center;
 	gap: 0.7rem;
@@ -157,8 +165,6 @@
 	line-height: 1.5;
 }
 
-/* Below Starlight's mobile breakpoint the bar is tight enough that the badge is
-   the first thing that can go. */
 @media (max-width: 50rem) {
 	.title-wrapper::after {
 		display: none;
@@ -171,12 +177,110 @@ header.header {
 	padding-block: 0;
 }
 
+.rd-header {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+}
+
+.rd-header__bar {
+	display: flex;
+	align-items: center;
+	height: var(--rd-bar-height);
+	flex: none;
+}
+
+/* Starlight's header is a full-width grid. As a flex item it would size to its
+   content instead, pinning the search box and the social links into the left
+   third and leaving the rest of the bar empty. */
+.rd-header__bar > * {
+	flex: 1 1 auto;
+	width: 100%;
+}
+
+/* Three columns with the outer two equal pins the search to the middle of the
+   viewport whatever is either side of it. */
+.rd-header__bar > .header {
+	display: grid;
+	grid-template-columns: 1fr minmax(0, 30rem) 1fr;
+	align-items: center;
+	gap: 1rem;
+}
+
+.rd-header__bar > .header > :nth-child(2) {
+	justify-self: center;
+	width: 100%;
+}
+
+.rd-header__bar > .header > :nth-child(2) site-search,
+.rd-header__bar > .header > :nth-child(2) button[data-open-modal] {
+	width: 100%;
+}
+
+.rd-header__bar > .header > :nth-child(3) {
+	justify-self: end;
+}
+
+/* ----------------------------------------------------------------- areas -- */
+
+.rd-areas {
+	height: var(--rd-areas-height);
+	flex: none;
+	display: flex;
+	align-items: stretch;
+	overflow-x: auto;
+	scrollbar-width: none;
+	background: color-mix(in srgb, var(--rd-ground-raised) 60%, transparent);
+	border-top: 1px solid var(--sl-color-gray-6);
+	margin-inline: calc(var(--sl-nav-pad-x, 1rem) * -1);
+	padding-inline: var(--sl-nav-pad-x, 1rem);
+}
+
+.rd-areas::-webkit-scrollbar {
+	display: none;
+}
+
+.rd-areas ul {
+	display: flex;
+	align-items: stretch;
+	gap: 2rem;
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+
+.rd-areas a {
+	display: flex;
+	align-items: center;
+	height: 100%;
+	white-space: nowrap;
+	font-family: var(--sl-font-mono);
+	font-size: 0.875rem;
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	color: var(--sl-color-gray-3);
+	text-decoration: none;
+	border-bottom: 2px solid transparent;
+	transition: color 140ms ease, border-color 140ms ease;
+}
+
+.rd-areas a:hover {
+	color: var(--sl-color-white);
+}
+
+.rd-areas a[aria-current='page'] {
+	color: var(--sl-color-white);
+	border-bottom-color: var(--rd-red-500);
+}
+
+/* The plugin still owns working out which area is current, so its sidebar copy
+   stays rendered and is hidden rather than removed. */
+.sidebar-content .starlight-sidebar-topics {
+	display: none;
+}
+
 /* --------------------------------------------------------------- sidebar -- */
 
-/* Starlight marks the current page with a filled accent block. At full brand red
-   that is the loudest thing on the page, and the reader's eye goes to where they
-   already are rather than to the prose. A rule and accent text say the same thing
-   at a fraction of the weight. */
 .sidebar-content a[aria-current='page'],
 .sidebar-content a[aria-current='page']:hover,
 .sidebar-content a[aria-current='page']:focus {
@@ -191,19 +295,17 @@ header.header {
 	border-inline-start-color: var(--sl-color-gray-6);
 }
 
-/* Group headings are signposts, not content. Small caps at low contrast keeps
-   them scannable without competing with the links under them. */
+.right-sidebar h2,
 .sidebar-content details > summary .group-label > span,
 .sidebar-content .top-level > li > details > summary span {
-	font-size: var(--sl-text-xs);
-	letter-spacing: 0.08em;
+	font-family: var(--sl-font-mono);
+	font-size: 0.7rem;
+	letter-spacing: 0.12em;
 	text-transform: uppercase;
 	color: var(--sl-color-gray-3);
-	font-weight: 600;
+	font-weight: 700;
 }
 
-/* The topic switcher sits above the page list, so it needs to read as a different
-   kind of thing — a rule below it separates choosing an area from moving inside one. */
 starlight-sidebar-topics-list,
 .sidebar-content > ul:first-child {
 	padding-bottom: 0.75rem;
@@ -211,10 +313,18 @@ starlight-sidebar-topics-list,
 	border-bottom: 1px solid var(--sl-color-gray-6);
 }
 
+.rd-eyebrow {
+	margin: 0 0 0.4rem;
+	font-family: var(--sl-font-mono);
+	font-size: 0.7rem;
+	font-weight: 700;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--sl-color-accent-high);
+}
+
 /* ------------------------------------------------------------------ hero -- */
 
-/* Splash pages default to a very tall hero. The mark is the only image on the
-   overview and does not need half a screen to say what it is. */
 .hero {
 	padding-block: clamp(1.5rem, 6vw, 3.5rem);
 	gap: 2rem;
@@ -229,9 +339,20 @@ starlight-sidebar-topics-list,
 	filter: drop-shadow(0 0 4rem rgb(253 48 49 / 0.22));
 }
 
-.hero h1 {
-	letter-spacing: -0.03em;
-	font-size: clamp(2.5rem, 8vw, 3.75rem);
+/* Scoped under `.hero` to outrank the rule above, which would otherwise size
+   the wordmark to the hero illustration's 13rem. */
+.hero .rd-hero-word {
+	display: block;
+	width: min(100%, 21rem);
+	height: auto;
+	max-height: none;
+}
+
+/* White letterforms need the repainted copy rather than a filter, because the
+   lockup's red glyph must survive — see `scripts/make-light-logos.mjs`. */
+:root[data-theme='dark'] .rd-hero-word[data-theme='light'],
+:root[data-theme='light'] .rd-hero-word[data-theme='dark'] {
+	display: none;
 }
 
 .hero .tagline {
@@ -239,20 +360,51 @@ starlight-sidebar-topics-list,
 	margin-top: 0.5rem;
 }
 
+.action.primary {
+	background: linear-gradient(180deg, var(--rd-red-500), var(--rd-red-600));
+	color: #fff;
+	border: 1px solid color-mix(in srgb, var(--rd-red-400) 60%, transparent);
+	box-shadow: 0 0.5rem 1.5rem rgb(253 48 49 / 0.28);
+	transition: transform 150ms ease, box-shadow 150ms ease;
+}
+
+.action.primary:hover {
+	transform: translateY(-2px);
+	box-shadow: 0 0.75rem 2rem rgb(253 48 49 / 0.4);
+}
+
+/* One bloom in the brand red gives the ground depth. Kept as a background layer
+   on `body` rather than a fixed pseudo-element: a pseudo-element with a z-index
+   establishes a stacking context that paints over the content, and lifting
+   `.page` back above it drops the article several hundred pixels down. */
+:root[data-theme='dark'] body {
+	background-image: radial-gradient(70rem 34rem at 82% -10%, rgb(253 48 49 / 0.1), transparent 60%);
+	background-attachment: fixed;
+	background-repeat: no-repeat;
+}
+
 /* ----------------------------------------------------------------- cards -- */
 
-/* Starlight cycles `--sl-card-border` and `--sl-card-bg` through orange, purple,
-   green, red and blue by `nth-child`, and draws the icon as a tile in whichever
-   it landed on. Six cards then read as six unrelated products. Emptying the two
-   properties removes the tile and the rotation together — overriding the icon
-   rule directly would not, because Starlight's sits in `@layer
-   starlight.components` and only the properties it reads are reachable. */
+/* Starlight cycles `--sl-card-border` and `--sl-card-bg` through five hues by
+   `nth-child` and draws the icon as a tile in whichever it landed on, so six
+   cards read as six unrelated products. Emptying the two properties removes the
+   tile and the rotation together; overriding the icon rule directly would not,
+   because Starlight's sits in `@layer starlight.components` and only the
+   properties it reads are reachable. */
 .card {
 	--sl-card-border: transparent;
 	--sl-card-bg: transparent;
+	position: relative;
 	border-color: var(--rd-ground-edge);
 	background: var(--rd-ground-raised);
 	border-radius: 0.75rem;
+	transition: border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+.card:hover {
+	transform: translateY(-3px);
+	border-color: color-mix(in srgb, var(--rd-red-500) 40%, transparent);
+	box-shadow: var(--rd-lift);
 }
 
 .card .icon {
@@ -266,73 +418,31 @@ starlight-sidebar-topics-list,
 	align-items: center;
 }
 
-/* LinkCards carry the section index, so the whole card is the target and it has
-   to say so on hover. */
 .sl-link-card {
 	border-color: var(--rd-ground-edge);
 	background: var(--rd-ground-raised);
 	border-radius: 0.75rem;
-	transition: border-color 150ms ease, transform 150ms ease;
+	transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
 }
 
 .sl-link-card:hover {
 	border-color: color-mix(in srgb, var(--rd-red-500) 45%, transparent);
 	transform: translateY(-2px);
+	box-shadow: var(--rd-lift);
 }
 
 .sl-link-card .icon {
 	color: var(--rd-red-500);
 }
 
-/* ------------------------------------------------------------- long-form -- */
-
-.sl-markdown-content h2,
-.sl-markdown-content h3 {
-	letter-spacing: -0.02em;
-}
-
-.sl-markdown-content table {
-	width: 100%;
-}
-
-.sl-markdown-content th:first-child,
-.sl-markdown-content td:first-child {
-	white-space: nowrap;
-}
-
-/* Steps are the install path on the overview; the accent marker makes the
-   sequence readable at a glance rather than as four stacked paragraphs. */
 .sl-steps > li::before {
 	background: color-mix(in srgb, var(--rd-red-500) 14%, var(--rd-ground));
 	border-color: color-mix(in srgb, var(--rd-red-500) 35%, transparent);
 	color: var(--sl-color-white);
 }
 
-/* ========================================================== atmosphere == */
+/* -------------------------------------------------------------- terminal -- */
 
-/* A flat near-black page reads as unfinished rather than as restrained. One
-   bloom in the brand red gives the ground depth and a hairline grid makes it a
-   surface rather than an absence. The grid runs the full page rather than fading
-   out, because a background layer cannot be masked — kept faint enough to be a
-   texture behind prose rather than a thing to read.
-
-   These are background layers on `body`, not fixed pseudo-elements. A fixed
-   pseudo-element with a z-index establishes a stacking context that paints over
-   the content, and lifting `.page` back above it breaks Starlight's own layout —
-   the article drops several hundred pixels down the page. A background layer has
-   no such effect because it never enters the stacking order at all. */
-:root[data-theme='dark'] body {
-	background-image:
-		radial-gradient(70rem 34rem at 82% -10%, rgb(253 48 49 / 0.1), transparent 60%),
-		repeating-linear-gradient(to right, rgb(255 255 255 / 0.017) 0 1px, transparent 1px 4rem),
-		repeating-linear-gradient(to bottom, rgb(255 255 255 / 0.017) 0 1px, transparent 1px 4rem);
-	background-attachment: fixed;
-	background-repeat: no-repeat;
-}
-
-/* ============================================================ terminal == */
-
-/* The product is a command line, so the landing image is a command line. */
 .rd-term {
 	width: 100%;
 	max-width: 34rem;
@@ -369,6 +479,7 @@ starlight-sidebar-topics-list,
 
 .rd-term__name {
 	margin-inline-start: auto;
+	font-family: var(--sl-font-mono);
 	font-size: 0.7rem;
 	color: var(--rd-shell-dim);
 	letter-spacing: 0.04em;
@@ -391,8 +502,6 @@ starlight-sidebar-topics-list,
 	font-family: var(--sl-font-mono);
 }
 
-/* Each line fades up in turn, so the session reads as something that happened
-   rather than as a screenshot of text. */
 .rd-term .l {
 	display: block;
 	opacity: 0;
@@ -434,244 +543,8 @@ starlight-sidebar-topics-list,
 	to { visibility: hidden; }
 }
 
-/* Motion is decoration here; anybody who has asked for less should get none. */
-@media (prefers-reduced-motion: reduce) {
-	.rd-term .l { opacity: 1; animation: none; }
-	.rd-term__cursor { animation: none; }
-	.sl-link-card:hover { transform: none; }
-}
+/* --------------------------------------------------------------- install -- */
 
-/* =============================================================== pills == */
-
-.rd-pills {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 0.5rem;
-	margin-block: 0 1.75rem;
-}
-
-.rd-pill {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.4rem;
-	padding: 0.25rem 0.7rem;
-	border: 1px solid var(--rd-ground-edge);
-	border-radius: 999px;
-	font-family: var(--sl-font-mono);
-	font-size: var(--sl-text-xs);
-	letter-spacing: 0.02em;
-	color: var(--sl-color-gray-2);
-	background: color-mix(in srgb, var(--rd-ground-raised) 70%, transparent);
-}
-
-/* ======================================================== card motion == */
-
-.card {
-	position: relative;
-	transition: border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
-}
-
-.card:hover {
-	transform: translateY(-3px);
-	border-color: color-mix(in srgb, var(--rd-red-500) 40%, transparent);
-	box-shadow: var(--rd-lift);
-}
-
-.sl-link-card:hover {
-	box-shadow: var(--rd-lift);
-}
-
-/* The primary action is the one thing on the page that should look clickable
-   from across the room. */
-.action.primary {
-	background: linear-gradient(180deg, var(--rd-red-500), var(--rd-red-600));
-	color: #fff;
-	border: 1px solid color-mix(in srgb, var(--rd-red-400) 60%, transparent);
-	box-shadow: 0 0.5rem 1.5rem rgb(253 48 49 / 0.28);
-	transition: transform 150ms ease, box-shadow 150ms ease;
-}
-
-.action.primary:hover {
-	transform: translateY(-2px);
-	box-shadow: 0 0.75rem 2rem rgb(253 48 49 / 0.4);
-}
-
-/* ======================================================= section rules == */
-
-/* An accent tick before each h2 gives the long pages a rhythm to scroll past. */
-.sl-markdown-content h2::before {
-	content: '';
-	display: inline-block;
-	width: 0.2rem;
-	height: 0.9em;
-	margin-inline-end: 0.6rem;
-	vertical-align: -0.04em;
-	border-radius: 999px;
-	background: linear-gradient(180deg, var(--rd-red-500), transparent);
-}
-
-/* ============================================================== areas == */
-
-/* Two bands in one fixed header: the site bar, then the navigation. The reader's
-   two questions — which area, and where in it — get two different places to be
-   answered rather than one stacked list. */
-.rd-header {
-	display: flex;
-	flex-direction: column;
-	height: 100%;
-}
-
-.rd-header__bar {
-	display: flex;
-	align-items: center;
-	height: var(--rd-bar-height);
-	flex: none;
-}
-
-/* Starlight's header is a full-width grid. As a flex item it would size to its
-   content instead, pinning the search box and the social links into the left
-   third and leaving the rest of the bar empty. */
-.rd-header__bar > * {
-	flex: 1 1 auto;
-	width: 100%;
-}
-
-/* Starlight lets the search sit wherever the title stops, so it lands
-   left-of-centre and moves when the title does. Three columns with the outer two
-   equal pins it to the middle of the viewport whatever is either side of it. */
-.rd-header__bar > .header {
-	display: grid;
-	grid-template-columns: 1fr minmax(0, 30rem) 1fr;
-	align-items: center;
-	gap: 1rem;
-}
-
-.rd-header__bar > .header > :nth-child(2) {
-	justify-self: center;
-	width: 100%;
-}
-
-.rd-header__bar > .header > :nth-child(2) site-search,
-.rd-header__bar > .header > :nth-child(2) button[data-open-modal] {
-	width: 100%;
-}
-
-.rd-header__bar > .header > :nth-child(3) {
-	justify-self: end;
-}
-
-/* The nav is its own band, not a line of links tucked under the wordmark: it
-   spans the header's full width, carries its own ground and its own rule, and
-   the active tab's underline sits on that rule. Without the band it reads as an
-   afterthought below the logo rather than as the site's navigation. */
-.rd-areas {
-	height: var(--rd-areas-height);
-	flex: none;
-	display: flex;
-	align-items: stretch;
-	overflow-x: auto;
-	scrollbar-width: none;
-	background: color-mix(in srgb, var(--rd-ground-raised) 60%, transparent);
-	border-top: 1px solid var(--sl-color-gray-6);
-	margin-inline: calc(var(--sl-nav-pad-x, 1rem) * -1);
-	padding-inline: var(--sl-nav-pad-x, 1rem);
-}
-
-.rd-areas::-webkit-scrollbar {
-	display: none;
-}
-
-.rd-areas ul {
-	display: flex;
-	align-items: stretch;
-	gap: 2rem;
-	list-style: none;
-	padding: 0;
-	margin: 0;
-}
-
-/* Monospace across the chrome. On a tool you drive from a terminal it reads as
-   part of the product rather than as decoration. */
-.rd-areas a {
-	display: flex;
-	align-items: center;
-	height: 100%;
-	white-space: nowrap;
-	font-family: var(--sl-font-mono);
-	font-size: 0.875rem;
-	font-weight: 600;
-	letter-spacing: 0.01em;
-	color: var(--sl-color-gray-3);
-	text-decoration: none;
-	border-bottom: 2px solid transparent;
-	transition: color 140ms ease, border-color 140ms ease;
-}
-
-.rd-areas a:hover {
-	color: var(--sl-color-white);
-}
-
-.rd-areas a[aria-current='page'] {
-	color: var(--sl-color-white);
-	border-bottom-color: var(--rd-red-500);
-}
-
-/* The plugin still owns working out which area is current, so its sidebar copy
-   stays rendered and is hidden rather than removed. */
-.sidebar-content .starlight-sidebar-topics {
-	display: none;
-}
-
-/* -------------------------------------------------------------- eyebrow -- */
-
-.rd-eyebrow {
-	margin: 0 0 0.4rem;
-	font-family: var(--sl-font-mono);
-	font-size: 0.7rem;
-	font-weight: 700;
-	letter-spacing: 0.14em;
-	text-transform: uppercase;
-	color: var(--sl-color-accent-high);
-}
-
-/* ------------------------------------------------------- monospace chrome -- */
-
-.right-sidebar h2,
-.sidebar-content details > summary .group-label > span,
-.sidebar-content .top-level > li > details > summary span {
-	font-family: var(--sl-font-mono);
-	font-size: 0.7rem;
-	letter-spacing: 0.12em;
-	text-transform: uppercase;
-	color: var(--sl-color-gray-3);
-	font-weight: 700;
-}
-
-/* ============================================================= install == */
-
-/* The wordmark stands where the name would be, so the hero shows the branding
-   rather than describing it. Kept as an image with alt text, so a screen reader
-   and the page title still say "rundesk".
-
-   Scoped under `.hero` to outrank the `.hero img` rule that sizes the hero
-   illustration — without that it inherits a 13rem height and arrives twice the
-   size of the heading it replaced. */
-.hero .rd-hero-word {
-	display: block;
-	width: min(100%, 21rem);
-	height: auto;
-	max-height: none;
-}
-
-/* The wordmark is white letterforms, so light needs the repainted copy rather
-   than a filter — see `scripts/make-light-logos.mjs`. */
-:root[data-theme='dark'] .rd-hero-word[data-theme='light'],
-:root[data-theme='light'] .rd-hero-word[data-theme='dark'] {
-	display: none;
-}
-
-/* The command most people came for, framed as a panel rather than buried in the
-   page's other code blocks. */
 .rd-install {
 	margin-block: 0 1rem;
 	border: 1px solid var(--rd-shell-edge);
@@ -783,7 +656,39 @@ starlight-sidebar-topics-list,
 	color: var(--sl-color-gray-3);
 }
 
-/* A flag broken across two lines reads as two flags. */
 .rd-install__caption code {
 	white-space: nowrap;
+}
+
+/* ----------------------------------------------------------------- pills -- */
+
+.rd-pills {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	margin-block: 0 1.75rem;
+}
+
+.rd-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	padding: 0.25rem 0.7rem;
+	border: 1px solid var(--rd-ground-edge);
+	border-radius: 999px;
+	font-family: var(--sl-font-mono);
+	font-size: var(--sl-text-xs);
+	letter-spacing: 0.02em;
+	color: var(--sl-color-gray-2);
+	background: color-mix(in srgb, var(--rd-ground-raised) 70%, transparent);
+}
+
+/* ---------------------------------------------------------------- motion -- */
+
+@media (prefers-reduced-motion: reduce) {
+	.rd-term .l { opacity: 1; animation: none; }
+	.rd-term__cursor { animation: none; }
+	.card:hover,
+	.sl-link-card:hover,
+	.action.primary:hover { transform: none; }
 }

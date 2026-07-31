@@ -1,11 +1,5 @@
 ---
-/**
- * The install one-liner, presented as the thing most people came for.
- *
- * A plain fenced block buries it among the other code on the page. A panel with
- * its own frame, a prompt and a copy button says "this is the command" without a
- * sentence having to.
- */
+/** The install one-liner, framed as a panel rather than one code block among many. */
 const command =
 	'curl -fsSL https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh | bash';
 ---
@@ -42,8 +36,6 @@ const command =
 			if (!command || !label) return;
 			try {
 				await navigator.clipboard.writeText(command);
-				// Say what happened. A button that looks identical after a click leaves
-				// the reader pasting into a terminal to find out whether it worked.
 				label.textContent = 'Copied';
 				button.dataset.copied = 'true';
 			} catch {

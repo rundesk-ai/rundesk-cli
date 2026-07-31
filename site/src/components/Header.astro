@@ -2,11 +2,9 @@
 /**
  * Starlight's header, with the area switcher hung underneath it.
  *
- * The plugin puts the areas at the top of the left sidebar. Moving them into the
- * header makes the two navigations answer different questions in different places:
- * across the top, which area am I in; down the side, where in it. The sidebar copy
- * is hidden in `brand.css` rather than removed, because the plugin still owns
- * marking the current one.
+ * The plugin renders the areas at the top of the left sidebar; that copy is
+ * hidden in `brand.css` rather than removed, because it still owns working out
+ * which area is current.
  */
 import Default from '@astrojs/starlight/components/Header.astro';
 
