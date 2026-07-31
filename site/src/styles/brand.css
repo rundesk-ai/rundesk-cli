@@ -75,6 +75,54 @@
 	--sl-color-black: #ffffff;
 }
 
+/* ------------------------------------------------------------ typography -- */
+
+/* Two voices from one family. Plex Sans carries the prose; Plex Mono carries
+   every piece of chrome and the top two heading levels, so the page reads as
+   the terminal product it documents rather than as a generic docs theme. */
+:root {
+	--sl-font: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+	--sl-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.content-panel h1 {
+	font-family: var(--sl-font-mono);
+	font-weight: 600;
+	/* Mono sets wide. Without negative tracking a heading runs a third longer
+	   than the sans equivalent and stops holding together as one shape. */
+	letter-spacing: -0.035em;
+}
+
+.content-panel h1 {
+	font-size: clamp(1.85rem, 1.4rem + 1.7vw, 2.4rem);
+	line-height: 1.2;
+}
+
+.sl-markdown-content h2 {
+	font-size: 1.45rem;
+	line-height: 1.3;
+	margin-top: 2.5rem;
+}
+
+.sl-markdown-content h3,
+.sl-markdown-content h4 {
+	font-family: var(--sl-font);
+	font-weight: 600;
+	letter-spacing: -0.011em;
+}
+
+.sl-markdown-content h3 {
+	font-size: 1.12rem;
+	margin-top: 1.9rem;
+}
+
+.sl-markdown-content p,
+.sl-markdown-content li {
+	line-height: 1.72;
+}
+
 /* ---------------------------------------------------------------- chrome -- */
 
 /* The title is the lockup itself, so there is no text to colour — only a height
@@ -100,7 +148,7 @@
 	padding: 0.1rem 0.45rem 0.14rem;
 	border: 1px solid var(--sl-color-gray-4);
 	border-radius: 0.25rem;
-	font-family: var(--__sl-font-mono, ui-monospace, monospace);
+	font-family: var(--sl-font-mono);
 	font-size: 0.66rem;
 	font-weight: 700;
 	letter-spacing: 0.16em;
@@ -340,7 +388,7 @@ starlight-sidebar-topics-list,
 	border: none;
 	padding: 0;
 	color: var(--rd-shell-ink);
-	font-family: var(--__sl-font-mono, ui-monospace, monospace);
+	font-family: var(--sl-font-mono);
 }
 
 /* Each line fades up in turn, so the session reads as something that happened
@@ -549,7 +597,7 @@ starlight-sidebar-topics-list,
 	align-items: center;
 	height: 100%;
 	white-space: nowrap;
-	font-family: var(--__sl-font-mono, ui-monospace, monospace);
+	font-family: var(--sl-font-mono);
 	font-size: 0.875rem;
 	font-weight: 600;
 	letter-spacing: 0.01em;
@@ -578,7 +626,7 @@ starlight-sidebar-topics-list,
 
 .rd-eyebrow {
 	margin: 0 0 0.4rem;
-	font-family: var(--__sl-font-mono, ui-monospace, monospace);
+	font-family: var(--sl-font-mono);
 	font-size: 0.7rem;
 	font-weight: 700;
 	letter-spacing: 0.14em;
@@ -591,7 +639,7 @@ starlight-sidebar-topics-list,
 .right-sidebar h2,
 .sidebar-content details > summary .group-label > span,
 .sidebar-content .top-level > li > details > summary span {
-	font-family: var(--__sl-font-mono, ui-monospace, monospace);
+	font-family: var(--sl-font-mono);
 	font-size: 0.7rem;
 	letter-spacing: 0.12em;
 	text-transform: uppercase;
@@ -639,7 +687,7 @@ starlight-sidebar-topics-list,
 	padding: 0 1.1rem;
 	height: 3rem;
 	border-bottom: 1px solid var(--rd-shell-edge);
-	font-family: var(--__sl-font-mono, ui-monospace, monospace);
+	font-family: var(--sl-font-mono);
 	font-size: 0.75rem;
 	letter-spacing: 0.1em;
 	text-transform: uppercase;
@@ -671,7 +719,7 @@ starlight-sidebar-topics-list,
 
 .rd-install__body {
 	padding: 1.1rem 1.1rem 1.25rem;
-	font-family: var(--__sl-font-mono, ui-monospace, monospace);
+	font-family: var(--sl-font-mono);
 }
 
 .rd-install__note {

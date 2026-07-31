@@ -49,7 +49,22 @@ export default defineConfig({
 				replacesTitle: true,
 			},
 			favicon: '/favicon.png',
-			customCss: ['./src/styles/brand.css'],
+			customCss: ['./src/styles/fonts.css', './src/styles/brand.css'],
+			head: [
+				// The two weights every page paints before anything else. Without these
+				// the first render is the fallback stack and the page reflows once the
+				// real faces arrive.
+				...['plex-sans-400', 'plex-mono-400'].map((face) => ({
+					tag: 'link',
+					attrs: {
+						rel: 'preload',
+						href: `/fonts/${face}.woff2`,
+						as: 'font',
+						type: 'font/woff2',
+						crossorigin: 'anonymous',
+					},
+				})),
+			],
 			social: [
 				{
 					icon: 'github',
