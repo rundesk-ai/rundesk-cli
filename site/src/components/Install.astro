@@ -5,28 +5,11 @@ const command =
 ---
 
 <div class="rd-install">
-	<div class="rd-install__bar">
-		<span class="rd-install__label">Install</span>
-		<span class="rd-install__tab" aria-current="true">One-liner</span>
-		<span class="rd-install__grow"></span>
-		<span class="rd-install__plat">macOS</span>
-	</div>
-	<div class="rd-install__body">
-		<p class="rd-install__note"># One command. Your shell profile is not touched.</p>
-		<div class="rd-install__line">
-			<code><span class="rd-install__prompt">$</span> {command}</code>
-			<button class="rd-install__copy" type="button" data-command={command}>
-				<span class="rd-install__copy-label">Copy</span>
-			</button>
-		</div>
-	</div>
+	<code class="rd-install__line"><span class="rd-install__prompt">$</span>{command}</code>
+	<button class="rd-install__copy" type="button" data-command={command}>
+		<span class="rd-install__copy-label">Copy</span>
+	</button>
 </div>
-
-<p class="rd-install__caption">
-	Everything lands under <code>~/.rundesk</code> — <code>app/</code> for the release,
-	<code>data/</code> for your agents. Updates replace the first and leave the second alone.
-	Remove it again with <code>--uninstall</code>.
-</p>
 
 <script>
 	for (const button of document.querySelectorAll<HTMLButtonElement>('.rd-install__copy')) {

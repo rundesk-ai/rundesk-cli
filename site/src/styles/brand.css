@@ -122,17 +122,6 @@
 	line-height: 1.72;
 }
 
-.sl-markdown-content h2::before {
-	content: '';
-	display: inline-block;
-	width: 0.2rem;
-	height: 0.9em;
-	margin-inline-end: 0.6rem;
-	vertical-align: -0.04em;
-	border-radius: 999px;
-	background: linear-gradient(180deg, var(--rd-red-500), transparent);
-}
-
 .sl-markdown-content table {
 	width: 100%;
 }
@@ -147,34 +136,6 @@
 .site-title img {
 	height: 1.55rem;
 	width: auto;
-}
-
-/* Hung off `.title-wrapper` rather than `.site-title`, so the badge sits beside
-   the lockup instead of inside the link back to the overview. */
-.title-wrapper {
-	align-items: center;
-	gap: 0.7rem;
-}
-
-.title-wrapper::after {
-	content: 'Docs';
-	flex: none;
-	padding: 0.1rem 0.45rem 0.14rem;
-	border: 1px solid var(--sl-color-gray-4);
-	border-radius: 0.25rem;
-	font-family: var(--sl-font-mono);
-	font-size: 0.66rem;
-	font-weight: 700;
-	letter-spacing: 0.16em;
-	text-transform: uppercase;
-	color: var(--sl-color-gray-3);
-	line-height: 1.5;
-}
-
-@media (max-width: 50rem) {
-	.title-wrapper::after {
-		display: none;
-	}
 }
 
 header.header {
@@ -348,8 +309,8 @@ header.header {
 .sidebar-content details > summary .group-label > span,
 .sidebar-content .top-level > li > details > summary span {
 	font-family: var(--sl-font-mono);
-	font-size: 0.6875rem;
-	letter-spacing: 0.13em;
+	font-size: 0.78rem;
+	letter-spacing: 0.09em;
 	text-transform: uppercase;
 	color: var(--sl-color-gray-3);
 	font-weight: 700;
@@ -371,16 +332,6 @@ starlight-sidebar-topics-list,
 .right-sidebar a {
 	padding-block: 0.3rem;
 	line-height: 1.5;
-}
-
-.rd-eyebrow {
-	margin: 0 0 0.4rem;
-	font-family: var(--sl-font-mono);
-	font-size: 0.7rem;
-	font-weight: 700;
-	letter-spacing: 0.14em;
-	text-transform: uppercase;
-	color: var(--sl-color-accent-high);
 }
 
 /* ------------------------------------------------------------------ hero -- */
@@ -545,7 +496,7 @@ starlight-sidebar-topics-list,
 
 .card .sl-markdown-content,
 .sl-link-card .description {
-	font-size: var(--sl-text-sm);
+	font-size: 1rem;
 	line-height: 1.6;
 	color: var(--sl-color-gray-2);
 	margin: 0;
@@ -605,19 +556,11 @@ starlight-sidebar-topics-list,
 	background: var(--rd-red-500);
 }
 
-.rd-term__name {
-	margin-inline-start: auto;
-	font-family: var(--sl-font-mono);
-	font-size: 0.7rem;
-	color: var(--rd-shell-dim);
-	letter-spacing: 0.04em;
-}
-
 .rd-term__body {
 	margin: 0;
 	padding: 1.15rem 1.25rem 1.35rem;
 	background: transparent;
-	font-size: 0.82rem;
+	font-size: 0.875rem;
 	line-height: 1.75;
 	overflow-x: auto;
 }
@@ -673,69 +616,20 @@ starlight-sidebar-topics-list,
 
 /* --------------------------------------------------------------- install -- */
 
+/* --------------------------------------------------------------- install -- */
+
 .rd-install {
-	margin-block: 0 1rem;
-	border: 1px solid var(--rd-shell-edge);
-	border-radius: var(--rd-radius);
-	overflow: hidden;
-	background: var(--rd-shell);
-}
-
-.rd-install__bar {
-	display: flex;
-	align-items: center;
-	gap: 1.25rem;
-	padding: 0 1.1rem;
-	height: 3rem;
-	border-bottom: 1px solid var(--rd-shell-edge);
-	font-family: var(--sl-font-mono);
-	font-size: 0.75rem;
-	letter-spacing: 0.1em;
-	text-transform: uppercase;
-}
-
-.rd-install__label {
-	color: var(--rd-shell-bright);
-	font-weight: 700;
-}
-
-.rd-install__tab {
-	color: var(--rd-red-400);
-	font-weight: 700;
-	align-self: stretch;
-	display: flex;
-	align-items: center;
-	border-bottom: 2px solid var(--rd-red-500);
-	margin-bottom: -1px;
-}
-
-.rd-install__grow {
-	flex: 1;
-}
-
-.rd-install__plat {
-	color: var(--rd-shell-dim);
-	font-weight: 600;
-}
-
-.rd-install__body {
-	padding: 1.1rem 1.1rem 1.25rem;
-	font-family: var(--sl-font-mono);
-}
-
-.rd-install__note {
-	margin: 0 0 0.6rem;
-	font-size: 0.8rem;
-	color: var(--rd-shell-dim);
-}
-
-.rd-install__line {
 	display: flex;
 	align-items: center;
 	gap: 1rem;
+	margin-block: 0 2.5rem;
+	padding: 0.9rem 1rem 0.9rem 1.15rem;
+	border: 1px solid var(--rd-shell-edge);
+	border-radius: var(--rd-radius);
+	background: var(--rd-shell);
 }
 
-.rd-install__line code {
+.rd-install__line {
 	flex: 1;
 	min-width: 0;
 	overflow-x: auto;
@@ -743,27 +637,27 @@ starlight-sidebar-topics-list,
 	background: none;
 	border: none;
 	padding: 0;
-	font-size: 0.9rem;
+	font-family: var(--sl-font-mono);
+	font-size: 0.95rem;
 	color: var(--rd-shell-bright);
 }
 
 .rd-install__prompt {
 	color: var(--rd-red-500);
 	font-weight: 700;
-	margin-inline-end: 0.4rem;
+	margin-inline-end: 0.6rem;
 }
 
 .rd-install__copy {
 	flex: none;
-	padding: 0.4rem 0.75rem;
+	padding: 0.45rem 0.9rem;
 	border: 1px solid var(--rd-shell-edge);
 	border-radius: 0.375rem;
 	background: transparent;
 	color: var(--rd-shell-ink);
 	font: inherit;
-	font-size: 0.72rem;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
+	font-family: var(--sl-font-mono);
+	font-size: 0.85rem;
 	cursor: pointer;
 	transition: border-color 140ms ease, color 140ms ease;
 }
@@ -776,84 +670,6 @@ starlight-sidebar-topics-list,
 .rd-install__copy[data-copied] {
 	border-color: #7ddba0;
 	color: #7ddba0;
-}
-
-.rd-install__caption {
-	margin-block: 0 2rem;
-	font-size: var(--sl-text-sm);
-	color: var(--sl-color-gray-3);
-}
-
-.rd-install__caption code {
-	white-space: nowrap;
-}
-
-/* ----------------------------------------------------------------- pills -- */
-
-.rd-pills {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 0.5rem;
-	margin-block: 0 1.75rem;
-}
-
-.rd-pill {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.4rem;
-	padding: 0.25rem 0.7rem;
-	border: 1px solid var(--rd-ground-edge);
-	border-radius: 999px;
-	font-family: var(--sl-font-mono);
-	font-size: var(--sl-text-xs);
-	letter-spacing: 0.02em;
-	color: var(--sl-color-gray-2);
-	background: color-mix(in srgb, var(--rd-ground-raised) 70%, transparent);
-}
-
-/* ------------------------------------------------------------ page links -- */
-
-/* Starlight draws previous/next as rounded, shadowed, full-width boxes, which
-   puts the heaviest object on the page under the prose it follows. A rule and
-   the two titles say the same thing and stay out of the way. */
-.pagination-links a {
-	border: 0;
-	border-radius: 0;
-	box-shadow: none;
-	padding: 1rem 0;
-	gap: 0.35rem;
-	background: none;
-	border-top: 1px solid var(--sl-color-gray-6);
-}
-
-.pagination-links a:hover {
-	background: none;
-	border-top-color: var(--sl-color-accent-high);
-}
-
-/* The direction is a bare text node in this span and the page title is the
-   `.link-title` inside it, so the eyebrow is set here and undone below. */
-.pagination-links a > span {
-	gap: 0.3rem;
-	font-family: var(--sl-font-mono);
-	font-size: 0.68rem;
-	font-weight: 700;
-	letter-spacing: 0.14em;
-	text-transform: uppercase;
-	color: var(--sl-color-gray-3);
-}
-
-.pagination-links a .link-title {
-	font-family: var(--sl-font);
-	font-size: var(--sl-text-base);
-	font-weight: 500;
-	letter-spacing: -0.011em;
-	text-transform: none;
-	color: var(--sl-color-white);
-}
-
-.pagination-links svg {
-	color: var(--sl-color-gray-4);
 }
 
 /* ---------------------------------------------------------------- motion -- */
