@@ -1305,14 +1305,14 @@ class WhatSkillCatalogsDo(unittest.TestCase):
         catalogs = FakeCatalogs()
 
         code, said = drive(
-            ["skills", "install", "https://github.com/rundesk-ai/rundesk-skills-dev"],
+            ["skills", "install", "https://github.com/rundesk-ai/rundesk-skills"],
             catalogs=catalogs,
         )
 
         self.assertEqual(0, code, said)
         self.assertIn("python-patterns", said)
         self.assertIn("--confirm", said)
-        self.assertEqual([("inspect", "https://github.com/rundesk-ai/rundesk-skills-dev")],
+        self.assertEqual([("inspect", "https://github.com/rundesk-ai/rundesk-skills")],
                          catalogs.did)
 
     def test_confirming_installs_the_repository_without_granting_a_skill(self):
@@ -1322,7 +1322,7 @@ class WhatSkillCatalogsDo(unittest.TestCase):
         skills = FakeSkills()
 
         code, said = drive([
-            "skills", "install", "https://github.com/rundesk-ai/rundesk-skills-dev",
+            "skills", "install", "https://github.com/rundesk-ai/rundesk-skills",
             "--confirm",
         ], agents=agents, skills=skills, catalogs=catalogs)
 

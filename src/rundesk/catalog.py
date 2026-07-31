@@ -23,7 +23,7 @@ from pathlib import Path
 from rundesk import data_home
 from rundesk import skill, updater
 
-MANIFEST = "catalog.json"
+MANIFEST = "manifest.json"
 SCHEMA = 1
 OWNED = ".rundesk-catalog"
 APP = "app"
@@ -91,9 +91,9 @@ def read(at: Path) -> Manifest:
         raise NotACatalog(f"{page} could not be read: {why}") from why
     if not isinstance(said, dict):
         raise NotACatalog(f"{page} must hold an object")
-    if said.get("manifest") != SCHEMA:
+    if said.get("schema") != SCHEMA:
         raise NotACatalog(
-            f"{page} uses manifest format {said.get('manifest')!r}; this Rundesk reads {SCHEMA}"
+            f"{page} uses schema {said.get('schema')!r}; this Rundesk reads {SCHEMA}"
         )
     name = _name(said.get("name"), "catalog")
     version = said.get("version")

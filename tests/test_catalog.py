@@ -33,7 +33,7 @@ def a_catalog(at: Path, name="development", version="1.0.0",
         declared.append({"name": called, "path": f"skills/{called}"})
     (made / catalog.MANIFEST).write_text(
         json.dumps({
-            "manifest": 1,
+            "schema": 1,
             "name": name,
             "version": version,
             "description": "Development guidance.",
@@ -70,11 +70,19 @@ class WhatACatalogIs(WithCatalogs):
             manifest.skills,
         )
 
-    def test_a_future_manifest_format_is_refused(self):
+    def test_one_skill_uses_the_same_manifest_contract(self):
+        """R-CAT-1 — a repository never needs a second package shape for one skill."""
+        manifest = catalog.read(a_catalog(self.sources))
+        self.assertEqual(
+            (("python-patterns", "skills/python-patterns"),),
+            manifest.skills,
+        )
+
+    def test_a_future_manifest_schema_is_refused(self):
         """R-CAT-2 — an unknown contract is never read hopefully."""
         made = a_catalog(self.sources)
         said = json.loads((made / catalog.MANIFEST).read_text())
-        said["manifest"] = 2
+        said["schema"] = 2
         (made / catalog.MANIFEST).write_text(json.dumps(said), encoding="utf-8")
         with self.assertRaises(catalog.NotACatalog):
             catalog.read(made)

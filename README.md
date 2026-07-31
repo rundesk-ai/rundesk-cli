@@ -217,10 +217,13 @@ Install a catalog from its repository URL. Rundesk previews every declared skill
 confirmation makes them available in the shared library and grants none automatically:
 
 ```sh
-rundesk skills install https://github.com/rundesk-ai/rundesk-skills-dev
-rundesk skills install https://github.com/rundesk-ai/rundesk-skills-dev --confirm
+rundesk skills install https://github.com/rundesk-ai/rundesk-skills
+rundesk skills install https://github.com/rundesk-ai/rundesk-skills --confirm
 rundesk skills grant ava python-patterns
 ```
+
+Catalog repositories use one [`manifest.json` contract](docs/extending/skill-catalogs/README.md)
+whether they publish one skill or a collection.
 
 ### Operations and data
 
