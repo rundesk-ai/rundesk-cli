@@ -5,9 +5,8 @@ sidebar:
   order: 5
 ---
 
-Rundesk runs coding agents on your own machine, unattended, and reachable from chat. That is
-worth being precise about. This page says what Rundesk enforces and — just as importantly —
-what it does not.
+Rundesk runs coding agents on your own machine, unattended, and reachable from chat. This page
+says what Rundesk enforces, and what it does not.
 
 ## The honest summary
 
@@ -16,7 +15,7 @@ it is not a security boundary between a coding agent and your filesystem. Codex,
 Grok, and Antigravity each have their own approval and permission model; Rundesk runs them
 and records what happened.
 
-What Rundesk does own is narrower and worth knowing exactly:
+What Rundesk does own is narrower:
 
 - who is allowed to send an agent work
 - what environment the provider is started in
@@ -50,8 +49,6 @@ Anything not on that list is a thing Rundesk has decided its programs do not see
 holds credentials for every channel an agent is on, and it does not pass them to every
 program it starts.
 
-Two consequences:
-
 - **`HOME` is your real home.** The agent is not chrooted. It can read what you can read.
 - **A scheduled program must be given by full path.** A bare name is refused, because a
   gateway runs with almost none of the `PATH` your shell has.
@@ -81,8 +78,6 @@ who can use it later".
 ```sh
 rundesk channels ava show discord-dms
 ```
-
-Two behaviours worth knowing:
 
 - **Direct messages and rooms are separate channels** with separate allowlists and separate
   instructions, so an agent can be told to behave differently where other people are reading.

@@ -87,8 +87,6 @@ the file visibly, cannot be configured away, and the command refuses to revoke i
 
 ## The file is the source of truth
 
-This is the part worth being precise about, because it changed.
-
 **Runtime readers require the values to be in the file.** They do not fall back to a value
 inside Python when a key is missing. A missing or unreadable owner value is refused and said
 out loud, rather than silently supplied — because reaching around the file makes `config.json`

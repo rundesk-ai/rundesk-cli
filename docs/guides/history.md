@@ -64,10 +64,11 @@ rundesk usage ava       # one of them
 Token usage is normalized across providers, so the cost of a fleet running on different brains
 is a question with an answer.
 
-One detail worth knowing when you script against this: an agent that has run nothing reports
-its input, output, and cached token counts as **absent, not zero**. A run Rundesk could not
-account for is counted separately from a run that used nothing, because those are different
-claims.
+### Absent is not zero
+
+An agent that has run nothing reports its input, output, and cached token counts as **absent**,
+not as `0`. A run Rundesk could not account for is counted separately from a run that used
+nothing — absent and zero are different claims.
 
 ## What the gateway itself said
 

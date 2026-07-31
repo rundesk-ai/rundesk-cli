@@ -23,9 +23,6 @@ do the job. Written as a pair, a capability developed once can be granted to eve
 - **Honest about failure.** A command that cannot do the thing says so and exits non-zero. A
   script that reads `0` believes the work happened.
 
-That last one is the same rule Rundesk holds itself to: never let a command report a success
-it did not earn.
-
 ## Building one
 
 The full guide ships as a skill:

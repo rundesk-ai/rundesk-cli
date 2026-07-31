@@ -30,9 +30,8 @@ it. Every agent, conversation, schedule, and channel returns to its state at the
 copy was taken, and anything that happened since is gone.
 :::
 
-This is the asymmetry to hold onto: taking a copy is cheap and putting one back is not. If
-you are unsure whether you need a restore or a narrower fix, the narrower fix is almost
-always right.
+Taking a copy is cheap and putting one back is not. If you are unsure whether you need a
+restore or a narrower fix, the narrower fix is almost always right.
 
 Removing a single copy is separate, and only touches that one:
 
