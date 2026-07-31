@@ -1803,7 +1803,7 @@ class Gateway:
                 channel_name = origin.get("channel")
                 conversation = origin.get("conversation")
                 answering = self._reached.get(channel_name) if channel_name else None
-                if answering is not None and conversation:
+                if answering is not None and answering.connected and conversation:
                     try:
                         await answering.told_update_finished(
                             conversation, update_request.summary(row)
@@ -1822,7 +1822,7 @@ class Gateway:
                 channel_name = origin.get("channel")
                 conversation = origin.get("conversation")
                 answering = self._reached.get(channel_name) if channel_name else None
-                if answering is not None and conversation:
+                if answering is not None and answering.connected and conversation:
                     try:
                         await answering.told_restart_finished(
                             conversation, restart_request.summary(restart)
