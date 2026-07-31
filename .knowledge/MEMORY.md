@@ -758,6 +758,14 @@ re-checked since, so treat these as true-when-found rather than as current.*
   --json type` exits before listing anything and prints the valid fields; request
   `--json issueType` and read `.issueType.name`.
 
+- **The system skill creator's `quick_validate.py` imports PyYAML, which this repository does
+  not install.** Do not add or install that dependency for a built-in skill; use
+  `tests/test_skill.py` and its `skill.valid()` coverage, then run the repository gate.
+
+- **Parallel pushes from linked worktrees contend on the repository's shared config lock.** The
+  remote push can succeed while `git push -u` fails to save local upstream metadata; push linked
+  worktrees sequentially, or run `git branch --set-upstream-to=origin/<branch>` afterward.
+
 - **`gh repo view` takes the repository positionally and rejects `--repo`.** Use
   `gh repo view owner/repository --json ...`; unlike issue and PR commands, this verb has no
   repository flag.
