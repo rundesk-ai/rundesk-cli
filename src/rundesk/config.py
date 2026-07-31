@@ -42,9 +42,18 @@ from rundesk import data_home
 #: open it, and a dotfile is a file people are not told about.
 NAMED = "config.json"
 
+#: The exact skill default v0.23.0 wrote. Only this unchanged release-owned value advances;
+#: every owner customization remains untouched (R-UPD-48, R-UPD-50).
+PREVIOUS_DEFAULT_GRANTS = (
+    "managing-rundesk",
+    "managing-rundesk-schedules",
+    "managing-rundesk-backups",
+    "filing-rundesk-issues",
+)
+
 #: What a new configuration says in full (R-INS-19). This is an installation seed, never a
 #: runtime fallback: once written, `config.json` is what governs the install. Not every
-#: shipped skill belongs here — these four are what every agent needs to work with rundesk.
+#: shipped skill belongs here — these are the common operating and collaboration baseline.
 INITIAL = {
     "backups": {"at": "04:00", "keep_days": 30},
     "updates": {"at": "03:00"},
@@ -53,7 +62,10 @@ INITIAL = {
             "managing-rundesk",
             "managing-rundesk-schedules",
             "managing-rundesk-backups",
+            "filing-github-issues",
             "filing-rundesk-issues",
+            "writing-github-pull-requests",
+            "writing-rundesk-pull-requests",
         ]
     },
 }
@@ -142,10 +154,11 @@ def ensure(where: Path | None = None) -> list[str]:
     """Put the file there with every effective value, and say which sections changed.
 
     Run by the install, and again by an update so a file written by an older release grows
-    every section and key that release did not know. **Nothing already in the file is
-    touched** — not a value, not a section, not a key this release has never heard of. This
-    migrates v0.20.0's empty objects into a complete configuration without replacing
-    anything an owner filled first (R-UPD-48).
+    every section and key that release did not know. Owner-stated values are untouched;
+    the one exception is an exact prior release default, which advances to the new default
+    because it is still the release's choice rather than a customization. This migrates
+    v0.20.0's empty objects and common skill defaults without replacing an owner choice
+    (R-UPD-48, R-UPD-50).
     """
     at = path(where)
     try:
@@ -166,6 +179,12 @@ def ensure(where: Path | None = None) -> list[str]:
                 current[key] = copy.deepcopy(value)
                 if section not in changed:
                     changed.append(section)
+    skills = standing.get("skills")
+    if (isinstance(skills, dict)
+            and skills.get("granted") == list(PREVIOUS_DEFAULT_GRANTS)):
+        skills["granted"] = copy.deepcopy(INITIAL["skills"]["granted"])
+        if "skills" not in changed:
+            changed.append("skills")
     if not changed and at.is_file():
         return []
     ordered = {one: standing[one] for one in SECTIONS if one in standing}

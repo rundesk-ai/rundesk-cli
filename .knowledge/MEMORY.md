@@ -257,6 +257,21 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   existing issues before filing one.
 - **zsh expands an unquoted `?ref=main` in a `gh api` endpoint as a filename glob.** The
   request never reaches GitHub and fails with `no matches found`; quote the whole endpoint.
+- **In zsh, `path` is a special array tied to `PATH`.** Assigning a file path to a shell
+  variable named `path` replaces the command search path, so the next `gh`, `base64` or other
+  executable reports `command not found`. Use a task-specific name such as `skill_file`.
+- **The system skill creator's `quick_validate.py` is not zero-dependency.** It imports
+  PyYAML and fails with `ModuleNotFoundError: No module named 'yaml'` on the repository's
+  standard-library Python. Do not install around the repository contract; validate shipped
+  skill frontmatter with `tests/test_skill.py` and the full gate.
+- **GitHub's repository issue-types endpoint requires its current API version header.** A bare
+  `gh api repos/<owner>/<repo>/issue-types` used gh's older default and returned HTTP 404 even
+  though the types exist. Pass `-H 'X-GitHub-Api-Version: 2026-03-10'`; `gh issue view --json`
+  names the returned field `issueType`, not `type`.
+- **`gh pr list --head` does not accept the `owner:branch` syntax that `gh pr create --head`
+  accepts.** It returns no matches rather than flagging the qualifier. Search with the bare
+  branch, request `headRepositoryOwner`, and compare that field before treating a PR as the
+  same head.
 - **macOS `tar` has no GNU `--wildcards` option.** Extracting one member from a generated
   archive fails before reading it; list the archive, select the exact member name, then pass
   that name back to `tar -x`.

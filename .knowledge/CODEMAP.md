@@ -257,7 +257,7 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   it** — it was a document at the repository root that an agent had to be told to go and read,
   and the pointer named a path that existed on neither kind of install. As a skill it is handed
   to the agent instead. **Not every shipped skill reaches every agent**: the required baseline
-  is `config.skills()["granted"]`, defaulting to the four that work rundesk itself and reconciled
+  is `config.skills()["granted"]`, defaulting to the common Rundesk and GitHub workflows and reconciled
   onto existing agents during updates and reinstalls (R-AGT-36).
 - `docs/extending/` — the adapter and integration guides. They were built-in skills, laid down in
   every owner's library and granted to every agent, for a task almost none of them will ever do.
