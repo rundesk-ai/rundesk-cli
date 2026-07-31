@@ -192,12 +192,16 @@ take_back_config() {
   done
   [[ -n "$root" ]] || return 0
   command -v python3 >/dev/null 2>&1 || return 0
-  python3 - "$root" <<'CONFIG' 2>/dev/null || true
+  # Pass the install's data root as a value. This helper can run inside an agent process
+  # carrying another install's RUNDESK_DATA_DIR, and removal must never resolve that ambient
+  # path after the shell has already selected the install being removed (R-RM-12, #220).
+  python3 - "$root" "$DATA_DIR" <<'CONFIG' 2>/dev/null || true
 import sys
+from pathlib import Path
 sys.path.insert(0, sys.argv[1] + "/src")
 from rundesk import config
 
-if config.take_back():
+if config.take_back(Path(sys.argv[2])):
     print("took back the unchanged configuration this install wrote")
 CONFIG
   return 0
@@ -215,12 +219,14 @@ take_back_skills() {
   local took
   # Never allowed to fail the removal: a library that cannot be written to is a thing to
   # leave behind and say nothing about, not a reason to stop taking rundesk off a machine.
-  took="$(python3 - "$root" <<'SKILLS' 2>/dev/null || true
+  # The same boundary as configuration: an inherited library belongs to some other install.
+  took="$(python3 - "$root" "$DATA_DIR/skills" <<'SKILLS' 2>/dev/null || true
 import sys
+from pathlib import Path
 sys.path.insert(0, sys.argv[1] + "/src")
 from rundesk import skill
 
-print(" ".join(skill.take_back()))
+print(" ".join(skill.take_back(Path(sys.argv[2]))))
 SKILLS
 )"
   [[ -n "$took" ]] && echo "took back the skills this release laid down: $took"

@@ -9,6 +9,7 @@ Run: python3 tests/test_install.py
 
 from __future__ import annotations
 
+import json
 import os
 import plistlib
 import re
@@ -632,6 +633,60 @@ class DependencyTests(Sandbox):
         self.assertEqual(gone.returncode, 0, gone.stderr)
         self.assertEqual([], [name for name in shipped if (library / name).exists()],
                          "a skill this release laid down was left on the machine")
+
+    def test_a_redirected_uninstall_cannot_take_another_installs_data(self):
+        """R-RM-12 — reported (#220).
+
+        An agent inherits the live install's data and skill-library paths. Pointing only the
+        installer at a scratch root must still make every removal helper act on that scratch
+        install; otherwise validating an uninstall takes the live install's built-ins.
+        """
+        scratch = self.root / "scratch"
+        made = scratch / "app"
+        shutil.copytree(REPO, made, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+
+        shipped = next(one.name for one in (REPO / "src" / "templates" / "skills").iterdir()
+                       if (one / "SKILL.md").is_file())
+        scratch_library = scratch / "data" / "skills"
+        foreign_data = self.root / "existing" / "data"
+        foreign_library = foreign_data / "skills"
+        for library, words in ((scratch_library, "scratch\n"),
+                               (foreign_library, "existing bytes must survive\n")):
+            built_in = library / shipped
+            built_in.mkdir(parents=True)
+            (built_in / "SKILL.md").write_text(words, encoding="utf-8")
+            (built_in / ".rundesk-built-in").write_text("rundesk built-in\n", encoding="utf-8")
+        sys.path.insert(0, str(REPO / "src"))
+        from rundesk import config
+        configuration = json.dumps(config.INITIAL, indent=2) + "\n"
+        (scratch / "data" / "config.json").write_text(configuration, encoding="utf-8")
+        (foreign_data / "config.json").write_text(configuration, encoding="utf-8")
+        foreign_before = {
+            path.relative_to(foreign_data): path.read_bytes()
+            for path in foreign_data.rglob("*") if path.is_file()
+        }
+
+        gone = installer(
+            "--uninstall", home=self.home, bindir=self.bindir, cwd=made,
+            script=made / "install.sh",
+            extra_env={
+                "RUNDESK_INSTALL_DIR": str(scratch),
+                "RUNDESK_DATA_DIR": str(foreign_data),
+                "RUNDESK_SKILL_LIBRARY": str(foreign_library),
+            },
+        )
+
+        self.assertEqual(gone.returncode, 0, gone.stderr)
+        self.assertFalse((scratch_library / shipped).exists(),
+                         "the redirected install left its own built-in behind")
+        self.assertFalse((scratch / "data" / "config.json").exists(),
+                         "the redirected install left its own unchanged configuration behind")
+        self.assertEqual(
+            foreign_before,
+            {path.relative_to(foreign_data): path.read_bytes()
+             for path in foreign_data.rglob("*") if path.is_file()},
+            "uninstalling the scratch install changed another install's data",
+        )
 
     def test_removing_rundesk_leaves_a_skill_the_owner_wrote_themselves(self):
         """R-RM-7 — the other half, and the line that matters: the set taken back is the set
