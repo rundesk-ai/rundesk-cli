@@ -130,23 +130,12 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
         self.assertIn("closingIssuesReferences", pull)
 
 
-class WhatTheShippedPdfCreationSkillSays(unittest.TestCase):
-    def test_pdf_creation_requires_local_generation_and_visual_verification(self):
-        page = (REALLY_SHIPPED / "pdf-creation" / "SKILL.md").read_text()
-        for expected in (
-                "Create the PDF entirely on the local machine",
-                "SimpleDocTemplate", "LongTable", "pdftoppm",
-                "Inspect every rendered page", "Escape untrusted or literal content"):
-            with self.subTest(expected=expected):
-                self.assertIn(expected, page)
-
-
 class WhatTheReleaseNoLongerOwns(unittest.TestCase):
-    def test_development_guidance_is_not_a_rundesk_built_in(self):
-        """R-CAT-6 — catalog skills have one update owner rather than two."""
+    def test_optional_external_skills_are_not_rundesk_built_ins(self):
+        """R-CAT-6, R-AGT-35 — optional skills have an external owner or none yet."""
         for called in (
                 "frontend-design", "laravel-patterns", "python-patterns",
-                "python-testing", "vue-patterns"):
+                "python-testing", "vue-patterns", "pdf-creation", "seo"):
             with self.subTest(skill=called):
                 self.assertNotIn(called, skill.shipped())
 
