@@ -3977,6 +3977,89 @@ class ARunTheGatewayNeverSettled(WithARunDirectory):
         self.assertIsNotNone(gw._lock, "the gateway refused to start over old records")
 
 
+class LifecycleOutcomesWaitForReachability(WithARunDirectory):
+    """R-UPD-40, R-GW-43 — lifecycle outcomes wait for their channel to reconnect."""
+
+    async def test_lifecycle_outcomes_are_not_offered_until_the_channel_is_ready(self):
+        """A disconnected channel is an expected wait state, not a failed delivery."""
+        class Surface:
+            def __init__(self):
+                self.connected = False
+                self.update_calls = 0
+                self.restart_calls = 0
+                self.update_refused = False
+                self.restart_refused = False
+
+            async def told_update_finished(self, _conversation, _text):
+                self.update_calls += 1
+                if not self.connected:
+                    raise RuntimeError("channel 'ops' is not connected")
+                if not self.update_refused:
+                    self.update_refused = True
+                    raise OSError("the platform is busy")
+
+            async def told_restart_finished(self, _conversation, _text):
+                self.restart_calls += 1
+                if not self.connected:
+                    raise RuntimeError("channel 'ops' is not connected")
+                if not self.restart_refused:
+                    self.restart_refused = True
+                    raise OSError("the platform is busy")
+
+        update = {
+            "id": "update-1",
+            "origin": {"channel": "ops", "conversation": "one"},
+        }
+        restart = {
+            "id": "restart-1",
+            "origin": {"channel": "ops", "conversation": "one"},
+        }
+        surface = Surface()
+        gw = self.made("ava")
+        gw._reached["ops"] = surface
+        sleeps = 0
+
+        async def advance(_seconds):
+            nonlocal sleeps
+            sleeps += 1
+            if sleeps == 30:
+                self.assertEqual(0, surface.update_calls)
+                self.assertEqual(0, surface.restart_calls)
+                update_delivered.assert_not_called()
+                restart_delivered.assert_not_called()
+                self.assertEqual([], warning.call_args_list,
+                                 "waiting for readiness wrote warning noise")
+                surface.connected = True
+            elif sleeps == 31:
+                self.assertEqual((1, 1), (surface.update_calls, surface.restart_calls))
+                update_delivered.assert_not_called()
+                restart_delivered.assert_not_called()
+            elif sleeps == 32:
+                gw._stopping = True
+
+        with (
+            mock.patch.object(gateway.update_request, "deliverable", return_value=update),
+            mock.patch.object(gateway.update_request, "summary", return_value="updated"),
+            mock.patch.object(gateway.update_request, "delivered") as update_delivered,
+            mock.patch.object(gateway.restart_request, "deliverable", return_value=restart),
+            mock.patch.object(gateway.restart_request, "summary", return_value="restarted"),
+            mock.patch.object(gateway.restart_request, "delivered") as restart_delivered,
+            mock.patch.object(gateway.asyncio, "sleep", new=advance),
+            mock.patch.object(gw.log, "warning") as warning,
+        ):
+            await gw._deliver_update_notices()
+
+        self.assertEqual(2, surface.update_calls,
+                         "the update did not retry exactly once after a ready failure")
+        self.assertEqual(2, surface.restart_calls,
+                         "the restart did not retry exactly once after a ready failure")
+        update_delivered.assert_called_once_with("update-1")
+        restart_delivered.assert_called_once_with("ava", "restart-1")
+        warnings = [call.args[0] % call.args[1:] for call in warning.call_args_list]
+        self.assertEqual(2, len(warnings), "a ready failure was not warned once per retry")
+        self.assertFalse(any("not connected" in line for line in warnings),
+                         "an expected wait state was logged as a delivery failure")
+
 
 if __name__ == "__main__":
     unittest.main()
