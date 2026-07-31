@@ -360,17 +360,49 @@ starlight-sidebar-topics-list,
 	margin-top: 0.5rem;
 }
 
+/* Solid, not a gradient: a red ramp over near-black reads cheap, and only the
+   darker end of the ramp carries white text at 4.5:1 (#d81f20 is 5.1:1, the
+   brighter #fd3031 only 3.8:1). Hover darkens, which can only raise it. */
 .action.primary {
-	background: linear-gradient(180deg, var(--rd-red-500), var(--rd-red-600));
-	color: #fff;
-	border: 1px solid color-mix(in srgb, var(--rd-red-400) 60%, transparent);
-	box-shadow: 0 0.5rem 1.5rem rgb(253 48 49 / 0.28);
-	transition: transform 150ms ease, box-shadow 150ms ease;
+	background: var(--rd-red-600);
+	color: #ffffff;
+	border: 0;
+	border-radius: 0.5rem;
+	padding: 0.72rem 1.4rem;
+	font-family: var(--sl-font-mono);
+	font-weight: 600;
+	font-size: 0.95rem;
+	letter-spacing: -0.01em;
+	line-height: 1.25;
+	display: inline-flex;
+	align-items: center;
+	gap: 0.55rem;
+	box-shadow: none;
+	transition: background-color 150ms ease;
 }
 
-.action.primary:hover {
-	transform: translateY(-2px);
-	box-shadow: 0 0.75rem 2rem rgb(253 48 49 / 0.4);
+.action.primary:hover,
+.action.primary:focus-visible {
+	background: var(--rd-red-700);
+	color: #ffffff;
+}
+
+/* Starlight sizes the icon off the label's font-size and leaves it on the text
+   baseline, which sits it low against a mono label. */
+.action.primary svg {
+	flex: none;
+	color: currentColor;
+	font-size: 1.1em;
+}
+
+.action.minimal {
+	padding-block: 0.72rem;
+	font-family: var(--sl-font-mono);
+	font-size: 0.95rem;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	align-items: center;
+	gap: 0.55rem;
 }
 
 /* One bloom in the brand red gives the ground depth. Kept as a background layer
@@ -681,6 +713,51 @@ starlight-sidebar-topics-list,
 	letter-spacing: 0.02em;
 	color: var(--sl-color-gray-2);
 	background: color-mix(in srgb, var(--rd-ground-raised) 70%, transparent);
+}
+
+/* ------------------------------------------------------------ page links -- */
+
+/* Starlight draws previous/next as rounded, shadowed, full-width boxes, which
+   puts the heaviest object on the page under the prose it follows. A rule and
+   the two titles say the same thing and stay out of the way. */
+.pagination-links a {
+	border: 0;
+	border-radius: 0;
+	box-shadow: none;
+	padding: 1rem 0;
+	gap: 0.35rem;
+	background: none;
+	border-top: 1px solid var(--sl-color-gray-6);
+}
+
+.pagination-links a:hover {
+	background: none;
+	border-top-color: var(--sl-color-accent-high);
+}
+
+/* The direction is a bare text node in this span and the page title is the
+   `.link-title` inside it, so the eyebrow is set here and undone below. */
+.pagination-links a > span {
+	gap: 0.3rem;
+	font-family: var(--sl-font-mono);
+	font-size: 0.68rem;
+	font-weight: 700;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--sl-color-gray-3);
+}
+
+.pagination-links a .link-title {
+	font-family: var(--sl-font);
+	font-size: var(--sl-text-base);
+	font-weight: 500;
+	letter-spacing: -0.011em;
+	text-transform: none;
+	color: var(--sl-color-white);
+}
+
+.pagination-links svg {
+	color: var(--sl-color-gray-4);
 }
 
 /* ---------------------------------------------------------------- motion -- */
