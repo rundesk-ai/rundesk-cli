@@ -1485,6 +1485,59 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         # What ends it is a final state, which cancels it — that path is untouched here.
         held.typing.cancel()
 
+    def test_a_terminal_notice_does_not_claim_another_turn_is_running(self):
+        """R-DIS-35 — a restart outcome has no turn left to end its typing indicator."""
+        typed = []
+
+        class Notice:
+            live = {}
+            started = {}
+
+            async def _flush(self, it, held): pass
+            async def _post(self, it, text, **kw): return None
+            def _no_longer_last(self, held): pass
+            def _stop_typing(self, held): discord.Agent._stop_typing(self, held)
+            async def _typing(self, it): typed.append(it)
+
+        notice = Notice()
+        asyncio.run(discord.Agent.told(notice, {
+            "type": "said", "conversation": "c1", "text": "restart succeeded",
+            "continues": False,
+        }))
+
+        self.assertEqual([], typed)
+        self.assertNotIn("c1", notice.live)
+
+    def test_a_terminal_notice_does_not_erase_a_newer_running_turn(self):
+        """R-DIS-35 — a new turn may begin before a queued restart notice is delivered."""
+        async def scenario():
+            class Notice:
+                started = {}
+
+                async def _flush(self, it, held): pass
+                async def _post(self, it, text, **kw): return None
+                def _no_longer_last(self, held): pass
+                def _stop_typing(self, held): discord.Agent._stop_typing(self, held)
+                async def _typing(self, it): await asyncio.Event().wait()
+
+            held = discord.Live()
+            held.started = 1.0
+            held.typing = asyncio.create_task(asyncio.Event().wait())
+            notice = Notice()
+            notice.live = {"c1": held}
+
+            await discord.Agent.told(notice, {
+                "type": "said", "conversation": "c1", "text": "restart succeeded",
+                "continues": False,
+            })
+
+            self.assertIs(held, notice.live["c1"])
+            self.assertIsNotNone(held.typing)
+            self.assertFalse(held.typing.done())
+            held.typing.cancel()
+
+        asyncio.run(scenario())
+
     def test_a_commentary_stops_growing_once_something_is_said_under_it(self):
         """R-DIS-20 — a message something has been posted under is one the reader has
         already scrolled past. Editing it changes history rather than showing progress:
