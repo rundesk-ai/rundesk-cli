@@ -103,9 +103,11 @@ A verb says **what**. The next word says **whose** — \`start ava\`, \`logs ava
 \`channels ava\`. A verb marked *planned* is registered and not built: it exits \`69\`
 and changes nothing.
 
-:::note
-This page is generated from Rundesk's argument parser, so it cannot drift from the
-installed command. Fix a wording problem in the parser, not here.
+:::note[Generated from the command itself]
+Every signature and every argument below was walked out of Rundesk
+**${surface.version}**'s own argument parser — the same object \`rundesk --help\` prints
+from — and the build fails when this page and the command disagree. It cannot describe a
+version nobody has. A wording problem here is a problem in the parser.
 :::
 
 ${body.join('\n')}`;

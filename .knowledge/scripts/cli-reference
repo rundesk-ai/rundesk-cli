@@ -32,6 +32,7 @@ STRUCTURE = ROOT / "CLI.json"
 
 sys.path.insert(0, str(ROOT / "src"))
 
+import rundesk  # noqa: E402
 from rundesk import cli  # noqa: E402
 
 #: The verbs a person meets in the order they meet them, rather than the order argparse
@@ -328,6 +329,10 @@ def data() -> dict:
 
     return {
         "generated_from": "rundesk.cli.build_parser",
+        # The release this surface was walked out of. Deliberately no timestamp: `--check`
+        # compares the file it would write against the one on disk, and a clock in it would
+        # fail the gate on every run.
+        "version": rundesk.__version__,
         "groups": groups,
         "arguments": [
             {"written": written, "means": means}

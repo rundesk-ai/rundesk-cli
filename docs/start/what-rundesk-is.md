@@ -52,4 +52,36 @@ The provider and channel seams are **programs, not in-process plugins**. A custo
 can be written in any language and receives the same scheduling, lifecycle, history, and
 channel behavior as a shipped one.
 
+## One night, end to end
+
+Nothing below needs you to be awake for it.
+
+```text
+  03:00                                                    07:40
+    │                                                        │
+    ▼                                                        ▼
+┌────────────┐   ┌───────────────┐   ┌──────────────┐   ┌──────────┐
+│  schedule  │──▶│    gateway    │──▶│   provider   │   │   you    │
+│  is due    │   │  ava, always  │   │  codex, run  │   │ on your  │
+│            │   │  on, launchd  │   │  as a program│   │  phone   │
+└────────────┘   └───────┬───────┘   └──────┬───────┘   └────▲─────┘
+                         │                  │                │
+              never runs on top             │                │
+              of itself; never              ▼                │
+              fires late after     ┌──────────────────┐      │
+              downtime             │  the turn, as a  │      │
+                                   │  durable record  │      │
+                                   │  messages, tools,│      │
+                                   │  outcome, tokens │      │
+                                   └────────┬─────────┘      │
+                                            │                │
+                                            └────────────────┘
+                                              delivered to
+                                              the channel it
+                                              was told to use
+```
+
+In the morning `rundesk runs ava` says what happened, `rundesk usage ava` says what it cost,
+and asking the agent about it on Discord continues the same conversation.
+
 Next: [install it](/start/install/).

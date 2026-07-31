@@ -1,5 +1,6 @@
 {
   "generated_from": "rundesk.cli.build_parser",
+  "version": "0.15.0",
   "groups": [
     {
       "title": "An agent, and its life",
