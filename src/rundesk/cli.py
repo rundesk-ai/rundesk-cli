@@ -52,8 +52,9 @@ from rundesk import update_request  # noqa: E402
 
 #: The installer as published, for the one case where this install has lost its own:
 #: removing rundesk is exactly when a broken install has to be removable.
-PUBLISHED_INSTALLER = ("https://github.com/rundesk-ai/rundesk-cli/releases/latest/"
-                       "download/install.sh")
+PUBLISHED_INSTALLER = (
+    "https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh"
+)
 
 #: Where this checkout lives — the thing an update replaces in place.
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent

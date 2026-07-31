@@ -462,7 +462,15 @@ class BuiltCommandTests(unittest.TestCase):
             finally:
                 cli.REPO_ROOT = was
         self.assertEqual(1, code)
-        self.assertIn("curl", err, "it failed and never said how to remove it anyway")
+        self.assertIn(
+            f"curl -fsSL {cli.PUBLISHED_INSTALLER} | bash -s -- --uninstall",
+            err,
+            "it failed and did not give the published removal instruction",
+        )
+        self.assertEqual(
+            cli.PUBLISHED_INSTALLER,
+            "https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh",
+        )
 
     def test_the_planned_list_and_the_built_commands_do_not_overlap(self):
         # A command that is both "coming soon" and handled would answer twice, and

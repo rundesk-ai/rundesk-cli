@@ -1,9 +1,8 @@
 name: release
 
-# Push a vX.Y.Z tag → publish a GitHub Release and attach install.sh, so
-#   https://github.com/rundesk-ai/rundesk-cli/releases/latest/download/install.sh
-# always serves the installer that shipped with the newest release — and so
-# `rundesk update` has something to find.
+# Push a vX.Y.Z tag → publish one program archive. Remote installs and updates
+# both fetch this asset, so GitHub's cumulative release-download count records
+# each delivery once (R-INS-20, R-UPD-49).
 on:
   push:
     tags: ['v*.*.*']
@@ -36,7 +35,12 @@ jobs:
               raise SystemExit(1)
           CHECK
 
+      - name: Build the counted program archive
+        run: |
+          git archive --format=tar --prefix="rundesk-cli-${GITHUB_REF_NAME}/" "$GITHUB_SHA" |
+            gzip -9 > rundesk-cli.tar.gz
+
       - uses: softprops/action-gh-release@v3
         with:
-          files: install.sh
+          files: rundesk-cli.tar.gz
           generate_release_notes: true

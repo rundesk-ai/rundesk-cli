@@ -67,6 +67,7 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-46 | An update that landed names the release now installed and links what changed in it | `a version is linked to the release that carries it`, `the link is built from the repository this install updates itself from`, `the whole of what the command prints is accepted`, `an applied update names the release it landed and links it`, `a succeeded outcome links the release that is now installed`, `a worker run outcome names the release once rather than twice`, `an outcome whose transcript says nothing still links the release`, `every adapter is told the version that actually came up` |
 | ✅ | R-UPD-47 | An update that did not land never names a release as installed | `something that is not a release version gets no link rather than a wrong one`, `an update that did not land never names a release as applied`, `a failed or rolled back outcome never links a release as landed` |
 | ✅ | R-UPD-48 | An update adds configuration values an earlier release did not write without changing values the owner stated | `v020s empty sections are filled with the values in force`, `a missing value is added without touching one already stated`, `a value already stated survives the section being added`, `a configuration that cannot be read is left exactly as it is` |
+| ✅ | R-UPD-49 | A remote update from the counted-delivery release onward contributes once to Rundesk's public installs count | `a remote update downloads the counted release asset once` |
 
 ## Open questions
 

@@ -1596,12 +1596,12 @@ def _as_a_line(it: dict) -> str:
         # the conversation it ended on was leads with that, and `output` stays beside it as
         # the only other thing the turn itself did.
         #
-        # A brain that does not say gets exactly the footer it got before, rather than
-        # `output` alone: adding a quantity for one brain may not take three away from
-        # another. Absent means "could not tell" on either side of that, which is what the
-        # isinstance guard has always been for.
+        # A brain that does not say gets the useful cost summary. Cache writes remain in
+        # the recorded usage details, but are omitted from this compact final footer.
+        # Absent means "could not tell" on either side, which is what the isinstance guard
+        # has always been for.
         slots = (("session", "output") if isinstance(it.get("session"), int)
-                 else ("input", "output", "cached", "written"))
+                 else ("input", "output", "cached"))
         parts = [f"{_amount(it[what])} {what}"
                  for what in slots if isinstance(it.get(what), int)]
         return f"-# · {' · '.join(parts)}" if parts else ""
