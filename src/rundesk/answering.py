@@ -271,7 +271,7 @@ class Answering:
             self._note(said)
         return True, where_it_goes
 
-    async def told_what_a_schedule_did(self, named: str, became: str, where=None) -> None:
+    async def told_what_a_schedule_did(self, named: str, result, where=None) -> None:
         """Say on this surface what one of this agent's schedules came to (R-SCH-31).
 
         **The one thing here that nobody asked for.** Every other record this sends answers
@@ -279,9 +279,11 @@ class Answering:
         already looks, because work that failed at three in the morning is no use in an account
         nobody opens until they think to.
 
-        Said as a remark rather than as an answer: `said` is a complete thing the agent said
-        that is not anchored to a question, which is exactly what this is — there is no message
-        to reply to and no reaction to put on one.
+        **A turn's report is a completed answer** (R-SCH-50), with the provider, elapsed time,
+        and usage its outcome carried. The clock supplied no inbound question, but the channel
+        can still present the report like every other final answer and anchor it to the notice
+        that the run started. Program and startup outcomes have no turn outcome to enrich, so
+        those remain complete remarks.
 
         **Where** is the place the schedule named, and the newest conversation on this surface
         only when it named none. A channel reaching a whole server has many rooms, and picking
@@ -318,15 +320,47 @@ class Answering:
             self._note(f"channel '{self.channel}': nowhere to say what '{named}' did — "
                        f"nothing has been said on this surface yet")
             return
+        became = getattr(result, "became", result)
         text = self._what_it_did(kept, named, became)
+        outcome_run = getattr(result, "run", None)
+        run = kept.run(outcome_run) if isinstance(outcome_run, str) else None
+        if run is None:
+            ran = kept.runs(schedule_id=row.get("id"), limit=1)
+            run = ran[0] if ran else None
         # The place goes over even when we resolved a conversation ourselves: only the adapter
         # can reach a room nobody has spoken in yet, and it is the one that knows what the word
         # means. A surface that cannot resolve one falls back to the conversation (R-CAD-16).
-        self._tell(type="said", conversation=where_it_goes, place=place or None, text=text,
-                   schedule=named)
+        if outcome_run is None:
+            self._tell(type="said", conversation=where_it_goes, place=place or None,
+                       text=text, schedule=named)
+        else:
+            # A scheduled turn is still a completed channel answer (R-SCH-50). Its outcome
+            # is the only place the session-size figure survives: the durable run keeps the
+            # billed pieces but deliberately does not store that provider snapshot.
+            tokens = getattr(result, "tokens", {})
+            if isinstance(tokens, dict) and tokens.get("reported"):
+                usage = {key: tokens[key]
+                         for key in ("input", "output", "cached", "written", "session")
+                         if isinstance(tokens.get(key), int)}
+                self._tell(type="usage", conversation=where_it_goes,
+                           run=outcome_run, schedule=named, **usage)
+            final = {
+                "type": "answer", "conversation": where_it_goes,
+                "place": place or None, "run": outcome_run, "text": text,
+                "schedule": named,
+            }
+            if run is not None:
+                final["provider"] = provider.label(run.get("provider") or "")
+            elapsed = getattr(result, "elapsed", None)
+            if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool):
+                final["elapsed"] = elapsed
+            allowed = self.record.get("allow")
+            if (isinstance(allowed, list) and len(allowed) == 1
+                    and isinstance(allowed[0], str) and allowed[0]):
+                final["recipient"] = allowed[0]
+            self._tell(**final)
         if where_it_goes is not None:
-            ran = kept.runs(schedule_id=row.get("id"), limit=1)
-            kept.answered(where_it_goes, ran[0]["id"] if ran else None,
+            kept.answered(where_it_goes, run["id"] if run else None,
                           store.stamped(), text)
         elif said:
             self._note(said)

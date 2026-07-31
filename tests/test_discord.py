@@ -350,7 +350,8 @@ class _Wrote:
 
     @property
     def mentioned(self):
-        return [one for _content, _quoted, one in self.wrote]
+        return [one or content.startswith("<@")
+                for content, _quoted, one in self.wrote]
 
 
 def _writing_surface(room, activity=None):
@@ -373,7 +374,7 @@ def _writing_surface(room, activity=None):
         _stop_typing = discord.Agent._stop_typing
 
         def __init__(self):
-            self.live, self.seen, self.started = {}, {}, {}
+            self.live, self.scheduled, self.seen, self.started = {}, {}, {}, {}
             self.chose = SimpleNamespace(
                 activity=discord.POSTS if activity is None else activity)
 
@@ -480,28 +481,67 @@ class TheAnswerMentionsWhoAsked(unittest.TestCase):
         asyncio.run(carry())
         self.assertEqual([("I'll look at the logs.", False, False)], room.wrote)
 
-    def test_a_scheduled_report_mentions_nobody_though_it_is_a_reply(self):
-        """R-DIS-30, R-DIS-31, R-SCH-46 — a schedule's report is a reply, but the message it
-        replies to is rundesk's own start notice rather than a person's. So there is nobody
-        there to mention and the pair stays untinted — the case with real teeth, because a
-        mention here would have the agent ping itself on every scheduled run."""
+    def test_a_scheduled_final_mentions_its_recipient_and_not_the_notice_author(self):
+        """R-DIS-30, R-DIS-31, R-SCH-46, R-SCH-50 — the report replies to rundesk's own
+        notice, so reply-author mentions would ping the bot. Its explicit authorized
+        recipient gives the final answer the ordinary highlighted treatment instead."""
         room = _Wrote()
         surface = _writing_surface(room)
 
         async def carry():
-            for one in ({"schedule": "nightly", "began": True,
-                         "text": "💻 Working on 'nightly' …"},
-                        {"schedule": "nightly", "text": "nothing broke overnight"}):
+            for one in (
+                    {"type": "said", "schedule": "nightly", "began": True,
+                     "text": "💻 Working on 'nightly' …"},
+                    {"type": "usage", "schedule": "nightly",
+                     "session": 122435, "output": 837},
+                    {"type": "answer", "schedule": "nightly", "recipient": "2207",
+                     "provider": "a-brain", "elapsed": 120,
+                     "text": "nothing broke overnight"}):
                 await discord.Agent.told(
-                    surface, dict({"type": "said", "conversation": "4242"}, **one))
+                    surface, dict({"conversation": "4242"}, **one))
             await asyncio.sleep(0)
 
         asyncio.run(carry())
         (_notice, notice_quoted, _n), (found, report_quoted, _r) = room.wrote
         self.assertFalse(notice_quoted, "the notice quoted something of its own")
         self.assertTrue(report_quoted, "the report stopped replying to its notice")
-        self.assertEqual("nothing broke overnight", found)
-        self.assertEqual([False, False], room.mentioned)
+        self.assertEqual(
+            "<@2207> -# a-brain · 122k session · 837 output · 2m elapsed\n"
+            "nothing broke overnight",
+            found,
+        )
+        self.assertEqual([False, True], room.mentioned)
+
+    def test_a_scheduled_final_does_not_consume_a_newer_turn_in_its_room(self):
+        """R-DIS-35, R-SCH-50 — unattended usage and presentation have their own state;
+        a final arriving beside a newer interactive turn preserves that turn's anchor,
+        cost, timer, and typing task."""
+        room = _Wrote()
+        surface = _writing_surface(room)
+        interactive = discord.Live()
+        interactive.anchor = _asking(4242)
+        interactive.cost = "-# · 10k session · 20 output"
+        interactive.started = 10.0
+        typing = _Cancels()
+        interactive.typing = typing
+        surface.live["4242"] = interactive
+
+        async def carry():
+            surface.started["nightly"] = _asking(4242)
+            await discord.Agent.told(surface, {
+                "type": "usage", "conversation": "4242", "schedule": "nightly",
+                "session": 122435, "output": 837,
+            })
+            await discord.Agent.told(surface, {
+                "type": "answer", "conversation": "4242", "schedule": "nightly",
+                "recipient": "2207", "text": "nothing broke overnight",
+            })
+
+        asyncio.run(carry())
+        self.assertIs(interactive, surface.live["4242"])
+        self.assertEqual(("-# · 10k session · 20 output", 10.0, typing),
+                         (interactive.cost, interactive.started, interactive.typing))
+        self.assertFalse(typing.cancelled)
 
     def test_the_commentary_and_the_mark_on_a_failure_mention_nobody(self):
         """R-DIS-20, R-DIS-31 — what the agent is doing while it works, and the line saying
@@ -1077,6 +1117,17 @@ class WhatOneTurnLooksLike(unittest.TestCase):
             "-# · 122k session · 837 output",
             discord._as_a_line({"type": "usage", "session": 122435, "input": 2,
                                 "output": 837, "cached": 121446, "written": 987}))
+
+    def test_where_an_answer_is_posted_does_not_change_its_usage_summary(self):
+        """R-DIS-29 — direct messages and rooms show the same useful session-size view;
+        where an answer lands cannot silently replace it with the billing breakdown."""
+        usage = {"type": "usage", "session": 122435, "input": 2,
+                 "output": 837, "cached": 121446}
+        self.assertEqual(
+            ["-# · 122k session · 837 output"] * 2,
+            [discord._as_a_line(dict(usage, direct=direct))
+             for direct in (True, False)],
+        )
 
     def test_the_whole_footer_an_owner_reads_is_the_size_what_was_written_and_the_clock(self):
         """R-DIS-29, R-DIS-24 — end to end, from the record the adapter sent to the line

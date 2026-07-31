@@ -70,6 +70,7 @@ gateway each, which is how one agent's schedules stay that agent's alone.
 | ✅ | R-SCH-47 | A scheduled turn is told to treat only its schedule task as the request | `scheduled run instructions apply only to schedule triggers`, `scheduled run instructions define unattended outcomes` |
 | ✅ | R-SCH-48 | A scheduled turn is told never to ask questions, request approval, or wait for replies | `scheduled run instructions define unattended outcomes` |
 | ✅ | R-SCH-49 | A scheduled turn is told to deliver one final report, including no-action and blocked outcomes | `scheduled run instructions define unattended outcomes` |
+| ✅ | R-SCH-50 | A scheduled turn's final channel report carries the same completion facts as an interactive answer | `what a schedule came to is said on the surface it names`, `a scheduled turn reports as a final answer with its usage`, `a scheduled final mentions its recipient and not the notice author`, `a scheduled final does not consume a newer turn in its room`, `a turns elapsed time ignores wall clock jumps` |
 
 ## Open questions
 

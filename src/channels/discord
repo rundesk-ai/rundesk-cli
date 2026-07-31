@@ -433,6 +433,9 @@ class Agent(discord.Client):
         super().__init__(intents=intents, **kw)
         self.chose = chose
         self.live: dict = {}
+        #: Presentation state for unattended turns, kept apart from a person whose newer
+        #: interactive turn may be running in the same room (R-DIS-35, R-SCH-50).
+        self.scheduled: dict = {}
         #: Recent messages by id, so a mark can be put on one without fetching it back.
         #: Bounded, because this process runs for weeks.
         self.seen: dict = {}
@@ -822,11 +825,22 @@ class Agent(discord.Client):
                  f" for {it.get('conversation')}"
                  f" ({len(str(it.get('text') or ''))} chars,"
                  f" {len(it.get('attachments') or [])} files)", "INFO")
-        held = self.live.setdefault(str(it.get("conversation")), Live())
+        named = str(it.get("schedule") or "")
+        if named:
+            scheduled = getattr(self, "scheduled", None)
+            if scheduled is None:
+                scheduled = self.scheduled = {}
+            held = scheduled.setdefault(named, Live())
+        else:
+            held = self.live.setdefault(str(it.get("conversation")), Live())
         if kind == "state":
             await self._state(it, held)
         elif kind == "answer":
+            if named:
+                held.anchor = self.started.pop(named, None)
             await self._answer(it, held)
+            if named:
+                self.scheduled.pop(named, None)
         elif kind == "query-result":
             await self._query_result(it)
         elif kind == "configure-result":
@@ -858,7 +872,6 @@ class Agent(discord.Client):
             # finds can quote it — or the report itself, which replies to whatever is being
             # held under that name. Everything else is an ordinary remark and anchors to
             # nothing, because quoting the question on every remark buries the question.
-            named = str(it.get("schedule") or "")
             began = bool(it.get("began"))
             anchor = None if began else (self.started.pop(named, None) if named else None)
             rest, notice = str(it.get("text") or ""), None
@@ -875,7 +888,9 @@ class Agent(discord.Client):
             # state record. A terminal notice arrives outside any turn and has no final
             # state coming behind it; restarting here would claim work was happening for
             # ever (R-DIS-35).
-            if it.get("continues", True) or turn_was_running:
+            if named and not began:
+                self.scheduled.pop(named, None)
+            elif it.get("continues", True) or turn_was_running:
                 held.typing = held.typing or asyncio.ensure_future(self._typing(it))
             else:
                 self.live.pop(str(it.get("conversation")), None)
@@ -1127,10 +1142,9 @@ class Agent(discord.Client):
     async def _answer(self, it: dict, held: Live) -> None:
         """The answer, whole, at the end — split across messages rather than cut.
 
-        Anchored to the message that asked (R-DIS-28), so it is findable in a busy channel
-        and so an owner can tell an answer from a scheduled report arriving beside it; only
-        the first piece carries the anchor, because a quote on every piece buries what it
-        is quoting.
+        Anchored to the message that asked (R-DIS-28), or to a schedule's start notice
+        (R-DIS-30), so it is findable in a busy channel. Only the first piece carries the
+        anchor, because a quote on every piece buries what it is quoting.
 
         **And it mentions whoever asked** (R-DIS-31). A message that mentions you is drawn
         by *your own* client with a tint across the whole row — the avatar and the name
@@ -1138,10 +1152,9 @@ class Agent(discord.Client):
         somebody is waiting for stops looking like the bookkeeping in front of it. So it is
         this one message and nothing else rundesk posts: commentary, a remark said mid-turn,
         a state mark and a schedule's start notice all go through `_post` too, and a surface
-        where everything is tinted has tinted nothing. The mention follows the anchor for
-        the same reason the tint is worth having — where the answer replies to a person's
-        message it names them, and where it replies to nothing it names nobody, so a room
-        is not pinged by an answer nobody there asked for.
+        where everything is tinted has tinted nothing. An interactive answer mentions the
+        asker through its reply; a scheduled answer explicitly mentions the single authorized
+        recipient because its reply anchor was written by rundesk itself (R-SCH-50).
         """
         # The provider and cost first, then the answer, in one message (R-DIS-17,
         # R-DIS-33). At the top rather than the bottom because a long answer pushes
@@ -1155,8 +1168,11 @@ class Agent(discord.Client):
         if isinstance(provider_name, str) and provider_name:
             footer = (f"-# {provider_name}{footer[2:]}"
                       if footer.startswith("-# ·") else f"-# {provider_name}")
-        if held.started is not None:
-            elapsed = f"{_duration(held.clock() - held.started)} elapsed"
+        elapsed_seconds = it.get("elapsed")
+        if not isinstance(elapsed_seconds, (int, float)) and held.started is not None:
+            elapsed_seconds = held.clock() - held.started
+        if isinstance(elapsed_seconds, (int, float)):
+            elapsed = f"{_duration(elapsed_seconds)} elapsed"
             footer = f"{footer} · {elapsed}" if footer else f"-# · {elapsed}"
         if footer:
             whole = f"{footer}\n{whole}"
@@ -1164,10 +1180,13 @@ class Agent(discord.Client):
                  if isinstance(one, dict) and isinstance(one.get("at"), str)]
         # Past a certain length an answer is a document rather than a message, and a
         # dozen numbered fragments is not something anybody reads (R-DIS-13).
+        recipient = str(it.get("recipient") or "")
+        mention = (recipient if it.get("schedule") and recipient.isdigit()
+                   else held.anchor is not None and not it.get("schedule"))
         if len(whole) > LIMIT * ATTACH_AFTER:
             await self._post(it, f"{footer}\n-# the answer is long, so it is attached"
                              .strip(), anchor=held.anchor, files=files, text_as=whole,
-                             mention=held.anchor is not None)
+                             mention=mention)
             return
         rest, anchor = whole, held.anchor
         while rest:
@@ -1175,9 +1194,10 @@ class Agent(discord.Client):
             # **Once, on the piece carrying the anchor** (R-DIS-13, R-DIS-31). The mention
             # is the reply, so it goes exactly where the reply goes: a long answer that
             # mentioned on every piece would be five notifications for one reply.
-            await self._post(it, piece, anchor=anchor, mention=anchor is not None,
+            await self._post(it, piece, anchor=anchor, mention=mention,
                              files=files if not rest else [])
             anchor = None
+            mention = False
 
     async def _where_to_write(self, it: dict):
         """The room to write in: the place rundesk was told to say it in, or the conversation.
@@ -1306,17 +1326,24 @@ class Agent(discord.Client):
         # is lost to a line on our own stderr. The asker deleting their question is enough,
         # and a turn here runs for minutes. Off, Discord drops the quote and still posts.
         quoting = None if anchor is None else anchor.to_reference(fail_if_not_exists=False)
-        # **The mention is the reply's, so there is no mention without one** (R-DIS-31).
+        # **An ordinary mention is the reply's** (R-DIS-31).
         # `mention_author` is Discord's `allowed_mentions.replied_user`, which names the
         # author of the message being replied to — so it can only reach somebody through
         # `quoting`, and the guard above drops an anchor standing in another room. Asked of
         # `quoting` rather than of `anchor` for exactly that: an answer whose question is
         # somewhere else quotes nobody and must therefore mention nobody.
+        mention_recipient = mention if isinstance(mention, str) and mention.isdigit() else ""
+        if mention_recipient:
+            # A schedule's anchor is rundesk's own notice, so mentioning the reply author
+            # would ping the bot and leave the owner untinted. The core supplies the one
+            # authorized recipient only where the channel has exactly one (R-SCH-50).
+            content = f"<@{mention_recipient}> {content}"
         try:
             said = await channel.send(
                 content,
                 reference=quoting,
-                mention_author=bool(mention) and quoting is not None,
+                mention_author=(bool(mention) and not mention_recipient
+                                and quoting is not None),
                 files=sending or None,
             )
             note(f"wrote {len(content)} chars and {len(sending)} files", "INFO")

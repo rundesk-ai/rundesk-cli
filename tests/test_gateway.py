@@ -3038,7 +3038,7 @@ if "--capabilities" in sys.argv:
 prompt = sys.stdin.read().strip()
 say = lambda **it: (sys.stdout.write(json.dumps(it) + "\n"), sys.stdout.flush())
 say(type="text", text="heard " + prompt)
-say(type="usage", input=100, output=8, cached=40, model="stand-in-1")
+say(type="usage", input=100, output=8, cached=40, session=148, model="stand-in-1")
 say(type="done", ok=True, session=(os.environ.get("RUNDESK_RESUME") or "") + "s")
 """ % PY
 
@@ -3069,6 +3069,9 @@ class ASurface:
 
     def __init__(self, refuses: bool = False, nowhere: bool = False):
         self.told: list = []
+        #: The complete result handed to the surface, retained separately from the compact
+        #: outcome assertions older schedule cases make (R-SCH-50).
+        self.results: list = []
         self.started: list = []
         #: What each report was told to be delivered to, in order.
         self.delivered_to: list = []
@@ -3077,10 +3080,11 @@ class ASurface:
         #: back when nothing has ever been said on it and no place was named (R-SCH-46).
         self.nowhere = nowhere
 
-    async def told_what_a_schedule_did(self, named: str, became: str, where=None) -> None:
+    async def told_what_a_schedule_did(self, named: str, result, where=None) -> None:
         if self.refuses:
             raise OSError("the platform would not take it")
-        self.told.append((named, became))
+        self.results.append(result)
+        self.told.append((named, getattr(result, "became", result)))
         self.delivered_to.append(where)
 
     async def told_a_schedule_started(self, named: str):
@@ -3597,8 +3601,9 @@ class WhenTheClockAsksATurn(WithARunDirectory):
                         f"the schedule's own brain was passed over: {run['provider']}")
 
     async def test_what_a_schedule_came_to_is_said_on_the_surface_it_names(self):
-        """R-SCH-31 — the gateway is the only thing that can say it: a channel is held open
-        here, and a scheduled program is a child process that cannot reach one."""
+        """R-SCH-31, R-SCH-50 — the gateway is the only thing that can say it: a channel
+        is held open here, and it receives the complete turn result rather than losing the
+        usage facts before the answer can be rendered."""
         self.agents.remember("ava", self.agents_at, provider=self.brain())
         self.reachable_on("ops")
         self.asks(channel="ops")
@@ -3609,6 +3614,10 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         told = gw._reached["ops"].told
         self.assertEqual([("nightly", "finished")], told,
                          f"what the schedule came to never reached the surface: {told}")
+        result = gw._reached["ops"].results[0]
+        self.assertEqual((True, 8, 148), (result.tokens["reported"],
+                                          result.tokens["output"],
+                                          result.tokens["session"]))
 
     async def test_a_schedule_says_it_on_the_surface_it_names_and_no_other(self):
         """R-SCH-31 — it went to every surface the agent had, which is two notices about work

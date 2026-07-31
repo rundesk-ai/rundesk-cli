@@ -36,10 +36,16 @@ class Outcome:
     """
 
     def __init__(self, run="1-aaaa", ok=True, reason="finished", text="", why=None,
-                 files=()):
+                 files=(), tokens=None, elapsed=120):
         self.run, self.ok, self.reason, self.why = run, ok, reason, why
         self.text = text
         self.files = list(files)
+        self.tokens = dict(tokens or {"reported": False})
+        self.elapsed = elapsed
+
+    @property
+    def became(self):
+        return "finished" if self.ok else self.reason
 
 
 class Brain:
@@ -309,6 +315,46 @@ class WhereABrainIsAnswering(CarriesAConversation):
         await held.told_what_a_schedule_did("nightly", "finished")
         await self._settled(held)
         self.assertIn("nothing broke overnight", surface.of("said")[0]["text"])
+
+    async def test_a_scheduled_turn_reports_as_a_final_answer_with_its_usage(self):
+        """R-SCH-50 — a turn the clock started is still a final channel answer, so the
+        surface receives its provider, session size, output, elapsed time, and recipient
+        instead of a plain remark carrying only its text."""
+        self.spoken_on()
+        row = self.a_schedule()
+        kept = agents.records("ava", self.where)
+        its_own = kept.opened(store.conversation_id("schedule", "nightly"), "schedule",
+                              "schedule", "nightly", "2026-07-26T09:00:00Z")["id"]
+        run = kept.began("schedule", "a-brain", "safe", "2026-07-26T09:00:00Z",
+                         conversation_id=its_own, schedule_id=row["id"])
+        kept.answered(its_own, run, "2026-07-26T09:02:00Z", "nothing broke overnight")
+        kept.ended(run, "2026-07-26T09:02:00Z", "finished",
+                   tokens={"input": 2, "output": 837, "cached": 121446,
+                           "reported": True})
+        outcome = Outcome(
+            run=run,
+            tokens={"input": 2, "output": 837, "cached": 121446,
+                    "session": 122435, "reported": True},
+        )
+
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        await held.told_what_a_schedule_did("nightly", outcome)
+        await self._settled(held)
+
+        self.assertEqual([{
+            "type": "usage", "conversation": self.spoken_on(), "run": run,
+            "schedule": "nightly",
+            "input": 2, "output": 837, "cached": 121446, "session": 122435,
+        }], surface.of("usage"))
+        answer = surface.of("answer")[0]
+        self.assertEqual(
+            ("nothing broke overnight", "a-brain", "nightly", "2207", 120),
+            (answer["text"], answer["provider"], answer["schedule"],
+             answer["recipient"], answer["elapsed"]),
+        )
+        self.assertEqual([], [one for one in surface.of("said")
+                              if not one.get("began")])
 
     async def test_what_a_surface_is_shown_is_what_the_agent_said(self):
         """R-SCH-34 — a person reading a room wants what their agent found, not a line of
