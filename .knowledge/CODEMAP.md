@@ -208,10 +208,15 @@ Brand tokens in `site/src/styles/brand.css` are sampled from `assets/readme/rund
 the header lockup in `site/src/assets/` is cut from that same banner rather than set in a webfont, so
 the site carries the real letterforms.
 
-`site/scripts/sync-cli-reference.mjs` copies `CLI.md` into `docs/reference/cli.md` on every
-`dev` and `build`. That file is git-ignored: `CLI.md` is already generated from the parser, and
-a committed copy would be a third version of the command surface free to disagree with the
-other two.
+`site/scripts/sync-cli-reference.mjs` renders `docs/reference/cli.md` from `CLI.json` on every
+`dev` and `build`. That file is git-ignored: the command surface is already generated from the
+parser, and a committed copy would be a third version free to disagree with the other two.
+
+`.knowledge/scripts/cli-reference` writes both `CLI.md` and `CLI.json` from one walk of
+`build_parser()`, and `--check` fails the gate when either drifts. Two renderings because they
+are read in different places: a terminal wants aligned columns, and a page wants a heading and
+an anchor per verb, its own operations, and only the arguments that verb takes. The site build
+consumes the JSON, so it stays offline and needs no Python.
 
 Nothing here reaches a user's machine. `install.sh` downloads a release tarball, so `site/`'s
 dependencies live only in a checkout and a Pages build.
@@ -275,6 +280,9 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
 - `CLI.md` — every operation the command offers, how each is typed, and what each argument means.
   **Generated** by `.knowledge/scripts/cli-reference` from the parser, so it cannot describe a product
   nobody has; the gate fails when it and the command disagree.
+- `CLI.json` — the same walk as data, for anything rendering its own view of the surface. Written
+  and checked by the same script, in the same run, so the two cannot disagree. The documentation
+  site's reference page is built from this.
 - `src/templates/skills/` — **the skills this release ships.** Copied into the owner's library
   by the install and brought forward by an update, so a built-in is always the version installed
   (R-AGT-30). `using-rundesk` is how to operate rundesk, written for **an agent running inside

@@ -1,0 +1,909 @@
+{
+  "generated_from": "rundesk.cli.build_parser",
+  "groups": [
+    {
+      "title": "An agent, and its life",
+      "why": "Making one, taking it away, and seeing what you have.",
+      "verbs": [
+        {
+          "verb": "add",
+          "summary": "Make an agent, and the gateway that runs it.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk add [--provider <provider>] [--model <model>] [--set <key=value>] [--instructions <text>] <agent>",
+              "does": "make an agent, and the gateway that runs it"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--instructions <text>",
+              "means": "what every turn for this agent is told before it reads a prompt, where neither the schedule nor the surface said — empty takes it off"
+            },
+            {
+              "written": "--model <model>",
+              "means": "which model, in that brain's own words"
+            },
+            {
+              "written": "--provider <provider>",
+              "means": "which brain answers for it when a turn does not say"
+            },
+            {
+              "written": "--set <key=value>",
+              "means": "anything that brain takes, carried to it unread; repeatable"
+            },
+            {
+              "written": "<agent>",
+              "means": "what to call it, and what to name it by later"
+            }
+          ]
+        },
+        {
+          "verb": "configure",
+          "summary": "Change an existing agent's durable defaults.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk configure [--provider <provider>] [--model <model>] [--set <key=value>] [--instructions <text>] <agent>",
+              "does": "change an existing agent's durable defaults"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--instructions <text>",
+              "means": "what every turn is told by default — empty takes it off"
+            },
+            {
+              "written": "--model <model>",
+              "means": "which model, in that brain's own words"
+            },
+            {
+              "written": "--provider <provider>",
+              "means": "which brain answers by default"
+            },
+            {
+              "written": "--set <key=value>",
+              "means": "anything that brain takes, carried to it unread; repeatable"
+            },
+            {
+              "written": "<agent>",
+              "means": "which agent"
+            }
+          ]
+        },
+        {
+          "verb": "remove",
+          "summary": "Take an agent away for good.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk remove <agent>",
+              "does": "take an agent away for good"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "<agent>",
+              "means": "which agent — required, because this one never guesses"
+            }
+          ]
+        },
+        {
+          "verb": "agents",
+          "summary": "Every agent this install has, and what each is doing.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk agents",
+              "does": "every agent this install has, and what each is doing"
+            },
+            {
+              "signature": "rundesk agents <agent>",
+              "does": "what one agent is, and where it keeps things"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "<agent>",
+              "means": "one agent — what it is, and where it keeps things"
+            }
+          ]
+        },
+        {
+          "verb": "doctor",
+          "summary": "What stands between an agent and a working turn.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk doctor",
+              "does": "what stands between every agent and a working turn"
+            },
+            {
+              "signature": "rundesk doctor <agent>",
+              "does": "what stands between one agent and a working turn"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "<agent>",
+              "means": "which agent — every one of them when left out"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Running one",
+      "why": "An agent runs in one gateway of its own — these name the agent, never the gateway.",
+      "verbs": [
+        {
+          "verb": "start",
+          "summary": "Have the machine keep an agent running.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk start [--here] <agent>",
+              "does": "have the machine keep an agent running"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--here",
+              "means": "run it in this terminal instead of handing it to the machine"
+            },
+            {
+              "written": "<agent>",
+              "means": "which agent"
+            }
+          ]
+        },
+        {
+          "verb": "stop",
+          "summary": "Stand an agent down.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk stop [--all] <agent>",
+              "does": "stand an agent down"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--all",
+              "means": "every agent on this machine"
+            },
+            {
+              "written": "<agent>",
+              "means": "which agent"
+            }
+          ]
+        },
+        {
+          "verb": "restart",
+          "summary": "Cycle an agent, leaving the others alone.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk restart [--all] <agent>",
+              "does": "cycle an agent, leaving the others alone"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--all",
+              "means": "every agent on this machine"
+            },
+            {
+              "written": "<agent>",
+              "means": "which agent"
+            }
+          ]
+        },
+        {
+          "verb": "logs",
+          "summary": "What an agent has been saying.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk logs [-n <lines>] [--source <source>] <agent>",
+              "does": "what an agent has been saying"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--source <source>",
+              "means": "whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine"
+            },
+            {
+              "written": "-n, --lines <lines>",
+              "means": "how many of the last lines to show, from each source"
+            },
+            {
+              "written": "<agent>",
+              "means": "whose log"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Reaching it",
+      "why": "The ways work arrives for an agent, and what became of each.",
+      "verbs": [
+        {
+          "verb": "ask",
+          "summary": "One turn, streamed to this terminal.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] [--instructions <text>] <agent> <prompt>",
+              "does": "one turn, streamed to this terminal"
+            },
+            {
+              "signature": "rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] [--instructions <text>] <agent> <prompt>",
+              "does": "with standing instructions, told apart from the prompt"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--conversation <conversation>",
+              "means": "which conversation to carry on — this terminal's, when left out"
+            },
+            {
+              "written": "--fresh",
+              "means": "start the conversation again rather than carrying it on"
+            },
+            {
+              "written": "--instructions <text>",
+              "means": "standing instructions for this turn, told to the brain apart from the prompt — what a schedule running unattended says"
+            },
+            {
+              "written": "--model <model>",
+              "means": "which model, in that brain's own words"
+            },
+            {
+              "written": "--provider <provider>",
+              "means": "which brain answers this turn, whatever the agent reaches for otherwise"
+            },
+            {
+              "written": "--read-only",
+              "means": "let this turn look at the machine without changing it"
+            },
+            {
+              "written": "--set <key=value>",
+              "means": "anything that brain takes, carried to it unread; repeatable"
+            },
+            {
+              "written": "--steer",
+              "means": "keep saying more to it while it works — a line at a time, until you stop"
+            },
+            {
+              "written": "<agent>",
+              "means": "which agent"
+            },
+            {
+              "written": "<prompt>",
+              "means": "what to ask it, in quotes"
+            }
+          ]
+        },
+        {
+          "verb": "channels",
+          "summary": "The surfaces an agent is reachable on.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk channels <agent> add --kind <kind> --allow <user> [--token-stdin] [--activity | --no-activity] <channel> -- <option> [<arg> ...]",
+              "does": "put this agent on a channel"
+            },
+            {
+              "signature": "rundesk channels <agent> instructions <channel> <text>",
+              "does": "what this agent is told about where it is"
+            },
+            {
+              "signature": "rundesk channels <agent> remove <channel>",
+              "does": "take this agent off a channel"
+            },
+            {
+              "signature": "rundesk channels <agent> show <channel>",
+              "does": "one channel, and who may reach this agent through it"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--activity, --no-activity",
+              "means": "show what the agent is doing while it works, not only what it finally says (default: on)"
+            },
+            {
+              "written": "--allow <user>",
+              "means": "who may reach this agent through it — at least one, always; repeatable"
+            },
+            {
+              "written": "--kind <kind>",
+              "means": "which kind of surface — one that ships, or the path of a program that speaks yours"
+            },
+            {
+              "written": "--token-stdin",
+              "means": "read the credential this channel needs from standard input, one line; asked for at the terminal when left out"
+            },
+            {
+              "written": "<agent>",
+              "means": "whose channels — a channel belongs to one agent"
+            },
+            {
+              "written": "<channel>",
+              "means": "what to call it, and what to name it by later"
+            },
+            {
+              "written": "<option>",
+              "means": "after `--`, whatever this kind of channel needs — carried to it exactly as typed, and never read here"
+            },
+            {
+              "written": "<text>",
+              "means": "what to tell it, with {agent} {channel} {surface} {where} {called} {user} {conversation} filled in — empty takes it back off, and left out shows what is there"
+            }
+          ]
+        },
+        {
+          "verb": "schedules",
+          "summary": "What an agent runs on its own, and when.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk schedules <agent> add [--when <cron>] [--at <moment>] [--ask <prompt>] [--provider <provider>] [--model <model>] [--instructions <text>] [--to <channel>] [--in <where>] <schedule> -- <program> [<arg> ...]",
+              "does": "add a schedule"
+            },
+            {
+              "signature": "rundesk schedules <agent> off <schedule>",
+              "does": "keep a schedule but stop it running"
+            },
+            {
+              "signature": "rundesk schedules <agent> on <schedule>",
+              "does": "let a schedule run"
+            },
+            {
+              "signature": "rundesk schedules <agent> remove <schedule>",
+              "does": "take a schedule away"
+            },
+            {
+              "signature": "rundesk schedules <agent> run <schedule>",
+              "does": "run a schedule now, whether or not it is due"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--ask <prompt>",
+              "means": "what to ask this agent when it is due, in quotes — a turn rather than a program"
+            },
+            {
+              "written": "--at <moment>",
+              "means": "instead of --when: the one moment it runs, on this machine's own clock, as YYYY-MM-DDTHH:MM. It runs then and never again — a moment is given, never a phrase like 'tomorrow at nine'"
+            },
+            {
+              "written": "--expired",
+              "means": "instead, the one-time schedules whose moment has gone — whether each ran, or whether it passed while nothing was running"
+            },
+            {
+              "written": "--in <where>",
+              "means": "which place on that channel to say it in — a room, a direct message, in whatever the surface calls them. Left out, it follows the conversation"
+            },
+            {
+              "written": "--instructions <text>",
+              "means": "standing instructions for the turn this schedule starts, told to the brain apart from the prompt"
+            },
+            {
+              "written": "--model <model>",
+              "means": "which model, in that brain's own words"
+            },
+            {
+              "written": "--provider <provider>",
+              "means": "which brain answers this schedule, whatever the agent reaches for otherwise"
+            },
+            {
+              "written": "--to <channel>",
+              "means": "which channel to say what this came to on, by the name it was added under — the account and `schedules` say it either way"
+            },
+            {
+              "written": "--when <cron>",
+              "means": "when it runs, over and over, as five cron fields — minute, hour, day, month, weekday"
+            },
+            {
+              "written": "<agent>",
+              "means": "whose schedules — an agent's schedules are its own"
+            },
+            {
+              "written": "<program>",
+              "means": "after `--`, the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH"
+            },
+            {
+              "written": "<schedule>",
+              "means": "what to call it, and what to name it by later"
+            }
+          ]
+        },
+        {
+          "verb": "runs",
+          "summary": "What an agent has run, and what became of each.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk runs [--most <n>] <agent>",
+              "does": "what an agent has run, and what became of each"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--most <n>",
+              "means": "how many to show, newest first (default: 20)"
+            },
+            {
+              "written": "<agent>",
+              "means": "which agent — the name it was made under"
+            }
+          ]
+        },
+        {
+          "verb": "usage",
+          "summary": "What agents have cost, in tokens.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk usage",
+              "does": "what every agent has cost"
+            },
+            {
+              "signature": "rundesk usage <agent>",
+              "does": "what one agent has cost"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "<agent>",
+              "means": "one agent — every agent when left out"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Rundesk itself",
+      "why": "The copy of rundesk on this machine.",
+      "verbs": [
+        {
+          "verb": "status",
+          "summary": "How rundesk itself is on this machine.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk status",
+              "does": "how rundesk itself is on this machine"
+            }
+          ],
+          "arguments": []
+        },
+        {
+          "verb": "version",
+          "summary": "What is installed, and whether that is current.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk version [--check]",
+              "does": "what is installed, and whether that is current"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--check",
+              "means": "say whether a newer release exists"
+            }
+          ]
+        },
+        {
+          "verb": "update",
+          "summary": "Move to the newest published release.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk update [--check] [--status]",
+              "does": "move to the newest published release"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--check",
+              "means": "say what would happen, and change nothing"
+            },
+            {
+              "written": "--status",
+              "means": "show the last queued update and its final outcome"
+            }
+          ]
+        },
+        {
+          "verb": "backups",
+          "summary": "Copies of everything this install keeps.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk backups add",
+              "does": "take a backup now"
+            },
+            {
+              "signature": "rundesk backups off",
+              "does": "stop the machine taking one every day"
+            },
+            {
+              "signature": "rundesk backups on",
+              "does": "have the machine take one every day"
+            },
+            {
+              "signature": "rundesk backups remove [--yes] <backup>",
+              "does": "delete one backup, and only that one"
+            },
+            {
+              "signature": "rundesk backups restore [--yes] <backup>",
+              "does": "put a backup back, replacing everything this install keeps"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--where",
+              "means": "print the directory they are kept in, and nothing else"
+            },
+            {
+              "written": "--yes",
+              "means": "do not ask first — for a script, never for a person"
+            },
+            {
+              "written": "<backup>",
+              "means": "which one, by the name it is listed under"
+            }
+          ]
+        },
+        {
+          "verb": "uninstall",
+          "summary": "Remove rundesk from this machine.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk uninstall [--purge]",
+              "does": "remove rundesk from this machine"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--purge",
+              "means": "also take every agent's home, log and history"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Not yet grouped",
+      "why": "",
+      "verbs": [
+        {
+          "verb": "messages",
+          "summary": "What was said, newest first.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk messages [--most <n>] [--since <id>] [--channel <channel>] [--conversation <where>] [--author <who>] [--source <how>] <agent>",
+              "does": "what was said, newest first"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--author <who>",
+              "means": "only what this kind of author said — one of agent | rundesk | user"
+            },
+            {
+              "written": "--channel <channel>",
+              "means": "only what was said on this channel, by the name it was added under"
+            },
+            {
+              "written": "--conversation <where>",
+              "means": "only what was said in one place on it — the direct message or room, in the platform's own word for it"
+            },
+            {
+              "written": "--most <n>",
+              "means": "how many to show, newest first (default: 20)"
+            },
+            {
+              "written": "--since <id>",
+              "means": "only what was said after this one, by the id shown beside it"
+            },
+            {
+              "written": "--source <how>",
+              "means": "only messages belonging to work admitted this way — one of channel | schedule | terminal"
+            },
+            {
+              "written": "<agent>",
+              "means": "which agent"
+            }
+          ]
+        },
+        {
+          "verb": "resume",
+          "summary": "Carry one run on from where it stopped.",
+          "planned": true,
+          "operations": [
+            {
+              "signature": "rundesk resume <agent>",
+              "does": "carry one run on from where it stopped   [planned]"
+            }
+          ],
+          "arguments": []
+        },
+        {
+          "verb": "scripts",
+          "summary": "The integration commands every agent can invoke.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk scripts [--where]",
+              "does": "the integration commands every agent can invoke"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--where",
+              "means": "print the directory they are kept in, and nothing else"
+            }
+          ]
+        },
+        {
+          "verb": "search",
+          "summary": "What was said, by the words in it.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk search [--most <n>] <agent> <words>",
+              "does": "what was said, by the words in it"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--most <n>",
+              "means": "how many to show (default: 20)"
+            },
+            {
+              "written": "<agent>",
+              "means": "which agent"
+            },
+            {
+              "written": "<words>",
+              "means": "what to look for, in the words that were actually said"
+            }
+          ]
+        },
+        {
+          "verb": "skills",
+          "summary": "The skills on this machine, and who has which.",
+          "planned": false,
+          "operations": [
+            {
+              "signature": "rundesk skills grant <agent> <skill>",
+              "does": "give an agent one of the skills in the library"
+            },
+            {
+              "signature": "rundesk skills revoke <agent> <skill>",
+              "does": "take a skill away from an agent"
+            }
+          ],
+          "arguments": [
+            {
+              "written": "--where",
+              "means": "print the directory they are kept in, and nothing else"
+            },
+            {
+              "written": "<agent>",
+              "means": "who is being given it"
+            },
+            {
+              "written": "<skill>",
+              "means": "which skill, by the name it is under"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "arguments": [
+    {
+      "written": "--activity, --no-activity",
+      "means": "show what the agent is doing while it works, not only what it finally says (default: on)"
+    },
+    {
+      "written": "--all",
+      "means": "every agent on this machine"
+    },
+    {
+      "written": "--allow <user>",
+      "means": "who may reach this agent through it — at least one, always; repeatable"
+    },
+    {
+      "written": "--ask <prompt>",
+      "means": "what to ask this agent when it is due, in quotes — a turn rather than a program"
+    },
+    {
+      "written": "--at <moment>",
+      "means": "instead of --when: the one moment it runs, on this machine's own clock, as YYYY-MM-DDTHH:MM. It runs then and never again — a moment is given, never a phrase like 'tomorrow at nine'"
+    },
+    {
+      "written": "--author <who>",
+      "means": "only what this kind of author said — one of agent | rundesk | user"
+    },
+    {
+      "written": "--channel <channel>",
+      "means": "only what was said on this channel, by the name it was added under"
+    },
+    {
+      "written": "--check",
+      "means": "say whether a newer release exists"
+    },
+    {
+      "written": "--conversation <conversation>",
+      "means": "which conversation to carry on — this terminal's, when left out"
+    },
+    {
+      "written": "--conversation <where>",
+      "means": "only what was said in one place on it — the direct message or room, in the platform's own word for it"
+    },
+    {
+      "written": "--expired",
+      "means": "instead, the one-time schedules whose moment has gone — whether each ran, or whether it passed while nothing was running"
+    },
+    {
+      "written": "--fresh",
+      "means": "start the conversation again rather than carrying it on"
+    },
+    {
+      "written": "--here",
+      "means": "run it in this terminal instead of handing it to the machine"
+    },
+    {
+      "written": "--in <where>",
+      "means": "which place on that channel to say it in — a room, a direct message, in whatever the surface calls them. Left out, it follows the conversation"
+    },
+    {
+      "written": "--instructions <text>",
+      "means": "what every turn for this agent is told before it reads a prompt, where neither the schedule nor the surface said — empty takes it off"
+    },
+    {
+      "written": "--kind <kind>",
+      "means": "which kind of surface — one that ships, or the path of a program that speaks yours"
+    },
+    {
+      "written": "--model <model>",
+      "means": "which model, in that brain's own words"
+    },
+    {
+      "written": "--most <n>",
+      "means": "how many to show, newest first (default: 20)"
+    },
+    {
+      "written": "--provider <provider>",
+      "means": "which brain answers for it when a turn does not say"
+    },
+    {
+      "written": "--purge",
+      "means": "also take every agent's home, log and history"
+    },
+    {
+      "written": "--read-only",
+      "means": "let this turn look at the machine without changing it"
+    },
+    {
+      "written": "--set <key=value>",
+      "means": "anything that brain takes, carried to it unread; repeatable"
+    },
+    {
+      "written": "--since <id>",
+      "means": "only what was said after this one, by the id shown beside it"
+    },
+    {
+      "written": "--source <how>",
+      "means": "only messages belonging to work admitted this way — one of channel | schedule | terminal"
+    },
+    {
+      "written": "--source <source>",
+      "means": "whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine"
+    },
+    {
+      "written": "--status",
+      "means": "show the last queued update and its final outcome"
+    },
+    {
+      "written": "--steer",
+      "means": "keep saying more to it while it works — a line at a time, until you stop"
+    },
+    {
+      "written": "--to <channel>",
+      "means": "which channel to say what this came to on, by the name it was added under — the account and `schedules` say it either way"
+    },
+    {
+      "written": "--token-stdin",
+      "means": "read the credential this channel needs from standard input, one line; asked for at the terminal when left out"
+    },
+    {
+      "written": "--when <cron>",
+      "means": "when it runs, over and over, as five cron fields — minute, hour, day, month, weekday"
+    },
+    {
+      "written": "--where",
+      "means": "print the directory they are kept in, and nothing else"
+    },
+    {
+      "written": "--yes",
+      "means": "do not ask first — for a script, never for a person"
+    },
+    {
+      "written": "-n, --lines <lines>",
+      "means": "how many of the last lines to show, from each source"
+    },
+    {
+      "written": "<agent>",
+      "means": "which agent — the name it was made under"
+    },
+    {
+      "written": "<backup>",
+      "means": "which one, by the name it is listed under"
+    },
+    {
+      "written": "<channel>",
+      "means": "what to call it, and what to name it by later"
+    },
+    {
+      "written": "<option>",
+      "means": "after `--`, whatever this kind of channel needs — carried to it exactly as typed, and never read here"
+    },
+    {
+      "written": "<program>",
+      "means": "after `--`, the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH"
+    },
+    {
+      "written": "<prompt>",
+      "means": "what to ask it, in quotes"
+    },
+    {
+      "written": "<run>",
+      "means": "which run — the id listed against each by `runs`"
+    },
+    {
+      "written": "<schedule>",
+      "means": "what to call it, and what to name it by later"
+    },
+    {
+      "written": "<skill>",
+      "means": "which skill, by the name it is under"
+    },
+    {
+      "written": "<text>",
+      "means": "what to tell it, with {agent} {channel} {surface} {where} {called} {user} {conversation} filled in — empty takes it back off, and left out shows what is there"
+    },
+    {
+      "written": "<words>",
+      "means": "what to look for, in the words that were actually said"
+    }
+  ],
+  "exits": [
+    {
+      "code": 0,
+      "means": "it did the thing"
+    },
+    {
+      "code": 1,
+      "means": "it ran and failed, and said why"
+    },
+    {
+      "code": 2,
+      "means": "typed wrongly — read the help"
+    },
+    {
+      "code": 69,
+      "means": "this rundesk has not built that yet, and nothing changed"
+    }
+  ]
+}

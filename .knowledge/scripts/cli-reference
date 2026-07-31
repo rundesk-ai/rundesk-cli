@@ -17,12 +17,18 @@ and `.knowledge/guides/the-command-surface.md` is the design. Standard library o
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 REFERENCE = ROOT / "CLI.md"
+#: The same walk, as data. `CLI.md` is one rendering of the command and the documentation
+#: site is another — a page wants a heading and an anchor per verb where a file in a
+#: terminal wants aligned columns. Both come from this one walk so neither can drift, and
+#: the site build stays offline and free of Python.
+STRUCTURE = ROOT / "CLI.json"
 
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -250,6 +256,99 @@ def parser_description(parser) -> str:
     return said(parser.description).split("\n")[0]
 
 
+def arguments_of(name: str, parser) -> list[tuple[str, str]]:
+    """Every argument this one verb takes, with what it means.
+
+    The aligned file lists arguments once for the whole surface, because in a terminal a
+    reader scrolls past them. A page can put each verb's own beside it, which is what makes
+    a verb's section answer a question on its own.
+    """
+    seen: dict[str, str] = {}
+
+    def walk(under):
+        for action in under._actions:
+            if action.dest in ("help", "command", "args", "act") or isinstance(
+                action, argparse._SubParsersAction
+            ):
+                continue
+            written, what = described(action)
+            if what and written not in seen:
+                seen[written] = what
+        for deeper in offered(under).values():
+            walk(deeper)
+
+    if name in cli.PLANNED:
+        # Nothing is registered for a planned verb, so its arguments are only the ones
+        # named beside the declaration.
+        _help_text, actions = cli.PLANNED[name]
+        for takes, _what in actions.values():
+            for written in re.findall(r"<[^>]+>", takes):
+                if (means := getattr(cli, "MEANS", {}).get(written)):
+                    seen.setdefault(written, means)
+    else:
+        walk(parser)
+    return sorted(seen.items())
+
+
+def data() -> dict:
+    """The whole command surface as data, in the order a reader meets it."""
+    parser = cli.build_parser()
+    verbs = offered(parser)
+    lines_for = summaries(parser)
+    grouped = {name for _t, _d, names in GROUPS for name in names}
+    missing = sorted(set(verbs) - grouped - set(getattr(cli, "HIDDEN", ())))
+
+    groups = []
+    for title, why, names in GROUPS + (
+        [("Not yet grouped", "", tuple(missing))] if missing else []
+    ):
+        entries = []
+        for name in names:
+            if name not in verbs:
+                continue
+            entries.append(
+                {
+                    "verb": name,
+                    "summary": sentence(said(lines_for.get(name, ""))),
+                    "planned": name in cli.PLANNED,
+                    "operations": [
+                        {"signature": signature, "does": does}
+                        for signature, does in operations(
+                            name, verbs[name], lines_for.get(name, "")
+                        )
+                    ],
+                    "arguments": [
+                        {"written": written, "means": means}
+                        for written, means in arguments_of(name, verbs[name])
+                    ],
+                }
+            )
+        if entries:
+            groups.append({"title": title, "why": why, "verbs": entries})
+
+    return {
+        "generated_from": "rundesk.cli.build_parser",
+        "groups": groups,
+        "arguments": [
+            {"written": written, "means": means}
+            for written, means in arguments_seen(verbs)
+        ],
+        "exits": [
+            {"code": 0, "means": "it did the thing"},
+            {"code": 1, "means": "it ran and failed, and said why"},
+            {"code": 2, "means": "typed wrongly — read the help"},
+            {
+                "code": cli.NOT_AVAILABLE,
+                "means": "this rundesk has not built that yet, and nothing changed",
+            },
+        ],
+    }
+
+
+def structure() -> str:
+    return json.dumps(data(), indent=2, ensure_ascii=False) + "\n"
+
+
 def reference() -> str:
     parser = cli.build_parser()
     verbs = offered(parser)
@@ -320,20 +419,23 @@ def reference() -> str:
 
 
 def main(argv: list[str]) -> int:
-    made = reference()
+    written = ((REFERENCE, reference()), (STRUCTURE, structure()))
     if "--check" in argv:
-        if not REFERENCE.is_file():
-            print(f"cli-reference: {REFERENCE.name} does not exist — run this without --check",
-                  file=sys.stderr)
-            return 1
-        if REFERENCE.read_text(encoding="utf-8") != made:
-            print(f"cli-reference: {REFERENCE.name} no longer matches the command — "
-                  f"run: python3 .knowledge/scripts/cli-reference", file=sys.stderr)
-            return 1
-        print(f"cli-reference: OK ({REFERENCE.name} matches the command)")
+        for where, made in written:
+            if not where.is_file():
+                print(f"cli-reference: {where.name} does not exist — run this without --check",
+                      file=sys.stderr)
+                return 1
+            if where.read_text(encoding="utf-8") != made:
+                print(f"cli-reference: {where.name} no longer matches the command — "
+                      f"run: python3 .knowledge/scripts/cli-reference", file=sys.stderr)
+                return 1
+        print("cli-reference: OK ({} match the command)".format(
+            " and ".join(where.name for where, _ in written)))
         return 0
-    REFERENCE.write_text(made, encoding="utf-8")
-    print(f"cli-reference: wrote {REFERENCE.name} ({len(made.splitlines())} lines)")
+    for where, made in written:
+        where.write_text(made, encoding="utf-8")
+        print(f"cli-reference: wrote {where.name} ({len(made.splitlines())} lines)")
     return 0
 
 
