@@ -736,6 +736,9 @@ class FakeSkills:
         self.laid = True
         return list(self._ships)
 
+    def retire(self, skills_dirs, where=None):
+        self.retired_for = list(skills_dirs)
+        return []
 
     def take_back(self, where=None):
         return list(self._ships)
@@ -1221,11 +1224,14 @@ class WhatTheInstallerDoesToTheLibrary(unittest.TestCase):
         """R-AGT-36 — reinstalling over an existing installation applies the configured
         baseline to agents that predate this release."""
         agents = FakeAgents(made=("ava", "bo"))
+        skills = FakeSkills(ships=("managing-rundesk",))
 
         code, said = drive(["skills", "--lay-down"], agents=agents,
-                           skills=FakeSkills(ships=("managing-rundesk",)))
+                           skills=skills)
 
         self.assertEqual(0, code, said)
+        self.assertEqual(
+            [agents.skills("ava"), agents.skills("bo")], skills.retired_for)
         self.assertEqual(["ava", "bo"], agents.required)
 
 

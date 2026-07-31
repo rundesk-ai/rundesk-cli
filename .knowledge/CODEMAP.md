@@ -105,11 +105,12 @@ file with it.
   conversation, PID, and start time so status and update safety can see work without seeing prompts.
 - `src/rundesk/skill.py` — the library of skills on this machine, and what makes one. Everything
   stands in `data/skills/`: built-ins copied there by the install and brought forward by an update,
-  an owner's own beside them and never touched. **A grant is a link in the agent's own `skills/`,
-  not a record of one** — rundesk never loads a skill, so the only lever with force is what is
-  standing there before the brain runs, and a rule in a config file would describe what rundesk
-  placed while the brain read on. Knows nothing of any brain: where a skill is *presented* is each
-  adapter's, told through `RUNDESK_SKILLS`.
+  explicitly renamed or retired when a release changes its set, and an owner's own beside them
+  and never touched. **A grant is a link in the agent's own `skills/`, not a record of one** —
+  rundesk never loads a skill, so the only lever with force is what is standing there before the
+  brain runs, and a rule in a config file would describe what rundesk placed while the brain read
+  on. Knows nothing of any brain: where a skill is *presented* is each adapter's, told through
+  `RUNDESK_SKILLS`.
 - `src/rundesk/script.py` — the owner's shared integration commands. Resolves the script
   library below the install's data and lists only runnable top-level entries; `process.py`
   puts that directory first on every program's `PATH`.
@@ -253,12 +254,14 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   nobody has; the gate fails when it and the command disagree.
 - `src/templates/skills/` — **the skills this release ships.** Copied into the owner's library
   by the install and brought forward by an update, so a built-in is always the version installed
-  (R-AGT-30). `managing-rundesk` is how to operate rundesk, written for **an agent running inside
-  it** — it was a document at the repository root that an agent had to be told to go and read,
-  and the pointer named a path that existed on neither kind of install. As a skill it is handed
-  to the agent instead. **Not every shipped skill reaches every agent**: the required baseline
-  is `config.skills()["granted"]`, defaulting to the four that work rundesk itself and reconciled
-  onto existing agents during updates and reinstalls (R-AGT-36).
+  (R-AGT-30); `.renamed.json` states old package names whose attached grants move to a replacement,
+  while unlisted Rundesk-owned packages are retired (R-AGT-35). `managing-rundesk` is how to
+  operate rundesk, written for **an agent running inside it** — it was a document at the repository
+  root that an agent had to be told to go and read, and the pointer named a path that existed on
+  neither kind of install. As a skill it is handed to the agent instead. **Not every shipped skill
+  reaches every agent**: the required baseline is `config.skills()["granted"]`, defaulting to the
+  four that work rundesk itself and reconciled onto existing agents during updates and reinstalls
+  (R-AGT-36).
 - `docs/extending/` — the adapter and integration guides. They were built-in skills, laid down in
   every owner's library and granted to every agent, for a task almost none of them will ever do.
   A person building an adapter reads these against the repository; an agent does not need them in

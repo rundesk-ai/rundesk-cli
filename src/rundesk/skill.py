@@ -20,6 +20,7 @@ brain went on reading whatever else it found.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import shutil
@@ -39,6 +40,10 @@ NAMED = "SKILL.md"
 #: A name matching what a release ships is not proof: a later release can introduce a
 #: name the owner already used, and that coincidence does not transfer ownership.
 OWNED = ".rundesk-built-in"
+
+#: Explicit package-name changes carried by this release. Kept beside the packages so a
+#: rename cannot be added without being part of the same release artifact.
+RENAMED = ".renamed.json"
 
 #: What a name may be, and it is the tightest of the three brains rather than ours: grok
 #: refuses anything else outright, and a name a loader rejects is a skill that is silently
@@ -75,6 +80,25 @@ def shipped() -> tuple[str, ...]:
     if not SHIPPED.is_dir():
         return ()
     return tuple(sorted(one.name for one in SHIPPED.iterdir() if (one / NAMED).is_file()))
+
+
+def renamed() -> dict[str, str]:
+    """Built-in names an earlier release used and what this release calls them.
+
+    A rename must be stated. Similar names and similar contents are not evidence that two
+    packages are the same skill, and guessing would turn retiring one built-in into granting
+    an unrelated one.
+    """
+    try:
+        said = json.loads((SHIPPED / RENAMED).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(said, dict):
+        return {}
+    return {
+        before: after for before, after in said.items()
+        if isinstance(before, str) and isinstance(after, str)
+    }
 
 
 def library(where: Path | None = None) -> dict:
@@ -198,6 +222,55 @@ def lay_down(where: Path | None = None, force: bool = False) -> list[str]:
             continue
         moved.append(name)
     return moved
+
+
+def retire(skills_dirs: list[Path], where: Path | None = None) -> list[str]:
+    """Retire built-ins this release no longer ships, preserving every unsafe case.
+
+    Same-name updates need no grant migration: a grant is a link into the shared library
+    and sees the swapped package immediately. A renamed skill is different. Its replacement
+    is granted first and its old grant is revoked second, so a failed migration leaves the
+    working version attached. A removed skill has only the revoke.
+
+    Only directories carrying Rundesk's ownership marker qualify. An owner-created library
+    skill, a hand-placed agent entry, a replacement that could not be laid down, or a grant
+    blocked by something the owner placed all stop retirement rather than turn an update
+    into data loss.
+    """
+    where = where or home()
+    standing = library(where)
+    current = set(shipped())
+    changes = renamed()
+    retired = []
+    for name, package in standing.items():
+        if name in current or package.is_symlink() or not _owned(package, name):
+            continue
+        replacement = changes.get(name)
+        if replacement is not None:
+            new = standing.get(replacement)
+            if replacement not in current or new is None or not _owned(new, replacement):
+                continue
+        blocked = False
+        for skills_dir in skills_dirs:
+            old_grant = skills_dir / name
+            if not old_grant.is_symlink() or not ours(old_grant, where):
+                continue
+            try:
+                if replacement is not None:
+                    grant(skills_dir, replacement, where)
+                revoke(skills_dir, name, where)
+            except (OSError, Unknown, NotASkill, InTheWay):
+                blocked = True
+        if blocked or any(
+                (skills_dir / name).is_symlink() and ours(skills_dir / name, where)
+                for skills_dir in skills_dirs):
+            continue
+        try:
+            shutil.rmtree(package)
+        except OSError:
+            continue
+        retired.append(name)
+    return retired
 
 
 def _owned(at: Path, name: str) -> bool:
