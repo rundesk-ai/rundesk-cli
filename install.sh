@@ -46,7 +46,7 @@ DATA_DIR="$INSTALL_DIR/data"
 BACKUPS_DIR="${RUNDESK_BACKUP_DIR:-$INSTALL_DIR/backups}"
 MIN_PYTHON_MINOR=9
 # The first release whose install and update paths share one counted release asset.
-COUNTED_DELIVERY_SINCE="0.23.0"
+COUNTED_DELIVERY_SINCE="0.22.4"
 
 die() { echo "error: $*" >&2; exit 1; }
 

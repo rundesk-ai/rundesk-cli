@@ -1126,17 +1126,17 @@ class ReleaseLookupTests(FakesTheFetch, Sandbox):
             "valid",
             self.release_archive(),
             counted_asset_missing=True,
-            tag="v0.23.0",
+            tag="v0.22.4",
         )
         self.assertNotEqual(done.returncode, 0)
         self.assertTrue(marker.exists(), "the failed counted delivery replaced the install")
         self.assertEqual(
             requests[-1],
             "https://github.com/rundesk-ai/rundesk-cli/releases/download/"
-            "v0.23.0/rundesk-cli.tar.gz",
+            "v0.22.4/rundesk-cli.tar.gz",
         )
         self.assertFalse(
-            any("archive/refs/tags/v0.23.0" in request for request in requests),
+            any("archive/refs/tags/v0.22.4" in request for request in requests),
             "the counted release silently installed through an uncounted fallback",
         )
 
