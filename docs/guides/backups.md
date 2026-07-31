@@ -2,7 +2,7 @@
 title: Back up and restore
 description: Taking a copy is cheap. Putting one back replaces everything this install keeps.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 Rundesk keeps copies of everything an owner has — agents, homes, memory, conversations,

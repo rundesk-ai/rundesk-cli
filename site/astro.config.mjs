@@ -128,6 +128,7 @@ export default defineConfig({
 										slug: 'concepts/conversations',
 									},
 									{ label: 'Skills', slug: 'concepts/skills' },
+									{ label: 'What an agent can reach', slug: 'concepts/security' },
 								],
 							},
 						],
@@ -141,7 +142,9 @@ export default defineConfig({
 								items: [
 									{ label: 'Put an agent on Discord', slug: 'guides/discord' },
 									{ label: 'Schedule work', slug: 'guides/schedules' },
+									{ label: 'Read what happened', slug: 'guides/history' },
 									{ label: 'Back up and restore', slug: 'guides/backups' },
+									{ label: 'When something breaks', slug: 'guides/troubleshooting' },
 								],
 							},
 						],
@@ -154,6 +157,7 @@ export default defineConfig({
 								label: 'The surface',
 								items: [
 									{ label: 'Providers', slug: 'reference/providers' },
+									{ label: 'Configuration', slug: 'reference/configuration' },
 									{ label: 'CLI reference', slug: 'reference/cli' },
 								],
 							},
