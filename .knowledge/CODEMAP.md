@@ -120,7 +120,11 @@ file with it.
 - `src/rundesk/profile_run.py` — one isolated specialist execution, from admission to expiry.
   Assembles a bundle of locked bytes under the agent's own directory and moves it into place
   whole, hands `turn.py` an execution context standing in the target project, and settles the
-  root into exactly one review its named parent is owed. **Knows nothing of channels or
+  root into exactly one review its named parent is owed. **Takes back what an adapter stood in
+  that project on its way in**: every brain presents skills beside the directory it stands in,
+  so a run that simply ended left a vendor directory in somebody's checkout holding links into
+  a bundle swept a fortnight later. Vendor-neutral — it removes only a link resolving inside
+  this run's own snapshot, and only a directory that removal emptied. **Knows nothing of channels or
   gateways**: what carries it and what tells its parent are `agent.profiling`'s, handed to a
   gateway already made the way `agent.asking` already is.
 - `src/rundesk/catalog.py` — repository manifests, catalog provenance, and atomic installation,
@@ -238,7 +242,7 @@ provider. One file per contract, named for it:
 | `test_discord.py` | 168 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
 | `test_instructions.py` | 20 | Rundesk's core and trigger prompts, standard variables, the additive builder, and the separate profile floor |
 | `test_profile.py` | 30 | `agent-profile-worker` — what a profile is, what makes one usable, and what its revision is computed from, against a scratch library |
-| `test_profile_run.py` | 53 | `agent-profile-worker` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
+| `test_profile_run.py` | 59 | `agent-profile-worker` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
 | `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and

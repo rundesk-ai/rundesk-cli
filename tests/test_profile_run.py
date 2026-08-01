@@ -284,7 +284,7 @@ class WhatAProfileExecutionIsToldAndGiven(WithAnAgentThatCanDelegate):
         told = carry.given["preface"]
         self.assertIn("on behalf of the named agent elena", told)
         self.assertIn("Never speak as the person who asked", told)
-        self.assertIn("may not start another Rundesk profile run", told)
+        self.assertIn("Starting another Rundesk profile run is refused", told)
 
     def test_the_execution_runs_under_the_profiles_own_posture(self):
         self.wrote(posture="read")
@@ -581,6 +581,87 @@ class WhenCarryingGoesWrong(WithAnAgentThatCanDelegate):
         admitted = self.admit()
         asyncio.run(self.carrying(RuntimeError("no")).carry(admitted.id))
         self.assertEqual([], agent.profiling("elena", self.where).waiting())
+
+
+class WhatARunLeavesInTheTargetProject(WithAnAgentThatCanDelegate):
+    """R-PRF-22 — a worker stands in somebody's repository and leaves it as it found it.
+
+    Every adapter measured presents skills beside the directory it stands in, so a run that
+    simply ended left a vendor directory in that checkout holding links into a bundle that
+    is swept after a fortnight — dangling ones, in a repository the worker was told not to
+    disturb.
+    """
+
+    def presented(self, admitted, at=".agents/skills"):
+        """What an adapter does on its way in, as the shipped adapters actually do it."""
+        skills = profile_runs.paths("elena", admitted.id, self.where)["skills"]
+        stood = self.target / at
+        stood.mkdir(parents=True)
+        for one in sorted(skills.iterdir()):
+            (stood / one.name).symlink_to(one)
+        return stood
+
+    def test_what_an_adapter_stood_in_the_target_is_taken_back_when_the_run_ends(self):
+        admitted = self.admit()
+        stood = self.presented(admitted)
+        self.assertTrue((stood / "writing-plans").is_symlink())
+
+        self.carried(admitted)
+
+        self.assertFalse(stood.exists())
+        self.assertFalse((self.target / ".agents").exists())
+        self.assertTrue((self.target / "AGENTS.md").is_file())
+
+    def test_taking_them_back_works_wherever_a_brain_put_them(self):
+        """Vendor-neutral: this knows nothing about which directory any brain uses, only
+        that a link resolves inside this run's own snapshot."""
+        for at in (".claude/skills", ".grok/skills", ".agents/skills"):
+            admitted = self.admit()
+            stood = self.presented(admitted, at=at)
+            self.carried(admitted)
+            self.assertFalse(stood.exists(), at)
+            self.assertFalse((self.target / at.split("/")[0]).exists(), at)
+
+    def test_nothing_of_the_owners_is_taken_back_with_them(self):
+        admitted = self.admit()
+        stood = self.presented(admitted)
+        (stood / "theirs").mkdir()
+        (stood / "theirs" / "SKILL.md").write_text("---\nname: theirs\n---\n",
+                                                   encoding="utf-8")
+        elsewhere = self.target / ".agents" / "settings.json"
+        elsewhere.write_text("{}", encoding="utf-8")
+
+        self.carried(admitted)
+
+        self.assertFalse((stood / "writing-plans").exists())
+        self.assertTrue((stood / "theirs" / "SKILL.md").is_file())
+        self.assertTrue(elsewhere.is_file())
+
+    def test_a_link_that_points_anywhere_else_is_left_exactly_as_it_is(self):
+        admitted = self.admit()
+        stood = self.target / ".agents" / "skills"
+        stood.mkdir(parents=True)
+        somewhere = self.target / "their-own-skill"
+        somewhere.mkdir()
+        (stood / "their-own-skill").symlink_to(somewhere)
+
+        self.carried(admitted)
+
+        self.assertTrue((stood / "their-own-skill").is_symlink())
+
+    def test_a_run_with_no_project_has_nothing_in_anybodys_checkout_to_take_back(self):
+        admitted = self.admit(target=None)
+        self.assertEqual([], profile_runs.unpresent(
+            None, profile_runs.paths("elena", admitted.id, self.where)["skills"]))
+
+    def test_an_expired_run_takes_its_links_out_of_the_project_too(self):
+        """A run its gateway never got to finish still stood links in somebody's project."""
+        admitted = self.admit()
+        stood = self.presented(admitted)
+        profile_runs.sweep("elena", self.where,
+                           now=lambda: store.moment("2026-09-01T09:00:00Z").timestamp())
+        self.assertFalse(stood.exists())
+        self.assertFalse((self.target / ".agents").exists())
 
 
 class WhatAPersonIsShown(WithAnAgentThatCanDelegate):

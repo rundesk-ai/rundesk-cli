@@ -440,6 +440,7 @@ async def carry(name: str, run_id: str, where: Path | None = None, carrying=None
     if row["state"] in store.FINISHED_PROFILES:
         raise NotDelegable(f"'{run_id}' has already finished")
     it = verified(name, row, where)
+    bundled = paths(name, run_id, where)
     parent = kept.run(row["parent_run"]) or {}
     chose = kept.agent()
     named = parent.get("provider") or chose.get("provider") or ""
@@ -466,8 +467,76 @@ async def carry(name: str, run_id: str, where: Path | None = None, carrying=None
         now=now,
     )
     kept.profile_active(run_id, store.stamped(now), retained_until(now))
+    # Before the outcome is settled, because settling is what makes the parent's review
+    # owing — and a report that says the checkout was left as it was found should be true
+    # by the time anybody reads it.
+    unpresent(row.get("target"), bundled["skills"])
     settle(name, run_id, outcome, where=where, now=now)
     return outcome
+
+
+#: How deep into a target project a presented skill may have been placed. Every adapter
+#: measured puts them one or two components down — `.agents/skills/<name>`,
+#: `.claude/skills/<name>`, `.grok/skills/<name>` — so three is the shape plus room, and a
+#: bound is what keeps this from walking somebody's whole repository.
+PRESENTED_DEPTH = 3
+
+
+def unpresent(target: str | None, skills_root: Path) -> list:
+    """Take back whatever an adapter stood in the target project on this run's behalf.
+
+    **A profile execution stands in somebody's repository, and every adapter presents its
+    skills beside the directory it stands in.** So a run that simply ended left a vendor
+    directory inside that checkout, holding links into a bundle that is swept after
+    fourteen days — dangling ones, in a repository the worker was told to leave exactly as
+    it found it.
+
+    Vendor-neutral by construction: this knows nothing about which directory any brain
+    uses, and removes only a **link that resolves inside this run's own skill snapshot**.
+    A directory is removed only once emptied by that, so anything of the owner's — even in
+    the same place — is untouched. Nothing here raises: a project that cannot be tidied is
+    worth saying nothing about beside the work that was done.
+    """
+    if not target:
+        return []
+    root = Path(target)
+    try:
+        mine = skills_root.resolve()
+    except OSError:
+        return []
+    taken, emptied = [], []
+    for at in _shallow(root, PRESENTED_DEPTH):
+        try:
+            if not at.is_symlink() or mine not in at.resolve().parents:
+                continue
+            at.unlink()
+        except OSError:
+            continue
+        taken.append(at.name)
+        emptied.append(at.parent)
+    for at in sorted(set(emptied), key=lambda one: len(one.parts), reverse=True):
+        while at != root and root in at.parents:
+            try:
+                at.rmdir()      # refuses the moment anything of the owner's is in it
+            except OSError:
+                break
+            at = at.parent
+    return sorted(taken)
+
+
+def _shallow(root: Path, depth: int):
+    """Everything standing within this many components of here, and no further."""
+    found, edge = [], [root]
+    for _ in range(depth):
+        below = []
+        for one in edge:
+            try:
+                below.extend(sorted(one.iterdir()))
+            except OSError:
+                continue
+        found.extend(below)
+        edge = [one for one in below if one.is_dir() and not one.is_symlink()]
+    return found
 
 
 def settle(name: str, run_id: str, outcome: turn.Outcome, where: Path | None = None,
@@ -555,6 +624,8 @@ def sweep(name: str, where: Path | None = None, now=None) -> list:
     kept = agents.records(name, where)
     gone = []
     for row in kept.expired_profiles(store.stamped(now)):
+        # A run its gateway never got to finish still stood links in somebody's project.
+        unpresent(row.get("target"), paths(name, row["id"], where)["skills"])
         with_it = bundle(name, row["id"], where)
         shutil.rmtree(with_it, ignore_errors=True)
         # The handle as well as the bundle. A session left behind is a run that could be
