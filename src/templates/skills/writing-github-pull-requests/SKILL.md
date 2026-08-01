@@ -1,12 +1,9 @@
 ---
 name: writing-github-pull-requests
-description: Prepare, open, or improve evidence-rich GitHub pull requests for any repository while following its contribution rules, templates, validation commands, and merge conventions. Use whenever asked to create, submit, draft, edit, or write up a PR; summarize implemented work for review; or judge whether a PR is ready to open.
+description: Prepare, open, edit, or review evidence-rich GitHub pull requests under each repository's rules. Use for PR creation, drafting, write-ups, readiness checks, validation summaries, issue linkage, or review updates.
 ---
 
 # Writing a GitHub pull request
-
-*This skill ships with rundesk and is replaced whenever rundesk updates. To make a version
-of your own, copy it under a different name — that copy is yours and is never touched.*
 
 A pull request is the case for merging a change, not a restatement of the diff. The repository
 owns that case: read its rules and template before using the fallback here. Opening, editing,

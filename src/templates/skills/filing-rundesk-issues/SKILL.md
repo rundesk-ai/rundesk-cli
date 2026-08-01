@@ -1,12 +1,9 @@
 ---
 name: filing-rundesk-issues
-description: Apply Rundesk-specific platform stewardship, ownership, evidence, privacy, taxonomy, and identity rules for rundesk-ai/rundesk-cli. Use whenever Rundesk behaves wrongly, lacks a core capability an owner clearly needs, or creates recurring evidence-backed friction; whenever someone asks to file Rundesk work; and alongside filing-github-issues for every Rundesk issue, even when nobody separately asks for one.
+description: Apply Rundesk-specific evidence, privacy, taxonomy, stewardship, and identity rules to rundesk-ai/rundesk-cli issues. Use for confirmed Rundesk defects, core platform needs, recurring friction, requests to file Rundesk work, and every Rundesk issue handled with filing-github-issues.
 ---
 
 # Filing an issue against Rundesk
-
-*This skill ships with rundesk and is replaced whenever rundesk updates. To make a version of
-your own, copy it under a different name — that copy is yours and is never touched.*
 
 Read and follow `filing-github-issues` for the shared workflow: repository discovery, duplicate
 search, evidence structure, public-data redaction, templates, filing, and verification. This

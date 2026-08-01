@@ -1,12 +1,9 @@
 ---
 name: managing-schedules
-description: Manage Rundesk schedules and delivery. Use for reminders, recurring reports, timed work, or creating, changing, pausing, running, and removing schedules.
+description: Manage Rundesk schedules and delivery. Use for reminders, recurring reports, timed work, or schedule creation, editing, pausing, runs, and removal.
 ---
 
 # Managing schedules
-
-*This skill ships with rundesk and is replaced whenever rundesk updates. To make a version of
-your own, copy it under a different name — that copy is yours and is never touched.*
 
 ```sh
 rundesk schedules <name>       what this agent runs on its own — add, on, off, remove, run

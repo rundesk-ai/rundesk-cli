@@ -1,12 +1,9 @@
 ---
 name: filing-github-issues
-description: File or improve evidence-rich GitHub issues for any repository while following its own templates, contribution rules, taxonomy, and security policy. Use whenever asked to draft, create, edit, or triage a GitHub issue; when a confirmed defect or scoped feature should be recorded; or when deciding whether to file, comment on an existing issue, or report privately.
+description: Create, edit, or triage evidence-rich GitHub issues under each repository's rules. Use for issue drafts or filing, confirmed defects, scoped feature requests, duplicate searches, comments, or private security routing.
 ---
 
 # Filing a GitHub issue
-
-*This skill ships with rundesk and is replaced whenever rundesk updates. To make a version
-of your own, copy it under a different name — that copy is yours and is never touched.*
 
 The repository owns its tracker. Discover and follow its conventions before applying the
 fallbacks here. Creating or editing an issue changes an external system: do it when the owner

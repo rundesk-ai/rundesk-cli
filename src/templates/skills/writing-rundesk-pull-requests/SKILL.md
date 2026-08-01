@@ -1,12 +1,9 @@
 ---
 name: writing-rundesk-pull-requests
-description: Apply Rundesk-specific validation, requirement, issue-closing, and identity rules to pull requests against rundesk-ai/rundesk-cli. Use alongside writing-github-pull-requests whenever opening, editing, summarizing, or reviewing a Rundesk PR.
+description: Apply Rundesk-specific proof, requirement, issue-closing, and identity rules to rundesk-ai/rundesk-cli pull requests. Use with writing-github-pull-requests for any Rundesk PR creation, update, summary, or review.
 ---
 
 # Writing a pull request against Rundesk
-
-*This skill ships with rundesk and is replaced whenever rundesk updates. To make a version of
-your own, copy it under a different name — that copy is yours and is never touched.*
 
 Read and follow `writing-github-pull-requests` for repository discovery, branch and diff review,
 fresh validation, evidence-rich writing, GitHub issue links, creation, and verification. This

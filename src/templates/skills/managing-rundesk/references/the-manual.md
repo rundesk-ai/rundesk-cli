@@ -1,8 +1,5 @@
 # Managing rundesk
 
-You are an agent running inside rundesk. This file is rundesk's, not yours and not your
-owner's — it is replaced on every update, so what is here is current.
-
 ## What rundesk is, and why it is the first thing you reach for
 
 Rundesk is the thing running you. It gave you your name, it holds the record of everything you
