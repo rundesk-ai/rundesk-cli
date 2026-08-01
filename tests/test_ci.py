@@ -6,6 +6,7 @@ import importlib.machinery
 import os
 import pathlib
 import re
+import signal
 import tempfile
 import time
 import unittest
@@ -56,11 +57,18 @@ class FastPullRequestFeedback(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             script = root / "test_hangs.py"
-            script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+            script.write_text(
+                "import faulthandler, signal, time\n"
+                "faulthandler.register(signal.SIGUSR1, all_threads=True)\n"
+                "time.sleep(30)\n",
+                encoding="utf-8",
+            )
             runner.LOGS = root / "logs"
             runner.LOGS.mkdir()
             runner.ROOT = root
             runner.SUITE_TIMEOUT_SECONDS = 0.1
+            self.assertEqual(signal.SIGABRT, runner.DIAGNOSTIC_SIGNAL)
+            runner.DIAGNOSTIC_SIGNAL = signal.SIGUSR1
             _name, _code, log, timed_out = runner.run(script)
             self.assertTrue(timed_out)
             self.assertIn("Current thread", log.read_text(encoding="utf-8"))
@@ -71,9 +79,16 @@ class FastPullRequestFeedback(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             script = root / "hangs.py"
-            script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+            script.write_text(
+                "import faulthandler, signal, time\n"
+                "faulthandler.register(signal.SIGUSR1, all_threads=True)\n"
+                "time.sleep(30)\n",
+                encoding="utf-8",
+            )
             gate.ROOT = root
             gate.CHECK_TIMEOUT_SECONDS = 0.1
+            self.assertEqual(signal.SIGABRT, gate.DIAGNOSTIC_SIGNAL)
+            gate.DIAGNOSTIC_SIGNAL = signal.SIGUSR1
             passed, output, elapsed = gate.run(
                 "the deliberate hanging check", [gate.PY, str(script)])
             self.assertFalse(passed)
@@ -89,9 +104,10 @@ class FastPullRequestFeedback(unittest.TestCase):
             child_pid = root / "child.pid"
             script = root / "hangs_with_child.py"
             script.write_text(
-                "import pathlib, signal, subprocess, sys, time\n"
+                "import faulthandler, pathlib, signal, subprocess, sys, time\n"
+                "faulthandler.register(signal.SIGUSR1, all_threads=True)\n"
                 "child = subprocess.Popen([sys.executable, '-c', "
-                "\"import signal,time; signal.signal(signal.SIGABRT, signal.SIG_IGN); "
+                "\"import signal,time; signal.signal(signal.SIGUSR1, signal.SIG_IGN); "
                 "time.sleep(30)\"])\n"
                 f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid))\n"
                 "time.sleep(30)\n",
@@ -103,6 +119,8 @@ class FastPullRequestFeedback(unittest.TestCase):
             # tree, not whether a fresh Python interpreter starts within 100 ms.
             gate.CHECK_TIMEOUT_SECONDS = 1
             gate.ABORT_GRACE_SECONDS = 0.1
+            self.assertEqual(signal.SIGABRT, gate.DIAGNOSTIC_SIGNAL)
+            gate.DIAGNOSTIC_SIGNAL = signal.SIGUSR1
             passed, _output, elapsed = gate.run(
                 "the process-tree check", [gate.PY, str(script)])
             self.assertFalse(passed)
