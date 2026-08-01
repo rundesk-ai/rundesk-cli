@@ -1,7 +1,7 @@
 ---
 id: CH
 name: A channel, and the work that arrives on it
-last_verified: 2026-07-26
+last_verified: 2026-08-01
 ---
 
 ## What this is
@@ -51,7 +51,7 @@ it has not — what never differs is that the work runs and is answered.
 | ✅ | R-CH-28 | A final channel answer names its resolved provider without exposing the provider's location | `a final answer names the provider that produced it`, `a provider label is readable without exposing or rewriting its location` |
 | ✅ | R-CH-29 | An inbound reply separates its context, identifies the earlier conversation message, and bounds quoted text by REPLY_TEXT_MOST with an explicit truncation marker | `a reply reference crosses the seam with bounded context`, `a reply tells the brain which message the follow up is for`, `an ordinary message has no empty reply context` |
 | ✅ | R-CH-30 | An unresolved reply reference still starts a turn and identifies the unavailable message | `an unresolved reply reference is kept without inventing context`, `an unresolved reply still starts a turn and says what is missing` |
-| ✅ | R-CH-31 | Only a reserved `rundesk-attach:` line in a final answer attaches its absolute local file without exposing the machine path | `a reserved local attachment line hides its path`, `a crlf reserved attachment line hides its path`, `a scheduled final answer attaches its reserved local line`, `a reserved local line outside the agent is not attached`, `ordinary local markdown is not an attachment declaration`, `relative and remote links stay links and attach nothing`, `a protocol relative link is not a local file`, `an escaped reserved attachment line is literal`, `a creator provider file and reserved line to it are attached once`, `case aliases from creator and reserved line are attached once`, `an oversize reserved local line is not attached`, `reserved local lines are bounded to the attachment count`, `duplicate provider files do not crowd out a reserved line`, `every agent is told how to attach a local file` |
+| ✅ | R-CH-31 | A final answer attaches a whole-line absolute local file link without exposing the machine path | `an absolute local markdown link is an attachment declaration`, `non standalone local markdown is not an attachment declaration`, `a reserved local attachment line hides its path`, `a crlf reserved attachment line hides its path`, `a scheduled final answer attaches its reserved local line`, `a reserved local line outside the agent is not attached`, `relative and remote links stay links and attach nothing`, `a protocol relative link is not a local file`, `an escaped reserved attachment line is literal`, `a creator provider file and reserved line to it are attached once`, `case aliases from creator and reserved line are attached once`, `an oversize reserved local line is not attached`, `reserved local lines are bounded to the attachment count`, `duplicate provider files do not crowd out a reserved line`, `every agent is told how to attach a local file` |
 
 ## Open questions
 

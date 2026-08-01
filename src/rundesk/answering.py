@@ -71,11 +71,12 @@ AFTER_UPDATE = (
     "original request. Do not stop at reporting status or repeat completed actions."
 )
 
-# A reserved whole line is a portable control record, not a guess about Markdown. It is
-# recognized before formatting in every context; prefix it with a backslash when showing
-# the protocol literally. Ordinary links, quotes, lists, and code contain no control line.
+# A whole-line absolute local link is explicit delivery intent (R-CH-31). The optional
+# reserved prefix is portable across brains that do not naturally emit Markdown file links;
+# prefix that form with a backslash when showing the protocol literally. Quotes, lists,
+# inline links, relative paths, remote paths, and code contain no delivery declaration.
 _LOCAL_ATTACHMENT = re.compile(
-    r"^rundesk-attach:[ \t]+\[(?P<label>(?:\\.|[^]\\\r\n])*)\]"
+    r"^(?:rundesk-attach:[ \t]+)?\[(?P<label>(?:\\.|[^]\\\r\n])*)\]"
     r"\(<(?P<at>/(?!/)[^>\r\n]+)>\)[ \t]*\r?$",
     re.MULTILINE,
 )
@@ -829,8 +830,8 @@ class Answering:
     async def _made(self, declared) -> list:
         """What the brain declared for delivery, as things a surface may actually send.
 
-        Provider file records and reserved local attachment lines in the final answer are
-        both explicit declarations. **Only from where this agent works.** A path is checked
+        Provider file records and whole-line local file links in the final answer are
+        explicit declarations. **Only from where this agent works.** A path is checked
         against the agent's own directories before anything leaves the machine — the
         brain runs as the owner and can read anything they can, so "the brain asked for
         it" is not on its own a reason to put a file into a chat room (R-CH-13, R-CH-31).
@@ -1151,7 +1152,7 @@ def _fingerprint_beneath(at: Path, inside: Path) -> tuple[int, str, tuple[int, i
 
 
 def _attachment_lines(text: str) -> tuple[str, list]:
-    """Extract reserved local attachment lines and leave only their labels."""
+    """Extract whole-line local attachment links and leave only their labels."""
     declared = []
 
     def attachment(line) -> str:

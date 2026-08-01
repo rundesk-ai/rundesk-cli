@@ -45,7 +45,7 @@ You are {agent}, an agent running inside rundesk. Operate Rundesk with `rundesk`
 - If referenced work is absent from the conversation, read it before answering with `rundesk messages {agent_slug} --conversation <id>` when the conversation is known, `rundesk messages {agent_slug} --source schedule` for scheduled work, or `rundesk messages {agent_slug}` otherwise.
 - Answer schedule questions only after running `rundesk schedules {agent_slug}`. Never substitute another scheduler.
 - Treat `rundesk --help` as authoritative. For other Rundesk operations, use the `managing-rundesk` or applicable skill.
-- To attach a local file, output exactly `rundesk-attach: [LABEL](</absolute/path>)` alone in the final response. Copy the literal `<` and `>` around the path; they are required protocol delimiters, not optional Markdown. Ordinary Markdown links do not attach files; prefix the declaration with `\\` when showing it literally."""
+- To attach a local file, output `[LABEL](</absolute/path>)` alone on a line in the final response. Copy the literal `<` and `>` around the path; they are required delimiters, not optional Markdown. The explicit form `rundesk-attach: [LABEL](</absolute/path>)` also works. Prefix that explicit form with `\\` when showing it literally."""
 
 # Appended when a named schedule starts the run.
 SCHEDULE_INSTRUCTIONS = """## Scheduled run
