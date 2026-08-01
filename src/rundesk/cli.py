@@ -3300,6 +3300,12 @@ def _show_profile_run(args: argparse.Namespace, whose) -> int:
     print(f"{'skills':16}{' '.join(it['skills'])}")
     print(f"{'elapsed':16}{it['elapsed']}s")
     print(f"{'reviewed':16}{'yes' if it['reviewed'] else 'no'}")
+    owed = profile_runs.owed_review(args.name, args.run)
+    if owed["owed"]:
+        # Said only while one is owed, and with the count: a review tried many times and
+        # never delivered is the shape of a surface that is not coming back, and nothing
+        # else an owner can read says so.
+        print(f"{'owed review':16}yes, tried {owed['attempts']}")
     return 0
 
 

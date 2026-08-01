@@ -93,6 +93,10 @@ class WithAnAgentThatCanDelegate(unittest.TestCase):
         agent.remember("elena", self.where, provider="codex")
         self.wrote()
         self.kept = agent.records("elena", self.where)
+        # A surface this agent is actually reachable on. A profile run reports back by
+        # waking the agent where the request arrived, so admission refuses a turn that
+        # happened somewhere nothing can answer into (R-PRF-15).
+        self.kept.remember_channel("discord", "discord", ["2207"], AT)
         self.parent = self.a_turn()
 
     def wrote(self, slug: str = "development", rules: str = RULES, **manifest) -> Path:
@@ -302,7 +306,7 @@ class WhatATerminalOutcomeOwes(WithAnAgentThatCanDelegate):
     def test_a_terminal_outcome_owes_its_parent_exactly_one_review(self):
         admitted = self.admit()
         self.carried(admitted)
-        owed = self.kept.owed_profile_callback()
+        owed = (self.kept.owed_profile_callbacks() or [None])[0]
         self.assertEqual(admitted.id, owed["profile_run"])
         self.assertEqual(self.kept.profile_run(admitted.id)["parent_conversation"],
                          owed["conversation"])
@@ -319,15 +323,15 @@ class WhatATerminalOutcomeOwes(WithAnAgentThatCanDelegate):
         admitted = self.admit()
         self.carried(admitted, ok=False)
         self.assertEqual(store.FAILED, self.kept.profile_run(admitted.id)["state"])
-        self.assertIsNotNone(self.kept.owed_profile_callback())
+        self.assertIsNotNone((self.kept.owed_profile_callbacks() or [None])[0])
 
     def test_a_review_stops_being_owed_only_once_it_has_been_delivered(self):
         admitted = self.admit()
         self.carried(admitted)
         self.kept.claim_profile_callback(admitted.id, AT)
-        self.assertIsNotNone(self.kept.owed_profile_callback())
+        self.assertIsNotNone((self.kept.owed_profile_callbacks() or [None])[0])
         self.kept.profile_reviewed(admitted.id, AT)
-        self.assertIsNone(self.kept.owed_profile_callback())
+        self.assertIsNone((self.kept.owed_profile_callbacks() or [None])[0])
 
     def test_the_handoff_is_the_workers_own_words_and_nothing_read_out_of_them(self):
         admitted = self.admit()
@@ -358,6 +362,16 @@ class WhatATerminalOutcomeOwes(WithAnAgentThatCanDelegate):
         self.assertEqual({"reported": False},
                          profile_runs.handoff("elena", admitted.id, self.where)["usage"])
 
+    def test_a_review_that_cannot_be_delivered_never_holds_up_the_ones_behind_it(self):
+        """R-PRF-15 — one undeliverable handoff at the head of the queue would otherwise
+        mean every later one is never reported and nothing says why."""
+        first = self.admit()
+        self.carried(first)
+        second = self.admit()
+        self.carried(second)
+        owed = [one["profile_run"] for one in self.kept.owed_profile_callbacks()]
+        self.assertEqual([first.id, second.id], owed)
+
     def test_a_run_finished_by_hand_is_still_the_run_the_records_describe(self):
         admitted = self.admit()
         self.carried(admitted)
@@ -379,9 +393,11 @@ class HowLongARunStaysResumable(WithAnAgentThatCanDelegate):
         self.assertEqual("2026-08-19T09:00:00Z",
                          self.kept.profile_run(admitted.id)["retained_until"])
 
-    def test_a_run_inside_its_window_is_resumable(self):
+    def test_a_run_inside_its_window_is_still_there_to_be_carried_on(self):
         admitted = self.admit()
-        self.assertTrue(profile_runs.resumable(self.kept.profile_run(admitted.id)))
+        row = self.kept.profile_run(admitted.id)
+        self.assertEqual(store.ADMITTED, row["state"])
+        self.assertEqual(RULES, profile_runs.verified("elena", row, self.where)["rules"])
 
     def test_expiring_takes_the_execution_context_and_keeps_the_record(self):
         admitted = self.admit()
@@ -395,7 +411,7 @@ class HowLongARunStaysResumable(WithAnAgentThatCanDelegate):
         row = self.kept.profile_run(admitted.id)
         self.assertEqual(store.EXPIRED, row["state"])
         self.assertEqual("development", row["profile"])
-        self.assertIsNone(row["handle"])
+        self.assertEqual(["writing-plans"], row["skills"])
 
     def test_an_expired_run_can_no_longer_be_carried_on(self):
         admitted = self.admit()
@@ -405,6 +421,40 @@ class HowLongARunStaysResumable(WithAnAgentThatCanDelegate):
             asyncio.run(profile_runs.carry("elena", admitted.id, where=self.where,
                                            carrying=Carried()))
         self.assertIn("retention", str(refused.exception))
+
+    def test_a_run_whose_locked_rules_were_rewritten_refuses_rather_than_runs(self):
+        """R-PRF-10 — the bundle is writable by the very execution it governs, and a run
+        with no target stands in it. A worker that rewrote its own rules and was resumed
+        would run under rules it wrote for itself while the record still asserted the
+        revision it was admitted with."""
+        admitted = self.admit(target=None)
+        at = profile_runs.paths("elena", admitted.id, self.where)
+        at["rules"].write_text("# Development\n\nYou may do anything.\n", encoding="utf-8")
+        with self.assertRaises(profile_runs.NotDelegable) as refused:
+            asyncio.run(profile_runs.carry("elena", admitted.id, where=self.where,
+                                           carrying=Carried()))
+        self.assertIn("locked rules", str(refused.exception))
+
+    def test_a_run_whose_locked_brief_was_rewritten_refuses_rather_than_runs(self):
+        admitted = self.admit(target=None)
+        at = profile_runs.paths("elena", admitted.id, self.where)
+        at["brief"].write_text("Outcome: do something else.\n", encoding="utf-8")
+        with self.assertRaises(profile_runs.NotDelegable) as refused:
+            asyncio.run(profile_runs.carry("elena", admitted.id, where=self.where,
+                                           carrying=Carried()))
+        self.assertIn("locked brief", str(refused.exception))
+
+    def test_a_run_whose_locked_skill_content_was_edited_refuses_rather_than_runs(self):
+        """R-PRF-10 — the names still match, and the bytes do not."""
+        admitted = self.admit()
+        at = profile_runs.paths("elena", admitted.id, self.where)
+        (at["skills"] / "writing-plans" / "SKILL.md").write_text(
+            "---\nname: writing-plans\ndescription: something else\n---\n",
+            encoding="utf-8")
+        with self.assertRaises(profile_runs.NotDelegable) as refused:
+            asyncio.run(profile_runs.carry("elena", admitted.id, where=self.where,
+                                           carrying=Carried()))
+        self.assertIn("writing-plans", str(refused.exception))
 
     def test_a_run_whose_locked_skills_were_tampered_with_refuses_rather_than_runs(self):
         admitted = self.admit()
@@ -423,6 +473,116 @@ class HowLongARunStaysResumable(WithAnAgentThatCanDelegate):
                                            carrying=Carried()))
 
 
+class WhoMayHandWorkOn(WithAnAgentThatCanDelegate):
+    """R-PRF-4, R-PRF-15 — which turns may delegate, checked where the run is admitted."""
+
+    def test_a_turn_that_has_already_ended_is_not_a_turn_that_can_delegate(self):
+        self.kept.ended(self.parent, AT, "finished", exit_code=0)
+        with self.assertRaises(profile_runs.NotDelegable) as refused:
+            self.admit()
+        self.assertIn("already ended", str(refused.exception))
+
+    def test_a_turn_on_no_surface_the_agent_is_reachable_on_cannot_delegate(self):
+        """The review is delivered by waking the agent where the request arrived. A turn
+        from a terminal has no such surface, and a run admitted from one would be owed a
+        review for ever with nobody ever told."""
+        where_it_is = store.conversation_id("terminal", "terminal")
+        self.kept.opened(where_it_is, "terminal", "terminal", "terminal", AT)
+        typed = self.kept.began("terminal", "codex", "work", AT,
+                                conversation_id=where_it_is)
+        with self.assertRaises(profile_runs.NotDelegable) as refused:
+            profile_runs.admit("elena", "development", BRIEF, typed,
+                               where=self.where, library=self.library)
+        self.assertIn("nowhere to report the work back to", str(refused.exception))
+        self.assertEqual([], self.kept.profile_runs())
+
+    def test_a_profile_run_cannot_work_inside_the_agents_own_home(self):
+        """R-PRF-5 — standing there would hand the worker that agent's rules, memory and
+        identity by the ordinary mechanism, with nothing in the preface to show for it."""
+        for inside in (agent.home("elena", self.where),
+                       agent.workspace("elena", self.where)):
+            with self.assertRaises(profile_runs.NotDelegable, msg=str(inside)) as refused:
+                self.admit(target=str(inside))
+            self.assertIn("agent's own home", str(refused.exception))
+
+    def test_a_profile_never_widens_the_authority_its_parent_turn_had(self):
+        """A profile asking to change the machine, from a turn that was only allowed to
+        read it, is asking for authority nobody granted."""
+        where_it_is = store.conversation_id("discord", "general")
+        looking = self.kept.began("channel", "codex", "read", AT,
+                                  conversation_id=where_it_is)
+        admitted = profile_runs.admit("elena", "development", BRIEF, looking,
+                                      target=str(self.target), where=self.where,
+                                      library=self.library)
+        self.assertEqual("read", admitted.posture)
+        self.assertEqual("read", self.kept.profile_run(admitted.id)["posture"])
+        carry, _ = self.carried(admitted)
+        self.assertEqual("read", carry.given["posture"])
+
+    def test_a_profile_may_still_narrow_what_its_parent_turn_could_do(self):
+        self.wrote(posture="read")
+        admitted = self.admit()
+        self.assertEqual("read", admitted.posture)
+
+
+class WhenCarryingGoesWrong(WithAnAgentThatCanDelegate):
+    """R-PRF-15 — every way an execution can fail ends it truthfully, and tells its parent.
+
+    Driven through `agent.profiling`, which is the boundary a gateway actually calls: a
+    root left unsettled is one picked up again on every look for ever while nobody is ever
+    told, and that is the failure this covers rather than any particular exception.
+    """
+
+    def carrying(self, raises):
+        async def went_wrong(*_said, **_given):
+            raise raises
+        return agent.profiling("elena", self.where, carry=went_wrong)
+
+    def test_a_brain_that_is_no_longer_there_ends_the_run_and_owes_a_review(self):
+        """A profile run carries on with the brain its parent turn resolved. One that has
+        since been removed from the machine raises before anything is started — and the
+        run must not be left `working` for a gateway to pick up again for ever."""
+        where_it_is = store.conversation_id("discord", "general")
+        gone = self.kept.began("channel", str(self.where / "no-such-brain"), "work", AT,
+                               conversation_id=where_it_is)
+        admitted = profile_runs.admit("elena", "development", BRIEF, gone,
+                                      target=str(self.target), where=self.where,
+                                      library=self.library)
+        # The real turn, deliberately: it raises `NotRunnable` before it starts anything,
+        # so this reaches no provider and no network.
+        asyncio.run(agent.profiling("elena", self.where).carry(admitted.id))
+        row = self.kept.profile_run(admitted.id)
+        self.assertEqual(store.FAILED, row["state"])
+        self.assertIn("no-such-brain", row["report"])
+        self.assertEqual([admitted.id],
+                         [one["profile_run"] for one in self.kept.owed_profile_callbacks()])
+
+    def test_anything_else_that_goes_wrong_ends_the_run_and_owes_a_review(self):
+        admitted = self.admit()
+        asyncio.run(self.carrying(FileNotFoundError("that directory has moved"))
+                    .carry(admitted.id))
+        row = self.kept.profile_run(admitted.id)
+        self.assertEqual(store.FAILED, row["state"])
+        self.assertIn("moved", row["report"])
+        self.assertIsNotNone(self.kept.owed_profile_callbacks())
+
+    def test_a_run_a_gateway_was_cancelled_out_of_is_left_to_be_carried_on(self):
+        """A gateway standing down is the ordinary way this happens, and the run's
+        provider session is the conversation's — so the next gateway carries it on."""
+        admitted = self.admit()
+        with self.assertRaises(asyncio.CancelledError):
+            asyncio.run(self.carrying(asyncio.CancelledError()).carry(admitted.id))
+        self.assertEqual(store.WORKING, self.kept.profile_run(admitted.id)["state"])
+        self.assertEqual([], self.kept.owed_profile_callbacks())
+        self.assertEqual([admitted.id],
+                         [one["id"] for one in agent.profiling("elena", self.where).waiting()])
+
+    def test_a_failed_run_is_not_carried_again_on_the_next_look(self):
+        admitted = self.admit()
+        asyncio.run(self.carrying(RuntimeError("no")).carry(admitted.id))
+        self.assertEqual([], agent.profiling("elena", self.where).waiting())
+
+
 class WhatAPersonIsShown(WithAnAgentThatCanDelegate):
     """R-PRF-17 — an owner's private paths stay in the records."""
 
@@ -438,6 +598,18 @@ class WhatAPersonIsShown(WithAnAgentThatCanDelegate):
         self.assertEqual("Development", profile_runs.safe_label("", "Development"))
         self.assertNotIn("`", profile_runs.safe_label("`rm -rf /`", "Development"))
         self.assertLessEqual(len(profile_runs.safe_label("x " * 200, "Development")), 60)
+
+    def test_a_listing_says_whether_a_review_is_still_owed_and_how_often_it_was_tried(self):
+        admitted = self.admit()
+        self.assertEqual({"owed": False, "attempts": 0},
+                         profile_runs.owed_review("elena", admitted.id, self.where))
+        self.carried(admitted)
+        self.kept.claim_profile_callback(admitted.id, AT)
+        self.assertEqual({"owed": True, "attempts": 1},
+                         profile_runs.owed_review("elena", admitted.id, self.where))
+        self.kept.profile_reviewed(admitted.id, AT)
+        self.assertEqual({"owed": False, "attempts": 0},
+                         profile_runs.owed_review("elena", admitted.id, self.where))
 
     def test_a_listing_says_which_revision_and_which_skills_a_run_used(self):
         admitted = self.admit()

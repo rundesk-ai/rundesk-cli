@@ -33,6 +33,7 @@ those change while the locked bytes must not.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -142,11 +143,18 @@ def retained_until(now=None, days: int = RETAINED_DAYS) -> str:
     return store.stamped(lambda: (at + timedelta(days=days)).timestamp())
 
 
-def target_of(said: str | None) -> str | None:
-    """The project directory this run works in, proved to be one.
+def target_of(said: str | None, whose: Path | None = None) -> str | None:
+    """The project directory this run works in, proved to be one and proved to be apart.
 
     Resolved once, at admission, and recorded — so what a run says it worked on is what it
     stood in rather than whatever that path points at a fortnight later.
+
+    **Never inside the named agent's own home** (R-PRF-5). The provider stands in this
+    directory and its CLI discovers the instruction files standing there, which is the
+    whole point — and it is exactly why a target inside the agent's home would hand the
+    worker that agent's `AGENTS.md`, `SOUL.md` and `MEMORY.md` by the ordinary mechanism,
+    with nothing in the preface to show for it. Refused rather than trusted to the prose
+    floor, because the floor is words and this is the machine.
     """
     if said is None or not str(said).strip():
         return None
@@ -155,7 +163,27 @@ def target_of(said: str | None) -> str | None:
         raise NotDelegable(f"'{said}' is not an absolute path to a project")
     if not at.is_dir():
         raise NotDelegable(f"there is no directory at {at}")
-    return str(at.resolve())
+    stands = at.resolve()
+    if whose is not None:
+        home_at = whose.resolve()
+        if stands == home_at or home_at in stands.parents:
+            raise NotDelegable(
+                "a profile run cannot work inside the agent's own home — standing there "
+                "would hand it that agent's rules, memory and identity"
+            )
+    return str(stands)
+
+
+def narrowed(parent: str | None, wanted: str) -> str:
+    """The posture this execution actually runs under.
+
+    **A profile may narrow what its parent could do and may never widen it.** The parent
+    turn is the authority a worker acts under, so a profile asking to change the machine
+    from a turn that was only allowed to read it is asking for authority nobody granted.
+    """
+    if parent == provider.READ or wanted == provider.READ:
+        return provider.READ
+    return provider.WORK
 
 
 def safe_label(said: str | None, fallback: str) -> str:
@@ -192,29 +220,61 @@ def admit(name: str, slug: str, brief: str, parent_run: str,
         wanted = profile.read(slug, where, library)
     except profile.NotAProfile as why:
         raise NotDelegable(str(why)) from None
-    stands = target_of(target)
+    stands = target_of(target, agents.home(name, where))
     kept = agents.records(name, where)
+    parent, owed_to = _parent(kept, parent_run)
+    posture = narrowed(parent.get("posture"), wanted.posture)
     at = store.stamped(now)
     until = retained_until(now)
+    named_label = safe_label(label, wanted.label)
     try:
         run_id = kept.admit_profile(
             wanted.slug, wanted.revision, list(wanted.skills),
-            safe_label(label, wanted.label), wanted.posture, parent_run,
-            _parent_conversation(kept, parent_run), stands, at, until, pick=pick,
+            _locks(wanted, brief, posture, library), named_label, posture,
+            parent_run, owed_to, stands, at, until, pick=pick,
         )
     except store.Refused as why:
         raise NotDelegable(str(why)) from None
-    _assemble(name, run_id, wanted, brief, where, library)
+    _assemble(name, run_id, wanted, brief, posture, where, library)
     return Admitted(
-        id=run_id, profile=wanted.slug, label=safe_label(label, wanted.label),
-        revision=wanted.revision, skills=wanted.skills, posture=wanted.posture,
-        parent_run=parent_run, parent_conversation=_parent_conversation(kept, parent_run),
+        id=run_id, profile=wanted.slug, label=named_label,
+        revision=wanted.revision, skills=wanted.skills, posture=posture,
+        parent_run=parent_run, parent_conversation=owed_to,
         target=stands, retained_until=until,
     )
 
 
-def _parent_conversation(kept, parent_run: str) -> str:
-    """Which conversation the answer is owed to, off the parent run's own row."""
+def _locks(wanted, brief: str, posture: str, library: dict | None) -> dict:
+    """A digest of every part of what this run is about to be locked to (R-PRF-10).
+
+    Recorded per part rather than as the profile's aggregate revision alone, because the
+    bundle is writable by the execution it governs — a run that stands in its own home has
+    its rules under its own hand. One digest per part is what makes "these are the bytes
+    that ran" checkable against the disk afterwards, and what names *which* part changed.
+    """
+    resolved = library if library is not None else skill.library()
+    return {
+        "rules": _digest(wanted.instructions),
+        "manifest": _digest(json.dumps(
+            {**wanted.manifest(), "posture": posture}, indent=2, sort_keys=True) + "\n"),
+        "brief": _digest(brief),
+        "skills": {one: profile.package_digest(resolved[one]) for one in wanted.skills},
+    }
+
+
+def _digest(text: str) -> str:
+    """One part of a locked bundle, as the word its record holds."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _parent(kept, parent_run: str):
+    """The turn delegating this, and the conversation the answer is owed to.
+
+    Only what the caller needs before the write: which turn, and where its answer is owed.
+    **Whether that turn may delegate at all is settled inside the write that admits the
+    run**, so nothing can change between the asking and the answer, and the whole rule is
+    stated once rather than in two places that would drift.
+    """
     row = kept.run(parent_run)
     if row is None:
         raise NotDelegable(f"'{parent_run}' is not a run of this agent's")
@@ -223,11 +283,11 @@ def _parent_conversation(kept, parent_run: str) -> str:
         raise NotDelegable(
             f"'{parent_run}' happened in no conversation, so there is nowhere to report back"
         )
-    return where_it_is
+    return row, where_it_is
 
 
-def _assemble(name: str, run_id: str, wanted, brief: str, where: Path | None,
-              library: dict | None) -> Path:
+def _assemble(name: str, run_id: str, wanted, brief: str, posture: str,
+              where: Path | None, library: dict | None) -> Path:
     """Build this run's locked context whole, then move it into place.
 
     Copied rather than linked, and completely. A link into the shared library would make
@@ -244,7 +304,8 @@ def _assemble(name: str, run_id: str, wanted, brief: str, where: Path | None,
         (coming / "skills").mkdir()
         (coming / "home" / LOCKED_RULES).write_text(wanted.instructions, encoding="utf-8")
         (coming / LOCKED_MANIFEST).write_text(
-            json.dumps(wanted.manifest(), indent=2, sort_keys=True) + "\n",
+            json.dumps({**wanted.manifest(), "posture": posture}, indent=2, sort_keys=True)
+            + "\n",
             encoding="utf-8",
         )
         (coming / LOCKED_BRIEF).write_text(brief, encoding="utf-8")
@@ -285,22 +346,39 @@ def locked(name: str, run_id: str, where: Path | None = None) -> dict:
 def verified(name: str, row: dict, where: Path | None = None) -> dict:
     """The locked context, proved to be the one this run was admitted with (R-PRF-10).
 
-    A resumption that started against edited bytes would be a different execution wearing
-    an old run's id — the one thing an immutable lock exists to prevent. Corruption is
-    said out loud and refused rather than repaired: a bundle nobody can vouch for is not
-    a bundle to carry work on in.
+    **The bytes, not the names.** A resumption that started against edited content would be
+    a different execution wearing an old run's id — the one thing an immutable lock exists
+    to prevent — and a check that only compared skill *names* would pass straight through
+    an edited package. Every snapshot is digested again and compared with what was recorded
+    when the run was admitted.
+
+    Corruption is said out loud and refused rather than repaired: a bundle nobody can vouch
+    for is not a bundle to carry work on in.
     """
+    at = paths(name, row["id"], where)
     it = locked(name, row["id"], where)
-    if sorted(it["manifest"].get("skills") or []) != sorted(row.get("skills") or []):
-        raise NotDelegable(
-            f"'{row['id']}' no longer holds the skills it was admitted with"
-        )
-    if sorted(it["skills"]) != sorted(row.get("skills") or []):
+    held = row.get("locked") or {}
+    wanted = sorted(row.get("skills") or [])
+    if sorted(it["skills"]) != wanted:
         raise NotDelegable(
             f"'{row['id']}'s locked skill snapshot is not what it was admitted with"
         )
-    if it["manifest"].get("posture") != row.get("posture"):
-        raise NotDelegable(f"'{row['id']}' no longer holds the posture it was admitted with")
+    for what, found in (("rules", _digest(it["rules"])),
+                        ("manifest", _digest(at["manifest"].read_text(encoding="utf-8"))),
+                        ("brief", _digest(it["brief"]))):
+        if held.get(what) != found:
+            raise NotDelegable(
+                f"'{row['id']}'s locked {what} is not what it was admitted with"
+            )
+    for one, digest in sorted((held.get("skills") or {}).items()):
+        try:
+            was = profile.package_digest(at["skills"] / one)
+        except profile.NotAProfile as why:
+            raise NotDelegable(f"'{row['id']}'s locked {one} could not be read: {why}") from None
+        if was != digest:
+            raise NotDelegable(
+                f"'{row['id']}'s locked {one} is not the package it was admitted with"
+            )
     return it
 
 
@@ -387,11 +465,7 @@ async def carry(name: str, run_id: str, where: Path | None = None, carrying=None
         admitted=admitted,
         now=now,
     )
-    # Where the conversation got to, kept on the run as well as in the session the store
-    # already holds — so an owner asking what a retained run can be carried on from is
-    # answered without opening the conversation it belongs to.
-    kept.profile_active(run_id, store.stamped(now), retained_until(now),
-                        handle=outcome.handle)
+    kept.profile_active(run_id, store.stamped(now), retained_until(now))
     settle(name, run_id, outcome, where=where, now=now)
     return outcome
 
@@ -415,6 +489,20 @@ def settle(name: str, run_id: str, outcome: turn.Outcome, where: Path | None = N
     )
 
 
+def owed_review(name: str, run_id: str, where: Path | None = None) -> dict:
+    """Whether this run's parent has been told, and how often it has been tried.
+
+    Read for a listing rather than for a decision: a review that has been attempted many
+    times and never delivered is the shape of a surface that is not coming back, and an
+    owner cannot see that anywhere else.
+    """
+    kept = agents.reading(name, where)
+    for one in kept.owed_profile_callbacks(limit=kept.OWED_AT_ONCE):
+        if one["profile_run"] == run_id:
+            return {"owed": True, "attempts": int(one["attempts"] or 0)}
+    return {"owed": False, "attempts": 0}
+
+
 def handoff(name: str, run_id: str, where: Path | None = None) -> dict:
     """The one report a named parent reviews, and what is mechanically known beside it.
 
@@ -426,7 +514,10 @@ def handoff(name: str, run_id: str, where: Path | None = None) -> dict:
     row = kept.profile_run(run_id)
     if row is None:
         raise NotDelegable(f"there is no profile run called '{run_id}'")
-    carried = [one for one in kept.runs(limit=200) if one.get("profile_run") == run_id]
+    # Asked of the column the records keep it in, never found by scanning the newest
+    # runs: a busy agent's profile turn falls off the end of a scan, and what the handoff
+    # would then report is no usage, no files, and nothing verified — silently.
+    carried = kept.runs(profile_run=run_id, limit=200)
     files, tokens = [], {"reported": False}
     for one in carried:
         if one.get("tokens_reported"):
@@ -483,14 +574,6 @@ def _tidy(root: Path) -> None:
                 shutil.rmtree(one, ignore_errors=True)
     except OSError:
         return
-
-
-def resumable(row: dict, now=None) -> bool:
-    """Whether this run's locked context is still within its retention window."""
-    if row.get("state") in (store.EXPIRED,) + store.FINISHED_PROFILES:
-        return False
-    until = store.moment(row.get("retained_until"))
-    return until is not None and until.timestamp() > (now or time.time)()
 
 
 def shown(row: dict, now=None) -> dict:

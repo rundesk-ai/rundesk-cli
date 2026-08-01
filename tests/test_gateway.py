@@ -4093,9 +4093,9 @@ class Delegating:
     the seam being an argument.
     """
 
-    def __init__(self, waiting=(), owed=None, carried=None):
+    def __init__(self, waiting=(), owed=(), carried=None):
         self._waiting = list(waiting)
-        self._owed = owed
+        self._owed = list(owed)
         self.carried = carried if carried is not None else []
         self.claimed: list = []
         self.reviewing_runs: list = []
@@ -4111,7 +4111,7 @@ class Delegating:
         return None
 
     def owed(self):
-        return self._owed
+        return list(self._owed)
 
     def claiming(self, profile_run):
         self.claimed.append(profile_run)
@@ -4121,7 +4121,7 @@ class Delegating:
 
     def reviewed(self, profile_run):
         self.reviewed_runs.append(profile_run)
-        self._owed = None
+        self._owed = [one for one in self._owed if one["profile_run"] != profile_run]
 
     def sweep(self):
         self.swept += 1
@@ -4183,9 +4183,9 @@ class CarryingWhatAnAgentHandedOn(WithARunDirectory):
         self.assertEqual(["prf-1-aaaa"], doing.carried)
 
     async def test_a_parent_is_told_once_and_the_review_stops_being_owed(self):
-        doing = Delegating(owed={"profile_run": "prf-1-aaaa", "channel": "ops",
-                                 "conversation": "one",
-                                 "handoff": {"report": "done"}})
+        doing = Delegating(owed=[{"profile_run": "prf-1-aaaa", "channel": "ops",
+                                  "conversation": "one",
+                                  "handoff": {"report": "done"}}])
         gw = self.one(doing)
         surface = Reached()
         gw._reached["ops"] = surface
@@ -4198,8 +4198,8 @@ class CarryingWhatAnAgentHandedOn(WithARunDirectory):
         self.assertEqual(["prf-1-aaaa"], doing.reviewed_runs)
 
     async def test_a_review_is_left_owing_while_the_surface_is_down(self):
-        doing = Delegating(owed={"profile_run": "prf-1-aaaa", "channel": "ops",
-                                 "conversation": "one", "handoff": {}})
+        doing = Delegating(owed=[{"profile_run": "prf-1-aaaa", "channel": "ops",
+                                  "conversation": "one", "handoff": {}}])
         gw = self.one(doing)
         gw._reached["ops"] = Reached(connected=False)
 
@@ -4209,8 +4209,8 @@ class CarryingWhatAnAgentHandedOn(WithARunDirectory):
         self.assertEqual([], doing.claimed)
 
     async def test_a_review_the_surface_refused_is_left_owing_rather_than_lost(self):
-        doing = Delegating(owed={"profile_run": "prf-1-aaaa", "channel": "ops",
-                                 "conversation": "one", "handoff": {}})
+        doing = Delegating(owed=[{"profile_run": "prf-1-aaaa", "channel": "ops",
+                                  "conversation": "one", "handoff": {}}])
         gw = self.one(doing)
         gw._reached["ops"] = Reached(raises=RuntimeError("the room is busy"))
 
@@ -4219,6 +4219,25 @@ class CarryingWhatAnAgentHandedOn(WithARunDirectory):
 
         self.assertEqual(["prf-1-aaaa"], doing.claimed)
         self.assertEqual([], doing.reviewed_runs)
+
+    async def test_an_undeliverable_review_never_holds_up_the_ones_behind_it(self):
+        """R-PRF-15 — a channel the owner has since removed never comes back, and the
+        oldest handoff sitting at the head of the queue would keep every later one from
+        ever being reported."""
+        doing = Delegating(owed=[
+            {"profile_run": "prf-1-aaaa", "channel": "gone", "conversation": "one",
+             "handoff": {}},
+            {"profile_run": "prf-2-bbbb", "channel": "ops", "conversation": "two",
+             "handoff": {"report": "done"}},
+        ])
+        gw = self.one(doing)
+        surface = Reached()
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_profile_review()
+
+        self.assertEqual([("two", {"report": "done"})], surface.told)
+        self.assertEqual(["prf-2-bbbb"], doing.reviewed_runs)
 
     def test_a_gateway_with_no_agent_behind_it_carries_no_profile_run_at_all(self):
         gw = gateway.Gateway("ava", where=self.where, logs=self.logs, root=self.root)

@@ -10,6 +10,13 @@ skills, whose run asked, which conversation the answer is owed to, and how long 
 execution context stays resumable. All of it is settled when the run is admitted and none
 of it changes after, exactly as what an ordinary run resolved does not change after.
 
+Beside it, a digest of every part of the locked bundle — the rules, the manifest, and each
+skill package on its own. Kept per part rather than only as the profile's aggregate
+revision, because the bundle is writable by the very execution it governs: a worker that
+rewrote its own rules and was resumed would run under rules it wrote for itself while the
+record still asserted the original revision. "These are the bytes that ran" has to be
+checkable against what is on disk a fortnight later, one part at a time.
+
 **That its parent still has to be told.** A profile run finishes while nobody is waiting
 on it: the turn that admitted it ended with an acknowledgment, and the named agent is
 woken afterwards to review the handoff. A gateway that died between the two would
@@ -40,6 +47,7 @@ def up(conn, home):
             profile             TEXT NOT NULL,
             revision            TEXT NOT NULL,
             skills              TEXT NOT NULL DEFAULT '[]',
+            locked              TEXT NOT NULL DEFAULT '{}',
             label               TEXT NOT NULL,
             posture             TEXT NOT NULL,
             parent_run          TEXT NOT NULL,
@@ -51,7 +59,6 @@ def up(conn, home):
             state               TEXT NOT NULL,
             outcome             TEXT,
             report              TEXT,
-            handle              TEXT,
             reviewed_at         TEXT
         ) STRICT
         """

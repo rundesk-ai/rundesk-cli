@@ -291,10 +291,17 @@ def environment(
     if profile_run:
         # **A convenience for refusing early, and never the authority** (R-PRF-13). A
         # profile execution that reaches for `rundesk` is refused a second profile level,
-        # and this is what lets the command say so before it opens anything. What actually
-        # decides is the run's own durable record, because anything a caller can set is
-        # something a caller can unset — and the one thing this must survive is a brain
-        # that clears a variable and tries again.
+        # and this is what lets the command say so before it opens anything. What decides
+        # is the durable record of the run this turn names as the one delegating: it must
+        # be a run of the same agent, still in flight, on a surface the agent is reachable
+        # on, not itself carrying a profile, and not a turn woken to review one.
+        #
+        # **That is a correctness guard, not a security boundary.** Every one of those
+        # facts is checked against the records, but *which* run a caller claims to be is
+        # `RUNDESK_RUN`, which is an environment variable in the caller's own process. A
+        # brain determined to get around this can clear one variable and name another — as
+        # it can already reach every other verb the command offers. What this rule buys is
+        # that no ordinary path, and no adapter's own subagent, falls into a second level.
         said["RUNDESK_PROFILE_RUN"] = profile_run
     if raw is not None:
         # Somewhere to put what the *brain* said, which rundesk never sees: an adapter

@@ -37,8 +37,10 @@ from rundesk import ROOT
 from rundesk import agent as agents
 from rundesk import provider, skill
 
-#: Where shared profile definitions stand, below wherever agents are kept. Hidden, so a
-#: profile slug can never collide with an agent name: an agent may not begin with a dot.
+#: Where shared profile definitions stand, below wherever agents are kept. Dotted, so it
+#: stands among the agents without being one: what makes a directory an agent is a `home/`
+#: inside it, so nothing that walks that place can mistake this for one — the same reason
+#: `agent.OVERRIDES` is dotted, and the same guarantee.
 PROFILES = ".profiles"
 
 #: The profiles this release ships, read off the directory rather than listed — the same

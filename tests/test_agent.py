@@ -1589,7 +1589,7 @@ class WhatAProfileIsNot(WithSomewhereToKeepAgents):
         self.made("ava")
         doing = agent.profiling("ava", self.where)
         self.assertEqual([], doing.waiting())
-        self.assertIsNone(doing.owed())
+        self.assertEqual([], doing.owed())
         self.assertEqual([], doing.sweep())
 
     def test_a_profile_run_this_agent_never_admitted_is_no_complaint_at_all(self):

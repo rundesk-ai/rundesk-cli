@@ -1116,7 +1116,7 @@ def _what_is_wrong_with_its_profile_runs(name: str, where: Path | None = None) -
     try:
         kept = reading(name, where)
         runs = kept.profile_runs(limit=200)
-        owing = kept.owed_profile_callback()
+        owing = kept.owed_profile_callbacks()
     except (store.Unreadable, store.TooNew, store.Behind, migration.Failed):
         return found   # already reported by the version and records checks above
     for row in runs:
@@ -1131,9 +1131,9 @@ def _what_is_wrong_with_its_profile_runs(name: str, where: Path | None = None) -
         if target and not Path(target).is_dir():
             found.append(Complaint(
                 row["id"], "the directory this profile run works in is not there", ""))
-    if owing is not None:
+    for one in owing:
         found.append(Complaint(
-            owing["profile_run"],
+            one["profile_run"],
             "a profile run has reported back and its parent has not been told yet",
             f"rundesk start {name}"))
     for slug in {row["profile"] for row in runs}:
@@ -1439,6 +1439,8 @@ def profiling(name: str, where: Path | None = None, carry=None) -> Profiling:
     delivered, and clearing what has expired. The gateway holds which of them are in
     flight, exactly as it already holds which schedules are.
     """
+    import asyncio
+
     from rundesk import profile_run as profile_runs
 
     def waiting() -> list:
@@ -1449,11 +1451,11 @@ def profiling(name: str, where: Path | None = None, carry=None) -> Profiling:
         what the ordinary turn machinery already does with one (R-PRF-11).
         """
         kept = reading(name, where)
-        found = [one for one in kept.profile_runs(limit=200)
-                 if one["state"] in (store.ADMITTED, store.WORKING)]
+        found = [one for state in store.UNFINISHED_PROFILES
+                 for one in kept.profile_runs(state=state, limit=200)]
         return sorted(found, key=lambda one: one["admitted_at"])
 
-    async def carrying(run_id: str, watching=None, steering=None, admitted=None):
+    async def carrying(run_id: str):
         """Carry one root, and leave it settled however that goes.
 
         **A run that cannot be carried is still a run its parent has to be told about.**
@@ -1462,32 +1464,46 @@ def profiling(name: str, where: Path | None = None, carry=None) -> Profiling:
         picked up again on the next look for ever while nobody was ever told.
         """
         try:
-            return await profile_runs.carry(
-                name, run_id, where=where, carrying=carry,
-                watching=watching, steering=steering, admitted=admitted,
-            )
-        except profile_runs.NotDelegable as why:
+            return await profile_runs.carry(name, run_id, where=where, carrying=carry)
+        except asyncio.CancelledError:
+            # A gateway standing down mid-execution. The run stays unfinished on purpose:
+            # its provider session is the conversation's, so the next gateway carries it
+            # on rather than starting it again (R-PRF-11).
+            raise
+        except BaseException as why:  # noqa: BLE001 — a boundary, and see below
+            # **Every other way this can fail ends the execution truthfully.** A corrupt
+            # bundle, a brain the agent no longer has, a target directory somebody moved —
+            # each of them raises something different, and one left unsettled is picked up
+            # again on the next look for ever while nobody is ever told. Caught broadly
+            # because *what* went wrong matters far less than the parent hearing that it
+            # did (R-PRF-15).
             records(name, where).finish_profile(
-                run_id, store.stamped(), store.FAILED, str(why),
+                run_id, store.stamped(), store.FAILED, str(why) or why.__class__.__name__,
                 profile_runs.retained_until(),
             )
             return None
 
-    def owed():
-        """The oldest review a parent is still owed, with where to say it."""
+    def owed() -> list:
+        """Every review a parent is still owed, oldest first, with where to say each.
+
+        **A list rather than the oldest one.** One review that cannot be delivered — a
+        channel the owner has since removed — would otherwise sit at the head for ever and
+        keep every later review behind it, so work that was done would never be reported
+        and nothing would say why (R-PRF-15).
+        """
         kept = reading(name, where)
-        claimed = kept.owed_profile_callback()
-        if claimed is None:
-            return None
-        room = kept.conversation_of(claimed["conversation"])
-        if room is None:
-            return None
-        return {
-            "profile_run": claimed["profile_run"],
-            "channel": room.get("channel"),
-            "conversation": room.get("space"),
-            "handoff": profile_runs.handoff(name, claimed["profile_run"], where),
-        }
+        found = []
+        for claimed in kept.owed_profile_callbacks():
+            room = kept.conversation_of(claimed["conversation"])
+            if room is None:
+                continue
+            found.append({
+                "profile_run": claimed["profile_run"],
+                "channel": room.get("channel"),
+                "conversation": room.get("space"),
+                "handoff": profile_runs.handoff(name, claimed["profile_run"], where),
+            })
+        return found
 
     def claiming(profile_run: str) -> None:
         """This review is being attempted now — counted where trying is what happened."""

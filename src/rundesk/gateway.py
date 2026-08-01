@@ -1880,19 +1880,21 @@ class Gateway:
         so a surface that is down means the review waits rather than being lost — and a
         gateway that died between the two finds it owing again.
         """
-        owed = self.profiles.owed()
-        if owed is None:
+        for owed in self.profiles.owed():
+            answering = self._reached.get(owed.get("channel"))
+            if answering is None or not answering.connected or not owed.get("conversation"):
+                # Not deliverable now, and possibly not ever — a channel the owner has
+                # removed never comes back. Every later review is still tried, so one
+                # undeliverable handoff cannot hold up the rest (R-PRF-15).
+                continue
+            self.profiles.claiming(owed["profile_run"])
+            await answering.told_profile_finished(
+                owed["conversation"], owed["handoff"],
+                reviewing=lambda run, at=owed["profile_run"]: self.profiles.reviewing(at, run),
+            )
+            self.profiles.reviewed(owed["profile_run"])
+            self.log.info("delivered the handoff for profile run %s", owed["profile_run"])
             return
-        answering = self._reached.get(owed.get("channel"))
-        if answering is None or not answering.connected or not owed.get("conversation"):
-            return
-        self.profiles.claiming(owed["profile_run"])
-        await answering.told_profile_finished(
-            owed["conversation"], owed["handoff"],
-            reviewing=lambda run: self.profiles.reviewing(owed["profile_run"], run),
-        )
-        self.profiles.reviewed(owed["profile_run"])
-        self.log.info("delivered the handoff for profile run %s", owed["profile_run"])
 
     def _sweep_profiles(self) -> None:
         """Take away every profile execution context whose window has passed (R-PRF-12)."""
