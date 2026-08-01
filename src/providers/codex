@@ -48,6 +48,7 @@ import binascii
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -293,7 +294,14 @@ class Codex:
             # brain says is finished by the time it says it, never a piece of something
             # still being written. So a surface may show each as it is said rather than
             # holding every one of them to the end.
-            say(type=SPOKEN[kind], text=item.get("text") or "", whole=True)
+            said, made = _cited(item.get("text") or "")
+            say(type=SPOKEN[kind], text=said, whole=True)
+            if SPOKEN[kind] == "text":
+                for at in made:
+                    # Only what it said out loud. A citation inside its thinking still
+                    # loses its path, but thinking about a file is not delivering one.
+                    if os.path.isfile(at):
+                        say(type="file", at=at)
             return
         at = str(item.get("id") or "1")
         if at not in self._tools:
@@ -377,6 +385,52 @@ IMAGE_TYPES = {
     "image/png": ".png",
     "image/webp": ".webp",
 }
+
+
+#: How this vendor writes a file into its own prose, and the fields it writes there.
+#: **Read out of the skills codex-cli 0.145.0 ships** — `pdf`, `documents`, `spreadsheets`
+#: and `presentations` each instruct the model to "place `:codex-file-citation{...}` inline
+#: in prose", carrying an absolute `path`, a `purpose` of `output` for something it created
+#: or edited and `source` for something it only read, and further `key="value"` locators
+#: such as `page_number` or `slide_number`. The braces hold no nested ones.
+#:
+#: Nothing outside this file has heard of that markup, and nothing should have to: left
+#: alone it reaches a chat room as broken syntax wrapped around a private machine path,
+#: and the file the person was told about never arrives. Translating it is this adapter's
+#: job for the same reason the rest of this vendor's vocabulary is.
+CITATION = re.compile(r":codex-file-citation\{(?P<fields>[^{}]*)\}")
+CITED_FIELD = re.compile(r'(?P<key>[A-Za-z_][A-Za-z0-9_]*)="(?P<value>[^"]*)"')
+
+#: The one purpose that means this brain made the thing, rather than merely read it.
+MADE_FOR = "output"
+
+
+def _cited(said: str) -> tuple[str, list]:
+    """This vendor's file citations, said in the seam's own words (R-PRV-30).
+
+    Two separate things, deliberately. What the person reads keeps the file's **name** and
+    loses the machine path: naming a file is not a reason to tell a room where it sits on
+    somebody's disk, and this adapter already refuses to carry a private path anywhere
+    else. What the brain says it *made* is reported as a file record — the same words every
+    other brain uses for the same claim (R-PRV-20) — so a surface can actually send it.
+
+    A `source` citation is the brain naming what it read. That is not a request to deliver
+    anything, so it becomes a name and nothing more. Whether even an output one is sent
+    stays Rundesk's decision and not this file's: it still refuses anything outside where
+    this agent works.
+    """
+    made = []
+
+    def named(found) -> str:
+        fields = dict(CITED_FIELD.findall(found.group("fields")))
+        at = fields.get("path") or ""
+        if not at:
+            return found.group(0)   # nothing named, so nothing true to put in its place
+        if fields.get("purpose") == MADE_FOR and at.startswith("/") and at not in made:
+            made.append(at)
+        return os.path.basename(at) or at
+
+    return CITATION.sub(named, said), made
 
 
 def _files(item: dict, workspace: str) -> list:

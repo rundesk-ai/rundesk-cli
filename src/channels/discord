@@ -200,7 +200,7 @@ CONTROL_COMMANDS = (
      "♻️ restarting the agent — it will be back in a moment."),
 )
 
-#: Read-only agent and gateway questions (R-DIS-22, R-DIS-36). Their names are
+#: Read-only agent and gateway questions (R-DIS-22, R-DIS-36, R-DIS-37). Their names are
 #: Discord's; the values are Rundesk's closed query vocabulary, so this never becomes
 #: an arbitrary command runner.
 QUERY_COMMANDS = (
@@ -208,6 +208,7 @@ QUERY_COMMANDS = (
     ("version", "Show the installed and running Rundesk versions", "version"),
     ("agents", "List configured agents and whether they are running", "agents"),
     ("skills", "List skills granted to this agent", "skills"),
+    ("schedules", "List this agent's schedules that can still run", "schedules"),
     ("help", "Show the gateway commands available here", "help"),
 )
 

@@ -1765,14 +1765,15 @@ class WhatItOffersAndWhatItIsTold(unittest.TestCase):
         self.assertEqual("restart", gestures["restart"])
 
     def test_read_only_gateway_information_is_offered_as_discord_commands(self):
-        """R-DIS-22, R-DIS-36"""
+        """R-DIS-22, R-DIS-36, R-DIS-37"""
         from rundesk import channel
 
         queries = {name: query for name, _description, query in discord.QUERY_COMMANDS}
         self.assertEqual(set(channel.QUERIES), set(queries.values()))
-        self.assertEqual({"status", "version", "agents", "skills", "help"},
+        self.assertEqual({"status", "version", "agents", "skills", "schedules", "help"},
                          set(queries))
         self.assertEqual("skills", queries["skills"])
+        self.assertEqual("schedules", queries["schedules"])
 
     def test_one_slash_interaction_belongs_to_exactly_one_configured_surface(self):
         """R-DIS-23 — Discord delivers one bot's interaction to its simultaneous DM and
