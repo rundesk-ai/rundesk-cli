@@ -272,11 +272,12 @@ together these prevent a concurrent turn from replacing an approved file or its 
 Ignore the attachment if verification fails, and ignore all attachments if your surface
 cannot send them.
 
-An agent declares a local file only with a whole, unindented final-answer line shaped as
-`rundesk-attach: [Download](</absolute/path>)`; Rundesk removes the reserved prefix and
-private destination before the `answer` reaches you. Ordinary Markdown never attaches a
-local file. The control line is recognized before Markdown formatting in every context;
-`\rundesk-attach:` is the literal escaped form.
+An agent declares a local file with a whole, unindented final-answer line shaped as
+`[Download](</absolute/path>)` or the explicit
+`rundesk-attach: [Download](</absolute/path>)`; Rundesk removes the private destination and
+any reserved prefix before the `answer` reaches you. Inline, relative, and remote Markdown
+links never attach local files. Declarations are recognized before Markdown formatting in
+every context; `\rundesk-attach:` is the literal escaped form.
 
 `conversation` is whatever your platform calls one exchange — a thread, a room, a chat, a
 phone number. Rundesk never parses it and never shows it to anyone; it is the key a
