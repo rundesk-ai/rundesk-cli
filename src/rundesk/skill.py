@@ -20,9 +20,11 @@ brain went on reading whatever else it found.
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import os
 import re
 import shutil
+import threading
 from pathlib import Path
 
 from rundesk import ROOT, skills_home
@@ -57,8 +59,13 @@ NAMED_LIMIT = 64
 #: an expired built-in: an expired name is no longer runtime policy (R-AGT-35), while a
 #: renamed name is still the same shipped capability and its Rundesk-owned copies and grants
 #: must follow the current spelling (R-AGT-49).
-RENAMED = {"writing-rundesk-skills": "writing-skills"}
+RENAMED = {
+    "managing-rundesk-backups": "managing-backups",
+    "managing-rundesk-schedules": "managing-schedules",
+    "writing-rundesk-skills": "writing-skills",
+}
 
+_GRANT_LOCKS = threading.local()
 
 def home() -> Path:
     """Where every skill on this machine stands.
@@ -69,6 +76,32 @@ def home() -> Path:
     the owner's library through it.
     """
     return Path(os.environ.get("RUNDESK_SKILL_LIBRARY") or skills_home())
+
+
+@contextlib.contextmanager
+def changing_grants(where: Path | None = None):
+    """Serialize grant changes with catalog retirement across every agent."""
+    where = (where or home()).resolve()
+    where.mkdir(parents=True, exist_ok=True)
+    held = getattr(_GRANT_LOCKS, "held", {})
+    if where in held:
+        handle, depth = held[where]
+        held[where] = (handle, depth + 1)
+        try:
+            yield
+        finally:
+            held[where] = (handle, depth)
+        return
+    handle = os.open(where, os.O_RDONLY)
+    held[where] = (handle, 1)
+    _GRANT_LOCKS.held = held
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        os.close(handle)
+        del held[where]
 
 
 def shipped() -> tuple[str, ...]:
@@ -250,9 +283,10 @@ def take_back(where: Path | None = None) -> list[str]:
     and with it the whole install directory, standing after an uninstall that reported having
     left nothing.
 
-    **Whatever the owner wrote stays.** A directory is taken only when its name is in the set
-    this release ships *and* its marker proves Rundesk laid it down. A skill of their own —
-    including one that happens to have a newly shipped name — is not touched.
+    **Whatever the owner wrote stays.** A directory is taken only when its name is shipped
+    now or is an explicitly renamed built-in *and* its marker proves Rundesk laid it down.
+    A skill of their own — including one that happens to have a newly shipped name — is
+    not touched.
 
     An empty library goes too. A directory left holding nothing is not something the owner
     keeps, and it is the difference between an install directory that can be removed and one
@@ -262,7 +296,7 @@ def take_back(where: Path | None = None) -> list[str]:
     if not where.is_dir():
         return []
     gone = []
-    for name in shipped():
+    for name in sorted(set(shipped()).union(RENAMED)):
         standing = where / name
         if not standing.is_dir() or standing.is_symlink() or not _owned(standing, name):
             continue

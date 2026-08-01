@@ -8,7 +8,9 @@ what granting and revoking are incapable of touching.
 
 from __future__ import annotations
 
+import json
 import os
+import fcntl
 import subprocess
 import sys
 import tempfile
@@ -112,18 +114,34 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
             with self.subTest(excluded=excluded):
                 self.assertNotIn(excluded, page)
 
-    def test_workspace_organization_guidance_routes_canonical_knowledge(self):
-        """R-AGT-50 — every agent can organize recurring workspace knowledge without
-        turning its always-loaded files into duplicate databases."""
+    def test_workspace_organization_guidance_keeps_processes_tidy_and_repositories_outside(self):
+        """R-AGT-45, R-AGT-50 — release-default agents keep coordination artifacts tidy
+        without turning their workspace into another project directory."""
         page = (REALLY_SHIPPED / "organizing-workspaces" / "SKILL.md").read_text()
         for expected in (
-                "plans/", "ORGANIZATION.md", "MEMORY.md", "AGENTS.md",
-                "one canonical home", "Unconfirmed", "project-owned truth"):
+                "plans/", "MEMORY.md", "AGENTS.md", "one canonical home",
+                "Do not clone a project", "git worktree list --porcelain",
+                "git worktree remove <exact-path>", "Age alone is not evidence",
+                "no project repository, `.git` directory, or project worktree"):
             with self.subTest(expected=expected):
                 self.assertIn(expected, page)
-        for excluded in ("~/.claude", "~/.agents", "docs/superpowers"):
+        for excluded in (
+                "~/.claude", "~/.agents", "docs/superpowers",
+                "## Build a routing map", "## Directory", "## Relationships"):
             with self.subTest(excluded=excluded):
                 self.assertNotIn(excluded, page)
+
+    def test_management_skill_names_drop_the_redundant_rundesk_qualifier(self):
+        """R-AGT-49 — shipped management guidance keeps the capability while its owned
+        package and grants follow the shorter name."""
+        for old, new in (
+                ("managing-rundesk-backups", "managing-backups"),
+                ("managing-rundesk-schedules", "managing-schedules")):
+            with self.subTest(old=old, new=new):
+                self.assertEqual(new, skill.RENAMED[old])
+                self.assertFalse((REALLY_SHIPPED / old).exists())
+                page = (REALLY_SHIPPED / new / "SKILL.md").read_text()
+                self.assertIn(f"name: {new}", page)
 
     def test_issue_and_pull_request_guidance_requires_the_agent_footer(self):
         for skill_name in (
@@ -185,6 +203,16 @@ class WhatTheReleaseNoLongerOwns(unittest.TestCase):
 
 
 class WhatTheLibraryHolds(WithALibrary):
+    def test_grant_changes_share_one_install_wide_lock(self):
+        """R-CAT-9 — a grant cannot enter while catalog retirement is deciding."""
+        with skill.changing_grants(self.library):
+            contender = os.open(self.library, os.O_RDONLY)
+            self.addCleanup(os.close, contender)
+            with self.assertRaises(OSError):
+                fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
     def test_the_provider_given_library_is_the_one_a_nested_command_reports(self):
         was = os.environ.get("RUNDESK_SKILL_LIBRARY")
         os.environ["RUNDESK_SKILL_LIBRARY"] = str(self.library)
@@ -555,6 +583,19 @@ class BringingTheBuiltInsForward(WithALibrary):
         self.assertEqual([], skill.take_back(self.library))
         self.assertTrue((theirs / "SKILL.md").is_file(),
                         "uninstall took an owner skill it had preserved")
+
+    def test_uninstall_takes_a_blocked_renamed_builtin_but_keeps_the_owner_collision(self):
+        """R-RM-7, R-AGT-49 — ownership, not current spelling, determines removal."""
+        a_skill(self.release, "writing-skills", says="release words")
+        old = a_skill(self.library, "writing-rundesk-skills", says="historical words")
+        (old / skill.OWNED).write_text("rundesk built-in\n", encoding="utf-8")
+        owner = a_skill(self.library, "writing-skills", says="owner words")
+
+        removed = skill.take_back(self.library)
+
+        self.assertIn("writing-rundesk-skills", removed)
+        self.assertFalse(old.exists())
+        self.assertIn("owner words", (owner / skill.NAMED).read_text())
 
     def test_uninstalling_removes_a_complete_built_in_skill_package(self):
         """R-AGT-44, R-RM-7 — the complete built-in belongs to the release, so uninstall
@@ -941,6 +982,37 @@ class WhatMakingAnAgentGrants(WithALibrary):
         self.assertIn("writing-rundesk-skills", configured)
         self.assertIn("writing-rundesk-skills", skill.granted(self.agents.skills("ava")))
         self.assertTrue((self.library / old.name).is_dir())
+
+    def test_a_required_management_collision_keeps_the_owned_old_capability(self):
+        """R-AGT-36, R-AGT-49 — the complete provision order never promotes an owner
+        package under a new required name into Rundesk's operating floor."""
+        new = "managing-backups"
+        old = "managing-rundesk-backups"
+        shutil.rmtree(self.release / new)
+        shutil.rmtree(self.library / new)
+        a_skill(self.release, old)
+        skill.lay_down(self.library)
+        owner = a_skill(self.library, new, says="owner backup process")
+        (self.where / "data" / "config.json").write_text(
+            json.dumps({"skills": {"granted": [old]}}) + "\n", encoding="utf-8")
+        self.agents.add("ava")
+
+        shutil.rmtree(self.release / old)
+        a_skill(self.release, new)
+        config.ensure(self.where / "data")
+        skill.lay_down(self.library, force=True)
+        self.agents.reconcile_skill_config()
+        self.agents.require_skills("ava")
+        self.agents.retire_renamed_skills()
+
+        configured = config.skills(self.where / "data")["granted"]
+        granted = skill.granted(self.agents.skills("ava"))
+        self.assertIn(old, configured)
+        self.assertNotIn(new, configured)
+        self.assertIn(old, granted)
+        self.assertNotIn(new, granted)
+        self.assertIn("owner backup process", (owner / skill.NAMED).read_text())
+        self.assertTrue((self.library / old / skill.OWNED).is_file())
 
     def test_an_agent_is_made_with_the_skills_written_into_a_new_configuration(self):
         """R-AGT-36 — the required set is what an agent needs to work with rundesk

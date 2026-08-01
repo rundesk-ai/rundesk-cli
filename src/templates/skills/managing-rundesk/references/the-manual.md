@@ -187,7 +187,7 @@ with. Shared channels cannot change an agent-wide default.
 
 **Schedules are their own skill.** What a schedule is *for*, how to say when, where its
 outcome lands and what a channel that spans a server does to that are all in
-`managing-rundesk-schedules`. A fresh configuration requires that grant for every new agent.
+`managing-schedules`. A fresh configuration requires that grant for every new agent.
 If it is on this machine and you were not given it, say so rather than guessing at the parts.
 The one thing worth carrying here: a schedule is the owner's clock, never a way to move your
 own work out of the turn you are in.
@@ -202,7 +202,7 @@ rundesk version                what is installed, and whether it is current
 ```
 
 **Backups are their own skill.** What a copy holds, when taking one is worth it, and why
-putting one back is never yours to decide are in `managing-rundesk-backups`. Reach for it
+putting one back is never yours to decide are in `managing-backups`. Reach for it
 before anything irreversible.
 
 **A credential is never typed as an argument.** Anything on a command line is readable through

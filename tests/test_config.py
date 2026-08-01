@@ -64,6 +64,15 @@ class WhatInstallingWrites(WithADataDirectory):
         self.assertEqual(tuple(written["skills"]["granted"]),
                          config.skills(self.where)["granted"])
 
+    def test_the_documented_fresh_configuration_matches_the_install_seed(self):
+        """R-INS-19 — an example described as complete must not omit defaults that a
+        copied configuration would prevent an update from adding."""
+        documented = (Path(__file__).resolve().parent.parent / "docs" /
+                      "configuration.md").read_text(encoding="utf-8")
+        example = documented.split("```json\n", 1)[1].split("\n```", 1)[0]
+
+        self.assertEqual(config.INITIAL, json.loads(example))
+
     def test_installing_again_changes_nothing_an_owner_configured(self):
         """R-INS-19, R-AGT-4 — running the installer again is a repair, and it must not be
         how somebody loses what they set."""
@@ -150,6 +159,45 @@ class WhatAnUpdateAdds(WithADataDirectory):
         granted = json.loads(self.at.read_text())["skills"]["granted"]
         self.assertIn("writing-skills", granted)
         self.assertNotIn("writing-rundesk-skills", granted)
+
+    def test_required_management_grants_follow_the_shipped_renames(self):
+        """R-AGT-49 — existing required choices keep their capabilities under the
+        shorter backup and schedule names."""
+        renamed = {
+            "managing-rundesk-backups": "managing-backups",
+            "managing-rundesk-schedules": "managing-schedules",
+        }
+        for old, new in renamed.items():
+            self.built_in(old)
+            self.built_in(new)
+        self.at.write_text(json.dumps({
+            "skills": {"granted": list(renamed)},
+        }) + "\n", encoding="utf-8")
+
+        config.ensure(self.where)
+
+        granted = json.loads(self.at.read_text())["skills"]["granted"]
+        for old, new in renamed.items():
+            with self.subTest(old=old, new=new):
+                self.assertNotIn(old, granted)
+                self.assertEqual(1, granted.count(new))
+
+    def test_a_management_name_collision_keeps_the_owned_previous_requirement(self):
+        """R-AGT-36, R-AGT-49 — an owner package cannot become Rundesk's floor merely
+        because it occupies the new spelling of a required capability."""
+        old = self.built_in("managing-rundesk-backups")
+        owner = self.built_in("managing-backups")
+        (owner / skill.OWNED).unlink()
+        self.at.write_text(json.dumps({
+            "skills": {"granted": ["managing-rundesk-backups"]},
+        }) + "\n", encoding="utf-8")
+
+        config.ensure(self.where)
+
+        granted = json.loads(self.at.read_text())["skills"]["granted"]
+        self.assertIn("managing-rundesk-backups", granted)
+        self.assertNotIn("managing-backups", granted)
+        self.assertTrue((old / skill.OWNED).is_file())
 
     def test_an_owner_authoring_choice_keeps_its_name(self):
         """R-UPD-48, R-AGT-49 — matching a historical built-in name is not ownership

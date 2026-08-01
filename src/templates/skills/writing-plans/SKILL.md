@@ -1,6 +1,6 @@
 ---
 name: writing-plans
-description: Create implementation plans for multi-step development work and save them in the agent workspace. Use when requirements or a specification need to become an executable plan before code changes, especially when another agent or future session may implement it.
+description: Create executable implementation plans in the agent workspace. Use before multi-step development, especially for handoff to another agent or future session.
 ---
 
 # Writing plans

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
@@ -9,6 +10,7 @@ import shutil
 import sys
 import tarfile
 import tempfile
+import threading
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -114,6 +116,40 @@ class WhatACatalogIs(WithCatalogs):
 
 
 class InstallingACatalog(WithCatalogs):
+    def test_concurrent_installs_cannot_both_claim_the_same_skill(self):
+        """R-CAT-3 — catalog ownership is decided once under the install-wide lock."""
+        sources = (
+            a_catalog(self.sources / "one", name="one"),
+            a_catalog(self.sources / "two", name="two"),
+        )
+        ready = threading.Barrier(2)
+        outcomes = []
+
+        def install(source):
+            try:
+                catalog.install(
+                    source, self.catalogs, self.library,
+                    fetch=lambda given, work: (ready.wait(), source)[1],
+                )
+            except Exception as why:
+                outcomes.append(why)
+            else:
+                outcomes.append(None)
+
+        threads = [threading.Thread(target=install, args=(source,)) for source in sources]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(1, sum(why is None for why in outcomes))
+        self.assertEqual(1, sum(isinstance(why, catalog.InTheWay) for why in outcomes))
+        standing = catalog.installed(self.catalogs)
+        self.assertEqual(1, len(standing))
+        winner = next(iter(standing))
+        self.assertEqual(winner, catalog.whose(self.library / "python-patterns", self.catalogs))
+
     def test_a_script_backed_skill_is_copied_complete_and_never_executed(self):
         """R-CAT-13 — installation treats integration commands as inert package files."""
         source = a_catalog(self.sources)
@@ -424,6 +460,44 @@ class RemovingACatalog(WithCatalogs):
         catalog.remove("development", self.catalogs, self.library)
         self.assertFalse((self.library / "python-patterns").exists())
         self.assertTrue((owner / "SKILL.md").is_file())
+
+    def test_a_failed_removal_restores_catalog_links_before_grants(self):
+        """R-CAT-8, R-CAT-9 — catalog removal and grant retirement fail as one unit."""
+        landed = self.install(a_catalog(self.sources))
+        mine = self.root / "data" / "agents" / "ava" / "home" / "skills"
+        skill.grant(mine, "python-patterns", self.library)
+
+        @contextlib.contextmanager
+        def retiring(names):
+            self.assertEqual({"python-patterns"}, names)
+            skill.revoke(mine, "python-patterns", self.library)
+            try:
+                yield
+            except BaseException:
+                skill.grant(mine, "python-patterns", self.library)
+                raise
+
+        remove_tree = shutil.rmtree
+        failed = False
+
+        def fail_catalog(at, *args, **kwargs):
+            nonlocal failed
+            if Path(at) == landed.at and not failed:
+                failed = True
+                (landed.at / catalog.APP / "skills" / "python-patterns" / "SKILL.md").unlink()
+                raise OSError("disk refused catalog removal")
+            return remove_tree(at, *args, **kwargs)
+
+        with mock.patch.object(catalog.shutil, "rmtree", side_effect=fail_catalog):
+            with self.assertRaisesRegex(OSError, "disk refused"):
+                catalog.remove(
+                    "development", self.catalogs, self.library,
+                    granted={"python-patterns"}, retiring=retiring,
+                )
+
+        self.assertIn("development", catalog.installed(self.catalogs))
+        self.assertTrue((self.library / "python-patterns" / "SKILL.md").is_file())
+        self.assertEqual(["python-patterns"], skill.granted(mine))
 
 
 class UnpackingACatalog(WithCatalogs):

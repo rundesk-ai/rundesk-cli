@@ -133,7 +133,11 @@ rundesk skills remove example-skills
 rundesk skills remove example-skills --yes
 ```
 
-An update or removal is refused if it would take away a skill still granted to any agent.
+An update or removal revokes a catalog skill that disappeared from every stopped agent.
+It is refused if an affected agent is running; stop that agent and retry. Consequently,
+catalog authors can rename a skill by removing the old manifest entry and adding the new
+one without publishing migration metadata. Grants for the old name are removed, while the
+new name remains available for an owner to grant deliberately.
 
 ### Name collisions
 

@@ -405,12 +405,14 @@ jobs:
           printf '%s\n' "$held" |
             grep -qE '^fixture-guidance +rundesk-skills ' ||
             { echo "::error::the default catalog skill is not available after upgrade"; exit 1; }
-          printf '%s\n' "$held" |
-            grep -qE '^managing-rundesk-schedules +rundesk +.*Legacy_Name' ||
-            { echo "::error::the legacy agent lost its built-in skill grant"; exit 1; }
-          printf '%s\n' "$held" |
-            grep -qE '^managing-rundesk-schedules +rundesk +.*existing' ||
-            { echo "::error::the existing agent lost its built-in skill grant"; exit 1; }
+          for skill in managing-schedules managing-backups; do
+            printf '%s\n' "$held" |
+              grep -qE "^${skill} +rundesk +.*Legacy_Name" ||
+              { echo "::error::the legacy agent lost its ${skill} grant"; exit 1; }
+            printf '%s\n' "$held" |
+              grep -qE "^${skill} +rundesk +.*existing" ||
+              { echo "::error::the existing agent lost its ${skill} grant"; exit 1; }
+          done
           for skill in filing-github-issues writing-github-pull-requests; do
             printf '%s\n' "$held" |
               grep -qE "^${skill} +rundesk +.*Legacy_Name" ||

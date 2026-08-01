@@ -822,12 +822,7 @@ def _holding_name(name: str, where: Path):
     """
     path = _lock_path(name, where)
     try:
-        handle = os.open(path, os.O_RDWR)
-    except FileNotFoundError:
-        # No lock file at all, and one is never removed once made (see `release`), so no
-        # gateway of this name has ever run here and there is nobody to wait for.
-        yield True
-        return
+        handle = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     except OSError:
         yield False
         return

@@ -710,44 +710,46 @@ def require_skills(name: str, where: Path | None = None) -> list[str]:
         plan_home.mkdir(parents=True, exist_ok=True)
         given.append("workspace/plans/")
     mine = skills(name, where)
-    already = set(skill.granted(mine))
-    # Carry a Rundesk-made grant to the built-in's current name. Do this before the
-    # configured floor so an optional authoring grant follows the rename too; never touch a
-    # directory or foreign link an owner placed under the old spelling (R-AGT-49).
-    for old, new in skill.RENAMED.items():
-        old_grant = mine / old
-        if (old not in already or not skill.ours(old_grant)
-                or not skill.built_in(old) or not skill.built_in(new)):
-            continue
-        try:
-            if new not in already:
-                skill.grant(mine, new)
-                given.append(f"skills/{new}")
-            elif not skill.ours(mine / new):
-                # An owner entry under the replacement name is not proof this agent can
-                # lose its old working built-in. Keep both owner data and old grant.
+    with skill.changing_grants():
+        already = set(skill.granted(mine))
+        # Carry a Rundesk-made grant to the built-in's current name. Do this before the
+        # configured floor so an optional authoring grant follows the rename too; never touch a
+        # directory or foreign link an owner placed under the old spelling (R-AGT-49).
+        for old, new in skill.RENAMED.items():
+            old_grant = mine / old
+            if (old not in already or not skill.ours(old_grant)
+                    or not skill.built_in(old) or not skill.built_in(new)):
                 continue
-            skill.revoke(mine, old)
-        except (skill.Unknown, skill.NotASkill, skill.InTheWay, OSError):
-            continue
-        already.discard(old)
-        already.add(new)
-    # `where` is an agents directory, never the install's data directory. The baseline is
-    # install-wide and resolves from the same file every agent shares (R-AGT-36).
-    for called in config.skills()["granted"]:
-        if called in already:
-            continue
-        try:
-            skill.grant(mine, called)
-        except (skill.Unknown, skill.NotASkill, skill.InTheWay, OSError):
-            continue
-        given.append(f"skills/{called}")
+            try:
+                if new not in already:
+                    skill.grant(mine, new)
+                    given.append(f"skills/{new}")
+                elif not skill.ours(mine / new):
+                    # An owner entry under the replacement name is not proof this agent can
+                    # lose its old working built-in. Keep both owner data and old grant.
+                    continue
+                skill.revoke(mine, old)
+            except (skill.Unknown, skill.NotASkill, skill.InTheWay, OSError):
+                continue
+            already.discard(old)
+            already.add(new)
+        # `where` is an agents directory, never the install's data directory. The baseline is
+        # install-wide and resolves from the same file every agent shares (R-AGT-36).
+        for called in config.skills()["granted"]:
+            if called in already:
+                continue
+            try:
+                skill.grant(mine, called)
+            except (skill.Unknown, skill.NotASkill, skill.InTheWay, OSError):
+                continue
+            given.append(f"skills/{called}")
     return given
 
 
 def retire_renamed_skills(where: Path | None = None) -> list[str]:
     """Retire old built-ins after every agent's grants had a chance to move (R-AGT-49)."""
-    return skill.retire_renamed((skills(name, where) for name in known(where)))
+    with skill.changing_grants():
+        return skill.retire_renamed((skills(name, where) for name in known(where)))
 
 
 def reconcile_skill_config() -> list[str]:
