@@ -108,6 +108,14 @@ class InstructionBuilder(unittest.TestCase):
         self.assertIn("Treat `rundesk --help` as authoritative.", built)
         self.assertIn("`managing-rundesk` or applicable skill", built)
 
+    def test_core_instructions_require_applicable_skills_before_work(self):
+        """R-AGT-52 — granted procedures govern work instead of waiting to be named."""
+        built = instructions.build(variables=CORE)
+        self.assertIn(
+            "Before starting work, review your available skills and follow every one that applies.",
+            built,
+        )
+
     def test_schedule_and_owner_instructions_append_in_order(self):
         built = instructions.build(
             variables={**CORE, "schedule": "nightly"},
