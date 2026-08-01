@@ -212,6 +212,16 @@ EXAMPLES: list[tuple[str, list[tuple[str, str]]]] = [
         ("rundesk schedules ava off nightly",
          "keep it, and stop it running"),
     ]),
+    ("a profile", [
+        ("rundesk profiles ava",
+         "the specialists ava can hand heavy work to, and the runs it has admitted"),
+        ('rundesk profiles ava run development --target ~/code/exporter --label "csv export"',
+         "one bounded task, run in that project under the profile's own rules"),
+        ("", "an agent hands work on from inside its own turn, and the brief arrives on "
+             "standard input — the outcome, what it may do, and what done looks like"),
+        ("rundesk profiles ava show prf-3-vfs3",
+         "one run: which profile and revision, where it worked, and whether ava has reviewed it"),
+    ]),
 
 ]
 

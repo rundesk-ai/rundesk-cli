@@ -126,6 +126,18 @@ rundesk schedules ava --expired
 rundesk schedules ava off nightly
 ```
 
+**A profile**
+
+```sh
+# the specialists ava can hand heavy work to, and the runs it has admitted
+rundesk profiles ava
+# one bounded task, run in that project under the profile's own rules
+rundesk profiles ava run development --target ~/code/exporter --label "csv export"
+#   an agent hands work on from inside its own turn, and the brief arrives on standard input — the outcome, what it may do, and what done looks like
+# one run: which profile and revision, where it worked, and whether ava has reviewed it
+rundesk profiles ava show prf-3-vfs3
+```
+
 ## What the arguments mean
 
 ```sh
