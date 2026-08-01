@@ -20,7 +20,7 @@
 
 ## Validation
 
-- [ ] `python3 .knowledge/scripts/gate`
+- [ ] The full repository gate passed with an isolated environment.
 - [ ] Required install and uninstall checks ran in an isolated disposable station, or the exact blocker is stated below.
 - [ ] New guaranteed behavior has a ratified requirement, a cited regression test, and current documentation.
 
