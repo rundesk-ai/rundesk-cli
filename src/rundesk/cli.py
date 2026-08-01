@@ -2574,7 +2574,6 @@ def cmd_skills(args: argparse.Namespace, agents, skills, gateways, catalogs) -> 
         # The installer's, and deliberately not an owner's verb: what a release ships is
         # not a thing anybody should have to ask for.
         laid = skills.lay_down()
-        laid.extend(profile.lay_down())
         agents.reconcile_skill_config()
         if _refresh_skill_catalogs(agents, skills, gateways, catalogs):
             return 1
