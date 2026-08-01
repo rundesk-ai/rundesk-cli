@@ -220,16 +220,19 @@ take_back_skills() {
   # Never allowed to fail the removal: a library that cannot be written to is a thing to
   # leave behind and say nothing about, not a reason to stop taking rundesk off a machine.
   # The same boundary as configuration: an inherited library belongs to some other install.
-  took="$(python3 - "$root" "$DATA_DIR/skills" <<'SKILLS' 2>/dev/null || true
+  took="$(python3 - "$root" "$DATA_DIR" <<'SKILLS' 2>/dev/null || true
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1] + "/src")
-from rundesk import skill
+from rundesk import catalog, skill
 
-print(" ".join(skill.take_back(Path(sys.argv[2]))))
+data = Path(sys.argv[2])
+taken = catalog.take_back_seeded(data / "catalogs", data / "skills")
+taken.extend(skill.take_back(data / "skills"))
+print(" ".join(taken))
 SKILLS
 )"
-  [[ -n "$took" ]] && echo "took back the skills this release laid down: $took"
+  [[ -n "$took" ]] && echo "took back the skills Rundesk installed: $took"
   return 0
 }
 
@@ -663,8 +666,11 @@ fi
 # read off a directory and that reading lives in one place (R-AGT-30). What is already
 # there is left alone: an install is not a thing that overwrites somebody's work, and it
 # is `rundesk update` that brings a built-in forward.
-if laid="$("$BINDIR/rundesk" skills --lay-down 2>/dev/null)" && [[ -n "$laid" ]]; then
-  echo "put the skills this release ships in your library: $laid"
+if ! laid="$("$BINDIR/rundesk" skills --lay-down)"; then
+  die "rundesk was installed, but its skill catalogs could not be installed or updated."
+fi
+if [[ -n "$laid" ]]; then
+  echo "put Rundesk's skills and default catalog in your library: $laid"
 fi
 
 # A star is idempotent, and only the first successful install may ask for it (R-INS-21).

@@ -255,6 +255,9 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 - **`gh issue list --json type` fails even though `gh issue create --type` is valid.**
   The issue classification field is named `issueType` in JSON output; use that when checking
   existing issues before filing one.
+- **This installed `gh` does not accept `--repo` on `gh repo view`.** Pass the repository as
+  the positional argument (`gh repo view owner/repo --json ...`); the documented-looking flag
+  fails before any repository information is read.
 - **zsh expands an unquoted `?ref=main` in a `gh api` endpoint as a filename glob.** The
   request never reaches GitHub and fails with `no matches found`; quote the whole endpoint.
 - **In zsh, `path` is a special array tied to `PATH`.** Assigning a file path to a shell
@@ -778,6 +781,9 @@ re-checked since, so treat these as true-when-found rather than as current.*
 - **`status` is a read-only parameter in zsh.** A verification command that assigns
   `status=$?` aborts before its later checks. Use a task-specific name such as
   `launchd_exit=$?` for captured exit codes.
+
+- **The test counts in `CODEMAP.md` can be stale before a change starts.** Do not increment the
+  recorded number by the cases just added; run the suite and copy the actual `Ran N tests` count.
 
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

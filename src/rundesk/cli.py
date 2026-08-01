@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from rundesk import __version__, backups_home, data_home  # noqa: E402
 from rundesk import agent as _agent  # noqa: E402
 from rundesk import backup as backups  # noqa: E402
+from rundesk import catalog  # noqa: E402
 from rundesk import channel  # noqa: E402
 from rundesk import config  # noqa: E402
 from rundesk import dependencies  # noqa: E402
@@ -615,6 +616,19 @@ def build_parser() -> argparse.ArgumentParser:
     taken = doing.add_parser("revoke", help="take a skill away from an agent")
     taken.add_argument("name", metavar="<agent>", help="who is losing it")
     taken.add_argument("skill", metavar="<skill>", help="which skill, by the name it is under")
+    installing = doing.add_parser(
+        "install", help="install every skill declared by a repository")
+    installing.add_argument("repository", metavar="<repository>",
+                            help="a GitHub repository URL, local directory or archive")
+    installing.add_argument("--confirm", action="store_true",
+                            help="install after reviewing what the repository declares")
+    moving = doing.add_parser("update", help="move an installed catalog to its newer version")
+    moving.add_argument("catalog", metavar="<catalog>", help="which catalog")
+    removing = doing.add_parser("remove", help="remove an installed catalog and its skills")
+    removing.add_argument("catalog", metavar="<catalog>", help="which catalog")
+    removing.add_argument("--yes", action="store_true",
+                          help="do not ask first — for a script, never for a person")
+    doing.add_parser("catalogs", help="the installed skill catalogs and their versions")
 
     commands = sub.add_parser(
         "scripts", help="the integration commands every agent can invoke")
@@ -716,7 +730,7 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
+def cmd_update(args: argparse.Namespace, gateways, machine, agents, catalogs=catalog) -> int:
     if args.after_replacing is not None:
         # This process *is* the release that just landed, so what it does to an owner's
         # records is what the release that shipped it says it should be (R-UPD-33). The
@@ -733,8 +747,12 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
             # opened — linking that would name the version an owner has just left (R-UPD-46).
             landed=__version__,
         )
-        if code == 0 and not os.environ.get("RUNDESK_UPDATE_WORKER"):
-            return _install_automatic_updates(machine)
+        if code == 0:
+            cataloged = _refresh_skill_catalogs(agents, skill, catalogs)
+            if not os.environ.get("RUNDESK_UPDATE_WORKER"):
+                scheduled = _install_automatic_updates(machine)
+                return cataloged or scheduled
+            return cataloged
         return code
     if args.worker:
         return _run_update_worker(gateways, machine, agents)
@@ -777,8 +795,9 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents) -> int:
         preview=lambda: _what_an_update_would_do(agents, update_root),
     )
     if code == 0:
+        cataloged = _refresh_skill_catalogs(agents, skill, catalogs)
         scheduled = _install_automatic_updates(machine)
-        return scheduled if scheduled else code
+        return cataloged or scheduled
     return code
 
 
@@ -2299,7 +2318,115 @@ def _list_backups() -> int:
     return 0
 
 
-def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
+def _all_granted_skills(agents, skills) -> set[str]:
+    """Every skill at least one agent holds, asked from the links that are the grants."""
+    return {
+        called
+        for name in agents.known()
+        for called in skills.granted(agents.skills(name))
+    }
+
+
+def _refresh_skill_catalogs(agents, skills, catalogs) -> int:
+    """Seed the general collection and check every installed repository version."""
+    try:
+        checked = catalogs.refresh(granted=_all_granted_skills(agents, skills))
+    except (catalogs.NotACatalog, OSError) as why:
+        print(f"skills: CATALOGS NOT UPDATED — {why}", file=sys.stderr)
+        return 1
+    failed = False
+    for one in checked:
+        if one.why:
+            failed = True
+            print(f"skills: {one.name} NOT UPDATED — {one.why}", file=sys.stderr)
+        elif one.before is None:
+            print(f"skills: {one.name} {one.after}: installed by default")
+        elif one.before == one.after:
+            print(f"skills: {one.name} {one.after}: up to date")
+        else:
+            print(f"skills: {one.name}: {one.before} -> {one.after}")
+    return 1 if failed else 0
+
+
+def _install_skill_catalog(args: argparse.Namespace, catalogs) -> int:
+    try:
+        if not args.confirm:
+            manifest = catalogs.inspect(args.repository)
+            print(f"{manifest.name} {manifest.version} — {manifest.description}")
+            print(f"source: {args.repository}")
+            print("skills:")
+            for called, _ in manifest.skills:
+                print(f"  {called}")
+            print()
+            print(f"install: rundesk skills install {args.repository} --confirm")
+            return 0
+        landed = catalogs.install(args.repository)
+    except (catalogs.NotACatalog, catalogs.InTheWay, OSError) as why:
+        print(f"skills: NOT INSTALLED — {why}", file=sys.stderr)
+        return 1
+    print(f"{landed.name} {landed.version}: installed")
+    print("        its skills are available and none were granted")
+    return 0
+
+
+def _update_skill_catalog(args: argparse.Namespace, agents, skills, catalogs) -> int:
+    try:
+        before = catalogs.installed().get(args.catalog)
+        landed = catalogs.update(
+            args.catalog, granted=_all_granted_skills(agents, skills)
+        )
+    except (catalogs.NotACatalog, catalogs.InTheWay, catalogs.InUse,
+            catalogs.Unknown, catalogs.RollbackFailed, OSError) as why:
+        print(f"skills: NOT UPDATED — {why}", file=sys.stderr)
+        return 1
+    if before is not None and before.version == landed.version:
+        print(f"{landed.name} {landed.version}: up to date")
+    else:
+        print(f"{landed.name}: {before.version if before else '-'} -> {landed.version}")
+    return 0
+
+
+def _remove_skill_catalog(args: argparse.Namespace, agents, skills, catalogs) -> int:
+    try:
+        standing = catalogs.installed().get(args.catalog)
+        if standing is None:
+            raise catalogs.Unknown(f"there is no installed catalog called {args.catalog}")
+        if not args.yes:
+            print(f"{standing.name} {standing.version} would be removed")
+            for called, _ in standing.manifest.skills:
+                print(f"  {called}")
+            print()
+            print(f"remove: rundesk skills remove {args.catalog} --yes")
+            return 0
+        removed = catalogs.remove(
+            args.catalog, granted=_all_granted_skills(agents, skills)
+        )
+    except (catalogs.NotACatalog, catalogs.InUse, catalogs.Unknown, OSError) as why:
+        print(f"skills: NOT REMOVED — {why}", file=sys.stderr)
+        return 1
+    print(f"{args.catalog}: removed {', '.join(removed)}")
+    return 0
+
+
+def _list_skill_catalogs(catalogs) -> int:
+    try:
+        held = catalogs.installed()
+    except catalogs.NotACatalog as why:
+        print(f"skills: catalogs could not be read — {why}", file=sys.stderr)
+        return 1
+    if not held:
+        print("no skill catalogs")
+        print("        install one:  rundesk skills install <repository>")
+        return 0
+    _as_table(
+        ("CATALOG", "VERSION", "SOURCE", "SKILLS"),
+        [(one.name, one.version, one.source, str(len(one.manifest.skills)))
+         for one in held.values()],
+    )
+    return 0
+
+
+def cmd_skills(args: argparse.Namespace, agents, skills, catalogs) -> int:
     """The skills on this machine, who has which, and giving or taking one away.
 
     The catalog is read off the library and the agents rather than from anything written
@@ -2318,12 +2445,16 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
         # goes with it (R-RM-7). Left behind, it is a piece of rundesk on a machine somebody
         # has removed rundesk from — and it keeps the whole install directory standing after
         # an uninstall that said it had left nothing.
-        print(" ".join(skills.take_back()))
+        taken = catalogs.take_back_seeded()
+        taken.extend(skills.take_back())
+        print(" ".join(taken))
         return 0
     if getattr(args, "lay_down", False):
         # The installer's, and deliberately not an owner's verb: what a release ships is
         # not a thing anybody should have to ask for.
         laid = skills.lay_down()
+        if _refresh_skill_catalogs(agents, skills, catalogs):
+            return 1
         # `skills.granted` is a floor for every agent, including ones that predate the
         # value. Re-running the installer is an upgrade route, so reconcile the existing
         # population here as well as in `_provisioned` (R-AGT-36).
@@ -2332,6 +2463,14 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
         print(" ".join(laid))
         return 0
     act = getattr(args, "act", None)
+    if act == "install":
+        return _install_skill_catalog(args, catalogs)
+    if act == "update":
+        return _update_skill_catalog(args, agents, skills, catalogs)
+    if act == "remove":
+        return _remove_skill_catalog(args, agents, skills, catalogs)
+    if act == "catalogs":
+        return _list_skill_catalogs(catalogs)
     if act in ("grant", "revoke"):
         try:
             whose = agents.skills(args.name)
@@ -2386,7 +2525,7 @@ def cmd_skills(args: argparse.Namespace, agents, skills) -> int:
     # touches. Said this way because the column has more answers coming — a skill that
     # arrived with a plugin, or with a tool — and "yours" against "built-in" is a pair with
     # nowhere for a third to stand.
-    rows = [(name, "rundesk" if name in ships else "custom",
+    rows = [(name, "rundesk" if name in ships else (catalogs.whose(held[name]) or "custom"),
              ", ".join(sorted(who for who, mine in whose.items() if name in mine)) or "-")
             for name in sorted(held)]
     _as_table(("SKILL", "FROM", "AGENTS"), rows)
@@ -4215,7 +4354,7 @@ def _handed_on(argv: list[str], carries: set) -> tuple[list[str], list[str]]:
 
 
 def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
-         scripts=None) -> int:
+         scripts=None, catalogs=None) -> int:
     """The command surface.
 
     What the commands act on is passed in rather than imported here, so this file knows
@@ -4227,6 +4366,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
     agents = agents if agents is not None else _agent
     skills = skills if skills is not None else skill
     scripts = scripts if scripts is not None else script
+    catalogs = catalogs if catalogs is not None else catalog
     parser = build_parser()
     argv, handed_on = _handed_on(argv, _carries_a_tail(parser))
     args = parser.parse_args(argv)
@@ -4260,7 +4400,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
     if args.command == "version":
         return cmd_version(args)
     if args.command == "update":
-        return cmd_update(args, gateways, machine, agents)
+        return cmd_update(args, gateways, machine, agents, catalogs)
     if args.command == "uninstall":
         return cmd_uninstall(args)
     if args.command == "agents":
@@ -4290,7 +4430,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
     if args.command == "backups":
         return cmd_backups(args, gateways, machine, agents)
     if args.command == "skills":
-        return cmd_skills(args, agents, skills)
+        return cmd_skills(args, agents, skills, catalogs)
     if args.command == "scripts":
         return cmd_scripts(args, scripts)
     if args.command == "channels":

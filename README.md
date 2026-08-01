@@ -207,9 +207,37 @@ state, history, and delivery.
 ### Skills and integration CLIs
 
 - A shared skill library with per-agent grants
-- Built-in skills that update with Rundesk and owner-created skills that do not
+- Required Rundesk operating skills that every agent retains
+- The general `rundesk-skills` catalog included automatically on every install
+- Versioned repository catalogs updated with every Rundesk update and removed as collections
+- Owner-created skills that Rundesk never replaces
 - A shared executable library placed on every agent's `PATH`
 - Guidance for building guarded, offline-tested service integrations
+
+Every install includes the general [`rundesk-skills`](https://github.com/rundesk-ai/rundesk-skills)
+catalog without granting its skills automatically. Install another catalog from its repository
+URL; Rundesk previews every declared skill before confirmation:
+
+```sh
+rundesk skills install https://github.com/rundesk-ai/rundesk-skills
+rundesk skills install https://github.com/rundesk-ai/rundesk-skills --confirm
+rundesk skills grant ava python-patterns
+```
+
+Catalog repositories use one [`manifest.json` contract](docs/extending/skill-catalogs/README.md)
+whether they publish one skill or a collection.
+
+First-party optional integrations use the same contract:
+
+- [Apple skills](https://github.com/rundesk-ai/rundesk-skills-apple) — Calendar, Contacts,
+  Mail, and Messages on macOS.
+- [Integration skills](https://github.com/rundesk-ai/rundesk-skills-integrations) —
+  Cloudflare, Confluence, Coolify, Jira, and Sentry.
+
+Each command is packaged inside its skill. Service integrations use the system Python standard
+library; Apple integrations use macOS system frameworks and tools. Neither catalog installs
+dependencies. Credentials use isolated owner configuration by default with an explicit shared
+dotenv option.
 
 ### Operations and data
 
@@ -264,6 +292,12 @@ Not yet. Rundesk currently depends on macOS `launchd` to own its gateways. Follo
 Updates replace `~/.rundesk/app` and leave `~/.rundesk/data` untouched. When records need
 to move forward, Rundesk stops every gateway and keeps a rollback copy of each database.
 If a migration fails, it restores the records and previous release.
+
+After the Rundesk transaction succeeds—even when Rundesk was already current—it installs
+the default general catalog if absent and checks every installed catalog's repository. A
+newer version replaces the catalog atomically; checking the same version also restores its
+exact files to remove local drift. One failed catalog is reported without preventing the
+others from being checked or rolling back an otherwise healthy CLI update.
 
 </details>
 

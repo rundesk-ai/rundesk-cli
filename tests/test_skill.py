@@ -72,8 +72,7 @@ class WithALibrary(unittest.TestCase):
 
 class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
     def test_skill_authoring_guidance_defines_complete_packages(self):
-        """R-AGT-44 — the reusable format is shipped to every agent that writes skills,
-        rather than living only in a repository document people may not read."""
+        """R-AGT-44 — Rundesk's own reusable format ships with Rundesk."""
         page = (REALLY_SHIPPED / "writing-rundesk-skills" / "SKILL.md").read_text()
         for expected in (
                 "scripts/", "references/", "assets/",
@@ -131,43 +130,14 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
         self.assertIn("closingIssuesReferences", pull)
 
 
-class WhatTheShippedPythonTestingSkillSays(unittest.TestCase):
-    def test_python_testing_guidance_is_for_the_standard_library_runner(self):
-        page = (REALLY_SHIPPED / "python-testing" / "SKILL.md").read_text()
-        for expected in (
-                "unittest.TestCase", "self.addCleanup", "self.subTest",
-                "unittest.IsolatedAsyncioTestCase", "Patch where the code under test looks"):
-            with self.subTest(expected=expected):
-                self.assertIn(expected, page)
-        self.assertNotIn("pytest", page.lower())
-
-
-class WhatTheShippedPdfCreationSkillSays(unittest.TestCase):
-    def test_pdf_creation_requires_local_generation_and_visual_verification(self):
-        page = (REALLY_SHIPPED / "pdf-creation" / "SKILL.md").read_text()
-        for expected in (
-                "Create the PDF entirely on the local machine",
-                "SimpleDocTemplate", "LongTable", "pdftoppm",
-                "Inspect every rendered page", "Escape untrusted or literal content"):
-            with self.subTest(expected=expected):
-                self.assertIn(expected, page)
-
-
-class WhatTheShippedFrontendDesignSkillSays(unittest.TestCase):
-    def test_frontend_design_covers_visual_ux_responsive_and_accessible_quality(self):
-        """R-AGT-27, R-AGT-30 — the built-in teaches the complete design outcome."""
-        page = (REALLY_SHIPPED / "frontend-design" / "SKILL.md").read_text()
-        for expected in (
-                "one visual thesis", "Design every consequential state",
-                "Build a coherent visual system", "Make accessibility part of the design",
-                "Mobile and desktop layouts", "Keyboard navigation", "reduced motion"):
-            with self.subTest(expected=expected):
-                self.assertIn(expected, page)
-
-    def test_frontend_design_is_available_without_becoming_a_default_grant(self):
-        """R-AGT-30, R-AGT-36 — optional built-ins are available without becoming policy."""
-        self.assertIsNone(skill.valid(REALLY_SHIPPED / "frontend-design"))
-        self.assertNotIn("frontend-design", config.INITIAL["skills"]["granted"])
+class WhatTheReleaseNoLongerOwns(unittest.TestCase):
+    def test_optional_external_skills_are_not_rundesk_built_ins(self):
+        """R-CAT-6, R-AGT-35 — optional skills have an external owner or none yet."""
+        for called in (
+                "frontend-design", "laravel-patterns", "python-patterns",
+                "python-testing", "vue-patterns", "pdf-creation", "seo"):
+            with self.subTest(skill=called):
+                self.assertNotIn(called, skill.shipped())
 
 
 class WhatTheLibraryHolds(WithALibrary):
@@ -198,6 +168,11 @@ class WhatTheLibraryHolds(WithALibrary):
 
 
 class WhatMakesASkill(WithALibrary):
+    def test_every_required_skill_is_part_of_the_release(self):
+        """R-AGT-36 — the non-removable baseline can always be laid down and granted."""
+        shipped = {one.name for one in REALLY_SHIPPED.iterdir() if (one / skill.NAMED).is_file()}
+        self.assertEqual(set(), set(config.RUNDESK_REQUIRED_GRANTS) - shipped)
+
     def test_every_built_in_is_a_valid_skill(self):
         """R-AGT-27, R-AGT-30 — a release must not lay down a built-in that every brain
         silently refuses to index."""
@@ -732,7 +707,8 @@ class WhatMakingAnAgentGrants(WithALibrary):
         skill.SHIPPED = self.release
         self.addCleanup(setattr, skill, "SHIPPED", was)
         a_skill(self.release, "writing-skills")
-        a_skill(self.release, "filing-rundesk-issues")
+        for called in config.RUNDESK_REQUIRED_GRANTS:
+            a_skill(self.release, called)
         skill.lay_down(self.library)
         # What a new agent is given is stated rather than "everything shipped" (R-AGT-36),
         # so the scratch release has to be named or nothing here is granted at all.
@@ -764,7 +740,7 @@ class WhatMakingAnAgentGrants(WithALibrary):
 
         self.agents.add("ava")
 
-        self.assertEqual(["filing-rundesk-issues", "writing-skills"],
+        self.assertEqual(sorted((*config.RUNDESK_REQUIRED_GRANTS, "writing-skills")),
                          skill.granted(self.agents.skills("ava")),
                          "an agent was given a skill the configuration did not name")
 
@@ -782,12 +758,12 @@ class WhatMakingAnAgentGrants(WithALibrary):
 
         self.agents.require_skills("ava")
 
-        self.assertEqual(["filing-rundesk-issues", "later-addition", "owner-chose-this",
-                          "writing-skills"],
+        self.assertEqual(sorted((*config.RUNDESK_REQUIRED_GRANTS, "later-addition",
+                                 "owner-chose-this", "writing-skills")),
                          skill.granted(self.agents.skills("ava")))
 
     def test_an_agent_is_made_with_the_skills_written_into_a_new_configuration(self):
-        """R-AGT-36 — the required set is the four an agent needs to work with rundesk
+        """R-AGT-36 — the required set is what an agent needs to work with rundesk
         itself, written where the owner and the command both read it."""
         (self.where / "data" / "config.json").unlink()
         config.ensure(self.where / "data")
@@ -807,7 +783,7 @@ class WhatMakingAnAgentGrants(WithALibrary):
 
         self.agents.add("ava")
 
-        self.assertEqual(["filing-rundesk-issues"],
+        self.assertEqual(sorted(config.RUNDESK_REQUIRED_GRANTS),
                          skill.granted(self.agents.skills("ava")))
 
     def test_a_configuration_that_cannot_be_read_refuses_to_make_the_agent(self):

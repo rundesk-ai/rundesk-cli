@@ -28,7 +28,7 @@ none of them is a copy of another:
 
 | Decided in | What it settles |
 |---|---|
-| `src/rundesk/__init__.py` — `data_home()`, `scripts_home()`, `skills_home()` | **the program and the data are two directories**: `app/` is what an update replaces and an uninstall takes whole, while owner commands and skills resolve below the data it never touches (R-INS-13, R-RM-8, R-PROC-22) |
+| `src/rundesk/__init__.py` — `data_home()`, `scripts_home()`, `skills_home()` | **the program and the data are two directories**: `app/` is what an update replaces and an uninstall takes whole, while owner commands, skills, and catalogs resolve below the data it never touches (R-INS-13, R-RM-8, R-PROC-22) |
 | `src/rundesk/agent.py` — `agents_home()`, `directory()`, `paths()` | every directory that is one agent's own, off one list that making and diagnosing both read |
 | `src/rundesk/agent.py` — `templates_home()`, `sourced()` | where an owner's own templates stand and which file each page really comes from. **Below `agents_home()`**, so whatever redirects where agents live redirects it too, and outside anything a release ships, which is the whole of why an update cannot reach it (R-AGT-23) |
 | `src/rundesk/dependencies.py` — `wanted_at()`, `site_packages()` | what this install is made of and where it is kept, asked the same way by the installer, an update and a gateway |
@@ -104,12 +104,15 @@ file with it.
 - `src/rundesk/activity.py` — atomic, runtime-only provider-turn identities. Keeps only source,
   conversation, PID, and start time so status and update safety can see work without seeing prompts.
 - `src/rundesk/skill.py` — the library of skills on this machine, and what makes one. Everything
-  stands in `data/skills/`: built-ins copied there by the install and brought forward by an update,
-  an owner's own beside them and never touched. **A grant is a link in the agent's own `skills/`,
+  stands in `data/skills/`: required built-ins copied there by the install, catalog links, and an
+  owner's own packages beside them. **A grant is a link in the agent's own `skills/`,
   not a record of one** — rundesk never loads a skill, so the only lever with force is what is
   standing there before the brain runs, and a rule in a config file would describe what rundesk
   placed while the brain read on. Knows nothing of any brain: where a skill is *presented* is each
   adapter's, told through `RUNDESK_SKILLS`.
+- `src/rundesk/catalog.py` — repository manifests, catalog provenance, and atomic installation,
+  update, adoption, and removal below `data/catalogs/`. Exposes complete packages through links in
+  the existing skill library; never imports or executes catalog content.
 - `src/rundesk/script.py` — the owner's shared integration commands. Resolves the script
   library below the install's data and lists only runnable top-level entries; `process.py`
   puts that directory first on every program's `PATH`.
@@ -191,7 +194,7 @@ file with it.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 29 files, ~2000 cases)
+## Tests (tests/ — 30 files, ~2000 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
@@ -200,12 +203,13 @@ provider. One file per contract, named for it:
 |---|---|---|
 | `test_gateway.py` | 196 | `platform-gateway` — real processes, real signals, waits turned down |
 | `test_agent.py` | 88 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
-| `test_cli.py` | 288 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
+| `test_cli.py` | 296 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
+| `test_catalog.py` | 27 | `lifecycle-skill-catalog` — manifests, provenance, default seeding, inert integration packages, lifecycle refresh, ownership, atomic updates, drift replacement, removal, and unsafe archives, all offline |
 | `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 81 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
 | `test_update_request.py` | 26 | `lifecycle-update` + queued restarts — durable external handoff, duplicate requests, safety waits, and outcome delivery |
 | `test_dependencies.py` | 28 | `lifecycle-update` — what the install is made of: what is declared, what the virtualenv holds, and building one **without pip ever running** |
-| `test_install.py` | 70 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
+| `test_install.py` | 82 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
 | `test_supervisor.py` | 78 | the launchd job — a fake `launchctl`, so it runs where there is none |
 | `test_schedule.py` | 49 | `platform-schedule` — pure time arithmetic, the clock passed in |
 | `test_provider.py` | 37 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
@@ -220,7 +224,7 @@ provider. One file per contract, named for it:
 | `test_answering.py` | 101 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
 | `test_discord.py` | 168 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
 | `test_instructions.py` | 10 | Rundesk's core and trigger prompts, standard variables, and additive builder |
-| `test_ci.py` | 13 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, and the supported matrix |
+| `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and
 `.knowledge/scripts/check-evidence` fails the build when a row names one that does not exist.
@@ -251,15 +255,13 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
 - `CLI.md` — every operation the command offers, how each is typed, and what each argument means.
   **Generated** by `.knowledge/scripts/cli-reference` from the parser, so it cannot describe a product
   nobody has; the gate fails when it and the command disagree.
-- `src/templates/skills/` — **the skills this release ships.** Copied into the owner's library
-  by the install and brought forward by an update, so a built-in is always the version installed
+- `src/templates/skills/` — **the required and remaining release-owned skills.** Copied into the
+  owner's library by the install and brought forward by an update, so a built-in is always the version installed
   (R-AGT-30). `managing-rundesk` is how to operate rundesk, written for **an agent running inside
   it** — it was a document at the repository root that an agent had to be told to go and read,
   and the pointer named a path that existed on neither kind of install. As a skill it is handed
-  to the agent instead. **Not every shipped skill reaches every agent**: the required set is
-  `config.skills()["granted"]`, combining Rundesk's unrevokable platform-stewardship floor with
-  the owner-configured baseline and reconciling both onto existing agents during updates and
-  reinstalls (R-AGT-36, R-AGT-37).
+  to the agent instead. The operating baseline in `config.RUNDESK_REQUIRED_GRANTS` reaches every
+  new and existing agent and cannot be configured away or revoked (R-AGT-36, R-AGT-37).
 - `docs/extending/` — the adapter and integration guides. They were built-in skills, laid down in
   every owner's library and granted to every agent, for a task almost none of them will ever do.
   A person building an adapter reads these against the repository; an agent does not need them in

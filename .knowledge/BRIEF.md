@@ -40,7 +40,8 @@ supervises nothing itself; it hands that to what the machine already has.
 ## Scope
 
 - **Active areas:** the command surface and how it describes itself; install, update and uninstall; which
-  version this install is on, and which has been published; the agent — making one, seeing what you have,
+  version this install is on, and which has been published; versioned skill catalogs installed from
+  repositories into the shared library, with grants still decided per agent; the agent — making one, seeing what you have,
   saying what stands between it and a working turn, and taking it away with everything that was its own;
   the gateway that runs it — starting one, keeping it up, saying what it is doing, and ending everything it
   started when it goes; the programs it runs, which are
@@ -67,6 +68,7 @@ supervises nothing itself; it hands that to what the machine already has.
 ## External Systems
 
 - `GitHub Releases` — which version has been published, and the archive an update is fetched from.
+- `GitHub repositories` — public skill catalogs fetched by repository URL and tracked by their declared version.
 - `python3` — the runtime, taken as already present on the machine rather than installed.
 - `launchd` — what keeps a gateway running, brings it back when it falls over, and starts it again after
   a restart. rundesk writes the job and hands it over; it supervises nothing itself.

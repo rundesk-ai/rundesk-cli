@@ -578,7 +578,7 @@ def _download_and_apply(repo_root: Path, tag: str) -> int:
         print(f"{tag}: unpacking {_size(archive)}", flush=True)
         try:
             with tarfile.open(archive) as tar:
-                _safe_extract(tar, unpacked)
+                safe_extract(tar, unpacked)
         except (tarfile.TarError, ValueError, OSError) as err:
             print(f"{tag}: FAILED — the download is not shaped like a release: {err}", file=sys.stderr)
             return 1
@@ -630,7 +630,7 @@ def _size(path: Path) -> str:
         return "the release"
 
 
-def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
+def safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
     """Refuse a member that would land outside `dest` — an archive is untrusted input.
 
     Checking each member's own name is not enough. A link member's *target* is a second way
@@ -654,6 +654,11 @@ def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
             if not _lands_inside(root, str(PurePosixPath(member.name).parent / link)):
                 raise ValueError(f"refusing a link that points outside: {member.name} -> {link}")
     tar.extractall(dest)
+
+
+def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
+    """Backward-compatible private spelling retained for existing callers and tests."""
+    safe_extract(tar, dest)
 
 
 def _lands_inside(root: Path, name: str) -> bool:

@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk import __version__  # noqa: E402
 from rundesk import cli  # noqa: E402
+from rundesk import catalog as real_catalog  # noqa: E402
 from rundesk import config  # noqa: E402
 from rundesk import restart_request  # noqa: E402
 from rundesk import store  # noqa: E402
@@ -759,6 +760,78 @@ class FakeSkills:
         self._given[whose.name].remove(name)
 
 
+class FakeCatalogs:
+    NotACatalog = real_catalog.NotACatalog
+    InTheWay = real_catalog.InTheWay
+    InUse = real_catalog.InUse
+    Unknown = real_catalog.Unknown
+    RollbackFailed = real_catalog.RollbackFailed
+
+    class Manifest:
+        def __init__(self, name="development", version="1.0.0",
+                     skills=(("python-patterns", "skills/python-patterns"),)):
+            self.name = name
+            self.version = version
+            self.description = "Development guidance."
+            self.skills = skills
+
+    class One:
+        def __init__(self, name="development", version="1.0.0", source="owner/repository",
+                     skills=(("python-patterns", "skills/python-patterns"),)):
+            self.name = name
+            self.version = version
+            self.source = source
+            self.manifest = FakeCatalogs.Manifest(name, version, skills)
+
+    def __init__(self, held=()):
+        self._held = {one.name: one for one in held}
+        self.did = []
+
+    def inspect(self, source):
+        self.did.append(("inspect", source))
+        return self.Manifest()
+
+    def install(self, source):
+        self.did.append(("install", source))
+        one = self.One(source=source)
+        self._held[one.name] = one
+        return one
+
+    def update(self, name, granted=()):
+        self.did.append(("update", name, set(granted)))
+        before = self._held.get(name, self.One(name=name))
+        one = self.One(name=name, version="1.1.0", source=before.source,
+                       skills=before.manifest.skills)
+        self._held[name] = one
+        return one
+
+    def remove(self, name, granted=()):
+        self.did.append(("remove", name, set(granted)))
+        one = self._held.pop(name, None)
+        if one is None:
+            raise self.Unknown(f"there is no installed catalog called {name}")
+        return [called for called, _ in one.manifest.skills]
+
+    def refresh(self, granted=()):
+        self.did.append(("refresh", set(granted)))
+        one = self._held.get("rundesk-skills")
+        if one is None:
+            one = self.One(name="rundesk-skills", source=real_catalog.DEFAULT_SOURCE)
+            self._held[one.name] = one
+            return (real_catalog.Refreshed(one.name, None, one.version),)
+        return (real_catalog.Refreshed(one.name, one.version, one.version),)
+
+    def take_back_seeded(self):
+        one = self._held.pop("rundesk-skills", None)
+        return [] if one is None else [called for called, _ in one.manifest.skills]
+
+    def installed(self):
+        return dict(self._held)
+
+    def whose(self, entry):
+        return None
+
+
 class FakeScripts:
     """The shared script directory without reaching the owner's real one."""
 
@@ -1141,14 +1214,16 @@ class FakeMachine:
         return self.backups_daily is not None
 
 
-def drive(argv, gateways=None, machine=None, agents=None, skills=None, scripts=None):
+def drive(argv, gateways=None, machine=None, agents=None, skills=None, scripts=None,
+          catalogs=None):
     """Run the command line and hand back what it printed and what it returned."""
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
             code = cli.main(argv, gateways=gateways or FakeGateways(),
                             machine=machine or FakeMachine(), agents=agents or FakeAgents(),
-                            skills=skills or FakeSkills(), scripts=scripts or FakeScripts())
+                            skills=skills or FakeSkills(), scripts=scripts or FakeScripts(),
+                            catalogs=catalogs or FakeCatalogs())
         except SystemExit as usage:
             # What a shell sees. Argparse refuses by exiting rather than returning, and a
             # case proving something is refused by the grammar could not otherwise say
@@ -1230,11 +1305,109 @@ class WhatTheInstallerDoesToTheLibrary(unittest.TestCase):
         baseline to agents that predate this release."""
         agents = FakeAgents(made=("ava", "bo"))
 
+        catalogs = FakeCatalogs()
         code, said = drive(["skills", "--lay-down"], agents=agents,
-                           skills=FakeSkills(ships=("managing-rundesk",)))
+                           skills=FakeSkills(ships=("managing-rundesk",)),
+                           catalogs=catalogs)
 
         self.assertEqual(0, code, said)
         self.assertEqual(["ava", "bo"], agents.required)
+        self.assertEqual(("refresh", set()), catalogs.did[-1])
+
+
+class WhatSkillCatalogsDo(unittest.TestCase):
+    def test_refresh_reports_default_install_and_checks_with_every_agent_grant(self):
+        """R-CAT-11, R-CAT-12 — lifecycle refresh owns seeding and update checks."""
+        catalogs = FakeCatalogs()
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(held=("python-patterns",),
+                            given={"skills": ["python-patterns"]})
+
+        with contextlib.redirect_stdout(io.StringIO()) as said:
+            code = cli._refresh_skill_catalogs(agents, skills, catalogs)
+
+        self.assertEqual(0, code)
+        self.assertIn("installed by default", said.getvalue())
+        self.assertEqual(("refresh", {"python-patterns"}), catalogs.did[-1])
+
+    def test_installing_first_previews_the_repository_and_changes_nothing(self):
+        """R-CAT-2 — remote content is described before it is written."""
+        catalogs = FakeCatalogs()
+
+        code, said = drive(
+            ["skills", "install", "https://github.com/rundesk-ai/rundesk-skills"],
+            catalogs=catalogs,
+        )
+
+        self.assertEqual(0, code, said)
+        self.assertIn("python-patterns", said)
+        self.assertIn("--confirm", said)
+        self.assertEqual([("inspect", "https://github.com/rundesk-ai/rundesk-skills")],
+                         catalogs.did)
+
+    def test_confirming_installs_the_repository_without_granting_a_skill(self):
+        """R-CAT-3 — availability and an agent grant remain separate decisions."""
+        catalogs = FakeCatalogs()
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills()
+
+        code, said = drive([
+            "skills", "install", "https://github.com/rundesk-ai/rundesk-skills",
+            "--confirm",
+        ], agents=agents, skills=skills, catalogs=catalogs)
+
+        self.assertEqual(0, code, said)
+        self.assertIn("none were granted", said)
+        self.assertEqual([], skills.granted(agents.skills("ava")))
+
+    def test_confirming_a_colliding_repository_fails_with_the_skill_name(self):
+        """R-CAT-5 — refusal tells the owner which custom package blocked installation."""
+        catalogs = FakeCatalogs()
+        conflict = "the skill python-patterns is already there and this catalog does not own it"
+
+        with mock.patch.object(catalogs, "install", side_effect=catalogs.InTheWay(conflict)):
+            code, said = drive([
+                "skills", "install", "https://github.com/example/example-skills", "--confirm",
+            ], catalogs=catalogs)
+
+        self.assertEqual(1, code)
+        self.assertIn(f"skills: NOT INSTALLED — {conflict}", said)
+
+    def test_updating_tells_the_catalog_which_skills_are_granted(self):
+        """R-CAT-9 — the surface supplies the cross-agent grant boundary."""
+        one = FakeCatalogs.One()
+        catalogs = FakeCatalogs((one,))
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(held=("python-patterns",),
+                            given={"skills": ["python-patterns"]})
+
+        code, said = drive(
+            ["skills", "update", "development"], agents=agents, skills=skills,
+            catalogs=catalogs,
+        )
+
+        self.assertEqual(0, code, said)
+        self.assertEqual(("update", "development", {"python-patterns"}), catalogs.did[-1])
+
+    def test_removing_without_yes_previews_and_changes_nothing(self):
+        """R-CAT-5 — removing a repository is an explicit second step."""
+        catalogs = FakeCatalogs((FakeCatalogs.One(),))
+
+        code, said = drive(["skills", "remove", "development"], catalogs=catalogs)
+
+        self.assertEqual(0, code, said)
+        self.assertIn("--yes", said)
+        self.assertIn("development", catalogs.installed())
+
+    def test_installed_catalogs_show_version_source_and_skill_count(self):
+        """R-CAT-4 — provenance is visible through the command surface."""
+        catalogs = FakeCatalogs((FakeCatalogs.One(),))
+
+        code, said = drive(["skills", "catalogs"], catalogs=catalogs)
+
+        self.assertEqual(0, code, said)
+        for expected in ("development", "1.0.0", "owner/repository", "1"):
+            self.assertIn(expected, said)
 
 
 class WhatCanBeTakenFromAnAgent(unittest.TestCase):

@@ -219,7 +219,8 @@ class DurableRequests(unittest.TestCase):
                 }, clear=True), \
                 mock.patch.object(cli.updater, "run", return_value=0) as ran:
             self.assertEqual(0, cli.cmd_update(
-                args, mock.Mock(), mock.Mock(), mock.Mock()
+                args, mock.Mock(), mock.Mock(), mock.Mock(known=mock.Mock(return_value=[])),
+                mock.Mock(refresh=mock.Mock(return_value=())),
             ))
         self.assertEqual(target, ran.call_args.args[0])
         self.assertEqual("0.9.6", ran.call_args.args[1])
@@ -383,7 +384,8 @@ class DurableRequests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"RUNDESK_RUN": ""}, clear=False), \
                 mock.patch.object(cli.updater, "run", return_value=0):
             self.assertEqual(0, cli.cmd_update(
-                args, mock.Mock(), machine, mock.Mock()
+                args, mock.Mock(), machine, mock.Mock(known=mock.Mock(return_value=[])),
+                mock.Mock(refresh=mock.Mock(return_value=())),
             ))
         self.assertTrue(machine.installed)
 
