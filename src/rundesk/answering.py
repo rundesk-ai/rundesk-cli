@@ -71,15 +71,11 @@ AFTER_UPDATE = (
     "original request. Do not stop at reporting status or repeat completed actions."
 )
 
-# A whole-line absolute local link is explicit delivery intent (R-CH-31). The optional
-# reserved prefix is portable across brains that do not naturally emit Markdown file links;
-# prefix that form with a backslash when showing the protocol literally. Quotes, lists,
-# inline links, relative paths, remote paths, and code contain no delivery declaration.
-_LOCAL_ATTACHMENT = re.compile(
-    r"^(?:rundesk-attach:[ \t]+)?\[(?P<label>(?:\\.|[^]\\\r\n])*)\]"
-    r"\(<(?P<at>/(?!/)[^>\r\n]+)>\)[ \t]*\r?$",
-    re.MULTILINE,
-)
+# Any absolute local Markdown link is delivery intent (R-CH-31). The optional reserved
+# prefix remains portable across brains; prefix that form or the opening bracket with a
+# backslash when showing one literally. The parser below handles balanced brackets and
+# parentheses because both are valid filename characters and regex cannot balance them.
+_LOCAL_ATTACHMENT_START = re.compile(r"(?<!\\)(?:rundesk-attach:[ \t]+)?\[")
 
 
 @dataclass
@@ -1152,15 +1148,97 @@ def _fingerprint_beneath(at: Path, inside: Path) -> tuple[int, str, tuple[int, i
 
 
 def _attachment_lines(text: str) -> tuple[str, list]:
-    """Extract whole-line local attachment links and leave only their labels."""
+    """Extract absolute local Markdown links and leave only their labels."""
     declared = []
+    visible = []
+    copied = 0
+    searched = 0
+    while found := _LOCAL_ATTACHMENT_START.search(text, searched):
+        start = found.start()
+        # `\rundesk-attach:` is the documented literal form. Without this check the
+        # optional prefix would let the search begin again at its otherwise ordinary `[`.
+        line_start = text.rfind("\n", 0, start) + 1
+        before = text[line_start:start]
+        if found.group(0) == "[" and re.search(
+                r"\\rundesk-attach:[ \t]+$", before):
+            searched = found.end()
+            continue
 
-    def attachment(line) -> str:
-        at = line.group("at")
+        label_start = found.end()
+        label_end = _matching_close(text, label_start, "[", "]")
+        if label_end is None or label_end + 1 >= len(text) or text[label_end + 1] != "(":
+            searched = found.end()
+            continue
+
+        destination_start = label_end + 2
+        if destination_start >= len(text):
+            break
+        if text[destination_start] == "<":
+            destination_end = _next_unescaped(text, destination_start + 1, ">")
+            if (destination_end is None or destination_end + 1 >= len(text)
+                    or text[destination_end + 1] != ")"):
+                searched = found.end()
+                continue
+            at = text[destination_start + 1:destination_end]
+            end = destination_end + 2
+        else:
+            destination_end = _matching_close(text, destination_start, "(", ")")
+            if destination_end is None:
+                searched = found.end()
+                continue
+            at = text[destination_start:destination_end]
+            end = destination_end + 1
+
+        if not at.startswith("/") or at.startswith("//") or "\n" in at or "\r" in at:
+            searched = found.end()
+            continue
+        if found.group(0).startswith("rundesk-attach:"):
+            # Preserve the reserved whole-line form's historical CRLF normalization and
+            # trailing-space handling without consuming prose after an ordinary link.
+            line_end = end
+            while line_end < len(text) and text[line_end] in " \t":
+                line_end += 1
+            if line_end < len(text) and text[line_end] == "\r":
+                line_end += 1
+            if line_end == len(text) or text[line_end] == "\n":
+                end = line_end
+        visible.extend((text[copied:start], text[label_start:label_end]))
         declared.append({"name": Path(at).name, "at": at})
-        return line.group("label")
+        copied = end
+        searched = end
+    visible.append(text[copied:])
+    return "".join(visible), declared
 
-    return _LOCAL_ATTACHMENT.sub(attachment, text), declared
+
+def _matching_close(text: str, start: int, opened: str, closed: str) -> int | None:
+    """Find a balanced Markdown delimiter, ignoring escaped characters."""
+    depth = 1
+    index = start
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+            continue
+        if text[index] == opened:
+            depth += 1
+        elif text[index] == closed:
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return None
+
+
+def _next_unescaped(text: str, start: int, wanted: str) -> int | None:
+    """Find one Markdown delimiter, ignoring escaped characters."""
+    index = start
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+            continue
+        if text[index] == wanted:
+            return index
+        index += 1
+    return None
 
 
 def _asked(it: dict) -> str:
