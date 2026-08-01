@@ -220,33 +220,36 @@ def install(source, where: Path | None = None, skills_dir: Path | None = None,
     with tempfile.TemporaryDirectory(prefix="rundesk-catalog-") as temporary:
         fetched = (fetch or _fetch)(source, Path(temporary))
         manifest = read(fetched)
-        if manifest.name in _installed(root, validate_packages=False):
-            raise InTheWay(
-                f"{manifest.name} is already installed; use: rundesk skills update {manifest.name}"
-            )
-        target = root / manifest.name
-        if target.exists():
-            raise InTheWay(f"{target} is already there and Rundesk did not lay it down")
-        _preflight(manifest, target, library)
-        retired = _retired(manifest, target, library)
-        try:
-            target.mkdir(parents=True)
-            (target / OWNED).write_text("rundesk skill catalog\n", encoding="utf-8")
-            _stash(retired, target / PREVIOUS)
-            shutil.copytree(fetched, target / APP)
-            _write_provenance(target, str(source), manifest.version, seeded=seeded)
-            _link_all(read(target / APP), target, library)
-        except Exception:
-            _unlink_owned(target, library)
-            _restore_stash(target / PREVIOUS, library)
-            shutil.rmtree(target, ignore_errors=True)
-            raise
-        shutil.rmtree(target / PREVIOUS, ignore_errors=True)
+        with skill.changing_grants(library):
+            if manifest.name in _installed(root, validate_packages=False):
+                raise InTheWay(
+                    f"{manifest.name} is already installed; "
+                    f"use: rundesk skills update {manifest.name}"
+                )
+            target = root / manifest.name
+            if target.exists():
+                raise InTheWay(f"{target} is already there and Rundesk did not lay it down")
+            _preflight(manifest, target, library)
+            retired = _retired(manifest, target, library)
+            try:
+                target.mkdir(parents=True)
+                (target / OWNED).write_text("rundesk skill catalog\n", encoding="utf-8")
+                _stash(retired, target / PREVIOUS)
+                shutil.copytree(fetched, target / APP)
+                _write_provenance(target, str(source), manifest.version, seeded=seeded)
+                _link_all(read(target / APP), target, library)
+            except Exception:
+                _unlink_owned(target, library)
+                _restore_stash(target / PREVIOUS, library)
+                shutil.rmtree(target, ignore_errors=True)
+                raise
+            shutil.rmtree(target / PREVIOUS, ignore_errors=True)
     return installed(root)[manifest.name]
 
 
 def refresh(where: Path | None = None, skills_dir: Path | None = None,
-            granted=(), fetch=None, default_source=None) -> tuple[Refreshed, ...]:
+            granted=(), fetch=None, default_source=None,
+            retiring=None) -> tuple[Refreshed, ...]:
     """Seed Rundesk's general catalog, then check every repository already installed.
 
     Repositories are independent update units. One unreachable or invalid source is
@@ -266,7 +269,9 @@ def refresh(where: Path | None = None, skills_dir: Path | None = None,
             results.append(Refreshed(landed.name, None, landed.version))
     for name, before in sorted(standing.items()):
         try:
-            after = update(name, root, library, granted=granted, fetch=fetch)
+            after = update(
+                name, root, library, granted=granted, fetch=fetch, retiring=retiring,
+            )
         except (NotACatalog, InTheWay, InUse, Unknown, RollbackFailed, OSError) as why:
             results.append(Refreshed(name, before.version, None, str(why)))
         else:
@@ -275,36 +280,49 @@ def refresh(where: Path | None = None, skills_dir: Path | None = None,
 
 
 def update(name: str, where: Path | None = None, skills_dir: Path | None = None,
-           granted=(), fetch=None) -> Installed:
+           granted=(), fetch=None, retiring=None) -> Installed:
     """Move one catalog to a newer declared version, putting the working release back on failure."""
     root = home(where)
     library = skills_dir if skills_dir is not None else skill.home()
-    current = _installed(root, validate_packages=False).get(name)
-    if current is None:
-        raise Unknown(f"there is no installed catalog called {name}")
+    with skill.changing_grants(library):
+        current = _installed(root, validate_packages=False).get(name)
+        if current is None:
+            raise Unknown(f"there is no installed catalog called {name}")
+        source = current.source
+        seeded = provenance(current.at).get("seeded")
+        with tempfile.TemporaryDirectory(prefix="rundesk-catalog-") as temporary:
+            fetched = (fetch or _fetch)(source, Path(temporary))
+            coming_manifest = read(fetched)
+            return _update_to(
+                current, coming_manifest, fetched, root, library, granted, retiring, seeded,
+            )
+
+
+def _update_to(current: Installed, coming_manifest: Manifest, fetched: Path,
+               root: Path, library: Path, granted, retiring, seeded) -> Installed:
+    """Activate one fetched release while the install-wide skill lock is held."""
+    name = current.name
     source = current.source
-    seeded = provenance(current.at).get("seeded")
-    with tempfile.TemporaryDirectory(prefix="rundesk-catalog-") as temporary:
-        fetched = (fetch or _fetch)(source, Path(temporary))
-        coming_manifest = read(fetched)
-        if coming_manifest.name != name:
-            raise NotACatalog(f"{source} now calls itself {coming_manifest.name}, not {name}")
-        # The repository release is authoritative even when its version is unchanged:
-        # checking it again repairs local edits, additions, and deletions. Only an older
-        # repository version is ignored.
-        if (coming_manifest.version != current.version
-                and not updater.is_newer(coming_manifest.version, current.version)):
-            return current
-        removed = {called for called, _ in current.manifest.skills} - {
-            called for called, _ in coming_manifest.skills
-        }
-        used = sorted(removed.intersection(granted))
-        if used:
-            raise InUse(f"cannot remove granted skills: {', '.join(used)}")
-        _preflight(coming_manifest, current.at, library)
-        retired = _retired(coming_manifest, current.at, library)
-        coming = current.at / COMING
-        previous = current.at / PREVIOUS
+    if coming_manifest.name != name:
+        raise NotACatalog(f"{source} now calls itself {coming_manifest.name}, not {name}")
+    # The repository release is authoritative even when its version is unchanged:
+    # checking it again repairs local edits, additions, and deletions. Only an older
+    # repository version is ignored.
+    if (coming_manifest.version != current.version
+            and not updater.is_newer(coming_manifest.version, current.version)):
+        return current
+    removed = {called for called, _ in current.manifest.skills} - {
+        called for called, _ in coming_manifest.skills
+    }
+    used = sorted(removed.intersection(granted))
+    if used and retiring is None:
+        raise InUse(f"cannot remove granted skills: {', '.join(used)}")
+    _preflight(coming_manifest, current.at, library)
+    retired = _retired(coming_manifest, current.at, library)
+    coming = current.at / COMING
+    previous = current.at / PREVIOUS
+    retirement = retiring(removed) if retiring is not None else contextlib.nullcontext()
+    with retirement:
         shutil.rmtree(coming, ignore_errors=True)
         shutil.rmtree(previous, ignore_errors=True)
         shutil.copytree(fetched, coming)
@@ -342,32 +360,52 @@ def update(name: str, where: Path | None = None, skills_dir: Path | None = None,
 
 
 def remove(name: str, where: Path | None = None, skills_dir: Path | None = None,
-           granted=()) -> list[str]:
-    """Remove one catalog only when none of its skills is still granted."""
+           granted=(), retiring=None) -> list[str]:
+    """Remove one catalog, retiring stopped-agent grants when coordinated by a caller."""
     root = home(where)
     library = skills_dir if skills_dir is not None else skill.home()
-    current = installed(root).get(name)
-    if current is None:
-        raise Unknown(f"there is no installed catalog called {name}")
-    names = {called for called, _ in current.manifest.skills}
-    used = sorted(names.intersection(granted))
-    if used:
-        raise InUse(f"revoke these skills first: {', '.join(used)}")
-    _unlink_owned(current.at, library)
-    shutil.rmtree(current.at)
+    with skill.changing_grants(library):
+        current = installed(root).get(name)
+        if current is None:
+            raise Unknown(f"there is no installed catalog called {name}")
+        names = {called for called, _ in current.manifest.skills}
+        used = sorted(names.intersection(granted))
+        if used and retiring is None:
+            raise InUse(f"revoke these skills first: {', '.join(used)}")
+        with tempfile.TemporaryDirectory(prefix="rundesk-catalog-removal-") as temporary:
+            saved = Path(temporary) / current.at.name
+            shutil.copytree(current.at, saved)
+            retirement = retiring(names) if retiring is not None else contextlib.nullcontext()
+            with retirement:
+                try:
+                    _unlink_owned(current.at, library)
+                    shutil.rmtree(current.at)
+                except Exception as original:
+                    try:
+                        _unlink_owned(current.at, library)
+                        if current.at.exists():
+                            shutil.rmtree(current.at)
+                        shutil.copytree(saved, current.at)
+                        _link_all(current.manifest, current.at, library)
+                    except Exception as rollback:
+                        raise RollbackFailed(
+                            f"removing {name} failed ({original}); restoring its catalog "
+                            f"also failed ({rollback})"
+                        ) from rollback
+                    raise
     with contextlib.suppress(OSError):
         root.rmdir()
     return sorted(names)
 
 
 def take_back_seeded(where: Path | None = None,
-                     skills_dir: Path | None = None) -> list[str]:
+                     skills_dir: Path | None = None, retiring=None) -> list[str]:
     """Remove only the general catalog Rundesk seeded, for a matching uninstall."""
     root = home(where)
     current = installed(root).get(DEFAULT_NAME)
     if current is None or provenance(current.at).get("seeded") is not True:
         return []
-    return remove(DEFAULT_NAME, root, skills_dir)
+    return remove(DEFAULT_NAME, root, skills_dir, retiring=retiring)
 
 
 def whose(entry: Path, where: Path | None = None) -> str | None:

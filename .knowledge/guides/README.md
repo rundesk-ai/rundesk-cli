@@ -30,7 +30,7 @@ Add a row when you add a guide; `doc-lint` fails the build if one is missing.
 
 Three how-tos are no longer here, and they did not all go to the same place.
 
-**Writing a skill** ships as a skill — `src/templates/skills/writing-rundesk-skills/` — so the
+**Writing a skill** ships as a skill — `src/templates/skills/writing-skills/` — so the
 agent doing the work is handed it rather than being expected to find it.
 
 **Building a provider adapter** and **building a channel adapter** are documentation, under

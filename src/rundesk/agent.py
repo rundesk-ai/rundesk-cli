@@ -299,6 +299,11 @@ def workspace(name: str, where: Path | None = None) -> Path:
     return home(name, where) / "workspace"
 
 
+def plans(name: str, where: Path | None = None) -> Path:
+    """Where this agent keeps implementation plans, inside its own workspace (R-AGT-48)."""
+    return workspace(name, where) / "plans"
+
+
 def skills(name: str, where: Path | None = None) -> Path:
     """Where this agent's skills are kept — its own, and not its owner's.
 
@@ -610,6 +615,10 @@ def add(name: str, where: Path | None = None, display_name: str | None = None) -
         if not path.exists():
             path.mkdir(parents=True, exist_ok=True)
             made.append(path.name + "/")
+    plan_home = plans(name, where)
+    if not plan_home.exists():
+        plan_home.mkdir(parents=True, exist_ok=True)
+        made.append("workspace/plans/")
     for called in knowledge():
         page = home(name, where) / called
         if not page.exists():
@@ -696,19 +705,56 @@ def require_skills(name: str, where: Path | None = None) -> list[str]:
     an install, and is not a half-made agent.
     """
     given = []
+    plan_home = plans(name, where)
+    if not plan_home.exists():
+        plan_home.mkdir(parents=True, exist_ok=True)
+        given.append("workspace/plans/")
     mine = skills(name, where)
-    already = set(skill.granted(mine))
-    # `where` is an agents directory, never the install's data directory. The baseline is
-    # install-wide and resolves from the same file every agent shares (R-AGT-36).
-    for called in config.skills()["granted"]:
-        if called in already:
-            continue
-        try:
-            skill.grant(mine, called)
-        except (skill.Unknown, skill.NotASkill, skill.InTheWay, OSError):
-            continue
-        given.append(f"skills/{called}")
+    with skill.changing_grants():
+        already = set(skill.granted(mine))
+        # Carry a Rundesk-made grant to the built-in's current name. Do this before the
+        # configured floor so an optional authoring grant follows the rename too; never touch a
+        # directory or foreign link an owner placed under the old spelling (R-AGT-49).
+        for old, new in skill.RENAMED.items():
+            old_grant = mine / old
+            if (old not in already or not skill.ours(old_grant)
+                    or not skill.built_in(old) or not skill.built_in(new)):
+                continue
+            try:
+                if new not in already:
+                    skill.grant(mine, new)
+                    given.append(f"skills/{new}")
+                elif not skill.ours(mine / new):
+                    # An owner entry under the replacement name is not proof this agent can
+                    # lose its old working built-in. Keep both owner data and old grant.
+                    continue
+                skill.revoke(mine, old)
+            except (skill.Unknown, skill.NotASkill, skill.InTheWay, OSError):
+                continue
+            already.discard(old)
+            already.add(new)
+        # `where` is an agents directory, never the install's data directory. The baseline is
+        # install-wide and resolves from the same file every agent shares (R-AGT-36).
+        for called in config.skills()["granted"]:
+            if called in already:
+                continue
+            try:
+                skill.grant(mine, called)
+            except (skill.Unknown, skill.NotASkill, skill.InTheWay, OSError):
+                continue
+            given.append(f"skills/{called}")
     return given
+
+
+def retire_renamed_skills(where: Path | None = None) -> list[str]:
+    """Retire old built-ins after every agent's grants had a chance to move (R-AGT-49)."""
+    with skill.changing_grants():
+        return skill.retire_renamed((skills(name, where) for name in known(where)))
+
+
+def reconcile_skill_config() -> list[str]:
+    """Carry configured names only after their replacement is proven in the library."""
+    return config.ensure()
 
 
 def adopt(name: str, where: Path | None = None, logs: Path | None = None,

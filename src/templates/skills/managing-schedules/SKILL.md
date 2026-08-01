@@ -1,9 +1,9 @@
 ---
-name: managing-rundesk-schedules
-description: What a rundesk schedule is for and how to work one — the owner deliverable it exists to produce, saying when as a moment or a repeating time, where its outcome lands, and why it is never a way to move your own work out of a turn. Use whenever anyone asks for a reminder, a recurring report, something to happen at a time, or asks what an agent runs on its own; and whenever you are about to add, change, turn off or run a rundesk schedule.
+name: managing-schedules
+description: Manage Rundesk schedules and delivery. Use for reminders, recurring reports, timed work, or creating, changing, pausing, running, and removing schedules.
 ---
 
-# Managing rundesk schedules
+# Managing schedules
 
 *This skill ships with rundesk and is replaced whenever rundesk updates. To make a version of
 your own, copy it under a different name — that copy is yours and is never touched.*

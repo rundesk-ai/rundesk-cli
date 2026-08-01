@@ -1,6 +1,6 @@
 ---
-name: writing-rundesk-skills
-description: How to write a skill for a rundesk agent and put it in this machine's library so agents can be granted it. Use whenever anyone asks to write, create, author, improve, fix, review or debug a skill for a rundesk agent, or asks why one is not being picked up — and whenever a repeated procedure here looks worth keeping, even if the word "skill" is never said.
+name: writing-skills
+description: Create, improve, review, or debug reusable Rundesk agent skills. Use for skill packaging, triggers, instructions, resources, or verification.
 ---
 
 # Writing a skill
@@ -82,6 +82,11 @@ This is the part most worth getting right, and the most common thing to get wron
 situations that should reach for it, including ones where nobody names the topic outright
 — "even if they do not say the word 'invoice'".
 
+Name the capability and the concrete triggers, but do not compress the steps into the
+description. A description that gives the whole procedure can become a shortcut: the brain
+follows those few words and never loads the instructions that qualify them. Keep the procedure in
+the body.
+
 **Never put "when to use this" in the body.** The body is read *after* the decision it
 would inform has already been made. It is the single most common wasted section.
 
@@ -113,6 +118,23 @@ absolutes are usually a sign the reason was never written down.
 
 **Write instructions, not prose about the skill.** "To release, run …" rather than "You
 should run …" or "This skill helps you …".
+
+## Match the instruction to the failure
+
+Run the no-skill baseline before deciding how firmly or in what shape to write. Different
+failures need different corrections:
+
+| Baseline failure | Write this |
+|---|---|
+| The agent knows a rule but skips it under pressure | An explicit boundary, its reason, and counters to the exact rationalizations the baseline produced |
+| The result has the wrong shape | A positive contract naming what the result contains and in what order |
+| A required element is omitted | A required slot in the template or checklist the agent is already using |
+| Behavior should vary by context | A rule keyed to an observable condition |
+
+Do not use a prohibition table for every problem. It helps a discipline failure because it
+closes demonstrated loopholes; for an output-shaping problem it can keep the unwanted form
+salient and invite negotiation. Do not invent rationalizations to make a skill look robust —
+record only ones a baseline or later test actually produced.
 
 ## Size, and splitting
 
@@ -165,6 +187,23 @@ anything at all.
 
 Then give an agent the skill and ask the same thing, in the words somebody would really
 use, without mentioning the skill. Ask for something only the skill can supply.
+
+Choose tests by what kind of skill it is:
+
+- **Discipline skill** — combine realistic pressures that tempt the agent to violate the
+  boundary. Capture its exact rationalizations, address only demonstrated loopholes, and
+  repeat the pressured case with the skill.
+- **Technique skill** — ask it to apply the method to a representative case, a variation,
+  and a case with missing information. The result must use the technique rather than merely
+  describe it.
+- **Pattern skill** — test recognition, application, and a counterexample where the pattern
+  should not be used.
+- **Reference skill** — test that the agent retrieves the right fact, applies it correctly,
+  and can expose a realistic gap instead of inventing an answer.
+
+If wording still produces inconsistent results across fresh sessions, compare smaller wording
+variants against the same no-guidance control before adding more prose. Repeated sampling is a
+diagnostic for consequential or variable behavior, not a quota every simple reference must pay.
 
 Two traps worth knowing:
 

@@ -2670,6 +2670,19 @@ class TakingAGatewayAway(WithARunDirectory):
 
         self.assertTrue(made["lock"].exists(), "it took a name another process was holding")
 
+    def test_holding_a_never_started_name_excludes_its_first_gateway_claim(self):
+        """R-GW-29 — absence of yesterday's lock cannot open a race into a mutation."""
+        lock = self.where / "first.lock"
+
+        with gateway.holding("first", self.where) as held:
+            self.assertTrue(held)
+            contender = os.open(lock, os.O_RDWR)
+            self.addCleanup(os.close, contender)
+            with self.assertRaises(OSError):
+                fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
     def test_forgetting_a_gateway_that_was_never_there_takes_nothing_and_says_so(self):
         """R-GW-31 — asked twice, or for a name that never existed, is not an error."""
         self.assertEqual([], gateway.forget("never-was", self.where, self.logs))

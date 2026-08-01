@@ -748,7 +748,7 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents, catalogs=cat
             landed=__version__,
         )
         if code == 0:
-            cataloged = _refresh_skill_catalogs(agents, skill, catalogs)
+            cataloged = _refresh_skill_catalogs(agents, skill, gateways, catalogs)
             if not os.environ.get("RUNDESK_UPDATE_WORKER"):
                 scheduled = _install_automatic_updates(machine)
                 return cataloged or scheduled
@@ -795,7 +795,7 @@ def cmd_update(args: argparse.Namespace, gateways, machine, agents, catalogs=cat
         preview=lambda: _what_an_update_would_do(agents, update_root),
     )
     if code == 0:
-        cataloged = _refresh_skill_catalogs(agents, skill, catalogs)
+        cataloged = _refresh_skill_catalogs(agents, skill, gateways, catalogs)
         scheduled = _install_automatic_updates(machine)
         return cataloged or scheduled
     return code
@@ -2036,10 +2036,14 @@ def _provisioned(root: Path = REPO_ROOT) -> str | None:
     # never touched, so this cannot be how an owner's configuration is lost (R-UPD-48).
     config.ensure()
     skill.lay_down(force=True)
+    # A persisted skill name can move only after both old and replacement packages are
+    # proven as Rundesk built-ins. The earlier pass fills values; this one carries names.
+    config.ensure()
     # Existing agents are brought forward too. Optional owner grants are not removed; the
     # configured list is the minimum every agent must hold, not its complete grant set.
     for name in _agent.known():
         _agent.require_skills(name)
+    _agent.retire_renamed_skills()
     return None
 
 
@@ -2327,10 +2331,65 @@ def _all_granted_skills(agents, skills) -> set[str]:
     }
 
 
-def _refresh_skill_catalogs(agents, skills, catalogs) -> int:
+@contextlib.contextmanager
+def _retiring_catalog_grants(agents, skills, gateways, catalogs, names, retired):
+    """Revoke catalog skills only while every affected agent is proven stopped.
+
+    The gateway holds stay open across the catalog mutation. If that mutation fails,
+    restore every grant while the old catalog package is available again.
+    """
+    with skills.changing_grants(skills.home()):
+        affected = []
+        for name in agents.known():
+            mine = agents.skills(name)
+            held = [
+                called for called in sorted(set(names).intersection(skills.granted(mine)))
+                if skills.ours(mine / called, skills.home())
+            ]
+            affected.append((name, held))
+        affected = [(name, held) for name, held in affected if held]
+        revoked = []
+        with contextlib.ExitStack() as locks:
+            for name, _ in affected:
+                stopped = locks.enter_context(
+                    gateways.holding(name, agents.resolved(name).run)
+                )
+                if not stopped:
+                    raise catalogs.InUse(
+                        f"cannot remove skills from running agent {name}; stop it first"
+                    )
+            try:
+                for name, held in affected:
+                    for called in held:
+                        skills.revoke(agents.skills(name), called)
+                        revoked.append((name, called))
+                yield
+            except BaseException as original:
+                failed = []
+                for name, called in reversed(revoked):
+                    try:
+                        skills.grant(agents.skills(name), called)
+                    except Exception as rollback:
+                        failed.append(f"{name}/{called}: {rollback}")
+                if failed:
+                    raise catalogs.RollbackFailed(
+                        f"the catalog change failed ({original}); restoring grants also "
+                        f"failed for {', '.join(failed)}"
+                    ) from original
+                raise
+        retired.extend(revoked)
+
+
+def _refresh_skill_catalogs(agents, skills, gateways, catalogs) -> int:
     """Seed the general collection and check every installed repository version."""
     try:
-        checked = catalogs.refresh(granted=_all_granted_skills(agents, skills))
+        retired = []
+        checked = catalogs.refresh(
+            granted=_all_granted_skills(agents, skills),
+            retiring=lambda names: _retiring_catalog_grants(
+                agents, skills, gateways, catalogs, names, retired,
+            ),
+        )
     except (catalogs.NotACatalog, OSError) as why:
         print(f"skills: CATALOGS NOT UPDATED — {why}", file=sys.stderr)
         return 1
@@ -2345,6 +2404,8 @@ def _refresh_skill_catalogs(agents, skills, catalogs) -> int:
             print(f"skills: {one.name} {one.after}: up to date")
         else:
             print(f"skills: {one.name}: {one.before} -> {one.after}")
+    for name, called in retired:
+        print(f"{name} no longer has removed skill {called}")
     return 1 if failed else 0
 
 
@@ -2369,11 +2430,15 @@ def _install_skill_catalog(args: argparse.Namespace, catalogs) -> int:
     return 0
 
 
-def _update_skill_catalog(args: argparse.Namespace, agents, skills, catalogs) -> int:
+def _update_skill_catalog(args: argparse.Namespace, agents, skills, gateways, catalogs) -> int:
+    retired = []
     try:
         before = catalogs.installed().get(args.catalog)
         landed = catalogs.update(
-            args.catalog, granted=_all_granted_skills(agents, skills)
+            args.catalog, granted=_all_granted_skills(agents, skills),
+            retiring=lambda names: _retiring_catalog_grants(
+                agents, skills, gateways, catalogs, names, retired,
+            ),
         )
     except (catalogs.NotACatalog, catalogs.InTheWay, catalogs.InUse,
             catalogs.Unknown, catalogs.RollbackFailed, OSError) as why:
@@ -2383,10 +2448,13 @@ def _update_skill_catalog(args: argparse.Namespace, agents, skills, catalogs) ->
         print(f"{landed.name} {landed.version}: up to date")
     else:
         print(f"{landed.name}: {before.version if before else '-'} -> {landed.version}")
+    for name, called in retired:
+        print(f"{name} no longer has removed skill {called}")
     return 0
 
 
-def _remove_skill_catalog(args: argparse.Namespace, agents, skills, catalogs) -> int:
+def _remove_skill_catalog(args: argparse.Namespace, agents, skills, gateways, catalogs) -> int:
+    retired = []
     try:
         standing = catalogs.installed().get(args.catalog)
         if standing is None:
@@ -2399,12 +2467,18 @@ def _remove_skill_catalog(args: argparse.Namespace, agents, skills, catalogs) ->
             print(f"remove: rundesk skills remove {args.catalog} --yes")
             return 0
         removed = catalogs.remove(
-            args.catalog, granted=_all_granted_skills(agents, skills)
+            args.catalog, granted=_all_granted_skills(agents, skills),
+            retiring=lambda names: _retiring_catalog_grants(
+                agents, skills, gateways, catalogs, names, retired,
+            ),
         )
-    except (catalogs.NotACatalog, catalogs.InUse, catalogs.Unknown, OSError) as why:
+    except (catalogs.NotACatalog, catalogs.InUse, catalogs.Unknown,
+            catalogs.RollbackFailed, OSError) as why:
         print(f"skills: NOT REMOVED — {why}", file=sys.stderr)
         return 1
     print(f"{args.catalog}: removed {', '.join(removed)}")
+    for name, called in retired:
+        print(f"{name} no longer has removed skill {called}")
     return 0
 
 
@@ -2426,7 +2500,7 @@ def _list_skill_catalogs(catalogs) -> int:
     return 0
 
 
-def cmd_skills(args: argparse.Namespace, agents, skills, catalogs) -> int:
+def cmd_skills(args: argparse.Namespace, agents, skills, gateways, catalogs) -> int:
     """The skills on this machine, who has which, and giving or taking one away.
 
     The catalog is read off the library and the agents rather than from anything written
@@ -2445,7 +2519,12 @@ def cmd_skills(args: argparse.Namespace, agents, skills, catalogs) -> int:
         # goes with it (R-RM-7). Left behind, it is a piece of rundesk on a machine somebody
         # has removed rundesk from — and it keeps the whole install directory standing after
         # an uninstall that said it had left nothing.
-        taken = catalogs.take_back_seeded()
+        retired = []
+        taken = catalogs.take_back_seeded(
+            retiring=lambda names: _retiring_catalog_grants(
+                agents, skills, gateways, catalogs, names, retired,
+            ),
+        )
         taken.extend(skills.take_back())
         print(" ".join(taken))
         return 0
@@ -2453,22 +2532,24 @@ def cmd_skills(args: argparse.Namespace, agents, skills, catalogs) -> int:
         # The installer's, and deliberately not an owner's verb: what a release ships is
         # not a thing anybody should have to ask for.
         laid = skills.lay_down()
-        if _refresh_skill_catalogs(agents, skills, catalogs):
+        agents.reconcile_skill_config()
+        if _refresh_skill_catalogs(agents, skills, gateways, catalogs):
             return 1
         # `skills.granted` is a floor for every agent, including ones that predate the
         # value. Re-running the installer is an upgrade route, so reconcile the existing
         # population here as well as in `_provisioned` (R-AGT-36).
         for name in agents.known():
             agents.require_skills(name)
+        agents.retire_renamed_skills()
         print(" ".join(laid))
         return 0
     act = getattr(args, "act", None)
     if act == "install":
         return _install_skill_catalog(args, catalogs)
     if act == "update":
-        return _update_skill_catalog(args, agents, skills, catalogs)
+        return _update_skill_catalog(args, agents, skills, gateways, catalogs)
     if act == "remove":
-        return _remove_skill_catalog(args, agents, skills, catalogs)
+        return _remove_skill_catalog(args, agents, skills, gateways, catalogs)
     if act == "catalogs":
         return _list_skill_catalogs(catalogs)
     if act in ("grant", "revoke"):
@@ -2484,13 +2565,14 @@ def cmd_skills(args: argparse.Namespace, agents, skills, catalogs) -> int:
             return 1
         try:
             if act == "grant":
-                skills.grant(whose, args.skill)
+                with skills.changing_grants(skills.home()):
+                    skills.grant(whose, args.skill)
                 print(f"{args.name} was given {args.skill}")
             else:
                 # Rundesk's product floor and the configured baseline are requirements, not
                 # creation-time suggestions. Only the owner-selected part can be changed
                 # before revocation (R-AGT-37).
-                if args.skill in config.RUNDESK_REQUIRED_GRANTS:
+                if args.skill in config.required_grants():
                     print(f"{args.skill}: RUNDESK REQUIRED — every agent retains it",
                           file=sys.stderr)
                     print("        this skill cannot be configured away or revoked",
@@ -2502,7 +2584,8 @@ def cmd_skills(args: argparse.Namespace, agents, skills, catalogs) -> int:
                     print(f"        remove it from {config.path()} before revoking it",
                           file=sys.stderr)
                     return 1
-                skills.revoke(whose, args.skill)
+                with skills.changing_grants(skills.home()):
+                    skills.revoke(whose, args.skill)
                 print(f"{args.name} no longer has {args.skill}")
         except (skills.Unknown, skills.NotASkill, skills.InTheWay,
                 config.Unreadable) as why:
@@ -4430,7 +4513,7 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
     if args.command == "backups":
         return cmd_backups(args, gateways, machine, agents)
     if args.command == "skills":
-        return cmd_skills(args, agents, skills, catalogs)
+        return cmd_skills(args, agents, skills, gateways, catalogs)
     if args.command == "scripts":
         return cmd_scripts(args, scripts)
     if args.command == "channels":

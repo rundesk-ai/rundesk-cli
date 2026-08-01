@@ -653,6 +653,11 @@ class FakeGateways:
         self.asked_where.append(where)
         return list(self._turning.get(name, []))
 
+    @contextlib.contextmanager
+    def holding(self, name, where=None):
+        """Stand in for the kernel lock around a stopped-only mutation."""
+        yield not self.standing(name, where).running
+
     def forget(self, name, where=None, schedules=None, logs=None, history=False):
         self.forgotten.append((name, history))
         self.asked_where.append(where)
@@ -724,13 +729,19 @@ class FakeSkills:
     NotASkill = real_skill.NotASkill
     InTheWay = real_skill.InTheWay
 
-    def __init__(self, held=(), ships=(), given=None):
+    def __init__(self, held=(), ships=(), given=None, custom=(), grant_failures=()):
         self._held = {name: pathlib.Path("/nowhere/skills") / name for name in held}
         self._ships = tuple(ships)
         self._given = dict(given or {})
+        self._custom = set(custom)
+        self._grant_failures = set(grant_failures)
 
     def home(self):
         return pathlib.Path("/nowhere/skills")
+
+    @contextlib.contextmanager
+    def changing_grants(self, where=None):
+        yield
 
     def library(self):
         return dict(self._held)
@@ -738,8 +749,15 @@ class FakeSkills:
     def shipped(self):
         return self._ships
 
+    def _given_key(self, whose):
+        agent = whose.parent.parent.name
+        return agent if agent in self._given else whose.name
+
     def granted(self, whose):
-        return sorted(self._given.get(whose.name, ()))
+        return sorted(self._given.get(self._given_key(whose), ()))
+
+    def ours(self, entry, where=None):
+        return entry.name not in self._custom
 
     def lay_down(self, where=None, force=False):
         self.laid = True
@@ -752,12 +770,16 @@ class FakeSkills:
     def grant(self, whose, name):
         if name not in self._held:
             raise self.Unknown(f"there is no skill called {name}")
-        self._given.setdefault(whose.name, []).append(name)
+        key = self._given_key(whose)
+        if (key, name) in self._grant_failures:
+            raise OSError(f"could not restore {key}/{name}")
+        self._given.setdefault(key, []).append(name)
 
     def revoke(self, whose, name):
-        if name not in self._given.get(whose.name, []):
+        key = self._given_key(whose)
+        if name not in self._given.get(key, []):
             raise self.Unknown(f"this agent was never given {name}")
-        self._given[whose.name].remove(name)
+        self._given[key].remove(name)
 
 
 class FakeCatalogs:
@@ -783,8 +805,9 @@ class FakeCatalogs:
             self.source = source
             self.manifest = FakeCatalogs.Manifest(name, version, skills)
 
-    def __init__(self, held=()):
+    def __init__(self, held=(), updates=None):
         self._held = {one.name: one for one in held}
+        self._updates = dict(updates or {})
         self.did = []
 
     def inspect(self, source):
@@ -797,22 +820,31 @@ class FakeCatalogs:
         self._held[one.name] = one
         return one
 
-    def update(self, name, granted=()):
+    def update(self, name, granted=(), retiring=None):
         self.did.append(("update", name, set(granted)))
         before = self._held.get(name, self.One(name=name))
+        after_skills = self._updates.get(name, before.manifest.skills)
         one = self.One(name=name, version="1.1.0", source=before.source,
-                       skills=before.manifest.skills)
-        self._held[name] = one
+                       skills=after_skills)
+        removed = ({called for called, _ in before.manifest.skills}
+                   - {called for called, _ in after_skills})
+        retirement = retiring(removed) if retiring is not None else contextlib.nullcontext()
+        with retirement:
+            self._held[name] = one
         return one
 
-    def remove(self, name, granted=()):
+    def remove(self, name, granted=(), retiring=None):
         self.did.append(("remove", name, set(granted)))
-        one = self._held.pop(name, None)
+        one = self._held.get(name)
         if one is None:
             raise self.Unknown(f"there is no installed catalog called {name}")
+        names = {called for called, _ in one.manifest.skills}
+        retirement = retiring(names) if retiring is not None else contextlib.nullcontext()
+        with retirement:
+            self._held.pop(name)
         return [called for called, _ in one.manifest.skills]
 
-    def refresh(self, granted=()):
+    def refresh(self, granted=(), retiring=None):
         self.did.append(("refresh", set(granted)))
         one = self._held.get("rundesk-skills")
         if one is None:
@@ -821,8 +853,13 @@ class FakeCatalogs:
             return (real_catalog.Refreshed(one.name, None, one.version),)
         return (real_catalog.Refreshed(one.name, one.version, one.version),)
 
-    def take_back_seeded(self):
-        one = self._held.pop("rundesk-skills", None)
+    def take_back_seeded(self, retiring=None):
+        one = self._held.get("rundesk-skills")
+        if one is not None and retiring is not None:
+            with retiring({called for called, _ in one.manifest.skills}):
+                self._held.pop("rundesk-skills")
+        elif one is not None:
+            self._held.pop("rundesk-skills")
         return [] if one is None else [called for called, _ in one.manifest.skills]
 
     def installed(self):
@@ -904,6 +941,8 @@ class FakeAgents:
         self.display_names: dict[str, str] = {}
         #: Existing agents whose configured baseline an upgrade route reconciled.
         self.required: list[str] = []
+        self.retired_skills = False
+        self.reconciled_skill_config = False
         for one in self._made:
             self._built(one)
 
@@ -996,6 +1035,14 @@ class FakeAgents:
 
     def require_skills(self, name):
         self.required.append(name)
+        return []
+
+    def retire_renamed_skills(self):
+        self.retired_skills = True
+        return []
+
+    def reconcile_skill_config(self):
+        self.reconciled_skill_config = True
         return []
 
     def adopt(self, name):
@@ -1301,8 +1348,8 @@ class WhatTheInstallerDoesToTheLibrary(unittest.TestCase):
 
 
     def test_laying_down_also_reconciles_every_existing_agent(self):
-        """R-AGT-36 — reinstalling over an existing installation applies the configured
-        baseline to agents that predate this release."""
+        """R-AGT-36, R-AGT-49 — reinstalling over an existing installation applies the
+        configured baseline before retiring a renamed built-in."""
         agents = FakeAgents(made=("ava", "bo"))
 
         catalogs = FakeCatalogs()
@@ -1312,10 +1359,59 @@ class WhatTheInstallerDoesToTheLibrary(unittest.TestCase):
 
         self.assertEqual(0, code, said)
         self.assertEqual(["ava", "bo"], agents.required)
+        self.assertTrue(agents.reconciled_skill_config)
+        self.assertTrue(agents.retired_skills)
         self.assertEqual(("refresh", set()), catalogs.did[-1])
+
+    def test_uninstalling_the_seeded_catalog_retires_stopped_agent_grants(self):
+        """R-CAT-9, R-CAT-11 — uninstall does not leave a dangling catalog grant."""
+        general = FakeCatalogs.One(name=real_catalog.DEFAULT_NAME)
+        catalogs = FakeCatalogs((general,))
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(
+            held=("python-patterns",), given={"skills": ["python-patterns"]},
+        )
+
+        code, said = drive(
+            ["skills", "--take-back"], agents=agents, skills=skills,
+            catalogs=catalogs,
+        )
+
+        self.assertEqual(0, code, said)
+        self.assertEqual([], skills.granted(agents.skills("ava")))
+        self.assertNotIn(real_catalog.DEFAULT_NAME, catalogs.installed())
 
 
 class WhatSkillCatalogsDo(unittest.TestCase):
+    def test_granting_uses_the_same_lock_as_catalog_retirement(self):
+        """R-CAT-9 — grant cannot race between retirement's scan and catalog mutation."""
+        class ProtectedSkills(FakeSkills):
+            protected = False
+
+            @contextlib.contextmanager
+            def changing_grants(self, where=None):
+                self.protected = True
+                try:
+                    yield
+                finally:
+                    self.protected = False
+
+            def grant(self, whose, name):
+                if not self.protected:
+                    raise AssertionError("grant changed outside the catalog grant lock")
+                return super().grant(whose, name)
+
+        agents = FakeAgents(made=("ava",))
+        skills = ProtectedSkills(held=("python-patterns",))
+
+        code, said = drive(
+            ["skills", "grant", "ava", "python-patterns"],
+            agents=agents, skills=skills,
+        )
+
+        self.assertEqual(0, code, said)
+        self.assertEqual(["python-patterns"], skills.granted(agents.skills("ava")))
+
     def test_refresh_reports_default_install_and_checks_with_every_agent_grant(self):
         """R-CAT-11, R-CAT-12 — lifecycle refresh owns seeding and update checks."""
         catalogs = FakeCatalogs()
@@ -1324,7 +1420,7 @@ class WhatSkillCatalogsDo(unittest.TestCase):
                             given={"skills": ["python-patterns"]})
 
         with contextlib.redirect_stdout(io.StringIO()) as said:
-            code = cli._refresh_skill_catalogs(agents, skills, catalogs)
+            code = cli._refresh_skill_catalogs(agents, skills, FakeGateways(), catalogs)
 
         self.assertEqual(0, code)
         self.assertIn("installed by default", said.getvalue())
@@ -1389,6 +1485,114 @@ class WhatSkillCatalogsDo(unittest.TestCase):
         self.assertEqual(0, code, said)
         self.assertEqual(("update", "development", {"python-patterns"}), catalogs.did[-1])
 
+    def test_updating_revokes_a_removed_skill_from_a_stopped_agent(self):
+        """R-CAT-9 — a catalog rename or removal needs no grant migration."""
+        before = FakeCatalogs.One(skills=(
+            ("python-patterns", "skills/python-patterns"),
+            ("vue-patterns", "skills/vue-patterns"),
+        ))
+        catalogs = FakeCatalogs(
+            (before,), updates={"development": (
+                ("python-patterns", "skills/python-patterns"),
+            )},
+        )
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(
+            held=("python-patterns", "vue-patterns"),
+            given={"skills": ["vue-patterns"]},
+        )
+
+        code, said = drive(
+            ["skills", "update", "development"], agents=agents, skills=skills,
+            catalogs=catalogs,
+        )
+
+        self.assertEqual(0, code, said)
+        self.assertEqual([], skills.granted(agents.skills("ava")))
+        self.assertIn("ava no longer has removed skill vue-patterns", said)
+
+    def test_updating_refuses_to_remove_a_skill_from_a_running_agent(self):
+        """R-CAT-9 — a running brain keeps the skill view it started with."""
+        before = FakeCatalogs.One(skills=(("vue-patterns", "skills/vue-patterns"),))
+        catalogs = FakeCatalogs((before,), updates={"development": ()})
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(held=("vue-patterns",), given={"skills": ["vue-patterns"]})
+        gateways = FakeGateways(standing=(FakeGateways.Standing("ava", running=True),))
+
+        code, said = drive(
+            ["skills", "update", "development"], gateways=gateways,
+            agents=agents, skills=skills, catalogs=catalogs,
+        )
+
+        self.assertEqual(1, code)
+        self.assertIn("stop it first", said)
+        self.assertEqual(["vue-patterns"], skills.granted(agents.skills("ava")))
+        self.assertEqual("1.0.0", catalogs.installed()["development"].version)
+
+    def test_updating_leaves_same_named_custom_agent_content_alone(self):
+        """R-CAT-5, R-CAT-9 — a name is not proof that Rundesk owns an agent's copy."""
+        before = FakeCatalogs.One(skills=(("vue-patterns", "skills/vue-patterns"),))
+        catalogs = FakeCatalogs((before,), updates={"development": ()})
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(
+            held=("vue-patterns",), given={"skills": ["vue-patterns"]},
+            custom=("vue-patterns",),
+        )
+
+        code, said = drive(
+            ["skills", "update", "development"], agents=agents, skills=skills,
+            catalogs=catalogs,
+        )
+
+        self.assertEqual(0, code, said)
+        self.assertEqual(["vue-patterns"], skills.granted(agents.skills("ava")))
+        self.assertNotIn("no longer has", said)
+
+    def test_a_failed_catalog_update_restores_the_grant_it_retired(self):
+        """R-CAT-8, R-CAT-9 — catalog files and stopped-agent grants roll back together."""
+        class FailingCatalogs(FakeCatalogs):
+            def update(self, name, granted=(), retiring=None):
+                with retiring({"vue-patterns"}):
+                    raise OSError("disk stopped accepting the catalog")
+
+        catalogs = FailingCatalogs((FakeCatalogs.One(),))
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(held=("vue-patterns",), given={"skills": ["vue-patterns"]})
+
+        code, said = drive(
+            ["skills", "update", "development"], agents=agents, skills=skills,
+            catalogs=catalogs,
+        )
+
+        self.assertEqual(1, code)
+        self.assertIn("disk stopped accepting", said)
+        self.assertEqual(["vue-patterns"], skills.granted(agents.skills("ava")))
+
+    def test_grant_rollback_attempts_every_agent_after_one_restore_fails(self):
+        """R-CAT-8, R-CAT-9 — one stuck grant does not strand every later restore."""
+        class FailingCatalogs(FakeCatalogs):
+            def update(self, name, granted=(), retiring=None):
+                with retiring({"vue-patterns"}):
+                    raise OSError("catalog mutation failed")
+
+        catalogs = FailingCatalogs((FakeCatalogs.One(),))
+        agents = FakeAgents(made=("ava", "bo"))
+        skills = FakeSkills(
+            held=("vue-patterns",),
+            given={"ava": ["vue-patterns"], "bo": ["vue-patterns"]},
+            grant_failures=(("bo", "vue-patterns"),),
+        )
+
+        code, said = drive(
+            ["skills", "update", "development"], agents=agents, skills=skills,
+            catalogs=catalogs,
+        )
+
+        self.assertEqual(1, code)
+        self.assertIn("bo/vue-patterns", said)
+        self.assertEqual(["vue-patterns"], skills.granted(agents.skills("ava")))
+        self.assertEqual([], skills.granted(agents.skills("bo")))
+
     def test_removing_without_yes_previews_and_changes_nothing(self):
         """R-CAT-5 — removing a repository is an explicit second step."""
         catalogs = FakeCatalogs((FakeCatalogs.One(),))
@@ -1398,6 +1602,24 @@ class WhatSkillCatalogsDo(unittest.TestCase):
         self.assertEqual(0, code, said)
         self.assertIn("--yes", said)
         self.assertIn("development", catalogs.installed())
+
+    def test_removing_a_catalog_revokes_its_skills_from_stopped_agents(self):
+        """R-CAT-9 — uninstall removes the catalog's stopped-agent grants too."""
+        catalogs = FakeCatalogs((FakeCatalogs.One(),))
+        agents = FakeAgents(made=("ava",))
+        skills = FakeSkills(
+            held=("python-patterns",), given={"skills": ["python-patterns"]},
+        )
+
+        code, said = drive(
+            ["skills", "remove", "development", "--yes"], agents=agents,
+            skills=skills, catalogs=catalogs,
+        )
+
+        self.assertEqual(0, code, said)
+        self.assertEqual([], skills.granted(agents.skills("ava")))
+        self.assertEqual({}, catalogs.installed())
+        self.assertIn("ava no longer has removed skill python-patterns", said)
 
     def test_installed_catalogs_show_version_source_and_skill_count(self):
         """R-CAT-4 — provenance is visible through the command surface."""

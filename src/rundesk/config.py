@@ -39,19 +39,30 @@ import copy
 import json
 from pathlib import Path
 
-from rundesk import data_home
+from rundesk import data_home, skill
 
 #: The file, under `data_home()`. Named plainly rather than hidden: an owner is expected to
 #: open it, and a dotfile is a file people are not told about.
 NAMED = "config.json"
 
-#: The exact skill default v0.23.0 wrote. Only this unchanged release-owned value advances;
-#: every owner customization remains untouched (R-UPD-48, R-UPD-50).
+#: Exact skill defaults earlier releases wrote. Only an unchanged release-owned value
+#: advances; every owner customization remains untouched (R-UPD-48, R-UPD-50).
 PREVIOUS_DEFAULT_GRANTS = (
-    "managing-rundesk",
-    "managing-rundesk-schedules",
-    "managing-rundesk-backups",
-    "filing-rundesk-issues",
+    (
+        "managing-rundesk",
+        "managing-rundesk-schedules",
+        "managing-rundesk-backups",
+        "filing-rundesk-issues",
+    ),
+    (
+        "managing-rundesk",
+        "managing-rundesk-schedules",
+        "managing-rundesk-backups",
+        "filing-github-issues",
+        "filing-rundesk-issues",
+        "writing-github-pull-requests",
+        "writing-rundesk-pull-requests",
+    ),
 )
 
 #: The operating baseline every Rundesk agent receives. The generic GitHub skills are here
@@ -59,13 +70,29 @@ PREVIOUS_DEFAULT_GRANTS = (
 #: them; a required skill whose prerequisite is optional is a broken baseline.
 RUNDESK_REQUIRED_GRANTS = (
     "managing-rundesk",
-    "managing-rundesk-schedules",
-    "managing-rundesk-backups",
+    "managing-schedules",
+    "managing-backups",
     "filing-github-issues",
     "filing-rundesk-issues",
     "writing-github-pull-requests",
     "writing-rundesk-pull-requests",
 )
+
+
+def required_grants(where: Path | None = None) -> tuple[str, ...]:
+    """The required capability names whose Rundesk-owned packages are available."""
+    previous = {new: old for old, new in skill.RENAMED.items()}
+    library = Path(where) / "skills" if where is not None else None
+    resolved = []
+    for called in RUNDESK_REQUIRED_GRANTS:
+        old = previous.get(called)
+        if (old is not None and not skill.built_in(called, library)
+                and skill.built_in(old, library)):
+            resolved.append(old)
+        else:
+            resolved.append(called)
+    return tuple(resolved)
+
 
 #: What a new configuration says in full (R-INS-19). This is an installation seed, never a
 #: runtime fallback: once written, `config.json` is what governs the install. Not every
@@ -74,7 +101,11 @@ INITIAL = {
     "backups": {"at": "04:00", "keep_days": 30},
     "updates": {"at": "03:00"},
     "skills": {
-        "granted": list(RUNDESK_REQUIRED_GRANTS)
+        "granted": [
+            *RUNDESK_REQUIRED_GRANTS,
+            "writing-plans",
+            "organizing-workspaces",
+        ]
     },
 }
 
@@ -158,7 +189,7 @@ def _granted(said, where) -> tuple[str, ...]:
         raise Unreadable(f"{path(where)}: 'skills.granted' must be a list of skill names, "
                          f"and is {said!r}")
     return tuple(said) + tuple(
-        called for called in RUNDESK_REQUIRED_GRANTS if called not in said
+        called for called in required_grants(where) if called not in said
     )
 
 
@@ -177,8 +208,12 @@ def ensure(where: Path | None = None) -> list[str]:
         standing = read(where)
     except Unreadable:
         return []
+    defaults = copy.deepcopy(INITIAL)
+    defaults["skills"]["granted"] = [
+        *required_grants(where), "writing-plans", "organizing-workspaces",
+    ]
     changed = []
-    for section, values in INITIAL.items():
+    for section, values in defaults.items():
         if section not in standing:
             standing[section] = copy.deepcopy(values)
             changed.append(section)
@@ -192,15 +227,27 @@ def ensure(where: Path | None = None) -> list[str]:
                 if section not in changed:
                     changed.append(section)
     skills = standing.get("skills")
-    if (isinstance(skills, dict)
-            and skills.get("granted") == list(PREVIOUS_DEFAULT_GRANTS)):
-        skills["granted"] = copy.deepcopy(INITIAL["skills"]["granted"])
+    stored_grants = skills.get("granted") if isinstance(skills, dict) else None
+    if (isinstance(stored_grants, list)
+            and tuple(stored_grants) in PREVIOUS_DEFAULT_GRANTS):
+        skills["granted"] = copy.deepcopy(defaults["skills"]["granted"])
         if "skills" not in changed:
             changed.append("skills")
     if isinstance(skills, dict) and isinstance(skills.get("granted"), list):
         granted = skills["granted"]
+        library = Path(where) / "skills" if where is not None else None
         if all(isinstance(one, str) for one in granted):
-            for called in RUNDESK_REQUIRED_GRANTS:
+            for old, new in skill.RENAMED.items():
+                if (old not in granted
+                        or not skill.built_in(old, library)
+                        or not skill.built_in(new, library)):
+                    continue
+                granted[granted.index(old)] = new
+                while granted.count(new) > 1:
+                    granted.remove(new)
+                if "skills" not in changed:
+                    changed.append("skills")
+            for called in required_grants(where):
                 if called not in granted:
                     granted.append(called)
                     if "skills" not in changed:
