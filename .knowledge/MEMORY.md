@@ -799,5 +799,14 @@ re-checked since, so treat these as true-when-found rather than as current.*
   followed by an install fails before the copy starts when `workdir` names the future copy;
   create the directory in one invocation, then run from it in the next.
 
+- **The release guide names a Workspace `scripts/issues-closed-by.py` that is no longer
+  present.** Verify issue linkage directly with
+  `gh pr view <n> --json closingIssuesReferences` and `gh issue view <n> --json state`; do
+  not treat the missing helper as proof that a release issue closed.
+
+- **This installed `gh release view --json` has no `isLatest` field.** Asking for it fails
+  before returning any release data; verify tag, publication, draft and prerelease state with
+  supported `release view` fields, and use `gh release list` when latest ordering matters.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*
