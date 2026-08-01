@@ -1208,7 +1208,7 @@ def _queried(name: str, asked: str, where: Path | None = None) -> str:
     """
     if asked == "help":
         return (
-            "Read-only queries: status, version, agents, help\n"
+            "Read-only queries: status, version, agents, skills, help\n"
             "Conversation controls: stop, forget\n"
             "Agent control: restart"
         )
@@ -1241,6 +1241,13 @@ def _queried(name: str, asked: str, where: Path | None = None) -> str:
                 if standing.running else "STOPPED"
             rows.append(f"{one}: {state} ({standing.version or '-'})")
         return "\n".join(rows)
+    if asked == "skills":
+        # The grant directory is the capability boundary for this agent (R-DIS-36).
+        # The shared library and another agent's grants are not things this one can use.
+        granted = skill.granted(skills(name, where))
+        if not granted:
+            return "No skills granted."
+        return "\n".join(f"- {called}" for called in granted)
     raise ValueError(f"unknown read-only query: {asked}")
 
 

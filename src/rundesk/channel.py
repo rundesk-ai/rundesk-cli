@@ -225,8 +225,9 @@ CONTROLS = (STOP, FORGET, RESTART)
 STATUS = "status"
 VERSION = "version"
 AGENTS = "agents"
+SKILLS = "skills"
 HELP = "help"
-QUERIES = (STATUS, VERSION, AGENTS, HELP)
+QUERIES = (STATUS, VERSION, AGENTS, SKILLS, HELP)
 
 #: What is asked of an adapter to find out whether it can reach what it was pointed at.
 #: Unlike asking a brain what it can do, this one really does reach a network — that is the

@@ -200,12 +200,14 @@ CONTROL_COMMANDS = (
      "♻️ restarting the agent — it will be back in a moment."),
 )
 
-#: Read-only gateway questions (R-DIS-22). Their names are Discord's; the values are Rundesk's
-#: closed query vocabulary, so this never becomes an arbitrary command runner.
+#: Read-only agent and gateway questions (R-DIS-22, R-DIS-36). Their names are
+#: Discord's; the values are Rundesk's closed query vocabulary, so this never becomes
+#: an arbitrary command runner.
 QUERY_COMMANDS = (
     ("status", "Show this agent gateway's current status", "status"),
     ("version", "Show the installed and running Rundesk versions", "version"),
     ("agents", "List configured agents and whether they are running", "agents"),
+    ("skills", "List skills granted to this agent", "skills"),
     ("help", "Show the gateway commands available here", "help"),
 )
 
@@ -920,9 +922,12 @@ class Agent(discord.Client):
             note(f"no deferred interaction for {it.get('query')}")
             return
         try:
-            await interaction.edit_original_response(
-                content=clip(str(it.get("text") or "No information available."), LIMIT)
-            )
+            rest = str(it.get("text") or "No information available.")
+            piece, rest = split_at(rest, LIMIT)
+            await interaction.edit_original_response(content=piece)
+            while rest:
+                piece, rest = split_at(rest, LIMIT)
+                await interaction.followup.send(content=piece, ephemeral=True)
         except Exception as why:  # noqa: BLE001 — a platform boundary
             note(f"could not answer /{it.get('query')}: {type(why).__name__}: {why}")
 
