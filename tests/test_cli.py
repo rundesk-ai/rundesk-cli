@@ -904,6 +904,8 @@ class FakeAgents:
         self.display_names: dict[str, str] = {}
         #: Existing agents whose configured baseline an upgrade route reconciled.
         self.required: list[str] = []
+        self.retired_skills = False
+        self.reconciled_skill_config = False
         for one in self._made:
             self._built(one)
 
@@ -996,6 +998,14 @@ class FakeAgents:
 
     def require_skills(self, name):
         self.required.append(name)
+        return []
+
+    def retire_renamed_skills(self):
+        self.retired_skills = True
+        return []
+
+    def reconcile_skill_config(self):
+        self.reconciled_skill_config = True
         return []
 
     def adopt(self, name):
@@ -1301,8 +1311,8 @@ class WhatTheInstallerDoesToTheLibrary(unittest.TestCase):
 
 
     def test_laying_down_also_reconciles_every_existing_agent(self):
-        """R-AGT-36 — reinstalling over an existing installation applies the configured
-        baseline to agents that predate this release."""
+        """R-AGT-36, R-AGT-49 — reinstalling over an existing installation applies the
+        configured baseline before retiring a renamed built-in."""
         agents = FakeAgents(made=("ava", "bo"))
 
         catalogs = FakeCatalogs()
@@ -1312,6 +1322,8 @@ class WhatTheInstallerDoesToTheLibrary(unittest.TestCase):
 
         self.assertEqual(0, code, said)
         self.assertEqual(["ava", "bo"], agents.required)
+        self.assertTrue(agents.reconciled_skill_config)
+        self.assertTrue(agents.retired_skills)
         self.assertEqual(("refresh", set()), catalogs.did[-1])
 
 

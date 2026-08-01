@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import config
+from rundesk import config, skill
 
 
 class WithADataDirectory(unittest.TestCase):
@@ -28,6 +28,21 @@ class WithADataDirectory(unittest.TestCase):
         self.where = Path(tempfile.mkdtemp(prefix="rundesk-config-"))
         self.addCleanup(shutil.rmtree, self.where, ignore_errors=True)
         self.at = self.where / config.NAMED
+        self.library = self.where / "skills"
+        self.library.mkdir()
+        real = skill.home
+        skill.home = lambda: self.library
+        self.addCleanup(setattr, skill, "home", real)
+
+    def built_in(self, name: str) -> Path:
+        at = self.library / name
+        at.mkdir()
+        (at / skill.NAMED).write_text(
+            f"---\nname: {name}\ndescription: Use for tests.\n---\n",
+            encoding="utf-8",
+        )
+        (at / skill.OWNED).write_text("rundesk built-in\n", encoding="utf-8")
+        return at
 
 
 class WhatInstallingWrites(WithADataDirectory):
@@ -97,7 +112,7 @@ class WhatAnUpdateAdds(WithADataDirectory):
         """R-UPD-50, R-AGT-36 — agents on the release default receive the new common
         collaboration skills rather than keeping an accidental snapshot of an old default."""
         self.at.write_text(json.dumps({
-            "skills": {"granted": list(config.PREVIOUS_DEFAULT_GRANTS)},
+            "skills": {"granted": list(config.PREVIOUS_DEFAULT_GRANTS[0])},
         }) + "\n", encoding="utf-8")
 
         changed = config.ensure(self.where)
@@ -107,6 +122,47 @@ class WhatAnUpdateAdds(WithADataDirectory):
             config.INITIAL["skills"]["granted"],
             json.loads(self.at.read_text())["skills"]["granted"],
         )
+
+    def test_the_immediately_previous_default_adds_plan_writing(self):
+        """R-UPD-50, R-AGT-48 — an unchanged default remains Rundesk's choice and gains
+        the new planning baseline on update."""
+        self.at.write_text(json.dumps({
+            "skills": {"granted": list(config.PREVIOUS_DEFAULT_GRANTS[-1])},
+        }) + "\n", encoding="utf-8")
+
+        config.ensure(self.where)
+
+        self.assertIn("writing-plans", json.loads(self.at.read_text())["skills"]["granted"])
+
+    def test_an_authoring_grant_follows_the_shipped_skill_rename(self):
+        """R-AGT-49 — the persisted optional choice keeps meaning the same capability
+        after its built-in name changes."""
+        self.built_in("writing-rundesk-skills")
+        self.built_in("writing-skills")
+        self.at.write_text(json.dumps({
+            "skills": {"granted": ["writing-rundesk-skills"]},
+        }) + "\n", encoding="utf-8")
+
+        config.ensure(self.where)
+
+        granted = json.loads(self.at.read_text())["skills"]["granted"]
+        self.assertIn("writing-skills", granted)
+        self.assertNotIn("writing-rundesk-skills", granted)
+
+    def test_an_owner_authoring_choice_keeps_its_name(self):
+        """R-UPD-48, R-AGT-49 — matching a historical built-in name is not ownership
+        proof for an owner's current package or configured choice."""
+        owned = self.built_in("writing-rundesk-skills")
+        (owned / skill.OWNED).unlink()
+        self.at.write_text(json.dumps({
+            "skills": {"granted": ["writing-rundesk-skills"]},
+        }) + "\n", encoding="utf-8")
+
+        config.ensure(self.where)
+
+        granted = json.loads(self.at.read_text())["skills"]["granted"]
+        self.assertIn("writing-rundesk-skills", granted)
+        self.assertNotIn("writing-skills", granted)
 
     def test_an_owner_customized_skill_list_keeps_its_choices_and_the_required_floor(self):
         """R-UPD-48, R-UPD-50, R-AGT-36 — optional choices survive while a product-required

@@ -367,6 +367,7 @@ class AnAgentIsMade(WithSomewhereToKeepAgents):
             self.assertTrue((agent.home("ava", self.where) / called).is_file(),
                             f"a new agent has no {called} to load")
         self.assertTrue(agent.workspace("ava", self.where).is_dir())
+        self.assertTrue(agent.plans("ava", self.where).is_dir())
         self.assertTrue(agent.skills("ava", self.where).is_dir())
 
     def test_a_new_home_has_no_separate_user_page(self):

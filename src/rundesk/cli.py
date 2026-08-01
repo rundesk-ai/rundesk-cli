@@ -2036,10 +2036,14 @@ def _provisioned(root: Path = REPO_ROOT) -> str | None:
     # never touched, so this cannot be how an owner's configuration is lost (R-UPD-48).
     config.ensure()
     skill.lay_down(force=True)
+    # A persisted skill name can move only after both old and replacement packages are
+    # proven as Rundesk built-ins. The earlier pass fills values; this one carries names.
+    config.ensure()
     # Existing agents are brought forward too. Optional owner grants are not removed; the
     # configured list is the minimum every agent must hold, not its complete grant set.
     for name in _agent.known():
         _agent.require_skills(name)
+    _agent.retire_renamed_skills()
     return None
 
 
@@ -2453,6 +2457,7 @@ def cmd_skills(args: argparse.Namespace, agents, skills, catalogs) -> int:
         # The installer's, and deliberately not an owner's verb: what a release ships is
         # not a thing anybody should have to ask for.
         laid = skills.lay_down()
+        agents.reconcile_skill_config()
         if _refresh_skill_catalogs(agents, skills, catalogs):
             return 1
         # `skills.granted` is a floor for every agent, including ones that predate the
@@ -2460,6 +2465,7 @@ def cmd_skills(args: argparse.Namespace, agents, skills, catalogs) -> int:
         # population here as well as in `_provisioned` (R-AGT-36).
         for name in agents.known():
             agents.require_skills(name)
+        agents.retire_renamed_skills()
         print(" ".join(laid))
         return 0
     act = getattr(args, "act", None)

@@ -53,6 +53,12 @@ DESCRIBED_LIMIT = 1024
 #: How long a name may be — the shortest limit any of the three enforces.
 NAMED_LIMIT = 64
 
+#: Built-in names deliberately replaced by this release. This is narrowly different from
+#: an expired built-in: an expired name is no longer runtime policy (R-AGT-35), while a
+#: renamed name is still the same shipped capability and its Rundesk-owned copies and grants
+#: must follow the current spelling (R-AGT-49).
+RENAMED = {"writing-rundesk-skills": "writing-skills"}
+
 
 def home() -> Path:
     """Where every skill on this machine stands.
@@ -203,6 +209,35 @@ def lay_down(where: Path | None = None, force: bool = False) -> list[str]:
 def _owned(at: Path, name: str) -> bool:
     """Whether Rundesk has evidence that this skill is its own."""
     return (at / OWNED).is_file()
+
+
+def built_in(name: str, where: Path | None = None) -> bool:
+    """Whether the library entry by this name is proven to be Rundesk's."""
+    at = library(where).get(name)
+    return at is not None and _owned(at, name)
+
+
+def retire_renamed(skills_dirs, where: Path | None = None) -> list[str]:
+    """Remove old built-in names only after no Rundesk grant still needs them.
+
+    A replacement is laid down first, grants are moved second, and retirement is last. If
+    one agent has a collision or cannot accept the new link, its old working package remains
+    available and the next update can retry (R-AGT-49).
+    """
+    where = where or home()
+    gone = []
+    for old, new in RENAMED.items():
+        standing = where / old
+        if not built_in(old, where) or not built_in(new, where):
+            continue
+        if any(ours(Path(skills_dir) / old, where) for skills_dir in skills_dirs):
+            continue
+        try:
+            shutil.rmtree(standing)
+        except OSError:
+            continue
+        gone.append(old)
+    return gone
 
 
 def take_back(where: Path | None = None) -> list[str]:

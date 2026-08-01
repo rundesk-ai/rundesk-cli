@@ -62,7 +62,7 @@ rundesk skills                      # every skill on this machine, and who has w
 ```
 
 If you can see one that would help and were not given it, say so rather than working around
-it. You can write skills too — `writing-rundesk-skills` says how. It is not one every agent
+it. You can write skills too — `writing-skills` says how. It is not one every agent
 starts with, so ask for it rather than assuming you have it.
 
 One **gateway** runs you. It is the long-lived process the machine keeps up; your channels are

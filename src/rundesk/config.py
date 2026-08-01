@@ -39,19 +39,30 @@ import copy
 import json
 from pathlib import Path
 
-from rundesk import data_home
+from rundesk import data_home, skill
 
 #: The file, under `data_home()`. Named plainly rather than hidden: an owner is expected to
 #: open it, and a dotfile is a file people are not told about.
 NAMED = "config.json"
 
-#: The exact skill default v0.23.0 wrote. Only this unchanged release-owned value advances;
-#: every owner customization remains untouched (R-UPD-48, R-UPD-50).
+#: Exact skill defaults earlier releases wrote. Only an unchanged release-owned value
+#: advances; every owner customization remains untouched (R-UPD-48, R-UPD-50).
 PREVIOUS_DEFAULT_GRANTS = (
-    "managing-rundesk",
-    "managing-rundesk-schedules",
-    "managing-rundesk-backups",
-    "filing-rundesk-issues",
+    (
+        "managing-rundesk",
+        "managing-rundesk-schedules",
+        "managing-rundesk-backups",
+        "filing-rundesk-issues",
+    ),
+    (
+        "managing-rundesk",
+        "managing-rundesk-schedules",
+        "managing-rundesk-backups",
+        "filing-github-issues",
+        "filing-rundesk-issues",
+        "writing-github-pull-requests",
+        "writing-rundesk-pull-requests",
+    ),
 )
 
 #: The operating baseline every Rundesk agent receives. The generic GitHub skills are here
@@ -74,7 +85,7 @@ INITIAL = {
     "backups": {"at": "04:00", "keep_days": 30},
     "updates": {"at": "03:00"},
     "skills": {
-        "granted": list(RUNDESK_REQUIRED_GRANTS)
+        "granted": [*RUNDESK_REQUIRED_GRANTS, "writing-plans"]
     },
 }
 
@@ -192,14 +203,24 @@ def ensure(where: Path | None = None) -> list[str]:
                 if section not in changed:
                     changed.append(section)
     skills = standing.get("skills")
-    if (isinstance(skills, dict)
-            and skills.get("granted") == list(PREVIOUS_DEFAULT_GRANTS)):
+    stored_grants = skills.get("granted") if isinstance(skills, dict) else None
+    if (isinstance(stored_grants, list)
+            and tuple(stored_grants) in PREVIOUS_DEFAULT_GRANTS):
         skills["granted"] = copy.deepcopy(INITIAL["skills"]["granted"])
         if "skills" not in changed:
             changed.append("skills")
     if isinstance(skills, dict) and isinstance(skills.get("granted"), list):
         granted = skills["granted"]
         if all(isinstance(one, str) for one in granted):
+            for old, new in skill.RENAMED.items():
+                if (old not in granted
+                        or not skill.built_in(old) or not skill.built_in(new)):
+                    continue
+                granted[granted.index(old)] = new
+                while granted.count(new) > 1:
+                    granted.remove(new)
+                if "skills" not in changed:
+                    changed.append("skills")
             for called in RUNDESK_REQUIRED_GRANTS:
                 if called not in granted:
                     granted.append(called)

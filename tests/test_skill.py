@@ -73,13 +73,44 @@ class WithALibrary(unittest.TestCase):
 class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
     def test_skill_authoring_guidance_defines_complete_packages(self):
         """R-AGT-44 — Rundesk's own reusable format ships with Rundesk."""
-        page = (REALLY_SHIPPED / "writing-rundesk-skills" / "SKILL.md").read_text()
+        page = (REALLY_SHIPPED / "writing-skills" / "SKILL.md").read_text()
         for expected in (
                 "scripts/", "references/", "assets/",
                 '"$RUNDESK_SKILLS/<name>/scripts/<command>"',
                 "do not put a companion command in the shared script library"):
             with self.subTest(expected=expected):
                 self.assertIn(expected, page)
+
+    def test_skill_authoring_guidance_matches_verification_and_form_to_the_failure(self):
+        """R-AGT-47 — reusable guidance is tested as the kind of guidance it is, and
+        changes the observed failure instead of adding generic rules."""
+        page = (REALLY_SHIPPED / "writing-skills" / "SKILL.md").read_text()
+        for expected in (
+                "Discipline skill", "Technique skill", "Pattern skill", "Reference skill",
+                "positive contract", "required slot", "observable condition",
+                "exact rationalizations", "become a shortcut"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, page)
+        for excluded in (
+                "superpowers:", "~/.claude", "~/.agents", "Graphviz", "persuasion",
+                "Delete means delete", "REQUIRED BACKGROUND", "pressure scenario with subagent"):
+            with self.subTest(excluded=excluded):
+                self.assertNotIn(excluded, page)
+
+    def test_plan_guidance_keeps_executable_plans_in_the_agent_workspace(self):
+        """R-AGT-48 — a plan has one discoverable home and enough verified detail for a
+        later worker without inheriting this conversation."""
+        page = (REALLY_SHIPPED / "writing-plans" / "SKILL.md").read_text()
+        for expected in (
+                "<workspace>/plans/YYYY-MM-DD-<short-topic>.md",
+                "Create `plans/` if an older workspace",
+                "exact paths", "exact command", "Map every requirement",
+                "Do not begin implementation unless"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, page)
+        for excluded in ("superpowers:", "docs/superpowers", "REQUIRED SUB-SKILL"):
+            with self.subTest(excluded=excluded):
+                self.assertNotIn(excluded, page)
 
     def test_issue_and_pull_request_guidance_requires_the_agent_footer(self):
         for skill_name in (
@@ -467,6 +498,42 @@ class BringingTheBuiltInsForward(WithALibrary):
         self.assertTrue((expired / skill.NAMED).is_file(),
                         "runtime policy still reached a name this release does not ship")
 
+    def test_a_renamed_built_in_replaces_only_the_copy_rundesk_owned(self):
+        """R-AGT-49 — an intentional rename does not leave duplicate shipped guidance,
+        and the ownership marker is still the boundary on what an update may remove."""
+        a_skill(self.release, "writing-skills", says="current words")
+        old = a_skill(self.library, "writing-rundesk-skills", says="historical words")
+        (old / skill.OWNED).write_text("rundesk built-in\n", encoding="utf-8")
+
+        skill.lay_down(self.library, force=True)
+        skill.retire_renamed([], self.library)
+
+        self.assertFalse(old.exists())
+        self.assertIn("current words", (self.library / "writing-skills" / "SKILL.md").read_text())
+
+    def test_a_renamed_built_in_leaves_an_owner_skill_under_the_old_name(self):
+        """R-AGT-49"""
+        a_skill(self.release, "writing-skills")
+        old = a_skill(self.library, "writing-rundesk-skills", says="owner words")
+
+        skill.lay_down(self.library, force=True)
+        skill.retire_renamed([], self.library)
+
+        self.assertIn("owner words", (old / "SKILL.md").read_text())
+
+    def test_a_blocked_replacement_keeps_the_previous_built_in_working(self):
+        """R-AGT-49 — a coincident owner skill under the new name cannot make an update
+        delete the old working built-in before its replacement exists."""
+        a_skill(self.release, "writing-skills", says="release words")
+        old = a_skill(self.library, "writing-rundesk-skills", says="historical words")
+        (old / skill.OWNED).write_text("rundesk built-in\n", encoding="utf-8")
+        a_skill(self.library, "writing-skills", says="owner words")
+
+        skill.lay_down(self.library, force=True)
+        skill.retire_renamed([], self.library)
+
+        self.assertTrue(old.is_dir())
+
     def test_take_back_leaves_a_shipped_name_the_install_did_not_lay_down(self):
         """R-RM-7 — uninstall ownership is proved by a marker, not the release's names."""
         theirs = a_skill(self.library, "later-addition", says="an owner's work")
@@ -761,6 +828,106 @@ class WhatMakingAnAgentGrants(WithALibrary):
         self.assertEqual(sorted((*config.RUNDESK_REQUIRED_GRANTS, "later-addition",
                                  "owner-chose-this", "writing-skills")),
                          skill.granted(self.agents.skills("ava")))
+
+    def test_reconciliation_adds_the_plan_home_to_an_existing_workspace(self):
+        """R-AGT-48 — update reconciliation gives existing agents the same canonical plan
+        home as newly created agents."""
+        self.agents.add("ava")
+        shutil.rmtree(self.agents.plans("ava"))
+
+        self.agents.require_skills("ava")
+
+        self.assertTrue(self.agents.plans("ava").is_dir())
+
+    def test_an_existing_rundesk_grant_follows_a_built_in_rename(self):
+        """R-AGT-49 — optional grants migrate too, while a foreign entry under the old
+        spelling remains outside Rundesk's authority."""
+        shutil.rmtree(self.release / "writing-skills")
+        a_skill(self.release, "writing-rundesk-skills")
+        skill.lay_down(self.library)
+        skill.grant(self.agents.skills("ava"), "writing-rundesk-skills")
+        old = self.library / "writing-rundesk-skills"
+        (old / skill.OWNED).write_text("rundesk built-in\n", encoding="utf-8")
+        a_skill(self.release, "writing-skills")
+        skill.lay_down(self.library, force=True)
+
+        self.agents.require_skills("ava")
+        self.agents.retire_renamed_skills()
+
+        granted = skill.granted(self.agents.skills("ava"))
+        self.assertIn("writing-skills", granted)
+        self.assertNotIn("writing-rundesk-skills", granted)
+        self.assertFalse(old.exists())
+
+    def test_an_owner_skill_and_its_grant_keep_the_old_name(self):
+        """R-AGT-49 — the old spelling is migration evidence only after Rundesk's owned
+        source was retired; an owner skill that still stands keeps its grant."""
+        owner_skill = a_skill(self.library, "writing-rundesk-skills", says="owner words")
+        skill.grant(self.agents.skills("ava"), "writing-rundesk-skills")
+
+        self.agents.require_skills("ava")
+
+        self.assertTrue(owner_skill.is_dir())
+        self.assertIn("writing-rundesk-skills", skill.granted(self.agents.skills("ava")))
+
+    def test_a_new_name_collision_keeps_the_old_working_grant(self):
+        """R-AGT-49 — an owner entry in the agent's skill directory cannot be treated as
+        a successful replacement for Rundesk's old grant."""
+        shutil.rmtree(self.release / "writing-skills")
+        a_skill(self.release, "writing-rundesk-skills")
+        skill.lay_down(self.library)
+        skill.grant(self.agents.skills("ava"), "writing-rundesk-skills")
+        a_skill(self.release, "writing-skills")
+        skill.lay_down(self.library, force=True)
+        owner_entry = a_skill(self.agents.skills("ava"), "writing-skills", says="owner words")
+
+        self.agents.require_skills("ava")
+        self.agents.retire_renamed_skills()
+
+        self.assertTrue(owner_entry.is_dir())
+        self.assertIn("writing-rundesk-skills", skill.granted(self.agents.skills("ava")))
+        self.assertTrue((self.library / "writing-rundesk-skills").is_dir())
+
+    def test_a_failed_replacement_grant_keeps_the_old_package_for_retry(self):
+        """R-AGT-49 — failure to create the new link cannot strand the old grant."""
+        shutil.rmtree(self.release / "writing-skills")
+        a_skill(self.release, "writing-rundesk-skills")
+        skill.lay_down(self.library)
+        skill.grant(self.agents.skills("ava"), "writing-rundesk-skills")
+        a_skill(self.release, "writing-skills")
+        skill.lay_down(self.library, force=True)
+        real = skill.grant
+        skill.grant = lambda *args, **kwargs: (_ for _ in ()).throw(OSError("read only"))
+        self.addCleanup(setattr, skill, "grant", real)
+
+        self.agents.require_skills("ava")
+        self.agents.retire_renamed_skills()
+
+        self.assertIn("writing-rundesk-skills", skill.granted(self.agents.skills("ava")))
+        self.assertTrue((self.library / "writing-rundesk-skills").is_dir())
+
+    def test_an_owner_replacement_collision_preserves_config_grant_and_package(self):
+        """R-UPD-48, R-AGT-49 — the full upgrade boundary: an owner package under the
+        new spelling prevents configuration, grants, and the old package from moving."""
+        shutil.rmtree(self.release / "writing-skills")
+        shutil.rmtree(self.library / "writing-skills")
+        old = a_skill(self.release, "writing-rundesk-skills")
+        skill.lay_down(self.library)
+        skill.grant(self.agents.skills("ava"), "writing-rundesk-skills")
+        (self.where / "data" / "config.json").write_text(
+            '{"skills": {"granted": ["writing-rundesk-skills"]}}\n', encoding="utf-8")
+        a_skill(self.release, "writing-skills")
+        a_skill(self.library, "writing-skills", says="owner replacement")
+
+        skill.lay_down(self.library, force=True)
+        self.agents.reconcile_skill_config()
+        self.agents.require_skills("ava")
+        self.agents.retire_renamed_skills()
+
+        configured = config.skills(self.where / "data")["granted"]
+        self.assertIn("writing-rundesk-skills", configured)
+        self.assertIn("writing-rundesk-skills", skill.granted(self.agents.skills("ava")))
+        self.assertTrue((self.library / old.name).is_dir())
 
     def test_an_agent_is_made_with_the_skills_written_into_a_new_configuration(self):
         """R-AGT-36 — the required set is what an agent needs to work with rundesk
