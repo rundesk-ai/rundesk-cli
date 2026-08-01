@@ -29,6 +29,7 @@ import stat
 import time
 import unicodedata
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from rundesk import ROOT, __version__, data_home, gateway, instructions, migration, skill, store
@@ -1208,7 +1209,7 @@ def _queried(name: str, asked: str, where: Path | None = None) -> str:
     """
     if asked == "help":
         return (
-            "Read-only queries: status, version, agents, skills, help\n"
+            "Read-only queries: status, version, agents, skills, schedules, help\n"
             "Conversation controls: stop, forget\n"
             "Agent control: restart"
         )
@@ -1248,7 +1249,42 @@ def _queried(name: str, asked: str, where: Path | None = None) -> str:
         if not granted:
             return "No skills granted."
         return "\n".join(f"- {called}" for called in granted)
+    if asked == "schedules":
+        return _query_schedules(name, datetime.now(), where)
     raise ValueError(f"unknown read-only query: {asked}")
+
+
+def _query_schedules(name: str, now: datetime, where: Path | None = None) -> str:
+    """What this agent still has waiting, one schedule to a line (R-DIS-37).
+
+    An agent's own, because a schedule belongs to the agent that keeps it (R-SCH-13). The
+    moment is an argument for the same reason it is everywhere else this decides anything
+    about a clock (R-SCH-12).
+
+    **What can still happen, and nothing else.** A schedule whose one moment has gone can
+    never be due again (R-SCH-40), so it is no more part of what this agent runs than one
+    that was removed — and on a surface this narrow, a list of things that are over pushes
+    the work that is waiting off the bottom of it.
+    """
+    from rundesk import schedule as schedules
+
+    kept, refused = schedules.read(reading(name, where).schedules())
+    # A stated minute is written most-significant first, so what is next reads in order as
+    # written. `off` and `never` state no minute at all and go under them, alphabetically.
+    lines = sorted(
+        ((schedules.describe(one, now), one.name) for one in kept
+         if not one.expired_at(now)),
+        key=lambda row: (not row[0][:1].isdigit(), row[0], row[1]),
+    )
+    said = [f"- {when} — {called}" for when, called in lines]
+    if not said and not refused:
+        said = ["No schedules that can still run." if kept else "No schedules."]
+    if refused:
+        # Said rather than silently left out: a schedule missing from this list because
+        # nobody could read it looks exactly like one that was never added.
+        said.append("could not be understood: " + ", ".join(
+            sorted(called or "(unnamed)" for called, _why in refused)))
+    return "\n".join(said)
 
 
 def _installed_version(root: Path | None = None) -> str:

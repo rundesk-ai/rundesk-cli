@@ -195,8 +195,11 @@ Then test both surfaces you enabled:
   messages inside that thread do not need another mention.
 - Run `/status` to confirm its slash commands are available.
 
-Rundesk also offers `/stop`, `/new`, `/restart`, `/version`, `/agents`, `/help`, and
-`/provider` where the channel's access rules allow them. Global slash commands can take
+Rundesk also offers `/stop`, `/new`, `/restart`, `/version`, `/agents`, `/skills`,
+`/schedules`, `/help`, and `/provider` where the channel's access rules allow them.
+`/schedules` lists the agent's schedules that can still run, soonest first; a one-time
+schedule whose moment has gone is left out — `rundesk schedules <agent> --expired` is
+where those are read. Global slash commands can take
 up to an hour to appear. When the channel was added with `--server`, Rundesk also syncs
 a server-scoped copy that normally appears sooner.
 
