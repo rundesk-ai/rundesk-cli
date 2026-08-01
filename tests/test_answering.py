@@ -1833,30 +1833,47 @@ class WhatTheAgentMade(CarriesAConversation):
         self.assertEqual(text, answer["text"])
         self.assertEqual([], answer["attachments"])
 
-    async def test_an_absolute_local_markdown_link_is_an_attachment_declaration(self):
-        """R-CH-31 — the ordinary file link a brain naturally writes carries the file
-        without requiring a second turn to restate it in Rundesk's reserved form."""
-        at = self._made("plans/implementation plan.md")
-        text = f"[Review the implementation plan](<{at}>)"
+    async def test_a_missing_local_markdown_link_attaches_nothing(self):
+        """R-CH-31 — an absolute path in Markdown is delivery intent, not evidence
+        that the named file actually exists."""
+        text = "Read [the missing report](/no/such/rundesk-report.pdf)."
         brain, surface = Brain(outcome=Outcome(text=text)), Surface()
         held = self.answering(surface, brain)
 
         await self.carry(held, self.arrived())
 
         answer = surface.of("answer")[0]
-        self.assertEqual("Review the implementation plan", answer["text"])
+        self.assertEqual("Read the missing report.", answer["text"])
+        self.assertEqual([], answer["attachments"])
+
+    async def test_an_inline_bare_absolute_local_markdown_link_is_attached(self):
+        """R-CH-31 — the exact link form a brain naturally writes in a sentence
+        carries the file without requiring another turn or reserved syntax."""
+        at = self._made("plans/imex-implementation-record.md")
+        text = f"I updated the [IMEX implementation record]({at}) as the canonical record."
+        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual(
+            "I updated the IMEX implementation record as the canonical record.",
+            answer["text"],
+        )
         self.assertNotIn(str(at), answer["text"])
         self.assertEqual(1, len(answer["attachments"]))
         self.assertEqual(at.name, answer["attachments"][0]["name"])
 
-    async def test_non_standalone_local_markdown_is_not_an_attachment_declaration(self):
-        """R-CH-31 — only a whole line is delivery intent; prose and formatting remain
-        text even when they happen to contain an absolute local link."""
+    async def test_existing_local_markdown_links_attach_in_any_message_position(self):
+        """R-CH-31 — placement, angle brackets, nested labels, and parentheses in an
+        existing absolute local path do not prevent delivery."""
         at = self._made("ordinary.pdf")
+        parenthesized = self._made("reports/report(1).pdf")
         examples = [
-            f'[Download](<{at}> "PDF report")',
+            f"See [Download](<{at}>) now.",
             f"[Download [PDF]](<{at}>)",
-            f"[Download]({at.parent}/report(1).pdf)",
+            f"See [Download]({parenthesized}) now.",
             f"<!-- [Download](<{at}>) -->",
             f">     [Download](<{at}>)",
             f"- Reports:\n    [Download](<{at}>)",
@@ -1869,8 +1886,9 @@ class WhatTheAgentMade(CarriesAConversation):
                 await self.carry(held, self.arrived())
 
                 answer = surface.of("answer")[0]
-                self.assertEqual(text, answer["text"])
-                self.assertEqual([], answer["attachments"])
+                self.assertNotIn(str(at), answer["text"])
+                self.assertNotIn(str(parenthesized), answer["text"])
+                self.assertEqual(1, len(answer["attachments"]))
 
     async def test_a_protocol_relative_link_is_not_a_local_file(self):
         """R-CH-31 — a remote URL without an explicit scheme remains a link."""
@@ -1885,17 +1903,23 @@ class WhatTheAgentMade(CarriesAConversation):
         self.assertEqual([], answer["attachments"])
 
     async def test_an_escaped_reserved_attachment_line_is_literal(self):
-        """R-CH-31 — the reserved protocol can be shown safely by escaping its prefix."""
+        """R-CH-31 — either attachment form can be shown safely by escaping its
+        distinguishing opening character."""
         at = self._made("example.pdf")
-        text = f"```text\n\\rundesk-attach: [example](<{at}>)\n```"
-        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
-        held = self.answering(surface, brain)
+        examples = [
+            f"```text\n\\rundesk-attach: [example](<{at}>)\n```",
+            f"The literal link is \\[example]({at}).",
+        ]
+        for text in examples:
+            with self.subTest(text=text):
+                brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+                held = self.answering(surface, brain)
 
-        await self.carry(held, self.arrived())
+                await self.carry(held, self.arrived())
 
-        answer = surface.of("answer")[0]
-        self.assertEqual(text, answer["text"])
-        self.assertEqual([], answer["attachments"])
+                answer = surface.of("answer")[0]
+                self.assertEqual(text, answer["text"])
+                self.assertEqual([], answer["attachments"])
 
     async def test_a_parent_changed_after_containment_is_not_sent(self):
         """R-CH-18 — every path component remains beneath a held agent directory
@@ -1950,19 +1974,19 @@ class WhatTheAgentMade(CarriesAConversation):
             await asyncio.wait_for(advance(), timeout=0.3)
             await carrying
 
-    async def test_a_reserved_local_line_outside_the_agent_is_not_attached(self):
-        """R-CH-31, R-CH-18 — a reserved line is not permission to disclose
+    async def test_a_local_markdown_link_outside_the_agent_is_not_attached(self):
+        """R-CH-31, R-CH-18 — a local link is not permission to disclose
         another directory, including by leaving its absolute path in the message."""
         at = self._made("private.pdf", inside=False)
         brain = Brain(outcome=Outcome(
-            text=f"rundesk-attach: [Private report](<{at}>)"))
+            text=f"I linked the [private report]({at})."))
         surface = Surface()
         held = self.answering(surface, brain)
 
         await self.carry(held, self.arrived())
 
         answer = surface.of("answer")[0]
-        self.assertEqual("Private report", answer["text"])
+        self.assertEqual("I linked the private report.", answer["text"])
         self.assertEqual([], answer["attachments"])
         self.assertTrue(any("outside where this agent works" in one for one in self.told))
 
