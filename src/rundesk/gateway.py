@@ -879,6 +879,16 @@ PS_TIMEOUT_SECONDS = 5.0
 #: Firing is recorded per minute, so looking more often costs nothing (R-SCH-9).
 TICK_SECONDS = 20.0
 
+#: How often the gateway looks for a profile run to carry and a parent to tell. Close to
+#: the beat rather than to the clock: an agent that just delegated is waiting for work to
+#: begin, and a parent whose worker has finished is waiting to be told (R-PRF-15).
+PROFILE_SECONDS = 5.0
+
+#: How often expired profile bundles are cleared. Once an hour, because retention is
+#: measured in days and what a sweep finds on a machine where nothing has expired is
+#: nothing (R-PRF-12).
+PROFILE_SWEEP_SECONDS = 3600.0
+
 #: How long stopping may take before the gateway stops waiting for what it is running and
 #: goes anyway (R-GW-7). Under what the supervisor allows: launchd sends SIGTERM, waits,
 #: and then sends SIGKILL — and being killed is how children get left behind.
@@ -1112,6 +1122,7 @@ class Gateway:
         agents: Path | None = None,
         records=None,
         asking=None,
+        profiles=None,
     ):
         self.name = checked(name)
         self.where = where or home()
@@ -1179,6 +1190,16 @@ class Gateway:
         #: Which schedules have a turn in flight. Kept apart from `running`, which holds
         #: programs a shutdown ends: a turn's brain is not a program this gateway started.
         self._asked_for: set[str] = set()
+        #: How this gateway carries the profile runs its agent has admitted, and tells
+        #: their parents. Handed over already made by whoever knows what an agent is, the
+        #: way `asking` is; `None` is a gateway with no agent behind it, which simply
+        #: never carries one (R-PRF-4).
+        self.profiles = profiles
+        #: Which profile roots have a turn in flight, by the run each is carrying. Kept
+        #: apart from `running` for the same reason `_asked_for` is: a turn's brain is not
+        #: a program this gateway started, and the same root started twice would be one
+        #: execution answering its parent twice.
+        self._profile_tasks: dict = {}
         #: Backend update turns this gateway owns. They remain pending durably until one
         #: returns, and shutdown cancels and awaits every task here.
         self._update_turn_tasks: dict[int, asyncio.Task] = {}
@@ -1750,6 +1771,14 @@ class Gateway:
         # through `start`, so ending it, sweeping it and recording it are already done.
         holding = asyncio.ensure_future(self._hold_channels())
         notices = asyncio.ensure_future(self._deliver_update_notices())
+        # Work this agent handed to a specialist, and the reviews it still owes for it.
+        # A loop rather than a reaction, because the two things it does are both durable
+        # facts a restart has to find again: a run admitted while nothing was up, and a
+        # parent that was never told (R-PRF-15).
+        specialists = asyncio.ensure_future(self._carry_profiles())
+        sweeping = asyncio.ensure_future(self._over_and_over(
+            PROFILE_SWEEP_SECONDS, self._sweep_profiles,
+            "could not sweep expired profile runs: %s", at_once=True))
         try:
             await self._stopped.wait()
         finally:
@@ -1757,15 +1786,26 @@ class Gateway:
             ticking.cancel()
             holding.cancel()
             notices.cancel()
+            specialists.cancel()
+            sweeping.cancel()
             for task in self._update_turn_tasks.values():
+                task.cancel()
+            for task in self._profile_tasks.values():
                 task.cancel()
             with contextlib.suppress(BaseException):
                 await holding
             with contextlib.suppress(BaseException):
                 await notices
+            with contextlib.suppress(BaseException):
+                await specialists
+            with contextlib.suppress(BaseException):
+                await sweeping
             if self._update_turn_tasks:
                 await asyncio.gather(
                     *tuple(self._update_turn_tasks.values()), return_exceptions=True)
+            if self._profile_tasks:
+                await asyncio.gather(
+                    *tuple(self._profile_tasks.values()), return_exceptions=True)
             # The handlers stay installed across `_go()`. Removing them here restores the
             # system default, which for these two signals is *terminate* — so a second
             # signal arriving during the shutdown window would kill the gateway outright,
@@ -1783,6 +1823,83 @@ class Gateway:
             self.log.info("ending so the machine starts this gateway again")
             return 1
         return 0 if drained else 1
+
+    async def _carry_profiles(self) -> None:
+        """Carry the profile runs this agent admitted, and tell each parent once.
+
+        Both halves are driven off durable records rather than off anything held in this
+        process, so a gateway that starts finds work admitted while nothing was up and
+        reviews nobody was ever told about. That is the whole reason the acknowledging
+        turn is allowed to end (R-PRF-15).
+        """
+        while not self._stopping:
+            if self.profiles is not None:
+                try:
+                    self._start_admitted_profiles()
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as why:  # noqa: BLE001 — this loop must not die
+                    self.log.warning("could not start a profile run: %s", why)
+                try:
+                    await self._deliver_one_profile_review()
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as why:  # noqa: BLE001 — retried after reconnect
+                    self.log.warning("could not deliver a profile handoff: %s", why)
+            await asyncio.sleep(PROFILE_SECONDS)
+
+    def _start_admitted_profiles(self) -> None:
+        """Start every admitted root that nothing here is already carrying (R-GW-15)."""
+        for row in self.profiles.waiting():
+            run_id = row["id"]
+            if run_id in self._profile_tasks:
+                continue
+            self._profile_tasks[run_id] = asyncio.ensure_future(self._carry_one(run_id))
+            self.log.info("carrying profile run %s", run_id)
+
+    async def _carry_one(self, run_id: str) -> None:
+        """One profile root, from here to its terminal outcome and no further.
+
+        What a provider-native helper does inside it belongs to that turn and returns to
+        it; nothing about one reaches this gateway, and none of them settles this run
+        (R-PRF-14).
+        """
+        try:
+            await self.profiles.carry(run_id)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as why:  # noqa: BLE001 — a boundary, reported truthfully
+            self.log.warning("profile run %s could not be carried: %s", run_id, why)
+        finally:
+            self._profile_tasks.pop(run_id, None)
+
+    async def _deliver_one_profile_review(self) -> None:
+        """Wake the parent for the oldest handoff it is still owed, if it can be woken.
+
+        Nothing is marked delivered until the channel has accepted the parent's response,
+        so a surface that is down means the review waits rather than being lost — and a
+        gateway that died between the two finds it owing again.
+        """
+        owed = self.profiles.owed()
+        if owed is None:
+            return
+        answering = self._reached.get(owed.get("channel"))
+        if answering is None or not answering.connected or not owed.get("conversation"):
+            return
+        self.profiles.claiming(owed["profile_run"])
+        await answering.told_profile_finished(
+            owed["conversation"], owed["handoff"],
+            reviewing=lambda run: self.profiles.reviewing(owed["profile_run"], run),
+        )
+        self.profiles.reviewed(owed["profile_run"])
+        self.log.info("delivered the handoff for profile run %s", owed["profile_run"])
+
+    def _sweep_profiles(self) -> None:
+        """Take away every profile execution context whose window has passed (R-PRF-12)."""
+        if self.profiles is None:
+            return
+        for run_id in self.profiles.sweep():
+            self.log.info("profile run %s is past its retention window", run_id)
 
     async def _deliver_update_notices(self) -> None:
         """Deliver a completed self-update once the originating channel is connected."""

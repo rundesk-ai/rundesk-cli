@@ -71,6 +71,16 @@ AFTER_UPDATE = (
     "original request. Do not stop at reporting status or repeat completed actions."
 )
 
+# What a named agent is woken with when a profile worker it delegated to has reported
+# back (R-PRF-15). Rundesk states what it mechanically knows and asks for a review; it
+# never says the work succeeded, because whether it did is exactly what the review is for
+# and Rundesk read nothing out of the worker's report to find out (R-PRF-16).
+REVIEW_HANDOFF = """A profile worker you delegated to has finished and reported back. Nobody has been told anything about it yet, and this report has not been checked.
+
+{handoff}
+
+Review it: verify the claims that matter against the work itself rather than accepting them, then answer the person who asked in this conversation. Say what you checked. If the report is wrong or incomplete, say so and what you are doing about it. Do not start another profile run from this turn."""
+
 # Any absolute local Markdown link is delivery intent (R-CH-31). The optional reserved
 # prefix remains portable across brains; prefix that form or the opening bracket with a
 # backslash when showing one literally. The parser below handles balanced brackets and
@@ -421,6 +431,58 @@ class Answering:
         # request undelivered so the reconnected gateway tries again truthfully.
         await held.task
         raise RuntimeError("the post-update continuation was not admitted")
+
+    async def told_profile_finished(self, conversation: str, handoff: dict,
+                                    reviewing=None) -> None:
+        """Wake the named parent to review one profile handoff (R-PRF-15).
+
+        **Nothing is posted here.** The worker's report is not an answer and is not news:
+        it is unchecked work, and a surface showing it would have delivered a result the
+        named agent never reviewed — which is the one thing this whole path exists to
+        prevent (R-PRF-16). What is posted is whatever the agent says after reading it.
+
+        Raised rather than returned when the review cannot start, so the caller leaves it
+        owing and tries again. A handoff quietly marked delivered because a room was busy
+        is work that was done and nobody was ever told about.
+        """
+        if not self.connected:
+            raise RuntimeError(f"channel '{self.channel}' is not connected")
+        held = self.exchanges.get(conversation)
+        if held is not None and held.task is not None and not held.task.done():
+            # Somebody is already being answered in this room. Two turns in one
+            # conversation are two brains on one session, and the review can wait.
+            raise RuntimeError("the parent conversation is already answering somebody")
+        if held is None:
+            self._make_room()
+            held = self.exchanges.setdefault(conversation, Exchange(conversation))
+        began = asyncio.Event()
+        held.ref = None
+        held.stopped = False
+
+        def admitted(run: str) -> None:
+            # Written before the turn can ask for anything: which run is reviewing a
+            # handoff is what refuses it a second profile level, and a marker written
+            # afterwards would be written after the moment it guards (R-PRF-13).
+            if reviewing is not None:
+                reviewing(run)
+            began.set()
+
+        held.task = asyncio.ensure_future(
+            self._one(
+                held, REVIEW_HANDOFF.format(handoff=_handoff_text(handoff)), "",
+                prompt_author="rundesk", on_admitted=admitted,
+            )
+        )
+        waiting = asyncio.ensure_future(began.wait())
+        await asyncio.wait({held.task, waiting}, return_when=asyncio.FIRST_COMPLETED)
+        waiting.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await waiting
+        if began.is_set():
+            return
+        # A turn that failed before admission never read the handoff. Leave it owing.
+        await held.task
+        raise RuntimeError("the profile review turn was not admitted")
 
     async def told_restart_finished(self, conversation: str, text: str) -> None:
         """Deliver one queued restart outcome after reconnect (R-GW-43)."""
@@ -1046,6 +1108,30 @@ class _Shown:
                                       run=self._held.run, text=older.strip())
             self._held.spoken.remove((was, older))
         self._held.spoken.append(("whole", text))
+
+
+def _handoff_text(handoff: dict) -> str:
+    """One profile handoff, as the named parent is given it to read.
+
+    What Rundesk knows and what the worker said, told apart on the page. Nothing here is
+    read out of the report or summarised from it: a line saying the tests passed would be
+    Rundesk asserting the one thing the review exists to establish (R-PRF-16).
+    """
+    said = [
+        f"Profile: {handoff.get('profile') or ''}",
+        f"Profile run: {handoff.get('profile_run') or ''}",
+        f"Outcome the worker's turn reached: {handoff.get('outcome') or ''}",
+    ]
+    if handoff.get("target"):
+        said.append(f"Worked in: {handoff['target']}")
+    if handoff.get("files"):
+        said.append("Files it said it made: " + ", ".join(str(one)
+                                                          for one in handoff["files"]))
+    said.append("")
+    said.append("Its report, in its own words, unchecked:")
+    said.append("")
+    said.append(str(handoff.get("report") or "(it said nothing)"))
+    return "\n".join(said)
 
 
 async def _saying(queue: asyncio.Queue):

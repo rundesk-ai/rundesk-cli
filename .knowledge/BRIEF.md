@@ -55,7 +55,10 @@ supervises nothing itself; it hands that to what the machine already has.
   what it did, what its brain actually said, and what it cost; and **the seam a surface is reached
   through**, the mirror of the first — putting an agent on a channel, proving it before writing anything
   down, holding it open inside the agent's gateway, deciding there and only there what state a turn is in,
-  and carrying what arrives on it through to an answer.
+  and carrying what arrives on it through to an answer; and **the specialist an agent hands heavy work
+  to** — a shared profile definition, one isolated execution of it that never carries the agent's
+  identity, memory or operational rules, and exactly one report the named agent reviews before anybody
+  else hears about it.
 - **Out of scope:** reading a run back from the command line. Those operations are registered and answer
   "coming soon" until built — what each run became and cost, said in a listing rather than read off the
   account itself. Nothing here claims a provider loaded a rule, works a cost out from prices, or asks a

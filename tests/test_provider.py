@@ -869,6 +869,27 @@ def _taken(argv: list, flag: str) -> tuple[Path | None, list]:
     return Path(argv[at + 1]).expanduser().resolve(), argv[:at] + argv[at + 2:]
 
 
+class WhatAProfileExecutionIsTold(unittest.TestCase):
+    """R-PRF-13 — the marker a command refuses early on, and never the authority."""
+
+    def test_an_ordinary_turn_is_told_nothing_about_a_profile(self):
+        said = provider.environment(
+            home=Path("/run"), cwd=Path("/home"), provider_home=Path("/brain"),
+            skills=Path("/skills"), run="1-aaaa",
+        )
+        self.assertNotIn("RUNDESK_PROFILE_RUN", said)
+
+    def test_a_profile_execution_is_told_which_run_it_is_carrying(self):
+        said = provider.environment(
+            home=Path("/run"), cwd=Path("/project"), provider_home=Path("/brain"),
+            skills=Path("/runs/prf-1-aaaa/skills"), run="2-bbbb",
+            profile_run="prf-1-aaaa",
+        )
+        self.assertEqual("prf-1-aaaa", said["RUNDESK_PROFILE_RUN"])
+        self.assertEqual("/project", said["RUNDESK_CWD"])
+        self.assertEqual("/runs/prf-1-aaaa/skills", said["RUNDESK_SKILLS"])
+
+
 if __name__ == "__main__":
     ADAPTER, rest = _taken(sys.argv[1:], "--adapter")
     HOME, rest = _taken(rest, "--home")

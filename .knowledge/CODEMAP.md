@@ -47,7 +47,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 24 modules)
+## Backend / Services (src/rundesk/ — 26 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -110,6 +110,19 @@ file with it.
   standing there before the brain runs, and a rule in a config file would describe what rundesk
   placed while the brain read on. Knows nothing of any brain: where a skill is *presented* is each
   adapter's, told through `RUNDESK_SKILLS`.
+- `src/rundesk/profile.py` — a shared specialist definition an agent may hand work to, and what
+  makes one usable. Two maintained files below `agents_home()/.profiles/` — a description, a
+  skill set and a posture, plus the rules one execution follows — and everything else derived:
+  the slug is the directory, the label is the slug read aloud, and the revision is a digest of
+  the manifest, the rules and every resolved skill package, so nobody increments a version. A
+  shipped profile is laid down where one is missing and **never over one that is there**: a
+  profile is what an owner writes their specialists as, not a thing a release keeps true.
+- `src/rundesk/profile_run.py` — one isolated specialist execution, from admission to expiry.
+  Assembles a bundle of locked bytes under the agent's own directory and moves it into place
+  whole, hands `turn.py` an execution context standing in the target project, and settles the
+  root into exactly one review its named parent is owed. **Knows nothing of channels or
+  gateways**: what carries it and what tells its parent are `agent.profiling`'s, handed to a
+  gateway already made the way `agent.asking` already is.
 - `src/rundesk/catalog.py` — repository manifests, catalog provenance, and atomic installation,
   update, adoption, and removal below `data/catalogs/`. Exposes complete packages through links in
   the existing skill library; never imports or executes catalog content.
@@ -194,7 +207,7 @@ file with it.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 30 files, ~2000 cases)
+## Tests (tests/ — 32 files, ~2100 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
@@ -223,7 +236,9 @@ provider. One file per contract, named for it:
 | `test_channel.py` | 73 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
 | `test_answering.py` | 101 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
 | `test_discord.py` | 168 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
-| `test_instructions.py` | 10 | Rundesk's core and trigger prompts, standard variables, and additive builder |
+| `test_instructions.py` | 20 | Rundesk's core and trigger prompts, standard variables, the additive builder, and the separate profile floor |
+| `test_profile.py` | 25 | `agent-profile-worker` — what a profile is, what makes one usable, and what its revision is computed from, against a scratch library |
+| `test_profile_run.py` | 39 | `agent-profile-worker` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
 | `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and
@@ -255,6 +270,10 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
 - `CLI.md` — every operation the command offers, how each is typed, and what each argument means.
   **Generated** by `.knowledge/scripts/cli-reference` from the parser, so it cannot describe a product
   nobody has; the gate fails when it and the command disagree.
+- `src/templates/profiles/` — **the profiles this release ships.** Two files each, laid down where
+  one of that name is missing and never over one an owner has: unlike a built-in skill, a profile is
+  what somebody writes their specialists as, and bringing one "forward" would rewrite what every future
+  run of an edited profile is allowed to do (R-PRF-18). `development` is the only one so far.
 - `src/templates/skills/` — **the required and remaining release-owned skills.** Copied into the
   owner's library by the install and brought forward by an update, so a built-in is always the version installed
   (R-AGT-30). `managing-rundesk` is how to operate rundesk, written for **an agent running inside

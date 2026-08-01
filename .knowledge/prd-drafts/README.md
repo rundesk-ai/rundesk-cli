@@ -8,4 +8,4 @@ Add a row when you add a draft; `doc-lint` fails the build if one is missing.
 
 | Draft | Proposes | Reserved namespace |
 |---|---|---|
-| _(none — `agent-store` and `lifecycle-migration` graduated into `../prd/` on 2026-07-26)_ | | |
+| [agent-profile-worker](./agent-profile-worker.md) | a shared specialist definition a named agent hands one bounded task to, and the single reviewed handoff it gets back | `PRF` |

@@ -1569,5 +1569,36 @@ class WhatRundeskItselfTellsEveryTurn(WithSomewhereToKeepAgents):
         self.assertIn("managing-rundesk", said)
 
 
+class WhatAProfileIsNot(WithSomewhereToKeepAgents):
+    """R-PRF-1 — a profile is a shared execution definition, never a named identity."""
+
+    def test_a_profile_definition_is_never_listed_as_an_agent(self):
+        self.made("ava")
+        at = self.where / ".profiles" / "development"
+        at.mkdir(parents=True)
+        (at / "profile.json").write_text(
+            '{"description": "d", "skills": ["writing-plans"], "posture": "work"}',
+            encoding="utf-8")
+        (at / "AGENTS.md").write_text("# Development\n", encoding="utf-8")
+        self.assertEqual(["ava"], agent.known(self.where))
+        self.assertNotIn("development", agent.identities(self.where))
+
+    def test_a_gateway_is_handed_everything_it_does_about_profile_runs(self):
+        """R-PRF-4 — made where an agent is known, so a gateway goes on knowing none of
+        it. Six questions and no state, exactly as `asking` is one and no state."""
+        self.made("ava")
+        doing = agent.profiling("ava", self.where)
+        self.assertEqual([], doing.waiting())
+        self.assertIsNone(doing.owed())
+        self.assertEqual([], doing.sweep())
+
+    def test_a_profile_run_this_agent_never_admitted_is_no_complaint_at_all(self):
+        """R-AGT-11, R-AGT-12 — a diagnosis starts nothing and repairs nothing."""
+        self.made("ava")
+        self.assertEqual([], [one for one in agent.diagnosed("ava", self.where,
+                                                             root=self.root)
+                              if one.about.startswith("prf-")])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -479,7 +479,7 @@ class BuiltCommandTests(unittest.TestCase):
         built = {"version", "update", "uninstall", "add", "configure", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
                  "channels", "runs", "usage", "search", "messages", "skills", "scripts",
-                 "backups", "config"}
+                 "backups", "config", "profiles"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 
@@ -698,13 +698,14 @@ class FakeGateways:
         return self._written if self._written is not None else pathlib.Path("/nowhere/x.log")
 
     def Gateway(self, name, where=None, logs=None, reachable=(),
-                agents=None, records=None, asking=None):
+                agents=None, records=None, asking=None, profiles=None):
         gateways = self
         # Kept, because what the command hands a gateway is the command's to get right:
         # a gateway told nothing about where agents are starts programs that cannot find
         # one (R-SCH-27), and only this side of the seam can be asked whether it was told.
         self.made_with.append({"name": name, "where": where, "logs": logs,
-                               "agents": agents, "records": records, "asking": asking})
+                               "agents": agents, "records": records, "asking": asking,
+                               "profiles": profiles})
 
         class One:
             async def serve(inner):
@@ -934,6 +935,8 @@ class FakeAgents:
         self.asked_runnable = None
         #: Which schedules a gateway asked a turn for, by agent.
         self.asked: list = []
+        #: Which agents a gateway was handed profile-carrying for.
+        self.profiled: list = []
         #: What asking what this agent keeps raises, where a case is about that failing.
         self.refuses: BaseException | None = None
         #: What was made, adopted and taken away, in the order it was asked for.
@@ -1080,6 +1083,17 @@ class FakeAgents:
             self.asked.append((name, one.name))
             raise AssertionError("a turn was admitted by a case that only watches for one")
         return made
+
+    def profiling(self, name, where=None, carry=None):
+        """What a gateway is handed to carry this agent's profile runs with. A stand-in
+        for the real one's shape and nothing more: whether the command hands one over is
+        this file's, and what a gateway does with it is `tests/test_gateway.py`'s."""
+        self.profiled.append(name)
+        return real_agent.Profiling(
+            waiting=lambda: [], carry=None, owed=lambda: None,
+            claiming=lambda _run: None, reviewing=lambda _run, _review: None,
+            reviewed=lambda _run: None, sweep=lambda: [],
+        )
 
     def agents_home(self):
         """Where this stand-in keeps them, which is a real directory for a case that writes.
@@ -1277,6 +1291,17 @@ def drive(argv, gateways=None, machine=None, agents=None, skills=None, scripts=N
             # what the caller was left with.
             code = usage.code if isinstance(usage.code, int) else 1
     return code, out.getvalue() + err.getvalue()
+
+
+@contextlib.contextmanager
+def feeding(said: str):
+    """What a command reads off standard input, for the one that takes a task that way."""
+    was = sys.stdin
+    sys.stdin = io.StringIO(said)
+    try:
+        yield
+    finally:
+        sys.stdin = was
 
 
 class WhatThisInstallIsConfiguredWith(unittest.TestCase):
@@ -4901,6 +4926,39 @@ class WhatATurnLooksLikeOnATerminal(unittest.TestCase):
         for, and the line still has to read."""
         self.assertEqual("· using mcp__weather",
                          self._watched({"type": "tool", "name": "mcp__weather"}))
+
+
+class HandingWorkToAProfile(unittest.TestCase):
+    """`rundesk profiles <agent> run <profile>` — who may ask, and what is refused."""
+
+    def test_handing_work_to_a_profile_needs_a_turn_of_this_agents_own(self):
+        """R-PRF-4 — a worker acts on a named agent's behalf and answers into that
+        agent's conversation, so the run that admits it has to be one of that agent's."""
+        for said in ("RUNDESK_RUN", "RUNDESK_PROFILE_RUN"):
+            os.environ.pop(said, None)
+        with feeding("Outcome: make it work.\n"):
+            code, said = drive(["profiles", "ava", "run", "development"],
+                               agents=FakeAgents(made=["ava"]))
+        self.assertEqual(1, code)
+        self.assertIn("NOT ADMITTED", said)
+        self.assertIn("own turn", said)
+
+    def test_a_profile_run_cannot_hand_work_to_another_profile(self):
+        """R-PRF-13 — said early and cheaply here; the durable record is what refuses."""
+        os.environ["RUNDESK_RUN"] = "9-zzzz"
+        os.environ["RUNDESK_PROFILE_RUN"] = "prf-1-aaaa"
+        self.addCleanup(os.environ.pop, "RUNDESK_RUN", None)
+        self.addCleanup(os.environ.pop, "RUNDESK_PROFILE_RUN", None)
+        with feeding("Outcome: make it work.\n"):
+            code, said = drive(["profiles", "ava", "run", "development"],
+                               agents=FakeAgents(made=["ava"]))
+        self.assertEqual(1, code)
+        self.assertIn("cannot start another one", said)
+
+    def test_asking_after_the_profiles_of_an_agent_there_is_none_of_says_so(self):
+        code, said = drive(["profiles", "nobody"], agents=FakeAgents(made=["ava"]))
+        self.assertEqual(1, code)
+        self.assertIn("NO SUCH AGENT", said)
 
 
 if __name__ == "__main__":

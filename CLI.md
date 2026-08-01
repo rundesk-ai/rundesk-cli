@@ -44,6 +44,10 @@ rundesk runs [--most <n>] <agent>                                               
 rundesk usage                                                                                                                                                                                                           what every agent has cost
 rundesk usage <agent>                                                                                                                                                                                                   what one agent has cost
 
+# handing work on
+rundesk profiles <agent> run [--target <directory>] [--label <text>] <profile>                                                                                                                                          hand one bounded task to a profile — the brief is read from standard input
+rundesk profiles <agent> show <run>                                                                                                                                                                                     one profile run in full
+
 # rundesk itself
 rundesk status                                                                                                                                                                                                          how rundesk itself is on this machine
 rundesk version [--check]                                                                                                                                                                                               what is installed, and whether that is current
@@ -143,6 +147,7 @@ rundesk schedules ava off nightly
 --in <where>                    which place on that channel to say it in, in that surface's own words — for Discord: a room name or id, or on a DM channel the person's user id (the same id as --allow) or the DM channel id. Left out, it follows the conversation
 --instructions <text>           what every turn for this agent is told before it reads a prompt, where neither the schedule nor the surface said — empty takes it off
 --kind <kind>                   which kind of surface — one that ships, or the path of a program that speaks yours
+--label <text>                  a short safe name for the task, shown where other people can read it — never a path and never the brief
 --model <model>                 which model, in that brain's own words
 --most <n>                      how many to show, newest first (default: 20)
 --provider <provider>           which brain answers for it when a turn does not say
@@ -150,10 +155,11 @@ rundesk schedules ava off nightly
 --read-only                     let this turn look at the machine without changing it
 --set <key=value>               anything that brain takes, carried to it unread; repeatable
 --since <id>                    only what was said after this one, by the id shown beside it
---source <how>                  only messages belonging to work admitted this way — one of channel | schedule | terminal
+--source <how>                  only messages belonging to work admitted this way — one of channel | profile | schedule | terminal
 --source <source>               whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine
 --status                        show the last queued update and its final outcome
 --steer                         keep saying more to it while it works — a line at a time, until you stop
+--target <directory>            the project directory the work happens in — the brain stands there, so the project's own instruction files load normally
 --to <channel>                  which channel to say what this came to on, by the name it was added under — the account and `schedules` say it either way
 --token-stdin                   read the credential this channel needs from standard input, one line; asked for at the terminal when left out
 --when <cron>                   when it runs, over and over, as five cron fields — minute, hour, day, month, weekday
@@ -166,10 +172,11 @@ rundesk schedules ava off nightly
 <catalog>                       which catalog
 <channel>                       what to call it, and what to name it by later
 <option>                        after `--`, whatever this kind of channel needs — carried to it exactly as typed, and never read here
+<profile>                       which profile — one this install has, by its own name
 <program>                       after `--`, the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH
 <prompt>                        what to ask it, in quotes
 <repository>                    a GitHub repository URL, local directory or archive
-<run>                           which run — the id listed against each by `runs`
+<run>                           which profile run — the id `profiles` lists
 <schedule>                      what to call it, and what to name it by later
 <skill>                         which skill, by the name it is under
 <text>                          what to tell it, with {agent} {channel} {surface} {where} {called} {user} {conversation} filled in — empty takes it back off, and left out shows what is there

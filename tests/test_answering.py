@@ -2224,6 +2224,91 @@ class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answering.AFTER_UPDATE, brain.asked[0]["prompt"])
         self.assertEqual("rundesk", brain.asked[0]["prompt_author"])
 
+    def a_parent_conversation(self, prefix: str, brain, surface):
+        """An agent with one room in it, and a channel answering for that agent."""
+        where = Path(tempfile.mkdtemp(prefix=prefix))
+        self.addCleanup(shutil.rmtree, where, True)
+        agents.add("ava", where)
+        agents.remember("ava", where, provider="a-brain")
+        agents.records("ava", where).opened(
+            store.conversation_id("ops", "one"), "ops", "somewhere", "one", AT
+        )
+        held = answering.Answering(
+            "ava", "ops", {"kind": "somewhere", "allow": ["2207"]},
+            surface, where=where, carry=brain,
+        )
+        held.connected = True
+        return held
+
+    @staticmethod
+    async def settled(held) -> None:
+        for _ in range(200):
+            running = [it.task for it in held.exchanges.values()
+                       if it.task is not None and not it.task.done()]
+            if not running and held._showing.empty() and (
+                    held._writer is None or held._writer.done()):
+                return
+            await asyncio.sleep(0.005)
+
+    async def test_a_profile_handoff_wakes_the_parent_to_review_it(self):
+        """R-PRF-15 — the named parent reads the report; nobody else is told anything."""
+        brain, surface = Brain(), Surface()
+        held = self.a_parent_conversation("rundesk-profile-review-", brain, surface)
+        reviewed: list = []
+
+        await held.told_profile_finished(
+            "one", {"profile": "development", "profile_run": "prf-1-aaaa",
+                    "outcome": "succeeded", "report": "I changed two files."},
+            reviewing=reviewed.append,
+        )
+        await self.settled(held)
+
+        self.assertEqual(1, len(brain.asked))
+        self.assertEqual("rundesk", brain.asked[0]["prompt_author"])
+        self.assertIn("I changed two files.", brain.asked[0]["prompt"])
+        self.assertIn("has not been checked", brain.asked[0]["prompt"])
+        self.assertIn("Do not start another profile run", brain.asked[0]["prompt"])
+        # Which run is reviewing is written the moment it is admitted — a marker written
+        # afterwards would be written after the moment it guards (R-PRF-13).
+        self.assertEqual(1, len(reviewed))
+
+    async def test_a_profile_handoff_is_never_posted_where_a_person_can_read_it(self):
+        """R-PRF-16 — an unreviewed report is not an answer, and delivering one would put
+        work the named agent never checked in front of the person who asked."""
+        brain = Brain(outcome=Outcome(text="I checked it; it is right."))
+        surface = Surface()
+        held = self.a_parent_conversation("rundesk-profile-unposted-", brain, surface)
+
+        await held.told_profile_finished(
+            "one", {"profile": "development", "profile_run": "prf-1-aaaa",
+                    "outcome": "succeeded", "report": "I changed two files."})
+        await self.settled(held)
+
+        self.assertEqual([], surface.of("said"))
+        self.assertNotIn("I changed two files.",
+                         "".join(one.get("text", "") for one in surface.of("answer")))
+
+    async def test_a_profile_handoff_is_left_owing_when_the_room_is_already_busy(self):
+        """R-PRF-15 — two turns in one conversation are two brains on one session, and a
+        review quietly dropped is work that happened and nobody was ever told about."""
+        holds = asyncio.Event()
+        brain, surface = Brain(holds=holds), Surface()
+        held = self.a_parent_conversation("rundesk-profile-busy-", brain, surface)
+        await held.heard({"type": "arrived", "conversation": "one", "user": "2207",
+                          "text": "are you there"})
+        for _ in range(200):
+            if brain.asked:
+                break
+            await asyncio.sleep(0.005)
+
+        with self.assertRaises(RuntimeError):
+            await held.told_profile_finished(
+                "one", {"profile": "development", "profile_run": "prf-1-aaaa",
+                        "outcome": "succeeded", "report": "done"})
+        self.assertEqual(1, len(brain.asked))
+        holds.set()
+        await self.settled(held)
+
     async def test_a_completed_restart_is_delivered_without_starting_another_turn(self):
         """R-GW-43"""
         where = Path(tempfile.mkdtemp(prefix="rundesk-restart-notice-"))

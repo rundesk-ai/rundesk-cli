@@ -236,6 +236,7 @@ def environment(
     raw: Path | None = None,
     path: str | None = None,
     preface: str | None = None,
+    profile_run: str | None = None,
 ) -> dict[str, str]:
     """Everything an adapter is told, and the whole of it (R-PRV-3).
 
@@ -287,6 +288,14 @@ def environment(
         # brain that cannot tell rundesk's words from the person's weights the owner's
         # standing instructions as though somebody had just typed them.
         said["RUNDESK_PREFACE"] = preface
+    if profile_run:
+        # **A convenience for refusing early, and never the authority** (R-PRF-13). A
+        # profile execution that reaches for `rundesk` is refused a second profile level,
+        # and this is what lets the command say so before it opens anything. What actually
+        # decides is the run's own durable record, because anything a caller can set is
+        # something a caller can unset — and the one thing this must survive is a brain
+        # that clears a variable and tries again.
+        said["RUNDESK_PROFILE_RUN"] = profile_run
     if raw is not None:
         # Somewhere to put what the *brain* said, which rundesk never sees: an adapter
         # stands between the two, so a vendor changing its stream shape would otherwise

@@ -768,7 +768,13 @@ class CarryingTheShapeThatShippedForward(WithStepsOfThisCasesOwn):
     def test_this_update_carries_the_exact_templates_it_migrates_toward(self):
         """A historical migration is frozen, but its release templates can still drift
         before shipping. This keeps the request and the files installed beside it identical."""
-        step = migration.found()[-1].loaded()
+        # The step that carries them, named rather than "the newest one" — a later step
+        # that carries no templates is not this step drifting, and reading the last one
+        # made adding any step at all fail here for a reason that has nothing to do with
+        # what this proves.
+        carrying = [one for one in migration.found() if one.version == 5]
+        self.assertEqual(1, len(carrying), "migration 005 is what carries the templates")
+        step = carrying[0].loaded()
         templates = migration.STEPS.parent / "templates" / "agent"
 
         for name, text in step.TEMPLATES:

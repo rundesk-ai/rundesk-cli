@@ -1056,6 +1056,7 @@ def diagnosed(name: str, where: Path | None = None, root: Path | None = None,
     if unfit:
         found.append(Complaint("this install", unfit, "rundesk update"))
     found.extend(_what_is_wrong_with_its_skills(name, where))
+    found.extend(_what_is_wrong_with_its_profile_runs(name, where))
     # **Where these records stand against what this install expects** (R-AGT-20). Read
     # without opening a store, which refuses records it will not read — and refusing is the
     # right answer for a turn and the wrong one for the check that exists to explain it.
@@ -1094,6 +1095,53 @@ def diagnosed(name: str, where: Path | None = None, root: Path | None = None,
             found.append(Complaint(str(why), "the brain this agent reaches for",
                                    f"rundesk configure {name} "
                                    "--provider <one that is installed>"))
+    return found
+
+
+def _what_is_wrong_with_its_profile_runs(name: str, where: Path | None = None) -> list:
+    """What stands between this agent's specialist executions and being carried on.
+
+    Nothing here starts a provider and nothing here writes (R-AGT-11, R-AGT-12). Every one
+    of these is a fact an owner cannot see any other way: work that will never be carried
+    on, a report nobody was ever told about, and a directory a run believes it is working
+    in that is no longer there.
+    """
+    from rundesk import profile as profiles
+    from rundesk import profile_run as profile_runs
+
+    found: list = []
+    at = store.path_for(directory(name, where))
+    if not at.exists():
+        return found
+    try:
+        kept = reading(name, where)
+        runs = kept.profile_runs(limit=200)
+        owing = kept.owed_profile_callback()
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed):
+        return found   # already reported by the version and records checks above
+    for row in runs:
+        if row["state"] not in (store.ADMITTED, store.WORKING):
+            continue
+        try:
+            profile_runs.verified(name, row, where)
+        except profile_runs.NotDelegable as why:
+            found.append(Complaint(row["id"], str(why), ""))
+            continue
+        target = row.get("target")
+        if target and not Path(target).is_dir():
+            found.append(Complaint(
+                row["id"], "the directory this profile run works in is not there", ""))
+    if owing is not None:
+        found.append(Complaint(
+            owing["profile_run"],
+            "a profile run has reported back and its parent has not been told yet",
+            f"rundesk start {name}"))
+    for slug in {row["profile"] for row in runs}:
+        try:
+            profiles.read(slug, where)
+        except profiles.NotAProfile as why:
+            found.append(Complaint(slug, f"a profile this agent has used is unusable: {why}",
+                                   ""))
     return found
 
 
@@ -1363,6 +1411,99 @@ def asking(name: str, where: Path | None = None, carry=None):
         )
 
     return made
+
+
+@dataclass(frozen=True)
+class Profiling:
+    """How a gateway carries this agent's profile runs, and tells their parents.
+
+    Handed over already made, for the reason `asking` is: a profile run needs an agent, a
+    brain, a bundle and an account, and a gateway knows none of the four. A gateway with
+    no agent behind it is handed nothing here and simply never carries one.
+    """
+
+    waiting: object
+    carry: object
+    owed: object
+    claiming: object
+    reviewing: object
+    reviewed: object
+    sweep: object
+
+
+def profiling(name: str, where: Path | None = None, carry=None) -> Profiling:
+    """Everything a gateway does about profile runs, made where an agent is known.
+
+    Five questions and no state: which runs are waiting to be carried, carrying one,
+    which parent is still owed a review, that a review turn was admitted, that it was
+    delivered, and clearing what has expired. The gateway holds which of them are in
+    flight, exactly as it already holds which schedules are.
+    """
+    from rundesk import profile_run as profile_runs
+
+    def waiting() -> list:
+        """Runs that were admitted and are not finished — oldest first.
+
+        A run left `working` by a gateway that died is here too, and is carried on rather
+        than started again: its provider session is the conversation's, so resuming is
+        what the ordinary turn machinery already does with one (R-PRF-11).
+        """
+        kept = reading(name, where)
+        found = [one for one in kept.profile_runs(limit=200)
+                 if one["state"] in (store.ADMITTED, store.WORKING)]
+        return sorted(found, key=lambda one: one["admitted_at"])
+
+    async def carrying(run_id: str, watching=None, steering=None, admitted=None):
+        """Carry one root, and leave it settled however that goes.
+
+        **A run that cannot be carried is still a run its parent has to be told about.**
+        A corrupt bundle, a brain the agent no longer has, a target directory that was
+        moved — every one of them ends this execution, and one left unsettled would be
+        picked up again on the next look for ever while nobody was ever told.
+        """
+        try:
+            return await profile_runs.carry(
+                name, run_id, where=where, carrying=carry,
+                watching=watching, steering=steering, admitted=admitted,
+            )
+        except profile_runs.NotDelegable as why:
+            records(name, where).finish_profile(
+                run_id, store.stamped(), store.FAILED, str(why),
+                profile_runs.retained_until(),
+            )
+            return None
+
+    def owed():
+        """The oldest review a parent is still owed, with where to say it."""
+        kept = reading(name, where)
+        claimed = kept.owed_profile_callback()
+        if claimed is None:
+            return None
+        room = kept.conversation_of(claimed["conversation"])
+        if room is None:
+            return None
+        return {
+            "profile_run": claimed["profile_run"],
+            "channel": room.get("channel"),
+            "conversation": room.get("space"),
+            "handoff": profile_runs.handoff(name, claimed["profile_run"], where),
+        }
+
+    def claiming(profile_run: str) -> None:
+        """This review is being attempted now — counted where trying is what happened."""
+        records(name, where).claim_profile_callback(profile_run, store.stamped())
+
+    def reviewing(profile_run: str, review_run: str) -> None:
+        records(name, where).profile_reviewing(profile_run, review_run)
+
+    def reviewed(profile_run: str) -> None:
+        records(name, where).profile_reviewed(profile_run, store.stamped())
+
+    def sweep() -> list:
+        return profile_runs.sweep(name, where)
+
+    return Profiling(waiting=waiting, carry=carrying, owed=owed, claiming=claiming,
+                     reviewing=reviewing, reviewed=reviewed, sweep=sweep)
 
 
 def unrunnable_channels(name: str, where: Path | None = None) -> list:

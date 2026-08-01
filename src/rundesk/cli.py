@@ -40,6 +40,8 @@ from rundesk import dependencies  # noqa: E402
 from rundesk import gateway as _gateway  # noqa: E402
 from rundesk import migration  # noqa: E402
 from rundesk import process  # noqa: E402
+from rundesk import profile  # noqa: E402
+from rundesk import profile_run as profile_runs  # noqa: E402
 from rundesk import provider  # noqa: E402
 from rundesk import restart_request  # noqa: E402
 from rundesk import schedule as schedules  # noqa: E402
@@ -662,6 +664,30 @@ def build_parser() -> argparse.ArgumentParser:
     # Named the way schedules are: the agent is the word after the verb, the channel is
     # what you call it, and what it *is* comes from `--kind`. Everything a particular
     # platform needs goes after `--` and is never read here (R-CAD-13).
+    # **The agent is named before the action, and it is required.** A verb cannot offer an
+    # optional `<agent>` *and* sub-actions: argparse matches the agent's name against the
+    # action names and dies with `invalid choice`, which is a usage dump about a command
+    # somebody typed correctly. `channels` and `schedules` are shaped this way for the
+    # same reason.
+    specialists = sub.add_parser(
+        "profiles", help="the specialists an agent hands heavy execution to")
+    specialists.add_argument("name", metavar="<agent>",
+                             help="whose profile runs — a run belongs to the agent that "
+                                  "admitted it")
+    handing = specialists.add_subparsers(dest="act", metavar="<action>")
+    handed = handing.add_parser(
+        "run", help="hand one bounded task to a profile — the brief is read from standard input")
+    handed.add_argument("profile", metavar="<profile>",
+                        help="which profile — one this install has, by its own name")
+    handed.add_argument("--target", metavar="<directory>",
+                        help="the project directory the work happens in — the brain stands "
+                             "there, so the project's own instruction files load normally")
+    handed.add_argument("--label", metavar="<text>",
+                        help="a short safe name for the task, shown where other people can "
+                             "read it — never a path and never the brief")
+    seen = handing.add_parser("show", help="one profile run in full")
+    seen.add_argument("run", metavar="<run>", help="which profile run — the id `profiles` lists")
+
     reachable = sub.add_parser("channels", help="the surfaces an agent is reachable on")
     reachable.add_argument("name", metavar="<agent>",
                            help="whose channels — a channel belongs to one agent")
@@ -1485,6 +1511,11 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
         # None for a name that is not an agent, which is a gateway that can start programs
         # and not turns — and says so rather than passing the minute over in silence.
         asking = agents.asking(args.name) if agents.exists(args.name) else None
+        # How the profile runs this agent admitted are carried, and how their parents are
+        # told. Resolved here and handed over made, for the same reason `asking` is: a
+        # profile run needs an agent, a bundle and an account, and a gateway knows none of
+        # them (R-PRF-4).
+        specialists = agents.profiling(args.name) if agents.exists(args.name) else None
     except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         print(f"        what stands in the way:  rundesk doctor {args.name}", file=sys.stderr)
@@ -1502,7 +1533,8 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
                                             # (R-SCH-27).
                                             agents=agents.agents_home(),
                                             records=records,
-                                            asking=asking).serve())
+                                            asking=asking,
+                                            profiles=specialists).serve())
     except (gateways.AlreadyRunning, gateways.Unfit, gateways.NotAName) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         return 0
@@ -2036,6 +2068,11 @@ def _provisioned(root: Path = REPO_ROOT) -> str | None:
     # never touched, so this cannot be how an owner's configuration is lost (R-UPD-48).
     config.ensure()
     skill.lay_down(force=True)
+    # Shipped profiles are laid down where they are missing and never over one that is
+    # there. A profile is what an owner writes their specialists as, so bringing one
+    # "forward" the way a built-in skill is brought forward would rewrite what every
+    # future run of an edited profile is allowed to do (R-PRF-18).
+    profile.lay_down()
     # A persisted skill name can move only after both old and replacement packages are
     # proven as Rundesk built-ins. The earlier pass fills values; this one carries names.
     config.ensure()
@@ -2526,12 +2563,18 @@ def cmd_skills(args: argparse.Namespace, agents, skills, gateways, catalogs) -> 
             ),
         )
         taken.extend(skills.take_back())
+        # What the release laid down and nobody has touched, for the same reason a
+        # built-in skill goes: it is a piece of the program, and it is what leaves the
+        # install directory standing after an uninstall that said it left nothing
+        # (R-RM-7). An edited profile is the owner's and stays.
+        taken.extend(profile.take_back())
         print(" ".join(taken))
         return 0
     if getattr(args, "lay_down", False):
         # The installer's, and deliberately not an owner's verb: what a release ships is
         # not a thing anybody should have to ask for.
         laid = skills.lay_down()
+        laid.extend(profile.lay_down())
         agents.reconcile_skill_config()
         if _refresh_skill_catalogs(agents, skills, gateways, catalogs):
             return 1
@@ -3192,6 +3235,116 @@ def cmd_channels(args: argparse.Namespace, gateways, agents) -> int:
         print(f"        what stands in the way:  rundesk doctor {args.name}",
               file=sys.stderr)
         return 1
+
+
+#: How many of an agent's profile runs a listing shows. Enough to cover what is in flight
+#: and what finished today; the records hold the rest.
+PROFILE_RUNS_SHOWN = 20
+
+
+def cmd_profiles(args: argparse.Namespace, agents) -> int:
+    """What an agent can hand heavy execution to, and what it has handed over."""
+    if not agents.exists(args.name):
+        print(f"{args.name}: NO SUCH AGENT", file=sys.stderr)
+        print("        what there is:  rundesk agents", file=sys.stderr)
+        return 1
+    act = getattr(args, "act", None)
+    if act == "run":
+        return _hand_to_a_profile(args, agents)
+    try:
+        whose = agents.reading(args.name)
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
+        print(f"{args.name}: RECORDS UNREADABLE — {why}", file=sys.stderr)
+        return 1
+    if act == "show":
+        return _show_profile_run(args, whose)
+    return _list_profiles(args, whose)
+
+
+def _list_profiles(args: argparse.Namespace, whose) -> int:
+    """The profiles this agent may reach for, and the runs it has already admitted."""
+    installed = profile.known()
+    if not installed:
+        print("no profiles installed")
+    for slug in installed:
+        try:
+            one = profile.read(slug)
+        except profile.NotAProfile as why:
+            print(f"{slug}  UNUSABLE — {why}")
+            continue
+        print(f"{one.label}  {one.slug}  {one.revision[:12]}  "
+              f"{one.posture}  [{' '.join(one.skills)}]")
+        print(f"        {one.description}")
+    runs = whose.profile_runs(limit=PROFILE_RUNS_SHOWN)
+    if not runs:
+        return 0
+    print()
+    for row in runs:
+        it = profile_runs.shown(row)
+        print(f"{it['id']}  {it['profile']}  {it['state']}  {it['label']}"
+              + (f"  in {it['target']}" if it["target"] else "")
+              + ("  reviewed" if it["reviewed"] else ""))
+    return 0
+
+
+def _show_profile_run(args: argparse.Namespace, whose) -> int:
+    """One profile run in full — never its brief, and never a local path (R-PRF-17)."""
+    row = whose.profile_run(args.run)
+    if row is None:
+        print(f"{args.name}/{args.run}: NO SUCH PROFILE RUN", file=sys.stderr)
+        print(f"        what there is:  rundesk profiles {args.name}", file=sys.stderr)
+        return 1
+    it = profile_runs.shown(row)
+    for what in ("id", "profile", "label", "revision", "posture", "state", "outcome",
+                 "parent_run", "target", "retained_until"):
+        print(f"{what:16}{it[what]}")
+    print(f"{'skills':16}{' '.join(it['skills'])}")
+    print(f"{'elapsed':16}{it['elapsed']}s")
+    print(f"{'reviewed':16}{'yes' if it['reviewed'] else 'no'}")
+    return 0
+
+
+def _hand_to_a_profile(args: argparse.Namespace, agents) -> int:
+    """Admit one profile run for this agent, on behalf of the turn asking (R-PRF-4).
+
+    **Only an agent's own turn may ask.** A profile worker acts on a named agent's behalf
+    and answers into that agent's conversation, so the run that admits it has to be one of
+    that agent's — which is what `RUNDESK_RUN` names and what the records then prove.
+
+    The brief is read from standard input rather than given as an argument: it is the task,
+    it is often several paragraphs, and an argument would put it in `ps` and in a shell
+    history where the rest of a turn's words never go.
+    """
+    parent = os.environ.get("RUNDESK_RUN") or ""
+    if not parent:
+        print(f"{args.name}: NOT ADMITTED — a profile run is admitted by this agent's own "
+              "turn, and nothing here is running one", file=sys.stderr)
+        return 1
+    if os.environ.get("RUNDESK_PROFILE_RUN"):
+        # Said early and cheaply. What actually refuses is the durable record below, which
+        # is why this is allowed to be a variable at all (R-PRF-13).
+        print(f"{args.name}: NOT ADMITTED — a profile run cannot start another one",
+              file=sys.stderr)
+        return 1
+    brief = sys.stdin.read()
+    try:
+        admitted = profile_runs.admit(
+            args.name, args.profile, brief, parent,
+            target=getattr(args, "target", None), label=getattr(args, "label", None),
+        )
+    except profile_runs.NotDelegable as why:
+        print(f"{args.name}: NOT ADMITTED — {why}", file=sys.stderr)
+        print(f"        what it can hand work to:  rundesk profiles {args.name}",
+              file=sys.stderr)
+        return 1
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
+        print(f"{args.name}: RECORDS UNREADABLE — {why}", file=sys.stderr)
+        return 1
+    print(admitted.id)
+    print(f"        {admitted.label} — {profile.label(admitted.profile)}, "
+          f"retained until {admitted.retained_until}")
+    print("        it runs in this agent's gateway; you are told when it reports back")
+    return 0
 
 
 #: What the credential a surface reads is kept in, beside that channel's own things. The
@@ -4516,6 +4669,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         return cmd_skills(args, agents, skills, gateways, catalogs)
     if args.command == "scripts":
         return cmd_scripts(args, scripts)
+    if args.command == "profiles":
+        return cmd_profiles(args, agents)
     if args.command == "channels":
         return cmd_channels(args, gateways, agents)
     if args.command == "schedules":

@@ -224,11 +224,14 @@ take_back_skills() {
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1] + "/src")
-from rundesk import catalog, skill
+from rundesk import catalog, profile, skill
 
 data = Path(sys.argv[2])
 taken = catalog.take_back_seeded(data / "catalogs", data / "skills")
 taken.extend(skill.take_back(data / "skills"))
+# The profiles this release laid down and nobody has touched. An edited one belongs to
+# whoever edited it and stays, which is why there is no ownership marker to consult.
+taken.extend(profile.take_back(data / "agents"))
 print(" ".join(taken))
 SKILLS
 )"
