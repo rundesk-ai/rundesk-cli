@@ -23,7 +23,23 @@ If `hasIssuesEnabled` is false, do not attempt creation; follow the repository's
 support or discussion route when authorized, or return the issue as a draft.
 
 Read the applicable `AGENTS.md`, `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/`, and
-`SECURITY.md`. Repository instructions and templates win over the fallback shapes below.
+`SECURITY.md`. Inspect every issue template, including YAML issue forms, then select the one
+whose stated purpose matches the report. Use the default branch's templates unless the task is
+explicitly changing those templates. Repository instructions and templates win over every
+fallback below.
+
+Treat the selected template as a body contract:
+
+- preserve its required sections, field order, checkbox wording, and requested footer;
+- answer every required prompt with evidence specific to this issue;
+- apply only title prefixes, labels, assignees, projects, and issue types the template or
+  repository requires;
+- remove comments and placeholders, and never mark a claim or check as complete unless proven.
+
+For a YAML issue form, inspect each `body` entry and its `validations.required` value. The
+submitted issue body must contain the corresponding rendered headings and answers even when it
+is created through `gh` instead of the web form. If any repository template applies, do not use
+the fallback merely because it is shorter.
 Inspect the labels and issue types before naming either:
 
 ```sh
@@ -72,7 +88,8 @@ Keep one issue to one independently closable problem. Lead with impact and curre
 not the implementation you expect. Include only sections that add information, and end with
 acceptance criteria somebody else can verify.
 
-Use the repository's template when it has one. Otherwise use the closest fallback.
+Use the selected repository template when one applies. Only when none applies, use the closest
+fallback.
 
 ### Bug
 
@@ -134,8 +151,12 @@ that prove the claim. When unsure, omit the material and say what was withheld.
 
 ## File and verify
 
-Write the finished body to a temporary Markdown file. `--body-file` preserves Markdown and
-avoids shell quoting failures; explicit flags avoid an editor prompt in a non-interactive turn.
+Before filing, compare the finished body against the selected template line by line. Confirm
+that every required field is present and substantive, the order is intact, no placeholder or
+instructional comment remains, and no checkbox overstates the evidence.
+
+Write the body to a temporary Markdown file. `--body-file` preserves Markdown and avoids shell
+quoting failures; explicit flags avoid an editor prompt in a non-interactive turn.
 
 ```sh
 gh issue create --repo <owner/repo> \
@@ -154,6 +175,7 @@ After creation, read GitHub's stored result rather than trusting the command inp
 gh issue view <number> --repo <owner/repo> --json url,title,body,labels,issueType,state
 ```
 
-Confirm the title, Markdown, labels/type, and URL. Report the URL to the owner. If `gh` is
-missing, unauthenticated, or lacks permission, stop with the exact body ready to paste; do not
-quietly switch accounts, repositories, or publication routes.
+Confirm the title, Markdown, labels/type, and URL. Recheck the stored body against the selected
+template; creation succeeding does not prove template compliance. Report the URL to the owner.
+If `gh` is missing, unauthenticated, or lacks permission, stop with the exact body ready to
+paste; do not quietly switch accounts, repositories, or publication routes.

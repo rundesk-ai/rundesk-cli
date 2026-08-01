@@ -1,0 +1,78 @@
+name: Bug
+description: Report Rundesk behavior that is broken or contradicts its documented contract.
+title: "<area>: "
+type: Bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search open and closed issues first. Do not disclose suspected vulnerabilities or exploit details in a public issue. Remove credentials, prompts, transcripts, private messages, personal names, and absolute home paths from all evidence.
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: Who is affected, what failed, and what consequence did it have?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduce
+      description: Give the smallest exact setup and commands or actions, in order.
+      placeholder: |
+        1. Configure ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Cite the documented contract or concrete intended result.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: State the observed result, trimmed to the failure.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Rundesk version or commit
+      placeholder: "rundesk v0.0.0 or commit abc1234"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Relevant environment
+      description: Include only operating system, runtime, provider, or channel details that affect the report.
+    validations:
+      required: false
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Add a fresh reproduction result, source location, regression range, or minimal sanitized log excerpt. Label inspection-only inferences.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List observable conditions that distinguish fixed from unfixed.
+      placeholder: "- [ ] ..."
+    validations:
+      required: true
+  - type: input
+    id: identity
+    attributes:
+      label: Filing identity
+      description: Use the filing agent's display name and no provider, model, tool, or session branding.
+      placeholder: "🤖 by <Agent>"
+    validations:
+      required: true

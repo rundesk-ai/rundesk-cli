@@ -60,8 +60,10 @@ NAMED_LIMIT = 64
 #: renamed name is still the same shipped capability and its Rundesk-owned copies and grants
 #: must follow the current spelling (R-AGT-49).
 RENAMED = {
+    "filing-rundesk-issues": "filing-github-issues",
     "managing-rundesk-backups": "managing-backups",
     "managing-rundesk-schedules": "managing-schedules",
+    "writing-rundesk-pull-requests": "writing-github-pull-requests",
     "writing-rundesk-skills": "writing-skills",
 }
 

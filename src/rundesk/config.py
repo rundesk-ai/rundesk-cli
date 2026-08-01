@@ -63,19 +63,28 @@ PREVIOUS_DEFAULT_GRANTS = (
         "writing-github-pull-requests",
         "writing-rundesk-pull-requests",
     ),
+    (
+        "managing-rundesk",
+        "managing-schedules",
+        "managing-backups",
+        "filing-github-issues",
+        "filing-rundesk-issues",
+        "writing-github-pull-requests",
+        "writing-rundesk-pull-requests",
+        "writing-plans",
+        "organizing-workspaces",
+    ),
 )
 
-#: The operating baseline every Rundesk agent receives. The generic GitHub skills are here
-#: because the Rundesk issue and pull-request overlays delegate their shared workflow to
-#: them; a required skill whose prerequisite is optional is a broken baseline.
+#: The operating baseline every Rundesk agent receives. Repository-specific collaboration
+#: policy lives in that repository's issue and pull-request templates; these generic skills
+#: discover and enforce those contracts wherever an agent contributes.
 RUNDESK_REQUIRED_GRANTS = (
     "managing-rundesk",
     "managing-schedules",
     "managing-backups",
     "filing-github-issues",
-    "filing-rundesk-issues",
     "writing-github-pull-requests",
-    "writing-rundesk-pull-requests",
 )
 
 
