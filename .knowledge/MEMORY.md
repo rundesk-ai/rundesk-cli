@@ -20,6 +20,16 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   check `launchctl list | grep rundesk` before and after. The whole recipe is
   [`guides/testing-against-a-station.md`](./guides/testing-against-a-station.md).
 
+- **Codex's output markup is not in the codex binary — it is in the skills it downloads, so
+  grepping the executable for it finds nothing and looks like proof it does not exist.**
+  `:codex-file-citation{path="…" purpose="output"}` is instructed by the bundled document
+  skills, not the CLI: `LC_ALL=C grep -ao 'codex-file-citation.\{0,400\}'` over the 271 MB
+  binary at `~/.codex/packages/standalone/releases/<version>/bin/codex` returns nothing, while
+  `grep -rl` over `~/.codex/plugins/cache/openai-primary-runtime/*/<version>/skills/*/SKILL.md`
+  gives the whole grammar with examples. Grep the plugin cache *and* the binary before deciding
+  this vendor never emits something; `~/.codex/sessions/**/rollout-*.jsonl` holds real captures
+  of what it actually wrote.
+
 - **A run's account holds no record of what its brain *said*, so "the account keeps every
   raw event" is false for text.** `store.RECORD_KINDS` has no `text` member and
   `turn._Account.add` returns before writing one — including its `raw` — because what was

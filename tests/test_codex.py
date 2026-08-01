@@ -199,6 +199,103 @@ class WhenItHandsWorkToAHelper(unittest.TestCase):
         self.assertTrue(held.finished.is_set(), "the parent's own completion was ignored")
 
 
+class HowThisBrainCitesAFile(unittest.TestCase):
+    """R-PRV-30 — the vendor's own citation markup, translated at the seam.
+
+    The markup below is the shape the skills shipped with codex-cli 0.145.0 instruct the
+    model to write, quoted from `pdf/SKILL.md` and `presentations/SKILL.md`.
+    """
+
+    def setUp(self):
+        self.where = Path(tempfile.mkdtemp(prefix="rundesk-codex-cited-"))
+        self.addCleanup(shutil.rmtree, self.where, True)
+
+    def spoken(self, kind: str, text: str) -> list:
+        held = object.__new__(codex.Codex)
+        held._tools = {}
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            held._ended({"type": kind, "id": "said-1", "text": text})
+        return [json.loads(line) for line in output.getvalue().splitlines()]
+
+    def made(self, name: str) -> str:
+        at = self.where / name
+        at.write_bytes(b"%PDF-1.4 a small stand-in")
+        return str(at)
+
+    def test_a_cited_file_is_named_without_its_path(self):
+        """R-PRV-30 — a citation is a claim about a file, not a licence to tell a room
+        where it sits on somebody's disk."""
+        at = self.made("Invoice_0749.pdf")
+        records = self.spoken(
+            "agentMessage",
+            f'Created :codex-file-citation{{path="{at}" purpose="output"}}, with the '
+            f'completed analysis.')
+        said = [one for one in records if one["type"] == "text"][0]["text"]
+        self.assertEqual("Created Invoice_0749.pdf, with the completed analysis.", said)
+        self.assertNotIn("codex-file-citation", said)
+        self.assertNotIn(str(self.where), said)
+
+    def test_a_cited_output_file_is_reported_as_a_file(self):
+        """R-PRV-20, R-PRV-30 — the file the person was told about actually arrives."""
+        at = self.made("report.pdf")
+        records = self.spoken(
+            "agentMessage", f'Created :codex-file-citation{{path="{at}" purpose="output"}}.')
+        self.assertEqual([at], [one["at"] for one in records if one["type"] == "file"])
+
+    def test_a_cited_source_file_is_named_and_never_delivered(self):
+        """R-PRV-30 — naming what it read is not asking for it to be sent."""
+        at = self.made("book.xlsx")
+        records = self.spoken(
+            "agentMessage",
+            f'Revenue is in :codex-file-citation{{path="{at}" purpose="source" '
+            f'artifact_kind="workbook" sheet="Revenue Model" range="C27"}}.')
+        said = [one for one in records if one["type"] == "text"][0]["text"]
+        self.assertEqual("Revenue is in book.xlsx.", said)
+        self.assertEqual([], [one for one in records if one["type"] == "file"])
+
+    def test_a_citation_in_reasoning_loses_its_path_and_delivers_nothing(self):
+        """R-PRV-30 — thinking about a file is not saying it made one."""
+        at = self.made("draft.docx")
+        records = self.spoken(
+            "reasoning", f'Next: :codex-file-citation{{path="{at}" purpose="output"}}.')
+        said = [one for one in records if one["type"] == "think"][0]["text"]
+        self.assertEqual("Next: draft.docx.", said)
+        self.assertEqual([], [one for one in records if one["type"] == "file"])
+
+    def test_one_output_file_cited_twice_is_reported_once(self):
+        """R-PRV-30 — a brain repeating itself is not two files."""
+        at = self.made("deck.pptx")
+        cited = f':codex-file-citation{{path="{at}" purpose="output"}}'
+        records = self.spoken("agentMessage", f"Made {cited}; see {cited} for the rest.")
+        self.assertEqual([at], [one["at"] for one in records if one["type"] == "file"])
+
+    def test_a_cited_file_that_is_not_there_is_not_reported_as_one(self):
+        """R-PRV-20, R-PRV-30 — a brain saying a file exists is not the file existing."""
+        at = str(self.where / "never-written.pdf")
+        records = self.spoken(
+            "agentMessage", f'Created :codex-file-citation{{path="{at}" purpose="output"}}.')
+        self.assertEqual("Created never-written.pdf.",
+                         [one for one in records if one["type"] == "text"][0]["text"])
+        self.assertEqual([], [one for one in records if one["type"] == "file"])
+
+    def test_a_citation_naming_no_file_is_left_exactly_as_it_was_written(self):
+        """R-PRV-30 — with nothing named there is nothing true to say in its place, and
+        silently deleting what a brain said is worse than showing it."""
+        records = self.spoken(
+            "agentMessage", 'See :codex-file-citation{purpose="output"} for the rest.')
+        self.assertEqual('See :codex-file-citation{purpose="output"} for the rest.',
+                         [one for one in records if one["type"] == "text"][0]["text"])
+        self.assertEqual([], [one for one in records if one["type"] == "file"])
+
+    def test_ordinary_prose_is_carried_through_untouched(self):
+        """R-PRV-30 — a translation nobody asked for is a brain being misquoted."""
+        said = "The rate is {path} in `a/b.py`, and 3 > 2 — nothing to translate."
+        records = self.spoken("agentMessage", said)
+        self.assertEqual(said,
+                         [one for one in records if one["type"] == "text"][0]["text"])
+
+
 class WhatCodexMade(unittest.TestCase):
     """R-PRV-20, R-PRV-26 — files come from explicit provider output, never prose."""
 
