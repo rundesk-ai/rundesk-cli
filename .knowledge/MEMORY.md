@@ -352,6 +352,12 @@ re-checked since, so treat these as true-when-found rather than as current.*
   Pass **`--no-memory`** on every turn of a probe *and* make the candidate words unguessable
   per run (a uuid suffix), or a re-run reads the previous run's sessions. The same finding is
   why the shipped adapter passes `--no-memory`: one agent's conversation is not another's.
+- **Grok ACP ignores root `--rules`; append standing instructions through `_meta.rules` on
+  `session/new`.** The root flag works in one-shot mode and is silently accepted by `agent stdio`,
+  but a live ACP marker disappeared there. The session metadata field returned the exact marker
+  and the indirect attachment protocol on 0.2.112. Do not send it on `session/load`: rules bind
+  when the conversation is created. Root `--tools` is also ignored by ACP and remains tracked in
+  issue #250 rather than being mistaken for a working read boundary.
 - **Claude reports `loggedIn: false` on a signed-in machine when `USER` is unset.** Its
   sign-in is in the macOS login keychain (`Claude Code-credentials`, `acct=<username>`), and
   the lookup is keyed on the account name — so under the environment rundesk *builds*
