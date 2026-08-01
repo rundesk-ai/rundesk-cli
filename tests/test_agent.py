@@ -20,6 +20,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -1416,10 +1417,85 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
         self.assertEqual("No skills granted.",
                          agent._queried("ava", "skills", self.where))
 
+    def test_schedules_lists_what_can_still_run_as_bullets_soonest_first(self):
+        """R-DIS-37 — the question is what is coming, so what is coming first is read
+        first. A schedule that is off states no minute and goes under those that do."""
+        self.made()
+        kept = agent.records("ava", self.where)
+        kept.remember_schedule("nightly", "0 3 * * *", store.stamped(),
+                               command=["/bin/echo", "hi"])
+        kept.remember_schedule("hourly", "30 * * * *", store.stamped(),
+                               command=["/bin/echo", "hi"])
+        kept.remember_schedule("once", created_at=store.stamped(),
+                               at="2026-09-01T09:00", command=["/bin/echo", "hi"])
+        kept.remember_schedule("paused", "0 4 * * *", store.stamped(),
+                               command=["/bin/echo", "hi"], enabled=False)
+
+        said = agent._query_schedules(
+            "ava", datetime(2026, 8, 1, 12, 0), self.where).splitlines()
+
+        self.assertEqual([
+            "- 2026-08-01 12:30 — hourly",
+            "- 2026-08-02 03:00 — nightly",
+            "- 2026-09-01 09:00 — once",
+            "- off — paused",
+        ], said)
+
+    def test_schedules_leaves_out_a_schedule_whose_moment_has_gone(self):
+        """R-DIS-37, R-SCH-40 — work that is over is not work this agent still runs, and
+        on a surface this narrow it would push what is waiting off the bottom."""
+        self.made()
+        kept = agent.records("ava", self.where)
+        kept.remember_schedule("over", created_at=store.stamped(),
+                               at="2026-07-01T09:00", command=["/bin/echo", "hi"])
+        kept.remember_schedule("waiting", "0 3 * * *", store.stamped(),
+                               command=["/bin/echo", "hi"])
+
+        said = agent._query_schedules(
+            "ava", datetime(2026, 8, 1, 12, 0), self.where).splitlines()
+
+        self.assertEqual(["- 2026-08-02 03:00 — waiting"], said)
+
+    def test_schedules_says_when_this_agent_has_nothing_left_to_run(self):
+        """R-DIS-37 — an empty answer is not an unexplained blank interaction, and never
+        having scheduled anything is a different answer from having nothing left."""
+        self.made()
+        self.assertEqual("No schedules.",
+                         agent._queried("ava", "schedules", self.where))
+
+        agent.records("ava", self.where).remember_schedule(
+            "over", created_at=store.stamped(), at="2026-07-01T09:00",
+            command=["/bin/echo", "hi"])
+        self.assertEqual(
+            "No schedules that can still run.",
+            agent._query_schedules("ava", datetime(2026, 8, 1, 12, 0), self.where))
+
+    def test_schedules_names_a_schedule_nobody_could_understand(self):
+        """R-DIS-37, R-SCH-10 — one that cannot be read looks exactly like one that was
+        never added, so the answer says which rather than quietly shortening itself."""
+        self.made()
+        kept = agent.records("ava", self.where)
+        kept.remember_schedule("gibberish", "every other tuesday", store.stamped(),
+                               command=["/bin/echo", "hi"])
+        kept.remember_schedule("waiting", "0 3 * * *", store.stamped(),
+                               command=["/bin/echo", "hi"])
+
+        said = agent._query_schedules(
+            "ava", datetime(2026, 8, 1, 12, 0), self.where).splitlines()
+
+        self.assertEqual(["- 2026-08-02 03:00 — waiting",
+                          "could not be understood: gibberish"], said)
+
+        kept.forget_schedule("waiting")
+        self.assertEqual(
+            "could not be understood: gibberish",
+            agent._query_schedules("ava", datetime(2026, 8, 1, 12, 0), self.where),
+            "an agent whose only schedule cannot be read was told it has none")
+
     def test_help_names_read_only_conversation_and_agent_commands(self):
         self.made()
         said = agent._queried("ava", "help", self.where)
-        self.assertIn("status, version, agents, skills, help", said)
+        self.assertIn("status, version, agents, skills, schedules, help", said)
         self.assertIn("stop, forget", said)
         self.assertIn("restart", said)
         self.assertNotIn("/", said, "the agent layer invented a platform's command syntax")
