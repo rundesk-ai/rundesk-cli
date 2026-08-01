@@ -84,12 +84,14 @@ class InstructionBuilder(unittest.TestCase):
     def test_every_agent_is_told_how_to_attach_a_local_file(self):
         """R-CH-31 — one portable final-answer convention reaches every brain."""
         built = instructions.build(variables=CORE)
-        self.assertIn("[LABEL](</absolute/path>)` alone on a line", built)
+        self.assertIn("Any Markdown link to an absolute local file path", built)
+        self.assertIn("whether inline or on its own line", built)
+        self.assertIn("optional `<` and `>` delimiters", built)
+        self.assertIn("only when the file exists and passes its safety checks", built)
+        self.assertIn("removes the private path", built)
         self.assertIn("rundesk-attach: [LABEL](</absolute/path>)", built)
-        self.assertIn("literal `<` and `>`", built)
-        self.assertIn("required delimiters", built)
         self.assertIn("explicit form", built)
-        self.assertIn("Prefix that explicit form with `\\`", built)
+        self.assertIn("opening bracket with `\\`", built)
 
     def test_core_instructions_keep_rundesk_operations_exact(self):
         built = instructions.build(variables=CORE)
