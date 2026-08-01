@@ -98,7 +98,7 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
                 self.assertNotIn(excluded, page)
 
     def test_plan_guidance_keeps_executable_plans_in_the_agent_workspace(self):
-        """R-AGT-48 — a plan has one discoverable home and enough verified detail for a
+        """R-AGT-51 — a plan has one discoverable home and enough verified detail for a
         later worker without inheriting this conversation."""
         page = (REALLY_SHIPPED / "writing-plans" / "SKILL.md").read_text()
         for expected in (
@@ -109,6 +109,19 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
             with self.subTest(expected=expected):
                 self.assertIn(expected, page)
         for excluded in ("superpowers:", "docs/superpowers", "REQUIRED SUB-SKILL"):
+            with self.subTest(excluded=excluded):
+                self.assertNotIn(excluded, page)
+
+    def test_workspace_organization_guidance_routes_canonical_knowledge(self):
+        """R-AGT-50 — every agent can organize recurring workspace knowledge without
+        turning its always-loaded files into duplicate databases."""
+        page = (REALLY_SHIPPED / "organizing-workspaces" / "SKILL.md").read_text()
+        for expected in (
+                "plans/", "ORGANIZATION.md", "MEMORY.md", "AGENTS.md",
+                "one canonical home", "Unconfirmed", "project-owned truth"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, page)
+        for excluded in ("~/.claude", "~/.agents", "docs/superpowers"):
             with self.subTest(excluded=excluded):
                 self.assertNotIn(excluded, page)
 

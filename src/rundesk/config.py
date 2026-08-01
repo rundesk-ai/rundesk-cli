@@ -85,7 +85,11 @@ INITIAL = {
     "backups": {"at": "04:00", "keep_days": 30},
     "updates": {"at": "03:00"},
     "skills": {
-        "granted": [*RUNDESK_REQUIRED_GRANTS, "writing-plans"]
+        "granted": [
+            *RUNDESK_REQUIRED_GRANTS,
+            "writing-plans",
+            "organizing-workspaces",
+        ]
     },
 }
 

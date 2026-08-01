@@ -68,7 +68,7 @@ second. Everything here is answerable without changing anything.
 | ✅ | R-UPD-47 | An update that did not land never names a release as installed | `something that is not a release version gets no link rather than a wrong one`, `an update that did not land never names a release as applied`, `a failed or rolled back outcome never links a release as landed` |
 | ✅ | R-UPD-48 | An update adds configuration values an earlier release did not write without changing optional values the owner stated | `v020s empty sections are filled with the values in force`, `a missing value is added without touching one already stated`, `a value already stated survives the section being added`, `an owner customized skill list keeps its choices and the required floor`, `a configuration that cannot be read is left exactly as it is` |
 | ✅ | R-UPD-49 | A remote update from the counted-delivery release onward contributes once to Rundesk's public installs count | `a remote update downloads the counted release asset once` |
-| ✅ | R-UPD-50 | An unchanged release-default skill list advances when the default changes | `the previous unchanged skill default is brought forward`, `an owner customized skill list keeps its choices and the required floor` |
+| ✅ | R-UPD-50 | An unchanged release-default skill list advances when the default changes | `the previous unchanged skill default is brought forward`, `the immediately previous default adds workspace guidance`, `an owner customized skill list keeps its choices and the required floor` |
 
 ## Open questions
 

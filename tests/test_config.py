@@ -123,16 +123,18 @@ class WhatAnUpdateAdds(WithADataDirectory):
             json.loads(self.at.read_text())["skills"]["granted"],
         )
 
-    def test_the_immediately_previous_default_adds_plan_writing(self):
-        """R-UPD-50, R-AGT-48 — an unchanged default remains Rundesk's choice and gains
-        the new planning baseline on update."""
+    def test_the_immediately_previous_default_adds_workspace_guidance(self):
+        """R-UPD-50, R-AGT-50, R-AGT-51 — an unchanged default remains Rundesk's
+        choice and gains the new planning and organization baseline on update."""
         self.at.write_text(json.dumps({
             "skills": {"granted": list(config.PREVIOUS_DEFAULT_GRANTS[-1])},
         }) + "\n", encoding="utf-8")
 
         config.ensure(self.where)
 
-        self.assertIn("writing-plans", json.loads(self.at.read_text())["skills"]["granted"])
+        granted = json.loads(self.at.read_text())["skills"]["granted"]
+        self.assertIn("writing-plans", granted)
+        self.assertIn("organizing-workspaces", granted)
 
     def test_an_authoring_grant_follows_the_shipped_skill_rename(self):
         """R-AGT-49 — the persisted optional choice keeps meaning the same capability
@@ -165,8 +167,8 @@ class WhatAnUpdateAdds(WithADataDirectory):
         self.assertNotIn("writing-skills", granted)
 
     def test_an_owner_customized_skill_list_keeps_its_choices_and_the_required_floor(self):
-        """R-UPD-48, R-UPD-50, R-AGT-36 — optional choices survive while a product-required
-        skill is restored visibly rather than existing as hidden runtime policy."""
+        """R-UPD-48, R-UPD-50, R-AGT-36, R-AGT-50, R-AGT-51 — optional choices survive
+        while a product-required skill is restored visibly rather than hidden policy."""
         chosen = ["managing-rundesk"]
         self.at.write_text(json.dumps({"skills": {"granted": chosen}}) + "\n",
                            encoding="utf-8")
@@ -175,6 +177,14 @@ class WhatAnUpdateAdds(WithADataDirectory):
 
         self.assertEqual(
             list(config.RUNDESK_REQUIRED_GRANTS),
+            json.loads(self.at.read_text())["skills"]["granted"],
+        )
+        self.assertNotIn(
+            "organizing-workspaces",
+            json.loads(self.at.read_text())["skills"]["granted"],
+        )
+        self.assertNotIn(
+            "writing-plans",
             json.loads(self.at.read_text())["skills"]["granted"],
         )
 
