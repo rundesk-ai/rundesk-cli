@@ -134,7 +134,7 @@ class WhatAnUpdateAdds(WithADataDirectory):
 
     def test_the_immediately_previous_default_adds_workspace_guidance(self):
         """R-UPD-50, R-AGT-50, R-AGT-51 — an unchanged default remains Rundesk's
-        choice and gains the new planning and organization baseline on update."""
+        choice while redundant collaboration overlays consolidate on update."""
         self.at.write_text(json.dumps({
             "skills": {"granted": list(config.PREVIOUS_DEFAULT_GRANTS[-1])},
         }) + "\n", encoding="utf-8")
@@ -144,6 +144,10 @@ class WhatAnUpdateAdds(WithADataDirectory):
         granted = json.loads(self.at.read_text())["skills"]["granted"]
         self.assertIn("writing-plans", granted)
         self.assertIn("organizing-workspaces", granted)
+        self.assertNotIn("filing-rundesk-issues", granted)
+        self.assertNotIn("writing-rundesk-pull-requests", granted)
+        self.assertEqual(1, granted.count("filing-github-issues"))
+        self.assertEqual(1, granted.count("writing-github-pull-requests"))
 
     def test_an_authoring_grant_follows_the_shipped_skill_rename(self):
         """R-AGT-49 — the persisted optional choice keeps meaning the same capability
@@ -159,6 +163,28 @@ class WhatAnUpdateAdds(WithADataDirectory):
         granted = json.loads(self.at.read_text())["skills"]["granted"]
         self.assertIn("writing-skills", granted)
         self.assertNotIn("writing-rundesk-skills", granted)
+
+    def test_github_collaboration_grants_follow_the_shipped_consolidation(self):
+        """R-AGT-49 — persisted Rundesk-specific collaboration grants keep the same
+        capability through the generic GitHub skill names."""
+        renamed = {
+            "filing-rundesk-issues": "filing-github-issues",
+            "writing-rundesk-pull-requests": "writing-github-pull-requests",
+        }
+        for old, new in renamed.items():
+            self.built_in(old)
+            self.built_in(new)
+        self.at.write_text(json.dumps({
+            "skills": {"granted": list(renamed)},
+        }) + "\n", encoding="utf-8")
+
+        config.ensure(self.where)
+
+        granted = json.loads(self.at.read_text())["skills"]["granted"]
+        for old, new in renamed.items():
+            with self.subTest(old=old, new=new):
+                self.assertNotIn(old, granted)
+                self.assertEqual(1, granted.count(new))
 
     def test_required_management_grants_follow_the_shipped_renames(self):
         """R-AGT-49 — existing required choices keep their capabilities under the

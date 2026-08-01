@@ -19,9 +19,7 @@ skills every agent must receive:
       "managing-schedules",
       "managing-backups",
       "filing-github-issues",
-      "filing-rundesk-issues",
       "writing-github-pull-requests",
-      "writing-rundesk-pull-requests",
       "writing-plans",
       "organizing-workspaces"
     ]

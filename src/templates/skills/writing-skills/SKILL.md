@@ -1,12 +1,9 @@
 ---
 name: writing-skills
-description: Create, improve, review, or debug reusable Rundesk agent skills. Use for skill packaging, triggers, instructions, resources, or verification.
+description: Create, review, or debug reusable Rundesk skills. Use for descriptions, triggers, instructions, packaging, resources, scripts, and tests.
 ---
 
 # Writing a skill
-
-*This skill ships with rundesk and is replaced whenever rundesk updates. To make a version
-of your own, copy it under a different name — that copy is yours and is never touched.*
 
 A skill is one portable folder. `SKILL.md` is its only required entry; scripts, references,
 assets and other resources needed to do the work belong beside it in that same folder. A

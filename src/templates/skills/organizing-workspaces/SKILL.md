@@ -1,6 +1,6 @@
 ---
 name: organizing-workspaces
-description: Organize and clean agent workspaces without storing project repositories there. Use for file placement, process structure, stale artifacts, worktrees, clutter, or indexes.
+description: Organize agent workspaces without project repositories. Use for file placement, clutter, stale artifacts, indexes, plans, project maps, worktrees, or recurring structure.
 ---
 
 # Organizing workspaces

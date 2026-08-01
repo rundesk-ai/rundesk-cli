@@ -785,5 +785,13 @@ re-checked since, so treat these as true-when-found rather than as current.*
 - **The test counts in `CODEMAP.md` can be stale before a change starts.** Do not increment the
   recorded number by the cases just added; run the suite and copy the actual `Ran N tests` count.
 
+- **The system Ruby's Psych has `safe_load` but not `safe_load_file`.** A YAML verification
+  using `YAML.safe_load_file(path)` fails before parsing; use
+  `YAML.safe_load(File.read(path), aliases: false, filename: path)` instead.
+
+- **A command runner resolves `workdir` before the command can create it.** A chained copy
+  followed by an install fails before the copy starts when `workdir` names the future copy;
+  create the directory in one invocation, then run from it in the next.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*
