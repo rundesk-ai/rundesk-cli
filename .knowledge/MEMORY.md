@@ -248,6 +248,9 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `gh run watch <id> --exit-status --interval 20`, which GitHub paces for you, or put a
   `sleep 20` in the loop. Check what is left with
   `gh api rate_limit --jq .resources.core` before starting anything that polls.
+- **Backticks inside a double-quoted zsh search pattern are command substitutions.** A pattern
+  such as one containing `` `rundesk-attach:` `` fails before `rg` runs when its Markdown backticks
+  are unmatched. Use single quotes around literal Markdown search patterns.
 - **`gh release view --json isLatest` fails because this `gh` does not expose that field.**
   The command prints its supported release fields and exits before anything chained after it
   runs. Use `tagName,name,publishedAt,url` and compare `tagName` with

@@ -1833,11 +1833,27 @@ class WhatTheAgentMade(CarriesAConversation):
         self.assertEqual(text, answer["text"])
         self.assertEqual([], answer["attachments"])
 
-    async def test_ordinary_local_markdown_is_not_an_attachment_declaration(self):
-        """R-CH-31 — only the reserved whole line can move local bytes."""
+    async def test_an_absolute_local_markdown_link_is_an_attachment_declaration(self):
+        """R-CH-31 — the ordinary file link a brain naturally writes carries the file
+        without requiring a second turn to restate it in Rundesk's reserved form."""
+        at = self._made("plans/implementation plan.md")
+        text = f"[Review the implementation plan](<{at}>)"
+        brain, surface = Brain(outcome=Outcome(text=text)), Surface()
+        held = self.answering(surface, brain)
+
+        await self.carry(held, self.arrived())
+
+        answer = surface.of("answer")[0]
+        self.assertEqual("Review the implementation plan", answer["text"])
+        self.assertNotIn(str(at), answer["text"])
+        self.assertEqual(1, len(answer["attachments"]))
+        self.assertEqual(at.name, answer["attachments"][0]["name"])
+
+    async def test_non_standalone_local_markdown_is_not_an_attachment_declaration(self):
+        """R-CH-31 — only a whole line is delivery intent; prose and formatting remain
+        text even when they happen to contain an absolute local link."""
         at = self._made("ordinary.pdf")
         examples = [
-            f"[Download](<{at}>)",
             f'[Download](<{at}> "PDF report")',
             f"[Download [PDF]](<{at}>)",
             f"[Download]({at.parent}/report(1).pdf)",
