@@ -46,6 +46,10 @@ PY = sys.executable
 #: headroom, short enough to name a wedged child while the run is still useful.
 CHECK_TIMEOUT_SECONDS = 180
 ABORT_GRACE_SECONDS = 5
+#: A module seam lets the timeout-path tests request the same traceback through a
+#: non-fatal user signal. The real gate keeps SIGABRT: Python's faulthandler installs
+#: that handler automatically for every check through PYTHONFAULTHANDLER.
+DIAGNOSTIC_SIGNAL = signal.SIGABRT
 
 
 def suites() -> list[pathlib.Path]:
@@ -119,10 +123,10 @@ def clean_of_the_live_install() -> dict[str, str]:
 def run(what: str, argv: list[str]) -> tuple[bool, str, float]:
     """Run one check within a ceiling, taking its whole process group on timeout.
 
-    SIGABRT comes first because Python's faulthandler turns it into the stack evidence
-    needed to diagnose a hang. SIGKILL is the backstop for a child or grandchild that
-    ignores it. Each check has its own session so neither signal can reach the gate or a
-    neighbouring suite.
+    The diagnostic signal comes first because Python's faulthandler turns the production
+    SIGABRT into the stack evidence needed to diagnose a hang. SIGKILL is the backstop for
+    a child or grandchild that ignores it. Each check has its own session so neither signal
+    can reach the gate or a neighbouring suite.
     """
     began = time.monotonic()
     process = subprocess.Popen(
@@ -140,14 +144,15 @@ def run(what: str, argv: list[str]) -> tuple[bool, str, float]:
     except subprocess.TimeoutExpired:
         timed_out = True
         try:
-            os.killpg(process.pid, signal.SIGABRT)
+            os.killpg(process.pid, DIAGNOSTIC_SIGNAL)
         except ProcessLookupError:
             pass
         try:
             said, _ = process.communicate(timeout=ABORT_GRACE_SECONDS)
         except subprocess.TimeoutExpired:
             said = ""
-        # A grandchild may ignore SIGABRT or close the captured pipe before it exits.
+        # A grandchild may ignore the diagnostic signal or close the captured pipe before
+        # it exits.
         # End the whole group even when the leader already returned.
         try:
             os.killpg(process.pid, signal.SIGKILL)
