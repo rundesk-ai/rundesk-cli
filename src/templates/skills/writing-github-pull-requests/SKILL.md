@@ -1,12 +1,9 @@
 ---
 name: writing-github-pull-requests
-description: Prepare, open, or improve evidence-rich GitHub pull requests for any repository while following its contribution rules, templates, validation commands, and merge conventions. Use whenever asked to create, submit, draft, edit, or write up a PR; summarize implemented work for review; or judge whether a PR is ready to open.
+description: Prepare, open, edit, or review evidence-rich GitHub pull requests under each repository's rules. Use for PR creation, drafting, write-ups, readiness checks, validation summaries, issue linkage, or review updates.
 ---
 
 # Writing a GitHub pull request
-
-*This skill ships with rundesk and is replaced whenever rundesk updates. To make a version
-of your own, copy it under a different name — that copy is yours and is never touched.*
 
 A pull request is the case for merging a change, not a restatement of the diff. The repository
 owns that case: read its rules and template before using the fallback here. Opening, editing,
@@ -25,9 +22,17 @@ git status --short --branch
 ```
 
 Read every applicable `AGENTS.md`, `CONTRIBUTING.md`, pull request template under the root,
-`docs/`, or `.github/`, and the workflows that define required checks. Follow repository rules
-for titles, issue links, attribution, changelogs, screenshots, test commands, and draft status.
-Do not transplant conventions from another repository.
+`docs/`, or `.github/`, and the workflows that define required checks. Inspect all templates and
+select the one that matches the change; use the default branch's template unless the task is
+explicitly changing it. Follow repository rules for titles, issue links, attribution,
+changelogs, screenshots, test commands, and draft status. Do not transplant conventions from
+another repository.
+
+Treat the selected template as a body contract. Preserve its required headings, order,
+checklists, questions, and footer. Answer each required prompt with change-specific evidence,
+remove instructional comments and placeholders, and never mark an unproven checkbox complete.
+If a repository template applies, do not replace it with the fallback because the fallback is
+shorter or more familiar.
 
 Match the target repository to an explicit `<base-remote>`, and match the branch's destination
 repository or fork to an explicit `<push-remote>`. Confirm each with `git remote get-url`; never
@@ -82,8 +87,8 @@ both places. For performance work, include the command, environment, and before/
 
 ## Write the case
 
-Use the repository template when one exists. Otherwise keep this spine and omit optional blocks
-instead of filling them with `N/A`:
+Use the selected repository template when one applies. Only when none applies, keep this spine
+and omit optional blocks instead of filling them with `N/A`:
 
 ```md
 ## Summary
@@ -136,6 +141,11 @@ issue remains open.
 
 ## Open and verify
 
+Before opening or updating the PR, compare the body against the selected template line by line.
+Confirm that all required sections and footer content remain, answers are substantive, no
+placeholder or instructional comment survives, and every checked item is supported by fresh
+evidence.
+
 Write the reviewed body to a temporary Markdown file. This preserves formatting and keeps
 non-interactive commands from opening an editor.
 
@@ -164,6 +174,7 @@ gh pr checks <number> --repo <owner/repo>
 ```
 
 Confirm the base, head branch, head repository owner, rendered body, draft state, linked issues,
-and URL. Report the URL plus any pending or failing checks. If `gh` is missing, unauthenticated,
-or lacks permission, stop with the title and body ready to paste; do not silently switch
-accounts, forks, or hosts.
+and URL. Recheck the stored body against the selected template; creation succeeding does not
+prove template compliance. Report the URL plus any pending or failing checks. If `gh` is
+missing, unauthenticated, or lacks permission, stop with the title and body ready to paste; do
+not silently switch accounts, forks, or hosts.

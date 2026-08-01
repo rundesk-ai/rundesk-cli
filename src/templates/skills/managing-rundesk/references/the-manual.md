@@ -1,8 +1,5 @@
 # Managing rundesk
 
-You are an agent running inside rundesk. This file is rundesk's, not yours and not your
-owner's — it is replaced on every update, so what is here is current.
-
 ## What rundesk is, and why it is the first thing you reach for
 
 Rundesk is the thing running you. It gave you your name, it holds the record of everything you
@@ -119,7 +116,7 @@ what `--conversation` wants. Widen only when neither the place nor the clock exp
 
 **Telling two people apart.** Two direct messages are two conversations, each with its own
 memory, and they differ by the place — the `WHERE` column. The `WHO` column names the person
-where their surface gave a name, so a Discord DM reads as `tim` rather than `user`, and it
+where their surface gave a name, so a Discord DM reads as `<member>` rather than `user`, and it
 names **you** on your own answers rather than saying `agent`. Where a surface gave no name,
 `user` stands in; `rundesk` is rundesk's own words and never yours.
 

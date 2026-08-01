@@ -25,6 +25,7 @@ from rundesk import config, skill
 #: What this release really ships, taken at import — every class below points
 #: `skill.SHIPPED` at a scratch directory while it runs.
 REALLY_SHIPPED = skill.SHIPPED
+REPOSITORY = REALLY_SHIPPED.parents[2]
 
 
 def a_skill(at: Path, name: str, described: str = None, says: str = "") -> Path:
@@ -143,37 +144,16 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
                 page = (REALLY_SHIPPED / new / "SKILL.md").read_text()
                 self.assertIn(f"name: {new}", page)
 
-    def test_issue_and_pull_request_guidance_requires_the_agent_footer(self):
-        for skill_name in (
-                "filing-rundesk-issues", "writing-rundesk-pull-requests"):
-            with self.subTest(skill=skill_name):
-                page = (REALLY_SHIPPED / skill_name / "SKILL.md").read_text()
-                self.assertIn("🤖 by <Agent>", page)
-                self.assertIn("provider", page.lower())
-                self.assertIn("model", page.lower())
-
-    def test_repository_overlays_delegate_the_shared_github_workflow(self):
-        for overlay, shared in (
+    def test_github_collaboration_overlays_consolidate_into_generic_skills(self):
+        """R-AGT-49 — old Rundesk-specific grants retain their capability without
+        shipping two copies of the same repository-aware workflow."""
+        for old, shared in (
                 ("filing-rundesk-issues", "filing-github-issues"),
                 ("writing-rundesk-pull-requests", "writing-github-pull-requests")):
-            with self.subTest(skill=overlay):
-                page = (REALLY_SHIPPED / overlay / "SKILL.md").read_text()
-                self.assertIn(f"Read and follow `{shared}`", page)
-
-    def test_rundesk_issue_guidance_makes_every_agent_a_bounded_platform_steward(self):
-        """R-AGT-36 — the skill every agent must retain says when it acts proactively and
-        keeps owner customization out of the platform tracker."""
-        page = (REALLY_SHIPPED / "filing-rundesk-issues" / "SKILL.md").read_text()
-        for expected in (
-                "Every Rundesk agent helps improve the platform",
-                "without a separate request",
-                "owner asked for or clearly needs a capability",
-                "recurring Rundesk friction has evidence",
-                "custom skill,",
-                "adapter, integration, or existing tool",
-                "built into Rundesk itself"):
-            with self.subTest(expected=expected):
-                self.assertIn(expected, page)
+            with self.subTest(old=old, shared=shared):
+                self.assertEqual(shared, skill.RENAMED[old])
+                self.assertFalse((REALLY_SHIPPED / old).exists())
+                self.assertTrue((REALLY_SHIPPED / shared / "SKILL.md").is_file())
 
     def test_generic_github_guidance_defers_to_each_repository_and_verifies_the_result(self):
         issue = (REALLY_SHIPPED / "filing-github-issues" / "SKILL.md").read_text()
@@ -190,6 +170,33 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
         self.assertIn("--head <branch>", pull)
         self.assertIn("--head <user>:<branch>", pull)
         self.assertIn("closingIssuesReferences", pull)
+        for expected in ("body contract", "placeholders", "template compliance"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, issue)
+                self.assertIn(expected, pull)
+        self.assertIn("required sections", issue)
+        self.assertIn("required headings", pull)
+        self.assertIn("YAML issue form", issue)
+        self.assertIn("validations.required", issue)
+
+    def test_rundesk_repository_supplies_bug_feature_and_pull_request_templates(self):
+        issue_templates = REPOSITORY / ".github" / "ISSUE_TEMPLATE"
+        bug = (issue_templates / "bug.yml").read_text()
+        feature = (issue_templates / "feature.yml").read_text()
+        pull = (REPOSITORY / ".github" / "pull_request_template.md").read_text()
+
+        for page, issue_type in ((bug, "Bug"), (feature, "Feature")):
+            with self.subTest(issue_type=issue_type):
+                self.assertIn(f"type: {issue_type}", page)
+                self.assertIn("label: Acceptance criteria", page)
+                self.assertIn("label: Filing identity", page)
+                self.assertIn("required: true", page)
+        for heading in (
+                "## Summary", "## Problem", "## Implementation", "## Validation",
+                "## Issue linkage", "## Agent"):
+            with self.subTest(heading=heading):
+                self.assertIn(heading, pull)
+        self.assertIn("🤖 by <Agent>", pull)
 
 
 class WhatTheReleaseNoLongerOwns(unittest.TestCase):

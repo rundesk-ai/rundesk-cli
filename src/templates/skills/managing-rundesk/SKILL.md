@@ -1,12 +1,9 @@
 ---
 name: managing-rundesk
-description: How to operate rundesk — the thing running you — including your own history, your agents, the channels you are reached on, what runs have cost, and the handful of commands that would end your own turn. Use whenever a question is about you or this install rather than about the work: what you did, where you can be reached, what something cost, how an agent is made or configured, or when anyone asks you to change how you are running. Schedules and backups have skills of their own.
+description: Operate and inspect the Rundesk installation running this agent. Use for agent history, runs and costs, channels, configuration, skills, agent lifecycle, or changes to how an agent runs; use the dedicated schedule or backup skill for those domains.
 ---
 
 # Managing rundesk
-
-*This skill ships with rundesk and is replaced whenever rundesk updates. To make a version of
-your own, copy it under a different name — that copy is yours and is never touched.*
 
 Rundesk is the thing running you. It gave you your name, it holds the record of everything you
 have been asked and answered, it keeps the channels people reach you on, and it fires the

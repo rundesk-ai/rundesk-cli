@@ -1,12 +1,9 @@
 ---
 name: writing-plans
-description: Create executable implementation plans in the agent workspace. Use before multi-step development, especially for handoff to another agent or future session.
+description: Create executable implementation plans in agent workspaces. Use for multi-step or cross-component work, risky changes, handoffs, or later continuation.
 ---
 
 # Writing plans
-
-*This skill ships with rundesk and is replaced whenever rundesk updates. To make a version
-of your own, copy it under a different name — that copy is yours and is never touched.*
 
 A plan is an implementation contract: a worker with repository access but no conversation
 history can follow it without guessing. Make it specific enough to execute and short enough

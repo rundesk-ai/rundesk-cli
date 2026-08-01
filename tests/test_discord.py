@@ -1765,12 +1765,14 @@ class WhatItOffersAndWhatItIsTold(unittest.TestCase):
         self.assertEqual("restart", gestures["restart"])
 
     def test_read_only_gateway_information_is_offered_as_discord_commands(self):
-        """R-DIS-22"""
+        """R-DIS-22, R-DIS-36"""
         from rundesk import channel
 
         queries = {name: query for name, _description, query in discord.QUERY_COMMANDS}
         self.assertEqual(set(channel.QUERIES), set(queries.values()))
-        self.assertEqual({"status", "version", "agents", "help"}, set(queries))
+        self.assertEqual({"status", "version", "agents", "skills", "help"},
+                         set(queries))
+        self.assertEqual("skills", queries["skills"])
 
     def test_one_slash_interaction_belongs_to_exactly_one_configured_surface(self):
         """R-DIS-23 — Discord delivers one bot's interaction to its simultaneous DM and
@@ -1808,6 +1810,41 @@ class WhatItOffersAndWhatItIsTold(unittest.TestCase):
             "ref": "query-1", "text": "ava: RUNNING",
         }))
         self.assertEqual("ava: RUNNING", asked.content)
+        self.assertEqual({}, client.queries)
+
+    def test_a_long_skills_answer_keeps_every_granted_skill(self):
+        """R-DIS-36 — a large grant set remains a complete private bullet list."""
+        class Followup:
+            def __init__(self):
+                self.messages = []
+
+            async def send(self, content, ephemeral):
+                self.messages.append((content, ephemeral))
+
+        class Interaction:
+            def __init__(self):
+                self.original = None
+                self.followup = Followup()
+
+            async def edit_original_response(self, content):
+                self.original = content
+
+        granted = [f"- skill-{number:02d}-{'x' * 52}" for number in range(35)]
+        answer = "\n".join(granted)
+        self.assertGreater(len(answer), discord.LIMIT)
+        asked = Interaction()
+        client = SimpleNamespace(queries={"query-1": asked})
+
+        asyncio.run(discord.Agent._query_result(client, {
+            "type": "query-result", "conversation": "44", "query": "skills",
+            "ref": "query-1", "text": answer,
+        }))
+
+        pieces = [asked.original] + [content for content, _private in
+                                     asked.followup.messages]
+        self.assertEqual(granted, "\n".join(pieces).splitlines())
+        self.assertTrue(all(private for _content, private in asked.followup.messages))
+        self.assertTrue(all(len(piece) <= discord.LIMIT for piece in pieces))
         self.assertEqual({}, client.queries)
 
     def test_a_read_only_command_is_deferred_and_reported_for_authorization(self):

@@ -1,12 +1,9 @@
 ---
 name: managing-backups
-description: Manage Rundesk backups safely. Use to list, create, remove, or restore backups, recover agents or history, or prepare for destructive Rundesk changes.
+description: Manage Rundesk backups safely. Use to list, create, remove, or restore backups, recover agents or history, or protect data before destructive work.
 ---
 
 # Managing backups
-
-*This skill ships with rundesk and is replaced whenever rundesk updates. To make a version of
-your own, copy it under a different name — that copy is yours and is never touched.*
 
 There are two acts here and they are not the same size. **Taking a copy is safe, quick, and
 never interrupts anything.** **Putting one back replaces everything your owner keeps** — and

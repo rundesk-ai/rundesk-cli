@@ -179,14 +179,6 @@ def opening(posture: str, model, extra: dict) -> list:
     if posture != FULLY:
         argv += ["--tools", ",".join(ALLOWED[posture])]
 
-    preface = (os.environ.get("RUNDESK_PREFACE") or "").strip()
-    if preface:
-        # **Never `--system-prompt-override`.** Its own help says it overrides the agent's
-        # system prompt; `--rules` says it appends to it. Adding is what standing
-        # instructions are, and the append form is also the one that leaves the prefix a
-        # conversation is cached against unchanged.
-        argv += ["--rules", preface]
-
     argv += _flags(extra)
     # ACP is the vendor's integration surface. `--always-approve` belongs after `agent`
     # and before its transport; the root permission mode above is kept too because it is
@@ -468,7 +460,10 @@ def carry() -> int:
     # reaches this brain unread like any other flag.
     _present(where)
 
-    return _turn(argv, where, dict(os.environ), asked, os.environ.get("RUNDESK_RESUME"))
+    preface = (os.environ.get("RUNDESK_PREFACE") or "").strip()
+    return _turn(
+        argv, where, dict(os.environ), asked, os.environ.get("RUNDESK_RESUME"), preface,
+    )
 
 
 class _ACP:
@@ -519,7 +514,7 @@ class _ACP:
         self.brain.stdin.flush()
 
 
-def _turn(argv: list, where: str, env: dict, asked: str, resume) -> int:
+def _turn(argv: list, where: str, env: dict, asked: str, resume, preface: str) -> int:
     """Run one ACP session, and report what it said as it says it."""
     raw = _raw()
     seen = {"session": str(resume or ""), "ended": False}
@@ -561,6 +556,14 @@ def _turn(argv: list, where: str, env: dict, asked: str, resume) -> int:
             acp.request("session/load", session_params, emit=False)
             session = str(resume)
         else:
+            # R-PRV-23 — ACP owns conversation creation, so its session metadata is the
+            # only place Grok applies standing instructions separately from the prompt.
+            # Root `--rules` is accepted by the process but ignored by `agent stdio`.
+            # `_meta.rules` appends to the built-in system prompt; the replacement field
+            # is deliberately never used. A resumed conversation already keeps the rules
+            # it was opened with and therefore receives none again.
+            if preface:
+                session_params["_meta"] = {"rules": preface}
             made = acp.request("session/new", session_params)
             session = str(made.get("sessionId") or "")
             if not session:

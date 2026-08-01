@@ -1389,10 +1389,37 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
         said = agent._queried("ava", "agents", self.where).splitlines()
         self.assertEqual(["ava: STOPPED (-)", "zebra: STOPPED (-)"], said)
 
+    def test_skills_lists_only_this_agents_grants_as_sorted_bullets(self):
+        """R-DIS-36 — the shared library and another agent's grants are not this
+        agent's capabilities."""
+        self.made("ava")
+        self.made("zebra")
+        library = self.before / "data" / "skills"
+        for called in ("alpha", "only-zebra", "ungranted", "zulu"):
+            page = library / called / "SKILL.md"
+            page.parent.mkdir(parents=True)
+            page.write_text(
+                f"---\nname: {called}\ndescription: Use for this test.\n---\n",
+                encoding="utf-8",
+            )
+        skill.grant(agent.skills("ava", self.where), "zulu", library)
+        skill.grant(agent.skills("ava", self.where), "alpha", library)
+        skill.grant(agent.skills("zebra", self.where), "only-zebra", library)
+
+        said = agent._queried("ava", "skills", self.where).splitlines()
+
+        self.assertEqual(["- alpha", "- zulu"], said)
+
+    def test_skills_says_when_this_agent_has_no_grants(self):
+        """R-DIS-36 — an empty answer is not an unexplained blank interaction."""
+        self.made()
+        self.assertEqual("No skills granted.",
+                         agent._queried("ava", "skills", self.where))
+
     def test_help_names_read_only_conversation_and_agent_commands(self):
         self.made()
         said = agent._queried("ava", "help", self.where)
-        self.assertIn("status, version, agents, help", said)
+        self.assertIn("status, version, agents, skills, help", said)
         self.assertIn("stop, forget", said)
         self.assertIn("restart", said)
         self.assertNotIn("/", said, "the agent layer invented a platform's command syntax")

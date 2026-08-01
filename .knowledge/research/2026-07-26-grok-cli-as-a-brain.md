@@ -1,6 +1,6 @@
 # Research: The Grok CLI as an agent's brain
 
-**Last updated:** 2026-07-27
+**Last updated:** 2026-08-01
 **Question it answers:** What does the installed Grok CLI actually do when it is driven headlessly, and which of it has to be absorbed by an adapter?
 
 ## What they do
@@ -185,14 +185,16 @@ annotated in the probe as "read-only for a probe".[10] Since only `bypassPermiss
 rather than the one its comment claims. It made no tool calls, so nothing in the golden turns on
 it.
 
-### The system prompt, and which flag does what
+### The system prompt, and which transport actually applies it
 
-Assumed, from the CLI's own help string and never exercised: `--rules` is described as "extra
-rules to append to the system prompt" and therefore **appends**, while
-`--system-prompt-override` **replaces** what the brain was built with. The shipped adapter passes
-`--rules` only.[2][3] Neither has been probed — not whether `--rules` actually lands, and not
-whether it is re-read on a resume or bound once when a conversation is created (Codex was measured
-to be the second kind and to drop it silently afterwards).
+Measured on 0.2.112: root `--rules` appends in one-shot mode but is silently ignored by
+`grok agent stdio`. ACP exposes the equivalent as `_meta.rules` on `session/new`; a live turn
+returned an unguessable marker supplied only there, then an indirect “send me the file” turn emitted
+Rundesk's exact attachment declaration. The installed official guide names this field “Extra rules
+appended to the system prompt.” `systemPromptOverride` replaces the prompt and is never used.[15]
+
+Rules bind when an ACP conversation is created. The adapter sends `_meta.rules` on `session/new`
+and nothing on `session/load`, matching the conversation-bound behavior measured for Codex.[15]
 
 ### Isolation: the one thing every other brain proved, now proved here too
 
@@ -358,11 +360,10 @@ results come from structured ACP updates, while steering remains unmeasured.[13]
 format is still a useful proof that a lossy vendor stream must not be mistaken for the agent's
 whole activity.
 
-**We take the ACP invocation, update mapping, usage split, resume handle and private home as
-settled.** What remains read off a flag is standing instructions: `--rules` has still never
-been shown to land, and whether it is re-read on a resume or bound once is unknown. That is not a
-detail — it is a way for an adapter to look correct and be wrong, which is exactly the failure
-`--permission-mode dontAsk` already produced once in the Node build.
+**We take the ACP invocation, update mapping, usage split, resume handle, private home and standing
+instruction transport as settled.** Root `--rules` is not an ACP transport; `_meta.rules` on
+`session/new` is. Root tool scoping remains a separate live defect: ACP ignored `--tools` and exposed
+`run_terminal_command` in read posture.[15]
 
 **Two transport choices are non-negotiable on every turn, for opposite reasons.** `--no-memory`, because
 without it a conversation reads conversations it was never given and a resume handle stops meaning
@@ -384,15 +385,12 @@ the version moves.
 
 ## Open questions
 
-**Four were the shopping list; three are answered and the fourth is now the only one left.**
-Resume carries context, usage is a turn's own, `GROK_HOME` isolates the login, and the prompt can
-go in a file — all measured, all in `What they do` above.[12] What remains:
+The original transport questions are answered: resume carries context, usage is a turn's own,
+`GROK_HOME` isolates login, prompts need not enter the process list, and ACP standing rules append
+at conversation creation.[12][15] What remains:
 
-- **`--system-prompt-override` and `--rules`.** Whether `--rules` lands at all, whether it is
-  re-read on a resume or bound at conversation creation, and what `--system-prompt-override`
-  really substitutes. An argument accepted and then dropped reads like it works. Claude's
-  equivalent question has now been measured and the answer was not the obvious one, which is
-  reason enough not to guess this one.
+- **ACP tool scoping.** Root `--tools` is accepted but ignored by `agent stdio`; the supported ACP
+  mechanism for narrowing a session has not been established.[15]
 - **What else reaches across sessions, and whether `--no-memory` closes all of it.** The control
   turn named "recent sessions" specifically; whether that is the documented cross-session memory,
   a tool, or something else was not established, and only the observable symptom was tested.
@@ -426,3 +424,4 @@ Beyond those:
 12. `.knowledge/scripts/probe-grok` against `grok 0.2.111` on macOS 25.5.0, 2026-07-26 — (internal)
 13. SpaceXAI, “Headless & Scripting” — https://docs.x.ai/build/cli/headless-scripting
 14. Controlled ACP tool and resume probes against `grok 0.2.112`, 2026-07-27 — (internal)
+15. Installed official `docs/user-guide/15-agent-mode.md` plus controlled ACP rule, posture and attachment probes against `grok 0.2.112`, 2026-08-01 — (internal)

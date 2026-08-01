@@ -358,12 +358,12 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
     def test_a_work_turn_gets_every_builtin(self):
         self.assertNotIn("--tools", self.opening())
 
-    def test_standing_instructions_are_added_and_never_substituted(self):
+    def test_standing_instructions_are_not_left_on_the_ignored_root_command(self):
         argv = self.opening(preface="Public room.")
-        self.assertEqual("Public room.", argv[argv.index("--rules") + 1])
+        self.assertNotIn("--rules", argv)
         self.assertNotIn("--system-prompt-override", argv)
 
-    def test_a_turn_with_nothing_standing_says_nothing(self):
+    def test_a_turn_with_nothing_standing_adds_no_root_prompt_flag(self):
         self.assertNotIn("--rules", self.opening(preface=None))
         self.assertNotIn("--rules", self.opening(preface="   \n "))
 
@@ -469,7 +469,7 @@ class TheWholeACPConversation(unittest.TestCase):
                 path.rmdir()
         self.where.rmdir()
 
-    def run_adapter(self, resume=None):
+    def run_adapter(self, resume=None, preface="Standing rule."):
         env = dict(os.environ)
         env.update({
             "RUNDESK_GROK_BIN": str(self.fake),
@@ -479,6 +479,10 @@ class TheWholeACPConversation(unittest.TestCase):
             "RUNDESK_RUN": "one",
             "FAKE_GROK_LOG": str(self.log),
         })
+        if preface is None:
+            env.pop("RUNDESK_PREFACE", None)
+        else:
+            env["RUNDESK_PREFACE"] = preface
         if resume is None:
             env.pop("RUNDESK_RESUME", None)
         else:
@@ -507,6 +511,20 @@ class TheWholeACPConversation(unittest.TestCase):
         self.assertEqual(4, only(said, "usage")[0]["input"])
         self.assertEqual(6, only(said, "usage")[0]["cached"])
 
+    def test_a_new_conversation_appends_standing_instructions_through_acp(self):
+        """R-PRV-23 — Grok receives standing rules separately from what was asked."""
+        _, _, protocol = self.run_adapter(preface="Locked Rundesk rule.")
+        created = next(one for one in protocol if one["method"] == "session/new")
+        self.assertEqual(
+            {"rules": "Locked Rundesk rule."},
+            created["params"]["_meta"],
+        )
+
+    def test_a_new_conversation_with_no_standing_instructions_has_no_meta(self):
+        _, _, protocol = self.run_adapter(preface=None)
+        created = next(one for one in protocol if one["method"] == "session/new")
+        self.assertNotIn("_meta", created["params"])
+
     def test_a_resume_loads_exactly_that_session_instead_of_making_one(self):
         done, said, protocol = self.run_adapter("old-session")
         self.assertEqual(0, done.returncode, done.stderr)
@@ -517,6 +535,7 @@ class TheWholeACPConversation(unittest.TestCase):
         prompted = next(one for one in protocol if one["method"] == "session/prompt")
         self.assertEqual("old-session", loaded["params"]["sessionId"])
         self.assertEqual("old-session", prompted["params"]["sessionId"])
+        self.assertNotIn("_meta", loaded["params"])
         self.assertEqual("old-session", only(said, "done")[0]["session"])
         self.assertNotIn("old reply", [one.get("text") for one in said])
         self.assertEqual(1, len(only(said, "done")))
