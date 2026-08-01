@@ -131,6 +131,20 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
             with self.subTest(excluded=excluded):
                 self.assertNotIn(excluded, page)
 
+    def test_workspace_organization_guidance_audits_continuity_and_protects_cleanup(self):
+        """R-AGT-50 — recurring home maintenance is discoverable and destructive cleanup
+        composes with the dedicated backup procedure."""
+        page = (REALLY_SHIPPED / "organizing-workspaces" / "SKILL.md").read_text()
+        frontmatter = page.split("---", 2)[1]
+        for expected in ("continuity audits", "recurring agent-home maintenance"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, frontmatter)
+        for expected in (
+                "Before destructive or difficult-to-reverse cleanup",
+                "read and follow `managing-backups`", "verify the new backup"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, page)
+
     def test_management_skill_names_drop_the_redundant_rundesk_qualifier(self):
         """R-AGT-49 — shipped management guidance keeps the capability while its owned
         package and grants follow the shorter name."""

@@ -1,6 +1,6 @@
 ---
 name: organizing-workspaces
-description: Organize and clean agent workspaces without storing project repositories there. Use for file placement, process structure, stale artifacts, worktrees, clutter, or indexes.
+description: Organize and clean agent workspaces without storing project repositories there. Use for workspace cleanup, continuity audits, recurring agent-home maintenance, file placement, stale artifacts, worktrees, clutter, or indexes.
 ---
 
 # Organizing workspaces
@@ -65,6 +65,11 @@ Identify:
 Prove why something is stale. Age alone is not evidence. Compare suspected duplicates by content,
 check inbound references, and identify the canonical copy. Prefer recoverable cleanup such as trash
 when available.
+
+Before destructive or difficult-to-reverse cleanup, identify whether a Rundesk backup contains the
+target. For agent-home or workspace data, read and follow `managing-backups`. Take and verify the new backup
+before cleanup. For excluded project or external material, establish its own recovery path. A backup
+does not authorize cleanup or make an uncertain target safe to remove.
 
 Moving, renaming, archiving, deleting, or overwriting existing material can erase context or break
 links. When cleanup was not explicitly requested, list the exact proposed paths and obtain
