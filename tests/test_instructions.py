@@ -40,13 +40,21 @@ class InstructionBuilder(unittest.TestCase):
         self.assertIn("You are ava, an agent running inside rundesk.", built)
         self.assertIn("`/agents/ava/home`", built)
         self.assertIn("`/agents/ava/home/workspace`", built)
+        self.assertIn(
+            "Before your first reply in a conversation, read `/agents/ava/home/AGENTS.md`.",
+            built,
+        )
         for placeholder in ("{agent}", "{agent_slug}", "{agent_home}", "{workspace}"):
             self.assertNotIn(placeholder, built)
 
     def test_standing_instruction_keeps_its_paragraph_boundaries(self):
-        self.assertIn("\n\n## Startup\n\n", instructions.RUNDESK_INSTRUCTIONS)
         self.assertIn(
-            "\n\n## Recovering context you do not have\n\n",
+            "\n\nYou are {agent}, an agent running inside rundesk. "
+            "Operate Rundesk with `rundesk`.\n\n",
+            instructions.RUNDESK_INSTRUCTIONS,
+        )
+        self.assertIn(
+            "\n\n- Your persistent home is `{agent_home}`;",
             instructions.RUNDESK_INSTRUCTIONS,
         )
 
@@ -54,11 +62,11 @@ class InstructionBuilder(unittest.TestCase):
         """R-AGT-45 — an operational root must never be guessed into a repository."""
         built = instructions.build(variables=CORE)
         self.assertIn(
-            "Never run any Git command with your home or workspace root as its working tree.",
+            "Never initialize them or run any Git command from either root",
             built,
         )
         self.assertIn(
-            "Never volunteer, narrate, or report the Git status of your home or workspace root.",
+            "Do not report either root's Git status.",
             built,
         )
 
@@ -66,9 +74,9 @@ class InstructionBuilder(unittest.TestCase):
         """R-AGT-46 — a self-created route miss is not progress or owner-facing friction."""
         built = instructions.build(variables=CORE)
         for rule in (
-            "route checks, and repository discovery are routine internal work",
-            "Correct an internal orientation or routing miss silently.",
-            "when the confirmed correct route remains unavailable and blocks",
+            "context recovery, routing, and repository discovery silently",
+            "Mention routing only when the confirmed route is unavailable",
+            "and blocks the requested outcome",
         ):
             with self.subTest(rule=rule):
                 self.assertIn(rule, built)
@@ -76,9 +84,29 @@ class InstructionBuilder(unittest.TestCase):
     def test_every_agent_is_told_how_to_attach_a_local_file(self):
         """R-CH-31 — one portable final-answer convention reaches every brain."""
         built = instructions.build(variables=CORE)
-        self.assertIn("rundesk-attach:", built)
-        self.assertIn("reserved declaration", built)
-        self.assertIn("ordinary Markdown links never attach", built)
+        self.assertIn("rundesk-attach: [LABEL](</absolute/path>)", built)
+        self.assertIn("literal `<` and `>`", built)
+        self.assertIn("required protocol delimiters", built)
+        self.assertIn("alone in the final response", built)
+        self.assertIn("Ordinary Markdown links do not attach", built)
+        self.assertIn("prefix the declaration with `\\`", built)
+
+    def test_core_instructions_keep_rundesk_operations_exact(self):
+        built = instructions.build(variables=CORE)
+        for command in (
+            "rundesk messages ava --conversation <id>",
+            "rundesk messages ava --source schedule",
+            "rundesk messages ava",
+            "rundesk schedules ava",
+            "rundesk --help",
+        ):
+            with self.subTest(command=command):
+                self.assertIn(f"`{command}`", built)
+        self.assertIn("read it before answering", built)
+        self.assertIn("only after running `rundesk schedules ava`", built)
+        self.assertIn("Never substitute another scheduler.", built)
+        self.assertIn("Treat `rundesk --help` as authoritative.", built)
+        self.assertIn("`managing-rundesk` or applicable skill", built)
 
     def test_schedule_and_owner_instructions_append_in_order(self):
         built = instructions.build(
