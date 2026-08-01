@@ -13,6 +13,10 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 LOGS = ROOT / "suite-logs"
 SUITE_TIMEOUT_SECONDS = 180
+#: Tests replace this with SIGUSR1 and register faulthandler for it in their fixture.
+#: That exercises the same timeout path without making macOS report an intentional test
+#: abort as an application crash. Real suite timeouts retain faulthandler's SIGABRT dump.
+DIAGNOSTIC_SIGNAL = signal.SIGABRT
 WEIGHTS = {
     "test_install": 50,
     "test_process": 43,
@@ -56,7 +60,7 @@ def run(path: pathlib.Path) -> tuple[str, int, pathlib.Path, bool]:
         except subprocess.TimeoutExpired:
             timed_out = True
             # Preserve the evidence for the hang before terminating the suite.
-            os.killpg(process.pid, signal.SIGABRT)
+            os.killpg(process.pid, DIAGNOSTIC_SIGNAL)
             try:
                 code = process.wait(timeout=5)
             except subprocess.TimeoutExpired:
