@@ -180,15 +180,15 @@ rundesk schedules <name>       what it runs on its own — add, on, off, remove,
 **Handing heavy work to a specialist.**
 
 ```sh
-rundesk profiles <name>                    what it can hand work to, and what it has
-rundesk profiles <name> run <profile>      hand one bounded task on — the brief is read from stdin
-rundesk profiles <name> show <run>         one run in full
+rundesk roles <name>                    what it can hand work to, and what it has
+rundesk roles <name> run <role>      hand one bounded task on — the brief is read from stdin
+rundesk roles <name> show <run>         one run in full
 ```
 
-A profile is two files an owner writes below where agents are kept: `profile.json` naming a
-description, the skills that profile exposes, and a posture; and `AGENTS.md` holding the rules
+A role is two files an owner writes below where agents are kept: `role.json` naming a
+description, the skills that role exposes, and a posture; and `AGENTS.md` holding the rules
 one execution follows. Everything else is worked out — the name is the directory, and the
-revision is a digest of what the profile is, so nobody maintains a version.
+revision is a digest of what the role is, so nobody maintains a version.
 
 Handing work on is something an agent does *from inside its own turn*, which is why the brief
 comes in on standard input rather than as an argument. What happens then:
@@ -197,11 +197,11 @@ comes in on standard input rather than as an argument. What happens then:
   into a bundle of its own and never changes for that run;
 - the agent's turn can end; the gateway carries the work;
 - the worker stands in the project you named, so that repository's own instruction files apply
-  to it, and it is given the profile's skills and none of the agent's;
+  to it, and it is given the role's skills and none of the agent's;
 - when it finishes, the agent is woken once to read the report, check it, and answer.
 
 The worker is not another agent. It has no home, no memory, no history, and it cannot start a
-profile run of its own. It is refused a target inside the agent's own home, it can never do
+role run of its own. It is refused a target inside the agent's own home, it can never do
 more than the turn that delegated to it could, and a run stays resumable for a fortnight after
 its last activity before its bundle is swept — the record of what it did stays.
 

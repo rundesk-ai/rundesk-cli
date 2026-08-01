@@ -40,8 +40,8 @@ from rundesk import dependencies  # noqa: E402
 from rundesk import gateway as _gateway  # noqa: E402
 from rundesk import migration  # noqa: E402
 from rundesk import process  # noqa: E402
-from rundesk import profile  # noqa: E402
-from rundesk import profile_run as profile_runs  # noqa: E402
+from rundesk import role  # noqa: E402
+from rundesk import role_run as role_runs  # noqa: E402
 from rundesk import provider  # noqa: E402
 from rundesk import restart_request  # noqa: E402
 from rundesk import schedule as schedules  # noqa: E402
@@ -212,15 +212,15 @@ EXAMPLES: list[tuple[str, list[tuple[str, str]]]] = [
         ("rundesk schedules ava off nightly",
          "keep it, and stop it running"),
     ]),
-    ("a profile", [
-        ("rundesk profiles ava",
+    ("a role", [
+        ("rundesk roles ava",
          "the specialists ava can hand heavy work to, and the runs it has admitted"),
-        ('rundesk profiles ava run development --target ~/code/exporter --label "csv export"',
-         "one bounded task, run in that project under the profile's own rules"),
+        ('rundesk roles ava run development --target ~/code/exporter --label "csv export"',
+         "one bounded task, run in that project under the role's own rules"),
         ("", "an agent hands work on from inside its own turn, and the brief arrives on "
              "standard input — the outcome, what it may do, and what done looks like"),
-        ("rundesk profiles ava show prf-3-vfs3",
-         "one run: which profile and revision, where it worked, and whether ava has reviewed it"),
+        ("rundesk roles ava show rol-3-vfs3",
+         "one run: which role and revision, where it worked, and whether ava has reviewed it"),
     ]),
 
 ]
@@ -680,23 +680,23 @@ def build_parser() -> argparse.ArgumentParser:
     # somebody typed correctly. `channels` and `schedules` are shaped this way for the
     # same reason.
     specialists = sub.add_parser(
-        "profiles", help="the specialists an agent hands heavy execution to")
+        "roles", help="the specialists an agent hands heavy execution to")
     specialists.add_argument("name", metavar="<agent>",
-                             help="whose profile runs — a run belongs to the agent that "
+                             help="whose role runs — a run belongs to the agent that "
                                   "admitted it")
     handing = specialists.add_subparsers(dest="act", metavar="<action>")
     handed = handing.add_parser(
-        "run", help="hand one bounded task to a profile — the brief is read from standard input")
-    handed.add_argument("profile", metavar="<profile>",
-                        help="which profile — one this install has, by its own name")
+        "run", help="hand one bounded task to a role — the brief is read from standard input")
+    handed.add_argument("role", metavar="<role>",
+                        help="which role — one this install has, by its own name")
     handed.add_argument("--target", metavar="<directory>",
                         help="the project directory the work happens in — the brain stands "
                              "there, so the project's own instruction files load normally")
     handed.add_argument("--label", metavar="<text>",
                         help="a short safe name for the task, shown where other people can "
                              "read it — never a path and never the brief")
-    seen = handing.add_parser("show", help="one profile run in full")
-    seen.add_argument("run", metavar="<run>", help="which profile run — the id `profiles` lists")
+    seen = handing.add_parser("show", help="one role run in full")
+    seen.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
 
     reachable = sub.add_parser("channels", help="the surfaces an agent is reachable on")
     reachable.add_argument("name", metavar="<agent>",
@@ -1521,11 +1521,11 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
         # None for a name that is not an agent, which is a gateway that can start programs
         # and not turns — and says so rather than passing the minute over in silence.
         asking = agents.asking(args.name) if agents.exists(args.name) else None
-        # How the profile runs this agent admitted are carried, and how their parents are
+        # How the role runs this agent admitted are carried, and how their parents are
         # told. Resolved here and handed over made, for the same reason `asking` is: a
-        # profile run needs an agent, a bundle and an account, and a gateway knows none of
-        # them (R-PRF-4).
-        specialists = agents.profiling(args.name) if agents.exists(args.name) else None
+        # role run needs an agent, a bundle and an account, and a gateway knows none of
+        # them (R-ROL-4).
+        specialists = agents.playing(args.name) if agents.exists(args.name) else None
     except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         print(f"        what stands in the way:  rundesk doctor {args.name}", file=sys.stderr)
@@ -1544,7 +1544,7 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
                                             agents=agents.agents_home(),
                                             records=records,
                                             asking=asking,
-                                            profiles=specialists).serve())
+                                            roles=specialists).serve())
     except (gateways.AlreadyRunning, gateways.Unfit, gateways.NotAName) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         return 0
@@ -2078,11 +2078,11 @@ def _provisioned(root: Path = REPO_ROOT) -> str | None:
     # never touched, so this cannot be how an owner's configuration is lost (R-UPD-48).
     config.ensure()
     skill.lay_down(force=True)
-    # Shipped profiles are laid down where they are missing and never over one that is
-    # there. A profile is what an owner writes their specialists as, so bringing one
+    # Shipped roles are laid down where they are missing and never over one that is
+    # there. A role is what an owner writes their specialists as, so bringing one
     # "forward" the way a built-in skill is brought forward would rewrite what every
-    # future run of an edited profile is allowed to do (R-PRF-18).
-    profile.lay_down()
+    # future run of an edited role is allowed to do (R-ROL-18).
+    role.lay_down()
     # A persisted skill name can move only after both old and replacement packages are
     # proven as Rundesk built-ins. The earlier pass fills values; this one carries names.
     config.ensure()
@@ -2576,8 +2576,8 @@ def cmd_skills(args: argparse.Namespace, agents, skills, gateways, catalogs) -> 
         # What the release laid down and nobody has touched, for the same reason a
         # built-in skill goes: it is a piece of the program, and it is what leaves the
         # install directory standing after an uninstall that said it left nothing
-        # (R-RM-7). An edited profile is the owner's and stays.
-        taken.extend(profile.take_back())
+        # (R-RM-7). An edited role is the owner's and stays.
+        taken.extend(role.take_back())
         print(" ".join(taken))
         return 0
     if getattr(args, "lay_down", False):
@@ -3246,12 +3246,12 @@ def cmd_channels(args: argparse.Namespace, gateways, agents) -> int:
         return 1
 
 
-#: How many of an agent's profile runs a listing shows. Enough to cover what is in flight
+#: How many of an agent's role runs a listing shows. Enough to cover what is in flight
 #: and what finished today; the records hold the rest.
-PROFILE_RUNS_SHOWN = 20
+ROLE_RUNS_SHOWN = 20
 
 
-def cmd_profiles(args: argparse.Namespace, agents) -> int:
+def cmd_roles(args: argparse.Namespace, agents) -> int:
     """What an agent can hand heavy execution to, and what it has handed over."""
     if not agents.exists(args.name):
         print(f"{args.name}: NO SUCH AGENT", file=sys.stderr)
@@ -3259,58 +3259,58 @@ def cmd_profiles(args: argparse.Namespace, agents) -> int:
         return 1
     act = getattr(args, "act", None)
     if act == "run":
-        return _hand_to_a_profile(args, agents)
+        return _hand_to_a_role(args, agents)
     try:
         whose = agents.reading(args.name)
     except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
         print(f"{args.name}: RECORDS UNREADABLE — {why}", file=sys.stderr)
         return 1
     if act == "show":
-        return _show_profile_run(args, whose)
-    return _list_profiles(args, whose)
+        return _show_role_run(args, whose)
+    return _list_roles(args, whose)
 
 
-def _list_profiles(args: argparse.Namespace, whose) -> int:
-    """The profiles this agent may reach for, and the runs it has already admitted."""
-    installed = profile.known()
+def _list_roles(args: argparse.Namespace, whose) -> int:
+    """The roles this agent may reach for, and the runs it has already admitted."""
+    installed = role.known()
     if not installed:
-        print("no profiles installed")
+        print("no roles installed")
     for slug in installed:
         try:
-            one = profile.read(slug)
-        except profile.NotAProfile as why:
+            one = role.read(slug)
+        except role.NotARole as why:
             print(f"{slug}  UNUSABLE — {why}")
             continue
         print(f"{one.label}  {one.slug}  {one.revision[:12]}  "
               f"{one.posture}  [{' '.join(one.skills)}]")
         print(f"        {one.description}")
-    runs = whose.profile_runs(limit=PROFILE_RUNS_SHOWN)
+    runs = whose.role_runs(limit=ROLE_RUNS_SHOWN)
     if not runs:
         return 0
     print()
     for row in runs:
-        it = profile_runs.shown(row)
-        print(f"{it['id']}  {it['profile']}  {it['state']}  {it['label']}"
+        it = role_runs.shown(row)
+        print(f"{it['id']}  {it['role']}  {it['state']}  {it['label']}"
               + (f"  in {it['target']}" if it["target"] else "")
               + ("  reviewed" if it["reviewed"] else ""))
     return 0
 
 
-def _show_profile_run(args: argparse.Namespace, whose) -> int:
-    """One profile run in full — never its brief, and never a local path (R-PRF-17)."""
-    row = whose.profile_run(args.run)
+def _show_role_run(args: argparse.Namespace, whose) -> int:
+    """One role run in full — never its brief, and never a local path (R-ROL-17)."""
+    row = whose.role_run(args.run)
     if row is None:
-        print(f"{args.name}/{args.run}: NO SUCH PROFILE RUN", file=sys.stderr)
-        print(f"        what there is:  rundesk profiles {args.name}", file=sys.stderr)
+        print(f"{args.name}/{args.run}: NO SUCH ROLE RUN", file=sys.stderr)
+        print(f"        what there is:  rundesk roles {args.name}", file=sys.stderr)
         return 1
-    it = profile_runs.shown(row)
-    for what in ("id", "profile", "label", "revision", "posture", "state", "outcome",
+    it = role_runs.shown(row)
+    for what in ("id", "role", "label", "revision", "posture", "state", "outcome",
                  "parent_run", "target", "retained_until"):
         print(f"{what:16}{it[what]}")
     print(f"{'skills':16}{' '.join(it['skills'])}")
     print(f"{'elapsed':16}{it['elapsed']}s")
     print(f"{'reviewed':16}{'yes' if it['reviewed'] else 'no'}")
-    owed = profile_runs.owed_review(args.name, args.run)
+    owed = role_runs.owed_review(args.name, args.run)
     if owed["owed"]:
         # Said only while one is owed, and with the count: a review tried many times and
         # never delivered is the shape of a surface that is not coming back, and nothing
@@ -3319,10 +3319,10 @@ def _show_profile_run(args: argparse.Namespace, whose) -> int:
     return 0
 
 
-def _hand_to_a_profile(args: argparse.Namespace, agents) -> int:
-    """Admit one profile run for this agent, on behalf of the turn asking (R-PRF-4).
+def _hand_to_a_role(args: argparse.Namespace, agents) -> int:
+    """Admit one role run for this agent, on behalf of the turn asking (R-ROL-4).
 
-    **Only an agent's own turn may ask.** A profile worker acts on a named agent's behalf
+    **Only an agent's own turn may ask.** A role acts on a named agent's behalf
     and answers into that agent's conversation, so the run that admits it has to be one of
     that agent's — which is what `RUNDESK_RUN` names and what the records then prove.
 
@@ -3332,31 +3332,31 @@ def _hand_to_a_profile(args: argparse.Namespace, agents) -> int:
     """
     parent = os.environ.get("RUNDESK_RUN") or ""
     if not parent:
-        print(f"{args.name}: NOT ADMITTED — a profile run is admitted by this agent's own "
+        print(f"{args.name}: NOT ADMITTED — a role run is admitted by this agent's own "
               "turn, and nothing here is running one", file=sys.stderr)
         return 1
-    if os.environ.get("RUNDESK_PROFILE_RUN"):
+    if os.environ.get("RUNDESK_ROLE_RUN"):
         # Said early and cheaply. What actually refuses is the durable record below, which
-        # is why this is allowed to be a variable at all (R-PRF-13).
-        print(f"{args.name}: NOT ADMITTED — a profile run cannot start another one",
+        # is why this is allowed to be a variable at all (R-ROL-13).
+        print(f"{args.name}: NOT ADMITTED — a role run cannot start another one",
               file=sys.stderr)
         return 1
     brief = sys.stdin.read()
     try:
-        admitted = profile_runs.admit(
-            args.name, args.profile, brief, parent,
+        admitted = role_runs.admit(
+            args.name, args.role, brief, parent,
             target=getattr(args, "target", None), label=getattr(args, "label", None),
         )
-    except profile_runs.NotDelegable as why:
+    except role_runs.NotDelegable as why:
         print(f"{args.name}: NOT ADMITTED — {why}", file=sys.stderr)
-        print(f"        what it can hand work to:  rundesk profiles {args.name}",
+        print(f"        what it can hand work to:  rundesk roles {args.name}",
               file=sys.stderr)
         return 1
     except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
         print(f"{args.name}: RECORDS UNREADABLE — {why}", file=sys.stderr)
         return 1
     print(admitted.id)
-    print(f"        {admitted.label} — {profile.label(admitted.profile)}, "
+    print(f"        {admitted.label} — {role.label(admitted.role)}, "
           f"retained until {admitted.retained_until}")
     print("        it runs in this agent's gateway; you are told when it reports back")
     return 0
@@ -4684,8 +4684,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         return cmd_skills(args, agents, skills, gateways, catalogs)
     if args.command == "scripts":
         return cmd_scripts(args, scripts)
-    if args.command == "profiles":
-        return cmd_profiles(args, agents)
+    if args.command == "roles":
+        return cmd_roles(args, agents)
     if args.command == "channels":
         return cmd_channels(args, gateways, agents)
     if args.command == "schedules":

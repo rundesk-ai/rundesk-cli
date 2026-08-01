@@ -45,8 +45,8 @@ rundesk usage                                                                   
 rundesk usage <agent>                                                                                                                                                                                                   what one agent has cost
 
 # handing work on
-rundesk profiles <agent> run [--target <directory>] [--label <text>] <profile>                                                                                                                                          hand one bounded task to a profile — the brief is read from standard input
-rundesk profiles <agent> show <run>                                                                                                                                                                                     one profile run in full
+rundesk roles <agent> run [--target <directory>] [--label <text>] <role>                                                                                                                                                hand one bounded task to a role — the brief is read from standard input
+rundesk roles <agent> show <run>                                                                                                                                                                                        one role run in full
 
 # rundesk itself
 rundesk status                                                                                                                                                                                                          how rundesk itself is on this machine
@@ -126,16 +126,16 @@ rundesk schedules ava --expired
 rundesk schedules ava off nightly
 ```
 
-**A profile**
+**A role**
 
 ```sh
 # the specialists ava can hand heavy work to, and the runs it has admitted
-rundesk profiles ava
-# one bounded task, run in that project under the profile's own rules
-rundesk profiles ava run development --target ~/code/exporter --label "csv export"
+rundesk roles ava
+# one bounded task, run in that project under the role's own rules
+rundesk roles ava run development --target ~/code/exporter --label "csv export"
 #   an agent hands work on from inside its own turn, and the brief arrives on standard input — the outcome, what it may do, and what done looks like
-# one run: which profile and revision, where it worked, and whether ava has reviewed it
-rundesk profiles ava show prf-3-vfs3
+# one run: which role and revision, where it worked, and whether ava has reviewed it
+rundesk roles ava show rol-3-vfs3
 ```
 
 ## What the arguments mean
@@ -167,7 +167,7 @@ rundesk profiles ava show prf-3-vfs3
 --read-only                     let this turn look at the machine without changing it
 --set <key=value>               anything that brain takes, carried to it unread; repeatable
 --since <id>                    only what was said after this one, by the id shown beside it
---source <how>                  only messages belonging to work admitted this way — one of channel | profile | schedule | terminal
+--source <how>                  only messages belonging to work admitted this way — one of channel | role | schedule | terminal
 --source <source>               whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine
 --status                        show the last queued update and its final outcome
 --steer                         keep saying more to it while it works — a line at a time, until you stop
@@ -184,11 +184,11 @@ rundesk profiles ava show prf-3-vfs3
 <catalog>                       which catalog
 <channel>                       what to call it, and what to name it by later
 <option>                        after `--`, whatever this kind of channel needs — carried to it exactly as typed, and never read here
-<profile>                       which profile — one this install has, by its own name
 <program>                       after `--`, the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH
 <prompt>                        what to ask it, in quotes
 <repository>                    a GitHub repository URL, local directory or archive
-<run>                           which profile run — the id `profiles` lists
+<role>                          which role — one this install has, by its own name
+<run>                           which role run — the id `roles` lists
 <schedule>                      what to call it, and what to name it by later
 <skill>                         which skill, by the name it is under
 <text>                          what to tell it, with {agent} {channel} {surface} {where} {called} {user} {conversation} filled in — empty takes it back off, and left out shows what is there

@@ -256,14 +256,14 @@ class InstructionBuilder(unittest.TestCase):
         self.assertLess(built.index("Adapter trigger"), built.index("Adapter addition."))
         self.assertTrue(built.endswith("Agent addition."))
 
-    def test_a_profile_execution_is_never_told_the_named_agent_core_rules(self):
-        """R-PRF-5 — the floor is what cannot be replaced, and it is small. A worker told
+    def test_a_role_execution_is_never_told_the_named_agent_core_rules(self):
+        """R-ROL-5 — the floor is what cannot be replaced, and it is small. A worker told
         it has a home, a memory and a Rundesk to operate goes looking for an identity it
         does not have."""
-        built = instructions.for_profile(
-            variables={"profile": "Development", "parent_agent": "elena",
-                       "profile_run": "prf-1-aaaa", "target": "/projects/exporter",
-                       "workspace": "/agents/elena/profile-runs/prf-1-aaaa/home/workspace"},
+        built = instructions.for_role(
+            variables={"role": "Development", "parent_agent": "elena",
+                       "role_run": "rol-1-aaaa", "target": "/projects/exporter",
+                       "workspace": "/agents/elena/role-runs/rol-1-aaaa/home/workspace"},
             rules="# Development\n\nRun the tests.\n",
         )
         self.assertNotIn(instructions.RUNDESK_INSTRUCTIONS.split("\n")[0], built)
@@ -271,26 +271,26 @@ class InstructionBuilder(unittest.TestCase):
                        "Operate Rundesk", "managing-rundesk"):
             self.assertNotIn(absent, built, absent)
         self.assertIn("on behalf of the named agent elena", built)
-        self.assertIn("prf-1-aaaa", built)
+        self.assertIn("rol-1-aaaa", built)
         self.assertIn("/projects/exporter", built)
 
-    def test_a_profiles_own_rules_reach_the_brain_exactly_as_they_were_written(self):
-        """R-PRF-10 — a run resumes with byte-identical rules, and a substitution is a
+    def test_a_roles_own_rules_reach_the_brain_exactly_as_they_were_written(self):
+        """R-ROL-10 — a run resumes with byte-identical rules, and a substitution is a
         difference. Nothing is filled into what the owner wrote."""
-        built = instructions.for_profile(
-            variables={"parent_agent": "elena", "profile": "Development"},
-            rules="Keep {agent_home} and {profile} literally.",
+        built = instructions.for_role(
+            variables={"parent_agent": "elena", "role": "Development"},
+            rules="Keep {agent_home} and {role} literally.",
         )
-        self.assertIn("Keep {agent_home} and {profile} literally.", built)
+        self.assertIn("Keep {agent_home} and {role} literally.", built)
 
-    def test_the_profile_layers_are_the_floor_then_the_rules_then_the_task(self):
-        """R-PRF-5 — one stable order, so what a brain reads first is Rundesk's."""
-        built = instructions.for_profile(
-            variables={"parent_agent": "elena", "profile": "Development",
-                       "profile_run": "prf-1-aaaa"},
+    def test_the_role_layers_are_the_floor_then_the_rules_then_the_task(self):
+        """R-ROL-5 — one stable order, so what a brain reads first is Rundesk's."""
+        built = instructions.for_role(
+            variables={"parent_agent": "elena", "role": "Development",
+                       "role_run": "rol-1-aaaa"},
             rules="# Mine",
         )
-        self.assertLess(built.index("# Profile execution"), built.index("# Mine"))
+        self.assertLess(built.index("# Role execution"), built.index("# Mine"))
         self.assertLess(built.index("# Mine"), built.index("## This execution"))
 
     def test_only_trigger_prompt_text_lives_in_this_module(self):

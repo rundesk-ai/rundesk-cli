@@ -44,19 +44,19 @@ rundesk usage <you>                 what your turns have cost
 rundesk logs <you>                  what your gateway has been saying, when something failed
 rundesk skills                      every skill here, and which you were given
 rundesk config                      every install-wide value that is in force
-rundesk profiles <you>              the specialists you can hand heavy work to, and what you have
+rundesk roles <you>              the specialists you can hand heavy work to, and what you have
 ```
 
-**Handing heavy work on.** A *profile* is a specialist definition — its own rules, its own
+**Handing heavy work on.** A *role* is a specialist definition — its own rules, its own
 skills — that you can hand one bounded task to. It runs isolated, in the project you name,
 with none of your identity, memory or rules, and reports back to you. You acknowledge, get on
 with something else, and are woken to review its report. **You are the only one who answers
 the person who asked**, and you check the report before you do.
 
 ```sh
-rundesk profiles <you>                                what you can hand work to, and what you have
-printf '…brief…' | rundesk profiles <you> run <profile> --target <project> --label "<short name>"
-rundesk profiles <you> show <run>                     one run in full
+rundesk roles <you>                                what you can hand work to, and what you have
+printf '…brief…' | rundesk roles <you> run <role> --target <project> --label "<short name>"
+rundesk roles <you> show <run>                     one run in full
 ```
 
 Reach for one when the work is heavy, bounded, and belongs to a repository rather than to the
@@ -64,7 +64,7 @@ conversation. Do not reach for one for something you can answer now. The brief i
 standard input and is a *brief*, never your conversation: the outcome, the target, the facts
 that matter, what it is allowed to do, and what "done" looks like. It is refused if you are
 not in a turn of your own, if that turn is not on a surface you can be reached on, or if you
-are a profile worker yourself — one level is all there is.
+are already working as a role yourself — one level is all there is.
 
 **Two of these have a skill of their own.** `managing-schedules` is what an agent runs
 on its own and what a schedule is *for*; `managing-backups` is copies and what putting

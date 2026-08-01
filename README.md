@@ -204,10 +204,10 @@ state, history, and delivery.
 - Every schedule readable in full and editable without losing its history
 - No overlapping run of the same schedule and no late execution after downtime
 
-### Profile workers
+### Role workers
 
-- A profile is two files — what the specialist is, and the rules one execution of it follows
-- An agent hands a profile one bounded task and carries on; it is woken to review the report
+- A role is two files — what the specialist is, and the rules one execution of it follows
+- An agent hands a role one bounded task and carries on; it is woken to review the report
 - The worker runs in the project you name, under that project's own instruction files
 - None of the agent's identity, memory, history or unrelated skills reach it
 - What a run used is locked when it is admitted and stays resumable for fourteen days

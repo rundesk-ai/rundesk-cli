@@ -233,24 +233,24 @@ print(" ".join(taken))
 SKILLS
 )"
   [[ -n "$took" ]] && echo "took back the skills Rundesk installed: $took"
-  # The profiles this release laid down and nobody has touched. Its own step and its own
-  # word, exactly as laying them down is: a profile is not a skill, and naming one as a
-  # skill is a message that is not true. An edited profile belongs to whoever edited it
-  # and stays, which is why there is no ownership marker to consult (R-PRF-18).
+  # The roles this release laid down and nobody has touched. Its own step and its own
+  # word, exactly as laying them down is: a role is not a skill, and naming one as a
+  # skill is a message that is not true. An edited role belongs to whoever edited it
+  # and stays, which is why there is no ownership marker to consult (R-ROL-18).
   local gone
-  gone="$(python3 - "$root" "$DATA_DIR" <<'PROFILES' 2>/dev/null || true
+  gone="$(python3 - "$root" "$DATA_DIR" <<'ROLES' 2>/dev/null || true
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1] + "/src")
 try:
-    from rundesk import profile
+    from rundesk import role
 except ImportError:
-    raise SystemExit(0)   # a release from before profiles existed laid none down
+    raise SystemExit(0)   # a release from before roles existed laid none down
 
-print(" ".join(profile.take_back(Path(sys.argv[2]) / "agents")))
-PROFILES
+print(" ".join(role.take_back(Path(sys.argv[2]) / "agents")))
+ROLES
 )"
-  [[ -n "$gone" ]] && echo "took back the profiles Rundesk installed: $gone"
+  [[ -n "$gone" ]] && echo "took back the roles Rundesk installed: $gone"
   return 0
 }
 
@@ -691,25 +691,25 @@ if [[ -n "$laid" ]]; then
   echo "put Rundesk's skills and default catalog in your library: $laid"
 fi
 
-# The profiles this release ships, into the owner tier where profiles are kept. Its own
-# step and its own word rather than folded into the line above: a profile is not a skill,
+# The roles this release ships, into the owner tier where roles are kept. Its own
+# step and its own word rather than folded into the line above: a role is not a skill,
 # and a message naming one as a skill is a message that is not true. Never over one that
-# is already there, because a profile is what somebody writes their specialists as
-# (R-PRF-18).
-if [[ -f "$APP_DIR/src/rundesk/profile.py" || -f "$INSTALL_DIR/src/rundesk/profile.py" \
-      || -f "${SCRIPT_DIR:-}/src/rundesk/profile.py" ]]; then
+# is already there, because a role is what somebody writes their specialists as
+# (R-ROL-18).
+if [[ -f "$APP_DIR/src/rundesk/role.py" || -f "$INSTALL_DIR/src/rundesk/role.py" \
+      || -f "${SCRIPT_DIR:-}/src/rundesk/role.py" ]]; then
   for candidate in "$APP_DIR" "$INSTALL_DIR" "${SCRIPT_DIR:-}"; do
-    [[ -n "$candidate" && -f "$candidate/src/rundesk/profile.py" ]] || continue
-    profiles="$(python3 - "$candidate" "$DATA_DIR" <<'PROFILES' 2>/dev/null || true
+    [[ -n "$candidate" && -f "$candidate/src/rundesk/role.py" ]] || continue
+    roles="$(python3 - "$candidate" "$DATA_DIR" <<'ROLES' 2>/dev/null || true
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1] + "/src")
-from rundesk import profile
+from rundesk import role
 
-print(" ".join(profile.lay_down(Path(sys.argv[2]) / "agents")))
-PROFILES
+print(" ".join(role.lay_down(Path(sys.argv[2]) / "agents")))
+ROLES
 )"
-    [[ -n "$profiles" ]] && echo "put Rundesk's profiles where your agents can reach them: $profiles"
+    [[ -n "$roles" ]] && echo "put Rundesk's roles where your agents can reach them: $roles"
     break
   done
 fi

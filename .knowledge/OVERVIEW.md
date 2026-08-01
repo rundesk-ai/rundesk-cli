@@ -141,11 +141,11 @@ flowchart LR
   night's work can be read back in the morning with nothing running. Beside it, word for word, is
   everything the brain itself said — kept separately, so it can be thrown away later without taking the
   account with it.
-- **Handing heavy work to a specialist** — an assistant can pass one bounded job to a *profile*: a
+- **Handing heavy work to a specialist** — an assistant can pass one bounded job to a *role*: a
   shared specialist definition, run as a fresh isolated execution that carries none of the
   assistant's identity, memory, history or operating rules. It works in the project you named, so
   that project's own instructions apply to it normally, and it is given exactly the skills the
-  profile lists. The assistant acknowledges and gets on with other things; when the specialist is
+  role lists. The assistant acknowledges and gets on with other things; when the specialist is
   finished, the assistant is woken to read the one report it produced, check it, and answer you
   itself. Nothing the specialist wrote reaches you unreviewed, and a specialist cannot hand work on
   to another one.

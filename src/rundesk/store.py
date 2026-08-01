@@ -87,7 +87,7 @@ RECOVERED_BY = "rundesk:recovery:run:"
 
 #: Every way work is admitted for an agent, and the whole of it. Four, because there are
 #: four things that start one: somebody at a terminal, somebody on a surface the agent is
-#: reachable on, the clock, and a profile run this agent's own turn admitted.
+#: reachable on, the clock, and a role run this agent's own turn admitted.
 #:
 #: **Declared and refused rather than written as free text.** This is the only record of how
 #: a run came about, and until it was a set the column took whatever a caller passed —
@@ -95,9 +95,9 @@ RECOVERED_BY = "rundesk:recovery:run:"
 #: typo looks like from the outside. A word nobody can read back is a run whose origin is
 #: lost, and this is the column somebody reads at three in the morning to find out whether
 #: they asked for what happened.
-SOURCES = ("terminal", "channel", "schedule", "profile")
+SOURCES = ("terminal", "channel", "schedule", "role")
 
-#: What a profile run is, from admission to the end of its retention (R-PRF-4). Closed for
+#: What a role run is, from admission to the end of its retention (R-ROL-4). Closed for
 #: the same reason `SOURCES` is: this is the only word saying whether a specialist
 #: execution is still going, already answered for, or no longer resumable, and one nobody
 #: can read back is a run whose state is lost.
@@ -112,8 +112,8 @@ SUCCEEDED = "succeeded"
 FAILED = "failed"
 STOPPED = "stopped"
 EXPIRED = "expired"
-UNFINISHED_PROFILES = (ADMITTED, WORKING)
-FINISHED_PROFILES = (SUCCEEDED, FAILED, STOPPED)
+UNFINISHED_ROLES = (ADMITTED, WORKING)
+FINISHED_ROLES = (SUCCEEDED, FAILED, STOPPED)
 
 
 class Unreadable(Exception):
@@ -1275,7 +1275,7 @@ class Store:
 
     def began(self, source, provider, posture, started_at, conversation_id=None,
               schedule_id=None, trigger_message_id=None, model=None, can=None,
-              settings=None, resumed=False, pick=None, profile_run=None) -> str:
+              settings=None, resumed=False, pick=None, role_run=None) -> str:
         """Admit one occurrence of work, and name it. Everything resolved here is final.
 
         The number is the database's and is never handed out twice — allocated inside the
@@ -1294,9 +1294,9 @@ class Store:
         kind already are: it is the only thing that says how this run came about, and a word
         nothing can read back is a run whose origin is lost rather than one described oddly.
 
-        `profile_run` is which isolated specialist execution this turn was carrying, where
+        `role_run` is which isolated specialist execution this turn was carrying, where
         it was carrying one. Absent on every ordinary turn, which is what makes "was this a
-        profile execution" a question the records answer rather than one inferred.
+        role execution" a question the records answer rather than one inferred.
         """
         if source not in SOURCES:
             raise ValueError(f"work is admitted from one of {SOURCES}, not {source!r}")
@@ -1307,11 +1307,11 @@ class Store:
             conn.execute(
                 "INSERT INTO run (n, id, conversation_id, schedule_id, source,"
                 " trigger_message_id, provider, model, posture, can, settings,"
-                " resumed, started_at, profile_run) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " resumed, started_at, role_run) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (number, named, conversation_id, schedule_id, source, trigger_message_id,
                  provider, model, posture, json.dumps(can or {}, sort_keys=True),
                  json.dumps(settings or {}, sort_keys=True),
-                 1 if resumed else 0, started_at, profile_run),
+                 1 if resumed else 0, started_at, role_run),
             )
             return named
 
@@ -1448,16 +1448,16 @@ class Store:
             row = conn.execute("SELECT * FROM run WHERE id = ?", (run_id,)).fetchone()
         return self._run(row) if row else None
 
-    def runs(self, conversation_id=None, schedule_id=None, profile_run=None,
+    def runs(self, conversation_id=None, schedule_id=None, role_run=None,
              limit: int = 50) -> list:
         """What an agent has run, newest first — or one conversation's, in the order it went."""
         where, values = [], []
         if conversation_id is not None:
             where.append("conversation_id = ?")
             values.append(conversation_id)
-        if profile_run is not None:
-            where.append("profile_run = ?")
-            values.append(profile_run)
+        if role_run is not None:
+            where.append("role_run = ?")
+            values.append(role_run)
         if schedule_id is not None:
             where.append("schedule_id = ?")
             values.append(schedule_id)
@@ -1530,24 +1530,24 @@ class Store:
             kept.append(one)
         return kept
 
-    # ---- profile runs ------------------------------------------------------------
+    # ---- role runs ------------------------------------------------------------
     #
-    # A profile run is one isolated specialist execution admitted by a named agent's own
-    # turn (R-PRF-4). It is not another agent and it is never listed as one: it belongs to
+    # A role run is one isolated specialist execution admitted by a named agent's own
+    # turn (R-ROL-4). It is not another agent and it is never listed as one: it belongs to
     # the agent whose records these are, and there is no cross-agent table because there is
     # no cross-agent database.
 
-    def admit_profile(self, profile: str, revision: str, skills, locked, label: str,
+    def admit_role(self, role: str, revision: str, skills, locked, label: str,
                       posture: str, parent_run: str, parent_conversation: str,
                       target: str | None, at: str, retained_until: str,
                       pick=None) -> str:
-        """Admit one profile run, and name it — everything here is final (R-PRF-4).
+        """Admit one role run, and name it — everything here is final (R-ROL-4).
 
         **Refused before anything is assembled, never after.** The parent must be a run of
-        this agent's, because a profile run acts on that agent's behalf and one admitted
+        this agent's, because a role run acts on that agent's behalf and one admitted
         by somebody else's turn would answer into a conversation its owner never opened.
-        And the parent must not itself be carrying a profile, because Rundesk profile
-        delegation is one level deep (R-PRF-13): a worker that could admit another worker
+        And the parent must not itself be carrying a role, because Rundesk role
+        delegation is one level deep (R-ROL-13): a worker that could admit another worker
         is an execution tree nobody is left owning.
 
         The number is the database's and is never handed out twice, allocated inside the
@@ -1559,25 +1559,25 @@ class Store:
             # the asking and the answer — and asked here rather than spread across a
             # caller, because a rule this important stated twice is stated differently.
             parent = conn.execute(
-                "SELECT profile_run, ended_at, conversation_id FROM run WHERE id = ?",
+                "SELECT role_run, ended_at, conversation_id FROM run WHERE id = ?",
                 (parent_run,),
             ).fetchone()
             if parent is None:
                 raise Refused(
                     f"'{parent_run}' is not a run of this agent's, so it cannot delegate"
                 )
-            if parent["profile_run"]:
+            if parent["role_run"]:
                 raise Refused(
-                    "a profile run cannot admit another one — Rundesk profile delegation "
+                    "a role run cannot admit another one — Rundesk role delegation "
                     "is one level deep"
                 )
             reviewing = conn.execute(
-                "SELECT 1 FROM profile_callback WHERE review_run = ?", (parent_run,)
+                "SELECT 1 FROM role_callback WHERE review_run = ?", (parent_run,)
             ).fetchone()
             if reviewing is not None:
                 raise Refused(
-                    "a turn woken to review a profile handoff cannot start another "
-                    "profile run"
+                    "a turn woken to review a role handoff cannot start another "
+                    "role run"
                 )
             if parent["ended_at"]:
                 # A turn that is over is not delegating. The only identity a caller has is
@@ -1595,24 +1595,24 @@ class Store:
                 # **Nowhere to report back to.** A worker finishes long after the turn
                 # that admitted it has ended, and the review is delivered by waking the
                 # agent on the surface the request arrived on. A turn from a terminal, a
-                # schedule or another profile has no such surface — and left to be found
+                # schedule or another role has no such surface — and left to be found
                 # out afterwards, that is a review owed for ever and work nobody is told
-                # about (R-PRF-15).
+                # about (R-ROL-15).
                 raise Refused(
                     "this turn is not happening on a surface the agent can be reached on, "
                     "so there would be nowhere to report the work back to"
                 )
             row = conn.execute(
-                "SELECT COALESCE(MAX(n), 0) + 1 FROM profile_run"
+                "SELECT COALESCE(MAX(n), 0) + 1 FROM role_run"
             ).fetchone()
             number = int(row[0])
-            named = f"prf-{number}-{_marked(pick)}"
+            named = f"rol-{number}-{_marked(pick)}"
             conn.execute(
-                "INSERT INTO profile_run (n, id, profile, revision, skills, locked,"
+                "INSERT INTO role_run (n, id, role, revision, skills, locked,"
                 " label, posture, parent_run, parent_conversation, target, admitted_at,"
                 " latest_at, retained_until, state)"
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (number, named, profile, revision,
+                (number, named, role, revision,
                  json.dumps(list(skills or []), sort_keys=True),
                  json.dumps(dict(locked or {}), sort_keys=True), label, posture,
                  parent_run, parent_conversation, target, at, at, retained_until,
@@ -1620,16 +1620,16 @@ class Store:
             )
             return named
 
-    def profile_run(self, profile_run_id: str):
-        """One profile run, or nothing where this agent has no such run."""
+    def role_run(self, role_run_id: str):
+        """One role run, or nothing where this agent has no such run."""
         with self._reading() as conn:
             row = conn.execute(
-                "SELECT * FROM profile_run WHERE id = ?", (profile_run_id,)
+                "SELECT * FROM role_run WHERE id = ?", (role_run_id,)
             ).fetchone()
-        return self._profile(row) if row else None
+        return self._role(row) if row else None
 
-    def profile_runs(self, parent_run=None, state=None, limit: int = 50) -> list:
-        """This agent's profile runs, newest first."""
+    def role_runs(self, parent_run=None, state=None, limit: int = 50) -> list:
+        """This agent's role runs, newest first."""
         where, values = [], []
         if parent_run is not None:
             where.append("parent_run = ?")
@@ -1640,40 +1640,40 @@ class Store:
         clause = (" WHERE " + " AND ".join(where)) if where else ""
         with self._reading() as conn:
             rows = conn.execute(
-                f"SELECT * FROM profile_run{clause} ORDER BY n DESC LIMIT ?",
+                f"SELECT * FROM role_run{clause} ORDER BY n DESC LIMIT ?",
                 values + [limit],
             ).fetchall()
-        return [self._profile(row) for row in rows]
+        return [self._role(row) for row in rows]
 
-    def profile_working(self, profile_run_id: str, at: str, retained_until: str) -> None:
-        """This profile run has work in flight, and its retention starts again from now."""
+    def role_working(self, role_run_id: str, at: str, retained_until: str) -> None:
+        """This role run has work in flight, and its retention starts again from now."""
         with self._writing() as conn:
             conn.execute(
-                "UPDATE profile_run SET state = ?, latest_at = ?, retained_until = ?"
+                "UPDATE role_run SET state = ?, latest_at = ?, retained_until = ?"
                 " WHERE id = ? AND state IN (?, ?)",
-                (WORKING, at, retained_until, profile_run_id, ADMITTED, WORKING),
+                (WORKING, at, retained_until, role_run_id, ADMITTED, WORKING),
             )
 
-    def profile_active(self, profile_run_id: str, at: str, retained_until: str) -> None:
+    def role_active(self, role_run_id: str, at: str, retained_until: str) -> None:
         """Latest activity on a retained run, so its window starts again from now.
 
-        Retention is measured from activity rather than from admission (R-PRF-11), so a
+        Retention is measured from activity rather than from admission (R-ROL-11), so a
         run that is still being worked on is never swept out from under it.
         """
         with self._writing() as conn:
             conn.execute(
-                "UPDATE profile_run SET latest_at = ?, retained_until = ? WHERE id = ?",
-                (at, retained_until, profile_run_id),
+                "UPDATE role_run SET latest_at = ?, retained_until = ? WHERE id = ?",
+                (at, retained_until, role_run_id),
             )
 
-    def finish_profile(self, profile_run_id: str, at: str, outcome: str,
+    def finish_role(self, role_run_id: str, at: str, outcome: str,
                        report: str, retained_until: str) -> bool:
-        """Settle the root of this profile run, and owe its parent exactly one review.
+        """Settle the root of this role run, and owe its parent exactly one review.
 
-        **The settlement and the callback are one write** (R-PRF-15). A run recorded as
+        **The settlement and the callback are one write** (R-ROL-15). A run recorded as
         finished with nothing owing is a result nobody is ever told about, and a callback
         queued beside an unsettled run is a parent woken about work still in flight. The
-        callback's key is the profile run, so a terminal outcome offered twice by a
+        callback's key is the role run, so a terminal outcome offered twice by a
         retrying gateway still owes exactly one review.
 
         Answers whether this call is the one that settled it, so a caller can tell the
@@ -1681,33 +1681,33 @@ class Store:
         """
         with self._writing() as conn:
             row = conn.execute(
-                "SELECT state, parent_conversation FROM profile_run WHERE id = ?",
-                (profile_run_id,),
+                "SELECT state, parent_conversation FROM role_run WHERE id = ?",
+                (role_run_id,),
             ).fetchone()
             if row is None:
-                raise Refused(f"there is no profile run called '{profile_run_id}'")
-            if row["state"] in FINISHED_PROFILES:
+                raise Refused(f"there is no role run called '{role_run_id}'")
+            if row["state"] in FINISHED_ROLES:
                 return False
             conn.execute(
-                "UPDATE profile_run SET state = ?, outcome = ?, report = ?,"
+                "UPDATE role_run SET state = ?, outcome = ?, report = ?,"
                 " latest_at = ?, retained_until = ? WHERE id = ?",
-                (outcome if outcome in FINISHED_PROFILES else FAILED, outcome, report,
-                 at, retained_until, profile_run_id),
+                (outcome if outcome in FINISHED_ROLES else FAILED, outcome, report,
+                 at, retained_until, role_run_id),
             )
             conn.execute(
-                "INSERT INTO profile_callback (profile_run, conversation, queued_at)"
-                " VALUES (?,?,?) ON CONFLICT(profile_run) DO NOTHING",
-                (profile_run_id, row["parent_conversation"], at),
+                "INSERT INTO role_callback (role_run, conversation, queued_at)"
+                " VALUES (?,?,?) ON CONFLICT(role_run) DO NOTHING",
+                (role_run_id, row["parent_conversation"], at),
             )
             return True
 
     #: How many owed reviews are offered at once. **More than one, deliberately.** Offering
     #: only the oldest let a single undeliverable row — a channel the owner has since
     #: removed — sit at the head for ever and keep every later review behind it, so work
-    #: that was done was never reported and nothing said why (R-PRF-15).
+    #: that was done was never reported and nothing said why (R-ROL-15).
     OWED_AT_ONCE = 20
 
-    def owed_profile_callbacks(self, limit: int = OWED_AT_ONCE) -> list:
+    def owed_role_callbacks(self, limit: int = OWED_AT_ONCE) -> list:
         """The reviews parents are still owed, oldest first.
 
         A read, deliberately. Whether one can be delivered depends on a surface being
@@ -1717,13 +1717,13 @@ class Store:
         """
         with self._reading() as conn:
             rows = conn.execute(
-                "SELECT * FROM profile_callback WHERE delivered_at IS NULL"
-                " ORDER BY queued_at, profile_run LIMIT ?",
+                "SELECT * FROM role_callback WHERE delivered_at IS NULL"
+                " ORDER BY queued_at, role_run LIMIT ?",
                 (limit,),
             ).fetchall()
         return [_plain(row) for row in rows]
 
-    def claim_profile_callback(self, profile_run_id: str, at: str) -> None:
+    def claim_role_callback(self, role_run_id: str, at: str) -> None:
         """This review is about to be attempted, and that attempt is counted.
 
         Kept apart from marking it delivered, which happens only once a channel has
@@ -1732,12 +1732,12 @@ class Store:
         """
         with self._writing() as conn:
             conn.execute(
-                "UPDATE profile_callback SET claimed_at = ?, attempts = attempts + 1"
-                " WHERE profile_run = ? AND delivered_at IS NULL",
-                (at, profile_run_id),
+                "UPDATE role_callback SET claimed_at = ?, attempts = attempts + 1"
+                " WHERE role_run = ? AND delivered_at IS NULL",
+                (at, role_run_id),
             )
 
-    def profile_reviewing(self, profile_run_id: str, review_run: str) -> None:
+    def role_reviewing(self, role_run_id: str, review_run: str) -> None:
         """Which named-agent turn was woken to read this handoff.
 
         Written the moment that turn is admitted, so a turn asking to delegate is answered
@@ -1745,48 +1745,48 @@ class Store:
         """
         with self._writing() as conn:
             conn.execute(
-                "UPDATE profile_callback SET review_run = ? WHERE profile_run = ?",
-                (review_run, profile_run_id),
+                "UPDATE role_callback SET review_run = ? WHERE role_run = ?",
+                (review_run, role_run_id),
             )
 
-    def profile_reviewed(self, profile_run_id: str, at: str) -> None:
+    def role_reviewed(self, role_run_id: str, at: str) -> None:
         """The parent has been woken and answered — this review is owed to nobody now."""
         with self._writing() as conn:
             conn.execute(
-                "UPDATE profile_callback SET delivered_at = ? WHERE profile_run = ?"
+                "UPDATE role_callback SET delivered_at = ? WHERE role_run = ?"
                 " AND delivered_at IS NULL",
-                (at, profile_run_id),
+                (at, role_run_id),
             )
             conn.execute(
-                "UPDATE profile_run SET reviewed_at = ? WHERE id = ? AND reviewed_at IS NULL",
-                (at, profile_run_id),
+                "UPDATE role_run SET reviewed_at = ? WHERE id = ? AND reviewed_at IS NULL",
+                (at, role_run_id),
             )
 
-    def expired_profiles(self, now: str) -> list:
-        """Every retained profile run whose window has passed, marked as expired.
+    def expired_roles(self, now: str) -> list:
+        """Every retained role run whose window has passed, marked as expired.
 
         The durable record of what was asked, what it cost and what it answered stays;
         what goes is the resumable execution — its provider session and, once the caller
-        has swept it, the bundle on disk (R-PRF-12). Read and mark in one write, so two
+        has swept it, the bundle on disk (R-ROL-12). Read and mark in one write, so two
         sweeps cannot both believe they are the one clearing a bundle.
         """
         with self._writing() as conn:
             rows = conn.execute(
-                "SELECT * FROM profile_run WHERE state != ? AND retained_until <= ?"
+                "SELECT * FROM role_run WHERE state != ? AND retained_until <= ?"
                 " ORDER BY n",
                 (EXPIRED, now),
             ).fetchall()
-            gone = [self._profile(row) for row in rows]
+            gone = [self._role(row) for row in rows]
             if gone:
                 conn.execute(
-                    "UPDATE profile_run SET state = ? WHERE state != ?"
+                    "UPDATE role_run SET state = ? WHERE state != ?"
                     " AND retained_until <= ?",
                     (EXPIRED, EXPIRED, now),
                 )
         return gone
 
     @staticmethod
-    def _profile(row) -> dict:
+    def _role(row) -> dict:
         kept = _plain(row)
         kept["skills"] = json.loads(kept["skills"])
         kept["locked"] = json.loads(kept["locked"])

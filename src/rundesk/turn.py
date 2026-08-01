@@ -63,10 +63,10 @@ UPDATE = "update"
 CHANNEL = "channel"
 
 #: The fourth: a turn this agent's own turn admitted, carrying one isolated specialist
-#: execution on its behalf (R-PRF-4). A conversation of its own, keyed by the profile run,
+#: execution on its behalf (R-ROL-4). A conversation of its own, keyed by the role run,
 #: so a specialist execution is never in the conversation a person is typing into and a
 #: resumed one carries on exactly where it stopped.
-PROFILE = "profile"
+ROLE = "role"
 
 #: How many lines of what a brain said went wrong are carried back with the outcome. The
 #: whole of it is in the run's own file; this is the tail worth putting in front of a person.
@@ -176,17 +176,17 @@ class Execution:
     """Where a turn actually runs, when it is not standing in the agent's own home.
 
     **Ordinary turns never build one of these.** An agent's turn stands in the agent's
-    home, is presented the agent's own skills, and carries no profile — which is what the
+    home, is presented the agent's own skills, and carries no role — which is what the
     default below says, so nothing about an ordinary turn changed by this existing.
 
-    A profile run replaces two of the three: the brain stands in the target project, so
+    A role run replaces two of the three: the brain stands in the target project, so
     the CLI discovers that repository's own `AGENTS.md` hierarchy natively rather than
     being handed a stale copy of it, and it is presented the run's locked skill snapshot
-    rather than whatever the named agent happens to hold today (R-PRF-7, R-PRF-8).
+    rather than whatever the named agent happens to hold today (R-ROL-7, R-ROL-8).
 
-    `profile_run` is also the recursion marker: it is written into the run's own row and
-    told to the brain, so a profile execution that reaches for `rundesk` is refused a
-    second profile level from the durable record rather than from a word it supplied.
+    `role_run` is also the recursion marker: it is written into the run's own row and
+    told to the brain, so a role execution that reaches for `rundesk` is refused a
+    second role level from the durable record rather than from a word it supplied.
     """
 
     #: The provider's working directory — where a brain stands, and where it finds the
@@ -195,13 +195,13 @@ class Execution:
     #: Where this turn's skills stand, told to the adapter and presented by it.
     skills: Path
     #: Which isolated specialist execution this turn is carrying, if it is carrying one.
-    profile_run: str | None = None
-    #: Which shared profile that execution is running, for the account to say so.
-    profile: str | None = None
+    role_run: str | None = None
+    #: Which shared role that execution is running, for the account to say so.
+    role: str | None = None
 
     @classmethod
     def ordinary(cls, whose: dict) -> "Execution":
-        """What every turn that is not a profile execution runs as."""
+        """What every turn that is not a role execution runs as."""
         return cls(cwd=whose["home"], skills=whose["skills"])
 
 
@@ -340,7 +340,7 @@ async def carry(
         conversation_id=where_it_is, schedule_id=schedule_id,
         trigger_message_id=asked, model=model, can=can,
         settings=settings, resumed=bool(resume), pick=pick,
-        profile_run=running.profile_run,
+        role_run=running.role_run,
     )
     if admitted is not None:
         admitted(run, dict(can))
@@ -401,7 +401,7 @@ async def carry(
                     skills=running.skills, run=run,
                     model=model, resume=carrying, posture=posture, settings=settings,
                     raw=transcript.printed(whose["logs"], run), preface=preface,
-                    profile_run=running.profile_run,
+                    role_run=running.role_run,
                 ),
                 # **The agent's home, not its workspace.** A brain loads the rules it is to
                 # follow because they *stand in the directory it stands in* — that is the
@@ -411,9 +411,9 @@ async def carry(
                 # there was nothing here to tell it. `workspace/` is still where it works,
                 # by instruction, which is what that file also says.
                 #
-                # A profile execution stands somewhere else for the same reason: the rules
+                # A role execution stands somewhere else for the same reason: the rules
                 # it is to follow are the target project's, and they stand in the target
-                # project (R-PRF-7).
+                # project (R-ROL-7).
                 cwd=running.cwd,
                 takes_input=True,
                 errors_apart=True,

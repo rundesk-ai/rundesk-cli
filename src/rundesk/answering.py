@@ -71,15 +71,15 @@ AFTER_UPDATE = (
     "original request. Do not stop at reporting status or repeat completed actions."
 )
 
-# What a named agent is woken with when a profile worker it delegated to has reported
-# back (R-PRF-15). Rundesk states what it mechanically knows and asks for a review; it
+# What a named agent is woken with when work it handed to a role has reported back
+# (R-ROL-15). Rundesk states what it mechanically knows and asks for a review; it
 # never says the work succeeded, because whether it did is exactly what the review is for
-# and Rundesk read nothing out of the worker's report to find out (R-PRF-16).
-REVIEW_HANDOFF = """A profile worker you delegated to has finished and reported back. Nobody has been told anything about it yet, and this report has not been checked.
+# and Rundesk read nothing out of the worker's report to find out (R-ROL-16).
+REVIEW_HANDOFF = """Work you handed to a role has finished and reported back. Nobody has been told anything about it yet, and this report has not been checked.
 
 {handoff}
 
-Review it: verify the claims that matter against the work itself rather than accepting them, then answer the person who asked in this conversation. Say what you checked. If the report is wrong or incomplete, say so and what you are doing about it. Do not start another profile run from this turn."""
+Review it: verify the claims that matter against the work itself rather than accepting them, then answer the person who asked in this conversation. Say what you checked. If the report is wrong or incomplete, say so and what you are doing about it. Do not start another role run from this turn."""
 
 # Any absolute local Markdown link is delivery intent (R-CH-31). The optional reserved
 # prefix remains portable across brains; prefix that form or the opening bracket with a
@@ -432,14 +432,14 @@ class Answering:
         await held.task
         raise RuntimeError("the post-update continuation was not admitted")
 
-    async def told_profile_finished(self, conversation: str, handoff: dict,
+    async def told_role_finished(self, conversation: str, handoff: dict,
                                     reviewing=None) -> None:
-        """Wake the named parent to review one profile handoff (R-PRF-15).
+        """Wake the named parent to review one role handoff (R-ROL-15).
 
         **Nothing is posted here.** The worker's report is not an answer and is not news:
         it is unchecked work, and a surface showing it would have delivered a result the
         named agent never reviewed — which is the one thing this whole path exists to
-        prevent (R-PRF-16). What is posted is whatever the agent says after reading it.
+        prevent (R-ROL-16). What is posted is whatever the agent says after reading it.
 
         Raised rather than returned when the review cannot start, so the caller leaves it
         owing and tries again. A handoff quietly marked delivered because a room was busy
@@ -461,8 +461,8 @@ class Answering:
 
         def admitted(run: str) -> None:
             # Written before the turn can ask for anything: which run is reviewing a
-            # handoff is what refuses it a second profile level, and a marker written
-            # afterwards would be written after the moment it guards (R-PRF-13).
+            # handoff is what refuses it a second role level, and a marker written
+            # afterwards would be written after the moment it guards (R-ROL-13).
             if reviewing is not None:
                 reviewing(run)
             began.set()
@@ -482,7 +482,7 @@ class Answering:
             return
         # A turn that failed before admission never read the handoff. Leave it owing.
         await held.task
-        raise RuntimeError("the profile review turn was not admitted")
+        raise RuntimeError("the role review turn was not admitted")
 
     async def told_restart_finished(self, conversation: str, text: str) -> None:
         """Deliver one queued restart outcome after reconnect (R-GW-43)."""
@@ -1111,15 +1111,15 @@ class _Shown:
 
 
 def _handoff_text(handoff: dict) -> str:
-    """One profile handoff, as the named parent is given it to read.
+    """One role handoff, as the named parent is given it to read.
 
     What Rundesk knows and what the worker said, told apart on the page. Nothing here is
     read out of the report or summarised from it: a line saying the tests passed would be
-    Rundesk asserting the one thing the review exists to establish (R-PRF-16).
+    Rundesk asserting the one thing the review exists to establish (R-ROL-16).
     """
     said = [
-        f"Profile: {handoff.get('profile') or ''}",
-        f"Profile run: {handoff.get('profile_run') or ''}",
+        f"Role: {handoff.get('role') or ''}",
+        f"Role run: {handoff.get('role_run') or ''}",
         f"Outcome the worker's turn reached: {handoff.get('outcome') or ''}",
     ]
     if handoff.get("target"):

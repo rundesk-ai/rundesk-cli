@@ -952,7 +952,7 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
              "started_at": AT, "ended_at": None, "outcome": None, "why": None,
              "exit_code": None, "tokens_in": None, "tokens_out": None,
              "tokens_cached": None, "tokens_written": None, "tokens_reported": False,
-             "because": None, "profile_run": None},
+             "because": None, "role_run": None},
             kept.run(named))
         self.assertEqual([named], [one["id"] for one in kept.runs(conversation_id="c1")])
         self.assertIsNone(kept.run("404-zzzz"))
@@ -1467,7 +1467,7 @@ class HowWorkIsAdmittedIsSpelledOneWay(unittest.TestCase):
 
         self.assertEqual(
             set(store.SOURCES),
-            {turn.TERMINAL, turn.CHANNEL, turn.SCHEDULE, turn.PROFILE},
+            {turn.TERMINAL, turn.CHANNEL, turn.SCHEDULE, turn.ROLE},
         )
 
 
