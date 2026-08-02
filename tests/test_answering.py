@@ -27,6 +27,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk import agent as agents  # noqa: E402
 from rundesk import answering, channel, config, instructions, store  # noqa: E402
+# Aliased for the same reason production does: two cases here hold a local named
+# `attachment`, and a module of that name would be shadowed by it for the whole scope.
+from rundesk import attachment as attachments  # noqa: E402
 
 #: When a conversation was opened. A calendar fact, never what anything is ordered by.
 AT = "2026-07-26T09:00:00Z"
@@ -808,6 +811,33 @@ class ReadOnlyGatewayQuestions(CarriesAConversation):
         await held.heard(self.query(user="9999"))
         await self._settled(held)
         self.assertEqual([], surface.of("query-result"))
+
+    async def test_answering_a_query_leaves_the_channel_event_loop_free(self):
+        """R-CAD-17 — answering one reads an agent's records and asks the machine when
+        each live turn's process began, once per turn, and `ps` is bounded at seconds.
+        Run on the loop it stalls every other conversation on this gateway for as long as
+        it takes, which is the same fault the attachment hashing above is kept off it for.
+        """
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow(asked):
+            entered.set()
+            release.wait(1)
+            return f"{asked}: RUNNING"
+
+        held = self.answering(Surface(), Brain(), querying=slow)
+
+        async def advance():
+            # Reached only while the query is still going: if it ran on this loop, nothing
+            # here would get a turn until it had finished.
+            self.assertTrue(await asyncio.to_thread(entered.wait, 0.2))
+            release.set()
+
+        asking = asyncio.create_task(held.heard(self.query()))
+        await asyncio.wait_for(advance(), timeout=0.3)
+        await asking
+        await self._settled(held)
 
 
 class WhatAMessageCannotChange(CarriesAConversation):
@@ -1934,7 +1964,7 @@ class WhatTheAgentMade(CarriesAConversation):
         outside.mkdir()
         (outside / at.name).write_bytes(b"private replacement")
         held_parent = workspace / "held-exports"
-        fingerprint = answering._fingerprint_beneath
+        fingerprint = attachments._fingerprint_beneath
 
         def swap_before_open(where, inside):
             parent.rename(held_parent)
@@ -1943,9 +1973,9 @@ class WhatTheAgentMade(CarriesAConversation):
 
         roots = [workspace, agents.paths("ava", self.where)["logs"],
                  agents.paths("ava", self.where)["home"]]
-        with mock.patch.object(answering, "_fingerprint_beneath",
+        with mock.patch.object(attachments, "_fingerprint_beneath",
                                side_effect=swap_before_open):
-            attachment, _why = answering._approved_attachment(
+            attachment, _why = attachments.approved(
                 {"name": at.name, "at": str(at)}, roots)
 
         self.assertIsNone(attachment)
@@ -1955,7 +1985,7 @@ class WhatTheAgentMade(CarriesAConversation):
         at = self._made("slow.pdf")
         entered = threading.Event()
         release = threading.Event()
-        approved = answering._approved_attachment
+        approved = attachments.approved
 
         def slow(*args):
             entered.set()
@@ -1970,7 +2000,7 @@ class WhatTheAgentMade(CarriesAConversation):
             self.assertTrue(await asyncio.to_thread(entered.wait, 0.2))
             release.set()
 
-        with mock.patch.object(answering, "_approved_attachment", side_effect=slow):
+        with mock.patch.object(attachments, "approved", side_effect=slow):
             carrying = asyncio.create_task(self.carry(held, self.arrived()))
             await asyncio.wait_for(advance(), timeout=0.3)
             await carrying
@@ -2002,8 +2032,8 @@ class WhatTheAgentMade(CarriesAConversation):
         surface = Surface()
         held = self.answering(surface, brain)
 
-        with mock.patch.object(answering, "_approved_attachment",
-                               wraps=answering._approved_attachment) as approved:
+        with mock.patch.object(attachments, "approved",
+                               wraps=attachments.approved) as approved:
             await self.carry(held, self.arrived())
 
         self.assertEqual(1, len(surface.of("answer")[0]["attachments"]))
@@ -2052,8 +2082,8 @@ class WhatTheAgentMade(CarriesAConversation):
         brain, surface = Brain(outcome=Outcome(text=text)), Surface()
         held = self.answering(surface, brain)
 
-        with mock.patch.object(answering, "_approved_attachment",
-                               wraps=answering._approved_attachment) as approved:
+        with mock.patch.object(attachments, "approved",
+                               wraps=attachments.approved) as approved:
             await self.carry(held, self.arrived())
 
         self.assertEqual(channel.ATTACHED_MOST,
@@ -2074,8 +2104,8 @@ class WhatTheAgentMade(CarriesAConversation):
         surface = Surface()
         held = self.answering(surface, brain)
 
-        with mock.patch.object(answering, "_approved_attachment",
-                               wraps=answering._approved_attachment) as approved:
+        with mock.patch.object(attachments, "approved",
+                               wraps=attachments.approved) as approved:
             await self.carry(held, self.arrived())
 
         self.assertEqual(2, len(surface.of("answer")[0]["attachments"]))

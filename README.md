@@ -290,8 +290,7 @@ or product telemetry.
 <details>
 <summary><strong>Linux or Windows?</strong></summary>
 
-Not yet. Rundesk currently depends on macOS `launchd` to own its gateways. Follow the
-[roadmap](ROADMAP.md) for platform work.
+Not yet. Rundesk currently depends on macOS `launchd` to own its gateways.
 
 </details>
 
@@ -319,7 +318,6 @@ others from being checked or rolling back an otherwise healthy CLI update.
 - **[Channel adapter contract](docs/extending/channel-adapters/references/the-contract.md)** — reach an agent from another platform
 - **[Integration CLI guide](docs/extending/integration-clis/README.md)** — give every agent a custom command
 - **[Tested contracts](.knowledge/prd/README.md)** — every guarantee and the test that proves it
-- **[Roadmap](ROADMAP.md)** — what is built, what is next, and why
 - **[Architecture](.knowledge/CODEMAP.md)** — how the system is organized
 
 ## 🤝 Contributing

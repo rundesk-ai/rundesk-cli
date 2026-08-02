@@ -560,7 +560,10 @@ def cmd_agents(args: argparse.Namespace, gateways, machine, agents) -> int:
             _how_long(it.started) if it.running else "-",
             job,
             _version_of(it),
-            str(len(doing)) if it.running else "-",
+            # "?" rather than a count where the record could not be read: counting the
+            # marker would report one process that may not exist.
+            ("?" if gateways.could_not_be_read(doing)
+             else str(len(doing))) if it.running else "-",
             str(len(turning)) or "-",
             # What never finished, counted where somebody looks (R-GW-39). The store
             # answering that question has existed since work could be interrupted at

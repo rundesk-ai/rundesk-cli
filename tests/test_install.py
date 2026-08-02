@@ -35,7 +35,14 @@ _working = tempfile.TemporaryDirectory(prefix="rundesk-checkout-")
 # and a job is only recognised as ours by comparing the two — so an unresolved temporary
 # directory leaves every plist looking like somebody else's, on macOS alone.
 REPO = Path(_working.name).resolve() / CHECKOUT.name
-shutil.copytree(CHECKOUT, REPO, ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv"))
+# Beyond git's own directory and build leavings: the untracked `ui/` and `site/` trees that
+# stand beside `src/`. They are ~100 MB, `git status` reports the tree clean while they sit
+# there, and carrying them into this copy took the suite from 92 seconds to past the gate's
+# 180-second ceiling — a timeout that reads exactly like a regression in whatever was just
+# changed, in a suite with nothing to do with it. **Only this copy reads the checkout**; every
+# other one below is made from `REPO`, so stopping them here stops them everywhere.
+shutil.copytree(CHECKOUT, REPO, ignore=shutil.ignore_patterns(
+    ".git", "__pycache__", ".venv", "node_modules", "ui", "site", "dist"))
 INSTALLER = REPO / "install.sh"
 
 

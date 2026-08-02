@@ -80,8 +80,6 @@ No change is a valid completed outcome. The proposed change carries the burden o
   qualifying defect, blocked ratified requirement or measured limit breach.
 - Review-only work does not authorize implementation or a new task. A qualifying finding becomes work
   only when the owner accepts it or explicitly asked the same run to fix qualifying defects.
-- `SUGGESTIONS.md` is the durable review ledger. Reviewers read its prior coverage and return the baseline,
-  scope, outcome and reopening triggers; when ledger updates are authorized, the main agent records them.
 - A completed review scope stays closed until relevant code, requirements or supported environments
   change; an incident, new reproduction, measured breach or recorded risk trigger also reopens it. Another
   available reviewer is not a reopening trigger.

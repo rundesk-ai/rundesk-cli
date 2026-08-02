@@ -19,3 +19,12 @@ dist/
 # What a CI step captures a suite into, so a leaked process cannot hold the runner open.
 suite.log
 suite-logs/
+
+# Working trees that stand beside the product and are not part of it. Named here so the
+# exclusion is deliberate and travels with the repository: untracked and unignored, ~100 MB
+# of them sat beside `src/` while the tree reported clean, and `tests/test_install.py` copied
+# the lot into its scratch checkout — which is how that suite came to exceed the gate's
+# 180-second ceiling for a reason nobody could attribute to anything they had changed.
+node_modules/
+ui/
+site/
