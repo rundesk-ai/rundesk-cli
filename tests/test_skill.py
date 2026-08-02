@@ -144,6 +144,56 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
                 page = (REALLY_SHIPPED / new / "SKILL.md").read_text()
                 self.assertIn(f"name: {new}", page)
 
+    def test_release_guidance_discovers_each_repositorys_release_contract(self):
+        """R-AGT-53 — releasing is one process across repositories, so the shipped guidance
+        asks each repository for its own contract instead of carrying this one's."""
+        page = (REALLY_SHIPPED / "publishing-github-releases" / "SKILL.md").read_text()
+        for expected in (
+                "Establish the release contract", "git describe --tags --abbrev=0",
+                "gh pr list --base", "The repository's rules win",
+                "Where the version literal lives", "What the repository's own validation gate is",
+                "Who clears the approval gate", "Between patch and minor, take the minor",
+                "closing keyword",
+                '"$RUNDESK_SKILLS/publishing-github-releases/scripts/issues-closed-by.py"'):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, page)
+        # This repository's own policy belongs in this repository, not in guidance every
+        # other project reads. A path or a version here is the split having failed.
+        for excluded in (
+                "rundesk-ai/rundesk-cli", "src/rundesk/__init__.py",
+                ".knowledge/scripts/gate", "release/v0.", "rundesk update --check"):
+            with self.subTest(excluded=excluded):
+                self.assertNotIn(excluded, page)
+
+    def test_release_guidance_ships_without_being_required(self):
+        """R-AGT-53 — cutting releases is specialist work, so the package is in the library
+        for anyone to be granted and is given to nobody by default."""
+        self.assertTrue((REALLY_SHIPPED / "publishing-github-releases" / "SKILL.md").exists())
+        self.assertIn("publishing-github-releases", skill.shipped())
+        self.assertNotIn("publishing-github-releases", config.RUNDESK_REQUIRED_GRANTS)
+        self.assertNotIn("publishing-github-releases",
+                         config.INITIAL["skills"]["granted"])
+        # An owner skill retired in favour of this one is not a renamed built-in: it carries
+        # no ownership marker, so a RENAMED entry would never fire and must not be added.
+        self.assertNotIn("rundesk-cli-releases", skill.RENAMED)
+
+    def test_the_release_checker_defaults_to_the_repository_it_runs_in(self):
+        """R-AGT-53 — a command beside a shared skill names no project, so it answers about
+        the checkout it is run in and refuses rather than guessing when there is none."""
+        script = (REALLY_SHIPPED / "publishing-github-releases" / "scripts"
+                  / "issues-closed-by.py")
+        self.assertTrue(os.access(script, os.X_OK))
+        source = script.read_text()
+        self.assertNotIn("rundesk", source)
+        self.assertIn("gh\", \"repo\", \"view\"", source)
+        self.assertIn("pass --repo owner/name", source)
+        # Every unanswerable path says why before stopping: the definition and both callers.
+        # Asserted positively, because the shape being excluded — `sys.exit(f"..." and 2)`,
+        # which returns the 2 and throws the message away — is quoted in the code that
+        # explains it, so a negative match would find its own documentation.
+        self.assertIn("print(why, file=sys.stderr)", source)
+        self.assertEqual(3, source.count("unanswerable("))
+
     def test_github_collaboration_overlays_consolidate_into_generic_skills(self):
         """R-AGT-49 — old Rundesk-specific grants retain their capability without
         shipping two copies of the same repository-aware workflow."""

@@ -73,6 +73,7 @@ provider's own tools still reach whatever their owner reaches.
 | ✅ | R-AGT-50 | Release-default agents receive guidance for organizing workspace processes and removing stale artifacts without housing project repositories | `workspace organization guidance keeps processes tidy and repositories outside`, `the immediately previous default adds workspace guidance`, `an owner customized skill list keeps its choices and the required floor` |
 | ✅ | R-AGT-51 | Release-default agents receive guidance for executable implementation plans | `plan guidance keeps executable plans in the agent workspace`, `the immediately previous default adds workspace guidance`, `an owner customized skill list keeps its choices and the required floor` |
 | ✅ | R-AGT-52 | An agent reviews available skills before acting so applicable skills govern the work | `core instructions require applicable skills before work` |
+| ✅ | R-AGT-53 | Release guidance ships as an optional built-in that discovers each repository's release contract rather than encoding one project's policy | `release guidance discovers each repositorys release contract`, `release guidance ships without being required`, `the release checker defaults to the repository it runs in` |
 
 ## Open questions
 
