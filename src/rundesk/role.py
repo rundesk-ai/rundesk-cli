@@ -8,7 +8,7 @@ follows — and every named agent on this install may put it on.
 The whole maintained unit is:
 
     .roles/<slug>/
-    ├── role.json     description, skills, posture — and nothing else
+    ├── role.json     description, skills, posture, provider, model — and nothing else
     └── AGENTS.md        the specialist execution rules
 
 Everything else is derived rather than configured, because a setting is a thing somebody
@@ -57,7 +57,13 @@ INSTRUCTIONS = "AGENTS.md"
 #: The whole of what a manifest may say (R-ROL-2). Closed on purpose: a field this
 #: release does not know is a field somebody believes is doing something, and refusing it
 #: is the only honest answer.
-FIELDS = ("description", "skills", "posture")
+#:
+#: `provider` and `model` are both optional, and absent means today's answer: the run
+#: continues on whatever brain its parent turn resolved. A role is a specialist definition
+#: rather than an inheritance of whoever asked, so one whose work only a particular brain
+#: does well may say so — and a role that says neither is unchanged in every way, down to
+#: its revision (R-ROL-33).
+FIELDS = ("description", "skills", "posture", "provider", "model")
 
 #: What a role may be called. The same shape a skill name takes, and for the same
 #: reason — it is a directory name that appears in a run's identity and in what a person
@@ -71,6 +77,15 @@ DESCRIBED_LIMIT = 1024
 #: How long a name may be, matching the library's own ceiling for the same reason: it is
 #: a directory name, and one longer than this is one some filesystem refuses.
 NAMED_LIMIT = 64
+
+#: How long the brain or the model a role pins itself to may be written. A shipped
+#: adapter's name and the path of a program somebody wrote both stand in this field, so it
+#: is bounded rather than shaped: **there is no list of brains to check a name against**,
+#: and there deliberately never will be — the provider seam enumerates nothing, so a brain
+#: this release has never heard of is the ordinary case rather than a typo. What this
+#: refuses is a field that cannot name anything at all; whether *this* machine has the one
+#: named is asked when a run is admitted (R-ROL-35).
+PINNED_LIMIT = 256
 
 #: How much task brief a named agent may hand a role run, for the whole install
 #: (R-ROL-6). One constant rather than a manifest field: a per-role ceiling is a
@@ -112,23 +127,39 @@ class Role:
     #: kind of difference nobody notices until the work comes back thin.
     missing: tuple
     posture: str
+    #: The brain every run of this role uses, and the model on it — empty where the role
+    #: names neither, which means the run continues on whatever its parent turn resolved
+    #: (R-ROL-33). Held as what the owner wrote rather than as anything resolved: whether
+    #: this machine has the brain named is a question admission asks, so a role written
+    #: on one machine is still readable on another that has not got it.
+    provider: str
+    model: str
     #: The specialist rules, exactly as the owner wrote them.
     instructions: str
     at: Path
     revision: str
 
     def manifest(self) -> dict:
-        """The three maintained fields, normalized — what a run's locked copy holds.
+        """The maintained fields, normalized — what a run's locked copy holds.
 
         The skills as this machine resolved them, because that is what the run is actually
         given; what it asked for and did not get is `missing`, and is reported rather than
         written into a lock that would then never verify.
+
+        **A field the role does not name is absent rather than empty.** A role that pins no
+        brain is a role that is not about brains, and writing `"provider": ""` into its
+        locked manifest would put a decision in the bundle that its owner never made.
         """
-        return {
+        said = {
             "description": self.description,
             "skills": list(self.skills),
             "posture": self.posture,
         }
+        if self.provider:
+            said["provider"] = self.provider
+        if self.model:
+            said["model"] = self.model
+        return said
 
 
 def home(where: Path | None = None) -> Path:
@@ -289,13 +320,20 @@ def read(slug: str, where: Path | None = None, library: dict | None = None) -> R
             f"'{slug}' asks for a posture of '{posture}' — it must be one of "
             f"{', '.join(provider.POSTURES)}"
         )
+    # Refused here, with everything else refusable about a definition, rather than found
+    # out mid-carry: a role pinned to a brain nobody can name is a run admitted, assembled
+    # and then failed for something the manifest said on the first line.
+    named = _pinned(slug, said, "provider")
+    model = _pinned(slug, said, "model")
     resolved = library if library is not None else skill.library()
     skills, missing = _skills(slug, said.get("skills"), resolved)
     rules = _instructions(slug, stands)
     return Role(
         slug=slug, label=label(slug), description=described.strip(),
-        skills=skills, missing=missing, posture=posture, instructions=rules, at=stands,
-        revision=_revision(described.strip(), skills, missing, posture, rules, resolved),
+        skills=skills, missing=missing, posture=posture, provider=named, model=model,
+        instructions=rules, at=stands,
+        revision=_revision(described.strip(), skills, missing, posture, named, model,
+                           rules, resolved),
     )
 
 
@@ -338,7 +376,7 @@ def _directory(slug: str, where: Path | None) -> Path:
 
 
 def _manifest(stands: Path) -> dict:
-    """The three maintained fields, refusing anything else that is written beside them."""
+    """The maintained fields, refusing anything else that is written beside them."""
     at = stands / MANIFEST
     if not at.is_file():
         raise NotARole(f"{stands.name} has no {MANIFEST} in it")
@@ -381,6 +419,42 @@ def _instructions(slug: str, stands: Path) -> str:
     return rules
 
 
+def _pinned(slug: str, manifest: dict, field: str) -> str:
+    """The brain or the model this role pins itself to, or why it names neither.
+
+    **Absent is the answer, not a missing one** (R-ROL-33). A role that says nothing about
+    which brain runs it continues on whatever its parent turn resolved, exactly as every
+    role did before this field existed — so the empty string here is a whole answer and
+    never a default standing in for one.
+
+    **Written and present is a claim, and is held to one.** `null`, a number or an empty
+    string in this field is somebody who believes they have pinned a brain and has not,
+    and a role admitted on the parent's brain when its manifest appears to name another is
+    the one failure this field could produce that nobody would ever see. So the field
+    being *there* is asked, rather than what reading it happens to answer — `null` and
+    absent are one value to a lookup with a default, and they are opposite claims here.
+
+    What is *not* checked here is whether any such brain exists. There is no list of
+    brains and there is deliberately never going to be one — the provider seam resolves a
+    name or a path to a program and enumerates nothing, so a brain rundesk has never heard
+    of is the ordinary case. Whether this machine has the one named is asked once, when a
+    run is admitted, where the answer can name the agent it would have run for (R-ROL-35).
+    """
+    if field not in manifest:
+        return ""
+    said = manifest[field]
+    if not isinstance(said, str) or not said.strip():
+        raise NotARole(f"'{slug}' says {field} and names nothing")
+    named = said.strip()
+    if len(named) > PINNED_LIMIT:
+        raise NotARole(
+            f"'{slug}' names a {field} longer than {PINNED_LIMIT} characters"
+        )
+    if any(ch == "\n" or ord(ch) < 32 for ch in named):
+        raise NotARole(f"'{slug}' names a {field} that cannot be one: {named!r}")
+    return named
+
+
 def _skills(slug: str, said: object, resolved: dict) -> tuple:
     """What this role exposes here, and what it named that this machine has not got.
 
@@ -409,24 +483,34 @@ def _skills(slug: str, said: object, resolved: dict) -> tuple:
             tuple(sorted(one for one in names if one not in resolved)))
 
 
-def _revision(description: str, skills: tuple, missing: tuple, posture: str, rules: str,
-              library: dict) -> str:
+def _revision(description: str, skills: tuple, missing: tuple, posture: str,
+              provider_named: str, model: str, rules: str, library: dict) -> str:
     """What this role is, in one word that changes when any part of it does.
 
     Computed rather than maintained (R-ROL-9). It covers the manifest as normalized, the
     rules as written, and the resolved content of every skill in the set — so editing a
     skill a role exposes moves the role's revision, which is what makes "this run
     used these exact bytes" a claim anybody can check afterwards.
+
+    **Which brain a role pins itself to is part of what the role is**, so pinning one, or
+    changing which one, is a new revision — the same work done on a different brain is
+    different work, and a locked run has to be able to say which.
+
+    **A field the role does not name is not in the digest at all** (R-ROL-33). Folding in
+    an empty provider would move the revision of every role already written, and every
+    installed role would read as edited by an update that touched none of them.
     """
     digest = hashlib.sha256()
     # The names this role asks for, whether or not this machine has them: a skill that
     # arrives later changes what a run admitted after it is given, and the revision has to
     # move with that.
-    digest.update(json.dumps(
-        {"description": description, "skills": sorted([*skills, *missing]),
-         "posture": posture},
-        sort_keys=True,
-    ).encode("utf-8"))
+    said = {"description": description, "skills": sorted([*skills, *missing]),
+            "posture": posture}
+    if provider_named:
+        said["provider"] = provider_named
+    if model:
+        said["model"] = model
+    digest.update(json.dumps(said, sort_keys=True).encode("utf-8"))
     digest.update(b"\0")
     digest.update(rules.encode("utf-8"))
     for name in skills:

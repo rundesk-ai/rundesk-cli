@@ -873,5 +873,12 @@ re-checked since, so treat these as true-when-found rather than as current.*
   in there is reported as a syntax error dozens of lines later, at whatever line happens to
   hold an unbalanced parenthesis. Write those comments without an apostrophe.
 
+- **`run.provider` is `NOT NULL`, so a turn with no brain cannot be written.** A case
+  exercising "nothing said which brain, so the agent's own default answered" naturally reaches
+  for `kept.began("channel", None, ...)` and gets `IntegrityError: NOT NULL constraint failed:
+  run.provider` from inside the store rather than a refusal saying what a run needs. The empty
+  string is what a run with no brain looks like in these records, and `or` chains treat it the
+  same way — write `kept.began("channel", "", ...)`.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*
