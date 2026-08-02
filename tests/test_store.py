@@ -11,6 +11,7 @@ Run: python3 tests/test_store.py
 
 from __future__ import annotations
 
+import contextlib
 import re
 import shutil
 import sqlite3
@@ -163,6 +164,70 @@ class WhenTwoOfThemArriveAtOnce(WithAnAgentsOwnRecords):
         self.assertEqual([store.VERSION, store.VERSION], done)
         # and what they built is real, not merely unraised-against
         back = store.Store(self.at)
+        self.assertEqual({"provider": None, "model": None, "instructions": None,
+                          "settings": {}}, back.agent())
+
+    def test_a_build_landing_between_the_two_looks_is_never_seen_half_way(self):
+        """The same race, made to happen rather than waited for (#278).
+
+        The case above is the real shape, and 300 rounds of it on this machine tripped it
+        none — a case that reports a fix it cannot tell from luck. Here the second command is
+        stopped between its version read and its table read, and the other command's whole
+        build — the tables and the version stamp that goes with them — is committed while it
+        stands there. Two unheld reads see version 0 *and* the tables, and `_refused` calls
+        that written partway; one hold sees neither half, because the build cannot land.
+
+        Nothing in `src/` is reached into: the stop is a subclass, and what tells the two
+        outcomes apart is the write lock answering rather than a clock. `timeout=0` is what
+        makes "somebody is holding it" an answer instead of a wait, so the held path costs
+        nothing and neither path sleeps.
+        """
+        bound = 10.0
+        looking, landed = threading.Event(), threading.Event()
+
+        class Held(store.Store):
+            """Stopped once, between the two reads `made` decides on."""
+
+            def _anything(self, conn):
+                if not looking.is_set():
+                    looking.set()
+                    landed.wait(bound)
+                return store.Store._anything(conn)
+
+        trouble = []
+
+        def build():
+            try:
+                Held(self.at).made()
+            except BaseException as raised:      # noqa: BLE001 — the case is what escapes
+                trouble.append(repr(raised))
+
+        second = threading.Thread(target=build)
+        second.start()
+        self.addCleanup(second.join, bound)
+        self.assertTrue(looking.wait(bound), "the second command never took its first look")
+
+        arranged = sqlite3.connect(str(self.at), isolation_level=None, timeout=0)
+        try:
+            arranged.execute("BEGIN IMMEDIATE")
+            arranged.execute("CREATE TABLE agent (id INTEGER PRIMARY KEY)")
+            arranged.execute(f"PRAGMA user_version = {store.VERSION}")
+            arranged.execute("COMMIT")
+        except sqlite3.OperationalError:
+            # The write lock is held across both looks, so this build has nowhere to land —
+            # which is the whole of the fix, said by the database rather than by a timer.
+            with contextlib.suppress(sqlite3.OperationalError):
+                arranged.execute("ROLLBACK")
+        finally:
+            arranged.close()
+            landed.set()
+        second.join(bound)
+
+        self.assertFalse(second.is_alive(), "the second command never finished")
+        self.assertEqual([], trouble, "a build landing mid-look was read as tables at "
+                                      "version 0 and refused as written partway")
+        back = store.Store(self.at)
+        self.assertEqual(store.VERSION, back.version())
         self.assertEqual({"provider": None, "model": None, "instructions": None,
                           "settings": {}}, back.agent())
 
