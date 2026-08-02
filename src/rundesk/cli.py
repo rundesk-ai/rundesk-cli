@@ -3294,6 +3294,10 @@ def _list_roles(args: argparse.Namespace, whose) -> int:
         print(f"{one.label}  {one.slug}  {one.revision[:12]}  "
               f"{one.posture}  [{' '.join(one.skills)}]")
         print(f"        {one.description}")
+        if one.missing:
+            # Said every time it is listed. A set quietly smaller than its manifest is the
+            # kind of difference nobody notices until the work comes back thin.
+            print(f"        not installed here, so not given: {' '.join(one.missing)}")
     runs = whose.role_runs(limit=ROLE_RUNS_SHOWN)
     if not runs:
         return 0

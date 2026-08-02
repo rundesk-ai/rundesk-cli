@@ -180,11 +180,22 @@ class WhatARunIsAdmittedWith(WithAnAgentThatCanDelegate):
             self.admit(target="../somewhere")
 
     def test_an_unusable_role_is_refused_before_anything_is_written(self):
-        self.wrote(skills=["reading-minds"])
+        self.wrote(posture="root")
         with self.assertRaises(role_runs.NotDelegable):
             self.admit()
         self.assertEqual([], self.kept.role_runs())
         self.assertFalse(role_runs.home("elena", self.where).exists())
+
+    def test_a_skill_this_machine_has_not_got_is_simply_not_given(self):
+        """R-ROL-8 — the role still runs. What it asked for and did not get is recorded,
+        so a set quietly smaller than its manifest is something a listing can name."""
+        self.wrote(skills=["writing-plans", "reading-minds"])
+        admitted = self.admit()
+        at = role_runs.paths("elena", admitted.id, self.where)
+        self.assertEqual(("writing-plans",), admitted.skills)
+        self.assertEqual(["writing-plans"],
+                         sorted(one.name for one in at["skills"].iterdir()))
+        self.assertEqual(["writing-plans"], self.kept.role_run(admitted.id)["skills"])
 
     def test_editing_the_shared_role_afterwards_leaves_this_run_alone(self):
         admitted = self.admit()

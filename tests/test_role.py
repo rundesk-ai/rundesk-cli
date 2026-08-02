@@ -162,11 +162,32 @@ class TheSkillsARoleExposes(WithSomewhereToKeepRoles):
             self.read()
         self.assertIn("more than once", str(refused.exception))
 
-    def test_a_skill_this_machine_does_not_have_is_refused(self):
+    def test_a_skill_this_machine_does_not_have_is_left_out_rather_than_refused(self):
+        """R-ROL-8 — a role is a definition an owner may share between machines and write
+        ahead of the library. Refusing the whole thing over one absent package would make
+        it unusable here for a capability the work in front of it may never need."""
         self.wrote(skills=["writing-plans", "reading-minds"])
-        with self.assertRaises(role.NotARole) as refused:
-            self.read()
-        self.assertIn("reading-minds", str(refused.exception))
+        one = self.read()
+        self.assertEqual(("writing-plans",), one.skills)
+        self.assertEqual(("reading-minds",), one.missing)
+
+    def test_a_role_whose_skills_are_all_absent_is_still_a_role(self):
+        self.wrote(skills=["reading-minds"])
+        one = self.read()
+        self.assertEqual((), one.skills)
+        self.assertEqual(("reading-minds",), one.missing)
+
+    def test_a_skill_arriving_later_changes_what_the_next_run_is_given(self):
+        """The revision covers what the role asks for, not only what resolved — so a
+        package installed afterwards moves it, and a run admitted after that gets it."""
+        self.wrote(skills=["writing-plans", "python-testing"])
+        without = dict(self.library)
+        without.pop("python-testing")
+        thin = role.read("development", self.where, without)
+        whole = self.read()
+        self.assertEqual(("writing-plans",), thin.skills)
+        self.assertEqual(("python-testing", "writing-plans"), whole.skills)
+        self.assertNotEqual(thin.revision, whole.revision)
 
     def test_the_skills_are_a_set_and_are_read_back_in_sorted_order(self):
         self.wrote(skills=["python-testing", "writing-plans"])

@@ -104,6 +104,13 @@ class Role:
     #: The complete set of skills this role exposes, in sorted order. Never a subset
     #: chosen at task time and never inherited from the parent agent.
     skills: tuple
+    #: The names this role asks for that this machine has no skill called. Kept rather than
+    #: refused (R-ROL-8): a role is a specialist definition an owner may share between
+    #: machines, and one that named a skill this install has not got would otherwise be
+    #: unusable here for a capability the work may never need. Carried so a listing and a
+    #: diagnosis can say which, because a set silently smaller than its manifest is the
+    #: kind of difference nobody notices until the work comes back thin.
+    missing: tuple
     posture: str
     #: The specialist rules, exactly as the owner wrote them.
     instructions: str
@@ -111,7 +118,12 @@ class Role:
     revision: str
 
     def manifest(self) -> dict:
-        """The three maintained fields, normalized — what a run's locked copy holds."""
+        """The three maintained fields, normalized — what a run's locked copy holds.
+
+        The skills as this machine resolved them, because that is what the run is actually
+        given; what it asked for and did not get is `missing`, and is reported rather than
+        written into a lock that would then never verify.
+        """
         return {
             "description": self.description,
             "skills": list(self.skills),
@@ -277,13 +289,13 @@ def read(slug: str, where: Path | None = None, library: dict | None = None) -> R
             f"'{slug}' asks for a posture of '{posture}' — it must be one of "
             f"{', '.join(provider.POSTURES)}"
         )
-    skills = _skills(slug, said.get("skills"), library)
-    rules = _instructions(slug, stands)
     resolved = library if library is not None else skill.library()
+    skills, missing = _skills(slug, said.get("skills"), resolved)
+    rules = _instructions(slug, stands)
     return Role(
         slug=slug, label=label(slug), description=described.strip(),
-        skills=skills, posture=posture, instructions=rules, at=stands,
-        revision=_revision(described.strip(), skills, posture, rules, resolved),
+        skills=skills, missing=missing, posture=posture, instructions=rules, at=stands,
+        revision=_revision(described.strip(), skills, missing, posture, rules, resolved),
     )
 
 
@@ -369,13 +381,19 @@ def _instructions(slug: str, stands: Path) -> str:
     return rules
 
 
-def _skills(slug: str, said: object, library: dict | None) -> tuple:
-    """The complete skill set this role exposes, normalized and resolved (R-ROL-8).
+def _skills(slug: str, said: object, resolved: dict) -> tuple:
+    """What this role exposes here, and what it named that this machine has not got.
 
     **A set, written down in sorted order.** Reordering the JSON must not make a new
-    revision — an owner tidying a list has not changed what the role is — and a
-    duplicate is refused rather than collapsed, because two entries of one name is an
-    owner who believes one of them is doing something else.
+    revision — an owner tidying a list has not changed what the role is — and a duplicate
+    is refused rather than collapsed, because two entries of one name is an owner who
+    believes one of them is doing something else.
+
+    **A name this install has no skill for is left out rather than refused** (R-ROL-8). A
+    role is a definition an owner may share between machines and write ahead of the
+    library, and refusing the whole thing over one absent package would make a role
+    unusable here for a capability the work in front of it may never need. What is missing
+    is carried back rather than swallowed, so a listing and a diagnosis can name it.
     """
     if not isinstance(said, list) or not said:
         raise NotARole(f"'{slug}' names no skills — a role exposes at least one")
@@ -387,16 +405,11 @@ def _skills(slug: str, said: object, library: dict | None) -> tuple:
     duplicated = sorted({one for one in names if names.count(one) > 1})
     if duplicated:
         raise NotARole(f"'{slug}' names {', '.join(duplicated)} more than once")
-    resolved = library if library is not None else skill.library()
-    missing = sorted(one for one in names if one not in resolved)
-    if missing:
-        raise NotARole(
-            f"'{slug}' names {', '.join(missing)}, which this machine has no skill called"
-        )
-    return tuple(sorted(names))
+    return (tuple(sorted(one for one in names if one in resolved)),
+            tuple(sorted(one for one in names if one not in resolved)))
 
 
-def _revision(description: str, skills: tuple, posture: str, rules: str,
+def _revision(description: str, skills: tuple, missing: tuple, posture: str, rules: str,
               library: dict) -> str:
     """What this role is, in one word that changes when any part of it does.
 
@@ -406,8 +419,12 @@ def _revision(description: str, skills: tuple, posture: str, rules: str,
     used these exact bytes" a claim anybody can check afterwards.
     """
     digest = hashlib.sha256()
+    # The names this role asks for, whether or not this machine has them: a skill that
+    # arrives later changes what a run admitted after it is given, and the revision has to
+    # move with that.
     digest.update(json.dumps(
-        {"description": description, "skills": list(skills), "posture": posture},
+        {"description": description, "skills": sorted([*skills, *missing]),
+         "posture": posture},
         sort_keys=True,
     ).encode("utf-8"))
     digest.update(b"\0")

@@ -241,8 +241,8 @@ provider. One file per contract, named for it:
 | `test_answering.py` | 123 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
 | `test_discord.py` | 168 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
 | `test_instructions.py` | 20 | Rundesk's core and trigger prompts, standard variables, the additive builder, and the separate role floor |
-| `test_role.py` | 30 | `agent-role` — what a role is, what makes one usable, and what its revision is computed from, against a scratch library |
-| `test_role_run.py` | 82 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
+| `test_role.py` | 32 | `agent-role` — what a role is, what makes one usable, and what its revision is computed from, against a scratch library |
+| `test_role_run.py` | 83 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
 | `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and

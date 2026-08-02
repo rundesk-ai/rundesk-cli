@@ -1136,12 +1136,21 @@ def _what_is_wrong_with_its_role_runs(name: str, where: Path | None = None) -> l
             one["role_run"],
             "a role run has reported back and its parent has not been told yet",
             f"rundesk start {name}"))
-    for slug in {row["role"] for row in runs}:
+    for slug in sorted({row["role"] for row in runs}):
         try:
-            roles.read(slug, where)
+            one = roles.read(slug, where)
         except roles.NotARole as why:
             found.append(Complaint(slug, f"a role this agent has used is unusable: {why}",
                                    ""))
+            continue
+        if one.missing:
+            # Not a fault — a role runs without a skill this machine has not got — but it
+            # is the difference between the work an owner expected and the work they get.
+            found.append(Complaint(
+                slug,
+                "this role asks for skills this machine has not got, so runs of it go "
+                f"without them: {', '.join(one.missing)}",
+                f"rundesk skills install <repository>"))
     return found
 
 
