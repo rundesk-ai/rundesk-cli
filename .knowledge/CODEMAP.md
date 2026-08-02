@@ -47,7 +47,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 24 modules)
+## Backend / Services (src/rundesk/ — 25 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -182,6 +182,12 @@ file with it.
   gateway per agent is how one agent is cycled without disturbing the rest. Owns every program started
   through it, and proves it is alive with a lock the kernel drops when the process dies. Writes what
   happened to its own log, kept apart from its run state because history has to outlive the gateway.
+- `src/rundesk/standing.py` — how a gateway stands, asked from above it: what one is doing, what
+  gateways there are at all, and waiting for one to come up or go. Above the gateway rather than in it,
+  because answering means putting a gateway together with the agent whose run directory it keeps, and a
+  gateway never reaches for an agent. Below the surface rather than in it, because the update worker
+  that stands every gateway on the machine down asks the same four questions. Every collaborator is an
+  argument, so all four are exercised with no gateway and no supervisor near them.
 - `src/rundesk/schedule.py` — work that starts itself: what a schedule is, when one is next due, and
   which are due now. Knows nothing of gateways or processes, and what a schedule names is carried without
   ever being read — so the day it names an agent rather than a command, nothing here changes. The time is

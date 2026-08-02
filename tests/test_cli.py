@@ -34,6 +34,7 @@ from rundesk import cli  # noqa: E402
 from rundesk import catalog as real_catalog  # noqa: E402
 from rundesk import config  # noqa: E402
 from rundesk import restart_request  # noqa: E402
+from rundesk import standing  # noqa: E402
 from rundesk import store  # noqa: E402
 from rundesk import update_request  # noqa: E402
 from rundesk import updater  # noqa: E402
@@ -44,7 +45,8 @@ from rundesk import updater  # noqa: E402
 #: answers honestly, never the duration. Set for the whole file rather than per case,
 #: because the ones that spend the whole wait are exactly the ones nobody remembers to
 #: turn down — a gateway that never comes up has no earlier moment to finish at.
-_REAL_PATIENCE = (cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS)
+_REAL_PATIENCE = (standing.START_PATIENCE, standing.CYCLE_PATIENCE,
+                  standing.LOOK_AGAIN_SECONDS)
 
 #: The real removal, put back when the file is done with.
 _REAL_REMOVAL = cli._remove_this_install
@@ -93,12 +95,14 @@ def setUpModule():
     # Both turned down together. Turning the patience down alone left a wait that had room
     # for one look and a fraction of a second's margin on the second — so a case proving a
     # cycle waits passed on a quick machine and reported a failure on a loaded one.
-    cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS = 0.3, 0.3, 0.005
+    standing.START_PATIENCE, standing.CYCLE_PATIENCE, standing.LOOK_AGAIN_SECONDS = (
+        0.3, 0.3, 0.005)
 
 
 def tearDownModule():
     cli._remove_this_install = _REAL_REMOVAL
-    cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS = _REAL_PATIENCE
+    (standing.START_PATIENCE, standing.CYCLE_PATIENCE,
+     standing.LOOK_AGAIN_SECONDS) = _REAL_PATIENCE
     if _REAL_BACKUP_DIR is None:
         os.environ.pop("RUNDESK_BACKUP_DIR", None)
     else:
@@ -1811,8 +1815,8 @@ class HandingAGatewayToTheMachine(unittest.TestCase):
     def test_starting_says_so_when_no_gateway_results(self):
         """R-GW-13 — a job can be accepted and the gateway then refuse to start, and
         refusing ends cleanly, so nothing else would ever say a word."""
-        self.addCleanup(setattr, cli, "START_PATIENCE", cli.START_PATIENCE)
-        cli.START_PATIENCE = 0.3
+        self.addCleanup(setattr, standing, "START_PATIENCE", standing.START_PATIENCE)
+        standing.START_PATIENCE = 0.3
         code, said = drive(["start", "gateway"], FakeGateways(starts_after=10_000), FakeMachine())
         self.assertEqual(1, code)
         self.assertIn("FAILED", said)
@@ -2045,8 +2049,8 @@ class StandingGatewaysDown(unittest.TestCase):
 
     def test_cycling_says_so_rather_than_starting_one_that_never_stopped(self):
         """R-GW-13 — and does not report having cycled it."""
-        self.addCleanup(setattr, cli, "CYCLE_PATIENCE", cli.CYCLE_PATIENCE)
-        cli.CYCLE_PATIENCE = 0.3
+        self.addCleanup(setattr, standing, "CYCLE_PATIENCE", standing.CYCLE_PATIENCE)
+        standing.CYCLE_PATIENCE = 0.3
         machine = FakeMachine(jobs=["agent-one"])
         gateways = FakeGateways(stops_after=10_000)  # never stops
         code, said = drive(["restart", "agent-one"], gateways, machine)
@@ -2511,7 +2515,6 @@ class RunningOneHere(unittest.TestCase):
         gateways = FakeGateways()
         drive(["serve", "ava"], gateways)
         self.assertEqual(["ava"], gateways.served)
-
 
     def test_a_steered_turn_is_handed_what_is_typed_while_it_runs(self):
         """`ask --steer` reaches the turn with something to read from.
@@ -4512,8 +4515,8 @@ class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
         """R-UPD-22 — a release needing something this install does not have starts a
         gateway that ends *well* so as not to be restarted forever, and the machine calls
         that a job accepted. Only asking the gateway itself catches it."""
-        self.addCleanup(setattr, cli, "START_PATIENCE", cli.START_PATIENCE)
-        cli.START_PATIENCE = 0.1
+        self.addCleanup(setattr, standing, "START_PATIENCE", standing.START_PATIENCE)
+        standing.START_PATIENCE = 0.1
         machine = self._machine(loaded=("alpha",))
         never = self._gateways([self.Standing("alpha", running=False)], gone_after_stop=False)
         self.assertEqual(["alpha"], cli._bring_all_back(["alpha"], never, machine, FakeAgents()))

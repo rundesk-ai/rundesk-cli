@@ -8,6 +8,30 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **`test_install` fails three ways at once because of directories git never mentions, and none of
+  them is your change.** A `ui/node_modules` (55 MB) and a built `site/` (47 MB) sitting beside `src/`
+  are tracked by nothing and ignored by nothing, so **`git status` reports the tree clean** while
+  `tests/test_install.py:38` and thirteen more `copytree` calls copy both fourteen times, and
+  `OneInstructionTests._published()` walks straight into them. Measured on one commit: **82 cases,
+  75 s, `OK`** against a lean `git archive` extraction, versus **187 s (past the gate's 180 s
+  ceiling) plus two failures** in the checkout — `_published()` finding the install instruction in
+  `site/dist/index.html`, `site/dist/llms-full.txt` and `site/dist/start/install/index.html` as well
+  as in `install.sh`, and reporting `2 != 1` because the built site is older than the instruction it
+  publishes. All three read exactly like a regression in whatever you just touched. **Before
+  believing `FAIL test_install`, run `du -sh */ | sort -rh | head` and re-run the suite against
+  `git archive HEAD | tar -x -C <scratch>`** — that separates the tree from the code in about a
+  minute. The durable fix is `ui`, `site`, `node_modules` and `dist` in that file's
+  `ignore_patterns`, plus a `.gitignore` line so the tree stops lying; both are changes nobody has
+  been asked for yet.
+- **A module-level constant that moves takes every `tests/` rebinding of it with it.** The suite
+  turns `START_PATIENCE`/`CYCLE_PATIENCE`/`LOOK_AGAIN_SECONDS` *down* so waiters do not really wait,
+  and `came_up`/`gone` read them off module globals at call time on purpose. Moving them from `cli`
+  to `standing` while leaving `tests/test_cli.py` setting `cli.START_PATIENCE` would have left the
+  rebinding pointing at nothing — the suite would still pass, just slowly enough to approach the
+  gate's per-suite ceiling, which is the failure shape nobody attributes correctly. It failed loudly
+  here only because nothing re-exported the old name. **Never re-export a moved constant for
+  convenience**, and grep `tests/` for `<module>.<CONST>` in the same commit that moves one.
+
 - **Running `./rundesk` from a checkout tests new code against the live install's data, and
   nothing warns you.** An agent's shell is a gateway's child, so it already carries
   `RUNDESK_AGENTS_DIR`, `RUNDESK_HOME`, `RUNDESK_SCRIPTS` and `RUNDESK_RUN` — the *owner's*.

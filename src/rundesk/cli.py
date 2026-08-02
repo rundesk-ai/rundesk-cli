@@ -45,6 +45,7 @@ from rundesk import restart_request  # noqa: E402
 from rundesk import schedule as schedules  # noqa: E402
 from rundesk import script  # noqa: E402
 from rundesk import skill  # noqa: E402
+from rundesk import standing  # noqa: E402
 from rundesk import store  # noqa: E402
 from rundesk import supervisor as _supervisor  # noqa: E402
 from rundesk import turn  # noqa: E402
@@ -67,24 +68,6 @@ _TROUBLE_LINES = 6
 
 #: How many of a gateway's last lines `logs` shows when not told otherwise.
 LOG_LINES = 40
-
-#: How long to wait for a gateway to actually appear after the machine takes its job.
-#: Generous enough for a cold start, short enough that a gateway which is never coming
-#: is reported rather than waited on.
-START_PATIENCE = 15.0
-
-#: How long cycling waits for a gateway to actually go before giving up on it. Longer
-#: than a gateway is allowed to take stopping, so a slow but correct shutdown is not
-#: mistaken for one that is stuck.
-CYCLE_PATIENCE = 20.0
-
-#: How often either of those looks again while it waits. Named once rather than written
-#: into each waiter, because how long to wait and how often to look are one decision: a
-#: patience shorter than a couple of these leaves a wait that can only look once, and
-#: whether it looks twice then depends on how loaded the machine is. That is exactly how
-#: a correct cycle came to be reported as one that never restarted, on one platform and
-#: not the other.
-LOOK_AGAIN_SECONDS = 0.2
 
 #: How long install health waits for backup storage to answer. A cloud-backed directory
 #: can block inside the operating system indefinitely; status remains useful without it
@@ -867,7 +850,7 @@ def _queue_restart(machine, name: str, origin: dict) -> int:
 
 def _restart_in_flight(name: str, gateways, agents) -> list[str]:
     run_home = agents.resolved(name).run
-    if not _standing(name, gateways, agents).running:
+    if not standing.of(name, gateways, agents).running:
         return []
     found = [
         one for one in gateways.what_is_working(name, run_home)
@@ -1201,33 +1184,6 @@ def _out_loud(said: str) -> None:
     print(f"        {said}")
 
 
-def _every_name(gateways, machine, agents, root: Path = REPO_ROOT) -> list[str]:
-    """Every gateway there is: one per agent, and any that has no agent yet.
-
-    Four places, because there are four ways one can exist. An agent has a gateway
-    whether or not it has ever run; a gateway from before there were agents left its record
-    where gateways used to keep them; a job the machine holds names one that may have
-    left nothing anywhere; and a name whose record was cleared and whose agent was taken
-    away survives in what it was scheduled to do and what it never finished (R-GW-38).
-    That last one is the name an owner wants after a crash, and it was the one they had
-    to know already before any command would tell them anything about it. Asked of the
-    agent module rather than of the gateway module for the first, so that a gateway still
-    knows nothing of whose work it holds.
-    """
-    return sorted({*agents.known(), *(it.name for it in gateways.every()),
-                   *machine.described(root=root), *gateways.remembered()})
-
-
-def _standing(name: str, gateways, agents):
-    """What this gateway is doing, asked where that gateway actually keeps it.
-
-    The one place the two are put together. A command that resolved the directory itself
-    at each call is how one of them comes to ask the wrong place and report a running
-    agent as stopped.
-    """
-    return gateways.standing(name, agents.resolved(name).run)
-
-
 def _stand_all_down(gateways, machine, agents,
                     root: Path = REPO_ROOT) -> tuple:
     """Stop every gateway an update is about to replace the files of (R-UPD-21).
@@ -1241,8 +1197,8 @@ def _stand_all_down(gateways, machine, agents,
     if not machine.available():
         return [], None
     stopped = []
-    for name in _every_name(gateways, machine, agents, root):
-        it = _standing(name, gateways, agents)
+    for name in standing.every_name(gateways, machine, agents, root):
+        it = standing.of(name, gateways, agents)
         if not it.running:
             continue
         try:
@@ -1284,7 +1240,7 @@ def _stand_all_down(gateways, machine, agents,
                 "it was not taken down"
             )
         said = machine.stop(it.name, root=root)
-        if not said.ok or not _gone(it.name, gateways, agents):
+        if not said.ok or not standing.gone(it.name, gateways, agents):
             update_request.finish_maintenance(it.name, run_home)
             return stopped, f"'{it.name}' would not stop, so nothing was replaced under it"
         stopped.append(it.name)
@@ -1308,7 +1264,7 @@ def _bring_all_back(names: list, gateways, machine, agents,
         except (machine.NotOurs, machine.NoSupervisor):
             down.append(name)
             continue
-        if not said.ok or _came_up(name, gateways, agents) is None:
+        if not said.ok or standing.came_up(name, gateways, agents) is None:
             down.append(name)
     if down:
         unfit = gateways.fitness(root)
@@ -1326,7 +1282,7 @@ def _recover_update_gateways(gateways, machine, agents,
     starting anything the update did not take down (R-UPD-44).
     """
     marked = []
-    for name in _every_name(gateways, machine, agents, root):
+    for name in standing.every_name(gateways, machine, agents, root):
         run_home = agents.resolved(name).run or gateways.home()
         if update_request.maintaining(name, run_home):
             marked.append((name, run_home))
@@ -1337,14 +1293,14 @@ def _recover_update_gateways(gateways, machine, agents,
         return [name for name, _run_home in marked]
     down = []
     for name, run_home in marked:
-        if _standing(name, gateways, agents).running:
+        if standing.of(name, gateways, agents).running:
             continue
         try:
             kept = machine.loaded(name)
             said = machine.start(name, root=root) if kept else None
         except (machine.NoSupervisor, machine.NotOurs, machine.Unsure):
             said = None
-        if said is None or not said.ok or _came_up(name, gateways, agents) is None:
+        if said is None or not said.ok or standing.came_up(name, gateways, agents) is None:
             down.append(name)
             continue
     return down
@@ -1360,7 +1316,7 @@ def _in_flight(gateways, agents) -> list:
     found = []
     for name in sorted(set(agents.known() + [it.name for it in gateways.every()])):
         run_home = agents.resolved(name).run
-        if _standing(name, gateways, agents).running:
+        if standing.of(name, gateways, agents).running:
             found.extend(f"{name}/{one}"
                          for one in gateways.what_is_working(name, run_home)
                          if not one.startswith("channel:"))
@@ -1521,7 +1477,7 @@ def cmd_start(args: argparse.Namespace, gateways, machine, agents) -> int:
         # launchd runs cannot come to behave differently.
         return cmd_serve(args, gateways, agents)
     name = args.name
-    already = _standing(name, gateways, agents)
+    already = standing.of(name, gateways, agents)
     if already.running:
         # Running is not the same as looked after. A gateway started by hand, or one left
         # behind when its job was taken away, answers everything exactly as a supervised
@@ -1560,29 +1516,13 @@ def cmd_start(args: argparse.Namespace, gateways, machine, agents) -> int:
     if not said.ok:
         print(f"{name}: FAILED — the supervisor refused the job: {said.said}", file=sys.stderr)
         return 1
-    up = _came_up(name, gateways, agents)
+    up = standing.came_up(name, gateways, agents)
     if up is None:
         print(f"{name}: FAILED — job accepted, but no gateway started.", file=sys.stderr)
         print(f"         why: rundesk logs {name}", file=sys.stderr)
         return 1
     print(f"{name}: RUNNING (pid {up.pid})")
     return 0
-
-
-def _came_up(name: str, gateways, agents, patience: float | None = None):
-    """The gateway, once it is actually there — or None if it never arrives.
-
-    The patience resolves here rather than in the signature: a default argument is bound
-    once, when this file is read, so naming the constant there freezes it and anything
-    that changed it afterwards is quietly ignored.
-    """
-    deadline = time.monotonic() + (START_PATIENCE if patience is None else patience)
-    while time.monotonic() < deadline:
-        now = _standing(name, gateways, agents)
-        if now.running:
-            return now
-        time.sleep(LOOK_AGAIN_SECONDS)
-    return None
 
 
 def _named(args: argparse.Namespace, gateways, machine, agents, verb: str) -> list[str] | None:
@@ -1603,7 +1543,7 @@ def _named(args: argparse.Namespace, gateways, machine, agents, verb: str) -> li
         print(f"        every agent at once:  rundesk {verb} --all", file=sys.stderr)
         print("        what there is:        rundesk agents", file=sys.stderr)
         return None
-    return _every_name(gateways, machine, agents)
+    return standing.every_name(gateways, machine, agents)
 
 
 def cmd_stop(args: argparse.Namespace, gateways, machine, agents) -> int:
@@ -1694,7 +1634,7 @@ def cmd_add(args: argparse.Namespace, gateways, machine, agents) -> int:
     # this on the agent being new would make one refusal permanent, since the home would
     # exist ever after and nothing would look at the old directory again.
     if wrote:
-        now = _standing(name, gateways, agents)
+        now = standing.of(name, gateways, agents)
         if now.running:
             print(f"{name}: NOT MADE — a gateway of that name is running (pid {now.pid})",
                   file=sys.stderr)
@@ -2001,7 +1941,7 @@ def _running_old_code(name, gateways, agents) -> list:
     Reported as a fault rather than a note: the whole trap is that nothing says anything.
     """
     try:
-        it = _standing(name, gateways, agents)
+        it = standing.of(name, gateways, agents)
     except Exception as why:   # noqa: BLE001 — a boundary; a diagnosis reports, never raises
         # **Said, not swallowed.** `gateway._held` deliberately re-raises an OSError that is
         # not a lock being held, so returning nothing here would let `doctor` print READY
@@ -2762,19 +2702,6 @@ def cmd_restart(args: argparse.Namespace, gateways, machine, agents) -> int:
     return _stand_down(args, gateways, machine, agents, "restart")
 
 
-def _gone(name: str, gateways, agents, patience: float | None = None) -> bool:
-    """Has this gateway actually stopped? Asked of the gateway, not of the machine.
-
-    The patience resolves here, not in the signature — see `_came_up`.
-    """
-    deadline = time.monotonic() + (CYCLE_PATIENCE if patience is None else patience)
-    while time.monotonic() < deadline:
-        if not _standing(name, gateways, agents).running:
-            return True
-        time.sleep(LOOK_AGAIN_SECONDS)
-    return not _standing(name, gateways, agents).running
-
-
 def _stand_down(args: argparse.Namespace, gateways, machine, agents, verb: str) -> int:
     names = _named(args, gateways, machine, agents, verb)
     if names is None:
@@ -2801,7 +2728,7 @@ def _stand_down(args: argparse.Namespace, gateways, machine, agents, verb: str) 
                 # is there and what was asked. Answering all three with one refusal — as
                 # a stand-in Spoke fed into the failure block below did — told an owner
                 # with no job at all to go looking for a second install of rundesk.
-                now = _standing(name, gateways, agents)
+                now = standing.of(name, gateways, agents)
                 if now.running:
                     print(f"{name}: FAILED — running with no job (pid {now.pid}); "
                           "nothing is keeping it up", file=sys.stderr)
@@ -2816,7 +2743,7 @@ def _stand_down(args: argparse.Namespace, gateways, machine, agents, verb: str) 
                 continue
             if verb == "restart":
                 if (getattr(args, "worker", False)
-                        and not _standing(name, gateways, agents).running):
+                        and not standing.of(name, gateways, agents).running):
                     # The external worker may have died after stopping the gateway and
                     # before starting it. Its durable request is still running, so the
                     # retry finishes the missing half instead of asking a stopped job to
@@ -2828,7 +2755,7 @@ def _stand_down(args: argparse.Namespace, gateways, machine, agents, verb: str) 
                               file=sys.stderr)
                         worst = 1
                         continue
-                    up = _came_up(name, gateways, agents)
+                    up = standing.came_up(name, gateways, agents)
                     if up is None:
                         print(f"{name}: FAILED — queued restart found it stopped, but "
                               "it did not come back", file=sys.stderr)
@@ -2853,7 +2780,7 @@ def _stand_down(args: argparse.Namespace, gateways, machine, agents, verb: str) 
                           file=sys.stderr)
                     worst = 1
                     continue
-                if not _gone(name, gateways, agents):
+                if not standing.gone(name, gateways, agents):
                     # Starting it now does nothing — the machine sees a job already
                     # running — and the old one then ends *well*, which is the one
                     # outcome the machine is told not to undo. The gateway would be
@@ -2882,7 +2809,7 @@ def _stand_down(args: argparse.Namespace, gateways, machine, agents, verb: str) 
             worst = 1
             continue
         if not said.ok:
-            now = _standing(name, gateways, agents)
+            now = standing.of(name, gateways, agents)
             if now.running:
                 print(f"{name}: FAILED — the supervisor refused to stop it (pid {now.pid}): "
                       f"{said.said}", file=sys.stderr)
@@ -2894,14 +2821,14 @@ def _stand_down(args: argparse.Namespace, gateways, machine, agents, verb: str) 
                 print(f"{name}: ALREADY STOPPED")
             continue
         if verb == "restart":
-            up = _came_up(name, gateways, agents)
+            up = standing.came_up(name, gateways, agents)
             if up is None:
                 print(f"{name}: FAILED — stopped, but did not restart.", file=sys.stderr)
                 print(f"         why: rundesk logs {name}", file=sys.stderr)
                 worst = 1
                 continue
             print(f"{name}: RESTARTED (pid {up.pid})")
-        elif not _gone(name, gateways, agents):
+        elif not standing.gone(name, gateways, agents):
             print(f"{name}: FAILED — still running after stop request", file=sys.stderr)
             worst = 1
         else:
@@ -2923,8 +2850,8 @@ def cmd_agents(args: argparse.Namespace, gateways, machine, agents) -> int:
         return _one_agent(args.name, gateways, machine, agents)
     has_supervisor = machine.available()
     described = set(machine.described()) if has_supervisor else set()
-    found = {name: _standing(name, gateways, agents)
-             for name in _every_name(gateways, machine, agents)}
+    found = {name: standing.of(name, gateways, agents)
+             for name in standing.every_name(gateways, machine, agents)}
     if not found:
         print("no agents")
         print("        make one:  rundesk add <agent>")
@@ -3016,7 +2943,7 @@ def _one_agent(name: str, gateways, machine, agents) -> int:
         print(f"{name}: NO SUCH AGENT", file=sys.stderr)
         print(f"        what there is:  rundesk agents", file=sys.stderr)
         return 1
-    it = _standing(name, gateways, agents)
+    it = standing.of(name, gateways, agents)
     print(f"{name}: " + (("WEDGED" if it.stale else f"RUNNING (pid {it.pid})")
                          if it.running else "STOPPED"))
     _as_table(("WHAT", "WHERE"),
@@ -3049,14 +2976,14 @@ def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
         supervisor = "yes" if machine.available() else "no — nothing keeps an agent up here"
     except Exception:                                    # pragma: no cover - defensive
         supervisor = "?"
-    names = _every_name(gateways, machine, agents)
-    standing = {name: _standing(name, gateways, agents) for name in names}
-    running = sum(1 for one in standing.values() if one.running)
+    names = standing.every_name(gateways, machine, agents)
+    found = {name: standing.of(name, gateways, agents) for name in names}
+    running = sum(1 for one in found.values() if one.running)
     working = 0
     turning = 0
     for name in names:
         run_home = agents.resolved(name).run
-        working += len(gateways.what_is_working(name, run_home)) if standing[name].running else 0
+        working += len(gateways.what_is_working(name, run_home)) if found[name].running else 0
         turning += len(gateways.what_is_turning(name, run_home))
     _as_table(("WHAT", "IS"), [
         ("version", __version__),
