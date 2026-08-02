@@ -128,34 +128,28 @@ class ActiveTurns(unittest.TestCase):
         self.assertEqual(1, len(went), "it said it swept nothing")
         self.assertEqual([], self.kept(), "the record it reported sweeping is still there")
 
-    def test_a_record_this_install_could_not_fingerprint_is_swept(self):
-        """`began` probes while the turn's own provider is being forked — exactly when a
-        loaded machine has no process to spare. Written as null, `_running` has nothing
-        left to compare ever again, so the row answered "still running" for the rest of
-        its life, `sweep` never took it, and the update waiting on that turn waited on
-        work that had ended days before.
+    def test_a_turn_this_install_could_not_fingerprint_is_kept_while_its_pid_lives(self):
+        """The accepted limit, written down so it is a decision rather than an oversight.
 
-        Safe here and only here: sweeping happens inside `claim`, where this gateway has
-        started nothing of its own and the one that wrote the record is proven gone."""
+        A probe can fail at registration — `began` runs while the turn's own provider is
+        being forked — and the row is then written with no fingerprint to compare. Such a
+        row can never be told from a reused pid afterwards, so it is **kept for as long as
+        that pid answers**, and an update may wait on a turn that has ended.
+
+        Sweeping it instead was tried and reverted. Those rows always have a live pid — a
+        dead one is already taken by the liveness check — so dropping them is not tidying
+        up after a dead turn, it is deleting the record of a possibly-running one. Two
+        independent paths proved it unsafe: an orphaned provider outliving the gateway that
+        started it, and `rundesk ask`, which writes here from a standalone process holding
+        no lock and having no gateway at all, so "the writer is proven gone" is never true
+        of it. Keeping what cannot be proven is what `_anything_left`, `what_is_working`
+        and `_end_left_running` all do; this is the same posture.
+        """
         self.began("one", started=lambda pid: None)
         written = json.loads(next((self.run_home / "turns").glob("*.json")).read_text())
         self.assertIsNone(written["started"], "the probe was meant to have failed")
-        self.assertEqual(
-            1, len(activity.sweep(self.run_home, started=lambda pid: WHEN)),
-            "a record nothing can ever prove was left to block every future update")
-        self.assertEqual([], self.kept())
-
-    def test_a_record_written_before_there_were_fingerprints_is_not_swept(self):
-        """The other half, so the fix above cannot swallow it: **absent is not null.** A
-        release that never wrote a fingerprint is a bounded, one-time thing an install
-        carries forward, and the turns it names are real."""
-        self.began("one")
-        path = next((self.run_home / "turns").glob("*.json"))
-        row = json.loads(path.read_text())
-        del row["started"]
-        path.write_text(json.dumps(row))
         self.assertEqual([], activity.sweep(self.run_home, started=lambda pid: WHEN),
-                         "it swept a turn from before there were fingerprints")
+                         "it deleted the record of a turn whose process is alive")
         self.assertEqual(1, len(self.kept()))
 
     def test_a_sweep_leaves_a_turn_that_is_still_running(self):

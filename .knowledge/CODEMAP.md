@@ -135,10 +135,13 @@ file with it.
   which is exactly when a record written before that reboot is read. Missing it keeps a row and
   mismatching it drops one, the same asymmetry `gateway._end_left_running` holds — and a probe that
   *could not answer* is neither, because `ps` reports nothing for a timeout or a failed fork.
-  **Absent and null are different answers**: absent is a release that never wrote one, whose turns
-  are real, while null is this install's own probe having failed, which nothing can ever tell from a
-  reused pid afterwards. Only `sweep` acts on that, and only inside `claim`, where this gateway has
-  started nothing and the one that wrote the record is proven gone. **`sweep()` is the only thing
+  **A row this install could not fingerprint at all is kept for as long as its pid answers** — an
+  accepted limit, not an oversight: such rows always have a live pid (a dead one is already taken by
+  the liveness check), so dropping them deletes the record of a possibly-running turn rather than
+  tidying up after a dead one. Sweeping them was tried and reverted; a provider orphaned by its
+  gateway, and `rundesk ask` — which writes here from a standalone process holding no lock and having
+  no gateway at all — both defeat any "the writer is proven gone" argument. The cost is that an
+  update may wait on a turn that has ended. **`sweep()` is the only thing
   that removes what a killed turn left behind** — `ended` runs in the turn's own `finally`, which a
   SIGKILL never reaches — and a gateway calls it as it claims the name.
 - `src/rundesk/skill.py` — the library of skills on this machine, and what makes one. Everything

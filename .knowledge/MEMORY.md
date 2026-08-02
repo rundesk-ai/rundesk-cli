@@ -22,11 +22,18 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `None` or `{}`, the comparison must have a third branch. `started_at`'s own docstring says a number
   is not an identity; it does not say that no answer is not an identity either.
   **And the same question applies where a probe is *written down*, not only where it is compared.**
-  `activity.began` stored whatever the probe gave it, so one failure at registration put a permanent
-  `null` in a record — which `_running` then read as "from before there were fingerprints" and kept
-  alive for ever, blocking every later update. Absent and null had to become different answers.
-  Whenever a probe's result is persisted, decide what a failed probe is stored *as*, and make sure
-  that value cannot be mistaken for a legitimate one written by an older release.
+  `activity.began` stores whatever the probe gave it, so one failure at registration puts a permanent
+  `null` in a record that nothing can ever tell from a reused pid — and that row is then kept alive
+  for as long as its pid answers, which can leave an update waiting on a turn that has ended. **That
+  is an accepted limit, and the attempt to close it is the cautionary half of this entry.** Sweeping
+  those rows looked surgical and was not: a row with no fingerprint always has a *live* pid, because
+  a dead one is already taken by the liveness check — so sweeping deletes the record of a
+  possibly-running turn rather than tidying up after a dead one. The "it is safe inside `claim`,
+  where the writer is proven gone" argument fails twice over: a provider orphaned by its gateway
+  outlives it, and `rundesk ask` writes into the same run directory from a standalone process holding
+  no lock and having no gateway at all. **Before deleting a record on the grounds that its writer
+  must be gone, find every writer** — the standalone one is easy to miss because the directory is
+  named for a gateway.
 - **An import that looks dead can be the seam a collaborator arrives through.** `main` passes the
   gateway module itself as `gateways` when nothing is injected, so `gateways.remembered()` in
   `standing.every_name` needs `gateway.remembered` to exist — while every static check says the
