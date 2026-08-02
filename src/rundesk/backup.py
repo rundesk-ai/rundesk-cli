@@ -694,54 +694,43 @@ def _clear(at: Path) -> None:
     shutil.rmtree(at, ignore_errors=True)
 
 
-def older_than(into: Path, days: int, now=None) -> list:
-    """Which copies are past the age an owner stated — never including the newest.
+def past_the_last(into: Path, copies: int) -> list:
+    """Which copies are beyond the number an owner keeps — never including the newest.
 
-    **The newest is never old.** "Kept for thirty days" must not come to mean "kept none" on a
-    machine that was off for a month, or on one where an owner set a short age and then went
-    away: the whole point of a backup is the one you reach for after trouble, and a rule that
-    can empty the directory is a rule that will, on exactly the day it matters.
+    **The newest is never surplus.** "Keep the last fourteen" must not come to mean "keep
+    none" because of a number this code argued with afterwards: the whole point of a backup
+    is the one you reach for after trouble, and a rule that can empty the directory is a rule
+    that will, on exactly the day it matters. `config` refuses a number below one before it
+    ever reaches here, and the newest file is held out of the candidates again here, where
+    the deleting actually happens.
 
-    A copy whose age cannot be read is never chosen. Deciding to delete something on the
-    strength of not understanding it is the one thing pruning must not do.
+    Order is the name's, which sorts by the moment a copy was taken (R-BKP-7), so no clock is
+    consulted at all — how many there are is a question this directory answers on its own.
+
+    A copy this rundesk cannot read is never chosen, and is never counted towards the number
+    either. Deciding to delete something on the strength of not understanding it is the one
+    thing pruning must not do, and counting it as one of the copies an owner is keeping would
+    delete a good one to make room for something that is not a backup.
     """
-    now = _now() if now is None else now
-    found = every(into)
-    if len(found) <= 1:
+    oldest_first = sorted(every(into), key=lambda one: one.at.name)
+    over = len([one for one in oldest_first if one.readable]) - copies
+    if over <= 0:
         return []
-    oldest_first = sorted(found, key=lambda one: one.at.name)
-    spent = []
-    for one in oldest_first[:-1]:
-        when = _taken_at(one)
-        if when is not None and (now - when).days > days:
-            spent.append(one)
-    return spent
+    return [one for one in oldest_first[:-1] if one.readable][:over]
 
 
-def _taken_at(one) -> datetime.datetime | None:
-    """When this copy says it was taken, or nothing where it cannot be told."""
-    said = (one.said or {}).get("taken_at")
-    if not isinstance(said, str):
-        return None
-    try:
-        return datetime.datetime.strptime(said, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=datetime.timezone.utc)
-    except ValueError:
-        return None
-
-
-def prune(into: Path, days: int, now=None, note=None) -> list:
-    """Take away the copies past the stated age, and say which went."""
+def prune(into: Path, copies: int, note=None) -> list:
+    """Take away the copies beyond the number kept, and say which went."""
     say = note if note is not None else (lambda said: None)
     gone = []
-    for one in older_than(into, days, now=now):
+    for one in past_the_last(into, copies):
         try:
             os.remove(one.at)
         except OSError as trouble:
             say(f"{one.at.name} could not be removed: {trouble}")
             continue
         gone.append(one.at.name)
-        say(f"{one.at.name} was older than {days} days and has been removed")
+        say(f"{one.at.name} is not one of the last {copies} copies and has been removed")
     return gone
 
 

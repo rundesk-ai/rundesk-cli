@@ -1330,7 +1330,7 @@ class WhatThisInstallIsConfiguredWith(unittest.TestCase):
         self.assertEqual(0, code)
         for section in config.SECTIONS:
             self.assertIn(section, said)
-        self.assertIn("keep_days", said)
+        self.assertIn("keep_last", said)
         self.assertIn("granted", said)
 
     def test_every_value_reported_is_stated_in_the_file(self):
@@ -1362,7 +1362,7 @@ class WhatThisInstallIsConfiguredWith(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertIn("backups.keepDays", said)
         self.assertIn("backupz", said)
-        self.assertIn("keep_days  30", said)
+        self.assertIn("keep_last  14", said)
         self.assertNotIn("(default)", said)
 
     def test_an_unreadable_configuration_is_refused_rather_than_reported_as_defaults(self):
