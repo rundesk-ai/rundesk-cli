@@ -149,6 +149,13 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   than the worktree it was invoked from.** Run both installer directions from the target
   worktree directly with the same fully redirected station environment and job prefix;
   otherwise the wrong source is tested or the temporary automatic-update job stays loaded.
+- **A scratch data root that no install has ever run against has no `config.json`, so the
+  first `add` fails with `NOT MADE — <data>/config.json: 'skills' is missing` and names
+  nothing you did.** `install.sh` is what seeds it, and in a disposable station installing
+  is exactly what is blocked, because the shared launchd labels are per user. Seed it
+  instead: with the station's environment exported, `python3 -c "import sys;
+  sys.path.insert(0, 'src'); from rundesk import config; config.ensure()"` answers
+  `['backups', 'updates', 'roles', 'skills']` once and the same `add` then succeeds.
 - **A fresh worktree has no `.venv`, so its Discord regression test skips and looks green.**
   Run the worktree's test path with the main checkout's `.venv/bin/python`; the interpreter
   supplies `discord.py` while the working directory and imported adapter remain the worktree's.

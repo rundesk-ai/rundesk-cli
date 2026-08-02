@@ -441,8 +441,8 @@ class Store:
     def _made(self, want: int, fresh_home: bool = False) -> None:
         conn = self._open(writing=True)
         try:
-            found = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if found == 0 and not self._anything(conn):
+            found, empty = self._looked(conn)
+            if found == 0 and empty:
                 conn.close()
                 conn = None
                 # Built by walking the same steps an update walks, rather than by a second
@@ -459,6 +459,30 @@ class Store:
         finally:
             if conn is not None:
                 conn.close()
+
+    def _looked(self, conn) -> tuple[int, bool]:
+        """What version these records are on, and whether they hold anything — one answer.
+
+        Two statements on an autocommit connection are two snapshots of the write-ahead log,
+        so a build committing between them is read as **tables standing at version 0** — the
+        one shape `_refused` calls written partway, reported for a database that is healthy a
+        millisecond later. `_settled` absorbs the sibling race and cannot absorb this one: it
+        is reached only once a builder has stamped a version, and here it is the version read
+        that is the stale half, so neither branch matches and the refusal is the fall-through.
+
+        Taken under the write lock, so the pair is one snapshot: a builder is wholly before it
+        or wholly after it, and there is no moment either half of the answer can come from.
+        """
+        self._boundary(conn, "BEGIN IMMEDIATE")
+        try:
+            found = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            empty = not self._anything(conn)
+        except BaseException:
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute("ROLLBACK")
+            raise
+        self._boundary(conn, "COMMIT")
+        return found, empty
 
     def understood(self) -> None:
         """Check the records already there are ones we know, and never build any.
@@ -513,9 +537,10 @@ class Store:
         """
         for _ in range(TRIES):
             # Waited *before* the first look, never after it. The version read on the way in
-            # here was taken without the lock and a builder may simply not have reached its
-            # next step yet, so concluding from it that nothing is moving is concluding from
-            # no evidence at all.
+            # here was taken between a builder's steps — it holds the lock for each one and
+            # lets it go in between — so a builder may simply not have reached its next step
+            # yet, and concluding from that one read that nothing is moving is concluding
+            # from no evidence at all.
             self._wait(random.uniform(WAIT_LEAST, WAIT_MOST))
             self._boundary(conn, "BEGIN IMMEDIATE")
             moved = int(conn.execute("PRAGMA user_version").fetchone()[0])
