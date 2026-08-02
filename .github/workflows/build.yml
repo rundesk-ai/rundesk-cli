@@ -405,7 +405,7 @@ jobs:
           printf '%s\n' "$held" |
             grep -qE '^fixture-guidance +rundesk-skills ' ||
             { echo "::error::the default catalog skill is not available after upgrade"; exit 1; }
-          for skill in managing-schedules managing-backups; do
+          for skill in managing-schedules managing-rundesk; do
             printf '%s\n' "$held" |
               grep -qE "^${skill} +rundesk +.*Legacy_Name" ||
               { echo "::error::the legacy agent lost its ${skill} grant"; exit 1; }
@@ -413,7 +413,14 @@ jobs:
               grep -qE "^${skill} +rundesk +.*existing" ||
               { echo "::error::the existing agent lost its ${skill} grant"; exit 1; }
           done
-          for skill in filing-github-issues writing-github-pull-requests; do
+          # Backups folded into `managing-rundesk`, so the capability is carried by the
+          # grant asserted above and the retired package goes. A name still standing here
+          # would mean the retirement did not happen and every agent kept a second copy.
+          if printf '%s\n' "$held" | grep -qE '^managing-backups '; then
+            echo "::error::the retired managing-backups package is still in the library"
+            exit 1
+          fi
+          for skill in filing-github-issues writing-github-pull-requests delegating-to-roles; do
             printf '%s\n' "$held" |
               grep -qE "^${skill} +rundesk +.*Legacy_Name" ||
               { echo "::error::the legacy agent did not receive ${skill}"; exit 1; }
