@@ -275,14 +275,12 @@ class WhatARolesRevisionIsComputedFrom(WithSomewhereToKeepRoles):
     #: And the same for the role this release actually ships, read against a machine with
     #: none of the skills it names — which is the answer that does not depend on what any
     #: one library happens to hold.
-    #: Moved twice, deliberately: #275 reshaped `development/AGENTS.md` into the one shape
-    #: every role is written in, and the heavy-focus roles gave every shipped role a
-    #: `## Not this role` section (R-ROL-38). `lay_down` never writes over a role that is
-    #: already there (R-ROL-18), so no installed role re-revisions — this is the digest of
-    #: what a *fresh* install now gets, and moving it is the reason this constant is
-    #: written by hand.
+    #: Moved once, deliberately: #275 reshaped `development/AGENTS.md` into the one shape
+    #: every role is written in. `lay_down` never writes over a role that is already there
+    #: (R-ROL-18), so no installed role re-revisions — this is the digest of what a *fresh*
+    #: install now gets, and moving it is the reason this constant is written by hand.
     SHIPPED_DEVELOPMENT = (
-        "43ee2eeb886c40a3561f471e70da54397c335048bc0b702e6ff274dbf0a41346")
+        "d9968a0556646d5218eded7030759bcc67e7b4cf272288de381a78892d3c346e")
 
     def test_a_role_naming_neither_keeps_the_revision_it_already_had(self):
         self.wrote()
@@ -356,20 +354,6 @@ class WhatAReleaseShips(WithSomewhereToKeepRoles):
                 self.assertTrue(one.description)
                 self.assertIn(one.posture, ("read", "work"))
                 self.assertTrue(one.instructions.strip())
-
-    def test_every_shipped_role_says_what_it_is_not_for(self):
-        """R-ROL-38 — a run costs a whole context to set up and hands back a report
-        somebody has to review, so a role reached for a two-file edit or a lookup is worse
-        than no role at all. Every shipped one names that light work before it says
-        anything about the heavy work, where a parent deciding whether to delegate reads
-        it rather than after the rules it will never get to."""
-        role.lay_down(self.where)
-        for slug in role.shipped():
-            with self.subTest(role=slug):
-                rules = role.read(slug, self.where, {}).instructions
-                self.assertIn("## Not this role", rules)
-                self.assertLess(rules.index("## Not this role"),
-                                rules.index("## Start here"))
 
     def test_every_shipped_role_ends_in_a_numbered_definition_of_done(self):
         """R-ROL-38 — what a parent reviews an unchecked report against. Numbered because

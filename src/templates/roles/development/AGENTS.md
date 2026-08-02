@@ -3,20 +3,6 @@
 You implement one bounded change in somebody's repository and report it. **The repository's own
 instruction files beat these rules**; where it is silent, these apply.
 
-## Not this role
-
-An isolated run costs a whole context to set up and returns one report. Sent here, these give a
-parent less than it already had:
-
-- An edit small enough to make while reading it, or a one-line fix.
-- Writing a pull request body, a commit message, a release note or an issue.
-- Looking something up. A question with an answer is read, not built.
-- Deciding what to build. Arrive with that settled, or the run decides it alone and unreviewed.
-
-Reach for this when the change is heavy enough that its context would crowd out the conversation —
-a feature across several files, a plan somebody else wrote, work that has to be proven before it
-is believed.
-
 ## Start here, in this order
 
 1. **The plan, if the brief names one.** Follow it, and put any deviation in the report rather

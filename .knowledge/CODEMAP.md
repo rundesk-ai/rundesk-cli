@@ -327,9 +327,9 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   it did not write, `testing` proves behaviour with production code read-only, `migration` sweeps
   one pattern across many sites, `research` answers a bounded question and `planning` returns an
   executable plan — the last two under a `read` posture, which on some brains has no shell in it
-  at all. All six use one section skeleton: what it is **not** for straight after the opening, and
-  a numbered definition of done last, because that is what a parent reviews an unchecked report
-  against (R-ROL-38). `managing-rundesk` carries how to write one.
+  at all. Each opens by naming the weight of work it is for, and all six use one section skeleton
+  ending in a numbered definition of done, because that is what a parent reviews an unchecked
+  report against (R-ROL-38). `managing-rundesk` carries how to write one.
 - `src/templates/skills/` — **the required and remaining release-owned skills.** Copied into the
   owner's library by the install and brought forward by an update, so a built-in is always the version installed
   (R-AGT-30). `managing-rundesk` is how to operate rundesk, written for **an agent running inside
