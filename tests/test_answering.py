@@ -2250,6 +2250,19 @@ class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
 class WhatIsForTheOwnerAlone(unittest.IsolatedAsyncioTestCase):
     """R-CH-32 — bookkeeping about the agent, told to the owner and to nobody else."""
 
+    def setUp(self):
+        # An install of this case's own. Without it, making an agent reads the *owner's*
+        # configured skill baseline — which is there on a developer's machine, whose shell
+        # is a gateway's child, and is not there on a runner.
+        self.data = Path(tempfile.mkdtemp(prefix="rundesk-owner-notice-data-"))
+        self.addCleanup(shutil.rmtree, self.data, True)
+        before = os.environ.get("RUNDESK_DATA_DIR")
+        os.environ["RUNDESK_DATA_DIR"] = str(self.data)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", before)
+                        if before is not None
+                        else os.environ.pop("RUNDESK_DATA_DIR", None))
+        config.ensure(self.data)
+
     def channel(self, where):
         agents.add("ava", where)
         agents.remember("ava", where, provider="a-brain")
