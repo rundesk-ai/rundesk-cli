@@ -283,7 +283,10 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
 - `src/templates/roles/` — **the roles this release ships.** Two files each, laid down where
   one of that name is missing and never over one an owner has: unlike a built-in skill, a role is
   what somebody writes their specialists as, and bringing one "forward" would rewrite what every future
-  run of an edited role is allowed to do (R-ROL-18). `development` is the only one so far.
+  run of an edited role is allowed to do (R-ROL-18). Two so far: `development` implements a
+  bounded change, and `research` answers a bounded question under a `read` posture and changes
+  nothing. Both use one section skeleton ending in a numbered definition of done, because that is
+  what a parent reviews an unchecked report against; `managing-rundesk` carries how to write one.
 - `src/templates/skills/` — **the required and remaining release-owned skills.** Copied into the
   owner's library by the install and brought forward by an update, so a built-in is always the version installed
   (R-AGT-30). `managing-rundesk` is how to operate rundesk, written for **an agent running inside
