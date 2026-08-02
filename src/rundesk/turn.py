@@ -62,6 +62,12 @@ UPDATE = "update"
 #: that set — here, there, and in whatever a caller passes — is two too many.
 CHANNEL = "channel"
 
+#: The fourth: a turn this agent's own turn admitted, carrying one isolated specialist
+#: execution on its behalf (R-ROL-4). A conversation of its own, keyed by the role run,
+#: so a specialist execution is never in the conversation a person is typing into and a
+#: resumed one carries on exactly where it stopped.
+ROLE = "role"
+
 #: How many lines of what a brain said went wrong are carried back with the outcome. The
 #: whole of it is in the run's own file; this is the tail worth putting in front of a person.
 TROUBLE_KEPT = 20
@@ -165,6 +171,40 @@ class Outcome:
                                           else self.reason)
 
 
+@dataclass(frozen=True)
+class Execution:
+    """Where a turn actually runs, when it is not standing in the agent's own home.
+
+    **Ordinary turns never build one of these.** An agent's turn stands in the agent's
+    home, is presented the agent's own skills, and carries no role — which is what the
+    default below says, so nothing about an ordinary turn changed by this existing.
+
+    A role run replaces two of the three: the brain stands in the target project, so
+    the CLI discovers that repository's own `AGENTS.md` hierarchy natively rather than
+    being handed a stale copy of it, and it is presented the run's locked skill snapshot
+    rather than whatever the named agent happens to hold today (R-ROL-7, R-ROL-8).
+
+    `role_run` is also the recursion marker: it is written into the run's own row and
+    told to the brain, so a role execution that reaches for `rundesk` is refused a
+    second role level from the durable record rather than from a word it supplied.
+    """
+
+    #: The provider's working directory — where a brain stands, and where it finds the
+    #: project rules it is to follow.
+    cwd: Path
+    #: Where this turn's skills stand, told to the adapter and presented by it.
+    skills: Path
+    #: Which isolated specialist execution this turn is carrying, if it is carrying one.
+    role_run: str | None = None
+    #: Which shared role that execution is running, for the account to say so.
+    role: str | None = None
+
+    @classmethod
+    def ordinary(cls, whose: dict) -> "Execution":
+        """What every turn that is not a role execution runs as."""
+        return cls(cwd=whose["home"], skills=whose["skills"])
+
+
 class CannotResume(RuntimeError):
     """An interrupted turn has no provider session that can safely be continued."""
 
@@ -198,6 +238,7 @@ async def carry(
     stopped_by_owner=None,
     recovery_of: str | None = None,
     started=None,
+    context: "Execution | None" = None,
 ) -> Outcome:
     """Run one turn for this agent, and write down everything about it.
 
@@ -230,9 +271,14 @@ async def carry(
     leaves everything shown while somebody is waiting uncorrelated — and the capabilities
     to know what to offer, since offering to interrupt a brain that cannot be steered
     offers something that cannot happen (R-PRV-15).
+
+    `context` is where this turn actually runs, for a turn not standing in the agent's own
+    home. Left out — which is every ordinary turn — it resolves to exactly what this
+    function has always used, so nothing about one changed by the argument existing.
     """
     at = provider.program(named)          # raises NotRunnable, before anything is written
     whose = agents.paths(name, where)
+    running = context if context is not None else Execution.ordinary(whose)
     brain = provider.key(named)
     # **Named, never made.** An adapter is told where a home of its own *would* be and is
     elapsed_clock = clock or time.monotonic
@@ -256,7 +302,7 @@ async def carry(
     transcript.sweep(whose["logs"])
 
     can = await provider.capabilities(at, provider.environment(
-        home=whose["run"], cwd=whose["home"], provider_home=home, skills=whose["skills"],
+        home=whose["run"], cwd=running.cwd, provider_home=home, skills=running.skills,
         run="capabilities", posture=posture, path=None,
     ))
     kept = agents.records(name, where)
@@ -294,6 +340,7 @@ async def carry(
         conversation_id=where_it_is, schedule_id=schedule_id,
         trigger_message_id=asked, model=model, can=can,
         settings=settings, resumed=bool(resume), pick=pick,
+        role_run=running.role_run,
     )
     if admitted is not None:
         admitted(run, dict(can))
@@ -350,10 +397,11 @@ async def carry(
             program = process.Program(
                 [str(at)],
                 env=provider.environment(
-                    home=whose["run"], cwd=whose["home"], provider_home=home,
-                    skills=whose["skills"], run=run,
+                    home=whose["run"], cwd=running.cwd, provider_home=home,
+                    skills=running.skills, run=run,
                     model=model, resume=carrying, posture=posture, settings=settings,
                     raw=transcript.printed(whose["logs"], run), preface=preface,
+                    role_run=running.role_run,
                 ),
                 # **The agent's home, not its workspace.** A brain loads the rules it is to
                 # follow because they *stand in the directory it stands in* — that is the
@@ -362,7 +410,11 @@ async def carry(
                 # reach: the agent was asked who it was and answered, truthfully, that
                 # there was nothing here to tell it. `workspace/` is still where it works,
                 # by instruction, which is what that file also says.
-                cwd=whose["home"],
+                #
+                # A role execution stands somewhere else for the same reason: the rules
+                # it is to follow are the target project's, and they stand in the target
+                # project (R-ROL-7).
+                cwd=running.cwd,
                 takes_input=True,
                 errors_apart=True,
                 on_error=_noting(writing, trouble),

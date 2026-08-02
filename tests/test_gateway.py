@@ -4085,6 +4085,173 @@ class LifecycleOutcomesWaitForReachability(WithARunDirectory):
                          "an expected wait state was logged as a delivery failure")
 
 
+class Delegating:
+    """What a gateway is handed to carry role runs with, as a stand-in.
+
+    The real one is `agent.playing`, made where an agent is known. Every case here runs
+    with no agent, no bundle and no brain anywhere near it, which is the whole point of
+    the seam being an argument.
+    """
+
+    def __init__(self, waiting=(), owed=(), carried=None):
+        self._waiting = list(waiting)
+        self._owed = list(owed)
+        self.carried = carried if carried is not None else []
+        self.claimed: list = []
+        self.settled: list = []
+        self.reviewing_runs: list = []
+        self.reviewed_runs: list = []
+        self.swept = 0
+
+    def waiting(self):
+        return list(self._waiting)
+
+    def stopping(self):
+        return [one for one in self._waiting if one.get("stop_asked_at")]
+
+    def stopped(self, run_id):
+        self.settled.append(run_id)
+        self._waiting = [one for one in self._waiting if one["id"] != run_id]
+
+    async def carry(self, run_id, watching=None, steering=None, admitted=None):
+        self.carried.append(run_id)
+        self._waiting = [one for one in self._waiting if one["id"] != run_id]
+        return None
+
+    def owed(self):
+        return list(self._owed)
+
+    def claiming(self, role_run):
+        self.claimed.append(role_run)
+
+    def reviewing(self, role_run, review_run):
+        self.reviewing_runs.append((role_run, review_run))
+
+    def reviewed(self, role_run):
+        self.reviewed_runs.append(role_run)
+        self._owed = [one for one in self._owed if one["role_run"] != role_run]
+
+    def sweep(self):
+        self.swept += 1
+        return []
+
+
+class Reached:
+    """One surface, as far as delivering a role handoff is concerned."""
+
+    def __init__(self, connected: bool = True, raises=None):
+        self.connected = connected
+        self.told: list = []
+        self._raises = raises
+
+    async def told_role_finished(self, conversation, handoff, reviewing=None):
+        if self._raises is not None:
+            raise self._raises
+        if reviewing is not None:
+            reviewing("11-rrrr")
+        self.told.append((conversation, handoff))
+
+
+class CarryingWhatAnAgentHandedOn(WithARunDirectory):
+    """R-ROL-15 — work admitted while nothing was up is still carried, and its parent
+    is told exactly once."""
+
+    def one(self, doing) -> gateway.Gateway:
+        gw = gateway.Gateway("ava", where=self.where, logs=self.logs, root=self.root,
+                             roles=doing)
+        self.addCleanup(gw.release)
+        return gw
+
+    async def test_a_gateway_carries_every_admitted_role_run_it_finds(self):
+        doing = Delegating(waiting=[{"id": "rol-1-aaaa"}, {"id": "rol-2-bbbb"}])
+        gw = self.one(doing)
+
+        gw._start_admitted_roles()
+        await asyncio.gather(*tuple(gw._role_tasks.values()))
+
+        self.assertEqual(["rol-1-aaaa", "rol-2-bbbb"], sorted(doing.carried))
+
+    async def test_a_root_already_in_flight_is_never_started_a_second_time(self):
+        """R-GW-15 — the same work started twice answers its parent twice."""
+        held = asyncio.Event()
+        doing = Delegating(waiting=[{"id": "rol-1-aaaa"}])
+
+        async def carrying(run_id, **_given):
+            doing.carried.append(run_id)
+            await held.wait()
+
+        doing.carry = carrying
+        gw = self.one(doing)
+
+        gw._start_admitted_roles()
+        gw._start_admitted_roles()
+        held.set()
+        await asyncio.gather(*tuple(gw._role_tasks.values()))
+
+        self.assertEqual(["rol-1-aaaa"], doing.carried)
+
+    async def test_a_parent_is_told_once_and_the_review_stops_being_owed(self):
+        doing = Delegating(owed=[{"role_run": "rol-1-aaaa", "channel": "ops",
+                                  "conversation": "one",
+                                  "handoff": {"report": "done"}}])
+        gw = self.one(doing)
+        surface = Reached()
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_role_review()
+
+        self.assertEqual([("one", {"report": "done"})], surface.told)
+        self.assertEqual(["rol-1-aaaa"], doing.claimed)
+        self.assertEqual([("rol-1-aaaa", "11-rrrr")], doing.reviewing_runs)
+        self.assertEqual(["rol-1-aaaa"], doing.reviewed_runs)
+
+    async def test_a_review_is_left_owing_while_the_surface_is_down(self):
+        doing = Delegating(owed=[{"role_run": "rol-1-aaaa", "channel": "ops",
+                                  "conversation": "one", "handoff": {}}])
+        gw = self.one(doing)
+        gw._reached["ops"] = Reached(connected=False)
+
+        await gw._deliver_one_role_review()
+
+        self.assertEqual([], doing.reviewed_runs)
+        self.assertEqual([], doing.claimed)
+
+    async def test_a_review_the_surface_refused_is_left_owing_rather_than_lost(self):
+        doing = Delegating(owed=[{"role_run": "rol-1-aaaa", "channel": "ops",
+                                  "conversation": "one", "handoff": {}}])
+        gw = self.one(doing)
+        gw._reached["ops"] = Reached(raises=RuntimeError("the room is busy"))
+
+        with self.assertRaises(RuntimeError):
+            await gw._deliver_one_role_review()
+
+        self.assertEqual(["rol-1-aaaa"], doing.claimed)
+        self.assertEqual([], doing.reviewed_runs)
+
+    async def test_an_undeliverable_review_never_holds_up_the_ones_behind_it(self):
+        """R-ROL-15 — a channel the owner has since removed never comes back, and the
+        oldest handoff sitting at the head of the queue would keep every later one from
+        ever being reported."""
+        doing = Delegating(owed=[
+            {"role_run": "rol-1-aaaa", "channel": "gone", "conversation": "one",
+             "handoff": {}},
+            {"role_run": "rol-2-bbbb", "channel": "ops", "conversation": "two",
+             "handoff": {"report": "done"}},
+        ])
+        gw = self.one(doing)
+        surface = Reached()
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_role_review()
+
+        self.assertEqual([("two", {"report": "done"})], surface.told)
+        self.assertEqual(["rol-2-bbbb"], doing.reviewed_runs)
+
+    def test_a_gateway_with_no_agent_behind_it_carries_no_role_run_at_all(self):
+        gw = gateway.Gateway("ava", where=self.where, logs=self.logs, root=self.root)
+        self.addCleanup(gw.release)
+        gw._sweep_roles()   # nothing to sweep, and nothing to raise
+        self.assertEqual({}, gw._role_tasks)
 class TellsTheOwnerWhatItsAgentMayDo(WithARunDirectory):
     """R-CH-32 — an agent gaining or losing a skill reaches its owner."""
 

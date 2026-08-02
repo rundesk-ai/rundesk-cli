@@ -44,6 +44,13 @@ rundesk runs [--most <n>] <agent>                                               
 rundesk usage                                                                                                                                                                                                           what every agent has cost
 rundesk usage <agent>                                                                                                                                                                                                   what one agent has cost
 
+# handing work on
+rundesk roles <agent> resume <run>                                                                                                                                                                                      carry a finished role run on — the further task is read from standard input
+rundesk roles <agent> run [--target <directory>] [--label <text>] <role>                                                                                                                                                hand one bounded task to a role — the brief is read from standard input
+rundesk roles <agent> say <run>                                                                                                                                                                                         say something to a role that is working — read from standard input
+rundesk roles <agent> show <run>                                                                                                                                                                                        one role run in full
+rundesk roles <agent> stop <run>                                                                                                                                                                                        end a role run before it finishes
+
 # rundesk itself
 rundesk status                                                                                                                                                                                                          how rundesk itself is on this machine
 rundesk version [--check]                                                                                                                                                                                               what is installed, and whether that is current
@@ -122,6 +129,18 @@ rundesk schedules ava --expired
 rundesk schedules ava off nightly
 ```
 
+**A role**
+
+```sh
+# the specialists ava can hand heavy work to, and the runs it has admitted
+rundesk roles ava
+# one bounded task, run in that project under the role's own rules
+rundesk roles ava run development --target ~/code/exporter --label "csv export"
+#   an agent hands work on from inside its own turn, and the brief arrives on standard input — the outcome, what it may do, and what done looks like
+# one run: which role and revision, where it worked, and whether ava has reviewed it
+rundesk roles ava show rol-3-vfs3
+```
+
 ## What the arguments mean
 
 ```sh
@@ -143,6 +162,7 @@ rundesk schedules ava off nightly
 --in <where>                    which place on that channel to say it in, in that surface's own words — for Discord: a room name or id, or on a DM channel the person's user id (the same id as --allow) or the DM channel id. Left out, it follows the conversation
 --instructions <text>           what every turn for this agent is told before it reads a prompt, where neither the schedule nor the surface said — empty takes it off
 --kind <kind>                   which kind of surface — one that ships, or the path of a program that speaks yours
+--label <text>                  a short safe name for the task, shown where other people can read it — never a path and never the brief
 --model <model>                 which model, in that brain's own words
 --most <n>                      how many to show, newest first (default: 20)
 --provider <provider>           which brain answers for it when a turn does not say
@@ -150,10 +170,11 @@ rundesk schedules ava off nightly
 --read-only                     let this turn look at the machine without changing it
 --set <key=value>               anything that brain takes, carried to it unread; repeatable
 --since <id>                    only what was said after this one, by the id shown beside it
---source <how>                  only messages belonging to work admitted this way — one of channel | schedule | terminal
+--source <how>                  only messages belonging to work admitted this way — one of channel | role | schedule | terminal
 --source <source>               whose lines to show — what the gateway wrote, or what the machine caught that never reached it — one of all | gateway | machine
 --status                        show the last queued update and its final outcome
 --steer                         keep saying more to it while it works — a line at a time, until you stop
+--target <directory>            the project directory the work happens in — the brain stands there, so the project's own instruction files load normally
 --to <channel>                  which channel to say what this came to on, by the name it was added under — the account and `schedules` say it either way
 --token-stdin                   read the credential this channel needs from standard input, one line; asked for at the terminal when left out
 --when <cron>                   when it runs, over and over, as five cron fields — minute, hour, day, month, weekday
@@ -169,7 +190,8 @@ rundesk schedules ava off nightly
 <program>                       after `--`, the full path of what to start when it is due, and its arguments — a bare name is refused, because a gateway runs with almost no PATH
 <prompt>                        what to ask it, in quotes
 <repository>                    a GitHub repository URL, local directory or archive
-<run>                           which run — the id listed against each by `runs`
+<role>                          which role — one this install has, by its own name
+<run>                           which role run — the id `roles` lists
 <schedule>                      what to call it, and what to name it by later
 <skill>                         which skill, by the name it is under
 <text>                          what to tell it, with {agent} {channel} {surface} {where} {called} {user} {conversation} filled in — empty takes it back off, and left out shows what is there

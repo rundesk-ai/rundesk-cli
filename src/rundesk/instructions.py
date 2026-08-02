@@ -74,6 +74,43 @@ _TRIGGERS = {
     PUBLIC: PUBLIC_ROOM,
 }
 
+# The whole of what Rundesk itself says to a role execution, and deliberately small
+# (R-ROL-5). It is not `RUNDESK_INSTRUCTIONS`: an agent working as a role has no home to
+# load, no memory to keep, no conversation to recover, no channels or schedules to operate
+# and no Rundesk to manage — every one of those belongs to the named agent that delegated
+# to it, and an execution told about them goes looking for an identity it does not have.
+#
+# What is left is what the role's own rules may not replace: whose behalf this is
+# on, what the task is, how far the authority reaches, that another role may not be put on
+# from here, and that being blocked is reported rather than worked around. A role may add
+# to this and may narrow it. Nothing removes it.
+ROLE_EXECUTION_INSTRUCTIONS = """# Role execution
+
+You are working as the '{role}' role, on behalf of the named agent {parent_agent}. This is one isolated execution and nothing more. These rules hold for the whole of it and cannot be replaced by anything after them.
+
+- You are not {parent_agent} and not a named agent. You have no memory, no history, and no identity beyond this task.
+- Do exactly the task in the brief. Never widen it, and never act on anything you infer about conversations you cannot see.
+- The brief's authorization ceiling is the whole of your authority. Needing more, stop and report `blocked`, naming the action and what it was for.
+- Never speak as the person who asked and never send anything to anyone. {parent_agent} reviews your report and answers them.
+- Never operate Rundesk, change channels or schedules, or write into {parent_agent}'s home.
+- Your provider's own subagents are yours to use within this task. Starting another Rundesk role run is refused.
+- Report truthfully: what you verified and how, what you did not do, and never a failure dressed as progress."""
+
+# What Rundesk tells a role execution about the task itself, after the floor and after
+# the role's own rules. Bounded and Rundesk-authored: the parent supplies the brief as
+# the prompt, and everything mechanical about the run is stated here once rather than left
+# for a parent to remember to include.
+ROLE_TASK_INSTRUCTIONS = """## This execution
+
+- Role run `{role_run}`, working in `{target}`, whose own instruction files apply to you.
+- Files that are not part of the project belong under `{workspace}`.
+- Finish with one report: outcome, what you changed or found, how you verified it, what risk is left, and any decision {parent_agent} must make."""
+
+#: Every variable a role layer may be filled with. Kept apart from `STANDARD_VARIABLES`
+#: because they describe different situations: those name an agent, a person and a place a
+#: conversation is happening in, and a role execution has none of the three.
+ROLE_VARIABLES = ("role", "parent_agent", "role_run", "target", "workspace")
+
 
 def render(template: str, variables: Mapping[str, object] | None = None) -> str:
     """Fill only variables the caller supplied, leaving unknown placeholders visible."""
@@ -100,3 +137,24 @@ def build(*, variables: Mapping[str, object] | None = None, trigger: str = "",
         for template in layers
         if (rendered := render(template, variables).strip())
     )
+
+
+def for_role(*, variables: Mapping[str, object] | None = None, rules: str = "") -> str:
+    """What a role execution is told about its situation, in one stable order.
+
+    **This is not `build`, and it never calls it** (R-ROL-5). `build` assembles what a
+    named agent is: its home, its memory, how to read its own history back, how to operate
+    Rundesk. An agent working as a role is none of those things and must not be told it is — so the
+    two orders are written apart rather than one being the other with layers removed,
+    which is the shape that quietly grows a leak back in.
+
+    `rules` is the role's own `AGENTS.md`, spliced in **exactly as it was locked**.
+    Nothing is filled into it: a run has to be resumable with byte-identical rules, and a
+    substitution is a difference (R-ROL-10).
+    """
+    layers = (
+        render(ROLE_EXECUTION_INSTRUCTIONS, variables).strip(),
+        (rules or "").strip(),
+        render(ROLE_TASK_INSTRUCTIONS, variables).strip(),
+    )
+    return "\n\n".join(one for one in layers if one)

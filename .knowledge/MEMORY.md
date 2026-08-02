@@ -838,5 +838,11 @@ re-checked since, so treat these as true-when-found rather than as current.*
   before returning any release data; verify tag, publication, draft and prerelease state with
   supported `release view` fields, and use `gh release list` when latest ordering matters.
 
+- **An apostrophe inside a heredoc inside `$( ... )` breaks `bash -n` on bash 3.2**, which is
+  what macOS ships and what the gate's shell check runs. `install.sh` embeds Python through
+  `took="$(python3 - ... <<'SKILLS' ... SKILLS)"`, and a Python comment reading `the owner's`
+  in there is reported as a syntax error dozens of lines later, at whatever line happens to
+  hold an unbalanced parenthesis. Write those comments without an apostrophe.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*
