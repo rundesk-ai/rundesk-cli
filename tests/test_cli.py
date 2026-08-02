@@ -484,7 +484,7 @@ class BuiltCommandTests(unittest.TestCase):
         built = {"version", "update", "uninstall", "add", "configure", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
                  "channels", "runs", "usage", "search", "messages", "skills", "scripts",
-                 "backups", "config"}
+                 "backups", "config", "roles"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 
@@ -577,6 +577,12 @@ class FakeGateways:
     MACHINE_LOG = real_gateway.MACHINE_LOG
     EVERY_LOG = real_gateway.EVERY_LOG
     LOG_SOURCES = real_gateway.LOG_SOURCES
+    # Borrowed rather than stubbed. What a channel owes the people it allows is one rule
+    # with one answer, and a stand-in that quietly did nothing would let `add` stop
+    # seeding it with nothing here to catch it. Both write inside the channel's own home,
+    # which every case below puts under a scratch agents directory.
+    remember_no_one_welcomed = staticmethod(real_gateway.remember_no_one_welcomed)
+    forget_welcomed = staticmethod(real_gateway.forget_welcomed)
 
     class AlreadyRunning(Exception):
         pass
@@ -703,13 +709,14 @@ class FakeGateways:
         return self._written if self._written is not None else pathlib.Path("/nowhere/x.log")
 
     def Gateway(self, name, where=None, logs=None, reachable=(),
-                agents=None, records=None, asking=None):
+                agents=None, records=None, asking=None, roles=None, granted=None):
         gateways = self
         # Kept, because what the command hands a gateway is the command's to get right:
         # a gateway told nothing about where agents are starts programs that cannot find
         # one (R-SCH-27), and only this side of the seam can be asked whether it was told.
         self.made_with.append({"name": name, "where": where, "logs": logs,
-                               "agents": agents, "records": records, "asking": asking})
+                               "agents": agents, "records": records, "asking": asking,
+                               "roles": roles, "granted": granted})
 
         class One:
             async def serve(inner):
@@ -939,6 +946,8 @@ class FakeAgents:
         self.asked_runnable = None
         #: Which schedules a gateway asked a turn for, by agent.
         self.asked: list = []
+        #: Which agents a gateway was handed role-carrying for.
+        self.played: list = []
         #: What asking what this agent keeps raises, where a case is about that failing.
         self.refuses: BaseException | None = None
         #: What was made, adopted and taken away, in the order it was asked for.
@@ -1085,6 +1094,18 @@ class FakeAgents:
             self.asked.append((name, one.name))
             raise AssertionError("a turn was admitted by a case that only watches for one")
         return made
+
+    def playing(self, name, where=None, carry=None):
+        """What a gateway is handed to carry this agent's role runs with. A stand-in
+        for the real one's shape and nothing more: whether the command hands one over is
+        this file's, and what a gateway does with it is `tests/test_gateway.py`'s."""
+        self.played.append(name)
+        return real_agent.Playing(
+            waiting=lambda: [], stopping=lambda: [], stopped=lambda _run: None,
+            carry=None, owed=lambda: [],
+            claiming=lambda _run: None, reviewing=lambda _run, _review: None,
+            reviewed=lambda _run: None, sweep=lambda: [],
+        )
 
     def agents_home(self):
         """Where this stand-in keeps them, which is a real directory for a case that writes.
@@ -1282,6 +1303,17 @@ def drive(argv, gateways=None, machine=None, agents=None, skills=None, scripts=N
             # what the caller was left with.
             code = usage.code if isinstance(usage.code, int) else 1
     return code, out.getvalue() + err.getvalue()
+
+
+@contextlib.contextmanager
+def feeding(said: str):
+    """What a command reads off standard input, for the one that takes a task that way."""
+    was = sys.stdin
+    sys.stdin = io.StringIO(said)
+    try:
+        yield
+    finally:
+        sys.stdin = was
 
 
 class WhatThisInstallIsConfiguredWith(unittest.TestCase):
@@ -1780,6 +1812,29 @@ class ServingAGateway(unittest.TestCase):
         self.assertEqual([at], [one["agents"] for one in gateways.made_with])
         self.assertIsNotNone(gateways.made_with[0]["records"],
                             "a gateway was left with nowhere to read its schedules from")
+
+    def test_a_gateway_is_told_how_to_ask_what_its_agent_may_do(self):
+        """R-CH-32 — a grant is a link anything may change while the gateway runs, so what
+        is handed over is the question and never an answer taken once at startup."""
+        gateways = FakeGateways()
+        at = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-grants-"))
+        self.addCleanup(shutil.rmtree, at, True)
+        agents = FakeAgents(made=["ava"], at=at)
+        skills = FakeSkills(given={"ava": ["alpha"]})
+        code, _ = drive(["serve", "ava"], gateways, agents=agents, skills=skills)
+        self.assertEqual(0, code)
+        asking = gateways.made_with[0]["granted"]
+        self.assertEqual(["alpha"], asking())
+        skills._given["ava"] = ["alpha", "beta"]
+        self.assertEqual(["alpha", "beta"], asking(),
+                         "a gateway was handed an answer rather than a question")
+
+    def test_a_gateway_of_a_name_that_is_not_an_agent_is_told_of_no_grants(self):
+        """A name nothing was made for holds no skills, and still runs (R-GW-13)."""
+        gateways = FakeGateways()
+        code, _ = drive(["serve", "nobody"], gateways, agents=FakeAgents())
+        self.assertEqual(0, code)
+        self.assertIsNone(gateways.made_with[0]["granted"])
 
     def test_serving_without_a_name_is_a_usage_error(self):
         """R-CMD-5 — a verb says what and the next word says whose. There is no longer one
@@ -4056,6 +4111,155 @@ print(json.dumps({"ok": True, "describes": "a room", "settings": {},
                          "an option inside the tail was read as the schedule's own")
 
 
+class WhoMayReachAnAgentThroughAChannel(unittest.TestCase):
+    """R-CAD-19 — changing who is allowed, on the channel that is already there.
+
+    The people responsible for an agent change over its life. Saying so used to mean
+    taking the agent off the surface and adding it again, which throws away its
+    instructions, its settings and whatever the adapter kept for it, to change one line.
+    """
+
+    #: Says it can see what it was pointed at, so a channel can be added to change.
+    WORKS = TheSurfacesAnAgentIsReachableOn.WORKS
+
+    def setUp(self):
+        self.at = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-allow-"))
+        self.addCleanup(shutil.rmtree, self.at, True)
+        self.written = self.at / "logs" / "ava.log"
+        self.agents = FakeAgents(made=["ava"], at=self.at)
+        (self.at / "ava").mkdir(parents=True, exist_ok=True)
+        at = self.at / "a-channel"
+        at.write_text("#!%s\n%s" % (sys.executable, self.WORKS), encoding="utf-8")
+        at.chmod(0o755)
+        self.kind = str(at)
+
+    def _gateways(self, **kw):
+        return FakeGateways(written=self.written, **kw)
+
+    def _added(self, *allow: str) -> None:
+        code, said = drive(["channels", "ava", "add", "ops", "--kind", self.kind,
+                            *[word for one in allow for word in ("--allow", one)]],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+
+    def allowed(self) -> list:
+        return self.agents.reading("ava").channel("ops")["allow"]
+
+    def welcomed(self) -> list:
+        kept = real_gateway.welcomed_path(self.agents.channel_home("ava", "ops"))
+        return json.loads(kept.read_text(encoding="utf-8"))["welcomed"]
+
+    def test_who_is_allowed_is_shown_one_to_a_line(self):
+        """R-CAD-19 — script-readable, because the answer is a list of ids and a table is
+        something a person has to take apart again."""
+        self._added("2207", "1180")
+        code, said = drive(["channels", "ava", "allow", "ops"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["1180", "2207"],
+                         [line for line in said.splitlines() if line.strip()])
+
+    def test_somebody_is_added_to_a_channel_that_already_exists(self):
+        """R-CAD-19"""
+        self._added("2207")
+        code, said = drive(["channels", "ava", "allow", "ops", "--add", "1180"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("ALLOWED", said)
+        self.assertEqual(["1180", "2207"], self.allowed())
+
+    def test_somebody_is_taken_off_a_channel_that_already_exists(self):
+        """R-CAD-19"""
+        self._added("2207", "1180")
+        code, said = drive(["channels", "ava", "allow", "ops", "--remove", "1180"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["2207"], self.allowed())
+
+    def test_one_person_is_replaced_by_another_in_one_change(self):
+        """R-CAD-19 — one command, so there is never a moment with nobody allowed in it
+        and never two writers who can lose each other's half."""
+        self._added("2207")
+        code, said = drive(["channels", "ava", "allow", "ops",
+                            "--add", "1180", "--remove", "2207"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["1180"], self.allowed())
+
+    def test_the_last_person_allowed_cannot_be_taken_off(self):
+        """R-CAD-10, R-CAD-19 — a channel nobody may use answers whoever speaks to it,
+        which is a misconfiguration and never a mode."""
+        self._added("2207")
+        code, said = drive(["channels", "ava", "allow", "ops", "--remove", "2207"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT CHANGED", said)
+        self.assertEqual(["2207"], self.allowed(), "the last owner was taken off anyway")
+
+    def test_taking_off_somebody_who_was_never_allowed_is_refused(self):
+        """R-CAD-19 — a mistyped id that quietly succeeds leaves the person the owner
+        meant to remove still allowed, and says the opposite."""
+        self._added("2207", "1180")
+        code, said = drive(["channels", "ava", "allow", "ops", "--remove", "9999"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT CHANGED", said)
+        self.assertEqual(["1180", "2207"], self.allowed())
+
+    def test_a_user_id_with_nothing_in_it_allows_nobody(self):
+        """R-CAD-10, R-CAD-19"""
+        self._added("2207")
+        code, said = drive(["channels", "ava", "allow", "ops", "--add", "  "],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT CHANGED", said)
+        self.assertEqual(["2207"], self.allowed())
+
+    def test_a_change_that_changes_nothing_says_so(self):
+        """R-CAD-19"""
+        self._added("2207")
+        code, said = drive(["channels", "ava", "allow", "ops", "--add", "2207"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("UNCHANGED", said)
+
+    def test_a_channel_that_is_not_there_is_told_from_one_that_is(self):
+        """R-CAD-19"""
+        self._added("2207")
+        code, said = drive(["channels", "ava", "allow", "nope", "--add", "1180"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT FOUND", said)
+
+    def test_adding_somebody_says_the_surface_hears_of_it_when_it_next_starts(self):
+        """R-CAD-19 — a surface is handed who it may listen to when it starts, so a new
+        owner messaging an agent that ignores them has no way to know why."""
+        self._added("2207")
+        _, said = drive(["channels", "ava", "allow", "ops", "--add", "1180"],
+                        self._gateways(), agents=self.agents)
+        self.assertIn("rundesk restart ava", said)
+
+    def test_a_new_channel_has_introduced_the_agent_to_nobody(self):
+        """R-CH-33 — which is what makes everybody on a channel added today owed one, and
+        nobody on a channel an older release wrote."""
+        self._added("2207")
+        self.assertEqual([], self.welcomed())
+
+    def test_somebody_taken_off_is_no_longer_written_down_as_introduced(self):
+        """R-CH-33 — rearranging who may reach an agent is exactly what an owner does with
+        nothing running, so the command forgets them rather than leaving it to a gateway
+        that is not there. Otherwise adding them back is a person who is never greeted."""
+        self._added("2207", "1180")
+        real_gateway.remember_welcomed(self.agents.channel_home("ava", "ops"), "1180")
+        drive(["channels", "ava", "allow", "ops", "--remove", "1180"],
+              self._gateways(), agents=self.agents)
+        self.assertEqual([], self.welcomed())
+        drive(["channels", "ava", "allow", "ops", "--add", "1180"],
+              self._gateways(), agents=self.agents)
+        self.assertEqual([], self.welcomed(),
+                         "somebody added again was still written down as introduced")
+
+
 class WhatNeverFinished(unittest.TestCase):
     """R-GW-38, R-GW-39 — the store saying what never finished, given a reader.
 
@@ -4662,6 +4866,58 @@ class WhatATurnLooksLikeOnATerminal(unittest.TestCase):
         for, and the line still has to read."""
         self.assertEqual("· using mcp__weather",
                          self._watched({"type": "tool", "name": "mcp__weather"}))
+
+
+class HandingWorkToARole(unittest.TestCase):
+    """`rundesk roles <agent> run <role>` — who may ask, and what is refused."""
+
+    def setUp(self):
+        self.where = tempfile.mkdtemp(prefix="rundesk-roles-cli-")
+        self.addCleanup(shutil.rmtree, self.where, True)
+
+    def test_handing_work_to_a_role_needs_a_turn_of_this_agents_own(self):
+        """R-ROL-4 — a worker acts on a named agent's behalf and answers into that
+        agent's conversation, so the run that admits it has to be one of that agent's."""
+        for said in ("RUNDESK_RUN", "RUNDESK_ROLE_RUN"):
+            os.environ.pop(said, None)
+        with feeding("Outcome: make it work.\n"):
+            code, said = drive(["roles", "ava", "run", "development"],
+                               agents=FakeAgents(made=["ava"]))
+        self.assertEqual(1, code)
+        self.assertIn("NOT ADMITTED", said)
+        self.assertIn("own turn", said)
+
+    def test_a_role_run_cannot_hand_work_to_another_role(self):
+        """R-ROL-13 — said early and cheaply here; the durable record is what refuses."""
+        os.environ["RUNDESK_RUN"] = "9-zzzz"
+        os.environ["RUNDESK_ROLE_RUN"] = "rol-1-aaaa"
+        self.addCleanup(os.environ.pop, "RUNDESK_RUN", None)
+        self.addCleanup(os.environ.pop, "RUNDESK_ROLE_RUN", None)
+        with feeding("Outcome: make it work.\n"):
+            code, said = drive(["roles", "ava", "run", "development"],
+                               agents=FakeAgents(made=["ava"]))
+        self.assertEqual(1, code)
+        self.assertIn("cannot start another one", said)
+
+    def test_a_refused_word_says_nothing_on_the_way_out(self):
+        """A line printed on the way in is a line a refusal cannot take back — this
+        command reported that it had said something while it was busy refusing to."""
+        out, err = io.StringIO(), io.StringIO()
+        with feeding("guidance\n"), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            code = cli.main(["roles", "ava", "say", "rol-9-zzzz"],
+                            gateways=FakeGateways(), machine=FakeMachine(),
+                            agents=FakeAgents(made=["ava"], at=self.where),
+                            skills=FakeSkills(), scripts=FakeScripts(),
+                            catalogs=FakeCatalogs())
+        self.assertEqual(1, code)
+        self.assertEqual("", out.getvalue())
+        self.assertIn("NOT DONE", err.getvalue())
+
+    def test_asking_after_the_roles_of_an_agent_there_is_none_of_says_so(self):
+        code, said = drive(["roles", "nobody"], agents=FakeAgents(made=["ava"]))
+        self.assertEqual(1, code)
+        self.assertIn("NO SUCH AGENT", said)
 
 
 if __name__ == "__main__":

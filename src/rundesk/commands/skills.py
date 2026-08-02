@@ -13,6 +13,7 @@ import contextlib
 import sys
 
 from rundesk import config
+from rundesk import role
 from rundesk import standing
 from rundesk.commands import _as_table
 
@@ -221,6 +222,11 @@ def cmd_skills(args: argparse.Namespace, agents, skills, gateways, catalogs) -> 
             ),
         )
         taken.extend(skills.take_back())
+        # What the release laid down and nobody has touched, for the same reason a
+        # built-in skill goes: it is a piece of the program, and it is what leaves the
+        # install directory standing after an uninstall that said it left nothing
+        # (R-RM-7). An edited role is the owner's and stays.
+        taken.extend(role.take_back())
         print(" ".join(taken))
         return 0
     if getattr(args, "lay_down", False):

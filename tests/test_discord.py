@@ -2272,6 +2272,138 @@ class WhichRoomAWordMeans(unittest.TestCase):
 class WhatTheOwnerIsTold(unittest.TestCase):
     """R-DIS-15, R-DIS-16 — coming up, going down, and closing the connection either way."""
 
+    def test_a_notice_for_the_owner_is_sent_to_them_and_starts_no_conversation(self):
+        """R-DIS-38 — bookkeeping about the agent reaches the owner privately, and a
+        record with no conversation must not leave a live exchange nobody is in."""
+        class Told:
+            live: dict = {}
+
+            def __init__(self):
+                self.said: list = []
+                self.who: list = []
+
+            async def _tell_the_owner(self, it, who=None):
+                self.said.append(it)
+                self.who.append(who)
+
+        told = Told()
+        asyncio.run(discord.Agent.told(
+            told, {"type": "owner-notice", "text": "🧩 **Skill added** — `alpha`"}))
+
+        self.assertEqual(["🧩 **Skill added** — `alpha`"], told.said)
+        self.assertEqual({}, told.live)
+
+    def test_a_notice_for_the_owner_too_long_for_one_message_is_split(self):
+        """R-DIS-13 — a catalog takes away every skill it brought in one go, and Discord
+        refuses a message over its limit outright rather than shortening it."""
+        class Told:
+            live: dict = {}
+
+            def __init__(self):
+                self.said: list = []
+                self.who: list = []
+
+            async def _tell_the_owner(self, it, who=None):
+                self.said.append(it)
+                self.who.append(who)
+
+        lines = "\n".join(f"🗑️ **Skill removed** — `{one}`" for one in range(200))
+        told = Told()
+        asyncio.run(discord.Agent.told(told, {"type": "owner-notice", "text": lines}))
+
+        self.assertGreater(len(told.said), 1, "a notice over the limit was sent whole")
+        self.assertTrue(all(len(one) <= discord.LIMIT for one in told.said))
+        self.assertEqual(
+            lines.splitlines(),
+            [line for piece in told.said for line in piece.splitlines()],
+            "splitting lost a skill the owner was owed")
+
+    def test_a_notice_for_the_owner_with_nothing_in_it_is_not_sent(self):
+        """R-DIS-38 — an empty message is one Discord refuses, and one nobody can read."""
+        class Told:
+            live: dict = {}
+
+            def __init__(self):
+                self.said: list = []
+                self.who: list = []
+
+            async def _tell_the_owner(self, it, who=None):
+                self.said.append(it)
+                self.who.append(who)
+
+        told = Told()
+        asyncio.run(discord.Agent.told(told, {"type": "owner-notice", "text": ""}))
+        self.assertEqual([], told.said)
+
+    def test_a_notice_naming_somebody_is_carried_to_that_person(self):
+        """R-DIS-39 — an introduction is for the person who has just been allowed to reach
+        the agent, and a gateway notice still reaches whoever the surface calls the owner."""
+        class Told:
+            live: dict = {}
+
+            def __init__(self):
+                self.said: list = []
+                self.who: list = []
+
+            async def _tell_the_owner(self, it, who=None):
+                self.said.append(it)
+                self.who.append(who)
+
+        told = Told()
+        asyncio.run(discord.Agent.told(
+            told, {"type": "owner-notice", "text": "Hello, I am Ava.", "user": "1180"}))
+        self.assertEqual(["1180"], told.who)
+
+        again = Told()
+        asyncio.run(discord.Agent.told(
+            again, {"type": "owner-notice", "text": "🟢 **Gateway online**"}))
+        self.assertEqual([None], again.who, "a notice for nobody in particular named one")
+
+    def test_a_notice_naming_somebody_this_channel_does_not_allow_is_refused(self):
+        """R-DIS-39, R-CAD-16 — a bot that would message any snowflake it was handed is
+        one bug away from messaging a stranger, so the adapter asks its own list too."""
+        kept, fetched = [], []
+
+        class Surface:
+            chose = SimpleNamespace(allow=["42"])
+
+            async def fetch_user(self, who):
+                fetched.append(who)
+                raise AssertionError("a user outside the allowed list was reached for")
+
+        with mock.patch.object(
+                discord, "note",
+                side_effect=lambda said, level="WARNING": kept.append((said, level))):
+            asyncio.run(discord.Agent._tell_the_owner(
+                Surface(), "Hello, I am Ava.", "9999"))
+        self.assertEqual([], fetched)
+        self.assertIn("not telling 9999", kept[0][0])
+
+    def test_a_notice_naming_an_allowed_person_reaches_that_person(self):
+        """R-DIS-39 — and never the first allowed user instead."""
+        sent = []
+
+        class Person:
+            def __init__(self, who):
+                self.who = who
+
+            async def send(self, said):
+                sent.append((self.who, said))
+
+            def __str__(self):
+                return f"person {self.who}"
+
+        class Surface:
+            chose = SimpleNamespace(allow=["42", "1180"])
+
+            async def fetch_user(self, who):
+                return Person(who)
+
+        with mock.patch.object(discord, "note", side_effect=lambda *a, **kw: None):
+            asyncio.run(discord.Agent._tell_the_owner(
+                Surface(), "Hello, I am Ava.", "1180"))
+        self.assertEqual([(1180, "Hello, I am Ava.")], sent)
+
     def test_successfully_telling_the_owner_is_routine_channel_activity(self):
         """R-GW-44 — a startup or shutdown notice that lands is not a warning."""
         kept = []
@@ -2307,7 +2439,7 @@ class WhatTheOwnerIsTold(unittest.TestCase):
         def _claim(self, what):
             return self._claims
 
-        async def _tell_the_owner(self, said):
+        async def _tell_the_owner(self, said, who=None):
             self.greeted.append(said)
             await asyncio.sleep(self._slow)
 
@@ -2380,7 +2512,7 @@ class WhatTheOwnerIsTold(unittest.TestCase):
         async def change_presence(self, **kw):
             pass
 
-        async def _tell_the_owner(self, said):
+        async def _tell_the_owner(self, said, who=None):
             self.said.append(said)
 
     def test_connecting_never_edits_the_bot_profile(self):

@@ -25,7 +25,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from rundesk import agent as agents  # noqa: E402
-from rundesk import answering, channel, config, store  # noqa: E402
+from rundesk import answering, channel, config, instructions, store  # noqa: E402
 
 #: When a conversation was opened. A calendar fact, never what anything is ordered by.
 AT = "2026-07-26T09:00:00Z"
@@ -2224,6 +2224,91 @@ class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answering.AFTER_UPDATE, brain.asked[0]["prompt"])
         self.assertEqual("rundesk", brain.asked[0]["prompt_author"])
 
+    def a_parent_conversation(self, prefix: str, brain, surface):
+        """An agent with one room in it, and a channel answering for that agent."""
+        where = Path(tempfile.mkdtemp(prefix=prefix))
+        self.addCleanup(shutil.rmtree, where, True)
+        agents.add("ava", where)
+        agents.remember("ava", where, provider="a-brain")
+        agents.records("ava", where).opened(
+            store.conversation_id("ops", "one"), "ops", "somewhere", "one", AT
+        )
+        held = answering.Answering(
+            "ava", "ops", {"kind": "somewhere", "allow": ["2207"]},
+            surface, where=where, carry=brain,
+        )
+        held.connected = True
+        return held
+
+    @staticmethod
+    async def settled(held) -> None:
+        for _ in range(200):
+            running = [it.task for it in held.exchanges.values()
+                       if it.task is not None and not it.task.done()]
+            if not running and held._showing.empty() and (
+                    held._writer is None or held._writer.done()):
+                return
+            await asyncio.sleep(0.005)
+
+    async def test_a_role_handoff_wakes_the_parent_to_review_it(self):
+        """R-ROL-15 — the named parent reads the report; nobody else is told anything."""
+        brain, surface = Brain(), Surface()
+        held = self.a_parent_conversation("rundesk-role-review-", brain, surface)
+        reviewed: list = []
+
+        await held.told_role_finished(
+            "one", {"role": "development", "role_run": "rol-1-aaaa",
+                    "outcome": "succeeded", "report": "I changed two files."},
+            reviewing=reviewed.append,
+        )
+        await self.settled(held)
+
+        self.assertEqual(1, len(brain.asked))
+        self.assertEqual("rundesk", brain.asked[0]["prompt_author"])
+        self.assertIn("I changed two files.", brain.asked[0]["prompt"])
+        self.assertIn("has not been checked", brain.asked[0]["prompt"])
+        self.assertIn("Do not start another role run", brain.asked[0]["prompt"])
+        # Which run is reviewing is written the moment it is admitted — a marker written
+        # afterwards would be written after the moment it guards (R-ROL-13).
+        self.assertEqual(1, len(reviewed))
+
+    async def test_a_role_handoff_is_never_posted_where_a_person_can_read_it(self):
+        """R-ROL-16 — an unreviewed report is not an answer, and delivering one would put
+        work the named agent never checked in front of the person who asked."""
+        brain = Brain(outcome=Outcome(text="I checked it; it is right."))
+        surface = Surface()
+        held = self.a_parent_conversation("rundesk-role-unposted-", brain, surface)
+
+        await held.told_role_finished(
+            "one", {"role": "development", "role_run": "rol-1-aaaa",
+                    "outcome": "succeeded", "report": "I changed two files."})
+        await self.settled(held)
+
+        self.assertEqual([], surface.of("said"))
+        self.assertNotIn("I changed two files.",
+                         "".join(one.get("text", "") for one in surface.of("answer")))
+
+    async def test_a_role_handoff_is_left_owing_when_the_room_is_already_busy(self):
+        """R-ROL-15 — two turns in one conversation are two brains on one session, and a
+        review quietly dropped is work that happened and nobody was ever told about."""
+        holds = asyncio.Event()
+        brain, surface = Brain(holds=holds), Surface()
+        held = self.a_parent_conversation("rundesk-role-busy-", brain, surface)
+        await held.heard({"type": "arrived", "conversation": "one", "user": "2207",
+                          "text": "are you there"})
+        for _ in range(200):
+            if brain.asked:
+                break
+            await asyncio.sleep(0.005)
+
+        with self.assertRaises(RuntimeError):
+            await held.told_role_finished(
+                "one", {"role": "development", "role_run": "rol-1-aaaa",
+                        "outcome": "succeeded", "report": "done"})
+        self.assertEqual(1, len(brain.asked))
+        holds.set()
+        await self.settled(held)
+
     async def test_a_completed_restart_is_delivered_without_starting_another_turn(self):
         """R-GW-43"""
         where = Path(tempfile.mkdtemp(prefix="rundesk-restart-notice-"))
@@ -2245,6 +2330,189 @@ class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("Rundesk restart succeeded", surface.of("said")[0]["text"])
         self.assertFalse(surface.of("said")[0]["continues"])
         self.assertEqual([], brain.asked)
+
+
+class WhatIsForTheOwnerAlone(unittest.IsolatedAsyncioTestCase):
+    """R-CH-32 — bookkeeping about the agent, told to the owner and to nobody else."""
+
+    def setUp(self):
+        # An install of this case's own. Without it, making an agent reads the *owner's*
+        # configured skill baseline — which is there on a developer's machine, whose shell
+        # is a gateway's child, and is not there on a runner.
+        self.data = Path(tempfile.mkdtemp(prefix="rundesk-owner-notice-data-"))
+        self.addCleanup(shutil.rmtree, self.data, True)
+        before = os.environ.get("RUNDESK_DATA_DIR")
+        os.environ["RUNDESK_DATA_DIR"] = str(self.data)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", before)
+                        if before is not None
+                        else os.environ.pop("RUNDESK_DATA_DIR", None))
+        config.ensure(self.data)
+
+    def channel(self, where):
+        agents.add("ava", where)
+        agents.remember("ava", where, provider="a-brain")
+        surface = Surface()
+        held = answering.Answering(
+            "ava", "ops", {"kind": "somewhere", "allow": ["2207"]},
+            surface, where=where, carry=Brain(),
+        )
+        held.connected = True
+        return held, surface
+
+    def somewhere(self):
+        where = Path(tempfile.mkdtemp(prefix="rundesk-owner-notice-"))
+        self.addCleanup(shutil.rmtree, where, True)
+        return where
+
+    async def test_a_notice_for_the_owner_names_no_conversation(self):
+        """Where an owner is reached privately is the surface's own answer."""
+        where = self.somewhere()
+        held, surface = self.channel(where)
+
+        await held.told_the_owner("🧩 **Skill added** — `alpha`")
+
+        sent = surface.of("owner-notice")
+        self.assertEqual(1, len(sent))
+        self.assertEqual("🧩 **Skill added** — `alpha`", sent[0]["text"])
+        self.assertIsNone(sent[0].get("conversation"))
+        self.assertEqual([], surface.of("said"), "it was said as the agent's own speech")
+
+    async def test_a_notice_for_the_owner_is_not_written_down_as_the_agent_speaking(self):
+        """A brain that never wrote the line must not find it in its own record."""
+        where = self.somewhere()
+        held, _surface = self.channel(where)
+        records = agents.records("ava", where)
+        records.opened(store.conversation_id("ops", "one"), "ops", "somewhere", "one", AT)
+
+        await held.told_the_owner("🗑️ **Skill removed** — `alpha`")
+
+        kept = records.messages(store.conversation_id("ops", "one"))
+        self.assertEqual([], [one for one in kept if "Skill removed" in str(one)])
+
+    async def test_a_notice_is_not_offered_to_a_channel_that_is_not_connected(self):
+        """A wait, and never a delivery: what is owed is told when the surface returns."""
+        where = self.somewhere()
+        held, surface = self.channel(where)
+        held.connected = False
+
+        with self.assertRaises(RuntimeError):
+            await held.told_the_owner("🧩 **Skill added** — `alpha`")
+        self.assertEqual([], surface.shown)
+
+
+class IntroducingTheAgentToSomebodyNewlyAllowed(unittest.IsolatedAsyncioTestCase):
+    """R-CH-33 — the agent's own hello, to the one person who has just arrived."""
+
+    def setUp(self):
+        # An install of this case's own, for the reason the notice cases above have one.
+        self.data = Path(tempfile.mkdtemp(prefix="rundesk-welcome-data-"))
+        self.addCleanup(shutil.rmtree, self.data, True)
+        before = os.environ.get("RUNDESK_DATA_DIR")
+        os.environ["RUNDESK_DATA_DIR"] = str(self.data)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", before)
+                        if before is not None
+                        else os.environ.pop("RUNDESK_DATA_DIR", None))
+        config.ensure(self.data)
+        self.where = Path(tempfile.mkdtemp(prefix="rundesk-welcome-"))
+        self.addCleanup(shutil.rmtree, self.where, True)
+
+    def channel(self, brain=None, allow=("2207", "1180"), provider="a-brain"):
+        agents.add("ava", self.where)
+        if provider:
+            agents.remember("ava", self.where, provider=provider)
+        surface = Surface()
+        held = answering.Answering(
+            "ava", "ops", {"kind": "somewhere", "allow": list(allow)},
+            surface, where=self.where,
+            carry=brain if brain is not None else Brain(outcome=Outcome(text="Hello.")),
+        )
+        held.connected = True
+        return held, surface
+
+    async def test_the_greeting_is_a_turn_rundesk_asked_for_in_its_own_conversation(self):
+        """R-CH-33 — a hello must not resume the session another room is in the middle of,
+        and nobody typed it, so it is not written down as though somebody had."""
+        brain = Brain(outcome=Outcome(text="Hello, I am Ava."))
+        held, _surface = self.channel(brain=brain)
+
+        await held.welcomed("1180")
+
+        asked = brain.asked[0]
+        self.assertEqual(instructions.ONBOARDING_PROMPT, asked["prompt"])
+        self.assertEqual("rundesk", asked["prompt_author"])
+        self.assertEqual("welcome-1180", asked["conversation"])
+        self.assertEqual("ops", asked["on"])
+        self.assertTrue(asked["fresh"], "a greeting resumed a conversation")
+
+    async def test_the_greeting_is_told_to_be_brief_and_to_invent_nothing(self):
+        """R-CH-33 — a new agent has no projects and no goals, and offering one is telling
+        an owner what they wanted before they have said it."""
+        brain = Brain(outcome=Outcome(text="Hello."))
+        held, _surface = self.channel(brain=brain)
+
+        await held.welcomed("1180")
+
+        preface = brain.asked[0]["preface"]
+        self.assertIn("very short", preface)
+        self.assertIn("Never invent", preface)
+        self.assertIn(instructions.RUNDESK_INSTRUCTIONS.splitlines()[0], preface,
+                      "rundesk's own rules were displaced by the onboarding layer")
+
+    async def test_what_the_agent_wrote_reaches_the_person_it_is_for(self):
+        """R-CH-33 — every other private notice is for whoever the surface calls the
+        owner; this one names the person who has just arrived."""
+        held, surface = self.channel(
+            brain=Brain(outcome=Outcome(text="Hello, I am Ava.")))
+
+        await held.welcomed("1180")
+
+        sent = surface.of("owner-notice")
+        self.assertEqual(1, len(sent))
+        self.assertEqual("Hello, I am Ava.", sent[0]["text"])
+        self.assertEqual("1180", sent[0]["user"])
+
+    async def test_somebody_this_channel_does_not_allow_is_not_greeted(self):
+        """R-CH-4, R-CH-33 — the same question, of the same record, as every message."""
+        held, surface = self.channel()
+
+        with self.assertRaises(RuntimeError):
+            await held.welcomed("9999")
+        self.assertEqual([], surface.shown)
+
+    async def test_a_channel_that_is_not_connected_greets_nobody(self):
+        """R-CH-33"""
+        held, surface = self.channel()
+        held.connected = False
+
+        with self.assertRaises(RuntimeError):
+            await held.welcomed("1180")
+        self.assertEqual([], surface.shown)
+
+    async def test_a_turn_that_said_nothing_is_not_reported_as_a_greeting(self):
+        """R-CH-33 — whoever asked for this must not write the person down as greeted."""
+        held, surface = self.channel(brain=Brain(outcome=Outcome(text="   ")))
+
+        with self.assertRaises(RuntimeError):
+            await held.welcomed("1180")
+        self.assertEqual([], surface.of("owner-notice"))
+
+    async def test_a_turn_that_failed_is_not_reported_as_a_greeting(self):
+        """R-CH-33"""
+        held, surface = self.channel(brain=Brain(
+            outcome=Outcome(ok=False, reason="failed", why="no brain answered",
+                            text="half a sentence")))
+
+        with self.assertRaises(RuntimeError):
+            await held.welcomed("1180")
+        self.assertEqual([], surface.of("owner-notice"))
+
+    async def test_an_agent_that_names_no_brain_greets_nobody(self):
+        """R-CH-33 — said rather than passed over, the way a schedule with no brain is."""
+        held, surface = self.channel(provider="")
+
+        with self.assertRaises(RuntimeError):
+            await held.welcomed("1180")
+        self.assertEqual([], surface.shown)
 
 
 if __name__ == "__main__":

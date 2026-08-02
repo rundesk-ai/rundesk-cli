@@ -4085,5 +4085,557 @@ class LifecycleOutcomesWaitForReachability(WithARunDirectory):
                          "an expected wait state was logged as a delivery failure")
 
 
+class Delegating:
+    """What a gateway is handed to carry role runs with, as a stand-in.
+
+    The real one is `agent.playing`, made where an agent is known. Every case here runs
+    with no agent, no bundle and no brain anywhere near it, which is the whole point of
+    the seam being an argument.
+    """
+
+    def __init__(self, waiting=(), owed=(), carried=None):
+        self._waiting = list(waiting)
+        self._owed = list(owed)
+        self.carried = carried if carried is not None else []
+        self.claimed: list = []
+        self.settled: list = []
+        self.reviewing_runs: list = []
+        self.reviewed_runs: list = []
+        self.swept = 0
+
+    def waiting(self):
+        return list(self._waiting)
+
+    def stopping(self):
+        return [one for one in self._waiting if one.get("stop_asked_at")]
+
+    def stopped(self, run_id):
+        self.settled.append(run_id)
+        self._waiting = [one for one in self._waiting if one["id"] != run_id]
+
+    async def carry(self, run_id, watching=None, steering=None, admitted=None):
+        self.carried.append(run_id)
+        self._waiting = [one for one in self._waiting if one["id"] != run_id]
+        return None
+
+    def owed(self):
+        return list(self._owed)
+
+    def claiming(self, role_run):
+        self.claimed.append(role_run)
+
+    def reviewing(self, role_run, review_run):
+        self.reviewing_runs.append((role_run, review_run))
+
+    def reviewed(self, role_run):
+        self.reviewed_runs.append(role_run)
+        self._owed = [one for one in self._owed if one["role_run"] != role_run]
+
+    def sweep(self):
+        self.swept += 1
+        return []
+
+
+class Reached:
+    """One surface, as far as delivering a role handoff is concerned."""
+
+    def __init__(self, connected: bool = True, raises=None):
+        self.connected = connected
+        self.told: list = []
+        self._raises = raises
+
+    async def told_role_finished(self, conversation, handoff, reviewing=None):
+        if self._raises is not None:
+            raise self._raises
+        if reviewing is not None:
+            reviewing("11-rrrr")
+        self.told.append((conversation, handoff))
+
+
+class CarryingWhatAnAgentHandedOn(WithARunDirectory):
+    """R-ROL-15 — work admitted while nothing was up is still carried, and its parent
+    is told exactly once."""
+
+    def one(self, doing) -> gateway.Gateway:
+        gw = gateway.Gateway("ava", where=self.where, logs=self.logs, root=self.root,
+                             roles=doing)
+        self.addCleanup(gw.release)
+        return gw
+
+    async def test_a_gateway_carries_every_admitted_role_run_it_finds(self):
+        doing = Delegating(waiting=[{"id": "rol-1-aaaa"}, {"id": "rol-2-bbbb"}])
+        gw = self.one(doing)
+
+        gw._start_admitted_roles()
+        await asyncio.gather(*tuple(gw._role_tasks.values()))
+
+        self.assertEqual(["rol-1-aaaa", "rol-2-bbbb"], sorted(doing.carried))
+
+    async def test_a_root_already_in_flight_is_never_started_a_second_time(self):
+        """R-GW-15 — the same work started twice answers its parent twice."""
+        held = asyncio.Event()
+        doing = Delegating(waiting=[{"id": "rol-1-aaaa"}])
+
+        async def carrying(run_id, **_given):
+            doing.carried.append(run_id)
+            await held.wait()
+
+        doing.carry = carrying
+        gw = self.one(doing)
+
+        gw._start_admitted_roles()
+        gw._start_admitted_roles()
+        held.set()
+        await asyncio.gather(*tuple(gw._role_tasks.values()))
+
+        self.assertEqual(["rol-1-aaaa"], doing.carried)
+
+    async def test_a_parent_is_told_once_and_the_review_stops_being_owed(self):
+        doing = Delegating(owed=[{"role_run": "rol-1-aaaa", "channel": "ops",
+                                  "conversation": "one",
+                                  "handoff": {"report": "done"}}])
+        gw = self.one(doing)
+        surface = Reached()
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_role_review()
+
+        self.assertEqual([("one", {"report": "done"})], surface.told)
+        self.assertEqual(["rol-1-aaaa"], doing.claimed)
+        self.assertEqual([("rol-1-aaaa", "11-rrrr")], doing.reviewing_runs)
+        self.assertEqual(["rol-1-aaaa"], doing.reviewed_runs)
+
+    async def test_a_review_is_left_owing_while_the_surface_is_down(self):
+        doing = Delegating(owed=[{"role_run": "rol-1-aaaa", "channel": "ops",
+                                  "conversation": "one", "handoff": {}}])
+        gw = self.one(doing)
+        gw._reached["ops"] = Reached(connected=False)
+
+        await gw._deliver_one_role_review()
+
+        self.assertEqual([], doing.reviewed_runs)
+        self.assertEqual([], doing.claimed)
+
+    async def test_a_review_the_surface_refused_is_left_owing_rather_than_lost(self):
+        doing = Delegating(owed=[{"role_run": "rol-1-aaaa", "channel": "ops",
+                                  "conversation": "one", "handoff": {}}])
+        gw = self.one(doing)
+        gw._reached["ops"] = Reached(raises=RuntimeError("the room is busy"))
+
+        with self.assertRaises(RuntimeError):
+            await gw._deliver_one_role_review()
+
+        self.assertEqual(["rol-1-aaaa"], doing.claimed)
+        self.assertEqual([], doing.reviewed_runs)
+
+    async def test_an_undeliverable_review_never_holds_up_the_ones_behind_it(self):
+        """R-ROL-15 — a channel the owner has since removed never comes back, and the
+        oldest handoff sitting at the head of the queue would keep every later one from
+        ever being reported."""
+        doing = Delegating(owed=[
+            {"role_run": "rol-1-aaaa", "channel": "gone", "conversation": "one",
+             "handoff": {}},
+            {"role_run": "rol-2-bbbb", "channel": "ops", "conversation": "two",
+             "handoff": {"report": "done"}},
+        ])
+        gw = self.one(doing)
+        surface = Reached()
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_role_review()
+
+        self.assertEqual([("two", {"report": "done"})], surface.told)
+        self.assertEqual(["rol-2-bbbb"], doing.reviewed_runs)
+
+    def test_a_gateway_with_no_agent_behind_it_carries_no_role_run_at_all(self):
+        gw = gateway.Gateway("ava", where=self.where, logs=self.logs, root=self.root)
+        self.addCleanup(gw.release)
+        gw._sweep_roles()   # nothing to sweep, and nothing to raise
+        self.assertEqual({}, gw._role_tasks)
+class TellsTheOwnerWhatItsAgentMayDo(WithARunDirectory):
+    """R-CH-32 — an agent gaining or losing a skill reaches its owner."""
+
+    class Surface:
+        """One channel, as the gateway reaches it."""
+
+        def __init__(self, connected: bool = True, refuses: bool = False):
+            self.connected = connected
+            self.refuses = refuses
+            self.told: list = []
+
+        async def told_the_owner(self, text):
+            if self.refuses:
+                raise OSError("the platform is busy")
+            self.told.append(text)
+
+    def watching(self, *granted, reachable=("ops",), name="ava"):
+        """A gateway holding one agent whose grants a case moves under it."""
+        gw = self.made(name)
+        gw.reachable = list(reachable)
+        self.grants = list(granted)
+        gw.granted = lambda: list(self.grants)
+        return gw
+
+    def look(self, gw):
+        """One pass of the loop, without its wait."""
+        gw._look_at_skills()
+        return gw._say_skill_changes()
+
+    async def test_a_first_look_says_nothing_and_writes_down_what_is_there(self):
+        """An install where this never ran holds skills that were never newly granted."""
+        gw = self.watching("alpha", "beta")
+        surface = self.Surface()
+        gw._reached["ops"] = surface
+        await self.look(gw)
+        self.assertEqual([], surface.told, "grants already held were announced as new")
+        self.assertEqual(("alpha", "beta"), gw._skills_seen())
+
+    async def test_a_skill_the_agent_gained_is_told_to_its_owner(self):
+        gw = self.watching("alpha")
+        surface = self.Surface()
+        gw._reached["ops"] = surface
+        await self.look(gw)
+        self.grants.append("beta")
+        await self.look(gw)
+        self.assertEqual(["🧩 **Skill added** — `beta`"], surface.told)
+
+    async def test_a_skill_the_agent_lost_is_told_to_its_owner(self):
+        gw = self.watching("alpha", "beta")
+        surface = self.Surface()
+        gw._reached["ops"] = surface
+        await self.look(gw)
+        self.grants.remove("alpha")
+        await self.look(gw)
+        self.assertEqual(["🗑️ **Skill removed** — `alpha`"], surface.told)
+
+    async def test_several_changes_at_once_are_one_message(self):
+        """A catalog brings several skills and takes several away in one go, and an owner
+        reading a phone wants one notice rather than a page of them."""
+        gw = self.watching("alpha", "beta")
+        surface = self.Surface()
+        gw._reached["ops"] = surface
+        await self.look(gw)
+        self.grants = ["beta", "gamma", "delta"]
+        await self.look(gw)
+        self.assertEqual(
+            ["🧩 **Skill added** — `gamma`\n"
+             "🧩 **Skill added** — `delta`\n"
+             "🗑️ **Skill removed** — `alpha`"],
+            surface.told)
+
+    async def test_a_change_is_told_once_however_often_it_is_looked_at(self):
+        gw = self.watching("alpha")
+        surface = self.Surface()
+        gw._reached["ops"] = surface
+        await self.look(gw)
+        self.grants.append("beta")
+        await self.look(gw)
+        await self.look(gw)
+        await self.look(gw)
+        self.assertEqual(1, len(surface.told), "the same change was told more than once")
+
+    async def test_an_agent_reached_on_two_surfaces_is_told_on_one(self):
+        """Two surfaces are one owner, and the same news twice reads as two changes."""
+        gw = self.watching("alpha", reachable=("ops", "away"))
+        first, second = self.Surface(), self.Surface()
+        gw._reached["away"], gw._reached["ops"] = first, second
+        await self.look(gw)
+        self.grants.append("beta")
+        await self.look(gw)
+        self.assertEqual(1, len(first.told), "the first surface by name was not the one told")
+        self.assertEqual([], second.told, "one change was told on two surfaces")
+
+    async def test_a_change_waits_for_a_surface_rather_than_being_lost(self):
+        gw = self.watching("alpha")
+        surface = self.Surface(connected=False)
+        gw._reached["ops"] = surface
+        await self.look(gw)
+        self.grants.append("beta")
+        await self.look(gw)
+        self.assertEqual([], surface.told)
+        surface.connected = True
+        await self.look(gw)
+        self.assertEqual(["🧩 **Skill added** — `beta`"], surface.told)
+
+    async def test_a_change_a_surface_refused_is_told_again(self):
+        """A delivery that failed is not a delivery, so nothing is written down for it."""
+        gw = self.watching("alpha")
+        surface = self.Surface(refuses=True)
+        gw._reached["ops"] = surface
+        await self.look(gw)
+        self.grants.append("beta")
+        await self.look(gw)
+        surface.refuses = False
+        await self.look(gw)
+        self.assertEqual(["🧩 **Skill added** — `beta`"], surface.told)
+
+    async def test_a_change_made_while_the_agent_was_stopped_is_still_told(self):
+        """Taking a skill away is exactly what an owner does with the gateway down."""
+        gw = self.watching("alpha", "beta")
+        await self.look(gw)                       # what it could do when it last ran
+        after = self.watching("alpha", name="ava")
+        surface = self.Surface()
+        after._reached["ops"] = surface
+        await self.look(after)
+        self.assertEqual(["🗑️ **Skill removed** — `beta`"], surface.told)
+
+    async def test_an_agent_reached_on_nothing_is_owed_no_notice(self):
+        """Otherwise an owner adding their first channel months later is greeted by every
+        grant they ever made."""
+        gw = self.watching("alpha", reachable=())
+        await self.look(gw)
+        self.grants.append("beta")
+        await self.look(gw)
+        self.assertEqual(("alpha", "beta"), gw._skills_seen())
+        self.assertIsNone(gw._skills_owed)
+
+    async def test_a_name_that_is_not_an_agent_is_not_watched(self):
+        """A gateway of a name nothing was made for holds no grants, and still runs."""
+        gw = self.made("ava")
+        gw._stopping = True
+        await gw._tell_about_skills()             # returns rather than asking None()
+
+    async def test_grants_that_cannot_be_read_are_said_once(self):
+        gw = self.watching("alpha")
+        gw.granted = mock.Mock(side_effect=OSError("no such directory"))
+        gw._stopping = False
+        rounds = 0
+
+        async def advance(_seconds):
+            nonlocal rounds
+            rounds += 1
+            if rounds == 3:
+                gw._stopping = True
+
+        with (mock.patch.object(gateway.asyncio, "sleep", new=advance),
+              mock.patch.object(gw.log, "warning") as warning):
+            await gw._tell_about_skills()
+        self.assertEqual(3, gw.granted.call_count)
+        self.assertEqual(1, warning.call_count,
+                         "an unreadable grant directory was said on every look")
+
+
+class IntroducesTheAgentToSomebodyNewlyAllowed(WithARunDirectory):
+    """R-CH-33 — a person newly allowed to reach an agent is greeted, once, by the agent.
+
+    Every other private notice here has a fixed wording rundesk wrote. This one is a whole
+    turn against the agent's own brain, so what it costs and how often it is attempted are
+    part of the contract rather than details.
+    """
+
+    class Surface:
+        """One channel, as the gateway reaches it: what it allows, and who it greeted."""
+
+        def __init__(self, allow=("2207",), connected: bool = True, refuses: bool = False):
+            self.connected = connected
+            self.refuses = refuses
+            self.record = {"allow": list(allow)}
+            self.greeted: list = []
+
+        async def welcomed(self, user):
+            if self.refuses:
+                raise OSError("the platform is busy")
+            self.greeted.append(user)
+
+    class Reached:
+        """What `agent.reachable` hands a gateway, as far as this loop is concerned."""
+
+        def __init__(self, name, home):
+            self.name, self.home = name, home
+
+    def setUp(self):
+        super().setUp()
+        # Channel homes stand under the agent, never in the run directory: the run
+        # directory's `*.json` entries are the list of gateways there are.
+        self.homes = Path(tempfile.mkdtemp(prefix="rundesk-channels-"))
+        self.addCleanup(shutil.rmtree, self.homes, True)
+
+    def greeting(self, *channels, name="ava"):
+        """A gateway holding channels a case can move who they allow under it."""
+        gw = self.made(name)
+        gw.reachable = list(channels)
+        return gw
+
+    def channel(self, named, allow=("2207",), connected=True, refuses=False, new=True):
+        """One reachable channel with a home of its own, and the surface holding it."""
+        home = self.homes / named
+        home.mkdir(parents=True, exist_ok=True)
+        if new:
+            gateway.remember_no_one_welcomed(home)
+        return (self.Reached(named, home),
+                self.Surface(allow=allow, connected=connected, refuses=refuses))
+
+    def welcomed_in(self, one) -> list:
+        return json.loads(
+            gateway.welcomed_path(one.home).read_text(encoding="utf-8"))["welcomed"]
+
+    async def test_somebody_newly_allowed_is_greeted_and_written_down(self):
+        """R-CH-33"""
+        one, surface = self.channel("ops")
+        gw = self.greeting(one)
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        self.assertEqual(["2207"], surface.greeted)
+        self.assertEqual(["2207"], self.welcomed_in(one))
+
+    async def test_somebody_already_greeted_is_not_greeted_again(self):
+        """R-CH-33 — a reconnect, a restart and an update all come back through here."""
+        one, surface = self.channel("ops")
+        gw = self.greeting(one)
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        after = self.greeting(one, name="ava")          # the gateway that comes back
+        after._reached["ops"] = surface
+        await after._welcome_anyone_owed()
+        self.assertEqual(["2207"], surface.greeted, "the same person was greeted twice")
+
+    async def test_a_channel_from_before_this_existed_greets_nobody(self):
+        """R-CH-33 — updating rundesk must not greet people who have been reaching the
+        agent for months. A channel with no record at all is one an older release wrote."""
+        one, surface = self.channel("ops", new=False)
+        gw = self.greeting(one)
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        self.assertEqual([], surface.greeted)
+        self.assertEqual(["2207"], self.welcomed_in(one),
+                         "who is already there was not written down as known")
+
+    async def test_only_the_person_newly_added_is_greeted(self):
+        """R-CH-33 — adding a second owner, and replacing one with another, both reach
+        exactly the person who has just arrived."""
+        one, surface = self.channel("ops")
+        gw = self.greeting(one)
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        surface.record["allow"] = ["2207", "1180"]
+        after = self.greeting(one, name="ava")
+        after._reached["ops"] = surface
+        await after._welcome_anyone_owed()
+        self.assertEqual(["2207", "1180"], surface.greeted)
+
+    async def test_somebody_taken_off_and_added_again_is_greeted_again(self):
+        """R-CH-33 — a new membership is a new introduction."""
+        one, surface = self.channel("ops")
+        gw = self.greeting(one)
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        surface.record["allow"] = ["1180"]              # 2207 taken off
+        gw = self.greeting(one, name="ava")
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        surface.record["allow"] = ["1180", "2207"]      # and put back
+        gw = self.greeting(one, name="ava")
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        self.assertEqual(["2207", "1180", "2207"], surface.greeted)
+
+    async def test_an_agent_reached_on_two_channels_greets_one_person_once(self):
+        """R-CH-33 — two surfaces are one agent, and two hellos a minute apart read as
+        two agents."""
+        first, first_surface = self.channel("away")
+        second, second_surface = self.channel("ops")
+        gw = self.greeting(first, second)
+        gw._reached["away"], gw._reached["ops"] = first_surface, second_surface
+        await gw._welcome_anyone_owed()
+        self.assertEqual(["2207"], first_surface.greeted,
+                         "the first channel by name was not the one that greeted them")
+        self.assertEqual([], second_surface.greeted, "one person was greeted twice")
+        self.assertEqual(["2207"], self.welcomed_in(second),
+                         "the other channel still owes a greeting already delivered")
+
+    async def test_a_greeting_waits_for_a_surface_rather_than_being_lost(self):
+        """R-CH-33"""
+        one, surface = self.channel("ops", connected=False)
+        gw = self.greeting(one)
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        self.assertEqual([], surface.greeted)
+        surface.connected = True
+        await gw._welcome_anyone_owed()
+        self.assertEqual(["2207"], surface.greeted)
+
+    async def test_a_greeting_that_failed_is_not_written_down_as_delivered(self):
+        """R-CH-33 — and is tried again by the next gateway that comes up well, rather
+        than every ten seconds against a brain that cannot run."""
+        one, surface = self.channel("ops", refuses=True)
+        gw = self.greeting(one)
+        gw._reached["ops"] = surface
+        with mock.patch.object(gw.log, "warning") as warning:
+            await gw._welcome_anyone_owed()
+            await gw._welcome_anyone_owed()
+        self.assertEqual([], self.welcomed_in(one))
+        self.assertEqual(1, warning.call_count,
+                         "a whole turn was asked for again inside one gateway's life")
+        surface.refuses = False
+        after = self.greeting(one, name="ava")
+        after._reached["ops"] = surface
+        await after._welcome_anyone_owed()
+        self.assertEqual(["2207"], surface.greeted)
+
+    async def test_a_channel_that_is_not_up_greets_nobody(self):
+        """R-CH-33 — a record with nobody holding it open is not a surface."""
+        one, _surface = self.channel("ops")
+        gw = self.greeting(one)
+        await gw._welcome_anyone_owed()
+        self.assertEqual([], self.welcomed_in(one))
+
+    async def test_a_gateway_with_no_channels_watches_nothing(self):
+        """R-CH-33 — including a gateway of a name nothing was made for."""
+        gw = self.made("ava")
+        gw._stopping = True
+        await gw._welcome_new_owners()               # returns rather than reaching for one
+
+
+class WhatAChannelHasWrittenDownAboutWhoItGreeted(WithARunDirectory):
+    """R-CH-33 — the file itself: three answers, and the difference is the feature."""
+
+    def home(self):
+        at = self.where / "channels" / "ops"
+        at.mkdir(parents=True, exist_ok=True)
+        return at
+
+    def test_nothing_written_owes_nobody_and_writes_down_who_is_there(self):
+        at = self.home()
+        self.assertEqual([], gateway.owed_a_welcome(at, ["2207", "1180"]))
+        self.assertEqual(["1180", "2207"],
+                         json.loads(gateway.welcomed_path(at).read_text())["welcomed"])
+
+    def test_a_channel_just_added_owes_everybody_it_allows(self):
+        at = self.home()
+        gateway.remember_no_one_welcomed(at)
+        self.assertEqual(["2207", "1180"], gateway.owed_a_welcome(at, ["2207", "1180"]))
+
+    def test_somebody_no_longer_allowed_is_dropped_rather_than_kept(self):
+        at = self.home()
+        gateway.remember_no_one_welcomed(at)
+        gateway.remember_welcomed(at, "2207")
+        self.assertEqual(["1180"], gateway.owed_a_welcome(at, ["1180"]))
+        self.assertEqual([], json.loads(
+            gateway.welcomed_path(at).read_text())["welcomed"])
+
+    def test_somebody_forgotten_by_hand_is_owed_a_greeting_again(self):
+        at = self.home()
+        gateway.remember_no_one_welcomed(at)
+        gateway.remember_welcomed(at, "2207")
+        gateway.forget_welcomed(at, ["2207"])
+        self.assertEqual(["2207"], gateway.owed_a_welcome(at, ["2207"]))
+
+    def test_forgetting_writes_no_record_where_there_was_none(self):
+        """A channel an older release wrote must not be turned into a new one by somebody
+        being taken off it."""
+        at = self.home()
+        gateway.forget_welcomed(at, ["2207"])
+        self.assertFalse(gateway.welcomed_path(at).exists())
+
+    def test_writing_down_a_greeting_starts_no_record_of_its_own(self):
+        """Same trap from the other side: a greeting delivered on one channel is written
+        against every channel of that agent, and a channel from before this existed must
+        not become a new one — everybody else on it would then be greeted too."""
+        at = self.home()
+        gateway.remember_welcomed(at, "2207")
+        self.assertFalse(gateway.welcomed_path(at).exists())
+        self.assertEqual([], gateway.owed_a_welcome(at, ["2207", "1180"]))
+
+
 if __name__ == "__main__":
     unittest.main()

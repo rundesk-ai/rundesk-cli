@@ -309,6 +309,8 @@ person sees and `text` with the parent body. When deleted, unavailable, or unfet
 {"type": "said",   "conversation": "1180", "place": null, "schedule": "nightly", "text": "Nothing broke overnight."}
 {"type": "answer", "conversation": "1180", "run": "7-a3f1", "provider": "stand-in", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png", "bytes": 1204, "sha256": "…"}]}
 {"type": "state",  "conversation": "1180", "run": "7-a3f1", "state": "finished"}
+{"type": "owner-notice", "text": "🧩 **Skill added** — `research`"}
+{"type": "owner-notice", "text": "Hello, I'm Ava. I'm here to help…", "user": "111111111111111111"}
 {"type": "query-result", "conversation": "1180", "query": "status", "ref": "8843", "text": "ava: RUNNING"}
 {"type": "configure-result", "conversation": "1180", "ref": "8844", "text": "Default provider changed to claude. The next message starts fresh."}
 ```
@@ -347,6 +349,25 @@ message, somebody *will* reply to it — and that is an ordinary message, starti
 ordinary turn, whose brain has no record of a line it never wrote. Send it on as you would
 any other; there is nothing for an adapter to do about it. The report beneath it is written
 down, so a reply to *that* reaches a session that saw it.
+
+**An `owner-notice` carries no conversation, because it is not about one.** It is
+rundesk's own bookkeeping about the agent — what it may do changed — and it is for the
+owner alone: the first person your channel allows, reached however your platform reaches
+one person privately. Rundesk never says where that is, because a room, a thread and a
+direct message are one platform's words for a place and this seam has none of them. Show
+it wherever that is on your surface, split it if your platform has a length limit, and
+if your surface has no private way to reach anybody, show nothing — the same freedom you
+have over everything else you are told. It is not written into the record of what the
+agent said, so a reply to it starts an ordinary turn whose brain never wrote the line.
+
+**An `owner-notice` may name `user`, and then it is for that person and no other.** It is
+always somebody your channel already allows — Rundesk checks that before sending — and it
+is how somebody newly added to your allow-list is introduced to the agent. That one *is*
+the agent's own words, produced by a real turn, so it reads like the agent and not like
+Rundesk. Reach whoever is named however your platform reaches one person privately; without
+the field, the notice is for whoever your surface treats as the owner, exactly as before.
+Check the id against your own allowed list too: a surface that would message any identifier
+it is handed is one bug away from messaging a stranger.
 
 **Nothing repeats, so keep your own time.** `running` is sent once, when the turn is
 admitted — it is not a heartbeat, and a surface whose "still working" indicator lapses

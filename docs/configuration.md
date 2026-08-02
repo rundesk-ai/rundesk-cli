@@ -17,7 +17,7 @@ skills every agent must receive:
     "granted": [
       "managing-rundesk",
       "managing-schedules",
-      "managing-backups",
+      "delegating-to-roles",
       "filing-github-issues",
       "writing-github-pull-requests",
       "writing-plans",

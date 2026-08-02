@@ -40,6 +40,8 @@ from rundesk import dependencies  # noqa: E402
 from rundesk import gateway as _gateway  # noqa: E402
 from rundesk import migration  # noqa: E402
 from rundesk import process  # noqa: E402
+from rundesk import role  # noqa: E402
+from rundesk import role_run as role_runs  # noqa: E402
 from rundesk import provider  # noqa: E402
 from rundesk import restart_request  # noqa: E402
 from rundesk import schedule as schedules  # noqa: E402
@@ -194,6 +196,16 @@ EXAMPLES: list[tuple[str, list[tuple[str, str]]]] = [
          "the one-time schedules that are over — which ran, and which never did"),
         ("rundesk schedules ava off nightly",
          "keep it, and stop it running"),
+    ]),
+    ("a role", [
+        ("rundesk roles ava",
+         "the specialists ava can hand heavy work to, and the runs it has admitted"),
+        ('rundesk roles ava run development --target ~/code/exporter --label "csv export"',
+         "one bounded task, run in that project under the role's own rules"),
+        ("", "an agent hands work on from inside its own turn, and the brief arrives on "
+             "standard input — the outcome, what it may do, and what done looks like"),
+        ("rundesk roles ava show rol-3-vfs3",
+         "one run: which role and revision, where it worked, and whether ava has reviewed it"),
     ]),
 
 ]
@@ -647,6 +659,38 @@ def build_parser() -> argparse.ArgumentParser:
     # Named the way schedules are: the agent is the word after the verb, the channel is
     # what you call it, and what it *is* comes from `--kind`. Everything a particular
     # platform needs goes after `--` and is never read here (R-CAD-13).
+    # **The agent is named before the action, and it is required.** A verb cannot offer an
+    # optional `<agent>` *and* sub-actions: argparse matches the agent's name against the
+    # action names and dies with `invalid choice`, which is a usage dump about a command
+    # somebody typed correctly. `channels` and `schedules` are shaped this way for the
+    # same reason.
+    specialists = sub.add_parser(
+        "roles", help="the specialists an agent hands heavy execution to")
+    specialists.add_argument("name", metavar="<agent>",
+                             help="whose role runs — a run belongs to the agent that "
+                                  "admitted it")
+    handing = specialists.add_subparsers(dest="act", metavar="<action>")
+    handed = handing.add_parser(
+        "run", help="hand one bounded task to a role — the brief is read from standard input")
+    handed.add_argument("role", metavar="<role>",
+                        help="which role — one this install has, by its own name")
+    handed.add_argument("--target", metavar="<directory>",
+                        help="the project directory the work happens in — the brain stands "
+                             "there, so the project's own instruction files load normally")
+    handed.add_argument("--label", metavar="<text>",
+                        help="a short safe name for the task, shown where other people can "
+                             "read it — never a path and never the brief")
+    guided = handing.add_parser(
+        "say", help="say something to a role that is working — read from standard input")
+    guided.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
+    ended = handing.add_parser("stop", help="end a role run before it finishes")
+    ended.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
+    again = handing.add_parser(
+        "resume", help="carry a finished role run on — the further task is read from standard input")
+    again.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
+    seen = handing.add_parser("show", help="one role run in full")
+    seen.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
+
     reachable = sub.add_parser("channels", help="the surfaces an agent is reachable on")
     reachable.add_argument("name", metavar="<agent>",
                            help="whose channels — a channel belongs to one agent")
@@ -690,6 +734,22 @@ def build_parser() -> argparse.ArgumentParser:
         one = on.add_parser(act, help=what)
         one.add_argument("channel", metavar="<channel>",
                          help="which channel, by the name it was added under")
+    # Who may reach the agent here, changed on a channel that already exists. A separate
+    # action for the same reason instructions are one: the people responsible for an agent
+    # change over its life, and changing one of them should not mean taking the agent off
+    # the channel, proving it again and rewriting everything else about it (R-CAD-19).
+    allowing = on.add_parser("allow",
+                             help="who may reach this agent through one channel")
+    allowing.add_argument("channel", metavar="<channel>",
+                          help="which channel, by the name it was added under")
+    # Both repeatable, and both optional: with neither, this shows who is allowed. One
+    # command doing both is how one person is replaced by another — read, decided and
+    # written once, so a replacement is never a moment with nobody allowed in it.
+    allowing.add_argument("--add", action="append", default=[], metavar="<user>",
+                          help="allow this person too — repeatable")
+    allowing.add_argument("--remove", action="append", default=[], metavar="<user>",
+                          help="stop allowing this person — repeatable, and never the "
+                               "last one")
     # Standing instructions, by the situation they hold in. A separate action rather than
     # flags on `add`, because these are the part an owner rewrites — a wording that reads
     # well in a room is found by trying it, and finding it should not mean taking the
@@ -828,7 +888,7 @@ def cmd_not_available(name: str, act: str | None = None) -> int:
     return NOT_AVAILABLE
 
 
-def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
+def cmd_serve(args: argparse.Namespace, gateways, agents, skills) -> int:
     """Run a gateway here, in the foreground. What the machine's job invokes.
 
     Refusing to run ends *well*, on purpose. The machine is told to start a gateway
@@ -861,6 +921,17 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
         # None for a name that is not an agent, which is a gateway that can start programs
         # and not turns — and says so rather than passing the minute over in silence.
         asking = agents.asking(args.name) if agents.exists(args.name) else None
+        # How the role runs this agent admitted are carried, and how their parents are
+        # told. Resolved here and handed over made, for the same reason `asking` is: a
+        # role run needs an agent, a bundle and an account, and a gateway knows none of
+        # them (R-ROL-4).
+        specialists = agents.playing(args.name) if agents.exists(args.name) else None
+        # What this agent may do, resolved here and handed over as a question rather than
+        # an answer: a grant is a link anything on the machine may add or take away while
+        # the gateway runs, and the gateway is what tells the owner it changed (R-CH-32).
+        # None for a name that is not an agent, which holds no grants.
+        granted = ((lambda: skills.granted(agents.skills(args.name)))
+                   if agents.exists(args.name) else None)
     except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         print(f"        what stands in the way:  rundesk doctor {args.name}", file=sys.stderr)
@@ -878,13 +949,15 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
                                             # (R-SCH-27).
                                             agents=agents.agents_home(),
                                             records=records,
-                                            asking=asking).serve())
+                                            asking=asking,
+                                            roles=specialists,
+                                            granted=granted).serve())
     except (gateways.AlreadyRunning, gateways.Unfit, gateways.NotAName) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         return 0
 
 
-def cmd_start(args: argparse.Namespace, gateways, machine, agents) -> int:
+def cmd_start(args: argparse.Namespace, gateways, machine, agents, skills) -> int:
     """Hand a gateway to the machine, and see that a gateway actually results.
 
     The machine taking the job is not the gateway running. A job can be accepted and the
@@ -895,7 +968,7 @@ def cmd_start(args: argparse.Namespace, gateways, machine, agents) -> int:
     if args.here:
         # The same function the machine's own job reaches, so what a person types and what
         # launchd runs cannot come to behave differently.
-        return cmd_serve(args, gateways, agents)
+        return cmd_serve(args, gateways, agents, skills)
     name = args.name
     already = standing.of(name, gateways, agents)
     if already.running:
@@ -2155,6 +2228,7 @@ def cmd_channels(args: argparse.Namespace, gateways, agents) -> int:
         return 1
     act = getattr(args, "act", None)
     doing = {"add": _add_channel, "remove": _remove_channel, "show": _show_channel,
+             "allow": _allow_channel,
              "instructions": _channel_instructions}.get(act, _list_channels)
     try:
         return doing(args, gateways, agents, whose)
@@ -2168,6 +2242,173 @@ def cmd_channels(args: argparse.Namespace, gateways, agents) -> int:
         print(f"{args.name}: NOT CHANGED — {why}", file=sys.stderr)
         print(f"        what stands in the way:  rundesk doctor {args.name}",
               file=sys.stderr)
+        return 1
+
+
+#: How many of an agent's role runs a listing shows. Enough to cover what is in flight
+#: and what finished today; the records hold the rest.
+ROLE_RUNS_SHOWN = 20
+
+
+def cmd_roles(args: argparse.Namespace, agents) -> int:
+    """What an agent can hand heavy execution to, and what it has handed over."""
+    if not agents.exists(args.name):
+        print(f"{args.name}: NO SUCH AGENT", file=sys.stderr)
+        print("        what there is:  rundesk agents", file=sys.stderr)
+        return 1
+    act = getattr(args, "act", None)
+    if act == "run":
+        return _hand_to_a_role(args, agents)
+    if act in ("say", "stop", "resume"):
+        return _guide_a_role(args, act)
+    try:
+        whose = agents.reading(args.name)
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
+        print(f"{args.name}: RECORDS UNREADABLE — {why}", file=sys.stderr)
+        return 1
+    if act == "show":
+        return _show_role_run(args, whose)
+    return _list_roles(args, whose)
+
+
+def _list_roles(args: argparse.Namespace, whose) -> int:
+    """The roles this agent may reach for, and the runs it has already admitted."""
+    installed = role.known()
+    if not installed:
+        print("no roles installed")
+    for slug in installed:
+        try:
+            one = role.read(slug)
+        except role.NotARole as why:
+            print(f"{slug}  UNUSABLE — {why}")
+            continue
+        print(f"{one.label}  {one.slug}  {one.revision[:12]}  "
+              f"{one.posture}  [{' '.join(one.skills)}]")
+        print(f"        {one.description}")
+        if one.missing:
+            # Said every time it is listed. A set quietly smaller than its manifest is the
+            # kind of difference nobody notices until the work comes back thin.
+            print(f"        not installed here, so not given: {' '.join(one.missing)}")
+    runs = whose.role_runs(limit=ROLE_RUNS_SHOWN)
+    if not runs:
+        return 0
+    print()
+    for row in runs:
+        it = role_runs.shown(row)
+        print(f"{it['id']}  {it['role']}  {it['state']}  {it['label']}"
+              + (f"  in {it['target']}" if it["target"] else "")
+              + ("  reviewed" if it["reviewed"] else ""))
+    return 0
+
+
+def _show_role_run(args: argparse.Namespace, whose) -> int:
+    """One role run in full — never its brief, and never a local path (R-ROL-17)."""
+    row = whose.role_run(args.run)
+    if row is None:
+        print(f"{args.name}/{args.run}: NO SUCH ROLE RUN", file=sys.stderr)
+        print(f"        what there is:  rundesk roles {args.name}", file=sys.stderr)
+        return 1
+    it = role_runs.shown(row)
+    for what in ("id", "role", "label", "revision", "posture", "state", "outcome",
+                 "parent_run", "target", "retained_until"):
+        print(f"{what:16}{it[what]}")
+    print(f"{'skills':16}{' '.join(it['skills'])}")
+    print(f"{'elapsed':16}{it['elapsed']}s")
+    print(f"{'reviewed':16}{'yes' if it['reviewed'] else 'no'}")
+    waiting = whose.words_waiting(args.run)
+    if waiting:
+        print(f"{'waiting to say':16}{waiting}")
+    if row.get("stop_asked_at"):
+        print(f"{'stop asked':16}{row['stop_asked_at']}")
+    owed = role_runs.owed_review(args.name, args.run)
+    if owed["owed"]:
+        # Said only while one is owed, and with the count: a review tried many times and
+        # never delivered is the shape of a surface that is not coming back, and nothing
+        # else an owner can read says so.
+        print(f"{'owed review':16}yes, tried {owed['attempts']}")
+    return 0
+
+
+def _hand_to_a_role(args: argparse.Namespace, agents) -> int:
+    """Admit one role run for this agent, on behalf of the turn asking (R-ROL-4).
+
+    **Only an agent's own turn may ask.** A role acts on a named agent's behalf
+    and answers into that agent's conversation, so the run that admits it has to be one of
+    that agent's — which is what `RUNDESK_RUN` names and what the records then prove.
+
+    The brief is read from standard input rather than given as an argument: it is the task,
+    it is often several paragraphs, and an argument would put it in `ps` and in a shell
+    history where the rest of a turn's words never go.
+    """
+    parent = os.environ.get("RUNDESK_RUN") or ""
+    if not parent:
+        print(f"{args.name}: NOT ADMITTED — a role run is admitted by this agent's own "
+              "turn, and nothing here is running one", file=sys.stderr)
+        return 1
+    if os.environ.get("RUNDESK_ROLE_RUN"):
+        # Said early and cheaply. What actually refuses is the durable record below, which
+        # is why this is allowed to be a variable at all (R-ROL-13).
+        print(f"{args.name}: NOT ADMITTED — a role run cannot start another one",
+              file=sys.stderr)
+        return 1
+    brief = sys.stdin.read()
+    try:
+        admitted = role_runs.admit(
+            args.name, args.role, brief, parent,
+            target=getattr(args, "target", None), label=getattr(args, "label", None),
+        )
+    except role_runs.NotDelegable as why:
+        print(f"{args.name}: NOT ADMITTED — {why}", file=sys.stderr)
+        print(f"        what it can hand work to:  rundesk roles {args.name}",
+              file=sys.stderr)
+        return 1
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
+        print(f"{args.name}: RECORDS UNREADABLE — {why}", file=sys.stderr)
+        return 1
+    print(admitted.id)
+    print(f"        {admitted.label} — {role.label(admitted.role)}, "
+          f"retained until {admitted.retained_until}")
+    print("        it runs in this agent's gateway; you are told when it reports back")
+    return 0
+
+
+def _guide_a_role(args: argparse.Namespace, act: str) -> int:
+    """Say something to a role run, end one, or carry a finished one on (R-ROL-23).
+
+    **Three verbs because there are three things to mean**, and each refusal names the one
+    that was wanted. A single verb that guessed from the run's state would say something
+    into work in flight when an owner meant to start it again, and spend a turn's money
+    doing it.
+    """
+    said = sys.stdin.read() if act in ("say", "resume") else ""
+    try:
+        if act == "stop":
+            if not role_runs.stop(args.name, args.run):
+                print(f"{args.name}/{args.run}: ALREADY OVER — nothing was running to end",
+                      file=sys.stderr)
+                return 1
+            print(f"{args.run} was asked to stop")
+            print("        it ends as soon as this agent's gateway reaches it")
+            return 0
+        if act == "say":
+            # Said *after* it was taken, never before: a line printed on the way in is a
+            # line a refusal cannot take back, and this one reported success while the
+            # command was busy failing.
+            lands = role_runs.say(args.name, args.run, said)
+            print(f"said to {args.run}")
+            print(f"        {lands}")
+            return 0
+        role_runs.resume(args.name, args.run, said)
+        print(f"{args.run} was carried on")
+        print("        it starts again in the conversation it already had")
+        return 0
+    except role_runs.NotDelegable as why:
+        print(f"{args.name}/{args.run}: NOT DONE — {why}", file=sys.stderr)
+        print(f"        where it stands:  rundesk roles {args.name} show {args.run}",
+              file=sys.stderr)
+        return 1
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
+        print(f"{args.name}: RECORDS UNREADABLE — {why}", file=sys.stderr)
         return 1
 
 
@@ -2308,6 +2549,13 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         if kept_secret.is_file() and beside != home:
             shutil.copy2(kept_secret, beside / SECRET_FILE)
             os.chmod(beside / SECRET_FILE, 0o600)
+        # **A new channel has introduced this agent to nobody**, written down before the
+        # record exists so that everybody in the list that follows is owed one (R-CH-33).
+        # This is also what tells a channel added today from one an older release wrote:
+        # no record at all means the people on it have been reaching this agent for
+        # months, and greeting them after an update would be rundesk claiming something
+        # happened that did not.
+        gateways.remember_no_one_welcomed(beside)
         whose.remember_channel(one, args.kind, args.allow, store.stamped(),
                                settings=shape["settings"], secret=said["secret"],
                                describes=shape["describes"],
@@ -2372,6 +2620,76 @@ def _remove_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     unlogged = _note(gateways, args.name, f"channel '{args.channel}' removed",
                      agents.resolved(args.name))
     print(f"{args.name}/{args.channel}: REMOVED")
+    return unlogged
+
+
+def _allow_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
+    """Who may reach this agent here — shown, or changed (R-CAD-19).
+
+    **Changed on the channel that is already there.** Who is responsible for an agent
+    changes over its life, and the only way to say so was to take the agent off the
+    surface and add it again — which throws away its instructions, its settings and
+    whatever the adapter had kept for it, to change one line.
+
+    With nothing to change this shows the list, one id to a line, so a script reads it
+    without parsing a table. What is added and what is removed are decided in one hold
+    below this, so replacing one person with another is never a moment with nobody
+    allowed in it and never a change two owners can lose between them.
+    """
+    it = whose.channel(args.channel)
+    if it is None:
+        print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
+              file=sys.stderr)
+        return 1
+    adding = [one for one in (args.add or []) if one is not None]
+    removing = [one for one in (args.remove or []) if one is not None]
+    if not adding and not removing:
+        allowed = it.get("allow") or []
+        if not allowed:
+            # Nothing writes this and nothing should ever read it as a mode. Said rather
+            # than printed as an empty list, which reads as a command that did nothing.
+            print(f"{args.name}/{args.channel}: NO ONE ALLOWED")
+            return 0
+        for one in allowed:
+            print(one)
+        return 0
+    was = list(it.get("allow") or [])
+    try:
+        resulting = whose.allow_channel(args.channel, add=adding, remove=removing)
+    except ValueError as why:
+        print(f"{args.name}/{args.channel}: NOT CHANGED — {why}", file=sys.stderr)
+        print(f"        who is allowed now:  rundesk channels {args.name} allow "
+              f"{args.channel}", file=sys.stderr)
+        return 1
+    if resulting == sorted(was):
+        print(f"{args.name}/{args.channel}: UNCHANGED — {', '.join(resulting)}")
+        return 0
+    gone = [one for one in was if one not in resulting]
+    if gone:
+        # Forgotten here as well as by the gateway, because the gateway is exactly what is
+        # *not* running while somebody rearranges who may reach an agent. Without it,
+        # taking a person off and putting them back while nothing was up would leave them
+        # written down as already introduced, and they would never be greeted (R-CH-33).
+        try:
+            gateways.forget_welcomed(
+                agents.channel_home(args.name, args.channel), gone)
+        except (OSError, _gateway.Unreadable) as why:
+            # The change itself is written and stands. Only the note of who has already
+            # been introduced could not be brought up to date, and the worst it costs is
+            # one greeting somebody has had before.
+            print(f"        who has been introduced could not be updated: {why}")
+    print(f"{args.name}/{args.channel}: ALLOWED — {', '.join(resulting)}")
+    unlogged = _note(gateways, args.name,
+                     f"channel '{args.channel}' now allows {', '.join(resulting)}",
+                     agents.resolved(args.name))
+    if [one for one in resulting if one not in was]:
+        # **What is written down is not what the adapter is holding.** A surface is handed
+        # who it may listen to when it starts, so somebody added while the agent is running
+        # is allowed by the record and still unknown to the program — and the introduction
+        # rundesk owes them waits for the same moment. Said, because a new owner messaging
+        # an agent that ignores them has no way to know why.
+        print(f"        in effect when the channel next starts:  "
+              f"rundesk restart {args.name}")
     return unlogged
 
 
@@ -3451,9 +3769,9 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
     if args.command == "ask":
         return cmd_ask(args, agents)
     if args.command == "serve":
-        return cmd_serve(args, gateways, agents)
+        return cmd_serve(args, gateways, agents, skills)
     if args.command == "start":
-        return cmd_start(args, gateways, machine, agents)
+        return cmd_start(args, gateways, machine, agents, skills)
     if args.command == "stop":
         return cmd_stop(args, gateways, machine, agents)
     if args.command == "remove":
@@ -3470,6 +3788,8 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
         return cmd_skills(args, agents, skills, gateways, catalogs)
     if args.command == "scripts":
         return cmd_scripts(args, scripts)
+    if args.command == "roles":
+        return cmd_roles(args, agents)
     if args.command == "channels":
         return cmd_channels(args, gateways, agents)
     if args.command == "schedules":

@@ -1546,5 +1546,17 @@ class ATurnTheGatewayStoodDownOn(WithAnAgentToRunTurnsFor):
         self.assertEqual("finished", said.became)
 
 
+class WhereATurnStands(unittest.TestCase):
+    """R-ROL-7 — an ordinary turn stands in the agent's home; only a role moves."""
+
+    def test_an_ordinary_turn_stands_in_the_agents_home_with_its_own_skills(self):
+        whose = {"home": Path("/agents/ava/home"), "skills": Path("/agents/ava/home/skills")}
+        running = turn.Execution.ordinary(whose)
+        self.assertEqual(Path("/agents/ava/home"), running.cwd)
+        self.assertEqual(Path("/agents/ava/home/skills"), running.skills)
+        self.assertIsNone(running.role_run)
+        self.assertIsNone(running.role)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

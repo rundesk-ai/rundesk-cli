@@ -256,6 +256,69 @@ class InstructionBuilder(unittest.TestCase):
         self.assertLess(built.index("Adapter trigger"), built.index("Adapter addition."))
         self.assertTrue(built.endswith("Agent addition."))
 
+    def test_a_role_execution_is_never_told_the_named_agent_core_rules(self):
+        """R-ROL-5 — the floor is what cannot be replaced, and it is small. A worker told
+        it has a home, a memory and a Rundesk to operate goes looking for an identity it
+        does not have."""
+        built = instructions.for_role(
+            variables={"role": "Development", "parent_agent": "elena",
+                       "role_run": "rol-1-aaaa", "target": "/projects/exporter",
+                       "workspace": "/agents/elena/role-runs/rol-1-aaaa/home/workspace"},
+            rules="# Development\n\nRun the tests.\n",
+        )
+        self.assertNotIn(instructions.RUNDESK_INSTRUCTIONS.split("\n")[0], built)
+        for absent in ("MEMORY.md", "SOUL.md", "rundesk schedules", "rundesk messages",
+                       "Operate Rundesk", "managing-rundesk"):
+            self.assertNotIn(absent, built, absent)
+        self.assertIn("on behalf of the named agent elena", built)
+        self.assertIn("rol-1-aaaa", built)
+        self.assertIn("/projects/exporter", built)
+
+    def test_a_roles_own_rules_reach_the_brain_exactly_as_they_were_written(self):
+        """R-ROL-10 — a run resumes with byte-identical rules, and a substitution is a
+        difference. Nothing is filled into what the owner wrote."""
+        built = instructions.for_role(
+            variables={"parent_agent": "elena", "role": "Development"},
+            rules="Keep {agent_home} and {role} literally.",
+        )
+        self.assertIn("Keep {agent_home} and {role} literally.", built)
+
+    def test_the_role_layers_are_the_floor_then_the_rules_then_the_task(self):
+        """R-ROL-5 — one stable order, so what a brain reads first is Rundesk's."""
+        built = instructions.for_role(
+            variables={"parent_agent": "elena", "role": "Development",
+                       "role_run": "rol-1-aaaa"},
+            rules="# Mine",
+        )
+        self.assertLess(built.index("# Role execution"), built.index("# Mine"))
+        self.assertLess(built.index("# Mine"), built.index("## This execution"))
+    def test_the_onboarding_layer_names_the_agent_and_invents_no_work(self):
+        """R-CH-33 — a new agent has no projects, no goals and no focus, and this is the
+        one turn where a brain has nothing but rundesk's words to go on."""
+        built = instructions.build(
+            variables={"agent": "Ava", "agent_home": "/agents/ava/home"},
+            trigger=instructions.ONBOARDING)
+        self.assertIn("you are Ava", built)
+        self.assertIn("very short", built)
+        self.assertIn("Invite them to reach out", built)
+        self.assertIn("Never invent, assume, or offer a project, goal, focus, or "
+                      "specialty", built)
+        self.assertIn("Write only the message itself", built)
+        self.assertNotIn("{agent}", built)
+
+    def test_the_onboarding_layer_never_displaces_rundesks_own_rules(self):
+        """R-AGT-38 — nothing replaces the core layer, and a trigger is one layer."""
+        built = instructions.build(variables={"agent": "Ava"},
+                                   trigger=instructions.ONBOARDING,
+                                   append="Owner addition.")
+        self.assertTrue(built.startswith(
+            instructions.render(instructions.RUNDESK_INSTRUCTIONS,
+                                {"agent": "Ava"}).strip().splitlines()[0]))
+        self.assertLess(built.index("First message to a new owner"),
+                        built.index("Owner addition."))
+        self.assertNotIn("First message to a new owner",
+                         instructions.build(variables={"agent": "Ava"}))
+
     def test_only_trigger_prompt_text_lives_in_this_module(self):
         for use_case in (
             "ATTACHMENTS", "INTERRUPTED_RECOVERY", "AFTER_EXTERNAL_UPDATE",

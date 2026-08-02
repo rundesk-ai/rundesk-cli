@@ -60,6 +60,8 @@ so only a running commentary may grow.
 | ✅ | R-DIS-35 | A terminal Discord notice neither claims an idle turn is running nor erases a newer turn that is running | `a terminal notice does not claim another turn is running`, `a terminal notice does not erase a newer running turn` |
 | ✅ | R-DIS-36 | Discord offers the current agent's granted skills as a read-only command | `skills lists only this agents grants as sorted bullets`, `skills says when this agent has no grants`, `read only gateway information is offered as discord commands`, `a long skills answer keeps every granted skill` |
 | ✅ | R-DIS-37 | Discord offers the schedules this agent can still run as a read-only bullet list, soonest first | `schedules lists what can still run as bullets soonest first`, `schedules leaves out a schedule whose moment has gone`, `schedules says when this agent has nothing left to run`, `schedules names a schedule nobody could understand`, `read only gateway information is offered as discord commands` |
+| ✅ | R-DIS-38 | Discord sends a notice meant for the owner alone as a direct message to them | `a notice for the owner is sent to them and starts no conversation`, `a notice for the owner too long for one message is split`, `a notice for the owner with nothing in it is not sent` |
+| ✅ | R-DIS-39 | Discord sends a notice meant for one named allowed user to that user, and refuses one naming somebody the channel does not allow | `a notice naming somebody is carried to that person`, `a notice naming somebody this channel does not allow is refused`, `a notice naming an allowed person reaches that person` |
 
 ## Open questions
 

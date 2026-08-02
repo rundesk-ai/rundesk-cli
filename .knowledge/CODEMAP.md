@@ -120,6 +120,23 @@ file with it.
   standing there before the brain runs, and a rule in a config file would describe what rundesk
   placed while the brain read on. Knows nothing of any brain: where a skill is *presented* is each
   adapter's, told through `RUNDESK_SKILLS`.
+- `src/rundesk/role.py` — a shared specialist definition an agent may hand work to, and what
+  makes one usable. Two maintained files below `agents_home()/.roles/` — a description, a
+  skill set and a posture, plus the rules one execution follows — and everything else derived:
+  the slug is the directory, the label is the slug read aloud, and the revision is a digest of
+  the manifest, the rules and every resolved skill package, so nobody increments a version. A
+  shipped role is laid down where one is missing and **never over one that is there**: a
+  role is what an owner writes their specialists as, not a thing a release keeps true.
+- `src/rundesk/role_run.py` — one isolated specialist execution, from admission to expiry.
+  Assembles a bundle of locked bytes under the agent's own directory and moves it into place
+  whole, hands `turn.py` an execution context standing in the target project, and settles the
+  root into exactly one review its named parent is owed. **Takes back what an adapter stood in
+  that project on its way in**: every brain presents skills beside the directory it stands in,
+  so a run that simply ended left a vendor directory in somebody's checkout holding links into
+  a bundle swept a fortnight later. Vendor-neutral — it removes only a link resolving inside
+  this run's own snapshot, and only a directory that removal emptied. **Knows nothing of channels or
+  gateways**: what carries it and what tells its parent are `agent.playing`'s, handed to a
+  gateway already made the way `agent.asking` already is.
 - `src/rundesk/catalog.py` — repository manifests, catalog provenance, and atomic installation,
   update, adoption, and removal below `data/catalogs/`. Exposes complete packages through links in
   the existing skill library; never imports or executes catalog content.
@@ -217,16 +234,16 @@ file with it.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 31 files, ~2000 cases)
+## Tests (tests/ — 33 files, ~2100 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
 
 | File | Cases | Covers |
 |---|---|---|
-| `test_gateway.py` | 196 | `platform-gateway` — real processes, real signals, waits turned down |
-| `test_agent.py` | 88 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
-| `test_cli.py` | 296 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
+| `test_gateway.py` | 215 | `platform-gateway` — real processes, real signals, waits turned down |
+| `test_agent.py` | 124 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
+| `test_cli.py` | 308 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
 | `test_catalog.py` | 27 | `lifecycle-skill-catalog` — manifests, provenance, default seeding, inert integration packages, lifecycle refresh, ownership, atomic updates, drift replacement, removal, and unsafe archives, all offline |
 | `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 81 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
@@ -236,18 +253,20 @@ provider. One file per contract, named for it:
 | `test_install.py` | 82 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
 | `test_supervisor.py` | 78 | the launchd job — a fake `launchctl`, so it runs where there is none |
 | `test_schedule.py` | 49 | `platform-schedule` — pure time arithmetic, the clock passed in |
-| `test_provider.py` | 37 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
+| `test_provider.py` | 41 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
 | `test_claude.py` | 65 | `provider-adapter` — the arithmetic and the postures one shipped brain decides on its own, driven against 184 captured lines rather than an account |
 | `test_grok.py` | 35 | `provider-adapter` — a brain that reports no tools, and the two flags of its that are accepted and enforce nothing |
 | `test_antigravity.py` | 18 | `provider-adapter` — piped prompt privacy, stream mapping, cumulative-resume usage, posture, skills and native-keyring environment, all offline |
-| `test_turn.py` | 107 | `agent-run` — one whole turn, and `rundesk ask` end to end |
+| `test_turn.py` | 110 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_activity.py` | 3 | live-turn concurrency, safe persisted fields, and update visibility |
 | `test_transcript.py` | 28 | `agent-run` — the account: append-only, clock-free, and what survives a pruning |
-| `test_store.py` | 123 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
+| `test_store.py` | 124 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
 | `test_channel.py` | 73 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
-| `test_answering.py` | 101 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
+| `test_answering.py` | 123 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
 | `test_discord.py` | 168 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
-| `test_instructions.py` | 10 | Rundesk's core and trigger prompts, standard variables, and additive builder |
+| `test_instructions.py` | 20 | Rundesk's core and trigger prompts, standard variables, the additive builder, and the separate role floor |
+| `test_role.py` | 32 | `agent-role` — what a role is, what makes one usable, and what its revision is computed from, against a scratch library |
+| `test_role_run.py` | 83 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
 | `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and
@@ -279,6 +298,10 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
 - `CLI.md` — every operation the command offers, how each is typed, and what each argument means.
   **Generated** by `.knowledge/scripts/cli-reference` from the parser, so it cannot describe a product
   nobody has; the gate fails when it and the command disagree.
+- `src/templates/roles/` — **the roles this release ships.** Two files each, laid down where
+  one of that name is missing and never over one an owner has: unlike a built-in skill, a role is
+  what somebody writes their specialists as, and bringing one "forward" would rewrite what every future
+  run of an edited role is allowed to do (R-ROL-18). `development` is the only one so far.
 - `src/templates/skills/` — **the required and remaining release-owned skills.** Copied into the
   owner's library by the install and brought forward by an update, so a built-in is always the version installed
   (R-AGT-30). `managing-rundesk` is how to operate rundesk, written for **an agent running inside
@@ -286,7 +309,8 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   and the pointer named a path that existed on neither kind of install. As a skill it is handed
   to the agent instead. The operating baseline in `config.RUNDESK_REQUIRED_GRANTS` reaches every
   new and existing agent and cannot be configured away or revoked (R-AGT-36, R-AGT-37).
-- `docs/extending/` — the adapter and integration guides. They were built-in skills, laid down in
+- `docs/extending/` — the adapter and integration guides, including `integration-clis/`, which
+  is where building one is documented rather than in a skill every agent carries. They were built-in skills, laid down in
   every owner's library and granted to every agent, for a task almost none of them will ever do.
   A person building an adapter reads these against the repository; an agent does not need them in
   front of it on every turn (#95).

@@ -15,6 +15,7 @@ Run: python3 tests/test_migration.py
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import sqlite3
 import sys
@@ -765,18 +766,34 @@ class CarryingTheShapeThatShippedForward(WithStepsOfThisCasesOwn):
             pending[0]["bootstrap"],
         )
 
-    def test_this_update_carries_the_exact_templates_it_migrates_toward(self):
-        """A historical migration is frozen, but its release templates can still drift
-        before shipping. This keeps the request and the files installed beside it identical."""
-        step = migration.found()[-1].loaded()
-        templates = migration.STEPS.parent / "templates" / "agent"
+    def test_a_shipped_step_carries_the_templates_it_shipped_with(self):
+        """R-MIG — **a step is a past moment, and a released one is frozen.**
 
-        for name, text in step.TEMPLATES:
-            self.assertEqual(
-                (templates / name).read_text(encoding="utf-8"),
-                text,
-                f"{name} changed without updating migration 005's durable request",
-            )
+        This used to compare 005's carried templates against the files installed today,
+        which is right only until that release ships. After it has, the comparison forces
+        every later edit of a template to rewrite a migration somebody has already run —
+        and then two machines both reporting version 5 could have been asked different
+        things, so the version stops being the record.
+
+        Pinned instead. A step that carries templates is compared against the live files
+        while it is unreleased, and pinned here the moment its release goes out.
+        """
+        shipped = {
+            "AGENTS.md": "2ff0ac04e5c32387",
+            "MEMORY.md": "5682b82a50cb76cc",
+            "SOUL.md": "706f7cc671e4c39d",
+            "CLAUDE.md": "a3dcced633541ea6",
+        }
+        carrying = [one for one in migration.found() if one.version == 5]
+        self.assertEqual(1, len(carrying), "migration 005 is what carries the templates")
+
+        for name, text in carrying[0].loaded().TEMPLATES:
+            with self.subTest(name):
+                self.assertEqual(
+                    shipped[name],
+                    hashlib.sha256(text.encode("utf-8")).hexdigest()[:16],
+                    f"{name} changed inside a migration that has already run for people",
+                )
 
     def test_a_new_bootstrap_does_not_hide_old_continuity_pages(self):
         """The bootstrap is safe to replace verbatim and may arrive before the tailored

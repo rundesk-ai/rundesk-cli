@@ -650,18 +650,27 @@ class Agent(discord.Client):
                     old.unlink()
         return True
 
-    async def _tell_the_owner(self, said: str) -> None:
-        """R-DIS-15 — the owner hears about coming up and going down, wherever they are.
+    async def _tell_the_owner(self, said: str, who: str | None = None) -> None:
+        """R-DIS-15, R-DIS-39 — one person hears about it privately, wherever they are.
 
-        The first allowed user is the owner; the rest are guests. Failures are said out
-        loud rather than swallowed: a greeting that silently never arrives is
-        indistinguishable from an agent that never came up, which is the one thing this
-        message exists to tell apart.
+        The first allowed user is the owner; the rest are guests. A notice that names
+        somebody goes to *that* person instead — which is how a newly allowed user is
+        introduced to the agent (R-CH-33) — and one naming somebody this channel does not
+        allow is refused here as well as above, the same rule a direct-message place is
+        held to (R-CAD-16). A bot that would DM any snowflake it was handed is one bug
+        away from messaging a stranger.
+
+        Failures are said out loud rather than swallowed: a greeting that silently never
+        arrives is indistinguishable from an agent that never came up, which is the one
+        thing this message exists to tell apart.
         """
         if not self.chose.allow:
             note("nobody to greet — RUNDESK_ALLOW is empty")
             return
-        who = self.chose.allow[0]
+        if who is not None and who not in self.chose.allow:
+            note(f"not telling {who}, who this channel does not allow")
+            return
+        who = who or self.chose.allow[0]
         try:
             person = await self.fetch_user(int(who))
             await person.send(said)
@@ -825,6 +834,22 @@ class Agent(discord.Client):
         entirely different fixes — so neither is left to be inferred.
         """
         kind = it.get("type")
+        # Answered before anything is kept for a conversation, because this one has none:
+        # it is about the agent and not about a turn, and a place held under an absent
+        # conversation is a live exchange nobody is in.
+        if kind == "owner-notice":
+            # Split like anything else Discord is given: a catalog removal takes away
+            # every skill it brought at once, and a notice over the limit is refused
+            # outright rather than shortened (R-DIS-13).
+            # Whoever it names, and otherwise the owner. An introduction is for the person
+            # who has just arrived and for nobody else (R-DIS-39); a gateway notice names
+            # no one and reaches the first allowed user, exactly as it always has.
+            who = str(it.get("user") or "") or None
+            rest = str(it.get("text") or "")
+            while rest:
+                piece, rest = split_at(rest, LIMIT)
+                await self._tell_the_owner(piece, who)
+            return
         if kind in ("state", "answer"):
             note(f"told {kind}"
                  f"{'/' + str(it.get('state')) if kind == 'state' else ''}"

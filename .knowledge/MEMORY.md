@@ -31,6 +31,33 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   gate's per-suite ceiling, which is the failure shape nobody attributes correctly. It failed loudly
   here only because nothing re-exported the old name. **Never re-export a moved constant for
   convenience**, and grep `tests/` for `<module>.<CONST>` in the same commit that moves one.
+- **The gate passes locally on a developer's machine for cases that fail on a runner, because
+  the suite inherits `RUNDESK_DATA_DIR` too.** An agent's shell is a gateway's child, so a case
+  that calls `agent.add` reads the *owner's* configured skill baseline through `config.skills()`
+  and never notices it had no install of its own. Measured: three new cases in `test_answering`
+  passed under `python3 .knowledge/scripts/gate` and errored on all three CI shards. Give every
+  case that makes an agent its own `RUNDESK_DATA_DIR` and `config.ensure`, the way
+  `CarriesAConversation.setUp` does — and run the gate at least once under
+  `env -u RUNDESK_DATA_DIR -u RUNDESK_HOME -u RUNDESK_AGENTS_DIR … HOME=/tmp/somewhere` before
+  believing it.
+
+- **`changing(target, [], …)` cannot tell a file nobody has written from one holding an
+  empty list, and for onboarding state those mean opposite things.** `_understood` returns
+  the `empty` value for a missing file and refuses anything whose type differs, so `[]`
+  collapses "this channel is new, greet everybody on it" into "this channel has greeted
+  everybody already" — a feature that silently never fires, on exactly the installs that
+  most need it. Measured while building `owed_a_welcome`: with `empty=[]` a channel added
+  a minute ago and a channel from three releases back read back identically. Use a mapping
+  (`empty={}`) and put the list under a key, so a *missing key* is the third answer;
+  `gateway._NEVER_LOOKED` is that. The same trap is waiting for anything else where "never
+  written" is not "written and empty".
+
+- **The run directory's `*.json` entries *are* the list of gateways, so anything else you
+  keep there under that suffix invents one.** `gateway.every` unions the stems of `*.lock`
+  and `*.json`, and `sweep` walks the same glob. Measured: dropping `ava.skills.json` into a
+  scratch run directory made `gateway.every` report a gateway called `ava.skills`. Runtime
+  state of any other kind goes in as a dotfile keyed by the encoded name, the way
+  `update_request.maintenance_path` and `gateway._skills_last_seen` do — never `<something>.json`.
 
 - **Running `./rundesk` from a checkout tests new code against the live install's data, and
   nothing warns you.** An agent's shell is a gateway's child, so it already carries
@@ -844,6 +871,12 @@ re-checked since, so treat these as true-when-found rather than as current.*
 - **This installed `gh release view --json` has no `isLatest` field.** Asking for it fails
   before returning any release data; verify tag, publication, draft and prerelease state with
   supported `release view` fields, and use `gh release list` when latest ordering matters.
+
+- **An apostrophe inside a heredoc inside `$( ... )` breaks `bash -n` on bash 3.2**, which is
+  what macOS ships and what the gate's shell check runs. `install.sh` embeds Python through
+  `took="$(python3 - ... <<'SKILLS' ... SKILLS)"`, and a Python comment reading `the owner's`
+  in there is reported as a syntax error dozens of lines later, at whatever line happens to
+  hold an unbalanced parenthesis. Write those comments without an apostrophe.
 
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

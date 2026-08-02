@@ -85,9 +85,9 @@ RECOVERABLE = "rundesk:recovery:available"
 RECOVERY_CLAIMED = "rundesk:recovery:claimed"
 RECOVERED_BY = "rundesk:recovery:run:"
 
-#: Every way work is admitted for an agent, and the whole of it. Three, because there are
-#: three things that start one: somebody at a terminal, somebody on a surface the agent is
-#: reachable on, and the clock.
+#: Every way work is admitted for an agent, and the whole of it. Four, because there are
+#: four things that start one: somebody at a terminal, somebody on a surface the agent is
+#: reachable on, the clock, and a role run this agent's own turn admitted.
 #:
 #: **Declared and refused rather than written as free text.** This is the only record of how
 #: a run came about, and until it was a set the column took whatever a caller passed —
@@ -95,7 +95,25 @@ RECOVERED_BY = "rundesk:recovery:run:"
 #: typo looks like from the outside. A word nobody can read back is a run whose origin is
 #: lost, and this is the column somebody reads at three in the morning to find out whether
 #: they asked for what happened.
-SOURCES = ("terminal", "channel", "schedule")
+SOURCES = ("terminal", "channel", "schedule", "role")
+
+#: What a role run is, from admission to the end of its retention (R-ROL-4). Closed for
+#: the same reason `SOURCES` is: this is the only word saying whether a specialist
+#: execution is still going, already answered for, or no longer resumable, and one nobody
+#: can read back is a run whose state is lost.
+#:
+#: `succeeded`, `failed` and `stopped` are terminal and are the words a root outcome
+#: settles on; they are the run's own, told apart from the outcome the provider reported
+#: so a caller can branch without parsing prose. `expired` is what a swept bundle leaves
+#: behind — the durable record of the work, with nothing left to carry on.
+ADMITTED = "admitted"
+WORKING = "working"
+SUCCEEDED = "succeeded"
+FAILED = "failed"
+STOPPED = "stopped"
+EXPIRED = "expired"
+UNFINISHED_ROLES = (ADMITTED, WORKING)
+FINISHED_ROLES = (SUCCEEDED, FAILED, STOPPED)
 
 
 class Unreadable(Exception):
@@ -722,6 +740,45 @@ class Store:
                 ),
             )
 
+    def allow_channel(self, name: str, add=(), remove=()) -> list:
+        """Change who may reach this agent through one channel, never down to nobody.
+
+        **The read, the decision and the write are one hold** (R-CAD-19). Working the new
+        list out above this and handing it down would let two owners each read the same
+        list, each write theirs back, and one of the two changes disappear with both
+        commands reporting success. So what is asked for is *what to change*, and what it
+        is changed from is read here.
+
+        A `remove` naming somebody this channel does not allow is refused rather than
+        passed over. A mistyped id that quietly succeeds leaves the person the owner meant
+        to take off still allowed, and says the opposite.
+
+        Down to nobody is refused here as well as at the command, for the reason adding
+        one is: a channel nobody may use answers whoever speaks to it, which is a
+        misconfiguration and never a mode (R-CAD-10).
+        """
+        adding = [str(one) for one in add]
+        removing = [str(one) for one in remove]
+        if any(not one.strip() for one in adding + removing):
+            raise ValueError("a user id with nothing in it allows and removes nobody")
+        with self._writing() as conn:
+            row = conn.execute(
+                "SELECT allow FROM channel WHERE name = ?", (name,)).fetchone()
+            if row is None:
+                raise ValueError(f"no channel called '{name}'")
+            allowed = set(json.loads(row["allow"]))
+            unknown = sorted(one for one in removing if one not in allowed)
+            if unknown:
+                raise ValueError(
+                    f"{', '.join(repr(one) for one in unknown)} "
+                    f"{'is' if len(unknown) == 1 else 'are'} not allowed here already")
+            resulting = sorted((allowed - set(removing)) | set(adding))
+            if not resulting:
+                raise ValueError("a channel nobody may use is refused rather than defaulted")
+            conn.execute("UPDATE channel SET allow = ? WHERE name = ?",
+                         (json.dumps(resulting), name))
+        return resulting
+
     def tell_channel(self, name: str, instructions) -> None:
         """What the agent is told about being here. Empty takes it off rather than storing it."""
         with self._writing() as conn:
@@ -1003,6 +1060,20 @@ class Store:
             ).fetchone()
         return _plain(row) if row else None
 
+    def conversation_of(self, conversation_id: str):
+        """Which surface and which place a conversation id names, or nothing.
+
+        The inverse of `conversation_id`, which is one-way: a run keeps the derived id and
+        anything answering back into that room needs the surface's own words for it again.
+        Asked here rather than by walking a listing, so a caller that has one id does not
+        have to read two hundred conversations to find it.
+        """
+        with self._reading() as conn:
+            row = conn.execute(
+                "SELECT * FROM conversation WHERE id = ?", (conversation_id,)
+            ).fetchone()
+        return _plain(row) if row else None
+
     def has_conversation(self, named: str) -> bool:
         """Is there a conversation of this name, by either way of naming one?
 
@@ -1243,7 +1314,7 @@ class Store:
 
     def began(self, source, provider, posture, started_at, conversation_id=None,
               schedule_id=None, trigger_message_id=None, model=None, can=None,
-              settings=None, resumed=False, pick=None) -> str:
+              settings=None, resumed=False, pick=None, role_run=None) -> str:
         """Admit one occurrence of work, and name it. Everything resolved here is final.
 
         The number is the database's and is never handed out twice — allocated inside the
@@ -1261,6 +1332,10 @@ class Store:
         `source` is one of `SOURCES` and refused otherwise, the way an author and a record
         kind already are: it is the only thing that says how this run came about, and a word
         nothing can read back is a run whose origin is lost rather than one described oddly.
+
+        `role_run` is which isolated specialist execution this turn was carrying, where
+        it was carrying one. Absent on every ordinary turn, which is what makes "was this a
+        role execution" a question the records answer rather than one inferred.
         """
         if source not in SOURCES:
             raise ValueError(f"work is admitted from one of {SOURCES}, not {source!r}")
@@ -1271,11 +1346,11 @@ class Store:
             conn.execute(
                 "INSERT INTO run (n, id, conversation_id, schedule_id, source,"
                 " trigger_message_id, provider, model, posture, can, settings,"
-                " resumed, started_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " resumed, started_at, role_run) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (number, named, conversation_id, schedule_id, source, trigger_message_id,
                  provider, model, posture, json.dumps(can or {}, sort_keys=True),
                  json.dumps(settings or {}, sort_keys=True),
-                 1 if resumed else 0, started_at),
+                 1 if resumed else 0, started_at, role_run),
             )
             return named
 
@@ -1412,12 +1487,16 @@ class Store:
             row = conn.execute("SELECT * FROM run WHERE id = ?", (run_id,)).fetchone()
         return self._run(row) if row else None
 
-    def runs(self, conversation_id=None, schedule_id=None, limit: int = 50) -> list:
+    def runs(self, conversation_id=None, schedule_id=None, role_run=None,
+             limit: int = 50) -> list:
         """What an agent has run, newest first — or one conversation's, in the order it went."""
         where, values = [], []
         if conversation_id is not None:
             where.append("conversation_id = ?")
             values.append(conversation_id)
+        if role_run is not None:
+            where.append("role_run = ?")
+            values.append(role_run)
         if schedule_id is not None:
             where.append("schedule_id = ?")
             values.append(schedule_id)
@@ -1488,6 +1567,376 @@ class Store:
             one = _plain(row)
             one["event"] = json.loads(one["event"]) if one["event"] else None
             kept.append(one)
+        return kept
+
+    # ---- role runs ------------------------------------------------------------
+    #
+    # A role run is one isolated specialist execution admitted by a named agent's own
+    # turn (R-ROL-4). It is not another agent and it is never listed as one: it belongs to
+    # the agent whose records these are, and there is no cross-agent table because there is
+    # no cross-agent database.
+
+    def admit_role(self, role: str, revision: str, skills, locked, label: str,
+                      posture: str, parent_run: str, parent_conversation: str,
+                      target: str | None, at: str, retained_until: str,
+                      pick=None) -> str:
+        """Admit one role run, and name it — everything here is final (R-ROL-4).
+
+        **Refused before anything is assembled, never after.** The parent must be a run of
+        this agent's, because a role run acts on that agent's behalf and one admitted
+        by somebody else's turn would answer into a conversation its owner never opened.
+        And the parent must not itself be carrying a role, because Rundesk role
+        delegation is one level deep (R-ROL-13): a worker that could admit another worker
+        is an execution tree nobody is left owning.
+
+        The number is the database's and is never handed out twice, allocated inside the
+        same transaction that writes the row — the same reason a run's is.
+        """
+        with self._writing() as conn:
+            # **Every reason a turn may not delegate, in one place and in one order.**
+            # Asked inside the write that admits the run, so nothing can change between
+            # the asking and the answer — and asked here rather than spread across a
+            # caller, because a rule this important stated twice is stated differently.
+            parent = conn.execute(
+                "SELECT role_run, ended_at, conversation_id FROM run WHERE id = ?",
+                (parent_run,),
+            ).fetchone()
+            if parent is None:
+                raise Refused(
+                    f"'{parent_run}' is not a run of this agent's, so it cannot delegate"
+                )
+            if parent["role_run"]:
+                raise Refused(
+                    "a role run cannot admit another one — Rundesk role delegation "
+                    "is one level deep"
+                )
+            reviewing = conn.execute(
+                "SELECT 1 FROM role_callback WHERE review_run = ?", (parent_run,)
+            ).fetchone()
+            if reviewing is not None:
+                raise Refused(
+                    "a turn woken to review a role handoff cannot start another "
+                    "role run"
+                )
+            if parent["ended_at"]:
+                # A turn that is over is not delegating. The only identity a caller has is
+                # the run it says it belongs to, and "still in flight" is the part of that
+                # claim these records can actually check.
+                raise Refused(
+                    f"'{parent_run}' has already ended, so it is not a turn that can delegate"
+                )
+            reachable = conn.execute(
+                "SELECT 1 FROM conversation c JOIN channel h ON h.name = c.channel"
+                " WHERE c.id = ?",
+                (parent_conversation,),
+            ).fetchone()
+            if reachable is None:
+                # **Nowhere to report back to.** A worker finishes long after the turn
+                # that admitted it has ended, and the review is delivered by waking the
+                # agent on the surface the request arrived on. A turn from a terminal, a
+                # schedule or another role has no such surface — and left to be found
+                # out afterwards, that is a review owed for ever and work nobody is told
+                # about (R-ROL-15).
+                raise Refused(
+                    "this turn is not happening on a surface the agent can be reached on, "
+                    "so there would be nowhere to report the work back to"
+                )
+            row = conn.execute(
+                "SELECT COALESCE(MAX(n), 0) + 1 FROM role_run"
+            ).fetchone()
+            number = int(row[0])
+            named = f"rol-{number}-{_marked(pick)}"
+            conn.execute(
+                "INSERT INTO role_run (n, id, role, revision, skills, locked,"
+                " label, posture, parent_run, parent_conversation, target, admitted_at,"
+                " latest_at, retained_until, state)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (number, named, role, revision,
+                 json.dumps(list(skills or []), sort_keys=True),
+                 json.dumps(dict(locked or {}), sort_keys=True), label, posture,
+                 parent_run, parent_conversation, target, at, at, retained_until,
+                 ADMITTED),
+            )
+            return named
+
+    def role_run(self, role_run_id: str):
+        """One role run, or nothing where this agent has no such run."""
+        with self._reading() as conn:
+            row = conn.execute(
+                "SELECT * FROM role_run WHERE id = ?", (role_run_id,)
+            ).fetchone()
+        return self._role(row) if row else None
+
+    def role_runs(self, parent_run=None, state=None, limit: int = 50) -> list:
+        """This agent's role runs, newest first."""
+        where, values = [], []
+        if parent_run is not None:
+            where.append("parent_run = ?")
+            values.append(parent_run)
+        if state is not None:
+            where.append("state = ?")
+            values.append(state)
+        clause = (" WHERE " + " AND ".join(where)) if where else ""
+        with self._reading() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM role_run{clause} ORDER BY n DESC LIMIT ?",
+                values + [limit],
+            ).fetchall()
+        return [self._role(row) for row in rows]
+
+    def role_working(self, role_run_id: str, at: str, retained_until: str) -> None:
+        """This role run has work in flight, and its retention starts again from now."""
+        with self._writing() as conn:
+            conn.execute(
+                "UPDATE role_run SET state = ?, latest_at = ?, retained_until = ?"
+                " WHERE id = ? AND state IN (?, ?)",
+                (WORKING, at, retained_until, role_run_id, ADMITTED, WORKING),
+            )
+
+    def role_active(self, role_run_id: str, at: str, retained_until: str) -> None:
+        """Latest activity on a retained run, so its window starts again from now.
+
+        Retention is measured from activity rather than from admission (R-ROL-11), so a
+        run that is still being worked on is never swept out from under it.
+        """
+        with self._writing() as conn:
+            conn.execute(
+                "UPDATE role_run SET latest_at = ?, retained_until = ? WHERE id = ?",
+                (at, retained_until, role_run_id),
+            )
+
+    def finish_role(self, role_run_id: str, at: str, outcome: str,
+                       report: str, retained_until: str) -> bool:
+        """Settle the root of this role run, and owe its parent exactly one review.
+
+        **The settlement and the callback are one write** (R-ROL-15). A run recorded as
+        finished with nothing owing is a result nobody is ever told about, and a callback
+        queued beside an unsettled run is a parent woken about work still in flight. The
+        callback's key is the role run, so a terminal outcome offered twice by a
+        retrying gateway still owes exactly one review.
+
+        Answers whether this call is the one that settled it, so a caller can tell the
+        first terminal outcome from a repeat without reading the row back.
+        """
+        with self._writing() as conn:
+            row = conn.execute(
+                "SELECT state, parent_conversation FROM role_run WHERE id = ?",
+                (role_run_id,),
+            ).fetchone()
+            if row is None:
+                raise Refused(f"there is no role run called '{role_run_id}'")
+            if row["state"] in FINISHED_ROLES:
+                return False
+            conn.execute(
+                "UPDATE role_run SET state = ?, outcome = ?, report = ?,"
+                " latest_at = ?, retained_until = ? WHERE id = ?",
+                (outcome if outcome in FINISHED_ROLES else FAILED, outcome, report,
+                 at, retained_until, role_run_id),
+            )
+            # **One review per terminal outcome, not one per run.** A run offered the same
+            # outcome twice by a retrying gateway never gets past the early return above,
+            # so the conflict here is only ever reached by a run that was carried on and
+            # has finished *again* — and that is a new outcome, owed a new review. A
+            # review still owing is left exactly as it stands, because reopening it would
+            # reset the attempts and the claim of one nobody has answered yet.
+            conn.execute(
+                "INSERT INTO role_callback (role_run, conversation, queued_at)"
+                " VALUES (?,?,?) ON CONFLICT(role_run) DO UPDATE SET"
+                " queued_at = excluded.queued_at, claimed_at = NULL, delivered_at = NULL,"
+                " attempts = 0 WHERE role_callback.delivered_at IS NOT NULL",
+                (role_run_id, row["parent_conversation"], at),
+            )
+            return True
+
+    #: How many owed reviews are offered at once. **More than one, deliberately.** Offering
+    #: only the oldest let a single undeliverable row — a channel the owner has since
+    #: removed — sit at the head for ever and keep every later review behind it, so work
+    #: that was done was never reported and nothing said why (R-ROL-15).
+    OWED_AT_ONCE = 20
+
+    def owed_role_callbacks(self, limit: int = OWED_AT_ONCE) -> list:
+        """The reviews parents are still owed, oldest first.
+
+        A read, deliberately. Whether one can be delivered depends on a surface being
+        connected, which this knows nothing about — and counting an attempt every time
+        somebody looked would make the attempt count a measure of polling rather than of
+        trying.
+        """
+        with self._reading() as conn:
+            rows = conn.execute(
+                "SELECT * FROM role_callback WHERE delivered_at IS NULL"
+                " ORDER BY queued_at, role_run LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [_plain(row) for row in rows]
+
+    def claim_role_callback(self, role_run_id: str, at: str) -> None:
+        """This review is about to be attempted, and that attempt is counted.
+
+        Kept apart from marking it delivered, which happens only once a channel has
+        accepted the parent's response — so a gateway that died between the two retries
+        rather than losing the result.
+        """
+        with self._writing() as conn:
+            conn.execute(
+                "UPDATE role_callback SET claimed_at = ?, attempts = attempts + 1"
+                " WHERE role_run = ? AND delivered_at IS NULL",
+                (at, role_run_id),
+            )
+
+    def say_to_role(self, role_run_id: str, said: str, at: str) -> None:
+        """One thing the parent said to this role, kept in the order it said it.
+
+        **Where it lands is not decided here.** A word said while a turn is running steers
+        it and a word said to a retained run that is over starts the next one — which of
+        those is happening is a fact about the run at the moment something reads the queue,
+        not a fact about the word. Refused only where there is nothing left to say it to.
+        """
+        with self._writing() as conn:
+            row = conn.execute(
+                "SELECT state FROM role_run WHERE id = ?", (role_run_id,)
+            ).fetchone()
+            if row is None:
+                raise Refused(f"there is no role run called '{role_run_id}'")
+            if row["state"] == EXPIRED:
+                raise Refused(
+                    f"'{role_run_id}' is past its retention window — there is nothing "
+                    "left to say it to"
+                )
+            conn.execute(
+                "INSERT INTO role_word (role_run, said, said_at) VALUES (?,?,?)",
+                (role_run_id, said, at),
+            )
+
+    def words_for_role(self, role_run_id: str, at: str) -> list:
+        """Everything said to this role and not yet taken, claimed in one write.
+
+        Read and stamped together, so a word reaches one turn exactly once however many
+        gateways look — the same reason claiming an interrupted run is one write.
+        """
+        with self._writing() as conn:
+            rows = conn.execute(
+                "SELECT n, said FROM role_word WHERE role_run = ? AND taken_at IS NULL"
+                " ORDER BY n",
+                (role_run_id,),
+            ).fetchall()
+            if not rows:
+                return []
+            conn.execute(
+                "UPDATE role_word SET taken_at = ? WHERE role_run = ? AND taken_at IS NULL",
+                (at, role_run_id),
+            )
+        return [row["said"] for row in rows]
+
+    def words_waiting(self, role_run_id: str) -> int:
+        """How much has been said to this role that nothing has taken yet."""
+        with self._reading() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS waiting FROM role_word"
+                " WHERE role_run = ? AND taken_at IS NULL",
+                (role_run_id,),
+            ).fetchone()
+        return int(row["waiting"] or 0)
+
+    def ask_role_stop(self, role_run_id: str, at: str) -> bool:
+        """Ask for this execution to end, and say whether there was one to ask about.
+
+        Durable rather than sent to whatever is carrying it: the thing that must act is a
+        task inside a gateway, which may not be the gateway the asking reached, and an ask
+        that lived only in one process is one a restart loses.
+        """
+        with self._writing() as conn:
+            row = conn.execute(
+                "SELECT state FROM role_run WHERE id = ?", (role_run_id,)
+            ).fetchone()
+            if row is None:
+                raise Refused(f"there is no role run called '{role_run_id}'")
+            if row["state"] not in UNFINISHED_ROLES:
+                return False
+            conn.execute(
+                "UPDATE role_run SET stop_asked_at = ? WHERE id = ? AND stop_asked_at IS NULL",
+                (at, role_run_id),
+            )
+            return True
+
+    def resume_role(self, role_run_id: str, at: str, retained_until: str) -> bool:
+        """Put a finished role run back in hand, and say whether it could be.
+
+        Its window is measured from activity, so being asked for again is activity: a run
+        somebody is still working with is never swept out from under them (R-ROL-11).
+
+        **The outcome it already reached is left standing**, and deliberately: it is what
+        says this run has finished before, which is how the next turn knows to ask what was
+        said rather than the brief it was admitted with.
+        """
+        with self._writing() as conn:
+            row = conn.execute(
+                "SELECT state FROM role_run WHERE id = ?", (role_run_id,)
+            ).fetchone()
+            if row is None:
+                raise Refused(f"there is no role run called '{role_run_id}'")
+            if row["state"] not in FINISHED_ROLES:
+                return False
+            conn.execute(
+                "UPDATE role_run SET state = ?, stop_asked_at = NULL, latest_at = ?,"
+                " retained_until = ? WHERE id = ?",
+                (ADMITTED, at, retained_until, role_run_id),
+            )
+            return True
+
+    def role_reviewing(self, role_run_id: str, review_run: str) -> None:
+        """Which named-agent turn was woken to read this handoff.
+
+        Written the moment that turn is admitted, so a turn asking to delegate is answered
+        from the records rather than from anything it could have been told and cleared.
+        """
+        with self._writing() as conn:
+            conn.execute(
+                "UPDATE role_callback SET review_run = ? WHERE role_run = ?",
+                (review_run, role_run_id),
+            )
+
+    def role_reviewed(self, role_run_id: str, at: str) -> None:
+        """The parent has been woken and answered — this review is owed to nobody now."""
+        with self._writing() as conn:
+            conn.execute(
+                "UPDATE role_callback SET delivered_at = ? WHERE role_run = ?"
+                " AND delivered_at IS NULL",
+                (at, role_run_id),
+            )
+            conn.execute(
+                "UPDATE role_run SET reviewed_at = ? WHERE id = ? AND reviewed_at IS NULL",
+                (at, role_run_id),
+            )
+
+    def expired_roles(self, now: str) -> list:
+        """Every retained role run whose window has passed, marked as expired.
+
+        The durable record of what was asked, what it cost and what it answered stays;
+        what goes is the resumable execution — its provider session and, once the caller
+        has swept it, the bundle on disk (R-ROL-12). Read and mark in one write, so two
+        sweeps cannot both believe they are the one clearing a bundle.
+        """
+        with self._writing() as conn:
+            rows = conn.execute(
+                "SELECT * FROM role_run WHERE state != ? AND retained_until <= ?"
+                " ORDER BY n",
+                (EXPIRED, now),
+            ).fetchall()
+            gone = [self._role(row) for row in rows]
+            if gone:
+                conn.execute(
+                    "UPDATE role_run SET state = ? WHERE state != ?"
+                    " AND retained_until <= ?",
+                    (EXPIRED, EXPIRED, now),
+                )
+        return gone
+
+    @staticmethod
+    def _role(row) -> dict:
+        kept = _plain(row)
+        kept["skills"] = json.loads(kept["skills"])
+        kept["locked"] = json.loads(kept["locked"])
         return kept
 
 

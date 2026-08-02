@@ -21,6 +21,7 @@ from rundesk import catalog
 from rundesk import config
 from rundesk import dependencies
 from rundesk import migration
+from rundesk import role
 from rundesk import skill
 from rundesk import store
 from rundesk import update_request
@@ -242,6 +243,11 @@ def _provisioned(root: Path = ROOT) -> str | None:
     # never touched, so this cannot be how an owner's configuration is lost (R-UPD-48).
     config.ensure()
     skill.lay_down(force=True)
+    # Shipped roles are laid down where they are missing and never over one that is
+    # there. A role is what an owner writes their specialists as, so bringing one
+    # "forward" the way a built-in skill is brought forward would rewrite what every
+    # future run of an edited role is allowed to do (R-ROL-18).
+    role.lay_down()
     # A persisted skill name can move only after both old and replacement packages are
     # proven as Rundesk built-ins. The earlier pass fills values; this one carries names.
     config.ensure()

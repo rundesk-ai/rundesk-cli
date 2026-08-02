@@ -578,6 +578,119 @@ def remembered(logs: Path | None = None) -> list[str]:
     return sorted(found)
 
 
+#: Where a channel keeps who it has already introduced this agent to (R-CH-33). Beside the
+#: credential, in the private home that channel is given for this agent and for no other,
+#: because that directory is what a channel *is* on disk: it outlives every restart and
+#: every update, it goes away when the channel does, and no other channel can reach it.
+#:
+#: A dotfile, so an adapter listing its own home is not handed a file it did not write.
+WELCOMED = ".welcomed.json"
+
+#: What a channel that has never been looked at holds. **A mapping and not a list**, and
+#: that is the whole of why anybody is ever welcomed: `changing` hands back exactly this
+#: for a file nobody has written, so an empty list as the empty value would be
+#: indistinguishable from a channel that has welcomed nobody yet — and those two mean
+#: opposite things. A missing key is a channel from before any of this existed.
+_NEVER_LOOKED: dict = {}
+
+#: The key inside it. Sorted, and only ever user ids this channel allows.
+_WELCOMED = "welcomed"
+
+
+def welcomed_path(home: Path) -> Path:
+    """Where this channel's record of who it has introduced the agent to stands."""
+    return Path(home) / WELCOMED
+
+
+def remember_no_one_welcomed(home: Path) -> None:
+    """Write down that this channel is new and has introduced the agent to nobody.
+
+    Written when the channel is *added*, and that is what tells a new channel from one an
+    older release wrote. Without it, the first gateway to run this code would read no file
+    at all for both and have no way to tell "everybody here is new" from "everybody here
+    has been talking to this agent for months" — and the second of those must never be
+    greeted (R-CH-33).
+    """
+    with changing(welcomed_path(home), dict(_NEVER_LOOKED), "who a channel has welcomed",
+                  durable=True) as kept:
+        kept[_WELCOMED] = []
+
+
+def forget_welcomed(home: Path, users) -> None:
+    """Drop these people from what this channel has written down.
+
+    Called where somebody is taken off a channel's allowed list, so that adding them again
+    later is a new introduction (R-CH-33). The gateway prunes the same names the next time
+    it looks — this is for the case where nothing is running, which is exactly when an
+    owner rearranges who may reach an agent.
+
+    A channel nobody has written a record for is left alone: seeding one here would claim
+    an older release's channel is new.
+    """
+    dropping = {str(one) for one in users}
+    if not dropping:
+        return
+    with changing(welcomed_path(home), dict(_NEVER_LOOKED), "who a channel has welcomed",
+                  durable=True) as kept:
+        known = kept.get(_WELCOMED)
+        if not isinstance(known, list):
+            return
+        kept[_WELCOMED] = sorted(one for one in known if one not in dropping)
+
+
+def owed_a_welcome(home: Path, allow) -> list[str]:
+    """Who this channel allows and has never introduced the agent to (R-CH-33).
+
+    Three answers out of one file, and the difference between them is the whole feature:
+
+    - **Nothing written** — a channel an older release added. What it allows now is written
+      in and nobody is owed, so updating rundesk never greets people who have been using
+      the agent for months.
+    - **Written and empty** — a channel just added. Everybody it allows is owed one.
+    - **Written with names in it** — anybody it allows who is not among them is owed one,
+      and anybody among them it no longer allows is dropped in the same hold. That is what
+      makes taking somebody off and putting them back a new introduction rather than
+      silence.
+
+    Read, decided and written under one hold, because the command that changes the allowed
+    list writes here too and two writers that each read the same file lose one change.
+    """
+    allowed = [str(one) for one in (allow or [])]
+    owed: list[str] = []
+    with changing(welcomed_path(home), dict(_NEVER_LOOKED),
+                  "who a channel has welcomed") as kept:
+        known = kept.get(_WELCOMED)
+        if not isinstance(known, list):
+            kept[_WELCOMED] = sorted(set(allowed))
+            return []
+        keeping = sorted({str(one) for one in known} & set(allowed))
+        if keeping != list(known):
+            kept[_WELCOMED] = keeping
+        owed = [one for one in allowed if one not in keeping]
+    return owed
+
+
+def remember_welcomed(home: Path, user: str) -> None:
+    """Write down that this channel has now introduced the agent to somebody.
+
+    **Only once it has actually happened.** A welcome written down before it was delivered
+    is a person who is never greeted at all, and this is the one message that cannot be
+    asked for again by whoever missed it.
+
+    A channel nothing has been written for is left alone, the way forgetting leaves it:
+    starting a record here would turn a channel an older release wrote into a new one,
+    and every other person on it would then be greeted as though they had just arrived.
+    Anything actually being greeted has been looked at first, and looking is what writes
+    the record.
+    """
+    with changing(welcomed_path(home), dict(_NEVER_LOOKED), "who a channel has welcomed",
+                  durable=True) as kept:
+        known = kept.get(_WELCOMED)
+        if not isinstance(known, list):
+            return
+        kept[_WELCOMED] = sorted({str(one) for one in known} | {str(user)})
+
+
 def _resolve_interruption(name: str, logs: Path | None, work: str) -> None:
     """Work that is running again is no longer work that never finished (R-GW-40).
 
@@ -879,10 +992,32 @@ PS_TIMEOUT_SECONDS = 5.0
 #: Firing is recorded per minute, so looking more often costs nothing (R-SCH-9).
 TICK_SECONDS = 20.0
 
+#: How often the gateway looks for a role run to carry and a parent to tell. Close to
+#: the beat rather than to the clock: an agent that just delegated is waiting for work to
+#: begin, and a parent whose worker has finished is waiting to be told (R-ROL-15).
+ROLE_SECONDS = 5.0
+
+#: How often expired role bundles are cleared. Once an hour, because retention is
+#: measured in days and what a sweep finds on a machine where nothing has expired is
+#: nothing (R-ROL-12).
+ROLE_SWEEP_SECONDS = 3600.0
+
 #: How long stopping may take before the gateway stops waiting for what it is running and
 #: goes anyway (R-GW-7). Under what the supervisor allows: launchd sends SIGTERM, waits,
 #: and then sends SIGKILL — and being killed is how children get left behind.
 STOP_SECONDS = 15.0
+
+#: How often what an agent may do is looked at, so its owner is told when it changes
+#: (R-CH-32). Unhurried on purpose: a grant is changed by hand at human pace, and the look
+#: is one directory listing — but a change made a minute before somebody uses the agent
+#: should already have been said.
+SKILLS_SECONDS = 10.0
+
+#: How often who a channel allows is looked at, so somebody newly allowed is greeted
+#: (R-CH-33). The same unhurried pace as the skills look and for the same reason — this is
+#: one small file per channel — but what it may *start* is a whole turn, which is why each
+#: person is attempted only once for as long as one gateway is up.
+WELCOME_SECONDS = 10.0
 
 
 class AlreadyRunning(Exception):
@@ -1112,6 +1247,8 @@ class Gateway:
         agents: Path | None = None,
         records=None,
         asking=None,
+        roles=None,
+        granted=None,
     ):
         self.name = checked(name)
         self.where = where or home()
@@ -1176,9 +1313,45 @@ class Gateway:
         #: whoever knows what an agent is. `None` is a gateway that can start programs and
         #: not turns, which is what one with no agent behind it is.
         self.asking = asking
+        #: What this agent may do, asked afresh each time rather than kept, and handed over
+        #: already made by whoever knows what an agent is — a gateway never reaches back for
+        #: one (R-AGT-9). Asked rather than remembered because a grant is a link on disk that
+        #: anything on the machine may add or take away while this gateway runs, which is the
+        #: whole reason its owner is told (R-CH-32).
+        #:
+        #: **None is a name that is not an agent**, which has no grants and so nothing to
+        #: watch — the same whole gateway a name with no schedules is.
+        self.granted = granted
+        #: What the owner is owed about their agent's skills and the list to write down
+        #: once they have it, or None for nothing owed. Held here rather than in the loop
+        #: so a surface that is not up yet is a wait: the news survives until it is
+        #: actually delivered, and only then is it written down.
+        self._skills_owed: tuple[list[str], tuple[str, ...]] | None = None
+        #: The last complaint about looking at them, so a directory that cannot be read
+        #: is said once rather than every ten seconds for as long as the gateway is up.
+        self._skills_complaint: str | None = None
+        #: Everybody this gateway has asked the agent to greet, whether or not it worked
+        #: (R-CH-33). Held for this process's lifetime and never written down: what is
+        #: written down is what was actually *delivered*, and this is what stops a brain
+        #: that cannot run being asked for the same turn every ten seconds until somebody
+        #: notices. A gateway that starts again tries each of them once more.
+        self._welcome_attempted: set[str] = set()
+        #: The last complaint about reading one of those records, said once for the same
+        #: reason the skills one is.
+        self._welcome_complaint: str | None = None
         #: Which schedules have a turn in flight. Kept apart from `running`, which holds
         #: programs a shutdown ends: a turn's brain is not a program this gateway started.
         self._asked_for: set[str] = set()
+        #: How this gateway carries the role runs its agent has admitted, and tells
+        #: their parents. Handed over already made by whoever knows what an agent is, the
+        #: way `asking` is; `None` is a gateway with no agent behind it, which simply
+        #: never carries one (R-ROL-4).
+        self.roles = roles
+        #: Which role roots have a turn in flight, by the run each is carrying. Kept
+        #: apart from `running` for the same reason `_asked_for` is: a turn's brain is not
+        #: a program this gateway started, and the same root started twice would be one
+        #: execution answering its parent twice.
+        self._role_tasks: dict = {}
         #: Backend update turns this gateway owns. They remain pending durably until one
         #: returns, and shutdown cancels and awaits every task here.
         self._update_turn_tasks: dict[int, asyncio.Task] = {}
@@ -1750,6 +1923,16 @@ class Gateway:
         # through `start`, so ending it, sweeping it and recording it are already done.
         holding = asyncio.ensure_future(self._hold_channels())
         notices = asyncio.ensure_future(self._deliver_update_notices())
+        # Work this agent handed to a specialist, and the reviews it still owes for it.
+        # A loop rather than a reaction, because the two things it does are both durable
+        # facts a restart has to find again: a run admitted while nothing was up, and a
+        # parent that was never told (R-ROL-15).
+        specialists = asyncio.ensure_future(self._carry_roles())
+        sweeping = asyncio.ensure_future(self._over_and_over(
+            ROLE_SWEEP_SECONDS, self._sweep_roles,
+            "could not sweep expired role runs: %s", at_once=True))
+        watching = asyncio.ensure_future(self._tell_about_skills())
+        greeting = asyncio.ensure_future(self._welcome_new_owners())
         try:
             await self._stopped.wait()
         finally:
@@ -1757,15 +1940,32 @@ class Gateway:
             ticking.cancel()
             holding.cancel()
             notices.cancel()
+            specialists.cancel()
+            sweeping.cancel()
+            watching.cancel()
+            greeting.cancel()
             for task in self._update_turn_tasks.values():
+                task.cancel()
+            for task in self._role_tasks.values():
                 task.cancel()
             with contextlib.suppress(BaseException):
                 await holding
             with contextlib.suppress(BaseException):
                 await notices
+            with contextlib.suppress(BaseException):
+                await specialists
+            with contextlib.suppress(BaseException):
+                await sweeping
+            with contextlib.suppress(BaseException):
+                await watching
+            with contextlib.suppress(BaseException):
+                await greeting
             if self._update_turn_tasks:
                 await asyncio.gather(
                     *tuple(self._update_turn_tasks.values()), return_exceptions=True)
+            if self._role_tasks:
+                await asyncio.gather(
+                    *tuple(self._role_tasks.values()), return_exceptions=True)
             # The handlers stay installed across `_go()`. Removing them here restores the
             # system default, which for these two signals is *terminate* — so a second
             # signal arriving during the shutdown window would kill the gateway outright,
@@ -1783,6 +1983,104 @@ class Gateway:
             self.log.info("ending so the machine starts this gateway again")
             return 1
         return 0 if drained else 1
+
+    async def _carry_roles(self) -> None:
+        """Carry the role runs this agent admitted, and tell each parent once.
+
+        Both halves are driven off durable records rather than off anything held in this
+        process, so a gateway that starts finds work admitted while nothing was up and
+        reviews nobody was ever told about. That is the whole reason the acknowledging
+        turn is allowed to end (R-ROL-15).
+        """
+        while not self._stopping:
+            if self.roles is not None:
+                try:
+                    self._end_the_roles_asked_to_stop()
+                    self._start_admitted_roles()
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as why:  # noqa: BLE001 — this loop must not die
+                    self.log.warning("could not start a role run: %s", why)
+                try:
+                    await self._deliver_one_role_review()
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as why:  # noqa: BLE001 — retried after reconnect
+                    self.log.warning("could not deliver a role handoff: %s", why)
+            await asyncio.sleep(ROLE_SECONDS)
+
+    def _start_admitted_roles(self) -> None:
+        """Start every admitted root that nothing here is already carrying (R-GW-15)."""
+        for row in self.roles.waiting():
+            run_id = row["id"]
+            if row.get("stop_asked_at"):
+                continue   # asked to end before anything started it; settled below
+            if run_id in self._role_tasks:
+                continue
+            self._role_tasks[run_id] = asyncio.ensure_future(self._carry_one(run_id))
+            self.log.info("carrying role run %s", run_id)
+
+    def _end_the_roles_asked_to_stop(self) -> None:
+        """End every execution somebody asked to end (R-ROL-24).
+
+        Cancelling is all this does. What the run is *settled* as belongs where every
+        other way it can end is settled, so a stop and a failure cannot come to disagree
+        about what a stopped run looks like — and a run nothing here is carrying is
+        settled there too, without a provider ever being started for it.
+        """
+        for row in self.roles.stopping():
+            task = self._role_tasks.get(row["id"])
+            if task is not None and not task.done():
+                task.cancel()
+            else:
+                self.roles.stopped(row["id"])
+            self.log.info("ending role run %s because it was asked to stop", row["id"])
+
+    async def _carry_one(self, run_id: str) -> None:
+        """One role root, from here to its terminal outcome and no further.
+
+        What a provider-native helper does inside it belongs to that turn and returns to
+        it; nothing about one reaches this gateway, and none of them settles this run
+        (R-ROL-14).
+        """
+        try:
+            await self.roles.carry(run_id)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as why:  # noqa: BLE001 — a boundary, reported truthfully
+            self.log.warning("role run %s could not be carried: %s", run_id, why)
+        finally:
+            self._role_tasks.pop(run_id, None)
+
+    async def _deliver_one_role_review(self) -> None:
+        """Wake the parent for the oldest handoff it is still owed, if it can be woken.
+
+        Nothing is marked delivered until the channel has accepted the parent's response,
+        so a surface that is down means the review waits rather than being lost — and a
+        gateway that died between the two finds it owing again.
+        """
+        for owed in self.roles.owed():
+            answering = self._reached.get(owed.get("channel"))
+            if answering is None or not answering.connected or not owed.get("conversation"):
+                # Not deliverable now, and possibly not ever — a channel the owner has
+                # removed never comes back. Every later review is still tried, so one
+                # undeliverable handoff cannot hold up the rest (R-ROL-15).
+                continue
+            self.roles.claiming(owed["role_run"])
+            await answering.told_role_finished(
+                owed["conversation"], owed["handoff"],
+                reviewing=lambda run, at=owed["role_run"]: self.roles.reviewing(at, run),
+            )
+            self.roles.reviewed(owed["role_run"])
+            self.log.info("delivered the handoff for role run %s", owed["role_run"])
+            return
+
+    def _sweep_roles(self) -> None:
+        """Take away every role execution context whose window has passed (R-ROL-12)."""
+        if self.roles is None:
+            return
+        for run_id in self.roles.sweep():
+            self.log.info("role run %s is past its retention window", run_id)
 
     async def _deliver_update_notices(self) -> None:
         """Deliver a completed self-update once the originating channel is connected."""
@@ -1829,6 +2127,239 @@ class Gateway:
                     except Exception as why:  # noqa: BLE001 — retried after reconnect
                         self.log.warning("could not deliver restart outcome: %s", why)
             await asyncio.sleep(2)
+
+    # -- what the agent may do ---------------------------------------------------------
+
+    def _skills_last_seen(self) -> Path:
+        """Where what this agent could do last time is written down.
+
+        Runtime state and not the owner's: it belongs to this gateway's run directory
+        beside its lock and its record, is nobody's to read but this loop, and says
+        nothing an owner would ever want back. Named the way the update marker is —
+        a dotfile keyed by the encoded name — because the run directory's `*.json`
+        entries are *the gateways there are* (`known`, `sweep`), so a record of any
+        other kind put there under that suffix invents a gateway nobody started.
+        """
+        identity = self.name.encode("utf-8").hex()
+        return self.where / f".{identity}.skills-last-seen"
+
+    def _skills_seen(self) -> tuple[str, ...] | None:
+        """What this agent could do when its owner was last told, or None for never.
+
+        None is deliberately not "it could do nothing": an install where this has never
+        run would otherwise announce every skill the agent already holds as newly
+        added, on the one startup that follows an update.
+        """
+        try:
+            written = self._skills_last_seen().read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        return tuple(line for line in written.splitlines() if line)
+
+    def _remember_skills(self, names: Sequence[str]) -> None:
+        """Write down what the owner has now been told about, or leave it alone.
+
+        Replaced whole and atomically: a half-written list read back by the next look is
+        a list of skills that were never taken away being announced as though they had
+        been. A machine that will not take it keeps the old list, so the same change is
+        said again on the next look rather than silently lost — being told twice is the
+        smaller failure.
+        """
+        target = self._skills_last_seen()
+        temporary = target.with_suffix(f".{os.getpid()}.tmp")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(temporary, "w", encoding="utf-8") as handle:
+                os.chmod(temporary, 0o600)
+                handle.write("".join(f"{one}\n" for one in names))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+        except OSError as why:
+            self.log.warning("could not write down what this agent may do: %s", why)
+        finally:
+            with contextlib.suppress(OSError):
+                temporary.unlink()
+
+    async def _tell_about_skills(self) -> None:
+        """Tell the owner, privately, when this agent gains or loses a skill (R-CH-32).
+
+        Looked at rather than reported: a grant is a link in a directory, and the four
+        things that add or remove one — a command, a configured baseline reconciled at
+        startup, a catalog update and a catalog removal — would each have to remember to
+        say so, while somebody making the link by hand never could. What the directory
+        holds is the whole truth about what an agent may do, so that is what is watched.
+
+        **What was seen is written down, so a change made while the agent was stopped is
+        still told.** Taking a skill away is exactly what an owner does with the gateway
+        down, and a notice only the running process could have raised is one that case
+        never gets.
+
+        Nothing is written down until it has actually been delivered, which is what makes
+        a surface that is not up yet a wait rather than a loss.
+        """
+        while not self._stopping:
+            if self.granted is not None:
+                try:
+                    self._look_at_skills()
+                except Exception as why:  # noqa: BLE001 — a loop nobody awaits
+                    if self._skills_complaint != str(why):
+                        self.log.warning("could not see what this agent may do: %s", why)
+                        self._skills_complaint = str(why)
+                else:
+                    self._skills_complaint = None
+                await self._say_skill_changes()
+            await asyncio.sleep(SKILLS_SECONDS)
+
+    def _look_at_skills(self) -> None:
+        """Work out what changed, and hold it until somebody can be told.
+
+        Worked out afresh every look rather than accumulated: what is owed is always the
+        difference between the directory and the list, so a skill granted and revoked
+        again before either could be said leaves nothing to say.
+        """
+        now = tuple(self.granted())
+        seen = self._skills_seen()
+        if seen is None or not self.reachable:
+            # A first look has nothing to compare against, and an agent reached on no
+            # surface has nobody to tell — both write down what is there and say nothing.
+            # Without the second, an owner who adds a channel months later is greeted by
+            # every grant they ever made.
+            self._remember_skills(now)
+            self._skills_owed = None
+            return
+        lines = (
+            [f"🧩 **Skill added** — `{one}`" for one in now if one not in seen]
+            + [f"🗑️ **Skill removed** — `{one}`" for one in seen if one not in now]
+        )
+        self._skills_owed = (lines, now) if lines else None
+
+    async def _say_skill_changes(self) -> None:
+        """Say what changed on one surface, and write it down only once it has gone.
+
+        One surface and not every one: an agent reached on two of them has one owner, and
+        the same news twice reads as two changes. The first by name, so which one it is
+        does not depend on the order channels happened to connect in.
+        """
+        if self._skills_owed is None:
+            return
+        lines, now = self._skills_owed
+        for named in sorted(self._reached):
+            answering = self._reached[named]
+            if not answering.connected:
+                continue
+            try:
+                await answering.told_the_owner("\n".join(lines))
+            except Exception as why:  # noqa: BLE001 — retried on the next look
+                self.log.warning("could not tell the owner what changed: %s", why)
+                return
+            self.log.info("told the owner about %d skill change(s)", len(lines))
+            self._remember_skills(now)
+            self._skills_owed = None
+            return
+
+    # -- who has just been allowed to reach it -------------------------------------------
+
+    async def _welcome_new_owners(self) -> None:
+        """Introduce this agent, once, to everybody newly allowed to reach it (R-CH-33).
+
+        A loop rather than something the command tells us, for the reason the skills one
+        is: what a channel allows is changed by a command that may run while nothing is
+        up, and by the time a gateway starts there is nobody left to have told it. What
+        the record says is the whole truth about who may reach this agent, so that is what
+        is looked at — and the introduction waits for the surface rather than being lost
+        with it.
+        """
+        while not self._stopping:
+            try:
+                await self._welcome_anyone_owed()
+            except asyncio.CancelledError:
+                # The gateway is going. Swallowed, this would sleep and start the same
+                # turn again after the surface it was for had been reported gone.
+                raise
+            except Exception as why:  # noqa: BLE001 — a loop nobody awaits
+                self.log.warning("could not see who is owed an introduction: %s", why)
+            await asyncio.sleep(WELCOME_SECONDS)
+
+    def _owed_a_welcome(self) -> dict:
+        """Who is owed an introduction, and on which of this agent's connected channels.
+
+        One entry per person and not per channel: an agent reachable both by direct
+        message and in rooms is *one* agent with one owner, and two greetings a minute
+        apart read as two agents. The channel is the first by name that both allows them
+        and is actually up, so which one it is does not depend on the order surfaces
+        happened to connect in.
+        """
+        owed: dict = {}
+        for one in self.reachable or ():
+            home = getattr(one, "home", None)
+            answering = self._reached.get(one.name)
+            if home is None or answering is None or not answering.connected:
+                continue
+            allow = (getattr(answering, "record", None) or {}).get("allow") or []
+            try:
+                for user in owed_a_welcome(Path(home), allow):
+                    owed.setdefault(user, one.name)
+            except (OSError, Unreadable) as why:
+                if self._welcome_complaint != str(why):
+                    self.log.warning("could not see who channel '%s' has welcomed: %s",
+                                     one.name, why)
+                    self._welcome_complaint = str(why)
+                continue
+            self._welcome_complaint = None
+        return owed
+
+    async def _welcome_anyone_owed(self) -> None:
+        """Ask the agent to greet each of them, and write it down once it has gone.
+
+        **Attempted once for each person while this gateway is up, whatever comes of it.**
+        Every other loop here is free to try again in ten seconds; this one asks a brain
+        for a whole turn, so a provider that cannot run would spend an owner's tokens over
+        and over for as long as the gateway lives. A failure is said in the log and left
+        unwritten, so the next gateway that comes up well tries it again — which is the
+        one retry that costs nothing when the reason is still there.
+        """
+        for user, named in sorted(self._owed_a_welcome().items()):
+            if user in self._welcome_attempted:
+                continue
+            answering = self._reached.get(named)
+            if answering is None or not answering.connected:
+                continue
+            # Before the turn, so a welcome that raises after the brain has already
+            # written to somebody is not asked for a second time.
+            self._welcome_attempted.add(user)
+            try:
+                await answering.welcomed(user)
+            except asyncio.CancelledError:
+                raise
+            except Exception as why:  # noqa: BLE001 — a delivery boundary, retried later
+                self.log.warning("channel '%s': could not introduce this agent to %s: %s",
+                                 named, user, why)
+                continue
+            self.log.info("channel '%s': introduced this agent to %s", named, user)
+            self._remember_welcomed_everywhere(user)
+
+    def _remember_welcomed_everywhere(self, user: str) -> None:
+        """Write one delivered introduction down against every channel of this agent.
+
+        Against every one, not only the surface it went out on: the person has now been
+        greeted by this agent, and a second channel still owing them would greet them
+        again the moment this one went quiet — or on the next gateway, which is where a
+        marker held only in memory stops helping.
+
+        Written even where that channel does not allow them, which costs nothing and is
+        the simpler rule: the next look prunes anybody a channel no longer allows, so a
+        name written somewhere it does not belong takes itself back out.
+        """
+        for one in self.reachable or ():
+            home = getattr(one, "home", None)
+            if home is None:
+                continue
+            try:
+                remember_welcomed(Path(home), user)
+            except (OSError, Unreadable) as why:
+                self.log.warning("channel '%s': could not write down that %s was "
+                                 "introduced: %s", one.name, user, why)
 
     def ask_to_stop(self, come_back: bool = False) -> None:
         """Take no more work, and begin going away (R-GW-6).

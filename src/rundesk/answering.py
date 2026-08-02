@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rundesk import agent as agents
-from rundesk import channel, migration, provider, store, turn
+from rundesk import channel, instructions, migration, provider, store, turn
 
 #: How many messages may be waiting for a conversation whose brain cannot be steered.
 #: Small on purpose: somebody typing while an agent works is answering the conversation,
@@ -65,11 +65,25 @@ CONTINUE = (
     "Do not repeat actions already completed. Finish the original request."
 )
 
+#: What the conversation an introduction happens in is called, in front of the user id it
+#: is for. Its own, so a greeting never lands in a room somebody is talking in (R-CH-33).
+WELCOME = "welcome-"
+
 AFTER_UPDATE = (
     "The external Rundesk update attempt has finished and the gateway is back online. "
     "Verify the installed version and update outcome, then continue and finish the user's "
     "original request. Do not stop at reporting status or repeat completed actions."
 )
+
+# What a named agent is woken with when work it handed to a role has reported back
+# (R-ROL-15). Rundesk states what it mechanically knows and asks for a review; it
+# never says the work succeeded, because whether it did is exactly what the review is for
+# and Rundesk read nothing out of the worker's report to find out (R-ROL-16).
+REVIEW_HANDOFF = """Work you handed to a role has finished and reported back. Nobody has been told anything about it yet, and this report has not been checked.
+
+{handoff}
+
+Review it: verify the claims that matter against the work itself rather than accepting them, then answer the person who asked in this conversation. Say what you checked. If the report is wrong or incomplete, say so and what you are doing about it. Do not start another role run from this turn."""
 
 # Any absolute local Markdown link is delivery intent (R-CH-31). The optional reserved
 # prefix remains portable across brains; prefix that form or the opening bracket with a
@@ -421,6 +435,136 @@ class Answering:
         # request undelivered so the reconnected gateway tries again truthfully.
         await held.task
         raise RuntimeError("the post-update continuation was not admitted")
+
+    async def told_role_finished(self, conversation: str, handoff: dict,
+                                    reviewing=None) -> None:
+        """Wake the named parent to review one role handoff (R-ROL-15).
+
+        **Nothing is posted here.** The worker's report is not an answer and is not news:
+        it is unchecked work, and a surface showing it would have delivered a result the
+        named agent never reviewed — which is the one thing this whole path exists to
+        prevent (R-ROL-16). What is posted is whatever the agent says after reading it.
+
+        Raised rather than returned when the review cannot start, so the caller leaves it
+        owing and tries again. A handoff quietly marked delivered because a room was busy
+        is work that was done and nobody was ever told about.
+        """
+        if not self.connected:
+            raise RuntimeError(f"channel '{self.channel}' is not connected")
+        held = self.exchanges.get(conversation)
+        if held is not None and held.task is not None and not held.task.done():
+            # Somebody is already being answered in this room. Two turns in one
+            # conversation are two brains on one session, and the review can wait.
+            raise RuntimeError("the parent conversation is already answering somebody")
+        if held is None:
+            self._make_room()
+            held = self.exchanges.setdefault(conversation, Exchange(conversation))
+        began = asyncio.Event()
+        held.ref = None
+        held.stopped = False
+
+        def admitted(run: str) -> None:
+            # Written before the turn can ask for anything: which run is reviewing a
+            # handoff is what refuses it a second role level, and a marker written
+            # afterwards would be written after the moment it guards (R-ROL-13).
+            if reviewing is not None:
+                reviewing(run)
+            began.set()
+
+        held.task = asyncio.ensure_future(
+            self._one(
+                held, REVIEW_HANDOFF.format(handoff=_handoff_text(handoff)), "",
+                prompt_author="rundesk", on_admitted=admitted,
+            )
+        )
+        waiting = asyncio.ensure_future(began.wait())
+        await asyncio.wait({held.task, waiting}, return_when=asyncio.FIRST_COMPLETED)
+        waiting.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await waiting
+        if began.is_set():
+            return
+        # A turn that failed before admission never read the handoff. Leave it owing.
+        await held.task
+        raise RuntimeError("the role review turn was not admitted")
+
+    async def told_the_owner(self, text: str) -> None:
+        """Say something to this agent's owner alone, wherever this surface reaches them
+        (R-CH-32).
+
+        **No conversation, on purpose.** This is rundesk's own bookkeeping about the agent
+        rather than anything the agent said in a room, and where an owner is reached
+        privately is the surface's own answer — a room, a thread and a direct message are
+        one platform's words for a place, and this file has never heard of any of them
+        (R-CAD-13). A surface with no private way to reach anybody shows nothing, which is
+        the same freedom it has over everything else it is told.
+
+        Not written into what the agent has said, for the reason the schedule notice is
+        not: a brain that never wrote the line would find it in its own record and take it
+        for something it had said.
+        """
+        if not self.connected:
+            raise RuntimeError(f"channel '{self.channel}' is not connected")
+        await self._sending(channel.spoken(type="owner-notice", text=text))
+
+    async def welcomed(self, user: str) -> None:
+        """Introduce this agent to somebody newly allowed to reach it (R-CH-33).
+
+        **The agent's own words, not rundesk's.** Every other thing this module sends
+        privately is bookkeeping with a fixed wording — a gateway came up, a skill changed
+        — and this one is the agent saying hello, so it is a real turn against the agent's
+        own brain with rundesk's onboarding layer in front of it (R-AGT-38). What the
+        person then replies to is something the agent actually wrote.
+
+        **Nothing is invented about them.** A new agent has no projects, no goals and no
+        focus, and the instructions say so in the plainest words there are; the owner
+        decides all of that by answering.
+
+        Refused for anybody this channel does not allow, which is the same question asked
+        of the same record as every message that arrives (R-CH-4). A turn that failed or
+        said nothing raises, so whoever asked for this does not write the person down as
+        greeted and try again later against nothing.
+        """
+        if not self.connected:
+            raise RuntimeError(f"channel '{self.channel}' is not connected")
+        if not channel.allowed(self.record, user):
+            raise RuntimeError(
+                f"channel '{self.channel}' does not allow '{user}'")
+        chose = agents.chosen(self.name, self._where)
+        named = chose.get("provider") or ""
+        if not named:
+            raise RuntimeError(f"agent '{self.name}' names no brain")
+        outcome = await self._carry(
+            self.name, instructions.ONBOARDING_PROMPT, named,
+            where=self._where,
+            model=chose.get("model"),
+            settings=chose.get("settings"),
+            # Its own conversation, and a fresh one. A greeting must not resume the
+            # session somebody else's room is in the middle of, and the instructions in
+            # front of it are read where a conversation is opened rather than on resume.
+            conversation=f"{WELCOME}{user}",
+            on=self.channel,
+            kind=str(self.record.get("kind") or ""),
+            fresh=True,
+            asked_by={"channel": self.channel, "on": f"{WELCOME}{user}", "user": user},
+            preface=instructions.build(
+                variables=agents.instruction_variables(self.name, self._where),
+                trigger=instructions.ONBOARDING,
+                append=agents.added_instructions(self.name, self._where)),
+            # Nobody typed this, so it is not written down as though somebody had
+            # (R-RUN-16). The run's source stays what it is — this happened on a channel.
+            prompt_author="rundesk",
+        )
+        text = (outcome.text or "").strip()
+        if not outcome.ok:
+            raise RuntimeError(_why(outcome))
+        if not text:
+            raise RuntimeError(turn.NOTHING_SAID)
+        # The one place a private notice names *which* allowed person it is for. Every
+        # other one is for whoever the surface considers the owner; this one is for the
+        # person who has just arrived, and no other (R-CH-33).
+        await self._sending(
+            channel.spoken(type="owner-notice", text=text, user=user))
 
     async def told_restart_finished(self, conversation: str, text: str) -> None:
         """Deliver one queued restart outcome after reconnect (R-GW-43)."""
@@ -1046,6 +1190,30 @@ class _Shown:
                                       run=self._held.run, text=older.strip())
             self._held.spoken.remove((was, older))
         self._held.spoken.append(("whole", text))
+
+
+def _handoff_text(handoff: dict) -> str:
+    """One role handoff, as the named parent is given it to read.
+
+    What Rundesk knows and what the worker said, told apart on the page. Nothing here is
+    read out of the report or summarised from it: a line saying the tests passed would be
+    Rundesk asserting the one thing the review exists to establish (R-ROL-16).
+    """
+    said = [
+        f"Role: {handoff.get('role') or ''}",
+        f"Role run: {handoff.get('role_run') or ''}",
+        f"Outcome the worker's turn reached: {handoff.get('outcome') or ''}",
+    ]
+    if handoff.get("target"):
+        said.append(f"Worked in: {handoff['target']}")
+    if handoff.get("files"):
+        said.append("Files it said it made: " + ", ".join(str(one)
+                                                          for one in handoff["files"]))
+    said.append("")
+    said.append("Its report, in its own words, unchecked:")
+    said.append("")
+    said.append(str(handoff.get("report") or "(it said nothing)"))
+    return "\n".join(said)
 
 
 async def _saying(queue: asyncio.Queue):

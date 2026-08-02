@@ -557,6 +557,62 @@ class WhatAnAgentIsConfiguredWith(WithAnAgentsOwnRecords):
         self.assertIsNone(kept.channel("discord")["instructions"],
                           "an empty instruction was stored rather than taken off")
 
+    def test_who_a_surface_allows_is_changed_without_rewriting_the_rest_of_it(self):
+        """R-CAD-19 — the people responsible for an agent change over its life, and saying
+        so must not throw away its instructions, its settings or what the adapter kept."""
+        kept = self.built()
+        kept.remember_channel("discord", "discord", ["amy"], AT, instructions="be brief",
+                              settings={"prefix": "!"}, describes="a room")
+        self.assertEqual(["amy", "zoe"], kept.allow_channel("discord", add=["zoe"]))
+        again = kept.channel("discord")
+        self.assertEqual(["amy", "zoe"], again["allow"])
+        self.assertEqual("be brief", again["instructions"])
+        self.assertEqual({"prefix": "!"}, again["settings"])
+        self.assertEqual("a room", again["describes"])
+
+    def test_one_person_is_replaced_by_another_under_one_hold(self):
+        """R-CAD-19 — asked for as *what to change*, so two owners changing the list at
+        once cannot each read the same one and lose the other's half."""
+        kept = self.built()
+        kept.remember_channel("discord", "discord", ["amy"], AT)
+        self.assertEqual(["zoe"],
+                         kept.allow_channel("discord", add=["zoe"], remove=["amy"]))
+        self.assertEqual(["zoe"], kept.channel("discord")["allow"])
+
+    def test_a_surface_cannot_be_changed_down_to_nobody(self):
+        """R-CAD-10, R-CAD-19 — the answer adding one refuses to write, said again at the
+        point it would be acted on."""
+        kept = self.built()
+        kept.remember_channel("discord", "discord", ["amy"], AT)
+        with self.assertRaises(ValueError):
+            kept.allow_channel("discord", remove=["amy"])
+        self.assertEqual(["amy"], kept.channel("discord")["allow"])
+
+    def test_taking_off_somebody_a_surface_never_allowed_is_refused(self):
+        """R-CAD-19 — a mistyped id that quietly succeeds leaves the person somebody meant
+        to take off still allowed, and says the opposite."""
+        kept = self.built()
+        kept.remember_channel("discord", "discord", ["amy"], AT)
+        with self.assertRaises(ValueError):
+            kept.allow_channel("discord", remove=["zoe"])
+        self.assertEqual(["amy"], kept.channel("discord")["allow"])
+
+    def test_a_user_id_with_nothing_in_it_allows_and_removes_nobody(self):
+        """R-CAD-10, R-CAD-19"""
+        kept = self.built()
+        kept.remember_channel("discord", "discord", ["amy"], AT)
+        for nobody in ("", "   "):
+            with self.assertRaises(ValueError):
+                kept.allow_channel("discord", add=[nobody])
+        self.assertEqual(["amy"], kept.channel("discord")["allow"])
+
+    def test_changing_who_a_surface_that_is_not_there_allows_is_refused(self):
+        """R-CAD-19 — never written as a side effect, the way `remember_channel` would."""
+        kept = self.built()
+        with self.assertRaises(ValueError):
+            kept.allow_channel("discord", add=["amy"])
+        self.assertEqual([], kept.channels())
+
     def test_a_surface_is_forgotten_when_it_is_asked_to_be(self):
         kept = self.built()
         kept.remember_channel("discord", "discord", ["amy"], AT)
@@ -952,7 +1008,7 @@ class TheAccountOfARun(WithAnAgentsOwnRecords):
              "started_at": AT, "ended_at": None, "outcome": None, "why": None,
              "exit_code": None, "tokens_in": None, "tokens_out": None,
              "tokens_cached": None, "tokens_written": None, "tokens_reported": False,
-             "because": None},
+             "because": None, "role_run": None},
             kept.run(named))
         self.assertEqual([named], [one["id"] for one in kept.runs(conversation_id="c1")])
         self.assertIsNone(kept.run("404-zzzz"))
@@ -1465,7 +1521,10 @@ class HowWorkIsAdmittedIsSpelledOneWay(unittest.TestCase):
         either side has to be added to the other in the same commit."""
         from rundesk import turn
 
-        self.assertEqual(set(store.SOURCES), {turn.TERMINAL, turn.CHANNEL, turn.SCHEDULE})
+        self.assertEqual(
+            set(store.SOURCES),
+            {turn.TERMINAL, turn.CHANNEL, turn.SCHEDULE, turn.ROLE},
+        )
 
 
 class TheOnlyWayIn(unittest.TestCase):
