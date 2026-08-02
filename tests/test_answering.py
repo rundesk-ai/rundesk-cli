@@ -812,6 +812,33 @@ class ReadOnlyGatewayQuestions(CarriesAConversation):
         await self._settled(held)
         self.assertEqual([], surface.of("query-result"))
 
+    async def test_answering_a_query_leaves_the_channel_event_loop_free(self):
+        """R-CAD-17 — answering one reads an agent's records and asks the machine when
+        each live turn's process began, once per turn, and `ps` is bounded at seconds.
+        Run on the loop it stalls every other conversation on this gateway for as long as
+        it takes, which is the same fault the attachment hashing above is kept off it for.
+        """
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow(asked):
+            entered.set()
+            release.wait(1)
+            return f"{asked}: RUNNING"
+
+        held = self.answering(Surface(), Brain(), querying=slow)
+
+        async def advance():
+            # Reached only while the query is still going: if it ran on this loop, nothing
+            # here would get a turn until it had finished.
+            self.assertTrue(await asyncio.to_thread(entered.wait, 0.2))
+            release.set()
+
+        asking = asyncio.create_task(held.heard(self.query()))
+        await asyncio.wait_for(advance(), timeout=0.3)
+        await asking
+        await self._settled(held)
+
 
 class WhatAMessageCannotChange(CarriesAConversation):
     """R-CH-5 — what somebody types cannot decide who answers it."""

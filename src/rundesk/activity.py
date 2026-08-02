@@ -37,6 +37,15 @@ def _machine_started(pid: int):
     there would close a cycle. Asked of the one place that already knows how, rather than
     spelled a second time — two answers to "when did this start" would eventually disagree
     about one process, and this comparison is only worth anything while they cannot.
+
+    **`gateway.started_at` runs `ps` synchronously, and `began` is called from inside a
+    coroutine. That is deliberate — do not move it off the loop.** `Gateway.start` asks the
+    identical question from the identical position and says why in full: both attempts to
+    take it off the loop, a worker thread and then the loop's own subprocess, hung the
+    suite on Linux indefinitely while macOS passed, because spawning a second child from
+    inside the coroutine that is already spawning one is what neither survives. This is one
+    bounded local look-up at the moment a turn is registered, not a loop. A reviewer
+    reading the async rule alone will call this out; the exception is recorded there.
     """
     from rundesk import gateway
     return gateway.started_at(pid)
@@ -108,7 +117,17 @@ def _running(row: dict, started) -> bool:
     was = row.get("started")
     if not was:
         return True
-    return started(pid) == was
+    now = started(pid)
+    # **A probe that could not answer is not a different process.** `started_at` reports
+    # None for a `ps` that timed out or a fork that failed under load, and comparing that
+    # against a recorded fingerprint makes `None != "<lstart>"` true of a process this
+    # same call has just proved alive. One such failure would sweep a running turn's
+    # record and let `abandoned` mark the live run stopped, then let the update that was
+    # waiting on it stop the gateway underneath it — the whole failure this file exists to
+    # prevent, arrived at from the other side. It is the same conflation of "I could not
+    # tell" with an answer that `gateway.CANNOT_BE_READ` exists for one module over.
+    # Only a real, different answer drops the row.
+    return now is None or now == was
 
 
 def active(run_home: Path | None, started=None) -> list[dict]:

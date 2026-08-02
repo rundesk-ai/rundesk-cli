@@ -89,6 +89,20 @@ class ActiveTurns(unittest.TestCase):
         next((self.run_home / "turns").glob("*.json")).write_text("{ not a record")
         self.assertEqual([], self.active())
 
+    def test_a_probe_that_could_not_answer_does_not_drop_a_live_turn(self):
+        """`started_at` reports None for a `ps` that timed out or a fork that failed under
+        load — "I could not tell", not "a different process". Compared as an answer it is
+        false of every recorded fingerprint, so one failed probe on a busy machine sweeps a
+        running turn's record, `abandoned` marks the live run stopped, and the update that
+        was waiting on that turn stops the gateway underneath it. The same conflation
+        `gateway.CANNOT_BE_READ` exists to prevent, arrived at from the other side."""
+        self.began("one", started=lambda pid: "when-the-turn-began")
+        self.assertEqual(
+            ["one"], [row["run"] for row in self.active(started=lambda pid: None)],
+            "a probe that could not answer was read as a reissued pid")
+        self.assertEqual([], activity.sweep(self.run_home, started=lambda pid: None))
+        self.assertEqual(1, len(self.kept()), "it swept a turn it had just proved alive")
+
     def test_a_record_written_before_there_were_fingerprints_still_names_real_work(self):
         """Missing keeps the row and mismatched drops it — the asymmetry
         `gateway._end_left_running` already holds. An install brought forward while a turn

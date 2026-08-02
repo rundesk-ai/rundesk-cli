@@ -78,6 +78,22 @@ def log_path(name: str, logs: Path | None = None) -> Path:
     return (logs or logs_home()) / f"{checked(name)}.log"
 
 
+def _rotated(name: str, where: Path) -> list[Path]:
+    """Every file a gateway of this name has written its account into, oldest first.
+
+    The rotation numbers count backwards, so reading them in reverse puts one gateway's
+    account back into the order it was written.
+
+    Derived from `log_path` rather than spelled again: what a name's log is called and how
+    it rotates are one rule, and a second copy of it is a second thing to change when
+    `LOG_KEEP` moves — which would leave a reader looking for files nobody writes, or
+    missing ones somebody does, with nothing to catch either.
+    """
+    current = log_path(name, where)
+    return [current.with_name(f"{current.name}.{older}")
+            for older in range(LOG_KEEP, 0, -1)] + [current]
+
+
 def _also_written_before(name: str, where: Path) -> bool:
     """Whether a `gateway.log` standing beside this one holds *this* name's history.
 
@@ -115,14 +131,8 @@ def log_sources(name: str, logs: Path | None = None,
         # Older than anything in this name's own file, so it is read first: every release
         # before this one wrote an agent's migration and store lines here.
         if _also_written_before(plain, where):
-            for older in range(LOG_KEEP, 0, -1):
-                found.append((GATEWAY_LOG, where / f"{DEFAULT_NAME}.log.{older}"))
-            found.append((GATEWAY_LOG, where / f"{DEFAULT_NAME}.log"))
-        # Oldest first: the rotation numbers count backwards, so reading them in reverse
-        # puts one gateway's account back into the order it was written.
-        for older in range(LOG_KEEP, 0, -1):
-            found.append((GATEWAY_LOG, where / f"{plain}.log.{older}"))
-        found.append((GATEWAY_LOG, where / f"{plain}.log"))
+            found.extend((GATEWAY_LOG, path) for path in _rotated(DEFAULT_NAME, where))
+        found.extend((GATEWAY_LOG, path) for path in _rotated(plain, where))
     if source in (MACHINE_LOG, EVERY_LOG):
         for ours in (".out", ".err"):
             found.append((MACHINE_LOG, where / f"{plain}{ours}"))

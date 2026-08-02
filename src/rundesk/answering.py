@@ -807,7 +807,13 @@ class Answering:
             text = "This gateway does not provide that information."
         else:
             try:
-                text = str(self._querying(it["query"]))
+                # Off the loop: answering this reads an agent's records and asks the
+                # machine when each live turn's process began, once per turn. Left here it
+                # blocks every other conversation on this gateway for as long as that
+                # takes — and `ps` is bounded at seconds, not milliseconds, which is the
+                # whole reason it has a timeout. The same reason attachment hashing is
+                # handed off below.
+                text = str(await asyncio.to_thread(self._querying, it["query"]))
             except Exception as why:  # noqa: BLE001 — an inspection boundary
                 self._note(
                     f"channel '{self.channel}': {it['query']} could not be read: {why}"
