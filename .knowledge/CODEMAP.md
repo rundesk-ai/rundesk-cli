@@ -42,12 +42,12 @@ and short: what a brain printed and what it said went wrong stay files, because 
 program that may be a shell script and stderr is a pipe the operating system gives us — so those may be
 destroyed to reclaim space, and nothing a run recorded is recoverable only from them (R-STO-5).
 
-Anything still kept as a small JSON file is written whole and renamed into place, and `gateway.changing()`
+Anything still kept as a small JSON file is written whole and renamed into place, and `durable.changing()`
 holds the read, the decision and the write under one `flock`. Those are what remain to move (see
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 26 modules)
+## Backend / Services (src/rundesk/ — 31 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -212,6 +212,19 @@ file with it.
   whole records through what is held for a receiver — kept apart from what the program says went wrong,
   written back to while it runs, and never split, so that a slow or failing receiver can neither hold up
   the program nor end it.
+- `src/rundesk/durable.py` — a small file written whole, and changed under a lock nobody else holds.
+  The primitive everything durable here is built on: a value renamed into place so a reader never sees
+  half of one, and `changing()` holding the read, the decision and the write under one `flock`. **What
+  cannot be read is not empty** — a missing file and an unreadable one are different answers, and
+  writing an empty value back over the second is how state is lost. Imports nothing of rundesk's.
+- `src/rundesk/gateway_log.py` — what a gateway is called, and the account it writes under that name.
+  One concern rather than two: a name becomes the name of its lock, its record **and** its log, so what
+  a name may be and where the writing lands are the same decision. History is kept apart from run
+  state, which is cleared when a gateway goes (R-GW-18).
+- `src/rundesk/recovery.py` — what a gateway never got to finish, left for whoever claims the name
+  next. The only record that outlives the process, so it is kept beside the log rather than inside the
+  run state it describes. The `Gateway` methods that *act* on it stay in that class: they are the
+  second half of `claim()` and they write the clock's own state.
 - `src/rundesk/gateway.py` — the part that stays running. One per name from the outset, since a
   gateway per agent is how one agent is cycled without disturbing the rest. Owns every program started
   through it, and proves it is alive with a lock the kernel drops when the process dies. Writes what
