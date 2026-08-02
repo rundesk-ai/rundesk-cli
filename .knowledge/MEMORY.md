@@ -8,6 +8,25 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **"I could not tell" reaches this codebase from a subprocess as readily as from a file, and the
+  rule was only ever applied to files.** `durable.read` tells `MISSING` from `UNREADABLE`,
+  `_anything_left` answers "still there" when it cannot read, and `_end_left_running` keeps a record
+  carrying no fingerprint — the discipline is everywhere for *files*. Then `gateway.started_at`
+  returns **None for a `ps` that timed out or a fork that failed**, and three separate comparisons
+  read that as a definite answer: `started(pgid) != since` left an orphaned process tree running and
+  deleted the only record naming it; `started(pid) == was` swept a live turn's record and let
+  `abandoned` mark the run stopped; and `read_json` collapsing UNREADABLE into empty told an update it
+  was safe to replace the install under a working gateway. All three fired hardest on a loaded machine
+  at boot, which is exactly when `ps` times out *and* when work gets left behind. **Before comparing
+  anything a probe returned, ask what that probe answers when it cannot answer** — and if that value is
+  `None` or `{}`, the comparison must have a third branch. `started_at`'s own docstring says a number
+  is not an identity; it does not say that no answer is not an identity either.
+  **And the same question applies where a probe is *written down*, not only where it is compared.**
+  `activity.began` stored whatever the probe gave it, so one failure at registration put a permanent
+  `null` in a record — which `_running` then read as "from before there were fingerprints" and kept
+  alive for ever, blocking every later update. Absent and null had to become different answers.
+  Whenever a probe's result is persisted, decide what a failed probe is stored *as*, and make sure
+  that value cannot be mistaken for a legitimate one written by an older release.
 - **An import that looks dead can be the seam a collaborator arrives through.** `main` passes the
   gateway module itself as `gateways` when nothing is injected, so `gateways.remembered()` in
   `standing.every_name` needs `gateway.remembered` to exist — while every static check says the

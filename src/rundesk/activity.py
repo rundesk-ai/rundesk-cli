@@ -130,6 +130,29 @@ def _running(row: dict, started) -> bool:
     return now is None or now == was
 
 
+def _never_provable(row: dict) -> bool:
+    """Is this a record *this* install published without a fingerprint?
+
+    Told from one written before there were any by whether the key is there at all.
+
+    **Absent** is a release that never wrote one — a bounded, one-time thing an install
+    carries forward once, whose turns are real. `active` keeps those for the whole of
+    their life, because settling a live turn is worse than carrying a dead one.
+
+    **Present and null** is our own probe having failed at the moment the turn registered,
+    which `began` runs while that turn's own provider is being forked — exactly when a
+    loaded machine has no process to spare. That row can never be told from a reused pid
+    afterwards: `_running` has nothing left to compare, so it answers "still running" for
+    ever, `sweep` never takes it, and the update waiting on that turn waits on work that
+    ended days ago.
+
+    **Only `sweep` acts on this, and only there is it safe to.** Sweeping happens inside
+    `claim`, where this gateway has started nothing of its own and the gateway that wrote
+    the record is already proven gone. A reader must never act on it.
+    """
+    return "started" in row and not row["started"]
+
+
 def active(run_home: Path | None, started=None) -> list[dict]:
     """Read live provider turns, ignoring malformed or no-longer-live records."""
     ask = started or _machine_started
@@ -153,7 +176,7 @@ def sweep(run_home: Path | None, started=None) -> list[str]:
     ask = started or _machine_started
     gone = []
     for path, row in _rows(run_home):
-        if row is not None and _running(row, ask):
+        if row is not None and _running(row, ask) and not _never_provable(row):
             continue
         with contextlib.suppress(OSError):
             path.unlink()

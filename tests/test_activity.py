@@ -128,6 +128,36 @@ class ActiveTurns(unittest.TestCase):
         self.assertEqual(1, len(went), "it said it swept nothing")
         self.assertEqual([], self.kept(), "the record it reported sweeping is still there")
 
+    def test_a_record_this_install_could_not_fingerprint_is_swept(self):
+        """`began` probes while the turn's own provider is being forked — exactly when a
+        loaded machine has no process to spare. Written as null, `_running` has nothing
+        left to compare ever again, so the row answered "still running" for the rest of
+        its life, `sweep` never took it, and the update waiting on that turn waited on
+        work that had ended days before.
+
+        Safe here and only here: sweeping happens inside `claim`, where this gateway has
+        started nothing of its own and the one that wrote the record is proven gone."""
+        self.began("one", started=lambda pid: None)
+        written = json.loads(next((self.run_home / "turns").glob("*.json")).read_text())
+        self.assertIsNone(written["started"], "the probe was meant to have failed")
+        self.assertEqual(
+            1, len(activity.sweep(self.run_home, started=lambda pid: WHEN)),
+            "a record nothing can ever prove was left to block every future update")
+        self.assertEqual([], self.kept())
+
+    def test_a_record_written_before_there_were_fingerprints_is_not_swept(self):
+        """The other half, so the fix above cannot swallow it: **absent is not null.** A
+        release that never wrote a fingerprint is a bounded, one-time thing an install
+        carries forward, and the turns it names are real."""
+        self.began("one")
+        path = next((self.run_home / "turns").glob("*.json"))
+        row = json.loads(path.read_text())
+        del row["started"]
+        path.write_text(json.dumps(row))
+        self.assertEqual([], activity.sweep(self.run_home, started=lambda pid: WHEN),
+                         "it swept a turn from before there were fingerprints")
+        self.assertEqual(1, len(self.kept()))
+
     def test_a_sweep_leaves_a_turn_that_is_still_running(self):
         """The half that keeps the sweep from being the bug: a live turn's record is what
         stops `abandoned` settling it, so taking one away would end a running turn's row."""
