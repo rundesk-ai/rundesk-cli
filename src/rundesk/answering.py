@@ -1305,8 +1305,12 @@ def _reviewed(outcome) -> bool:
     exact shape `turn.NOTHING_SAID` exists for — a stale session handing the prompt straight
     back — and writing the handoff off against one is the whole of how a worker's report was
     lost. A cancelled or failed turn never reaches here at all.
+
+    Asked of the outcome directly rather than through a defaulted `getattr`: this is one of
+    rundesk's own, every turn has both, and a lookup that quietly answered `False` for a
+    shape nobody expected would leave a delivered review looking undelivered for ever.
     """
-    return bool(getattr(outcome, "ok", False) and (getattr(outcome, "text", "") or "").strip())
+    return bool(outcome.ok and (outcome.text or "").strip())
 
 
 def _handoff_text(handoff: dict) -> str:
