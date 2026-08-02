@@ -47,7 +47,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 33 modules)
+## Backend / Services (src/rundesk/ — 34 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -239,6 +239,16 @@ file with it.
   half of one, and `changing()` holding the read, the decision and the write under one `flock`. **What
   cannot be read is not empty** — a missing file and an unreadable one are different answers, and
   writing an empty value back over the second is how state is lost. Imports nothing of rundesk's.
+- `src/rundesk/welcome.py` — who a channel has already introduced this agent to, and who is still
+  owed one (R-CH-33). One file in the channel's own home, and four questions asked of it. Apart from
+  the gateway because none of it is a gateway's: the record belongs to a channel, and the command
+  that adds or removes one writes here while nothing is running — which is why `commands/channels.py`
+  was reaching through the gateway collaborator for it. **A mapping and not a list is the whole
+  feature**: `changing` hands back the empty value for a file nobody wrote, so an empty list would
+  make "this channel is new, greet everybody" and "this channel has greeted everybody" the same
+  answer. A missing key is the third: a channel from before any of this, whose people must never be
+  greeted. The gateway keeps the loop that walks its live surfaces and asks for the turn — that is
+  gateway work and stays there; what is written down is here.
 - `src/rundesk/gateway_log.py` — what a gateway is called, and the account it writes under that name.
   One concern rather than two: a name becomes the name of its lock, its record **and** its log, so what
   a name may be and where the writing lands are the same decision. History is kept apart from run
