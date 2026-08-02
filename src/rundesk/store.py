@@ -1579,6 +1579,7 @@ class Store:
     def admit_role(self, role: str, revision: str, skills, locked, label: str,
                       posture: str, parent_run: str, parent_conversation: str,
                       target: str | None, at: str, retained_until: str,
+                      provider: str | None = None, model: str | None = None,
                       pick=None) -> str:
         """Admit one role run, and name it — everything here is final (R-ROL-4).
 
@@ -1591,6 +1592,11 @@ class Store:
 
         The number is the database's and is never handed out twice, allocated inside the
         same transaction that writes the row — the same reason a run's is.
+
+        `provider` and `model` are the brain this run was admitted to run on and the model
+        on it, already resolved by the caller (R-ROL-34). Nothing is left NULL by anything
+        that admits a run today; NULL is what a run admitted by an older release says, and
+        it means what it meant then — carry this on whatever the parent turn resolved.
         """
         with self._writing() as conn:
             # **Every reason a turn may not delegate, in one place and in one order.**
@@ -1649,13 +1655,13 @@ class Store:
             conn.execute(
                 "INSERT INTO role_run (n, id, role, revision, skills, locked,"
                 " label, posture, parent_run, parent_conversation, target, admitted_at,"
-                " latest_at, retained_until, state)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " latest_at, retained_until, state, provider, model)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (number, named, role, revision,
                  json.dumps(list(skills or []), sort_keys=True),
                  json.dumps(dict(locked or {}), sort_keys=True), label, posture,
                  parent_run, parent_conversation, target, at, at, retained_until,
-                 ADMITTED),
+                 ADMITTED, provider or None, model or None),
             )
             return named
 
