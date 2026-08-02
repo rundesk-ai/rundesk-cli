@@ -87,11 +87,26 @@ class InstructionBuilder(unittest.TestCase):
         self.assertIn("Any Markdown link to an absolute local file path", built)
         self.assertIn("whether inline or on its own line", built)
         self.assertIn("optional `<` and `>` delimiters", built)
-        self.assertIn("only when the file exists and passes its safety checks", built)
+        self.assertIn("only when the file exists, is small enough, and sits inside", built)
         self.assertIn("removes the private path", built)
         self.assertIn("rundesk-attach: [LABEL](</absolute/path>)", built)
         self.assertIn("explicit form", built)
         self.assertIn("opening bracket with `\\`", built)
+
+    def test_every_agent_is_told_where_an_attachment_may_come_from(self):
+        """R-CH-31 — containment is a rule a brain can follow, not one it discovers by failing.
+
+        The rejection is logged and never reaches the turn, so an agent whose file sits in a
+        project directory sees an answer that simply arrives without it. Told only that a
+        file "passes its safety checks", it rewrites the link — the one part that was right.
+        """
+        built = instructions.build(variables=CORE)
+        self.assertIn("sits inside `/agents/ava/home` or this agent's own Rundesk log directory",
+                      built)
+        self.assertIn("A file anywhere else is never attached, and nothing tells you so", built)
+        self.assertIn("a project directory you work in is outside", built)
+        self.assertIn("copy the file under `/agents/ava/home/workspace`", built)
+        self.assertIn("rather than rewriting the link", built)
 
     def test_core_instructions_keep_rundesk_operations_exact(self):
         built = instructions.build(variables=CORE)
