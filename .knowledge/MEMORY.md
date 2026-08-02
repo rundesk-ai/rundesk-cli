@@ -393,9 +393,16 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `gh run watch <id> --exit-status --interval 20`, which GitHub paces for you, or put a
   `sleep 20` in the loop. Check what is left with
   `gh api rate_limit --jq .resources.core` before starting anything that polls.
-- **Backticks inside a double-quoted zsh search pattern are command substitutions.** A pattern
-  such as one containing `` `rundesk-attach:` `` fails before `rg` runs when its Markdown backticks
-  are unmatched. Use single quotes around literal Markdown search patterns.
+- **Backticks inside anything double-quoted in zsh are command substitutions — including a
+  commit message.** A search pattern containing `` `rundesk-attach:` `` fails before `rg` runs
+  when its Markdown backticks are unmatched. Worse in `git commit -m "…"`, where it does not
+  fail: zsh runs the backticked word, prints `command not found` among the git output where it
+  reads like noise, substitutes **empty string**, and the commit lands with the word silently
+  gone from the message. Measured here: a body reading "`changing` is dropped from the durable
+  import" was committed as " is dropped from the durable import", and amending it afterwards is
+  not available in a worktree more than one agent works in. Write a message through a quoted
+  heredoc — `git commit -F - <<'MSG'` — where nothing is interpolated at all, and single-quote
+  literal Markdown search patterns.
 - **`gh release view --json isLatest` fails because this `gh` does not expose that field.**
   The command prints its supported release fields and exits before anything chained after it
   runs. Use `tagName,name,publishedAt,url` and compare `tagName` with
