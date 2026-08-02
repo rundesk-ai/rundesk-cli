@@ -19,6 +19,26 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   answers `attachment` when it is left with no characters at all — right for a file, and
   it will happily name something else after one.
 
+- **Nothing correlated in the Discord adapter's `Live` survives the turn that put it
+  there.** `_state`'s terminal branch ends with `self.live.pop(...)`, so a `finished`,
+  `stopped` or `failed` state throws away the whole entry — `held.tools` with it. Anything
+  that opens a mark in one record and closes it in another arriving after the turn ended
+  therefore silently never closes: `_activity_line` falls through, `_as_a_line` returns
+  `""` and `_doing` drops it, with nothing logged. This is what made a role run's return
+  invisible for every run there had ever been (rol-1-964h, 2026-08-02), and it reads
+  exactly like a feature nobody built. Anything outliving a turn must render from its own
+  record; if you must correlate, prove it through the real `Agent.told` with a terminal
+  `state` in between, and assert the entry really was popped — a case that only calls
+  `_activity_line` twice in a row passes against this.
+
+- **A test comparing two live readings of the same elapsed time passes locally and fails
+  on a runner at a second boundary.** `role_run.shown` and anything calling it each read
+  `time.time()` for themselves, so `AssertionError: 3000 != 3001` arrives from CI on a
+  case that has run green a dozen times here. Agreeing to within a second proves nothing
+  anyway — two separate computations would too. Replace the collaborator
+  (`mock.patch.object(role_runs, "shown", return_value={"elapsed": 4242})`) and assert the
+  value came through it.
+
 - **Adding a field to `agent.Playing` fails `test_cli`, not the suite you are working
   in.** It is a frozen dataclass with every field required, and `tests/test_cli.py`'s
   fake agents build a real `Playing` by keyword — so a new field lands as
