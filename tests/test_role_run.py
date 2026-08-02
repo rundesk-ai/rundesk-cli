@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 import shutil
+import string
 import sys
 import tempfile
 import time
@@ -1321,6 +1322,46 @@ class HowOftenARunSaysItIsStillWorking(unittest.TestCase):
     def test_an_elapsed_that_could_not_be_answers_nothing_rather_than_raising(self):
         """Showing is never worth a run, so the arithmetic behind it refuses nothing."""
         self.assertEqual(0, role_runs.check_in_due(-90))
+
+
+class WhatAnOwnerIsToldAboutAHandoffNobodyReviewed(unittest.TestCase):
+    """R-ROL-37, R-ROL-19 — the one notice that is sent about work still nobody has read,
+    so what it may carry is the whole question."""
+
+    def notice(self, **it) -> str:
+        return role_runs.REVIEW_UNDELIVERABLE.format(
+            **{"run": "rol-9-zzzz", "role": "development",
+               "attempts": role_runs.REVIEW_CEILING, **it})
+
+    def test_the_notice_names_the_run_the_role_and_how_often_it_was_tried(self):
+        """Enough to go and ask for the report, and that is what it is for."""
+        said = self.notice()
+        self.assertIn("rol-9-zzzz", said)
+        self.assertIn("development", said)
+        self.assertIn(str(role_runs.REVIEW_CEILING), said)
+
+    def test_the_notice_says_it_is_rundesk_reporting_rather_than_the_worker(self):
+        """The same distinction every other thing Rundesk says about a run draws: nothing
+        was checked, and an owner must not read this as a specialist's account of a job."""
+        self.assertIn("Rundesk", self.notice())
+        self.assertIn("has not been read by anybody", self.notice())
+
+    def test_the_notice_has_nowhere_a_report_a_path_or_a_brief_could_go(self):
+        """R-ROL-19 — asked of the wording rather than of one filled-in copy of it. A
+        `{report}` added later would pass every case that only reads what came out of a
+        particular handoff, and would publish unreviewed work by the one route built to
+        prevent that."""
+        holes = {name for _text, name, _spec, _conv
+                 in string.Formatter().parse(role_runs.REVIEW_UNDELIVERABLE) if name}
+        self.assertEqual({"run", "role", "attempts"}, holes)
+
+    def test_a_handoff_is_offered_a_bounded_number_of_times(self):
+        """R-ROL-37 — unbounded, a parent that fails every time is woken for the same
+        report every few seconds until the run expires a fortnight later."""
+        self.assertGreater(role_runs.REVIEW_CEILING, 1,
+                           "one failed attempt is a blip, not a parent that cannot be woken")
+        self.assertLessEqual(role_runs.REVIEW_CEILING, role_runs.CARRY_CEILING,
+                             "waking a parent is not allowed more goes than carrying a run")
 
 
 if __name__ == "__main__":

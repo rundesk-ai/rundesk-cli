@@ -4103,6 +4103,7 @@ class Delegating:
         self.settled: list = []
         self.reviewing_runs: list = []
         self.reviewed_runs: list = []
+        self.given_up: list = []
         self.swept = 0
         #: Where each run this stand-in knows about is shown, and how long it has been.
         self.check_ins: dict = {}
@@ -4148,6 +4149,12 @@ class Delegating:
         self.reviewed_runs.append(role_run)
         self._owed = [one for one in self._owed if one["role_run"] != role_run]
 
+    def giving_up(self, role_run):
+        """Exactly what `agent.playing` does — the same write `reviewed` makes, so it
+        stops being offered."""
+        self.given_up.append(role_run)
+        self._owed = [one for one in self._owed if one["role_run"] != role_run]
+
     def sweep(self):
         self.swept += 1
         return []
@@ -4161,21 +4168,38 @@ class Delegating:
 class Reached:
     """One surface, as far as delivering a role handoff is concerned."""
 
-    def __init__(self, connected: bool = True, raises=None, busy: bool = False):
+    def __init__(self, connected: bool = True, raises=None, busy: bool = False,
+                 answers: bool = True, owner_raises=None):
         self.connected = connected
         self.told: list = []
+        #: Every notice this surface was asked to put in front of the owner alone.
+        self.owner_told: list = []
         self._raises = raises
         self._busy = busy
+        #: Whether the review turn this admits goes on to answer. The real
+        #: `told_role_finished` returns the moment the turn is admitted and settles the
+        #: handoff only once it has actually said something — so a stand-in that always
+        #: settled would agree with the code that lost a report for exactly that reason.
+        self._answers = answers
+        self._owner_raises = owner_raises
 
     def answering_somebody(self, conversation):
         return self._busy
 
-    async def told_role_finished(self, conversation, handoff, reviewing=None):
+    async def told_role_finished(self, conversation, handoff, reviewing=None,
+                                 delivered=None):
         if self._raises is not None:
             raise self._raises
         if reviewing is not None:
             reviewing("11-rrrr")
         self.told.append((conversation, handoff))
+        if delivered is not None and self._answers:
+            delivered()
+
+    async def told_the_owner(self, text):
+        if self._owner_raises is not None:
+            raise self._owner_raises
+        self.owner_told.append(text)
 
 
 class Shown(Reached):
@@ -4272,6 +4296,122 @@ class CarryingWhatAnAgentHandedOn(WithARunDirectory):
 
         self.assertEqual(["rol-1-aaaa"], doing.claimed)
         self.assertEqual([], doing.reviewed_runs)
+
+    async def test_a_review_that_answered_nobody_leaves_the_handoff_owed(self):
+        """R-ROL-15 — issue #282 part B. The review turn was admitted and answered
+        nobody, which is what a stale provider session does, and the handoff was written
+        off the instant it started. The work was done, the provider was paid for it, and
+        the report was read by nobody — with nothing anywhere saying so."""
+        doing = Delegating(owed=[{"role_run": "rol-1-aaaa", "role": "development",
+                                  "attempts": 1, "channel": "ops",
+                                  "conversation": "one",
+                                  "handoff": {"report": "done"}}])
+        gw = self.one(doing)
+        gw._reached["ops"] = Reached(answers=False)
+
+        await gw._deliver_one_role_review()
+
+        self.assertEqual(["rol-1-aaaa"], doing.claimed, "it was not even attempted")
+        self.assertEqual([], doing.reviewed_runs,
+                         "a review that answered nobody was written off as delivered")
+        self.assertEqual(["rol-1-aaaa"], [one["role_run"] for one in doing.owed()],
+                         "the handoff is not there to be offered again")
+
+    async def test_a_handoff_under_the_ceiling_is_woken_for_again(self):
+        """R-ROL-37 — two failed attempts is a blip, not a parent that cannot be woken."""
+        doing = Delegating(owed=[{"role_run": "rol-1-aaaa", "role": "development",
+                                  "attempts": role_runs.REVIEW_CEILING - 1,
+                                  "channel": "ops", "conversation": "one",
+                                  "handoff": {"report": "done"}}])
+        gw = self.one(doing)
+        surface = Reached()
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_role_review()
+
+        self.assertEqual([("one", {"report": "done"})], surface.told)
+        self.assertEqual([], surface.owner_told, "the owner was told about a live handoff")
+        self.assertEqual([], doing.given_up)
+
+    async def test_a_handoff_at_the_ceiling_is_settled_once_and_the_owner_told(self):
+        """R-ROL-37 — a parent that fails every time would otherwise be woken for the same
+        report every few seconds for the whole retention window, and the one place nothing
+        can be said about it is the conversation whose review turn is the thing failing."""
+        doing = Delegating(owed=[{"role_run": "rol-1-aaaa", "role": "development",
+                                  "attempts": role_runs.REVIEW_CEILING,
+                                  "channel": "ops", "conversation": "one",
+                                  "handoff": {"report": "done"}}])
+        gw = self.one(doing)
+        surface = Reached()
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_role_review()
+        await gw._deliver_one_role_review()
+
+        self.assertEqual([], surface.told, "the parent was woken past the ceiling")
+        self.assertEqual(1, len(surface.owner_told), "the owner was told twice or not at all")
+        self.assertIn("rol-1-aaaa", surface.owner_told[0])
+        self.assertIn("development", surface.owner_told[0])
+        self.assertEqual(["rol-1-aaaa"], doing.given_up)
+        self.assertEqual([], doing.owed(), "it is still there to be offered again")
+
+    async def test_the_undeliverable_notice_repeats_no_word_of_the_unreviewed_report(self):
+        """R-ROL-19 — the report has still been read by nobody, so putting any of it in
+        front of the owner would publish unreviewed work by the one route built to stop
+        exactly that. The run and the role are enough to go and ask for it."""
+        report = "Landed the change; the suite passes."
+        doing = Delegating(owed=[{"role_run": "rol-1-aaaa", "role": "development",
+                                  "attempts": role_runs.REVIEW_CEILING,
+                                  "channel": "ops", "conversation": "one",
+                                  "handoff": {"report": report, "target": "/tmp/checkout",
+                                              "brief": "rewrite the exporter"}}])
+        gw = self.one(doing)
+        surface = Reached()
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_role_review()
+
+        said = surface.owner_told[0]
+        self.assertNotIn(report, said, "an unreviewed report reached a person")
+        self.assertNotIn("/tmp/checkout", said)
+        self.assertNotIn("rewrite the exporter", said)
+
+    async def test_a_surface_that_could_not_tell_the_owner_leaves_the_handoff_owed(self):
+        """R-ROL-37 — told first and written off second, so a notice that did not arrive
+        is tried again rather than being the thing that was lost."""
+        doing = Delegating(owed=[{"role_run": "rol-1-aaaa", "role": "development",
+                                  "attempts": role_runs.REVIEW_CEILING,
+                                  "channel": "ops", "conversation": "one",
+                                  "handoff": {"report": "done"}}])
+        gw = self.one(doing)
+        gw._reached["ops"] = Reached(owner_raises=RuntimeError("the platform refused it"))
+
+        with self.assertRaises(RuntimeError):
+            await gw._deliver_one_role_review()
+
+        self.assertEqual([], doing.given_up)
+        self.assertEqual(["rol-1-aaaa"], [one["role_run"] for one in doing.owed()])
+
+    async def test_a_handoff_settled_undeliverable_never_holds_up_the_ones_behind(self):
+        """R-ROL-15 — the same rule a channel the owner removed already obeys: one review
+        that cannot be delivered must not sit at the head keeping every later one behind
+        it, or work that was done is never reported and nothing says why."""
+        doing = Delegating(owed=[
+            {"role_run": "rol-1-aaaa", "role": "development",
+             "attempts": role_runs.REVIEW_CEILING, "channel": "ops",
+             "conversation": "one", "handoff": {"report": "the first"}},
+            {"role_run": "rol-2-bbbb", "role": "development", "attempts": 0,
+             "channel": "ops", "conversation": "two", "handoff": {"report": "the second"}},
+        ])
+        gw = self.one(doing)
+        surface = Reached()
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_role_review()
+
+        self.assertEqual(["rol-1-aaaa"], doing.given_up)
+        self.assertEqual([("two", {"report": "the second"})], surface.told,
+                         "the handoff behind an undeliverable one was never offered")
 
     async def test_handing_work_to_a_role_is_shown_where_it_was_asked_for(self):
         """R-ROL-27 — a role was invisible: the command admitting it showed as an ordinary

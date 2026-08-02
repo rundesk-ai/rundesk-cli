@@ -450,7 +450,7 @@ class Answering:
         return held is not None and held.task is not None and not held.task.done()
 
     async def told_role_finished(self, conversation: str, handoff: dict,
-                                    reviewing=None) -> None:
+                                    reviewing=None, delivered=None) -> None:
         """Wake the named parent to review one role handoff (R-ROL-15).
 
         **Nothing is posted here.** The worker's report is not an answer and is not news:
@@ -461,6 +461,22 @@ class Answering:
         Raised rather than returned when the review cannot start, so the caller leaves it
         owing and tries again. A handoff quietly marked delivered because a room was busy
         is work that was done and nobody was ever told about.
+
+        **This returns as soon as the turn is admitted, and `delivered` is what says it
+        arrived.** Waiting for the review itself would hold up every other role run for the
+        minutes a review takes. So the caller is told twice: `reviewing` the moment the turn
+        exists, because that marker is what refuses it a second role level and has to be
+        written before the turn can ask for anything (R-ROL-13) — and `delivered` only once
+        the turn ended well *and* actually said something, which is what a review is.
+
+        **A turn that was admitted and answered nobody has not delivered a review**, so a
+        handoff left owing by one is offered again. That does not weaken the one-review rule:
+        the first review has not happened yet, and offering it again is that review rather
+        than a second one (R-ROL-15).
+
+        The prompt stands on its own — it is the whole report — so the review turn is asked
+        again on a fresh session where a stale one hands it straight back. A handoff lost to
+        a session that never read it is a role run nobody ever reads (R-RUN-24).
         """
         if not self.connected:
             raise RuntimeError(f"channel '{self.channel}' is not connected")
@@ -484,10 +500,15 @@ class Answering:
                 reviewing(run)
             began.set()
 
+        def finished(outcome) -> None:
+            if delivered is not None and _reviewed(outcome):
+                delivered()
+
         held.task = asyncio.ensure_future(
             self._one(
                 held, REVIEW_HANDOFF.format(handoff=_handoff_text(handoff)), "",
                 prompt_author="rundesk", on_admitted=admitted,
+                stands_alone=True, on_finished=finished,
             )
         )
         waiting = asyncio.ensure_future(began.wait())
@@ -885,8 +906,19 @@ class Answering:
 
     async def _one(self, held: Exchange, prompt: str, user: str, preface: str = "",
                    recovery_of: dict | None = None, prompt_author: str = "user",
-                   on_admitted=None) -> None:
-        """Carry one turn, and say how it stands at each point rundesk decides it."""
+                   on_admitted=None, stands_alone: bool = False,
+                   on_finished=None) -> None:
+        """Carry one turn, and say how it stands at each point rundesk decides it.
+
+        `stands_alone` is passed straight through to the turn: whether this prompt carries
+        everything a fresh session would need to answer it (R-RUN-24). Every caller but the
+        handoff review leaves it alone, so a recovery and a post-update continuation behave
+        exactly as they did.
+
+        `on_finished` is told the outcome of a turn that reached the end well, for a caller
+        that has something to settle only once the turn actually answered — and never on
+        one that was cancelled or failed, which is why it is not in the `finally`.
+        """
         chose = recovery_of or agents.chosen(self.name, self._where)
         held.saying = asyncio.Queue()
         # Emptied for each turn. Left standing, what the *last* turn ended on was still
@@ -923,6 +955,7 @@ class Answering:
                 preface=preface,
                 resume_required=bool(recovery_of),
                 prompt_author="rundesk" if recovery_of else prompt_author,
+                stands_alone=stands_alone and not recovery_of,
                 recovery_of=recovery_of["id"] if recovery_of else None,
                 resume_on_interrupt=lambda: (
                     self._stopping and not held.stopped and recovery_of is None
@@ -945,6 +978,18 @@ class Answering:
             await self._answer(held, outcome, provider.label(chose.get("provider") or ""))
             self._say(channel.FINISHED if outcome.ok else channel.FAILED, held,
                       ref=held.ref, why=None if outcome.ok else _why(outcome))
+            if on_finished is not None:
+                try:
+                    on_finished(outcome)
+                except Exception as went_wrong:  # noqa: BLE001 — nobody awaits this task
+                    # Raised here it would be raised nowhere at all, and whatever this was
+                    # going to settle would look settled. Said out loud and left unsettled
+                    # instead, which is the direction that costs a second attempt rather
+                    # than the result.
+                    self._note(
+                        f"channel '{self.channel}': a finished turn could not be "
+                        f"settled: {went_wrong}"
+                    )
         finally:
             held.saying.put_nowait(None)
             held.saying = None
@@ -1251,6 +1296,17 @@ class _Shown:
                                       run=self._held.run, text=older.strip())
             self._held.spoken.remove((was, older))
         self._held.spoken.append(("whole", text))
+
+
+def _reviewed(outcome) -> bool:
+    """Whether a review turn actually reviewed the handoff it was woken for.
+
+    **Ended well, and said something.** A turn that ended `ok` having said nothing is the
+    exact shape `turn.NOTHING_SAID` exists for — a stale session handing the prompt straight
+    back — and writing the handoff off against one is the whole of how a worker's report was
+    lost. A cancelled or failed turn never reaches here at all.
+    """
+    return bool(getattr(outcome, "ok", False) and (getattr(outcome, "text", "") or "").strip())
 
 
 def _handoff_text(handoff: dict) -> str:

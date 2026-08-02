@@ -22,7 +22,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import agent, config, process, provider, store, transcript, turn  # noqa: E402
+from rundesk import agent, answering, config, process, provider, store  # noqa: E402
+from rundesk import transcript, turn  # noqa: E402
 
 PY = sys.executable
 
@@ -758,6 +759,53 @@ class ATurnAResumedSessionHandedStraightBack(WithAnAgentToRunTurnsFor):
         self.assertEqual([], self.asked_again(recovered.run))
         self.assertNotEqual("a-session", self.handle_for("stale"),
                             "the conversation was moved onto a session started from nothing")
+
+    async def test_a_prompt_that_stands_on_its_own_is_asked_again_whoever_wrote_it(self):
+        """R-RUN-24, R-ROL-15 — the handoff review is rundesk's own prompt and carries a
+        worker's whole report, so a fresh session answers it exactly as well as a resumed
+        one. Deciding this on who was recorded as asking consumed the report instead: the
+        run was carried out, the provider was paid for it, and nobody read a word of it."""
+        await self.ask("stale")
+        again = await self.ask("stale", prompt="review this report",
+                               prompt_author="rundesk", stands_alone=True)
+        self.assertTrue(again.ok, "a prompt that stands on its own was consumed")
+        self.assertEqual("answered review this report", again.text)
+        self.assertEqual(2, self.attempts(again.run))
+        self.assertEqual(1, len(self.asked_again(again.run)),
+                         "the brain was run twice and the account says once")
+
+    async def test_the_real_handoff_review_survives_a_session_that_never_read_it(self):
+        """R-ROL-15, R-RUN-24 — issue #282, built out of the wording the gateway actually
+        sends rather than a prompt written for this case. A worker's report reaching a
+        stale session was consumed in silence: one brain start, nothing said, the run
+        recorded `failed`, and the report readable by nobody."""
+        report = "Landed the change; the suite passes."
+        prompt = answering.REVIEW_HANDOFF.format(handoff=answering._handoff_text({
+            "role": "development", "role_run": "rol-9-zzzz", "outcome": "succeeded",
+            "target": "/tmp/checkout", "report": report, "files": [],
+        }))
+        await self.ask("stale")
+
+        again = await self.ask("stale", prompt=prompt, prompt_author="rundesk",
+                               stands_alone=True)
+
+        self.assertTrue(again.ok, "the handoff was consumed and the parent told nothing")
+        self.assertIn(report, again.text, "the review never reached the report")
+        self.assertEqual(2, self.attempts(again.run))
+        self.assertEqual(1, len(self.asked_again(again.run)))
+
+    async def test_a_recovery_turn_that_stands_on_its_own_is_still_refused(self):
+        """R-GW-22 — the two are not compatible claims, and a caller that made both would
+        hand `Continue the interrupted work` to a brain that knows nothing about it. Asked
+        of the resumption itself rather than left to callers remembering not to, because
+        what it costs to be wrong here is the interrupted work."""
+        await self.ask("stale")
+        recovered = await self.ask("stale", prompt="carry on", prompt_author="rundesk",
+                                   stands_alone=True, resume_required=True,
+                                   recovery_of="an-earlier-run")
+        self.assertFalse(recovered.ok, "a recovery that answered nobody was reported as done")
+        self.assertEqual(1, self.attempts(recovered.run), "interrupted work was begun again")
+        self.assertEqual([], self.asked_again(recovered.run))
 
     async def test_a_turn_that_was_not_resumed_is_not_asked_again(self):
         """R-RUN-24 — nothing was handed back, so there is nothing a fresh session would

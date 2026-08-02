@@ -2118,16 +2118,26 @@ class Gateway:
     async def _deliver_one_role_review(self) -> None:
         """Wake the parent for the oldest handoff it is still owed, if it can be woken.
 
-        Nothing is marked delivered until the channel has accepted the parent's response,
-        so a surface that is down means the review waits rather than being lost — and a
-        gateway that died between the two finds it owing again.
+        Nothing is marked delivered until the parent's review turn has actually answered,
+        so a surface that is down means the review waits rather than being lost, a review
+        that answered nobody leaves the handoff owed, and a gateway that died anywhere in
+        between finds it owing again.
         """
+        # Imported here rather than at the top, the way `agent.playing` imports the same
+        # module for the same reason: what a role run is reaches back through an agent to
+        # this file, so a module-level import would close that circle and leave whether it
+        # resolves depending on which of the three something happened to import first.
+        from rundesk import role_run
+
         for owed in self.roles.owed():
             answering = self._reached.get(owed.get("channel"))
             if answering is None or not answering.connected or not owed.get("conversation"):
                 # Not deliverable now, and possibly not ever — a channel the owner has
                 # removed never comes back. Every later review is still tried, so one
                 # undeliverable handoff cannot hold up the rest (R-ROL-15).
+                continue
+            if int(owed.get("attempts") or 0) >= role_run.REVIEW_CEILING:
+                await self._give_up_on_one_role_review(answering, owed)
                 continue
             if answering.answering_somebody(owed["conversation"]):
                 # **A parent mid-turn is not an attempt.** The handoff waits, which is
@@ -2140,10 +2150,47 @@ class Gateway:
             await answering.told_role_finished(
                 owed["conversation"], owed["handoff"],
                 reviewing=lambda run, at=owed["role_run"]: self.roles.reviewing(at, run),
+                # **Settled when the review answered, never when it was admitted.** A turn
+                # a stale session handed straight back read nothing and reviewed nothing,
+                # and writing the handoff off against one is a role run that was run, paid
+                # for and read by nobody (R-ROL-15).
+                delivered=lambda at=owed["role_run"]: self._role_review_delivered(at),
             )
-            self.roles.reviewed(owed["role_run"])
-            self.log.info("delivered the handoff for role run %s", owed["role_run"])
             return
+
+    def _role_review_delivered(self, run_id: str) -> None:
+        """One handoff, reviewed by the parent it was owed to and settled for good.
+
+        Said in the log here rather than where the turn was started, so "delivered" names
+        the moment it was delivered rather than the moment it was attempted.
+        """
+        self.roles.reviewed(run_id)
+        self.log.info("delivered the handoff for role run %s", run_id)
+
+    async def _give_up_on_one_role_review(self, answering, owed: dict) -> None:
+        """Settle a handoff nobody could be woken for, and tell the owner (R-ROL-37).
+
+        A review that fails every time would otherwise be offered round a loop for the
+        whole retention window, and the parent's own conversation is exactly where nothing
+        can be said about it — the review turn there is the thing that is not working.
+
+        **The owner is told before it is written off**, so a surface that throws leaves the
+        callback owed and the notice is tried again rather than lost. And the notice carries
+        the run and the role and nothing else: this report has still been read by nobody,
+        and repeating a word of it here would publish unreviewed work by the one route built
+        to prevent that (R-ROL-19).
+        """
+        from rundesk import role_run
+
+        await answering.told_the_owner(role_run.REVIEW_UNDELIVERABLE.format(
+            run=owed["role_run"], role=owed.get("role") or "",
+            attempts=int(owed.get("attempts") or 0),
+        ))
+        self.roles.giving_up(owed["role_run"])
+        self.log.warning(
+            "gave up on the handoff for role run %s after %s attempts",
+            owed["role_run"], owed.get("attempts"),
+        )
 
     def _sweep_roles(self) -> None:
         """Settle what has gone quiet, then take away what has expired (R-ROL-12).

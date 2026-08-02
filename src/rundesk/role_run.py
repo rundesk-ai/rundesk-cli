@@ -891,6 +891,25 @@ CARRY_CEILING = 3
 #: something puts time between them.
 CARRY_BACKOFF_SECONDS = 60.0
 
+#: How many times a parent may be woken for one handoff before it is settled undelivered
+#: (R-ROL-37). Three, matching what carrying a run is allowed: the faults this bounds are
+#: the ones that happen every time — a session that hands every turn back, a brain that
+#: answers nothing — and two more goes is enough for a blip to pass.
+REVIEW_CEILING = 3
+
+#: What an owner is told when a handoff could not be delivered at all.
+#:
+#: **Rundesk reporting on the delivery, and never a word of the report** (R-ROL-19). The
+#: worker's account has still not been reviewed by anybody, so putting any of it here would
+#: publish unreviewed work by the one route built to prevent it. What this says is which run,
+#: which role, and that its report is still waiting — enough to go and ask for it.
+REVIEW_UNDELIVERABLE = (
+    "A role run finished and Rundesk could not get its report reviewed. This is Rundesk "
+    "reporting on the delivery rather than on the work: the report has not been read by "
+    "anybody and none of it is repeated here. Run {run}, role {role}, woken {attempts} "
+    "times without the review ever answering."
+)
+
 #: How long a run may produce nothing at all before Rundesk settles it. The owner's
 #: number, and measured on inactivity rather than on total runtime: a legitimately long
 #: job keeps writing records, and ending one at six hours of honest work would be worse

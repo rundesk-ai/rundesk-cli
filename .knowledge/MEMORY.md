@@ -19,6 +19,16 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   answers `attachment` when it is left with no characters at all — right for a file, and
   it will happily name something else after one.
 
+- **Putting a file back after a teeth probe with `git checkout <file>` throws away the
+  whole task's uncommitted work in it, not the probe's break.** A probe here is "break the
+  fix, run the class, restore" — and the file being restored is the one holding everything
+  you have written, none of which is committed yet. `git checkout src/rundesk/gateway.py`
+  reverted fifty new lines to `HEAD`, printed nothing, and the `git diff --stat` after it
+  answered empty, which reads exactly like a clean restore rather than like the work being
+  gone. Recoverable only because the probe's own `cp … /tmp/<file>.keep` was still there.
+  **Restore from that copy and never from git** until the work is committed — and take the
+  copy *before* breaking anything, which is the same command either way.
+
 - **Nothing correlated in the Discord adapter's `Live` survives the turn that put it
   there.** `_state`'s terminal branch ends with `self.live.pop(...)`, so a `finished`,
   `stopped` or `failed` state throws away the whole entry — `held.tools` with it. Anything

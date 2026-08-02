@@ -1499,6 +1499,7 @@ class Playing:
     claiming: object
     reviewing: object
     reviewed: object
+    giving_up: object
     sweep: object
     quiet: object
 
@@ -1633,6 +1634,11 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
         channel the owner has since removed — would otherwise sit at the head for ever and
         keep every later review behind it, so work that was done would never be reported
         and nothing would say why (R-ROL-15).
+
+        How often each has been tried, and which role it was, come along with it: a caller
+        bounding how many times one parent is woken has to be able to read the count it is
+        bounding, and the notice it eventually sends may name the role and nothing else
+        (R-ROL-19, R-ROL-37).
         """
         kept = reading(name, where)
         found = []
@@ -1640,11 +1646,14 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
             room = kept.conversation_of(claimed["conversation"])
             if room is None:
                 continue
+            handoff = role_runs.handoff(name, claimed["role_run"], where)
             found.append({
                 "role_run": claimed["role_run"],
+                "role": handoff["role"],
+                "attempts": int(claimed["attempts"] or 0),
                 "channel": room.get("channel"),
                 "conversation": room.get("space"),
-                "handoff": role_runs.handoff(name, claimed["role_run"], where),
+                "handoff": handoff,
             })
         return found
 
@@ -1656,6 +1665,16 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
         records(name, where).role_reviewing(role_run, review_run)
 
     def reviewed(role_run: str) -> None:
+        records(name, where).role_reviewed(role_run, store.stamped())
+
+    def giving_up(role_run: str) -> None:
+        """This handoff will not be delivered, and it stops being owed (R-ROL-37).
+
+        The same write a delivered review makes, because what has to stop is the same
+        thing: a callback offered every few seconds for a fortnight to a parent that fails
+        every time. Whoever calls this has already told the owner — settling it here and
+        saying nothing would be the silence this exists to end.
+        """
         records(name, where).role_reviewed(role_run, store.stamped())
 
     def sweep() -> list:
@@ -1675,7 +1694,7 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
                    stopping=stopping, stopped=stopped,
                    carry=carrying,
                    owed=owed, claiming=claiming, reviewing=reviewing, reviewed=reviewed,
-                   sweep=sweep, quiet=quiet)
+                   giving_up=giving_up, sweep=sweep, quiet=quiet)
 
 
 def unrunnable_channels(name: str, where: Path | None = None) -> list:
