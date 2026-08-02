@@ -65,6 +65,11 @@ RENAMED = {
     "managing-rundesk-schedules": "managing-schedules",
     "writing-rundesk-pull-requests": "writing-github-pull-requests",
     "writing-rundesk-skills": "writing-skills",
+    # Backups stopped being a skill of their own and became a section of the one that
+    # already covers operating this install — same capability, one fewer thing every agent
+    # carries. Last, so an install still holding the older spelling resolves through
+    # `managing-backups` first and lands here in the same pass.
+    "managing-backups": "managing-rundesk",
 }
 
 _GRANT_LOCKS = threading.local()

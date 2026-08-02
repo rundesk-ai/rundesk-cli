@@ -1056,6 +1056,7 @@ def diagnosed(name: str, where: Path | None = None, root: Path | None = None,
     if unfit:
         found.append(Complaint("this install", unfit, "rundesk update"))
     found.extend(_what_is_wrong_with_its_skills(name, where))
+    found.extend(_what_is_wrong_with_its_role_runs(name, where))
     # **Where these records stand against what this install expects** (R-AGT-20). Read
     # without opening a store, which refuses records it will not read — and refusing is the
     # right answer for a turn and the wrong one for the check that exists to explain it.
@@ -1094,6 +1095,62 @@ def diagnosed(name: str, where: Path | None = None, root: Path | None = None,
             found.append(Complaint(str(why), "the brain this agent reaches for",
                                    f"rundesk configure {name} "
                                    "--provider <one that is installed>"))
+    return found
+
+
+def _what_is_wrong_with_its_role_runs(name: str, where: Path | None = None) -> list:
+    """What stands between this agent's specialist executions and being carried on.
+
+    Nothing here starts a provider and nothing here writes (R-AGT-11, R-AGT-12). Every one
+    of these is a fact an owner cannot see any other way: work that will never be carried
+    on, a report nobody was ever told about, and a directory a run believes it is working
+    in that is no longer there.
+    """
+    from rundesk import role as roles
+    from rundesk import role_run as role_runs
+
+    found: list = []
+    at = store.path_for(directory(name, where))
+    if not at.exists():
+        return found
+    try:
+        kept = reading(name, where)
+        runs = kept.role_runs(limit=200)
+        owing = kept.owed_role_callbacks()
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed):
+        return found   # already reported by the version and records checks above
+    for row in runs:
+        if row["state"] not in (store.ADMITTED, store.WORKING):
+            continue
+        try:
+            role_runs.verified(name, row, where)
+        except role_runs.NotDelegable as why:
+            found.append(Complaint(row["id"], str(why), ""))
+            continue
+        target = row.get("target")
+        if target and not Path(target).is_dir():
+            found.append(Complaint(
+                row["id"], "the directory this role run works in is not there", ""))
+    for one in owing:
+        found.append(Complaint(
+            one["role_run"],
+            "a role run has reported back and its parent has not been told yet",
+            f"rundesk start {name}"))
+    for slug in sorted({row["role"] for row in runs}):
+        try:
+            one = roles.read(slug, where)
+        except roles.NotARole as why:
+            found.append(Complaint(slug, f"a role this agent has used is unusable: {why}",
+                                   ""))
+            continue
+        if one.missing:
+            # Not a fault — a role runs without a skill this machine has not got — but it
+            # is the difference between the work an owner expected and the work they get.
+            found.append(Complaint(
+                slug,
+                "this role asks for skills this machine has not got, so runs of it go "
+                f"without them: {', '.join(one.missing)}",
+                f"rundesk skills install <repository>"))
     return found
 
 
@@ -1363,6 +1420,142 @@ def asking(name: str, where: Path | None = None, carry=None):
         )
 
     return made
+
+
+@dataclass(frozen=True)
+class Playing:
+    """How a gateway carries this agent's role runs, and tells their parents.
+
+    Handed over already made, for the reason `asking` is: a role run needs an agent, a
+    brain, a bundle and an account, and a gateway knows none of the four. A gateway with
+    no agent behind it is handed nothing here and simply never carries one.
+    """
+
+    waiting: object
+    stopping: object
+    stopped: object
+    carry: object
+    owed: object
+    claiming: object
+    reviewing: object
+    reviewed: object
+    sweep: object
+
+
+def playing(name: str, where: Path | None = None, carry=None) -> Playing:
+    """Everything a gateway does about role runs, made where an agent is known.
+
+    Five questions and no state: which runs are waiting to be carried, carrying one,
+    which parent is still owed a review, that a review turn was admitted, that it was
+    delivered, and clearing what has expired. The gateway holds which of them are in
+    flight, exactly as it already holds which schedules are.
+    """
+    import asyncio
+
+    from rundesk import role_run as role_runs
+
+    def waiting() -> list:
+        """Runs that were admitted and are not finished — oldest first.
+
+        A run left `working` by a gateway that died is here too, and is carried on rather
+        than started again: its provider session is the conversation's, so resuming is
+        what the ordinary turn machinery already does with one (R-ROL-11).
+        """
+        kept = reading(name, where)
+        found = [one for state in store.UNFINISHED_ROLES
+                 for one in kept.role_runs(state=state, limit=200)]
+        return sorted(found, key=lambda one: one["admitted_at"])
+
+    def stopping() -> list:
+        """Every unfinished run somebody has asked to end."""
+        return [one for one in waiting() if one.get("stop_asked_at")]
+
+    def stopped(run_id: str) -> None:
+        """Settle a run that was asked to end and that nothing was carrying.
+
+        The same settlement a cancelled one reaches, so a stop looks like a stop however
+        far the execution had got — including not having started at all.
+        """
+        records(name, where).finish_role(
+            run_id, store.stamped(), store.STOPPED,
+            "this run was stopped before it finished", role_runs.retained_until(),
+        )
+
+    async def carrying(run_id: str):
+        """Carry one root, and leave it settled however that goes.
+
+        **A run that cannot be carried is still a run its parent has to be told about.**
+        A corrupt bundle, a brain the agent no longer has, a target directory that was
+        moved — every one of them ends this execution, and one left unsettled would be
+        picked up again on the next look for ever while nobody was ever told.
+        """
+        try:
+            return await role_runs.carry(name, run_id, where=where, carrying=carry)
+        except asyncio.CancelledError:
+            # **A stop and a shutdown look identical here, and are not the same news.**
+            # A gateway standing down leaves the run unfinished on purpose: its provider
+            # session is the conversation's, so the next gateway carries it on. A person
+            # who asked for it to end wants it ended — and left unfinished it would simply
+            # start again on the way back up (R-ROL-24).
+            asked = (reading(name, where).role_run(run_id) or {}).get("stop_asked_at")
+            if not asked:
+                raise
+            records(name, where).finish_role(
+                run_id, store.stamped(), store.STOPPED,
+                "this run was stopped before it finished", role_runs.retained_until(),
+            )
+            return None
+        except BaseException as why:  # noqa: BLE001 — a boundary, and see below
+            # **Every other way this can fail ends the execution truthfully.** A corrupt
+            # bundle, a brain the agent no longer has, a target directory somebody moved —
+            # each of them raises something different, and one left unsettled is picked up
+            # again on the next look for ever while nobody is ever told. Caught broadly
+            # because *what* went wrong matters far less than the parent hearing that it
+            # did (R-ROL-15).
+            records(name, where).finish_role(
+                run_id, store.stamped(), store.FAILED, str(why) or why.__class__.__name__,
+                role_runs.retained_until(),
+            )
+            return None
+
+    def owed() -> list:
+        """Every review a parent is still owed, oldest first, with where to say each.
+
+        **A list rather than the oldest one.** One review that cannot be delivered — a
+        channel the owner has since removed — would otherwise sit at the head for ever and
+        keep every later review behind it, so work that was done would never be reported
+        and nothing would say why (R-ROL-15).
+        """
+        kept = reading(name, where)
+        found = []
+        for claimed in kept.owed_role_callbacks():
+            room = kept.conversation_of(claimed["conversation"])
+            if room is None:
+                continue
+            found.append({
+                "role_run": claimed["role_run"],
+                "channel": room.get("channel"),
+                "conversation": room.get("space"),
+                "handoff": role_runs.handoff(name, claimed["role_run"], where),
+            })
+        return found
+
+    def claiming(role_run: str) -> None:
+        """This review is being attempted now — counted where trying is what happened."""
+        records(name, where).claim_role_callback(role_run, store.stamped())
+
+    def reviewing(role_run: str, review_run: str) -> None:
+        records(name, where).role_reviewing(role_run, review_run)
+
+    def reviewed(role_run: str) -> None:
+        records(name, where).role_reviewed(role_run, store.stamped())
+
+    def sweep() -> list:
+        return role_runs.sweep(name, where)
+
+    return Playing(waiting=waiting, stopping=stopping, stopped=stopped, carry=carrying,
+                   owed=owed, claiming=claiming, reviewing=reviewing, reviewed=reviewed,
+                   sweep=sweep)
 
 
 def unrunnable_channels(name: str, where: Path | None = None) -> list:

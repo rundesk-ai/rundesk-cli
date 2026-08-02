@@ -74,6 +74,18 @@ PREVIOUS_DEFAULT_GRANTS = (
         "writing-plans",
         "organizing-workspaces",
     ),
+    # What shipped before backups folded into `managing-rundesk` and `delegating-to-roles`
+    # took its place in the baseline. An install still holding exactly this never chose it,
+    # so it advances; one that differs by a single name is an owner's and is left alone.
+    (
+        "managing-rundesk",
+        "managing-schedules",
+        "managing-backups",
+        "filing-github-issues",
+        "writing-github-pull-requests",
+        "writing-plans",
+        "organizing-workspaces",
+    ),
 )
 
 #: The operating baseline every Rundesk agent receives. Repository-specific collaboration
@@ -82,7 +94,7 @@ PREVIOUS_DEFAULT_GRANTS = (
 RUNDESK_REQUIRED_GRANTS = (
     "managing-rundesk",
     "managing-schedules",
-    "managing-backups",
+    "delegating-to-roles",
     "filing-github-issues",
     "writing-github-pull-requests",
 )

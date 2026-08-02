@@ -479,7 +479,7 @@ class BuiltCommandTests(unittest.TestCase):
         built = {"version", "update", "uninstall", "add", "configure", "ask", "doctor", "agents",
                  "serve", "start", "stop", "remove", "restart", "status", "logs", "schedules",
                  "channels", "runs", "usage", "search", "messages", "skills", "scripts",
-                 "backups", "config"}
+                 "backups", "config", "roles"}
         self.assertEqual(built & set(cli.PLANNED), set())
         self.assertEqual(set(verbs()), built | set(cli.PLANNED))
 
@@ -698,14 +698,14 @@ class FakeGateways:
         return self._written if self._written is not None else pathlib.Path("/nowhere/x.log")
 
     def Gateway(self, name, where=None, logs=None, reachable=(),
-                agents=None, records=None, asking=None, granted=None):
+                agents=None, records=None, asking=None, roles=None, granted=None):
         gateways = self
         # Kept, because what the command hands a gateway is the command's to get right:
         # a gateway told nothing about where agents are starts programs that cannot find
         # one (R-SCH-27), and only this side of the seam can be asked whether it was told.
         self.made_with.append({"name": name, "where": where, "logs": logs,
                                "agents": agents, "records": records, "asking": asking,
-                               "granted": granted})
+                               "roles": roles, "granted": granted})
 
         class One:
             async def serve(inner):
@@ -935,6 +935,8 @@ class FakeAgents:
         self.asked_runnable = None
         #: Which schedules a gateway asked a turn for, by agent.
         self.asked: list = []
+        #: Which agents a gateway was handed role-carrying for.
+        self.played: list = []
         #: What asking what this agent keeps raises, where a case is about that failing.
         self.refuses: BaseException | None = None
         #: What was made, adopted and taken away, in the order it was asked for.
@@ -1081,6 +1083,18 @@ class FakeAgents:
             self.asked.append((name, one.name))
             raise AssertionError("a turn was admitted by a case that only watches for one")
         return made
+
+    def playing(self, name, where=None, carry=None):
+        """What a gateway is handed to carry this agent's role runs with. A stand-in
+        for the real one's shape and nothing more: whether the command hands one over is
+        this file's, and what a gateway does with it is `tests/test_gateway.py`'s."""
+        self.played.append(name)
+        return real_agent.Playing(
+            waiting=lambda: [], stopping=lambda: [], stopped=lambda _run: None,
+            carry=None, owed=lambda: [],
+            claiming=lambda _run: None, reviewing=lambda _run, _review: None,
+            reviewed=lambda _run: None, sweep=lambda: [],
+        )
 
     def agents_home(self):
         """Where this stand-in keeps them, which is a real directory for a case that writes.
@@ -1278,6 +1292,17 @@ def drive(argv, gateways=None, machine=None, agents=None, skills=None, scripts=N
             # what the caller was left with.
             code = usage.code if isinstance(usage.code, int) else 1
     return code, out.getvalue() + err.getvalue()
+
+
+@contextlib.contextmanager
+def feeding(said: str):
+    """What a command reads off standard input, for the one that takes a task that way."""
+    was = sys.stdin
+    sys.stdin = io.StringIO(said)
+    try:
+        yield
+    finally:
+        sys.stdin = was
 
 
 class WhatThisInstallIsConfiguredWith(unittest.TestCase):
@@ -4925,6 +4950,58 @@ class WhatATurnLooksLikeOnATerminal(unittest.TestCase):
         for, and the line still has to read."""
         self.assertEqual("· using mcp__weather",
                          self._watched({"type": "tool", "name": "mcp__weather"}))
+
+
+class HandingWorkToARole(unittest.TestCase):
+    """`rundesk roles <agent> run <role>` — who may ask, and what is refused."""
+
+    def setUp(self):
+        self.where = tempfile.mkdtemp(prefix="rundesk-roles-cli-")
+        self.addCleanup(shutil.rmtree, self.where, True)
+
+    def test_handing_work_to_a_role_needs_a_turn_of_this_agents_own(self):
+        """R-ROL-4 — a worker acts on a named agent's behalf and answers into that
+        agent's conversation, so the run that admits it has to be one of that agent's."""
+        for said in ("RUNDESK_RUN", "RUNDESK_ROLE_RUN"):
+            os.environ.pop(said, None)
+        with feeding("Outcome: make it work.\n"):
+            code, said = drive(["roles", "ava", "run", "development"],
+                               agents=FakeAgents(made=["ava"]))
+        self.assertEqual(1, code)
+        self.assertIn("NOT ADMITTED", said)
+        self.assertIn("own turn", said)
+
+    def test_a_role_run_cannot_hand_work_to_another_role(self):
+        """R-ROL-13 — said early and cheaply here; the durable record is what refuses."""
+        os.environ["RUNDESK_RUN"] = "9-zzzz"
+        os.environ["RUNDESK_ROLE_RUN"] = "rol-1-aaaa"
+        self.addCleanup(os.environ.pop, "RUNDESK_RUN", None)
+        self.addCleanup(os.environ.pop, "RUNDESK_ROLE_RUN", None)
+        with feeding("Outcome: make it work.\n"):
+            code, said = drive(["roles", "ava", "run", "development"],
+                               agents=FakeAgents(made=["ava"]))
+        self.assertEqual(1, code)
+        self.assertIn("cannot start another one", said)
+
+    def test_a_refused_word_says_nothing_on_the_way_out(self):
+        """A line printed on the way in is a line a refusal cannot take back — this
+        command reported that it had said something while it was busy refusing to."""
+        out, err = io.StringIO(), io.StringIO()
+        with feeding("guidance\n"), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            code = cli.main(["roles", "ava", "say", "rol-9-zzzz"],
+                            gateways=FakeGateways(), machine=FakeMachine(),
+                            agents=FakeAgents(made=["ava"], at=self.where),
+                            skills=FakeSkills(), scripts=FakeScripts(),
+                            catalogs=FakeCatalogs())
+        self.assertEqual(1, code)
+        self.assertEqual("", out.getvalue())
+        self.assertIn("NOT DONE", err.getvalue())
+
+    def test_asking_after_the_roles_of_an_agent_there_is_none_of_says_so(self):
+        code, said = drive(["roles", "nobody"], agents=FakeAgents(made=["ava"]))
+        self.assertEqual(1, code)
+        self.assertIn("NO SUCH AGENT", said)
 
 
 if __name__ == "__main__":

@@ -236,6 +236,7 @@ def environment(
     raw: Path | None = None,
     path: str | None = None,
     preface: str | None = None,
+    role_run: str | None = None,
 ) -> dict[str, str]:
     """Everything an adapter is told, and the whole of it (R-PRV-3).
 
@@ -287,6 +288,21 @@ def environment(
         # brain that cannot tell rundesk's words from the person's weights the owner's
         # standing instructions as though somebody had just typed them.
         said["RUNDESK_PREFACE"] = preface
+    if role_run:
+        # **A convenience for refusing early, and never the authority** (R-ROL-13). A
+        # role execution that reaches for `rundesk` is refused a second role level,
+        # and this is what lets the command say so before it opens anything. What decides
+        # is the durable record of the run this turn names as the one delegating: it must
+        # be a run of the same agent, still in flight, on a surface the agent is reachable
+        # on, not itself carrying a role, and not a turn woken to review one.
+        #
+        # **That is a correctness guard, not a security boundary.** Every one of those
+        # facts is checked against the records, but *which* run a caller claims to be is
+        # `RUNDESK_RUN`, which is an environment variable in the caller's own process. A
+        # brain determined to get around this can clear one variable and name another — as
+        # it can already reach every other verb the command offers. What this rule buys is
+        # that no ordinary path, and no adapter's own subagent, falls into a second level.
+        said["RUNDESK_ROLE_RUN"] = role_run
     if raw is not None:
         # Somewhere to put what the *brain* said, which rundesk never sees: an adapter
         # stands between the two, so a vendor changing its stream shape would otherwise

@@ -141,8 +141,15 @@ class WhatTheShippedAuthoringSkillSays(unittest.TestCase):
             with self.subTest(old=old, new=new):
                 self.assertEqual(new, skill.RENAMED[old])
                 self.assertFalse((REALLY_SHIPPED / old).exists())
-                page = (REALLY_SHIPPED / new / "SKILL.md").read_text()
-                self.assertIn(f"name: {new}", page)
+                # **Followed to the end, because a rename may itself have been renamed.**
+                # Backups became a section of `managing-rundesk` rather than a skill, so
+                # the capability an old grant resolves to is two hops away and only the
+                # last one still ships a package.
+                carries = new
+                while carries in skill.RENAMED:
+                    carries = skill.RENAMED[carries]
+                page = (REALLY_SHIPPED / carries / "SKILL.md").read_text()
+                self.assertIn(f"name: {carries}", page)
 
     def test_release_guidance_discovers_each_repositorys_release_contract(self):
         """R-AGT-53 — releasing is one process across repositories, so the shipped guidance
@@ -1043,8 +1050,8 @@ class WhatMakingAnAgentGrants(WithALibrary):
     def test_a_required_management_collision_keeps_the_owned_old_capability(self):
         """R-AGT-36, R-AGT-49 — the complete provision order never promotes an owner
         package under a new required name into Rundesk's operating floor."""
-        new = "managing-backups"
-        old = "managing-rundesk-backups"
+        new = "managing-schedules"
+        old = "managing-rundesk-schedules"
         shutil.rmtree(self.release / new)
         shutil.rmtree(self.library / new)
         a_skill(self.release, old)

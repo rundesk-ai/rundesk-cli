@@ -879,6 +879,16 @@ PS_TIMEOUT_SECONDS = 5.0
 #: Firing is recorded per minute, so looking more often costs nothing (R-SCH-9).
 TICK_SECONDS = 20.0
 
+#: How often the gateway looks for a role run to carry and a parent to tell. Close to
+#: the beat rather than to the clock: an agent that just delegated is waiting for work to
+#: begin, and a parent whose worker has finished is waiting to be told (R-ROL-15).
+ROLE_SECONDS = 5.0
+
+#: How often expired role bundles are cleared. Once an hour, because retention is
+#: measured in days and what a sweep finds on a machine where nothing has expired is
+#: nothing (R-ROL-12).
+ROLE_SWEEP_SECONDS = 3600.0
+
 #: How long stopping may take before the gateway stops waiting for what it is running and
 #: goes anyway (R-GW-7). Under what the supervisor allows: launchd sends SIGTERM, waits,
 #: and then sends SIGKILL — and being killed is how children get left behind.
@@ -1118,6 +1128,7 @@ class Gateway:
         agents: Path | None = None,
         records=None,
         asking=None,
+        roles=None,
         granted=None,
     ):
         self.name = checked(name)
@@ -1203,6 +1214,16 @@ class Gateway:
         #: Which schedules have a turn in flight. Kept apart from `running`, which holds
         #: programs a shutdown ends: a turn's brain is not a program this gateway started.
         self._asked_for: set[str] = set()
+        #: How this gateway carries the role runs its agent has admitted, and tells
+        #: their parents. Handed over already made by whoever knows what an agent is, the
+        #: way `asking` is; `None` is a gateway with no agent behind it, which simply
+        #: never carries one (R-ROL-4).
+        self.roles = roles
+        #: Which role roots have a turn in flight, by the run each is carrying. Kept
+        #: apart from `running` for the same reason `_asked_for` is: a turn's brain is not
+        #: a program this gateway started, and the same root started twice would be one
+        #: execution answering its parent twice.
+        self._role_tasks: dict = {}
         #: Backend update turns this gateway owns. They remain pending durably until one
         #: returns, and shutdown cancels and awaits every task here.
         self._update_turn_tasks: dict[int, asyncio.Task] = {}
@@ -1774,6 +1795,14 @@ class Gateway:
         # through `start`, so ending it, sweeping it and recording it are already done.
         holding = asyncio.ensure_future(self._hold_channels())
         notices = asyncio.ensure_future(self._deliver_update_notices())
+        # Work this agent handed to a specialist, and the reviews it still owes for it.
+        # A loop rather than a reaction, because the two things it does are both durable
+        # facts a restart has to find again: a run admitted while nothing was up, and a
+        # parent that was never told (R-ROL-15).
+        specialists = asyncio.ensure_future(self._carry_roles())
+        sweeping = asyncio.ensure_future(self._over_and_over(
+            ROLE_SWEEP_SECONDS, self._sweep_roles,
+            "could not sweep expired role runs: %s", at_once=True))
         watching = asyncio.ensure_future(self._tell_about_skills())
         try:
             await self._stopped.wait()
@@ -1782,18 +1811,29 @@ class Gateway:
             ticking.cancel()
             holding.cancel()
             notices.cancel()
+            specialists.cancel()
+            sweeping.cancel()
             watching.cancel()
             for task in self._update_turn_tasks.values():
+                task.cancel()
+            for task in self._role_tasks.values():
                 task.cancel()
             with contextlib.suppress(BaseException):
                 await holding
             with contextlib.suppress(BaseException):
                 await notices
             with contextlib.suppress(BaseException):
+                await specialists
+            with contextlib.suppress(BaseException):
+                await sweeping
+            with contextlib.suppress(BaseException):
                 await watching
             if self._update_turn_tasks:
                 await asyncio.gather(
                     *tuple(self._update_turn_tasks.values()), return_exceptions=True)
+            if self._role_tasks:
+                await asyncio.gather(
+                    *tuple(self._role_tasks.values()), return_exceptions=True)
             # The handlers stay installed across `_go()`. Removing them here restores the
             # system default, which for these two signals is *terminate* — so a second
             # signal arriving during the shutdown window would kill the gateway outright,
@@ -1811,6 +1851,104 @@ class Gateway:
             self.log.info("ending so the machine starts this gateway again")
             return 1
         return 0 if drained else 1
+
+    async def _carry_roles(self) -> None:
+        """Carry the role runs this agent admitted, and tell each parent once.
+
+        Both halves are driven off durable records rather than off anything held in this
+        process, so a gateway that starts finds work admitted while nothing was up and
+        reviews nobody was ever told about. That is the whole reason the acknowledging
+        turn is allowed to end (R-ROL-15).
+        """
+        while not self._stopping:
+            if self.roles is not None:
+                try:
+                    self._end_the_roles_asked_to_stop()
+                    self._start_admitted_roles()
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as why:  # noqa: BLE001 — this loop must not die
+                    self.log.warning("could not start a role run: %s", why)
+                try:
+                    await self._deliver_one_role_review()
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as why:  # noqa: BLE001 — retried after reconnect
+                    self.log.warning("could not deliver a role handoff: %s", why)
+            await asyncio.sleep(ROLE_SECONDS)
+
+    def _start_admitted_roles(self) -> None:
+        """Start every admitted root that nothing here is already carrying (R-GW-15)."""
+        for row in self.roles.waiting():
+            run_id = row["id"]
+            if row.get("stop_asked_at"):
+                continue   # asked to end before anything started it; settled below
+            if run_id in self._role_tasks:
+                continue
+            self._role_tasks[run_id] = asyncio.ensure_future(self._carry_one(run_id))
+            self.log.info("carrying role run %s", run_id)
+
+    def _end_the_roles_asked_to_stop(self) -> None:
+        """End every execution somebody asked to end (R-ROL-24).
+
+        Cancelling is all this does. What the run is *settled* as belongs where every
+        other way it can end is settled, so a stop and a failure cannot come to disagree
+        about what a stopped run looks like — and a run nothing here is carrying is
+        settled there too, without a provider ever being started for it.
+        """
+        for row in self.roles.stopping():
+            task = self._role_tasks.get(row["id"])
+            if task is not None and not task.done():
+                task.cancel()
+            else:
+                self.roles.stopped(row["id"])
+            self.log.info("ending role run %s because it was asked to stop", row["id"])
+
+    async def _carry_one(self, run_id: str) -> None:
+        """One role root, from here to its terminal outcome and no further.
+
+        What a provider-native helper does inside it belongs to that turn and returns to
+        it; nothing about one reaches this gateway, and none of them settles this run
+        (R-ROL-14).
+        """
+        try:
+            await self.roles.carry(run_id)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as why:  # noqa: BLE001 — a boundary, reported truthfully
+            self.log.warning("role run %s could not be carried: %s", run_id, why)
+        finally:
+            self._role_tasks.pop(run_id, None)
+
+    async def _deliver_one_role_review(self) -> None:
+        """Wake the parent for the oldest handoff it is still owed, if it can be woken.
+
+        Nothing is marked delivered until the channel has accepted the parent's response,
+        so a surface that is down means the review waits rather than being lost — and a
+        gateway that died between the two finds it owing again.
+        """
+        for owed in self.roles.owed():
+            answering = self._reached.get(owed.get("channel"))
+            if answering is None or not answering.connected or not owed.get("conversation"):
+                # Not deliverable now, and possibly not ever — a channel the owner has
+                # removed never comes back. Every later review is still tried, so one
+                # undeliverable handoff cannot hold up the rest (R-ROL-15).
+                continue
+            self.roles.claiming(owed["role_run"])
+            await answering.told_role_finished(
+                owed["conversation"], owed["handoff"],
+                reviewing=lambda run, at=owed["role_run"]: self.roles.reviewing(at, run),
+            )
+            self.roles.reviewed(owed["role_run"])
+            self.log.info("delivered the handoff for role run %s", owed["role_run"])
+            return
+
+    def _sweep_roles(self) -> None:
+        """Take away every role execution context whose window has passed (R-ROL-12)."""
+        if self.roles is None:
+            return
+        for run_id in self.roles.sweep():
+            self.log.info("role run %s is past its retention window", run_id)
 
     async def _deliver_update_notices(self) -> None:
         """Deliver a completed self-update once the originating channel is connected."""

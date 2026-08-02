@@ -86,6 +86,26 @@ class WhatABackupHolds(WithSomethingToBackUp):
         self.assertIn("data/agents/ava/state.db", held)
         self.assertIn("data/agents/ava/home/SOUL.md", held)
 
+    def test_a_backup_holds_a_roles_definition_and_a_retained_runs_locked_context(self):
+        """R-BKP-1 — a role definition is an owner's, and a retained run's locked bytes
+        are what makes it resumable. A copy that brought the run's record back without
+        them would bring back a run nothing can carry on."""
+        home = self.an_agent()
+        roles = self.data / "agents" / ".roles" / "development"
+        roles.mkdir(parents=True)
+        (roles / "role.json").write_text(
+            '{"description": "d", "skills": ["tidying"], "posture": "work"}')
+        (roles / "AGENTS.md").write_text("# Development\n")
+        bundle = home / "role-runs" / "rol-1-aaaa"
+        (bundle / "home").mkdir(parents=True)
+        (bundle / "home" / "AGENTS.md").write_text("# Development\n")
+        (bundle / "brief.md").write_text("Outcome: make it work.\n")
+        held = self.inside(self.taken())
+        self.assertIn("data/agents/.roles/development/AGENTS.md", held)
+        self.assertIn("data/agents/.roles/development/role.json", held)
+        self.assertIn("data/agents/ava/role-runs/rol-1-aaaa/home/AGENTS.md", held)
+        self.assertIn("data/agents/ava/role-runs/rol-1-aaaa/brief.md", held)
+
     def test_a_backup_holds_the_skills_library_and_this_installs_own_configuration(self):
         """R-BKP-1 — what belongs to no single agent is still the owner's, and a restore
         that brought agents back without their skills would bring back agents that cannot
