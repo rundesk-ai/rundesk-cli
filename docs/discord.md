@@ -222,6 +222,47 @@ gateway watches what its agent may do rather than waiting to be told. A change m
 the agent was stopped is sent when it next starts. An agent reached on more than one
 channel is told on one of them, so the same change never arrives twice.
 
+## Changing who may reach the agent
+
+The allow-list is not fixed at setup. `allow` shows it, and changes it on the channel that
+already exists — so the agent keeps its instructions, its settings and everything the
+adapter has remembered about it:
+
+```sh
+rundesk channels ava allow discord-dms                                    # who is allowed
+rundesk channels ava allow discord-dms --add 111111111111111111           # one more
+rundesk channels ava allow discord-dms --remove 222222222222222222        # one fewer
+rundesk channels ava allow discord-dms --add 111111111111111111 \
+                                       --remove 222222222222222222        # one for another
+```
+
+Both flags are repeatable and both are applied together, so replacing one person with
+another is never a moment with nobody allowed. There is no way to reach nobody: the last
+person on the list cannot be taken off, and a `--remove` naming somebody who was never
+allowed is refused rather than passed over.
+
+The adapter is handed who it may listen to when it starts, so a change reaches Discord at
+the next `rundesk restart <agent>` — which the command says.
+
+### The first hello
+
+Everybody newly allowed to reach an agent gets one short direct message from the agent
+itself, once the channel is up:
+
+> Hello, I'm Ava. I'm here to help with whatever you're working on — your projects, your
+> goals, or anything you need. Just say the word.
+
+It is written by the agent, not by Rundesk, and Rundesk's instructions for it are
+deliberately empty of purpose: a new agent has no projects and no focus yet, and it is told
+in as many words to invent none. What it becomes is decided by the reply.
+
+Everybody on the list when the channel is first added counts as newly allowed, and so does
+anybody added later. Reconnects, restarts and Rundesk updates never repeat it, and a
+channel that already existed before this shipped greets nobody. Somebody taken off and
+added again is a new person to the agent, and is greeted again. If the greeting cannot be
+sent — the brain could not run, Discord refused it — it is logged and tried again the next
+time the agent starts, rather than quietly counted as delivered.
+
 ## Troubleshooting
 
 ### The bot is online but ignores messages

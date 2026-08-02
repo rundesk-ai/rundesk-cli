@@ -30,6 +30,7 @@ rundesk logs [-n <lines>] [--source <source>] <agent>                           
 rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] [--instructions <text>] <agent> <prompt>                                    one turn, streamed to this terminal
 rundesk ask [--provider <provider>] [--model <model>] [--set <key=value>] [--conversation <conversation>] [--fresh] [--read-only] [--steer] [--instructions <text>] <agent> <prompt>                                    with standing instructions, told apart from the prompt
 rundesk channels <agent> add --kind <kind> --allow <user> [--token-stdin] [--activity | --no-activity] <channel> -- <option> [<arg> ...]                                                                                put this agent on a channel
+rundesk channels <agent> allow [--add <user>] [--remove <user>] <channel>                                                                                                                                               who may reach this agent through one channel
 rundesk channels <agent> instructions <channel> <text>                                                                                                                                                                  what this agent is told about where it is
 rundesk channels <agent> remove <channel>                                                                                                                                                                               take this agent off a channel
 rundesk channels <agent> show <channel>                                                                                                                                                                                 one channel, and who may reach this agent through it
@@ -145,6 +146,7 @@ rundesk roles ava show rol-3-vfs3
 
 ```sh
 --activity, --no-activity       show what the agent is doing and saying while it works; off means one message a turn, the answer (default: on)
+--add <user>                    allow this person too — repeatable
 --all                           every agent on this machine
 --allow <user>                  who may reach this agent through it — at least one, always; repeatable
 --ask <prompt>                  what to ask this agent when it is due, in quotes — a turn rather than a program
@@ -168,6 +170,7 @@ rundesk roles ava show rol-3-vfs3
 --provider <provider>           which brain answers for it when a turn does not say
 --purge                         also take every agent's home, log and history
 --read-only                     let this turn look at the machine without changing it
+--remove <user>                 stop allowing this person — repeatable, and never the last one
 --set <key=value>               anything that brain takes, carried to it unread; repeatable
 --since <id>                    only what was said after this one, by the id shown beside it
 --source <how>                  only messages belonging to work admitted this way — one of channel | role | schedule | terminal

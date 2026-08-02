@@ -1203,6 +1203,12 @@ class Reachable:
     program: Path
     env: dict
     answering: object
+    #: The private directory this channel is given for this agent, resolved here for the
+    #: same reason the other three are: a gateway keeps a little about a channel that
+    #: outlives it — who it has already introduced the agent to (R-CH-33) — and reaching
+    #: for it would mean the gateway knowing where an agent's things stand. Defaulted so a
+    #: caller building one by hand for something with no home is still a whole Reachable.
+    home: Path | None = None
 
 
 def reachable(name: str, where: Path | None = None, carry=None) -> list:
@@ -1231,6 +1237,7 @@ def reachable(name: str, where: Path | None = None, carry=None) -> list:
                 allow=record.get("allow"), settings=record.get("settings"),
                 secret=record.get("secret")),
             answering=_answering(name, one, record, where, carry, answers),
+            home=home,
         ))
     return found
 
