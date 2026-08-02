@@ -56,6 +56,16 @@ file with it.
   rather than reporting a success it did not earn, and rather than argparse's usage code, which would
   make a missing command indistinguishable from a typo. An entry graduates out of that table into a real
   command as it lands.
+- `src/rundesk/commands/` — **one command group per module, and the only layer that may know
+  argparse.** A group takes a `Namespace` and hands back an exit code; what it acts on — the
+  gateways, the machine, the agents, the skills — arrives as an argument from `cli.main`, so every
+  verb is exercised with none of them near it. `cli.py` keeps the parser and the dispatch and imports
+  each handler **by name**, which is why the dispatch chain reads the same as it did when all of it
+  lived in one file — and is not an accident of style: a module alias would collide with `main`'s own
+  `agents` and `skills` parameters and with cli.py's existing `backups`, `schedules` and `config`
+  aliases. `__init__.py` holds only what more than one group needs and nothing below wants: how a
+  table is printed, how a change reaches an agent's log, and how a call that may block inside the
+  operating system is given up on.
 - `src/rundesk/agent.py` — the named identity work is run for: its name, its home, and where
   everything of its own stands. Above the gateway and never beside it — it resolves an agent's three
   directories and hands them to a `Gateway`, which is why a gateway goes on knowing nothing of whose work it

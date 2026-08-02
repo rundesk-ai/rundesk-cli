@@ -104,7 +104,8 @@ The executable owns nothing. `rundesk` resolves its own location, puts `src/` on
 | Layer | Owns | May depend on | Must not |
 |---|---|---|---|
 | `rundesk` | finding itself and handing off | `src/rundesk/cli.py` | hold any logic |
-| `src/rundesk/cli.py` | the command surface and dispatch | the modules below | do the work of a command inline |
+| `src/rundesk/cli.py` | the parser, the dispatch, and nothing else | the command groups below | do the work of a command inline |
+| `src/rundesk/commands/*.py` | one command group each: a `Namespace` in, an exit code out | the modules below | hold anything a second group needs |
 | `src/rundesk/*.py` | one concern each, importable and testable alone | the standard library | know how it was invoked |
 | `install.sh` | putting the command on a PATH, and taking it off | nothing in `src/` | contain product behavior |
 
@@ -190,7 +191,8 @@ A list written twice is a list that disagrees with itself.
 ```
 rundesk                     the executable the installer symlinks onto PATH
 CLI.md                      every operation and argument — generated from the parser, never edited
-src/rundesk/                one concern per module; cli.py is the surface — the core
+src/rundesk/                one concern per module; the core
+src/rundesk/commands/       one command group per module; the only layer that may know argparse
 src/providers/              the brains that ship, one program each; run, never imported
 src/channels/               the surfaces that ship, one program each; run, never imported
 src/migrations/             one step forward each, named for the version it brings data up to
