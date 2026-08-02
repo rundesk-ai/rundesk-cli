@@ -43,7 +43,7 @@ from rundesk import ROOT, __version__, data_home
 from rundesk import activity
 from rundesk import dependencies
 from rundesk.gateway_log import (  # noqa: F401 — several are reached as gateway.<name>
-    DEFAULT_NAME, EVERY_LOG, GATEWAY_LOG, LOG_BYTES, LOG_SOURCES, MACHINE_LOG, NotAName,
+    DEFAULT_NAME, EVERY_LOG, GATEWAY_LOG, LOG_SOURCES, MACHINE_LOG, NotAName,
     channel_note, checked, log_path, log_sources, logs_home, note, recorder,
 )
 from rundesk.recovery import (  # noqa: F401 — reached as gateway.<name> by agent.py and the suites

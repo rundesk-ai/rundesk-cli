@@ -39,7 +39,7 @@ ERRORS = ".err"
 RUNS = "runs"
 
 #: How much of one run's stream is worth keeping. The same bound the gateway's own log
-#: has had all along (`gateway.LOG_BYTES`), for the same reason and against a worse case:
+#: has had all along (`gateway_log.LOG_BYTES`), for the same reason and against a worse case:
 #: a brain replays the whole prior thread when it attaches, so on a long conversation the
 #: dominant content of every run is the *previous* runs, written again — measured at 26 MB
 #: per run across six consecutive runs of one conversation, growing with each turn. The end
