@@ -670,6 +670,12 @@ class FakeGateways:
         self.asked_where.append(where)
         return list(self._turning.get(name, []))
 
+    def could_not_be_read(self, working):
+        """The real predicate rather than a second opinion. A stand-in that decided this
+        for itself would agree with a caller here and disagree with the module it stands
+        for, which is how a surface passes its suite and reports a count it cannot know."""
+        return real_gateway.could_not_be_read(working)
+
     @contextlib.contextmanager
     def holding(self, name, where=None):
         """Stand in for the kernel lock around a stopped-only mutation."""
@@ -2023,6 +2029,29 @@ class StandingGatewaysDown(unittest.TestCase):
         self.assertIn("automatically after active work finishes", said)
         self.assertIn(("install_restart_worker", None), machine.did)
         self.assertNotIn(("stop", name), machine.did)
+
+    def test_a_restart_is_refused_while_a_gateways_record_cannot_be_read(self):
+        """R-UPD-23 — a record nobody can read is exactly when stopping is unsafe, and it
+        used to read as "nothing is running". Proves the marker reaches the *decision* and
+        not only the display: what the reader answers has to survive all the way to here,
+        or the fix is a nicer-looking table in front of the same outage."""
+        name = "unreadable-agent"
+        self.addCleanup(restart_request.path(name).unlink, missing_ok=True)
+        self.addCleanup(
+            restart_request.path(name).with_suffix(".lock").unlink, missing_ok=True)
+        machine = FakeMachine(jobs=[name])
+        gateways = FakeGateways(
+            standing=[FakeGateways.Standing(name, running=True, pid=9)],
+            working={name: [real_gateway.CANNOT_BE_READ]},
+        )
+        with mock.patch.dict(os.environ, {"RUNDESK_RUN": ""}, clear=False):
+            code, said = drive(
+                ["restart", name], gateways, machine, agents=FakeAgents(made=[name])
+            )
+        self.assertEqual(0, code)
+        self.assertIn("RESTART QUEUED", said)
+        self.assertNotIn(("stop", name), machine.did,
+                         "it stopped a gateway whose record it could not read")
 
     def test_force_restarts_a_busy_gateway_immediately(self):
         """R-GW-43"""
@@ -4776,16 +4805,35 @@ class MovingEveryAgentForwardWhenAnUpdateLands(unittest.TestCase):
         self.assertIn("beta", went_wrong, "it never said which agent")
         self.assertNotIn("alpha", went_wrong)
 
-    def test_what_went_wrong_is_left_in_that_agents_own_log(self):
+    def test_what_went_wrong_is_left_where_rundesk_logs_will_find_it(self):
         """R-STO-20 — an update that failed at three in the morning is read afterwards
-        rather than watched, and the one place an owner looks is the agent's own log."""
+        rather than watched, and the one place an owner looks is the agent's own log.
+
+        Asked through `log_sources`, which is what `rundesk logs <agent>` reads, rather
+        than through a path this case picks. It used to name `logs/gateway.log` directly
+        and passed for years while that file was one the command could not reach: for
+        every agent not itself called `gateway`, the reader looks for `<agent>.log`. The
+        line was on disk, in the very directory the command reads, and unreachable from
+        it — and this case said so was fine.
+        """
         broken = self.an_agent("beta")
         store.path_for(broken).write_bytes(b"this was never a database")
 
         with contextlib.redirect_stdout(io.StringIO()):
             update_commands._carry_every(self.agents)
+        readable = "".join(
+            path.read_text()
+            for _, path in real_gateway.log_sources("beta", broken / "logs"))
+        self.assertIn("could not be opened at all", readable,
+                      "the reason is written where `rundesk logs beta` cannot reach it")
+        # And in the agent's own file, not only reachable through the fallback that reads
+        # what earlier releases left. Without this the case passes against a writer still
+        # putting every line in `gateway.log` — proved by breaking exactly that and
+        # watching this case stay green.
+        own = real_gateway.log_path("beta", broken / "logs")
         self.assertIn("could not be opened at all",
-                      (broken / "logs" / "gateway.log").read_text())
+                      own.read_text() if own.exists() else "",
+                      "it landed somewhere the agent's own log is not")
 
 
 class MakingAnAgentNeedsABrain(unittest.TestCase):

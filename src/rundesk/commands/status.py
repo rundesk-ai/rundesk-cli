@@ -39,9 +39,18 @@ def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
     running = sum(1 for one in found.values() if one.running)
     working = 0
     turning = 0
+    # Whether any running gateway's record could not be read. What it is doing is left out
+    # of the count rather than guessed at — a marker is not a process — and the total below
+    # says it is short rather than quietly being so.
+    unreadable = False
     for name in names:
         run_home = agents.resolved(name).run
-        working += len(gateways.what_is_working(name, run_home)) if found[name].running else 0
+        if found[name].running:
+            doing = gateways.what_is_working(name, run_home)
+            if gateways.could_not_be_read(doing):
+                unreadable = True
+            else:
+                working += len(doing)
         turning += len(gateways.what_is_turning(name, run_home))
     _as_table(("WHAT", "IS"), [
         ("version", __version__),
@@ -50,7 +59,8 @@ def cmd_status(_args: argparse.Namespace, gateways, machine, agents) -> int:
         ("supervisor", supervisor),
         ("configured agents", str(len(agents.known()))),
         ("running gateways", str(running)),
-        ("live processes", str(working + turning)),
+        ("live processes",
+         f"{working + turning}+?" if unreadable else str(working + turning)),
         ("active turns", str(turning)),
         # Said here because "am I backed up" is a question about the install rather than
         # about any agent, and the answer somebody needs is not how many copies there are

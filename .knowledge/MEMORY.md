@@ -8,6 +8,32 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **"I could not tell" reaches this codebase from a subprocess as readily as from a file, and the
+  rule was only ever applied to files.** `durable.read` tells `MISSING` from `UNREADABLE`,
+  `_anything_left` answers "still there" when it cannot read, and `_end_left_running` keeps a record
+  carrying no fingerprint — the discipline is everywhere for *files*. Then `gateway.started_at`
+  returns **None for a `ps` that timed out or a fork that failed**, and three separate comparisons
+  read that as a definite answer: `started(pgid) != since` left an orphaned process tree running and
+  deleted the only record naming it; `started(pid) == was` swept a live turn's record and let
+  `abandoned` mark the run stopped; and `read_json` collapsing UNREADABLE into empty told an update it
+  was safe to replace the install under a working gateway. All three fired hardest on a loaded machine
+  at boot, which is exactly when `ps` times out *and* when work gets left behind. **Before comparing
+  anything a probe returned, ask what that probe answers when it cannot answer** — and if that value is
+  `None` or `{}`, the comparison must have a third branch. `started_at`'s own docstring says a number
+  is not an identity; it does not say that no answer is not an identity either.
+  **And the same question applies where a probe is *written down*, not only where it is compared.**
+  `activity.began` stores whatever the probe gave it, so one failure at registration puts a permanent
+  `null` in a record that nothing can ever tell from a reused pid — and that row is then kept alive
+  for as long as its pid answers, which can leave an update waiting on a turn that has ended. **That
+  is an accepted limit, and the attempt to close it is the cautionary half of this entry.** Sweeping
+  those rows looked surgical and was not: a row with no fingerprint always has a *live* pid, because
+  a dead one is already taken by the liveness check — so sweeping deletes the record of a
+  possibly-running turn rather than tidying up after a dead one. The "it is safe inside `claim`,
+  where the writer is proven gone" argument fails twice over: a provider orphaned by its gateway
+  outlives it, and `rundesk ask` writes into the same run directory from a standalone process holding
+  no lock and having no gateway at all. **Before deleting a record on the grounds that its writer
+  must be gone, find every writer** — the standalone one is easy to miss because the directory is
+  named for a gateway.
 - **An import that looks dead can be the seam a collaborator arrives through.** `main` passes the
   gateway module itself as `gateways` when nothing is injected, so `gateways.remembered()` in
   `standing.every_name` needs `gateway.remembered` to exist — while every static check says the
@@ -25,21 +51,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   edit and naming neither function. Nothing failed at import and the module still parsed.
   **When you move a definition, take it from `min(decorator_list, lineno)`, not from `def`**,
   and assert the moved text still starts with its decorator.
-- **`test_install` fails three ways at once because of directories git never mentions, and none of
-  them is your change.** A `ui/node_modules` (55 MB) and a built `site/` (47 MB) sitting beside `src/`
-  are tracked by nothing and ignored by nothing, so **`git status` reports the tree clean** while
-  `tests/test_install.py:38` and thirteen more `copytree` calls copy both fourteen times, and
-  `OneInstructionTests._published()` walks straight into them. Measured on one commit: **82 cases,
-  75 s, `OK`** against a lean `git archive` extraction, versus **187 s (past the gate's 180 s
-  ceiling) plus two failures** in the checkout — `_published()` finding the install instruction in
-  `site/dist/index.html`, `site/dist/llms-full.txt` and `site/dist/start/install/index.html` as well
-  as in `install.sh`, and reporting `2 != 1` because the built site is older than the instruction it
-  publishes. All three read exactly like a regression in whatever you just touched. **Before
-  believing `FAIL test_install`, run `du -sh */ | sort -rh | head` and re-run the suite against
-  `git archive HEAD | tar -x -C <scratch>`** — that separates the tree from the code in about a
-  minute. The durable fix is `ui`, `site`, `node_modules` and `dist` in that file's
-  `ignore_patterns`, plus a `.gitignore` line so the tree stops lying; both are changes nobody has
-  been asked for yet.
+- **Only `tests/test_install.py:38` copies the *checkout*; every other `copytree` in that file
+  copies `REPO`.** So whatever that one line lets through is carried by all eighteen of them, and
+  whatever it excludes is excluded everywhere. Untracked `ui/` and `site/` trees (~100 MB) beside
+  `src/` once took the suite from 92 s to past the gate's 180 s ceiling, which reads exactly like a
+  regression in whatever you just touched. Both are excluded there and in `.gitignore` now — the
+  point that outlives them is **where to make the change**: add to line 38, never to the other
+  seventeen. If that suite ever slows again, `du -sh */ | sort -rh | head` names the cause in
+  seconds.
 - **A module-level constant that moves takes every `tests/` rebinding of it with it.** The suite
   turns `START_PATIENCE`/`CYCLE_PATIENCE`/`LOOK_AGAIN_SECONDS` *down* so waiters do not really wait,
   and `came_up`/`gone` read them off module globals at call time on purpose. Moving them from `cli`
@@ -400,9 +419,16 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `gh run watch <id> --exit-status --interval 20`, which GitHub paces for you, or put a
   `sleep 20` in the loop. Check what is left with
   `gh api rate_limit --jq .resources.core` before starting anything that polls.
-- **Backticks inside a double-quoted zsh search pattern are command substitutions.** A pattern
-  such as one containing `` `rundesk-attach:` `` fails before `rg` runs when its Markdown backticks
-  are unmatched. Use single quotes around literal Markdown search patterns.
+- **Backticks inside anything double-quoted in zsh are command substitutions — including a
+  commit message.** A search pattern containing `` `rundesk-attach:` `` fails before `rg` runs
+  when its Markdown backticks are unmatched. Worse in `git commit -m "…"`, where it does not
+  fail: zsh runs the backticked word, prints `command not found` among the git output where it
+  reads like noise, substitutes **empty string**, and the commit lands with the word silently
+  gone from the message. Measured here: a body reading "`changing` is dropped from the durable
+  import" was committed as " is dropped from the durable import", and amending it afterwards is
+  not available in a worktree more than one agent works in. Write a message through a quoted
+  heredoc — `git commit -F - <<'MSG'` — where nothing is interpolated at all, and single-quote
+  literal Markdown search patterns.
 - **`gh release view --json isLatest` fails because this `gh` does not expose that field.**
   The command prints its supported release fields and exits before anything chained after it
   runs. Use `tagName,name,publishedAt,url` and compare `tagName` with
@@ -771,10 +797,6 @@ re-checked since, so treat these as true-when-found rather than as current.*
   switching back in a shared worktree would disrupt whoever is working in it. A red suite can
   be theirs and not yours — prove it in a scratch **copy** of the checkout rather than by
   changing anything in the tree they are working in.
-- **`SUGGESTIONS.md` finding numbers are taken while you are writing.** Numbers are never
-  reused, so two agents filing at once both reach for the next one — 41 and 42 were claimed
-  by another round mid-review. Re-read the file's tail immediately before you number
-  anything, and append rather than editing near somebody else's section.
 - **A stand-in that is more generous than the real thing hides whole features.** Twice
   here: a fake `turn.carry` volunteered what the brain could do, which the real one never
   passed on, so steering was dead behind a green suite; and a fake `Outcome` was missing an

@@ -47,7 +47,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 31 modules)
+## Backend / Services (src/rundesk/ — 35 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -105,6 +105,21 @@ file with it.
   about one run: **who may be answered**, checked against the record the owner wrote rather than trusted to
   an adapter, and **what state a turn is in**. Writes nothing down — the run's own account already records
   it, and a channel that kept a second copy would become the only place something existed.
+- `src/rundesk/query.py` — the read-only answers a channel may ask for, composed for a surface to
+  show: status, version, agents, skills, schedules, roles, help, and nothing that changes anything
+  (R-CAD-17). Apart from `agent.py` because composing what somebody reads in a chat room is not what
+  that module is for — its subject is a named identity, and none of `gateway`, `schedule`, `store`
+  or `role_run` is needed to resolve one. It imports `agent`, so `agent` imports **it** lazily, from
+  inside `_answering` where the `querying=` seam is built; a module-level import either way closes a
+  cycle. Written for a narrow surface throughout: what is over gives way to what is happening.
+- `src/rundesk/attachment.py` — what an answer declares for delivery, and whether it may be sent.
+  A brain writes an absolute local Markdown link to mean "send this" (R-CH-31); this reads those out
+  of what it wrote and decides, separately, whether one may leave the machine — that it stands where
+  the agent works, that no component of the path is a link out of there, and that it is small enough
+  (R-CH-18). Apart from `answering.py` because none of it is about who may be answered or what state
+  a turn is in, which is that module's whole subject: this is a **security boundary** — containment,
+  symlink refusal through held directory descriptors, and a size ceiling — and it is worth reading on
+  its own. Holds no state and knows nothing of conversations, agents or turns.
 - `src/rundesk/transcript.py` — the two files beside a run, and nothing else: what the brain itself
   printed (`logs/runs/<run>.jsonl`, whose path an adapter is handed, because you cannot give a shell script
   a database handle) and what it said went wrong (`.err`, an operating-system pipe). Both may be destroyed
@@ -114,7 +129,21 @@ file with it.
   resolved, run the brain, write down what it said, keep where the conversation got to, write down how it
   ended. Nothing reaches a brain that the account does not show.
 - `src/rundesk/activity.py` — atomic, runtime-only provider-turn identities. Keeps only source,
-  conversation, PID, and start time so status and update safety can see work without seeing prompts.
+  conversation, PID, start time, and **the machine's own answer for when that process began**, so
+  status and update safety can see work without seeing prompts. That last one is what makes a PID
+  an identity: the machine reissues numbers, and reissues them from low ones first after a reboot,
+  which is exactly when a record written before that reboot is read. Missing it keeps a row and
+  mismatching it drops one, the same asymmetry `gateway._end_left_running` holds — and a probe that
+  *could not answer* is neither, because `ps` reports nothing for a timeout or a failed fork.
+  **A row this install could not fingerprint at all is kept for as long as its pid answers** — an
+  accepted limit, not an oversight: such rows always have a live pid (a dead one is already taken by
+  the liveness check), so dropping them deletes the record of a possibly-running turn rather than
+  tidying up after a dead one. Sweeping them was tried and reverted; a provider orphaned by its
+  gateway, and `rundesk ask` — which writes here from a standalone process holding no lock and having
+  no gateway at all — both defeat any "the writer is proven gone" argument. The cost is that an
+  update may wait on a turn that has ended. **`sweep()` is the only thing
+  that removes what a killed turn left behind** — `ended` runs in the turn's own `finally`, which a
+  SIGKILL never reaches — and a gateway calls it as it claims the name.
 - `src/rundesk/skill.py` — the library of skills on this machine, and what makes one. Everything
   stands in `data/skills/`: required built-ins copied there by the install, catalog links, and an
   owner's own packages beside them. **A grant is a link in the agent's own `skills/`,
@@ -225,10 +254,25 @@ file with it.
   half of one, and `changing()` holding the read, the decision and the write under one `flock`. **What
   cannot be read is not empty** — a missing file and an unreadable one are different answers, and
   writing an empty value back over the second is how state is lost. Imports nothing of rundesk's.
+- `src/rundesk/welcome.py` — who a channel has already introduced this agent to, and who is still
+  owed one (R-CH-33). One file in the channel's own home, and four questions asked of it. Apart from
+  the gateway because none of it is a gateway's: the record belongs to a channel, and the command
+  that adds or removes one writes here while nothing is running — which is why `commands/channels.py`
+  was reaching through the gateway collaborator for it. **A mapping and not a list is the whole
+  feature**: `changing` hands back the empty value for a file nobody wrote, so an empty list would
+  make "this channel is new, greet everybody" and "this channel has greeted everybody" the same
+  answer. A missing key is the third: a channel from before any of this, whose people must never be
+  greeted. The gateway keeps the loop that walks its live surfaces and asks for the turn — that is
+  gateway work and stays there; what is written down is here.
 - `src/rundesk/gateway_log.py` — what a gateway is called, and the account it writes under that name.
   One concern rather than two: a name becomes the name of its lock, its record **and** its log, so what
   a name may be and where the writing lands are the same decision. History is kept apart from run
-  state, which is cleared when a gateway goes (R-GW-18).
+  state, which is cleared when a gateway goes (R-GW-18). **Everything written about an agent goes
+  through `note()`** — a migration and the store included, which used to spell a filename of their
+  own and so put every line about an agent's records where `rundesk logs <agent>` structurally
+  could not reach it, and where nothing rotated it (R-STO-20). It also reads back what those
+  releases left behind, from an agent's own log directory and never from the shared one, where
+  that same name is the default gateway's own current account.
 - `src/rundesk/recovery.py` — what a gateway never got to finish, left for whoever claims the name
   next. The only record that outlives the process, so it is kept beside the log rather than inside the
   run state it describes. The `Gateway` methods that *act* on it stay in that class: they are the

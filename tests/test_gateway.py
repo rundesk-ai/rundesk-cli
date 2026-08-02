@@ -1049,6 +1049,44 @@ class WhoseProcessIsItAnyway(WithARunDirectory):
         self.assertIsNone(stranger.returncode)
         self.assertIn("cannot prove it is ours", gateway.log_path("orphaned", self.logs).read_text())
 
+    def test_a_machine_that_will_not_say_when_a_group_started_keeps_the_record(self):
+        """R-GW-16, R-GW-26 — asked and not told is not "it is a stranger". `started_at`
+        answers None for a `ps` that timed out or a fork that failed, and a loaded machine
+        at boot is both when that happens and when work gets left behind.
+
+        Read as a mismatch it took the branch below: the group left running *and* the only
+        record naming it dropped, so nothing could ever find it again — the loss
+        `_anything_left` refuses one function up. Kept, exactly as a record carrying no
+        fingerprint at all is kept."""
+        asked = []
+        became = gateway._end_left_running(
+            "a-conversation", {"pgid": 4242, "since": "when ours started"},
+            self.made("orphaned").log,
+            present=lambda pgid: True,
+            started=lambda pgid: None,          # the machine would not answer
+            ask=lambda pgid, sig: asked.append((pgid, sig)) or True,
+            gone_within=lambda pgid, patience: False,
+        )
+        self.assertTrue(became.keep, "it dropped the only record naming live work")
+        self.assertFalse(became.swept)
+        self.assertEqual([], asked, "it signalled a group it could not prove was ours")
+
+    def test_a_group_the_machine_says_began_elsewhere_is_not_kept(self):
+        """R-GW-16 — the other half, so the fix above cannot swallow it: a real, different
+        answer still proves the number came round again, and naming a stranger in our
+        record is how the next start comes to aim at it."""
+        asked = []
+        became = gateway._end_left_running(
+            "a-conversation", {"pgid": 4242, "since": "when ours started"},
+            self.made("orphaned").log,
+            present=lambda pgid: True,
+            started=lambda pgid: "when a stranger started",
+            ask=lambda pgid, sig: asked.append((pgid, sig)) or True,
+            gone_within=lambda pgid, patience: False,
+        )
+        self.assertFalse(became.keep)
+        self.assertEqual([], asked, "it signalled a stranger's process group")
+
     async def test_a_record_that_does_not_say_what_was_running_is_left_alone(self):
         """R-GW-19 — a record whose entries are not numbers at all says nothing about
         what to end, and guessing is how the wrong thing gets ended."""
@@ -2778,6 +2816,41 @@ class WhatCannotBeReadIsNotEmpty(WithARunDirectory):
         self.assertEqual([], swept, "it claimed to have swept a record it could not read")
         self.assertTrue(record.exists(), "it deleted the only record naming abandoned work")
 
+    #: A record that is there and holds nothing anything can parse — a truncated write, or a
+    #: volume that stalled mid-flush. Not a missing record, which is a gateway that has
+    #: simply not written one yet.
+    def garbled_record_for(self, name: str = "gateway") -> Path:
+        target = self.where / f"{name}.json"
+        target.write_text('{"working": {"a-turn": {"pgid": 4242,,}}}')
+        return target
+
+    def test_a_record_that_cannot_be_read_is_not_reported_as_a_gateway_doing_nothing(self):
+        """R-UPD-23 — five callers decide on this answer: a queued restart and an
+        interactive one stop the gateway, an update replaces this install, and a restore
+        swaps the owner's whole data tree. `read_json` cannot tell a record nobody wrote
+        from one nobody could read, so an unreadable one answered "idle" and every one of
+        those went ahead while work was genuinely in flight."""
+        self.garbled_record_for()
+        doing = gateway.what_is_working("gateway", self.where)
+        self.assertNotEqual({}, doing, "an unreadable record was reported as an idle gateway")
+        self.assertTrue(gateway.could_not_be_read(doing),
+                        "it answered something, but not that it could not tell")
+
+    def test_a_record_that_cannot_be_read_is_not_reported_as_nothing_running(self):
+        """The same answer through the other reader, because `_in_flight` reaches both."""
+        self.garbled_record_for()
+        self.assertTrue(
+            gateway.could_not_be_read(gateway.what_is_running("gateway", self.where)))
+
+    def test_a_gateway_that_has_written_no_record_is_still_a_gateway_doing_nothing(self):
+        """The other half, and the one that keeps the fix from swallowing the product: a
+        record nobody has written yet is an idle gateway, not an unreadable one. Answering
+        "I could not tell" here would refuse every update on a machine that is perfectly
+        healthy — the same outage as the defect, arrived at from the other side."""
+        self.assertEqual({}, gateway.what_is_working("never-wrote-one", self.where))
+        self.assertFalse(gateway.could_not_be_read(
+            gateway.what_is_running("never-wrote-one", self.where)))
+
 
 class WhatAGatewaySaysAndWhereItLands(WithARunDirectory):
     """R-GW-35, R-GW-36 — one bounded account of a gateway, and all of it readable.
@@ -3974,6 +4047,24 @@ class ARunTheGatewayNeverSettled(WithARunDirectory):
         self.made().claim()
         self.assertIsNone(self._row(run)["ended_at"],
                           "a turn that is genuinely running was written off")
+
+    def test_what_a_crashed_turn_left_behind_is_gone_once_a_gateway_claims_the_name(self):
+        """R-GW-23 — the record a turn publishes for itself is removed by exactly one
+        thing, the turn's own `finally`, and a gateway killed outright never reaches it.
+        Nothing swept them afterwards: `release` takes the record file and `forget` takes
+        the record, the lock and the log. So one file per crashed turn stood for the life
+        of the install, cost a liveness check on every look at what an agent is doing, and
+        kept `agent.forget` from ever removing the agent's own `run/` directory."""
+        run = self._left_running()
+        gone = subprocess.Popen([sys.executable, "-c", ""])
+        gone.wait()
+        self._turning(run, pid=gone.pid)
+        self.assertEqual(1, len(list((self.where / "turns").glob("*.json"))))
+        self.made().claim()
+        self.assertEqual([], list((self.where / "turns").glob("*.json")),
+                         "what a crashed turn left behind is still standing")
+        self.assertIsNotNone(self._row(run)["ended_at"],
+                             "and the run it named was left marked as running")
 
     def test_settling_one_stranded_run_does_not_touch_a_run_that_already_ended(self):
         """A settled run keeps what it was settled as — including what it cost."""

@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import migration, store  # noqa: E402
+from rundesk import gateway_log, migration, store  # noqa: E402
 
 AT = "2026-07-26T09:00:00Z"
 LATER = "2026-07-26T10:00:00Z"
@@ -266,8 +266,9 @@ class WhenTheRecordsAreNotADatabaseAtAll(WithAnAgentsOwnRecords):
         self.garbled()
         with self.assertRaises(store.Unreadable):
             store.Store(self.at).understood()
-        self.assertIn("could not be read at all",
-                      (self.at.parent / "logs" / "gateway.log").read_text())
+        self.assertIn(
+            "could not be read at all",
+            gateway_log.log_path(self.at.parent.name, self.at.parent / "logs").read_text())
 
 
 class WhenTheShapeOnDiskIsNotThisOne(WithAnAgentsOwnRecords):
@@ -1478,7 +1479,9 @@ class WhatTheAgentsOwnLogSays(WithAnAgentsOwnRecords):
     WHEN = "2026-07-26 03:00:00"
 
     def told(self) -> str:
-        at = self.where / migration.LOG
+        # Through the reader `rundesk logs` uses, not a path spelled here: a line written
+        # where nothing reads it has to fail this rather than pass it (R-STO-20).
+        at = gateway_log.log_path(self.where.name, self.where / "logs")
         return at.read_text() if at.exists() else ""
 
     def test_records_this_rundesk_will_not_read_say_why_in_the_log(self):

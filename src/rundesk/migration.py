@@ -23,13 +23,17 @@ running it again is safe.
 from __future__ import annotations
 
 import contextlib
-import datetime
 import importlib.util
 import os
 import re
 import shutil
 import sqlite3
 from pathlib import Path
+
+# The one writer of a gateway's log, so a line about an agent's records reads like every
+# other line in that account and lands where `rundesk logs` already looks. Safe to name at
+# the top: it reaches only `data_home`, and nothing it touches reaches back here.
+from rundesk import gateway_log
 
 # `001.py`, `002.py`, `010.py` — the number is the version, and sorting the numbers is the
 # whole of the ordering. Nothing else is in the name, so there is one obvious way to add a step
@@ -134,15 +138,6 @@ def between(at_version: int, want: int, where=None) -> list:
     return [step for step in found(where) if at_version < step.version <= want]
 
 
-# Written the way a gateway writes its own line, so an owner reading one log reads one story.
-WRITTEN_AS = "%(at)s %(level)-7s %(said)s"
-LOG = "logs/gateway.log"
-
-
-def _now() -> str:
-    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
 def logged(home, said: str, level: str = "INFO", clock=None) -> None:
     """Leave a line in the agent's own log, where somebody will actually look for it.
 
@@ -150,16 +145,26 @@ def logged(home, said: str, level: str = "INFO", clock=None) -> None:
     that reported only to whoever ran it would leave nothing behind for the person who finds
     the agent down — and this is the one moment where what happened to an agent's records is
     not yet in those records.
+
+    **Into the file named for the agent** (R-STO-20). This wrote to a `logs/gateway.log`
+    beside it for as long as there have been agents, and `rundesk logs <agent>` reads
+    `<agent>.log` — so for every agent not itself called `gateway`, the one explanation of
+    why its records could not be read sat on disk in the very directory that command reads
+    and could not be reached from it. Nothing rotated it either.
+
+    The name comes off the directory, which is where an agent's own name already is. How a
+    line reads, where it lands and when it is rotated are the gateway's writer's to decide,
+    asked of it rather than spelled a second time here — two spellings of one line is how
+    the two come to differ with nothing to catch it.
     """
-    at = Path(home) / LOG
-    said = WRITTEN_AS % {"at": (clock or _now)(), "level": level, "said": said}
+    home = Path(home)
     try:
-        at.parent.mkdir(parents=True, exist_ok=True)
-        with open(at, "a", encoding="utf-8") as writing:
-            writing.write(said + "\n")
-    except OSError:
-        # A log that cannot be written must not be the thing that stops an update. What is
-        # happening is still reported to the caller, which is what decides.
+        gateway_log.note(home.name, said, logs=home / "logs", level=level, clock=clock)
+    except gateway_log.NotAName:
+        # A directory standing where agents are kept whose name could never be a gateway's,
+        # so there is no file to write this into. A log that cannot be written must not be
+        # the thing that stops an update; what is happening is still reported to the caller,
+        # which is what decides.
         pass
 
 

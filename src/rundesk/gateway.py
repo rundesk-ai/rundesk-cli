@@ -50,7 +50,11 @@ from rundesk.recovery import (  # noqa: F401 — reached as gateway.<name> by ag
     interrupted_path, note_interrupted, remembered, resolve_interruption,
     what_was_interrupted,
 )
-from rundesk.durable import UNREADABLE, Unreadable, changing, read, read_json, write_whole
+from rundesk.welcome import (  # noqa: F401 — reached as gateway.<name> by commands and the suites
+    WELCOMED, forget_welcomed, owed_a_welcome, remember_no_one_welcomed, remember_welcomed,
+    welcomed_path,
+)
+from rundesk.durable import UNREADABLE, Unreadable, read, read_json, write_whole
 from rundesk import process
 from rundesk import restart_request
 from rundesk import schedule
@@ -249,119 +253,6 @@ def started_at(pid: int) -> str | None:
     return said.stdout.strip() or None
 
 
-#: Where a channel keeps who it has already introduced this agent to (R-CH-33). Beside the
-#: credential, in the private home that channel is given for this agent and for no other,
-#: because that directory is what a channel *is* on disk: it outlives every restart and
-#: every update, it goes away when the channel does, and no other channel can reach it.
-#:
-#: A dotfile, so an adapter listing its own home is not handed a file it did not write.
-WELCOMED = ".welcomed.json"
-
-#: What a channel that has never been looked at holds. **A mapping and not a list**, and
-#: that is the whole of why anybody is ever welcomed: `changing` hands back exactly this
-#: for a file nobody has written, so an empty list as the empty value would be
-#: indistinguishable from a channel that has welcomed nobody yet — and those two mean
-#: opposite things. A missing key is a channel from before any of this existed.
-_NEVER_LOOKED: dict = {}
-
-#: The key inside it. Sorted, and only ever user ids this channel allows.
-_WELCOMED = "welcomed"
-
-
-def welcomed_path(home: Path) -> Path:
-    """Where this channel's record of who it has introduced the agent to stands."""
-    return Path(home) / WELCOMED
-
-
-def remember_no_one_welcomed(home: Path) -> None:
-    """Write down that this channel is new and has introduced the agent to nobody.
-
-    Written when the channel is *added*, and that is what tells a new channel from one an
-    older release wrote. Without it, the first gateway to run this code would read no file
-    at all for both and have no way to tell "everybody here is new" from "everybody here
-    has been talking to this agent for months" — and the second of those must never be
-    greeted (R-CH-33).
-    """
-    with changing(welcomed_path(home), dict(_NEVER_LOOKED), "who a channel has welcomed",
-                  durable=True) as kept:
-        kept[_WELCOMED] = []
-
-
-def forget_welcomed(home: Path, users) -> None:
-    """Drop these people from what this channel has written down.
-
-    Called where somebody is taken off a channel's allowed list, so that adding them again
-    later is a new introduction (R-CH-33). The gateway prunes the same names the next time
-    it looks — this is for the case where nothing is running, which is exactly when an
-    owner rearranges who may reach an agent.
-
-    A channel nobody has written a record for is left alone: seeding one here would claim
-    an older release's channel is new.
-    """
-    dropping = {str(one) for one in users}
-    if not dropping:
-        return
-    with changing(welcomed_path(home), dict(_NEVER_LOOKED), "who a channel has welcomed",
-                  durable=True) as kept:
-        known = kept.get(_WELCOMED)
-        if not isinstance(known, list):
-            return
-        kept[_WELCOMED] = sorted(one for one in known if one not in dropping)
-
-
-def owed_a_welcome(home: Path, allow) -> list[str]:
-    """Who this channel allows and has never introduced the agent to (R-CH-33).
-
-    Three answers out of one file, and the difference between them is the whole feature:
-
-    - **Nothing written** — a channel an older release added. What it allows now is written
-      in and nobody is owed, so updating rundesk never greets people who have been using
-      the agent for months.
-    - **Written and empty** — a channel just added. Everybody it allows is owed one.
-    - **Written with names in it** — anybody it allows who is not among them is owed one,
-      and anybody among them it no longer allows is dropped in the same hold. That is what
-      makes taking somebody off and putting them back a new introduction rather than
-      silence.
-
-    Read, decided and written under one hold, because the command that changes the allowed
-    list writes here too and two writers that each read the same file lose one change.
-    """
-    allowed = [str(one) for one in (allow or [])]
-    owed: list[str] = []
-    with changing(welcomed_path(home), dict(_NEVER_LOOKED),
-                  "who a channel has welcomed") as kept:
-        known = kept.get(_WELCOMED)
-        if not isinstance(known, list):
-            kept[_WELCOMED] = sorted(set(allowed))
-            return []
-        keeping = sorted({str(one) for one in known} & set(allowed))
-        if keeping != list(known):
-            kept[_WELCOMED] = keeping
-        owed = [one for one in allowed if one not in keeping]
-    return owed
-
-
-def remember_welcomed(home: Path, user: str) -> None:
-    """Write down that this channel has now introduced the agent to somebody.
-
-    **Only once it has actually happened.** A welcome written down before it was delivered
-    is a person who is never greeted at all, and this is the one message that cannot be
-    asked for again by whoever missed it.
-
-    A channel nothing has been written for is left alone, the way forgetting leaves it:
-    starting a record here would turn a channel an older release wrote into a new one,
-    and every other person on it would then be greeted as though they had just arrived.
-    Anything actually being greeted has been looked at first, and looking is what writes
-    the record.
-    """
-    with changing(welcomed_path(home), dict(_NEVER_LOOKED), "who a channel has welcomed",
-                  durable=True) as kept:
-        known = kept.get(_WELCOMED)
-        if not isinstance(known, list):
-            return
-        kept[_WELCOMED] = sorted({str(one) for one in known} | {str(user)})
-
-
 def _ask_group(pgid: int, sig: int) -> bool:
     """Ask this process group to go, and say whether the asking got through.
 
@@ -424,7 +315,19 @@ def _end_left_running(name: str, was, log: logging.Logger, present=None, started
         # Still there, and still unfinished. Kept for the same reason as one that would not
         # go: the record we are about to write replaces the only thing naming it.
         return Left(False, False, "the record could not prove it was ours to end", True)
-    if started(pgid) != since:
+    now = started(pgid)
+    if now is None:
+        # **Asked, and not told — which is not "it is a stranger".** `started_at` answers
+        # None for a `ps` that timed out or a fork that failed, and a loaded machine at
+        # boot is both when that happens and when work gets left behind. Read as a
+        # mismatch it took the branch below: the group was left running *and* the record
+        # naming it dropped, so nothing could ever find it again — the very loss
+        # `_anything_left` refuses one function up. Kept for the same reason a record with
+        # no fingerprint at all is kept.
+        log.warning("left '%s' (group %s) alone: the machine would not say when it started",
+                    name, pgid)
+        return Left(False, False, "the machine would not say whether it is ours", True)
+    if now != since:
         # The number now belongs to something that is not ours. Leaving a stray program
         # running is bad; a tree-kill aimed at a stranger because a number came round again
         # is very much worse, and has happened to others. Not kept, either — naming a
@@ -744,6 +647,26 @@ def standing(name: str = DEFAULT_NAME, where: Path | None = None) -> Standing:
     )
 
 
+#: What the two readers below answer with when the record is there and could not be read.
+#: **Named rather than left empty**, because `read_json` cannot tell "no record" from "a
+#: record nobody could read" and five callers *decide* on that answer: a queued restart and
+#: an interactive one stop the gateway, an update replaces this install, and a restore swaps
+#: the owner's whole data tree (R-UPD-23). Every one of them treats a non-empty answer as
+#: "refuse", so saying this is what makes an unreadable record safe. `_anything_left` below
+#: has taken the same position since work could be interrupted at all.
+CANNOT_BE_READ = "(the record could not be read)"
+
+
+def could_not_be_read(working) -> bool:
+    """Is this answer a record nobody could read, rather than a gateway doing nothing?
+
+    Asked where a count is about to be printed. A caller that renders `len()` would
+    otherwise report one process that may not exist, which is the same untruth the empty
+    answer was — just the other way up.
+    """
+    return CANNOT_BE_READ in (working or ())
+
+
 def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list[str]:
     """What this gateway says it has in flight, by the name each was started under.
 
@@ -752,17 +675,29 @@ def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list
     """
     # Built first: a name that is not usable is a mistake to report, and `NotAName` is a
     # kind of ValueError, so a reader that swallowed one would swallow the other.
-    record = _record_path(name, where or home())
-    said = read_json(record, None)
+    where = where or home()
+    record = _record_path(name, where)
+    state, said = read(record)
+    # Resolved once, above: this used to be handed the caller's unresolved `where`, and
+    # `activity.active(None)` answers `[]` — so asking the ordinary way reported no turns
+    # however many were running.
+    turns = [f"turn:{row['run']}" for row in activity.active(where)]
+    if state == UNREADABLE:
+        return [CANNOT_BE_READ, *turns]
     working = said.get("working") if isinstance(said, dict) else None
     programs = sorted(working) if isinstance(working, dict) else []
-    turns = [f"turn:{row['run']}" for row in activity.active(where)]
     return programs + turns
 
 
 def what_is_working(name: str = DEFAULT_NAME, where: Path | None = None) -> dict:
-    """Safe process details for persistent work directly owned by a gateway."""
-    said = read_json(_record_path(name, where or home()), None)
+    """Safe process details for persistent work directly owned by a gateway.
+
+    A record that cannot be read says so rather than answering with nothing: whether it is
+    safe to stop this gateway is decided on this, and "I could not tell" is not "idle".
+    """
+    state, said = read(_record_path(name, where or home()))
+    if state == UNREADABLE:
+        return {CANNOT_BE_READ: {"pgid": None, "since": None}}
     working = said.get("working") if isinstance(said, dict) else None
     return dict(working) if isinstance(working, dict) else {}
 
@@ -1279,7 +1214,27 @@ class Gateway:
         what it handed over, and this gateway has begun nothing of its own. What *is* still
         turning says so for itself in the activity records, and is left exactly alone —
         settling live work would be the same lie the other way up.
+
+        What those records leave behind is taken away here too, and this is the only place
+        it can be: nothing else in the product removes one.
         """
+        # Swept before anything is read, and here rather than anywhere else — the name's
+        # lock is held, every stray the last gateway left has already been dealt with, and
+        # this gateway has started nothing of its own. Anything still standing under a pid
+        # that is gone, or under one the machine has since handed to somebody else, is
+        # leftover by definition. Above the `records` guard because this is files rather
+        # than rows: a name that is not an agent still owns the directory.
+        try:
+            swept = activity.sweep(self.where)
+        except Exception as why:  # noqa: BLE001 — a filesystem boundary, and see below
+            # The same posture as the records boundary below: a gateway that would not
+            # come up because it could not tidy is a worse outage than what it could not
+            # tidy.
+            self.log.warning("could not sweep what crashed turns left behind: %s", why)
+        else:
+            if swept:
+                self.log.info(
+                    "swept %s turn record(s) left behind by work that is gone", len(swept))
         if self.records is None:
             return
         live = [row["run"] for row in activity.active(self.where)]

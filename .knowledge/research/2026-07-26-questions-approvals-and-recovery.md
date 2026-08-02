@@ -310,7 +310,8 @@ user, conversation and expiry is exactly right there, and ceremony on the questi
 **One defect and one boundary follow from this and are recorded rather than fixed here** — the
 shipped codex adapter drops server-initiated requests, which is a hung turn the day an approval
 policy is set; and Claude's memory crossing conversations in one agent's directory is a real
-isolation limit. Both are in [`../../SUGGESTIONS.md`](../../SUGGESTIONS.md).
+isolation limit. Both were recorded in the review ledger of the day, `SUGGESTIONS.md`, which has
+since been retired.
 
 This informs Phase 14 and is held to nothing: it is input to a draft, never a requirement. The
 component it would feed is a `provider-` one that is not declared yet, which is the owner's call.
