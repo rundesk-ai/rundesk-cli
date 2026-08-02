@@ -22,6 +22,9 @@ Load light; pull depth only when the task needs it.
    `python3 .knowledge/scripts/doc-lint .knowledge` before finishing; scratch -> `.knowledge/tmp/`.
 4. Read every file before editing it; search before writing new logic — reuse, extend, refactor.
 5. When the user raises a concern, investigate before contradicting — evidence, not a hunch.
+6. **Cutting a release** — any version bump, tag, or publish — starts at
+   `.knowledge/guides/cutting-a-release.md`. It answers what the `publishing-github-releases`
+   skill asks of this repository; an agent that does not hold that skill still follows the guide.
 
 ## Hard gates — require explicit approval
 
