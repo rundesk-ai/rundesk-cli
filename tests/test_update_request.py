@@ -10,7 +10,8 @@ from unittest import mock
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import cli, config, restart_request, update_request, updater  # noqa: E402
+from rundesk import cli, config, restart_request, update_request  # noqa: E402
+from rundesk import update_worker, updater  # noqa: E402
 
 
 class DurableRequests(unittest.TestCase):
@@ -124,12 +125,12 @@ class DurableRequests(unittest.TestCase):
             mock.Mock(returncode=0, stdout="updated safely\n", stderr=""),
             mock.Mock(returncode=0, stdout="rundesk 0.9.7\n", stderr=""),
         ]
-        with mock.patch.object(cli, "_in_flight", side_effect=[["ava/turn:one"], []]), \
-                mock.patch.object(cli.time, "sleep"), \
-                mock.patch.object(cli, "_recover_update_gateways", return_value=[]), \
-                mock.patch.object(cli, "_install_automatic_updates", return_value=0), \
-                mock.patch.object(cli.subprocess, "run", side_effect=completed) as ran:
-            code = cli._run_update_worker(mock.Mock(), mock.Mock(), mock.Mock())
+        with mock.patch.object(update_worker, "_in_flight", side_effect=[["ava/turn:one"], []]), \
+                mock.patch.object(update_worker.time, "sleep"), \
+                mock.patch.object(update_worker, "_recover_update_gateways", return_value=[]), \
+                mock.patch.object(update_worker, "_install_automatic_updates", return_value=0), \
+                mock.patch.object(update_worker.subprocess, "run", side_effect=completed) as ran:
+            code = update_worker._run_update_worker(mock.Mock(), mock.Mock(), mock.Mock())
         self.assertEqual(0, code)
         self.assertEqual(2, ran.call_count)
         final = update_request.read()
@@ -160,12 +161,12 @@ class DurableRequests(unittest.TestCase):
             mock.Mock(returncode=0, stdout="rundesk 0.9.9\n", stderr=""),
         ]
         agents = Agents()
-        with mock.patch.object(cli, "_in_flight", side_effect=lambda *_: []), \
-                mock.patch.object(cli.time, "sleep") as slept, \
-                mock.patch.object(cli, "_recover_update_gateways", return_value=[]), \
-                mock.patch.object(cli, "_install_automatic_updates", return_value=0), \
-                mock.patch.object(cli.subprocess, "run", side_effect=completed):
-            self.assertEqual(0, cli._run_update_worker(
+        with mock.patch.object(update_worker, "_in_flight", side_effect=lambda *_: []), \
+                mock.patch.object(update_worker.time, "sleep") as slept, \
+                mock.patch.object(update_worker, "_recover_update_gateways", return_value=[]), \
+                mock.patch.object(update_worker, "_install_automatic_updates", return_value=0), \
+                mock.patch.object(update_worker.subprocess, "run", side_effect=completed):
+            self.assertEqual(0, update_worker._run_update_worker(
                 mock.Mock(), mock.Mock(), agents
             ))
         slept.assert_called_once()
@@ -182,27 +183,27 @@ class DurableRequests(unittest.TestCase):
             mock.Mock(returncode=0, stdout="updated safely\n", stderr=""),
             mock.Mock(returncode=0, stdout="rundesk 0.9.7\n", stderr=""),
         ]
-        with mock.patch.object(cli, "_in_flight", return_value=[]), \
-                mock.patch.object(cli, "_recover_update_gateways", return_value=[]), \
-                mock.patch.object(cli, "_install_automatic_updates", return_value=0), \
-                mock.patch.object(cli.subprocess, "run", side_effect=completed) as ran:
-            self.assertEqual(0, cli._run_update_worker(
+        with mock.patch.object(update_worker, "_in_flight", return_value=[]), \
+                mock.patch.object(update_worker, "_recover_update_gateways", return_value=[]), \
+                mock.patch.object(update_worker, "_install_automatic_updates", return_value=0), \
+                mock.patch.object(update_worker.subprocess, "run", side_effect=completed) as ran:
+            self.assertEqual(0, update_worker._run_update_worker(
                 mock.Mock(), mock.Mock(), mock.Mock()
             ))
         update = ran.call_args_list[1]
-        self.assertEqual(str(cli.REPO_ROOT / "rundesk"), update.args[0][0])
+        self.assertEqual(str(update_worker.ROOT / "rundesk"), update.args[0][0])
         self.assertEqual(str(target), update.kwargs["env"]["RUNDESK_UPDATE_ROOT"])
         self.assertEqual("0.9.6", update.kwargs["env"]["RUNDESK_UPDATE_VERSION"])
 
     def test_an_interrupted_update_stays_active_for_the_supervisor_to_retry(self):
         """R-UPD-44"""
         update_request.queue({})
-        with mock.patch.object(cli, "_in_flight", return_value=[]), \
+        with mock.patch.object(update_worker, "_in_flight", return_value=[]), \
                 mock.patch.object(
-                    cli.subprocess, "run",
-                    side_effect=cli.subprocess.TimeoutExpired(["rundesk", "update"], 1),
+                    update_worker.subprocess, "run",
+                    side_effect=update_worker.subprocess.TimeoutExpired(["rundesk", "update"], 1),
                 ):
-            self.assertEqual(1, cli._run_update_worker(
+            self.assertEqual(1, update_worker._run_update_worker(
                 mock.Mock(), mock.Mock(), mock.Mock()
             ))
         self.assertEqual("running", update_request.read()["state"])
@@ -243,7 +244,7 @@ class DurableRequests(unittest.TestCase):
             def install_update_worker(self):
                 return mock.Mock(ok=True, said="")
 
-        code = cli._queue_update(Machine(), {
+        code = update_worker._queue_update(Machine(), {
             "agent": "ava", "run": "one", "channel": "discord",
             "conversation": "room-7",
         })
@@ -278,8 +279,8 @@ class DurableRequests(unittest.TestCase):
 
         machine = Machine()
         origin = {"agent": "ava", "run": "one"}
-        self.assertEqual(0, cli._queue_update(machine, origin))
-        self.assertEqual(0, cli._queue_update(machine, origin))
+        self.assertEqual(0, update_worker._queue_update(machine, origin))
+        self.assertEqual(0, update_worker._queue_update(machine, origin))
         self.assertEqual(1, machine.installed)
         self.assertEqual(1, machine.kicked)
 
@@ -307,7 +308,7 @@ class DurableRequests(unittest.TestCase):
         machine = Machine()
         update_request.queue({"agent": "ava", "run": "one"})
         update_request.claim()
-        self.assertEqual(0, cli._queue_update(machine, {"agent": "ava", "run": "two"}))
+        self.assertEqual(0, update_worker._queue_update(machine, {"agent": "ava", "run": "two"}))
         self.assertEqual(1, machine.installed)
         self.assertEqual("running", update_request.read()["state"])
 
@@ -334,7 +335,7 @@ class DurableRequests(unittest.TestCase):
 
         machine = Machine()
         update_request.queue({"agent": "ava", "run": "one"})
-        self.assertEqual(0, cli._queue_update(
+        self.assertEqual(0, update_worker._queue_update(
             machine, {"agent": "ava", "run": "two"}
         ))
         self.assertEqual(1, machine.kicked)
@@ -354,7 +355,7 @@ class DurableRequests(unittest.TestCase):
                 return mock.Mock(ok=True, said="")
 
         machine = Machine()
-        self.assertEqual(0, cli._queue_automatic_update(machine))
+        self.assertEqual(0, update_worker._queue_automatic_update(machine))
         self.assertTrue(machine.installed)
         self.assertEqual("pending", update_request.read()["state"])
         self.assertEqual({}, update_request.read()["origin"])
@@ -414,7 +415,7 @@ class DurableRequests(unittest.TestCase):
 
         machine = Machine()
         update_request.queue({})
-        self.assertEqual(0, cli._queue_automatic_update(machine))
+        self.assertEqual(0, update_worker._queue_automatic_update(machine))
         self.assertEqual(0, machine.installed)
         self.assertEqual(1, machine.kicked)
 

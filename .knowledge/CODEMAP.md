@@ -47,7 +47,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 25 modules)
+## Backend / Services (src/rundesk/ — 26 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -159,6 +159,13 @@ file with it.
   until the whole thing is proved, which is the only way back there is. Once the files land the rest
   of the window is handed to the release that just landed, because a step is found on disk and would
   otherwise be run by the runner it replaced.
+- `src/rundesk/update_worker.py` — the process **no gateway owns**, which is the only thing that may
+  stop every gateway on a machine. Claims a durable request, waits for every turn to finish, stands the
+  supervised gateways down, lets `updater.py` replace the files, and puts them back — plus the recovery
+  a successor performs when one died mid-window, off the maintenance marker rather than off a guess.
+  Entered as `rundesk update --worker` from the job `supervisor.describe_update_worker` writes; the
+  surface only adapts what was typed and calls in here. Every collaborator is an argument, so the
+  highest-consequence path in the product is exercised with no gateway and no supervisor near it.
 - `src/rundesk/update_request.py` — the durable handoff from an agent turn to the
   supervisor-owned update worker: one request, its origin, lifecycle, final outcome, and delivery state,
   all changed under one lock and atomically replaced.
@@ -200,7 +207,7 @@ file with it.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 30 files, ~2000 cases)
+## Tests (tests/ — 31 files, ~2000 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
@@ -214,6 +221,7 @@ provider. One file per contract, named for it:
 | `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 81 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
 | `test_update_request.py` | 26 | `lifecycle-update` + queued restarts — durable external handoff, duplicate requests, safety waits, and outcome delivery |
+| `test_update_worker.py` | 14 | `lifecycle-update` — the machine-wide stand-down and what a successor worker puts back, driven **without `cli.main`**: no surface fixture, no argparse, every collaborator a stand-in |
 | `test_dependencies.py` | 28 | `lifecycle-update` — what the install is made of: what is declared, what the virtualenv holds, and building one **without pip ever running** |
 | `test_install.py` | 82 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
 | `test_supervisor.py` | 78 | the launchd job — a fake `launchctl`, so it runs where there is none |
