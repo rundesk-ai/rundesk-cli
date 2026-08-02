@@ -1423,6 +1423,8 @@ class Playing:
     """
 
     waiting: object
+    stopping: object
+    stopped: object
     carry: object
     owed: object
     claiming: object
@@ -1455,6 +1457,21 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
                  for one in kept.role_runs(state=state, limit=200)]
         return sorted(found, key=lambda one: one["admitted_at"])
 
+    def stopping() -> list:
+        """Every unfinished run somebody has asked to end."""
+        return [one for one in waiting() if one.get("stop_asked_at")]
+
+    def stopped(run_id: str) -> None:
+        """Settle a run that was asked to end and that nothing was carrying.
+
+        The same settlement a cancelled one reaches, so a stop looks like a stop however
+        far the execution had got — including not having started at all.
+        """
+        records(name, where).finish_role(
+            run_id, store.stamped(), store.STOPPED,
+            "this run was stopped before it finished", role_runs.retained_until(),
+        )
+
     async def carrying(run_id: str):
         """Carry one root, and leave it settled however that goes.
 
@@ -1466,10 +1483,19 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
         try:
             return await role_runs.carry(name, run_id, where=where, carrying=carry)
         except asyncio.CancelledError:
-            # A gateway standing down mid-execution. The run stays unfinished on purpose:
-            # its provider session is the conversation's, so the next gateway carries it
-            # on rather than starting it again (R-ROL-11).
-            raise
+            # **A stop and a shutdown look identical here, and are not the same news.**
+            # A gateway standing down leaves the run unfinished on purpose: its provider
+            # session is the conversation's, so the next gateway carries it on. A person
+            # who asked for it to end wants it ended — and left unfinished it would simply
+            # start again on the way back up (R-ROL-24).
+            asked = (reading(name, where).role_run(run_id) or {}).get("stop_asked_at")
+            if not asked:
+                raise
+            records(name, where).finish_role(
+                run_id, store.stamped(), store.STOPPED,
+                "this run was stopped before it finished", role_runs.retained_until(),
+            )
+            return None
         except BaseException as why:  # noqa: BLE001 — a boundary, and see below
             # **Every other way this can fail ends the execution truthfully.** A corrupt
             # bundle, a brain the agent no longer has, a target directory somebody moved —
@@ -1518,8 +1544,9 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
     def sweep() -> list:
         return role_runs.sweep(name, where)
 
-    return Playing(waiting=waiting, carry=carrying, owed=owed, claiming=claiming,
-                     reviewing=reviewing, reviewed=reviewed, sweep=sweep)
+    return Playing(waiting=waiting, stopping=stopping, stopped=stopped, carry=carrying,
+                   owed=owed, claiming=claiming, reviewing=reviewing, reviewed=reviewed,
+                   sweep=sweep)
 
 
 def unrunnable_channels(name: str, where: Path | None = None) -> list:

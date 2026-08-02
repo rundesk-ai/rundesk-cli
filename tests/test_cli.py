@@ -1090,7 +1090,8 @@ class FakeAgents:
         this file's, and what a gateway does with it is `tests/test_gateway.py`'s."""
         self.played.append(name)
         return real_agent.Playing(
-            waiting=lambda: [], carry=None, owed=lambda: [],
+            waiting=lambda: [], stopping=lambda: [], stopped=lambda _run: None,
+            carry=None, owed=lambda: [],
             claiming=lambda _run: None, reviewing=lambda _run, _review: None,
             reviewed=lambda _run: None, sweep=lambda: [],
         )

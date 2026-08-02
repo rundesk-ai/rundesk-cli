@@ -664,6 +664,194 @@ class WhatARunLeavesInTheTargetProject(WithAnAgentThatCanDelegate):
         self.assertFalse((self.target / ".agents").exists())
 
 
+class SayingSomethingToWorkInFlight(WithAnAgentThatCanDelegate):
+    """R-ROL-23 — the parent guides an execution it is carrying, through the seam a turn
+    already has for a word said mid-turn."""
+
+    async def taken(self, admitted, every=0):
+        """Whatever the steering source yields before it would wait for more."""
+        said = []
+        source = role_runs.steering("elena", admitted.id, self.where, every=every)
+        try:
+            for _ in range(20):
+                said.append(await asyncio.wait_for(source.__anext__(), 1))
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            await source.aclose()
+        return [one.text for one in said]
+
+    def test_what_the_parent_says_reaches_the_work_in_flight_in_order(self):
+        admitted = self.admit()
+        self.kept.role_working(admitted.id, AT, role_runs.retained_until())
+        role_runs.say("elena", admitted.id, "check the header row too")
+        role_runs.say("elena", admitted.id, "and quote every field")
+        self.assertEqual(["check the header row too", "and quote every field"],
+                         asyncio.run(self.taken(admitted)))
+
+    def test_a_word_reaches_one_turn_and_never_a_second(self):
+        admitted = self.admit()
+        self.kept.role_working(admitted.id, AT, role_runs.retained_until())
+        role_runs.say("elena", admitted.id, "check the header row")
+        self.assertEqual(["check the header row"], asyncio.run(self.taken(admitted)))
+        self.assertEqual([], asyncio.run(self.taken(admitted)))
+
+    def test_saying_something_to_a_run_that_is_not_working_says_which_verb_was_wanted(self):
+        admitted = self.admit()
+        self.carried(admitted)
+        with self.assertRaises(role_runs.NotDelegable) as refused:
+            role_runs.say("elena", admitted.id, "one more thing")
+        self.assertIn("resume it", str(refused.exception))
+
+    def test_nothing_at_all_is_not_something_to_say(self):
+        admitted = self.admit()
+        self.kept.role_working(admitted.id, AT, role_runs.retained_until())
+        with self.assertRaises(role_runs.NotDelegable):
+            role_runs.say("elena", admitted.id, "   \n ")
+
+    def test_a_whole_second_task_is_not_a_word_said_into_one(self):
+        admitted = self.admit()
+        self.kept.role_working(admitted.id, AT, role_runs.retained_until())
+        with self.assertRaises(role_runs.NotDelegable) as refused:
+            role_runs.say("elena", admitted.id, "x" * (role.BRIEF_LIMIT + 1))
+        self.assertIn("role run of its own", str(refused.exception))
+
+    def test_a_run_carrying_work_is_handed_its_parents_words_by_the_turn(self):
+        admitted = self.admit()
+        carry, _ = self.carried(admitted)
+        self.assertIsNotNone(carry.given["steering"])
+
+    def test_what_is_waiting_to_be_said_is_something_a_listing_can_show(self):
+        admitted = self.admit()
+        self.kept.role_working(admitted.id, AT, role_runs.retained_until())
+        role_runs.say("elena", admitted.id, "one thing")
+        self.assertEqual(1, self.kept.words_waiting(admitted.id))
+        self.kept.words_for_role(admitted.id, AT)
+        self.assertEqual(0, self.kept.words_waiting(admitted.id))
+
+
+class EndingOneBeforeItFinishes(WithAnAgentThatCanDelegate):
+    """R-ROL-24 — a person asked for this to end, which is not a gateway going down."""
+
+    def test_asking_a_running_execution_to_stop_is_recorded_for_whatever_carries_it(self):
+        admitted = self.admit()
+        self.kept.role_working(admitted.id, AT, role_runs.retained_until())
+        self.assertTrue(role_runs.stop("elena", admitted.id))
+        self.assertIsNotNone(self.kept.role_run(admitted.id)["stop_asked_at"])
+        self.assertEqual([admitted.id],
+                         [one["id"] for one in agent.playing("elena", self.where).stopping()])
+
+    def test_a_run_nothing_has_started_is_settled_without_a_provider(self):
+        admitted = self.admit()
+        role_runs.stop("elena", admitted.id)
+        agent.playing("elena", self.where).stopped(admitted.id)
+        row = self.kept.role_run(admitted.id)
+        self.assertEqual(store.STOPPED, row["state"])
+        self.assertEqual([admitted.id],
+                         [one["role_run"] for one in self.kept.owed_role_callbacks()])
+
+    def test_a_stopped_execution_settles_as_stopped_rather_than_carried_on(self):
+        """A cancellation is how both a stop and a shutdown arrive. Only one of them means
+        the run should not start again on the way back up."""
+        admitted = self.admit()
+        role_runs.stop("elena", admitted.id)
+
+        async def cancelled(*_said, **_given):
+            raise asyncio.CancelledError()
+
+        asyncio.run(agent.playing("elena", self.where, carry=cancelled).carry(admitted.id))
+        self.assertEqual(store.STOPPED, self.kept.role_run(admitted.id)["state"])
+        self.assertEqual([], agent.playing("elena", self.where).waiting())
+
+    def test_a_gateway_standing_down_is_still_not_a_stop(self):
+        admitted = self.admit()
+
+        async def cancelled(*_said, **_given):
+            raise asyncio.CancelledError()
+
+        with self.assertRaises(asyncio.CancelledError):
+            asyncio.run(agent.playing("elena", self.where, carry=cancelled).carry(admitted.id))
+        self.assertEqual(store.WORKING, self.kept.role_run(admitted.id)["state"])
+
+    def test_stopping_one_that_is_already_over_says_so_rather_than_pretending(self):
+        admitted = self.admit()
+        self.carried(admitted)
+        self.assertFalse(role_runs.stop("elena", admitted.id))
+
+    def test_a_stopped_run_owes_its_parent_the_same_one_review(self):
+        admitted = self.admit()
+        role_runs.stop("elena", admitted.id)
+        agent.playing("elena", self.where).stopped(admitted.id)
+        self.assertEqual(1, len(self.kept.owed_role_callbacks()))
+
+
+class CarryingAFinishedOneOn(WithAnAgentThatCanDelegate):
+    """R-ROL-25 — more work, in the session it already has, with its locks unchanged."""
+
+    def test_resuming_puts_it_back_in_hand_and_asks_the_further_task(self):
+        admitted = self.admit()
+        self.carried(admitted)
+        role_runs.resume("elena", admitted.id, "now add the header row")
+        self.assertEqual(store.ADMITTED, self.kept.role_run(admitted.id)["state"])
+        self.assertEqual([admitted.id],
+                         [one["id"] for one in agent.playing("elena", self.where).waiting()])
+        carry, _ = self.carried(admitted)
+        self.assertEqual("now add the header row", carry.given["prompt"])
+
+    def test_the_first_turn_is_asked_the_brief_and_the_next_is_asked_what_was_said(self):
+        admitted = self.admit()
+        first, _ = self.carried(admitted)
+        self.assertEqual(BRIEF, first.given["prompt"])
+        role_runs.resume("elena", admitted.id, "now add the header row")
+        second, _ = self.carried(admitted)
+        self.assertNotEqual(BRIEF, second.given["prompt"])
+
+    def test_resuming_leaves_the_locked_bundle_exactly_as_it_was(self):
+        admitted = self.admit()
+        self.carried(admitted)
+        role_runs.resume("elena", admitted.id, "now add the header row")
+        at = role_runs.paths("elena", admitted.id, self.where)
+        self.assertEqual(BRIEF, at["brief"].read_text(encoding="utf-8"))
+        self.assertEqual(RULES, at["rules"].read_text(encoding="utf-8"))
+        row = self.kept.role_run(admitted.id)
+        self.assertEqual(RULES, role_runs.verified("elena", row, self.where)["rules"])
+
+    def test_being_asked_for_again_starts_the_retention_window_again(self):
+        admitted = self.admit()
+        self.carried(admitted)
+        was = self.kept.role_run(admitted.id)["retained_until"]
+        role_runs.resume("elena", admitted.id, "more", now=lambda: 1785700000.0)
+        self.assertNotEqual(was, self.kept.role_run(admitted.id)["retained_until"])
+
+    def test_resuming_one_that_is_still_running_says_which_verb_was_wanted(self):
+        admitted = self.admit()
+        self.kept.role_working(admitted.id, AT, role_runs.retained_until())
+        with self.assertRaises(role_runs.NotDelegable) as refused:
+            role_runs.resume("elena", admitted.id, "more")
+        self.assertIn("say it", str(refused.exception))
+
+    def test_an_expired_run_refuses_all_three(self):
+        admitted = self.admit()
+        role_runs.sweep("elena", self.where,
+                        now=lambda: store.moment("2026-09-01T09:00:00Z").timestamp())
+        for doing in (lambda: role_runs.say("elena", admitted.id, "more"),
+                      lambda: role_runs.stop("elena", admitted.id),
+                      lambda: role_runs.resume("elena", admitted.id, "more")):
+            with self.assertRaises(role_runs.NotDelegable) as refused:
+                doing()
+            self.assertIn("retention", str(refused.exception))
+
+    def test_a_resumed_run_that_finishes_owes_its_parent_another_review(self):
+        admitted = self.admit()
+        self.carried(admitted)
+        self.kept.role_reviewed(admitted.id, AT)
+        self.assertEqual([], self.kept.owed_role_callbacks())
+        role_runs.resume("elena", admitted.id, "now add the header row")
+        self.carried(admitted)
+        self.assertEqual([admitted.id],
+                         [one["role_run"] for one in self.kept.owed_role_callbacks()])
+
+
 class WhatAPersonIsShown(WithAnAgentThatCanDelegate):
     """R-ROL-17 — an owner's private paths stay in the records."""
 

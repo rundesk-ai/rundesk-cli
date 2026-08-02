@@ -4098,12 +4098,20 @@ class Delegating:
         self._owed = list(owed)
         self.carried = carried if carried is not None else []
         self.claimed: list = []
+        self.settled: list = []
         self.reviewing_runs: list = []
         self.reviewed_runs: list = []
         self.swept = 0
 
     def waiting(self):
         return list(self._waiting)
+
+    def stopping(self):
+        return [one for one in self._waiting if one.get("stop_asked_at")]
+
+    def stopped(self, run_id):
+        self.settled.append(run_id)
+        self._waiting = [one for one in self._waiting if one["id"] != run_id]
 
     async def carry(self, run_id, watching=None, steering=None, admitted=None):
         self.carried.append(run_id)

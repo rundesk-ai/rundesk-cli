@@ -1835,6 +1835,7 @@ class Gateway:
         while not self._stopping:
             if self.roles is not None:
                 try:
+                    self._end_the_roles_asked_to_stop()
                     self._start_admitted_roles()
                 except asyncio.CancelledError:
                     raise
@@ -1852,10 +1853,28 @@ class Gateway:
         """Start every admitted root that nothing here is already carrying (R-GW-15)."""
         for row in self.roles.waiting():
             run_id = row["id"]
+            if row.get("stop_asked_at"):
+                continue   # asked to end before anything started it; settled below
             if run_id in self._role_tasks:
                 continue
             self._role_tasks[run_id] = asyncio.ensure_future(self._carry_one(run_id))
             self.log.info("carrying role run %s", run_id)
+
+    def _end_the_roles_asked_to_stop(self) -> None:
+        """End every execution somebody asked to end (R-ROL-24).
+
+        Cancelling is all this does. What the run is *settled* as belongs where every
+        other way it can end is settled, so a stop and a failure cannot come to disagree
+        about what a stopped run looks like — and a run nothing here is carrying is
+        settled there too, without a provider ever being started for it.
+        """
+        for row in self.roles.stopping():
+            task = self._role_tasks.get(row["id"])
+            if task is not None and not task.done():
+                task.cancel()
+            else:
+                self.roles.stopped(row["id"])
+            self.log.info("ending role run %s because it was asked to stop", row["id"])
 
     async def _carry_one(self, run_id: str) -> None:
         """One role root, from here to its terminal outcome and no further.

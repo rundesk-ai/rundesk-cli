@@ -1694,9 +1694,17 @@ class Store:
                 (outcome if outcome in FINISHED_ROLES else FAILED, outcome, report,
                  at, retained_until, role_run_id),
             )
+            # **One review per terminal outcome, not one per run.** A run offered the same
+            # outcome twice by a retrying gateway never gets past the early return above,
+            # so the conflict here is only ever reached by a run that was carried on and
+            # has finished *again* — and that is a new outcome, owed a new review. A
+            # review still owing is left exactly as it stands, because reopening it would
+            # reset the attempts and the claim of one nobody has answered yet.
             conn.execute(
                 "INSERT INTO role_callback (role_run, conversation, queued_at)"
-                " VALUES (?,?,?) ON CONFLICT(role_run) DO NOTHING",
+                " VALUES (?,?,?) ON CONFLICT(role_run) DO UPDATE SET"
+                " queued_at = excluded.queued_at, claimed_at = NULL, delivered_at = NULL,"
+                " attempts = 0 WHERE role_callback.delivered_at IS NOT NULL",
                 (role_run_id, row["parent_conversation"], at),
             )
             return True
@@ -1736,6 +1744,106 @@ class Store:
                 " WHERE role_run = ? AND delivered_at IS NULL",
                 (at, role_run_id),
             )
+
+    def say_to_role(self, role_run_id: str, said: str, at: str) -> None:
+        """One thing the parent said to this role, kept in the order it said it.
+
+        **Where it lands is not decided here.** A word said while a turn is running steers
+        it and a word said to a retained run that is over starts the next one — which of
+        those is happening is a fact about the run at the moment something reads the queue,
+        not a fact about the word. Refused only where there is nothing left to say it to.
+        """
+        with self._writing() as conn:
+            row = conn.execute(
+                "SELECT state FROM role_run WHERE id = ?", (role_run_id,)
+            ).fetchone()
+            if row is None:
+                raise Refused(f"there is no role run called '{role_run_id}'")
+            if row["state"] == EXPIRED:
+                raise Refused(
+                    f"'{role_run_id}' is past its retention window — there is nothing "
+                    "left to say it to"
+                )
+            conn.execute(
+                "INSERT INTO role_word (role_run, said, said_at) VALUES (?,?,?)",
+                (role_run_id, said, at),
+            )
+
+    def words_for_role(self, role_run_id: str, at: str) -> list:
+        """Everything said to this role and not yet taken, claimed in one write.
+
+        Read and stamped together, so a word reaches one turn exactly once however many
+        gateways look — the same reason claiming an interrupted run is one write.
+        """
+        with self._writing() as conn:
+            rows = conn.execute(
+                "SELECT n, said FROM role_word WHERE role_run = ? AND taken_at IS NULL"
+                " ORDER BY n",
+                (role_run_id,),
+            ).fetchall()
+            if not rows:
+                return []
+            conn.execute(
+                "UPDATE role_word SET taken_at = ? WHERE role_run = ? AND taken_at IS NULL",
+                (at, role_run_id),
+            )
+        return [row["said"] for row in rows]
+
+    def words_waiting(self, role_run_id: str) -> int:
+        """How much has been said to this role that nothing has taken yet."""
+        with self._reading() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS waiting FROM role_word"
+                " WHERE role_run = ? AND taken_at IS NULL",
+                (role_run_id,),
+            ).fetchone()
+        return int(row["waiting"] or 0)
+
+    def ask_role_stop(self, role_run_id: str, at: str) -> bool:
+        """Ask for this execution to end, and say whether there was one to ask about.
+
+        Durable rather than sent to whatever is carrying it: the thing that must act is a
+        task inside a gateway, which may not be the gateway the asking reached, and an ask
+        that lived only in one process is one a restart loses.
+        """
+        with self._writing() as conn:
+            row = conn.execute(
+                "SELECT state FROM role_run WHERE id = ?", (role_run_id,)
+            ).fetchone()
+            if row is None:
+                raise Refused(f"there is no role run called '{role_run_id}'")
+            if row["state"] not in UNFINISHED_ROLES:
+                return False
+            conn.execute(
+                "UPDATE role_run SET stop_asked_at = ? WHERE id = ? AND stop_asked_at IS NULL",
+                (at, role_run_id),
+            )
+            return True
+
+    def resume_role(self, role_run_id: str, at: str, retained_until: str) -> bool:
+        """Put a finished role run back in hand, and say whether it could be.
+
+        Its window is measured from activity, so being asked for again is activity: a run
+        somebody is still working with is never swept out from under them (R-ROL-11).
+
+        **The outcome it already reached is left standing**, and deliberately: it is what
+        says this run has finished before, which is how the next turn knows to ask what was
+        said rather than the brief it was admitted with.
+        """
+        with self._writing() as conn:
+            row = conn.execute(
+                "SELECT state FROM role_run WHERE id = ?", (role_run_id,)
+            ).fetchone()
+            if row is None:
+                raise Refused(f"there is no role run called '{role_run_id}'")
+            if row["state"] not in FINISHED_ROLES:
+                return False
+            conn.execute(
+                "UPDATE role_run SET state = ?, stop_asked_at = NULL, latest_at = ?,"
+                " retained_until = ? WHERE id = ?",
+                (ADMITTED, at, retained_until, role_run_id),
+            )
+            return True
 
     def role_reviewing(self, role_run_id: str, review_run: str) -> None:
         """Which named-agent turn was woken to read this handoff.

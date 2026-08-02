@@ -33,6 +33,7 @@ those change while the locked bytes must not.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -267,6 +268,26 @@ def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _prompt(kept, row: dict, it: dict) -> str:
+    """What this turn is asked: the brief the first time, and what was said after that.
+
+    **"Has this run ever finished" is the question, and the records already answer it.**
+    An outcome is written when a run settles and is never cleared, so a resumption carries
+    one and a first execution does not — including a first execution whose gateway died
+    part-way, which must still be asked the brief rather than a word somebody steered it
+    with. Nothing new is stored to know this, and nothing can drift out of step with it.
+    """
+    if not row.get("outcome"):
+        return it["brief"]
+    said = kept.words_for_role(row["id"], store.stamped())
+    return "\n\n".join(one for one in said if one.strip()) or CARRY_ON
+
+
+def _steering(name: str, run_id: str, where, now):
+    """The parent's words, for a turn that was not handed a source of its own."""
+    return steering(name, run_id, where, now=now)
+
+
 def _parent(kept, parent_run: str):
     """The turn delegating this, and the conversation the answer is owed to.
 
@@ -420,6 +441,108 @@ def execution(name: str, row: dict, where: Path | None = None) -> turn.Execution
     )
 
 
+async def steering(name: str, run_id: str, where: Path | None = None, every=None,
+                   now=None):
+    """Everything the parent says to this execution while it is still running.
+
+    **Never ends of its own accord**, exactly as the terminal's own steering does not: what
+    ends it is the turn ending, and `turn.carry` cancels this the moment the brain stops.
+    A generator that ended early would close the input of a brain that is still working.
+
+    Claimed from the records rather than handed over in memory, because the thing saying
+    something is a different process — the agent's own next turn — and it may be talking to
+    a gateway that did not exist when this execution started.
+    """
+    kept = agents.records(name, where)
+    waited = STEER_SECONDS if every is None else every
+    while True:
+        for said in kept.words_for_role(run_id, store.stamped(now)):
+            if said.strip():
+                yield turn.Said(said, None)
+        await asyncio.sleep(waited)
+
+
+def say(name: str, run_id: str, said: str, where: Path | None = None, now=None) -> str:
+    """Say something to this role run, and answer where it will land.
+
+    One queue, because a word said to a role is one kind of thing. Where it goes is a fact
+    about the run at the moment it is read: an execution in flight is steered, and one that
+    is over and still retained is carried on by `resume`. Said plainly here rather than
+    guessed at, so an agent that reached for the wrong verb is told which one it wanted.
+    """
+    kept = agents.records(name, where)
+    row = _held(kept, run_id)
+    if not str(said or "").strip():
+        raise NotDelegable("nothing was said")
+    if len(said) > role.BRIEF_LIMIT:
+        raise NotDelegable(
+            f"more than {role.BRIEF_LIMIT} characters — a word said to work in flight is "
+            "guidance, and a task that large is a role run of its own"
+        )
+    if row["state"] not in (store.ADMITTED, store.WORKING):
+        raise NotDelegable(
+            f"'{run_id}' is not running — to carry it on with more work, resume it"
+        )
+    try:
+        kept.say_to_role(run_id, said, store.stamped(now))
+    except store.Refused as why:
+        raise NotDelegable(str(why)) from None
+    return run_id
+
+
+def stop(name: str, run_id: str, where: Path | None = None, now=None) -> bool:
+    """Ask this execution to end, and say whether there was one to end.
+
+    The ask is durable and the acting is the gateway's: what has to be ended is a task it
+    owns, and a person asking may not have reached the gateway carrying it.
+    """
+    kept = agents.records(name, where)
+    _held(kept, run_id)
+    try:
+        return kept.ask_role_stop(run_id, store.stamped(now))
+    except store.Refused as why:
+        raise NotDelegable(str(why)) from None
+
+
+def resume(name: str, run_id: str, more: str, where: Path | None = None, now=None) -> str:
+    """Carry a finished role run on with more work, in the session it already has.
+
+    **The locked bundle is not touched** (R-ROL-10). A continuation is the next thing said,
+    never an edit to the brief this run was admitted with — the digests still have to
+    verify before it is carried, and they are the whole reason a fortnight-old run can be
+    trusted at all.
+    """
+    kept = agents.records(name, where)
+    row = _held(kept, run_id)
+    if not str(more or "").strip():
+        raise NotDelegable("a resumed role run needs something more to do, and none was given")
+    if len(more) > role.BRIEF_LIMIT:
+        raise NotDelegable(
+            f"the continuation is longer than {role.BRIEF_LIMIT} characters"
+        )
+    if row["state"] in (store.ADMITTED, store.WORKING):
+        raise NotDelegable(
+            f"'{run_id}' is still running — to guide the work it is doing now, say it"
+        )
+    at = store.stamped(now)
+    kept.say_to_role(run_id, more, at)
+    if not kept.resume_role(run_id, at, retained_until(now)):
+        raise NotDelegable(f"'{run_id}' could not be carried on")
+    return run_id
+
+
+def _held(kept, run_id: str) -> dict:
+    """The run this is about, refused where its execution context is gone."""
+    row = kept.role_run(run_id)
+    if row is None:
+        raise NotDelegable(f"there is no role run called '{run_id}'")
+    if row["state"] == store.EXPIRED:
+        raise NotDelegable(
+            f"'{run_id}' is past its retention window and can no longer be carried on"
+        )
+    return row
+
+
 async def carry(name: str, run_id: str, where: Path | None = None, carrying=None,
                 now=None, watching=None, steering=None, admitted=None) -> turn.Outcome:
     """Run one role execution's root turn, and settle what became of it.
@@ -449,7 +572,7 @@ async def carry(name: str, run_id: str, where: Path | None = None, carrying=None
     at = store.stamped(now)
     kept.role_working(run_id, at, retained_until(now))
     outcome = await (carrying or turn.carry)(
-        name, it["brief"], named,
+        name, _prompt(kept, row, it), named,
         where=where,
         model=parent.get("model") or chose.get("model"),
         settings=parent.get("settings") or chose.get("settings"),
@@ -462,8 +585,17 @@ async def carry(name: str, run_id: str, where: Path | None = None, carrying=None
         prompt_author="rundesk",
         context=execution(name, row, where),
         watching=watching,
-        steering=steering,
+        # What the parent says to this execution while it runs. Handed over as the seam
+        # `turn.carry` already has, so a word said to a role travels the same path as a
+        # word typed at a terminal — into the account first, and then to the brain.
+        steering=(steering if steering is not None
+                  else _steering(name, run_id, where, now)),
         admitted=admitted,
+        # A person asked for this to end, rather than a gateway going down under it. The
+        # difference is the whole of what `rundesk runs` can answer afterwards about a
+        # quiet night (R-RUN-13).
+        stopped_by_owner=lambda: bool(
+            (kept.role_run(run_id) or {}).get("stop_asked_at")),
         now=now,
     )
     kept.role_active(run_id, store.stamped(now), retained_until(now))
@@ -473,6 +605,20 @@ async def carry(name: str, run_id: str, where: Path | None = None, carrying=None
     unpresent(row.get("target"), bundled["skills"])
     settle(name, run_id, outcome, where=where, now=now)
     return outcome
+
+
+#: What a resumed execution is asked when its parent moved it back into hand and said
+#: nothing more. Prose rather than an empty prompt: a brain given nothing answers about
+#: nothing, and the session it is carrying on already holds the work.
+CARRY_ON = (
+    "Carry on from where you stopped. Finish the task you were given, and report as your "
+    "rules require."
+)
+
+#: How often a running execution looks for something its parent has said to it. Close to
+#: the beat: a person who has just corrected their agent is waiting to see it land, and a
+#: word that arrives after the work it was meant to change is a word that arrived too late.
+STEER_SECONDS = 3.0
 
 
 #: How deep into a target project a presented skill may have been placed. Every adapter

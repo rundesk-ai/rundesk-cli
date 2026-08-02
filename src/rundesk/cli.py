@@ -695,6 +695,14 @@ def build_parser() -> argparse.ArgumentParser:
     handed.add_argument("--label", metavar="<text>",
                         help="a short safe name for the task, shown where other people can "
                              "read it — never a path and never the brief")
+    guided = handing.add_parser(
+        "say", help="say something to a role that is working — read from standard input")
+    guided.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
+    ended = handing.add_parser("stop", help="end a role run before it finishes")
+    ended.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
+    again = handing.add_parser(
+        "resume", help="carry a finished role run on — the further task is read from standard input")
+    again.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
     seen = handing.add_parser("show", help="one role run in full")
     seen.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
 
@@ -3260,6 +3268,8 @@ def cmd_roles(args: argparse.Namespace, agents) -> int:
     act = getattr(args, "act", None)
     if act == "run":
         return _hand_to_a_role(args, agents)
+    if act in ("say", "stop", "resume"):
+        return _guide_a_role(args, act)
     try:
         whose = agents.reading(args.name)
     except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
@@ -3310,6 +3320,11 @@ def _show_role_run(args: argparse.Namespace, whose) -> int:
     print(f"{'skills':16}{' '.join(it['skills'])}")
     print(f"{'elapsed':16}{it['elapsed']}s")
     print(f"{'reviewed':16}{'yes' if it['reviewed'] else 'no'}")
+    waiting = whose.words_waiting(args.run)
+    if waiting:
+        print(f"{'waiting to say':16}{waiting}")
+    if row.get("stop_asked_at"):
+        print(f"{'stop asked':16}{row['stop_asked_at']}")
     owed = role_runs.owed_review(args.name, args.run)
     if owed["owed"]:
         # Said only while one is owed, and with the count: a review tried many times and
@@ -3360,6 +3375,43 @@ def _hand_to_a_role(args: argparse.Namespace, agents) -> int:
           f"retained until {admitted.retained_until}")
     print("        it runs in this agent's gateway; you are told when it reports back")
     return 0
+
+
+def _guide_a_role(args: argparse.Namespace, act: str) -> int:
+    """Say something to a role run, end one, or carry a finished one on (R-ROL-23).
+
+    **Three verbs because there are three things to mean**, and each refusal names the one
+    that was wanted. A single verb that guessed from the run's state would say something
+    into work in flight when an owner meant to start it again, and spend a turn's money
+    doing it.
+    """
+    said = sys.stdin.read() if act in ("say", "resume") else ""
+    try:
+        if act == "stop":
+            if not role_runs.stop(args.name, args.run):
+                print(f"{args.name}/{args.run}: ALREADY OVER — nothing was running to end",
+                      file=sys.stderr)
+                return 1
+            print(f"{args.run} was asked to stop")
+            print("        it ends as soon as this agent's gateway reaches it")
+            return 0
+        if act == "say":
+            role_runs.say(args.name, args.run, said)
+            print(f"said to {args.run}")
+            print("        it reaches the work in flight; nothing is answered back here")
+            return 0
+        role_runs.resume(args.name, args.run, said)
+        print(f"{args.run} was carried on")
+        print("        it starts again in the conversation it already had")
+        return 0
+    except role_runs.NotDelegable as why:
+        print(f"{args.name}/{args.run}: NOT DONE — {why}", file=sys.stderr)
+        print(f"        where it stands:  rundesk roles {args.name} show {args.run}",
+              file=sys.stderr)
+        return 1
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
+        print(f"{args.name}: RECORDS UNREADABLE — {why}", file=sys.stderr)
+        return 1
 
 
 #: What the credential a surface reads is kept in, beside that channel's own things. The

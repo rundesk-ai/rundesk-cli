@@ -45,8 +45,11 @@ rundesk usage                                                                   
 rundesk usage <agent>                                                                                                                                                                                                   what one agent has cost
 
 # handing work on
+rundesk roles <agent> resume <run>                                                                                                                                                                                      carry a finished role run on — the further task is read from standard input
 rundesk roles <agent> run [--target <directory>] [--label <text>] <role>                                                                                                                                                hand one bounded task to a role — the brief is read from standard input
+rundesk roles <agent> say <run>                                                                                                                                                                                         say something to a role that is working — read from standard input
 rundesk roles <agent> show <run>                                                                                                                                                                                        one role run in full
+rundesk roles <agent> stop <run>                                                                                                                                                                                        end a role run before it finishes
 
 # rundesk itself
 rundesk status                                                                                                                                                                                                          how rundesk itself is on this machine

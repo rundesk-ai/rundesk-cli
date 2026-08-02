@@ -10,6 +10,11 @@ skills, whose run asked, which conversation the answer is owed to, and how long 
 execution context stays resumable. All of it is settled when the run is admitted and none
 of it changes after, exactly as what an ordinary run resolved does not change after.
 
+`stop_asked_at` is a person asking for this execution to end. Kept beside the run rather
+than sent to whatever is carrying it, because the thing that has to act on it is a task
+inside a gateway that may not be the gateway the asking reached — and an ask that only
+existed in one process is one a restart loses.
+
 Beside it, a digest of every part of the locked bundle — the rules, the manifest, and each
 skill package on its own. Kept per part rather than only as the role's aggregate
 revision, because the bundle is writable by the very execution it governs: a worker that
@@ -44,7 +49,7 @@ def up(conn, home):
         CREATE TABLE role_run (
             n                   INTEGER PRIMARY KEY AUTOINCREMENT,
             id                  TEXT NOT NULL UNIQUE,
-            role             TEXT NOT NULL,
+            role                TEXT NOT NULL,
             revision            TEXT NOT NULL,
             skills              TEXT NOT NULL DEFAULT '[]',
             locked              TEXT NOT NULL DEFAULT '{}',
@@ -59,7 +64,8 @@ def up(conn, home):
             state               TEXT NOT NULL,
             outcome             TEXT,
             report              TEXT,
-            reviewed_at         TEXT
+            reviewed_at         TEXT,
+            stop_asked_at       TEXT
         ) STRICT
         """
     )
@@ -78,7 +84,7 @@ def up(conn, home):
     conn.execute(
         """
         CREATE TABLE role_callback (
-            role_run   TEXT PRIMARY KEY REFERENCES role_run(id) ON DELETE CASCADE,
+            role_run      TEXT PRIMARY KEY REFERENCES role_run(id) ON DELETE CASCADE,
             conversation  TEXT NOT NULL,
             queued_at     TEXT NOT NULL,
             attempts      INTEGER NOT NULL DEFAULT 0,
@@ -88,6 +94,26 @@ def up(conn, home):
         ) STRICT
         """
     )
+    # **What the parent said to this role, in the order it said it.** A word said while a
+    # turn is running steers it; a word said to a run that is over and still retained
+    # starts the next one. That is the same distinction a channel conversation already
+    # draws, and it is drawn here the same way: whether something is running, not by two
+    # different kinds of thing to say.
+    #
+    # `taken_at` is stamped in the write that reads the word, so a word reaches one turn
+    # exactly once even when a gateway is replaced between the reading and the saying.
+    conn.execute(
+        """
+        CREATE TABLE role_word (
+            n         INTEGER PRIMARY KEY AUTOINCREMENT,
+            role_run  TEXT NOT NULL REFERENCES role_run(id) ON DELETE CASCADE,
+            said      TEXT NOT NULL,
+            said_at   TEXT NOT NULL,
+            taken_at  TEXT
+        ) STRICT
+        """
+    )
+    conn.execute("CREATE INDEX role_word_waiting ON role_word(role_run, n)")
     # Which role execution this turn was carrying, where it was carrying one. Nullable
     # with no default: every run written before this step belongs to no role, and so
     # does every ordinary turn written after it.

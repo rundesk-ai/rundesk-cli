@@ -59,6 +59,21 @@ printf '…brief…' | rundesk roles <you> run <role> --target <project> --label
 rundesk roles <you> show <run>                     one run in full
 ```
 
+**While it runs, and after.** Three verbs, and each refusal names the one you wanted:
+
+```sh
+printf '…guidance…' | rundesk roles <you> say <run>     guide work that is happening now
+rundesk roles <you> stop <run>                          end it before it finishes
+printf '…more work…' | rundesk roles <you> resume <run>  carry a finished one on
+```
+
+`say` reaches work in flight — use it the moment you learn the worker is heading somewhere
+wrong, rather than waiting to reject the report. `stop` is what you reach for when the work
+is no longer wanted; it ends and still reports back, so you are told rather than left
+guessing. `resume` carries a finished run on in the conversation it already has, so it
+still knows what it did — cheaper and better than handing the same ground to a fresh run.
+All three refuse once the run is past its retention window.
+
 Reach for one when the work is heavy, bounded, and belongs to a repository rather than to the
 conversation. Do not reach for one for something you can answer now. The brief is read from
 standard input and is a *brief*, never your conversation: the outcome, the target, the facts
