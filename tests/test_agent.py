@@ -19,6 +19,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from rundesk import agent, config, gateway, skill, store, updater  # noqa: E402
+from rundesk import role_run as role_runs  # noqa: E402
 
 
 #: The two files SQLite keeps beside a database, which are its bookkeeping and not the
@@ -1600,8 +1602,9 @@ class WhatARoleIsNot(WithSomewhereToKeepAgents):
                               if one.about.startswith("rol-")])
 
 
-class WhatItHasHandedToARole(WithSomewhereToKeepAgents):
-    """R-ROL-28 — a listing narrow enough to read on a phone, saying what is happening."""
+class HasARoleRun(WithSomewhereToKeepAgents):
+    """One admitted role run, for the two things asked of one: what a listing says about
+    it, and what a surface is told about it."""
 
     def a_run(self, state, label="a task", target=None, at="2026-08-01T09:00:00Z"):
         kept = agent.records("ava", self.where)
@@ -1614,6 +1617,10 @@ class WhatItHasHandedToARole(WithSomewhereToKeepAgents):
         if state != store.ADMITTED:
             kept.role_working(run, at, "2026-08-15T09:00:00Z")
         return kept, run
+
+
+class WhatItHasHandedToARole(HasARoleRun):
+    """R-ROL-28 — a listing narrow enough to read on a phone, saying what is happening."""
 
     def test_nothing_handed_on_says_so_rather_than_answering_with_nothing(self):
         self.made("ava")
@@ -1652,6 +1659,65 @@ class WhatItHasHandedToARole(WithSomewhereToKeepAgents):
         self.assertEqual("45s", agent._for_how_long(45))
         self.assertEqual("3m", agent._for_how_long(200))
         self.assertEqual("2h05m", agent._for_how_long(7500))
+
+
+class WhereARoleRunIsShown(HasARoleRun):
+    """R-ROL-27, R-ROL-36 — what a surface is told about a run comes from where the
+    listing's own facts come from, so the two can never disagree about one run."""
+
+    def since(self, seconds: float) -> str:
+        """When a run that has been going this long was admitted."""
+        return store.stamped(lambda: time.time() - seconds)
+
+    def test_where_a_run_is_shown_carries_the_role_and_how_long_it_has_been(self):
+        self.made("ava")
+        _kept, run = self.a_run(store.WORKING, at=self.since(90))
+        where = agent.playing("ava", self.where).seen(run)
+        self.assertEqual("development", where["role"])
+        self.assertEqual("discord", where["channel"])
+        self.assertEqual("general", where["conversation"])
+        self.assertAlmostEqual(90, where["elapsed"], delta=5)
+
+    def test_how_long_it_has_been_is_what_the_listing_says_it_is(self):
+        """One place works it out. A line in a room and a listing in a terminal
+        disagreeing about the same run is worse than either being absent.
+
+        Proved by replacing the listing rather than by comparing two live readings:
+        those cross a second boundary between them often enough to fail on a runner,
+        and agreeing to within a second is what two separate computations would do too.
+        """
+        self.made("ava")
+        _kept, run = self.a_run(store.WORKING, at=self.since(3000))
+
+        with mock.patch.object(role_runs, "shown",
+                               return_value={"elapsed": 4242}) as listing:
+            where = agent.playing("ava", self.where).seen(run)
+
+        self.assertEqual(4242, where["elapsed"],
+                         "how long it has been was worked out a second time")
+        self.assertEqual(1, listing.call_count)
+
+    def test_a_run_inside_its_first_window_is_not_checked_in_on(self):
+        self.made("ava")
+        _kept, run = self.a_run(store.WORKING, at=self.since(60))
+        self.assertIsNone(agent.playing("ava", self.where).checking_in(run, 0))
+
+    def test_a_run_past_its_window_says_which_check_in_it_has_reached(self):
+        self.made("ava")
+        _kept, run = self.a_run(store.WORKING, at=self.since(2500))
+        where = agent.playing("ava", self.where).checking_in(run, 0)
+        self.assertEqual(2, where["due"])
+        self.assertEqual("a task", where["label"])
+        self.assertEqual("development", where["role"])
+
+    def test_a_run_already_told_about_in_this_window_owes_nothing_more(self):
+        self.made("ava")
+        _kept, run = self.a_run(store.WORKING, at=self.since(2500))
+        self.assertIsNone(agent.playing("ava", self.where).checking_in(run, 2))
+
+    def test_a_run_this_agent_never_admitted_is_never_checked_in_on(self):
+        self.made("ava")
+        self.assertIsNone(agent.playing("ava", self.where).checking_in("rol-9-zzzz", 0))
 
 
 if __name__ == "__main__":

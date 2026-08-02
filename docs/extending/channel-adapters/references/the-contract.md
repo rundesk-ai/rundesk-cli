@@ -309,6 +309,7 @@ person sees and `text` with the parent body. When deleted, unavailable, or unfet
 {"type": "said",   "conversation": "1180", "place": null, "schedule": "nightly", "text": "Nothing broke overnight."}
 {"type": "answer", "conversation": "1180", "run": "7-a3f1", "provider": "stand-in", "text": "Three files changed — the parser was dropping…", "attachments": [{"name": "chart.png", "at": "/…/workspace/chart.png", "bytes": 1204, "sha256": "…"}]}
 {"type": "state",  "conversation": "1180", "run": "7-a3f1", "state": "finished"}
+{"type": "role", "conversation": "1180", "role_run": "rol-5-ihxy", "state": "handed", "role": "development", "label": "Backup keep-last retention", "elapsed": 0}
 {"type": "owner-notice", "text": "🧩 **Skill added** — `research`"}
 {"type": "owner-notice", "text": "Hello, I'm Ava. I'm here to help…", "user": "111111111111111111"}
 {"type": "query-result", "conversation": "1180", "query": "status", "ref": "8843", "text": "ava: RUNNING"}
@@ -349,6 +350,20 @@ message, somebody *will* reply to it — and that is an ordinary message, starti
 ordinary turn, whose brain has no record of a line it never wrote. Send it on as you would
 any other; there is nothing for an adapter to do about it. The report beneath it is written
 down, so a reply to *that* reaches a session that saw it.
+
+**A `role` record is work handed to a specialist, and it belongs to no turn.** A role run is
+admitted inside one turn, works for hours outside every turn, and reports back long after
+that turn ended — so it carries no `run` and is not part of any turn's commentary. `state`
+is one of `handed`, `working` and `settled`; `ok` is present on `settled` and nowhere else.
+**It is self-contained on purpose.** A run outlives an adapter process, so nothing here is
+correlated against anything you were told earlier: the record saying the work came back
+renders in full even if you were restarted twice since the one saying it went out. `label`
+and `role` are already safe to show — no path, and never the brief the worker was given.
+`elapsed` is seconds since the work was handed over. A `working` record repeats on
+rundesk's own clock and is the one thing here that does, so an adapter that shows it in
+place will not fill a room with a run saying nothing has changed. An adapter that does not
+know this type shows nothing and stays correct, which is what `understood` already
+guarantees for anything unrecognised.
 
 **An `owner-notice` carries no conversation, because it is not about one.** It is
 rundesk's own bookkeeping about the agent — what it may do changed — and it is for the

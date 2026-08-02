@@ -234,6 +234,7 @@ async def carry(
     schedule_id: int | None = None,
     resume_required: bool = False,
     prompt_author: str = "user",
+    stands_alone: bool = False,
     resume_on_interrupt=None,
     stopped_by_owner=None,
     recovery_of: str | None = None,
@@ -275,6 +276,13 @@ async def carry(
     `context` is where this turn actually runs, for a turn not standing in the agent's own
     home. Left out — which is every ordinary turn — it resolves to exactly what this
     function has always used, so nothing about one changed by the argument existing.
+
+    `stands_alone` says this prompt carries everything it needs, so a fresh session can
+    answer it — which is the whole of what decides whether a turn a stale session handed
+    straight back is worth asking again (R-RUN-24). A person's question always does. What
+    rundesk writes usually does not, because most of it continues work a particular session
+    was in the middle of; the caller that writes a self-contained one says so here rather
+    than being guessed at from who is recorded as asking.
     """
     at = provider.program(named)          # raises NotRunnable, before anything is written
     whose = agents.paths(name, where)
@@ -446,15 +454,26 @@ async def carry(
                 transcript.trim(whose["logs"], run)
 
         result = await attempt(resume, steering)
-        # **Only a prompt that stands on its own is worth asking again.** Everything rundesk
-        # writes into a turn itself is a *continuation* — "carry on where the last gateway
-        # stopped", "finish what you were doing before the update" — and those mean nothing
-        # at all without the session they were written for. Asked on a fresh one, the brain
-        # answers about nothing, the turn is recorded as finished, and the handle the retry
-        # ends on replaces the interrupted conversation's own, which is the work itself
-        # going (R-GW-22). A recovery turn is refused outright rather than resumed
-        # elsewhere, and this is the same refusal one attempt later.
-        if prompt_author == "user" and _never_ran(said, result, resumed=bool(resume)):
+        # **Only a prompt that stands on its own is worth asking again.** *Most* of what
+        # rundesk writes into a turn itself is a *continuation* — "carry on where the last
+        # gateway stopped", "finish what you were doing before the update" — and those mean
+        # nothing at all without the session they were written for. Asked on a fresh one,
+        # the brain answers about nothing, the turn is recorded as finished, and the handle
+        # the retry ends on replaces the interrupted conversation's own, which is the work
+        # itself going (R-GW-22).
+        #
+        # **The handoff review is the exception, and asking who wrote the prompt could not
+        # see it.** It carries a worker's whole report and asks for it to be reviewed, so a
+        # fresh session answers it exactly as well as a resumed one — and consumed by a
+        # stale session it is a role run that was run, paid for and read by nobody
+        # (R-ROL-15). So the caller says whether its prompt stands on its own, which is the
+        # question this was always standing in for.
+        #
+        # A recovery turn is refused outright rather than resumed elsewhere, and this is the
+        # same refusal one attempt later — asked of `resume_required` here rather than left
+        # to a caller remembering not to claim both.
+        worth_asking_again = (prompt_author == "user" or stands_alone) and not resume_required
+        if worth_asking_again and _never_ran(said, result, resumed=bool(resume)):
             # **The question is still worth asking, so it is asked** (R-RUN-24). A resumed
             # session that hands the turn straight back never read the prompt, and rundesk
             # is the only layer that knows both that nothing was said and what the person

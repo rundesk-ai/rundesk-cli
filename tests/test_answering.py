@@ -11,6 +11,7 @@ Run: python3 tests/test_answering.py
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -2172,6 +2173,88 @@ class WhatAChannelDoesNotWriteDown(CarriesAConversation):
         self.assertNotIn("conversations.json", beside)
 
 
+class WhatARoleRunSays(CarriesAConversation):
+    """R-ROL-27, R-ROL-36 — a role run is one record type from end to end, carrying
+    everything a surface needs to render it and nothing a surface has to remember."""
+
+    async def shown(self, held, surface) -> list:
+        await self._settled(held)
+        return surface.of("role")
+
+    async def test_handing_work_to_a_role_is_one_self_contained_record(self):
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+
+        held.told_role_working("one", "rol-1-aaaa", "a task", "development", 0)
+
+        said = await self.shown(held, surface)
+        self.assertEqual(1, len(said), "handing work over was not shown")
+        self.assertEqual(
+            {"type": "role", "conversation": "one", "role_run": "rol-1-aaaa",
+             "state": "handed", "role": "development", "label": "a task", "elapsed": 0},
+            said[0])
+
+    async def test_a_run_still_working_says_how_long_it_has_been(self):
+        """R-ROL-36 — the elapsed seconds are carried, because a surface that restarted
+        mid-run has no way of working out when this started."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+
+        held.told_role_checking_in("one", "rol-1-aaaa", "a task", "development", 2400)
+
+        said = await self.shown(held, surface)
+        self.assertEqual("working", said[0]["state"])
+        self.assertEqual(2400, said[0]["elapsed"])
+        self.assertEqual("rol-1-aaaa", said[0]["role_run"])
+
+    async def test_a_run_that_settled_says_whether_it_worked(self):
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+
+        held.told_role_settled("one", "rol-1-aaaa", True, "a task", "development", 60)
+        held.told_role_settled("one", "rol-2-bbbb", False, "a task", "development", 60)
+
+        said = await self.shown(held, surface)
+        self.assertEqual(["settled", "settled"], [one["state"] for one in said])
+        self.assertEqual([True, False], [one["ok"] for one in said])
+
+    async def test_a_role_record_carries_no_path_no_brief_and_no_report(self):
+        """R-ROL-17 — a room is read by other people, and what a worker was asked and
+        what it wrote back are neither of theirs."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+
+        held.told_role_working("one", "rol-1-aaaa", "a task", "development", 0)
+        held.told_role_checking_in("one", "rol-1-aaaa", "a task", "development", 1200)
+        held.told_role_settled("one", "rol-1-aaaa", True, "a task", "development", 1800)
+
+        said = await self.shown(held, surface)
+        self.assertEqual(3, len(said))
+        for one in said:
+            self.assertEqual(
+                {"type", "conversation", "role_run", "state", "role", "label", "elapsed"},
+                set(one) - {"ok"},
+                "a role record carries a field nothing here decided to send")
+
+    async def test_what_a_role_run_says_is_not_written_down_as_the_agents_words(self):
+        """Rundesk's bookkeeping about a run, exactly as the schedule notice is: a brain
+        that never wrote the line must not find it in its own record."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+        where_it_is = store.conversation_id("ops", "one")
+        agents.records("ava", self.where).opened(
+            where_it_is, "ops", "somewhere", "one", AT)
+
+        held.told_role_working("one", "rol-1-aaaa", "a task", "development", 0)
+        held.told_role_checking_in("one", "rol-1-aaaa", "a task", "development", 1200)
+        held.told_role_settled("one", "rol-1-aaaa", True, "a task", "development", 1800)
+        await self.shown(held, surface)
+
+        self.assertEqual(
+            [], agents.reading("ava", self.where).messages(where_it_is),
+            "rundesk's own bookkeeping was written down as something the agent said")
+
+
 class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.data = Path(tempfile.mkdtemp(prefix="rundesk-update-data-"))
@@ -2308,6 +2391,126 @@ class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(brain.asked))
         holds.set()
         await self.settled(held)
+
+    async def test_a_handoff_review_is_asked_as_a_prompt_that_stands_on_its_own(self):
+        """R-RUN-24, R-ROL-15 — issue #282. The review prompt is the whole report and asks
+        for it to be checked, so a fresh session answers it exactly as well as a resumed
+        one — and a resumed session that hands it straight back is a role run nobody ever
+        reads. Every other thing rundesk writes into a turn is a continuation and is left
+        alone."""
+        brain, surface = Brain(), Surface()
+        held = self.a_parent_conversation("rundesk-role-standalone-", brain, surface)
+
+        await held.told_role_finished(
+            "one", {"role": "development", "role_run": "rol-1-aaaa",
+                    "outcome": "succeeded", "report": "I changed two files."})
+        await self.settled(held)
+
+        self.assertTrue(brain.asked[0]["stands_alone"],
+                        "a stale session may consume the handoff and nothing retries it")
+
+    async def test_a_post_update_continuation_is_still_not_a_prompt_that_stands_alone(self):
+        """R-GW-22 — "carry on where you were" means nothing on a session that was not
+        there for what it continues, and the flag arriving for one caller must not arrive
+        for the rest."""
+        brain, surface = Brain(), Surface()
+        held = self.a_parent_conversation("rundesk-update-standalone-", brain, surface)
+
+        await held.told_update_finished("one", "Rundesk update succeeded")
+        await self.settled(held)
+
+        self.assertFalse(brain.asked[0]["stands_alone"])
+
+    async def test_a_review_that_answered_marks_the_handoff_delivered(self):
+        """R-ROL-15 — the parent read the report and said something about it, which is the
+        one review the run was owed."""
+        brain = Brain(outcome=Outcome(text="I checked it; it is right."))
+        surface = Surface()
+        held = self.a_parent_conversation("rundesk-role-delivered-", brain, surface)
+        settled: list = []
+
+        await held.told_role_finished(
+            "one", {"role": "development", "role_run": "rol-1-aaaa",
+                    "outcome": "succeeded", "report": "I changed two files."},
+            delivered=lambda: settled.append(True))
+        await self.settled(held)
+
+        self.assertEqual([True], settled)
+
+    async def test_a_review_that_answered_nobody_leaves_the_handoff_owed(self):
+        """R-ROL-15 — issue #282 part B. The turn was admitted and said nothing, which is
+        exactly what a stale session does. Settled on admission it was written off for
+        good: the work was done, the provider was paid for it, and nobody was ever told.
+
+        This does not weaken the one-review rule. A turn that never read the handoff has
+        not delivered a review, so offering it again is that first review happening."""
+        brain, surface = Brain(outcome=Outcome(ok=True, text="")), Surface()
+        held = self.a_parent_conversation("rundesk-role-silent-", brain, surface)
+        settled: list = []
+
+        await held.told_role_finished(
+            "one", {"role": "development", "role_run": "rol-1-aaaa",
+                    "outcome": "succeeded", "report": "I changed two files."},
+            delivered=lambda: settled.append(True))
+        await self.settled(held)
+
+        self.assertEqual(1, len(brain.asked), "the review turn never ran at all")
+        self.assertEqual([], settled, "a review that answered nobody was written off")
+
+    async def test_a_review_that_failed_never_marks_the_handoff_delivered(self):
+        """R-ROL-15 — a turn that ended badly is not a review however much it said."""
+        brain = Brain(outcome=Outcome(ok=False, reason="failed", text="",
+                                      why="the turn ended without an answer"))
+        surface = Surface()
+        held = self.a_parent_conversation("rundesk-role-failed-", brain, surface)
+        settled: list = []
+
+        await held.told_role_finished(
+            "one", {"role": "development", "role_run": "rol-1-aaaa",
+                    "outcome": "succeeded", "report": "I changed two files."},
+            delivered=lambda: settled.append(True))
+        await self.settled(held)
+
+        self.assertEqual([], settled)
+
+    async def test_a_cancelled_review_never_marks_the_handoff_delivered(self):
+        """R-ROL-15 — a gateway standing down mid-review is the ordinary way this happens,
+        and the handoff has to be there to be offered again on the way back up."""
+        holds = asyncio.Event()
+        brain, surface = Brain(holds=holds), Surface()
+        held = self.a_parent_conversation("rundesk-role-cancelled-", brain, surface)
+        settled: list = []
+
+        await held.told_role_finished(
+            "one", {"role": "development", "role_run": "rol-1-aaaa",
+                    "outcome": "succeeded", "report": "I changed two files."},
+            delivered=lambda: settled.append(True))
+        held.exchanges["one"].task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await held.exchanges["one"].task
+
+        self.assertEqual([], settled)
+        holds.set()
+
+    async def test_which_run_is_reviewing_is_written_before_anything_is_delivered(self):
+        """R-ROL-13, R-ROL-15 — the marker refusing a second role level is written the
+        moment the turn exists, and settling the handoff waits for the answer. A caller
+        told both at once could not tell an attempt from a delivery."""
+        holds = asyncio.Event()
+        brain, surface = Brain(holds=holds), Surface()
+        held = self.a_parent_conversation("rundesk-role-order-", brain, surface)
+        reviewed, settled = [], []
+
+        await held.told_role_finished(
+            "one", {"role": "development", "role_run": "rol-1-aaaa",
+                    "outcome": "succeeded", "report": "I changed two files."},
+            reviewing=reviewed.append, delivered=lambda: settled.append(True))
+
+        self.assertEqual(1, len(reviewed), "the turn could have asked for a role run")
+        self.assertEqual([], settled, "the handoff was settled while the review still ran")
+        holds.set()
+        await self.settled(held)
+        self.assertEqual([True], settled)
 
     async def test_a_completed_restart_is_delivered_without_starting_another_turn(self):
         """R-GW-43"""

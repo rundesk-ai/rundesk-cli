@@ -1461,32 +1461,6 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         self.assertEqual("-# 🤖 subagent finished", finished)
         self.assertNotIn("private helper response", finished)
 
-    def test_a_role_is_not_called_a_subagent(self):
-        """R-ROL-27 — both are delegation and only one is a subagent. Naming the wrong
-        mechanism misleads somebody deciding whether to wait."""
-        tools = {}
-        started = discord._activity_line(
-            {"type": "tool", "id": "role:rol-1-aaaa", "name": "role", "did": "delegate",
-             "who": "applicant export"}, tools)
-        finished = discord._activity_line(
-            {"type": "result", "id": "role:rol-1-aaaa", "ok": True,
-             "summary": "applicant export"}, tools)
-        # The shared name sanitiser is not bent for a role: what reaches a surface goes
-        # through the same guard a provider name does.
-        self.assertEqual("-# 🤖 handed to a role: applicant-export", started)
-        self.assertEqual("-# 🤖 role finished: applicant-export", finished)
-        self.assertNotIn("subagent", started)
-        self.assertNotIn("subagent", finished)
-
-    def test_a_role_that_did_not_finish_says_so_rather_than_that_a_subagent_failed(self):
-        tools = {}
-        discord._activity_line(
-            {"type": "tool", "id": "role:rol-1-aaaa", "name": "role", "did": "delegate",
-             "who": "applicant export"}, tools)
-        failed = discord._activity_line(
-            {"type": "result", "id": "role:rol-1-aaaa", "ok": False, "summary": "x"}, tools)
-        self.assertEqual("-# ⚠ 🤖 role did not finish: applicant-export", failed)
-
     def test_a_safe_subagent_name_is_shown_without_its_provider_path(self):
         """R-DIS-20 — one helper may be named without relaying its work or private path."""
         tools = {}
@@ -1805,6 +1779,269 @@ class WhatOneTurnLooksLike(unittest.TestCase):
                 said = f" {discord.SHOWN[verb]} "
                 self.assertNotIn(" its ", said)
                 self.assertIn(" my ", said)
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class WhatARoleRunLooksLikeHere(unittest.TestCase):
+    """R-ROL-27, R-ROL-36 — work handed to a specialist, rendered from the record alone.
+
+    Both marks used to ride the generic tool/result activity, which meant two things:
+    with the default `grows` display they were *edited* into whatever unrelated turn was
+    in flight, as grey subtext nobody was told about; and the closing one was rendered by
+    correlating against a `Live` entry this process happened to be holding, so a restart
+    between handing work over and getting it back left the mark open for ever.
+    """
+
+    def handed(self, **also) -> dict:
+        said = {"type": "role", "conversation": "1180", "role_run": "rol-1-aaaa",
+                "state": "handed", "role": "development", "label": "applicant export",
+                "elapsed": 0}
+        said.update(also)
+        return said
+
+    def test_handing_work_to_a_role_is_news_rather_than_subtext(self):
+        line = discord.role_line(self.handed())
+        self.assertEqual("🤖 Handed **applicant-export** to the *development* role.", line)
+        self.assertFalse(line.startswith("-#"), "the news was shown as grey subtext")
+
+    def test_a_settled_role_run_shows_in_full_with_no_prior_handed_ever_seen(self):
+        """**The regression this exists for.** A run lasts hours and this program does
+        not: the adapter that is told a run came back is routinely not the one that was
+        told it went out. Asserted against `role_line`, which has no memory to have."""
+        back = discord.role_line(self.handed(state="settled", ok=True, elapsed=4000))
+        self.assertEqual(
+            "✅ 🤖 **applicant-export** is back from the *development* role"
+            " — not reviewed yet.", back)
+
+    def test_a_role_that_did_not_finish_says_so_rather_than_that_a_subagent_failed(self):
+        line = discord.role_line(self.handed(state="settled", ok=False, elapsed=4000))
+        self.assertEqual(
+            "⚠️ 🤖 **applicant-export** did not finish — what came back is not reviewed yet.",
+            line)
+        self.assertNotIn("subagent", line)
+
+    def test_a_check_in_says_how_long_the_run_has_been_going(self):
+        self.assertEqual(
+            "-# 🤖 **applicant-export** — 40m, still working",
+            discord.role_line(self.handed(state="working", elapsed=2400)))
+
+    def test_a_state_this_surface_does_not_know_shows_nothing(self):
+        """What `understood` already guarantees for anything unrecognised: an adapter that
+        does not know a record shows nothing and stays correct."""
+        self.assertEqual("", discord.role_line(self.handed(state="wandering")))
+        self.assertEqual("", discord.role_line({"type": "role"}))
+
+    def test_a_role_run_carrying_no_role_is_not_named_after_a_fallback(self):
+        """`_plain_name` answers `attachment` when it is left nothing, which is right for
+        a file and would have shown *the attachment role*."""
+        line = discord.role_line(self.handed(role=""))
+        self.assertEqual("🤖 Handed **applicant-export** to a role.", line)
+        self.assertNotIn("attachment", line)
+
+    def test_a_label_carrying_a_path_comes_out_through_the_shared_guard(self):
+        """R-ROL-17, R-DIS-9 — the shared name sanitiser is not bent for a role."""
+        line = discord.role_line(
+            self.handed(label="/Users/somebody/secret/exporter",
+                        role="/opt/roles/development"))
+        self.assertNotIn("/Users", line)
+        self.assertNotIn("secret", line)
+        self.assertIn("exporter", line)
+        self.assertIn("development", line)
+
+    def test_a_role_is_not_called_a_subagent(self):
+        """R-ROL-27 — both are delegation and only one is a subagent. Naming the wrong
+        mechanism misleads somebody deciding whether to wait."""
+        for state, also in (("handed", {}), ("working", {}), ("settled", {"ok": True})):
+            with self.subTest(state):
+                self.assertNotIn(
+                    "subagent", discord.role_line(self.handed(state=state, **also)))
+        self.assertNotIn(
+            "role", discord._activity_line({"type": "tool", "id": "1", "did": "delegate"},
+                                           {}))
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class HowARoleRunReachesTheRoom(unittest.IsolatedAsyncioTestCase):
+    """R-ROL-27, R-ROL-36 — its own message, and a check-in that does not fill a room."""
+
+    class Posted:
+        def __init__(self, refuses=False):
+            self.edited: list = []
+            self.refuses = refuses
+
+        async def edit(self, content):
+            if self.refuses:
+                raise RuntimeError("the platform would not take it")
+            self.edited.append(content)
+
+    def surface(self, activity=None, posting=None):
+        """The adapter, with only the platform boundary replaced."""
+        posted, chose = [], type("Choice", (), {
+            "activity": discord.GROWS if activity is None else activity})()
+
+        class Turn:
+            live: dict = {}
+
+            def __init__(self):
+                self.chose = chose
+                self.posted = posted
+
+            async def _post(self, it, content, **kw):
+                self.posted.append(content)
+                return posting() if posting is not None else None
+
+            def _no_longer_last(self, held):
+                discord.Agent._no_longer_last(self, held)
+
+            async def _role(self, it, held):
+                await discord.Agent._role(self, it, held)
+
+        return Turn()
+
+    def record(self, **also) -> dict:
+        said = {"type": "role", "conversation": "1180", "role_run": "rol-1-aaaa",
+                "state": "handed", "role": "development", "label": "a task", "elapsed": 0}
+        said.update(also)
+        return said
+
+    async def test_a_role_run_is_a_message_of_its_own_and_never_the_commentary(self):
+        turn = self.surface()
+        turn.live = {}
+
+        await discord.Agent.told(turn, self.record())
+
+        self.assertEqual(["🤖 Handed **a-task** to the *development* role."], turn.posted)
+
+    async def test_a_settled_run_is_posted_after_the_admitting_turn_was_cleared(self):
+        """**The defect, through the real dispatch.** `_state` ends its terminal branch
+        with `self.live.pop(...)`, so the whole `Live` — including `held.tools`, which
+        held the `role:<run>` correlation written seconds earlier — is discarded the
+        moment the turn that admitted the run reaches `finished`. A role run always
+        outlives that turn, so the correlation was always gone by the time the run came
+        back: `_activity_line` fell through, a successful `result` rendered as `""`, and
+        `_doing` dropped it. The return therefore never rendered for any role run, not
+        merely after a restart.
+
+        Measured on `rol-1-964h` (2026-08-02): admitted 10:41:44, the admitting turn
+        finished 10:41:56, the run settled 11:23:48, and nothing was written to that
+        conversation between 10:41:56 and 11:24:13.
+        """
+        posted: list = []
+
+        class Turn:
+            def __init__(self):
+                self.live: dict = {}
+                self.chose = type("Choice", (), {"activity": discord.GROWS})()
+
+            async def _post(self, it, content, **kw):
+                posted.append(content)
+                return None
+
+            async def _react(self, it, held, mark, instead_of=None):
+                pass
+
+            async def _flush(self, it, held):
+                pass
+
+            def _no_longer_last(self, held):
+                discord.Agent._no_longer_last(self, held)
+
+            async def _state(self, it, held):
+                await discord.Agent._state(self, it, held)
+
+            async def _role(self, it, held):
+                await discord.Agent._role(self, it, held)
+
+        turn = Turn()
+        await discord.Agent.told(turn, self.record())
+        await discord.Agent.told(turn, {"type": "state", "conversation": "1180",
+                                        "run": "7-a3f1", "state": "finished"})
+        self.assertNotIn("1180", turn.live,
+                         "the admitting turn's state was not cleared, so this case would "
+                         "have passed against the defect it exists for")
+
+        await discord.Agent.told(turn, self.record(state="settled", ok=True, elapsed=2524))
+
+        self.assertEqual(
+            ["🤖 Handed **a-task** to the *development* role.",
+             "✅ 🤖 **a-task** is back from the *development* role — not reviewed yet."],
+            posted, "what came back was never posted")
+
+    async def test_a_role_run_still_shows_when_activity_is_off(self):
+        """Turning activity off silences a turn's running commentary. A role coming back
+        is not commentary — it is the only sign the work happened at all."""
+        turn = self.surface(activity=discord.OFF)
+        turn.live = {}
+
+        await discord.Agent.told(turn, self.record(state="settled", ok=True))
+
+        self.assertEqual(1, len(turn.posted))
+
+    async def test_a_check_in_edits_the_message_it_already_posted_for_that_run(self):
+        held, posted = discord.Live(), self.Posted()
+        turn = self.surface(posting=lambda: posted)
+
+        await turn._role(self.record(state="working", elapsed=1300), held)
+        await turn._role(self.record(state="working", elapsed=2500), held)
+
+        self.assertEqual(1, len(turn.posted), "a second message was posted for one run")
+        self.assertEqual(["-# 🤖 **a-task** — 41m, still working"], posted.edited)
+
+    async def test_a_check_in_posts_afresh_once_something_else_has_been_said(self):
+        """R-DIS-20 — a message something has been posted under is one the reader has
+        scrolled past, and editing it changes history rather than showing progress."""
+        held, posted = discord.Live(), self.Posted()
+        turn = self.surface(posting=lambda: posted)
+
+        await turn._role(self.record(state="working", elapsed=1300), held)
+        turn._no_longer_last(held)
+        await turn._role(self.record(state="working", elapsed=2500), held)
+
+        self.assertEqual(2, len(turn.posted))
+        self.assertEqual([], posted.edited)
+
+    async def test_two_runs_in_one_conversation_never_share_a_check_in(self):
+        """Keyed per run, because one conversation can have several in flight — and only
+        the newest is still the last thing here, so the other starts a message of its own
+        rather than rewriting one the reader has already scrolled past (R-DIS-20)."""
+        held = discord.Live()
+        made: list = []
+        turn = self.surface(posting=lambda: made.append(self.Posted()) or made[-1])
+
+        await turn._role(self.record(state="working", elapsed=1300), held)
+        await turn._role(self.record(role_run="rol-2-bbbb", label="another task",
+                                     state="working", elapsed=1300), held)
+        await turn._role(self.record(state="working", elapsed=2500), held)
+
+        self.assertEqual(
+            ["-# 🤖 **a-task** — 21m, still working",
+             "-# 🤖 **another-task** — 21m, still working",
+             "-# 🤖 **a-task** — 41m, still working"], turn.posted)
+        self.assertEqual([[], [], []], [one.edited for one in made],
+                         "one run's check-in was written over the other's message")
+        self.assertEqual({"rol-1-aaaa"}, set(held.checked_in),
+                         "a buried check-in was kept as though it were still editable")
+
+    async def test_a_check_in_that_could_not_be_edited_is_posted_instead(self):
+        """A platform boundary: a message somebody deleted must not silence a run."""
+        held = discord.Live()
+        refuses = self.Posted(refuses=True)
+        turn = self.surface(posting=lambda: refuses)
+
+        await turn._role(self.record(state="working", elapsed=1300), held)
+        await turn._role(self.record(state="working", elapsed=2500), held)
+
+        self.assertEqual(2, len(turn.posted))
+
+    async def test_a_run_that_settled_stops_being_checked_in_on(self):
+        held, posted = discord.Live(), self.Posted()
+        turn = self.surface(posting=lambda: posted)
+
+        await turn._role(self.record(state="working", elapsed=1300), held)
+        await turn._role(self.record(state="settled", ok=True, elapsed=1400), held)
+
+        self.assertEqual({}, held.checked_in)
+        self.assertEqual([], posted.edited, "what came back was edited into a check-in")
 
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
