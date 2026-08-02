@@ -1889,7 +1889,7 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
             kind=turn.SCHEDULE if by_the_clock else turn.TERMINAL,
             fresh=args.fresh or by_the_clock,
             watching=said,
-            steering=_typed() if args.steer else None,
+            steering=_steering() if args.steer else None,
             # What it is told before it reads a word: this turn's own, then the agent's
             # (R-AGT-16) — and, where the clock started this, what rundesk says about that
             # situation whatever they wrote (R-AGT-34). For a person at a terminal there is
@@ -1917,7 +1917,7 @@ def cmd_ask(args: argparse.Namespace, agents) -> int:
     return 0 if outcome.ok else 1
 
 
-async def _typed():
+async def _steering():
     """Whatever else is typed while the turn runs, a line at a time.
 
     Read off a thread, because reading a terminal blocks and the turn is running on this

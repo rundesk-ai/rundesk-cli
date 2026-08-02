@@ -2513,6 +2513,55 @@ class RunningOneHere(unittest.TestCase):
         self.assertEqual(["ava"], gateways.served)
 
 
+    def test_a_steered_turn_is_handed_what_is_typed_while_it_runs(self):
+        """`ask --steer` reaches the turn with something to read from.
+
+        The flag was declared and nothing drove it, so a second module-level `_typed`
+        shadowed the generator this passes and the whole verb ended in `TypeError` the
+        moment anybody used it. A surface walk cannot catch that — it never types the
+        flag — so the one thing worth asserting is that the turn is handed a source of
+        words rather than a crash.
+        """
+        told = {}
+
+        async def carried(*asked, **how):
+            told.update(how)
+            return _Ended()
+
+        with mock.patch.object(cli.turn, "carry", carried):
+            code, said = drive(["ask", "ava", "what changed?", "--provider", "codex",
+                                "--steer"], agents=FakeAgents(made=("ava",)))
+        self.assertEqual(0, code, said)
+        self.assertTrue(hasattr(told.get("steering"), "__anext__"),
+                        f"nothing to steer with: {told.get('steering')!r}")
+
+    def test_an_unsteered_turn_is_handed_nothing_to_read(self):
+        """The other half of the same seam: without the flag there is no terminal to read,
+        and a turn handed an open generator would wait on one that never closes."""
+        told = {}
+
+        async def carried(*asked, **how):
+            told.update(how)
+            return _Ended()
+
+        with mock.patch.object(cli.turn, "carry", carried):
+            code, said = drive(["ask", "ava", "what changed?", "--provider", "codex"],
+                               agents=FakeAgents(made=("ava",)))
+        self.assertEqual(0, code, said)
+        self.assertIsNone(told.get("steering"))
+
+
+class _Ended:
+    """What a turn hands back, as far as `ask` reads it."""
+
+    run = "0001"
+    tokens: dict = {}
+    ok = True
+    why = None
+    reason = None
+    trouble: list = []
+
+
 class DiagnosingAnAgent(unittest.TestCase):
     def test_an_agent_with_nothing_wrong_is_ready(self):
         """R-AGT-11"""
