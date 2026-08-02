@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from rundesk import cli, config, restart_request, update_request  # noqa: E402
 from rundesk import update_worker, updater  # noqa: E402
+from rundesk.commands import lifecycle  # noqa: E402
 
 
 class DurableRequests(unittest.TestCase):
@@ -71,10 +72,10 @@ class DurableRequests(unittest.TestCase):
         """R-GW-43"""
         restart_request.queue("ava", {})
         with mock.patch.object(
-                cli, "_restart_in_flight", side_effect=[["turn:one"], []]), \
-                mock.patch.object(cli.time, "sleep") as slept, \
-                mock.patch.object(cli, "_stand_down", return_value=0) as cycled:
-            self.assertEqual(0, cli._run_restart_worker(
+                lifecycle, "_restart_in_flight", side_effect=[["turn:one"], []]), \
+                mock.patch.object(lifecycle.time, "sleep") as slept, \
+                mock.patch.object(lifecycle, "_stand_down", return_value=0) as cycled:
+            self.assertEqual(0, lifecycle._run_restart_worker(
                 mock.Mock(), mock.Mock(), mock.Mock()
             ))
         slept.assert_called_once()

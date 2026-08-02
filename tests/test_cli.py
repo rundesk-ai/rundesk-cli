@@ -35,7 +35,9 @@ from rundesk import catalog as real_catalog  # noqa: E402
 from rundesk import config  # noqa: E402
 from rundesk import restart_request  # noqa: E402
 from rundesk import standing  # noqa: E402
+from rundesk.commands import agents as agent_commands  # noqa: E402
 from rundesk.commands import backups as backup_commands  # noqa: E402
+from rundesk.commands import lifecycle  # noqa: E402
 from rundesk.commands import history  # noqa: E402
 from rundesk.commands import status as status_commands  # noqa: E402
 from rundesk.commands import update as update_commands  # noqa: E402
@@ -2042,7 +2044,7 @@ class StandingGatewaysDown(unittest.TestCase):
         args = argparse.Namespace(name=name, all=False, force=False, worker=True)
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = cli._stand_down(
+            code = lifecycle._stand_down(
                 args, gateways, machine, FakeAgents(made=[name]), "restart"
             )
         self.assertEqual(0, code, err.getvalue())
@@ -4444,17 +4446,17 @@ class WhichVersionEachGatewayIsActuallyOn(unittest.TestCase):
         apart exactly when it matters."""
         from rundesk import __version__
         it = type("S", (), {"running": True, "version": __version__})()
-        self.assertEqual(__version__, cli._version_of(it))
+        self.assertEqual(__version__, agent_commands._version_of(it))
 
     def test_a_gateway_left_on_an_older_version_is_marked_rather_than_merely_shown(self):
         """R-GW-9 — an update replaces the files while a gateway keeps the code it already
         imported. Two numbers a reader has to compare by eye is a difference nobody sees."""
         it = type("S", (), {"running": True, "version": "0.0.1"})()
-        self.assertIn("old", cli._version_of(it))
+        self.assertIn("old", agent_commands._version_of(it))
 
     def test_a_gateway_that_is_not_running_has_no_version_to_report(self):
         """R-GW-9 — a version read off a record whose process is gone says nothing."""
-        self.assertEqual("-", cli._version_of(type("S", (), {"running": False, "version": "9"})()))
+        self.assertEqual("-", agent_commands._version_of(type("S", (), {"running": False, "version": "9"})()))
 
 
 class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
@@ -4842,7 +4844,7 @@ class WhatATurnLooksLikeOnATerminal(unittest.TestCase):
     def _watched(self, said: dict) -> str:
         held = io.StringIO()
         with contextlib.redirect_stderr(held):
-            cli._Shown()(said)
+            agent_commands._Shown()(said)
         return held.getvalue().strip()
 
     def test_a_tool_is_shown_by_its_verb_and_its_brains_name(self):
