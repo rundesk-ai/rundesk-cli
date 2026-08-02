@@ -894,6 +894,12 @@ ROLE_SWEEP_SECONDS = 3600.0
 #: and then sends SIGKILL — and being killed is how children get left behind.
 STOP_SECONDS = 15.0
 
+#: How often what an agent may do is looked at, so its owner is told when it changes
+#: (R-CH-32). Unhurried on purpose: a grant is changed by hand at human pace, and the look
+#: is one directory listing — but a change made a minute before somebody uses the agent
+#: should already have been said.
+SKILLS_SECONDS = 10.0
+
 
 class AlreadyRunning(Exception):
     """A gateway of this name is already up (R-GW-4, R-GW-5)."""
@@ -1123,6 +1129,7 @@ class Gateway:
         records=None,
         asking=None,
         roles=None,
+        granted=None,
     ):
         self.name = checked(name)
         self.where = where or home()
@@ -1187,6 +1194,23 @@ class Gateway:
         #: whoever knows what an agent is. `None` is a gateway that can start programs and
         #: not turns, which is what one with no agent behind it is.
         self.asking = asking
+        #: What this agent may do, asked afresh each time rather than kept, and handed over
+        #: already made by whoever knows what an agent is — a gateway never reaches back for
+        #: one (R-AGT-9). Asked rather than remembered because a grant is a link on disk that
+        #: anything on the machine may add or take away while this gateway runs, which is the
+        #: whole reason its owner is told (R-CH-32).
+        #:
+        #: **None is a name that is not an agent**, which has no grants and so nothing to
+        #: watch — the same whole gateway a name with no schedules is.
+        self.granted = granted
+        #: What the owner is owed about their agent's skills and the list to write down
+        #: once they have it, or None for nothing owed. Held here rather than in the loop
+        #: so a surface that is not up yet is a wait: the news survives until it is
+        #: actually delivered, and only then is it written down.
+        self._skills_owed: tuple[list[str], tuple[str, ...]] | None = None
+        #: The last complaint about looking at them, so a directory that cannot be read
+        #: is said once rather than every ten seconds for as long as the gateway is up.
+        self._skills_complaint: str | None = None
         #: Which schedules have a turn in flight. Kept apart from `running`, which holds
         #: programs a shutdown ends: a turn's brain is not a program this gateway started.
         self._asked_for: set[str] = set()
@@ -1779,6 +1803,7 @@ class Gateway:
         sweeping = asyncio.ensure_future(self._over_and_over(
             ROLE_SWEEP_SECONDS, self._sweep_roles,
             "could not sweep expired role runs: %s", at_once=True))
+        watching = asyncio.ensure_future(self._tell_about_skills())
         try:
             await self._stopped.wait()
         finally:
@@ -1788,6 +1813,7 @@ class Gateway:
             notices.cancel()
             specialists.cancel()
             sweeping.cancel()
+            watching.cancel()
             for task in self._update_turn_tasks.values():
                 task.cancel()
             for task in self._role_tasks.values():
@@ -1800,6 +1826,8 @@ class Gateway:
                 await specialists
             with contextlib.suppress(BaseException):
                 await sweeping
+            with contextlib.suppress(BaseException):
+                await watching
             if self._update_turn_tasks:
                 await asyncio.gather(
                     *tuple(self._update_turn_tasks.values()), return_exceptions=True)
@@ -1967,6 +1995,136 @@ class Gateway:
                     except Exception as why:  # noqa: BLE001 — retried after reconnect
                         self.log.warning("could not deliver restart outcome: %s", why)
             await asyncio.sleep(2)
+
+    # -- what the agent may do ---------------------------------------------------------
+
+    def _skills_last_seen(self) -> Path:
+        """Where what this agent could do last time is written down.
+
+        Runtime state and not the owner's: it belongs to this gateway's run directory
+        beside its lock and its record, is nobody's to read but this loop, and says
+        nothing an owner would ever want back. Named the way the update marker is —
+        a dotfile keyed by the encoded name — because the run directory's `*.json`
+        entries are *the gateways there are* (`known`, `sweep`), so a record of any
+        other kind put there under that suffix invents a gateway nobody started.
+        """
+        identity = self.name.encode("utf-8").hex()
+        return self.where / f".{identity}.skills-last-seen"
+
+    def _skills_seen(self) -> tuple[str, ...] | None:
+        """What this agent could do when its owner was last told, or None for never.
+
+        None is deliberately not "it could do nothing": an install where this has never
+        run would otherwise announce every skill the agent already holds as newly
+        added, on the one startup that follows an update.
+        """
+        try:
+            written = self._skills_last_seen().read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        return tuple(line for line in written.splitlines() if line)
+
+    def _remember_skills(self, names: Sequence[str]) -> None:
+        """Write down what the owner has now been told about, or leave it alone.
+
+        Replaced whole and atomically: a half-written list read back by the next look is
+        a list of skills that were never taken away being announced as though they had
+        been. A machine that will not take it keeps the old list, so the same change is
+        said again on the next look rather than silently lost — being told twice is the
+        smaller failure.
+        """
+        target = self._skills_last_seen()
+        temporary = target.with_suffix(f".{os.getpid()}.tmp")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(temporary, "w", encoding="utf-8") as handle:
+                os.chmod(temporary, 0o600)
+                handle.write("".join(f"{one}\n" for one in names))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+        except OSError as why:
+            self.log.warning("could not write down what this agent may do: %s", why)
+        finally:
+            with contextlib.suppress(OSError):
+                temporary.unlink()
+
+    async def _tell_about_skills(self) -> None:
+        """Tell the owner, privately, when this agent gains or loses a skill (R-CH-32).
+
+        Looked at rather than reported: a grant is a link in a directory, and the four
+        things that add or remove one — a command, a configured baseline reconciled at
+        startup, a catalog update and a catalog removal — would each have to remember to
+        say so, while somebody making the link by hand never could. What the directory
+        holds is the whole truth about what an agent may do, so that is what is watched.
+
+        **What was seen is written down, so a change made while the agent was stopped is
+        still told.** Taking a skill away is exactly what an owner does with the gateway
+        down, and a notice only the running process could have raised is one that case
+        never gets.
+
+        Nothing is written down until it has actually been delivered, which is what makes
+        a surface that is not up yet a wait rather than a loss.
+        """
+        while not self._stopping:
+            if self.granted is not None:
+                try:
+                    self._look_at_skills()
+                except Exception as why:  # noqa: BLE001 — a loop nobody awaits
+                    if self._skills_complaint != str(why):
+                        self.log.warning("could not see what this agent may do: %s", why)
+                        self._skills_complaint = str(why)
+                else:
+                    self._skills_complaint = None
+                await self._say_skill_changes()
+            await asyncio.sleep(SKILLS_SECONDS)
+
+    def _look_at_skills(self) -> None:
+        """Work out what changed, and hold it until somebody can be told.
+
+        Worked out afresh every look rather than accumulated: what is owed is always the
+        difference between the directory and the list, so a skill granted and revoked
+        again before either could be said leaves nothing to say.
+        """
+        now = tuple(self.granted())
+        seen = self._skills_seen()
+        if seen is None or not self.reachable:
+            # A first look has nothing to compare against, and an agent reached on no
+            # surface has nobody to tell — both write down what is there and say nothing.
+            # Without the second, an owner who adds a channel months later is greeted by
+            # every grant they ever made.
+            self._remember_skills(now)
+            self._skills_owed = None
+            return
+        lines = (
+            [f"🧩 **Skill added** — `{one}`" for one in now if one not in seen]
+            + [f"🗑️ **Skill removed** — `{one}`" for one in seen if one not in now]
+        )
+        self._skills_owed = (lines, now) if lines else None
+
+    async def _say_skill_changes(self) -> None:
+        """Say what changed on one surface, and write it down only once it has gone.
+
+        One surface and not every one: an agent reached on two of them has one owner, and
+        the same news twice reads as two changes. The first by name, so which one it is
+        does not depend on the order channels happened to connect in.
+        """
+        if self._skills_owed is None:
+            return
+        lines, now = self._skills_owed
+        for named in sorted(self._reached):
+            answering = self._reached[named]
+            if not answering.connected:
+                continue
+            try:
+                await answering.told_the_owner("\n".join(lines))
+            except Exception as why:  # noqa: BLE001 — retried on the next look
+                self.log.warning("could not tell the owner what changed: %s", why)
+                return
+            self.log.info("told the owner about %d skill change(s)", len(lines))
+            self._remember_skills(now)
+            self._skills_owed = None
+            return
 
     def ask_to_stop(self, come_back: bool = False) -> None:
         """Take no more work, and begin going away (R-GW-6).

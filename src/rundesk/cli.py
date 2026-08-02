@@ -1496,7 +1496,7 @@ def _as_table(head: tuple, rows: list) -> None:
         print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip())
 
 
-def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
+def cmd_serve(args: argparse.Namespace, gateways, agents, skills) -> int:
     """Run a gateway here, in the foreground. What the machine's job invokes.
 
     Refusing to run ends *well*, on purpose. The machine is told to start a gateway
@@ -1534,6 +1534,12 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
         # role run needs an agent, a bundle and an account, and a gateway knows none of
         # them (R-ROL-4).
         specialists = agents.playing(args.name) if agents.exists(args.name) else None
+        # What this agent may do, resolved here and handed over as a question rather than
+        # an answer: a grant is a link anything on the machine may add or take away while
+        # the gateway runs, and the gateway is what tells the owner it changed (R-CH-32).
+        # None for a name that is not an agent, which holds no grants.
+        granted = ((lambda: skills.granted(agents.skills(args.name)))
+                   if agents.exists(args.name) else None)
     except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         print(f"        what stands in the way:  rundesk doctor {args.name}", file=sys.stderr)
@@ -1552,13 +1558,14 @@ def cmd_serve(args: argparse.Namespace, gateways, agents) -> int:
                                             agents=agents.agents_home(),
                                             records=records,
                                             asking=asking,
-                                            roles=specialists).serve())
+                                            roles=specialists,
+                                            granted=granted).serve())
     except (gateways.AlreadyRunning, gateways.Unfit, gateways.NotAName) as why:
         print(f"{args.name}: NOT STARTED — {why}", file=sys.stderr)
         return 0
 
 
-def cmd_start(args: argparse.Namespace, gateways, machine, agents) -> int:
+def cmd_start(args: argparse.Namespace, gateways, machine, agents, skills) -> int:
     """Hand a gateway to the machine, and see that a gateway actually results.
 
     The machine taking the job is not the gateway running. A job can be accepted and the
@@ -1569,7 +1576,7 @@ def cmd_start(args: argparse.Namespace, gateways, machine, agents) -> int:
     if args.here:
         # The same function the machine's own job reaches, so what a person types and what
         # launchd runs cannot come to behave differently.
-        return cmd_serve(args, gateways, agents)
+        return cmd_serve(args, gateways, agents, skills)
     name = args.name
     already = _standing(name, gateways, agents)
     if already.running:
@@ -4724,9 +4731,9 @@ def main(argv: list[str], gateways=None, machine=None, agents=None, skills=None,
     if args.command == "ask":
         return cmd_ask(args, agents)
     if args.command == "serve":
-        return cmd_serve(args, gateways, agents)
+        return cmd_serve(args, gateways, agents, skills)
     if args.command == "start":
-        return cmd_start(args, gateways, machine, agents)
+        return cmd_start(args, gateways, machine, agents, skills)
     if args.command == "stop":
         return cmd_stop(args, gateways, machine, agents)
     if args.command == "remove":

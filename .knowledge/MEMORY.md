@@ -8,6 +8,23 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **The gate passes locally on a developer's machine for cases that fail on a runner, because
+  the suite inherits `RUNDESK_DATA_DIR` too.** An agent's shell is a gateway's child, so a case
+  that calls `agent.add` reads the *owner's* configured skill baseline through `config.skills()`
+  and never notices it had no install of its own. Measured: three new cases in `test_answering`
+  passed under `python3 .knowledge/scripts/gate` and errored on all three CI shards. Give every
+  case that makes an agent its own `RUNDESK_DATA_DIR` and `config.ensure`, the way
+  `CarriesAConversation.setUp` does — and run the gate at least once under
+  `env -u RUNDESK_DATA_DIR -u RUNDESK_HOME -u RUNDESK_AGENTS_DIR … HOME=/tmp/somewhere` before
+  believing it.
+
+- **The run directory's `*.json` entries *are* the list of gateways, so anything else you
+  keep there under that suffix invents one.** `gateway.every` unions the stems of `*.lock`
+  and `*.json`, and `sweep` walks the same glob. Measured: dropping `ava.skills.json` into a
+  scratch run directory made `gateway.every` report a gateway called `ava.skills`. Runtime
+  state of any other kind goes in as a dotfile keyed by the encoded name, the way
+  `update_request.maintenance_path` and `gateway._skills_last_seen` do — never `<something>.json`.
+
 - **Running `./rundesk` from a checkout tests new code against the live install's data, and
   nothing warns you.** An agent's shell is a gateway's child, so it already carries
   `RUNDESK_AGENTS_DIR`, `RUNDESK_HOME`, `RUNDESK_SCRIPTS` and `RUNDESK_RUN` — the *owner's*.

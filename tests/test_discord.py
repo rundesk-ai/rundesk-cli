@@ -2272,6 +2272,63 @@ class WhichRoomAWordMeans(unittest.TestCase):
 class WhatTheOwnerIsTold(unittest.TestCase):
     """R-DIS-15, R-DIS-16 — coming up, going down, and closing the connection either way."""
 
+    def test_a_notice_for_the_owner_is_sent_to_them_and_starts_no_conversation(self):
+        """R-DIS-38 — bookkeeping about the agent reaches the owner privately, and a
+        record with no conversation must not leave a live exchange nobody is in."""
+        class Told:
+            live: dict = {}
+
+            def __init__(self):
+                self.said: list = []
+
+            async def _tell_the_owner(self, it):
+                self.said.append(it)
+
+        told = Told()
+        asyncio.run(discord.Agent.told(
+            told, {"type": "owner-notice", "text": "🧩 **Skill added** — `alpha`"}))
+
+        self.assertEqual(["🧩 **Skill added** — `alpha`"], told.said)
+        self.assertEqual({}, told.live)
+
+    def test_a_notice_for_the_owner_too_long_for_one_message_is_split(self):
+        """R-DIS-13 — a catalog takes away every skill it brought in one go, and Discord
+        refuses a message over its limit outright rather than shortening it."""
+        class Told:
+            live: dict = {}
+
+            def __init__(self):
+                self.said: list = []
+
+            async def _tell_the_owner(self, it):
+                self.said.append(it)
+
+        lines = "\n".join(f"🗑️ **Skill removed** — `{one}`" for one in range(200))
+        told = Told()
+        asyncio.run(discord.Agent.told(told, {"type": "owner-notice", "text": lines}))
+
+        self.assertGreater(len(told.said), 1, "a notice over the limit was sent whole")
+        self.assertTrue(all(len(one) <= discord.LIMIT for one in told.said))
+        self.assertEqual(
+            lines.splitlines(),
+            [line for piece in told.said for line in piece.splitlines()],
+            "splitting lost a skill the owner was owed")
+
+    def test_a_notice_for_the_owner_with_nothing_in_it_is_not_sent(self):
+        """R-DIS-38 — an empty message is one Discord refuses, and one nobody can read."""
+        class Told:
+            live: dict = {}
+
+            def __init__(self):
+                self.said: list = []
+
+            async def _tell_the_owner(self, it):
+                self.said.append(it)
+
+        told = Told()
+        asyncio.run(discord.Agent.told(told, {"type": "owner-notice", "text": ""}))
+        self.assertEqual([], told.said)
+
     def test_successfully_telling_the_owner_is_routine_channel_activity(self):
         """R-GW-44 — a startup or shutdown notice that lands is not a warning."""
         kept = []

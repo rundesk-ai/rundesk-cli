@@ -825,6 +825,18 @@ class Agent(discord.Client):
         entirely different fixes — so neither is left to be inferred.
         """
         kind = it.get("type")
+        # Answered before anything is kept for a conversation, because this one has none:
+        # it is about the agent and not about a turn, and a place held under an absent
+        # conversation is a live exchange nobody is in.
+        if kind == "owner-notice":
+            # Split like anything else Discord is given: a catalog removal takes away
+            # every skill it brought at once, and a notice over the limit is refused
+            # outright rather than shortened (R-DIS-13).
+            rest = str(it.get("text") or "")
+            while rest:
+                piece, rest = split_at(rest, LIMIT)
+                await self._tell_the_owner(piece)
+            return
         if kind in ("state", "answer"):
             note(f"told {kind}"
                  f"{'/' + str(it.get('state')) if kind == 'state' else ''}"
