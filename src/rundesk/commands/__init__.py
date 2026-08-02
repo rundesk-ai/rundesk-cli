@@ -20,6 +20,15 @@ import queue
 import sys
 import threading
 
+#: What a command that exists but is not built yet exits with. Not 0, which a script
+#: would take as done; not 1, which is reserved for a command that ran and failed; and
+#: not 2, which argparse already spends on a usage error. Those last two are different
+#: situations wearing one number: "this rundesk does not have that yet" is worth waiting
+#: for or upgrading to, and "you typed it wrong" is worth reading the help for, and a
+#: script that cannot tell them apart can do neither. 69 is `EX_UNAVAILABLE`, which is
+#: what the BSD table has always called this. See `PLANNED`.
+NOT_AVAILABLE = 69
+
 
 def _as_table(head: tuple, rows: list) -> None:
     """Columns wide enough for what is in them. Written once, so the two things that
@@ -81,3 +90,20 @@ def _answered_within(patience: float, work, called: str) -> tuple:
         return answered.get(timeout=patience)
     except queue.Empty:
         return (False, None)
+
+
+def cmd_not_available(name: str, act: str | None = None) -> int:
+    """Say that this rundesk does not have that yet, and name what it does have.
+
+    The action is said back when one was given (R-CMD-10): `agents` and `agents show` are
+    different things to want, and being told only that "agents" is planned reads as though
+    the whole noun is missing rather than that one thing about it is.
+
+    Ends on `NOT_AVAILABLE` rather than argparse's usage code (R-CMD-8), and names a
+    command that does work (R-CMD-9), because being told what is missing and nothing else
+    leaves a reader exactly where they started.
+    """
+    asked = f"{name} {act}" if act else name
+    print(f"{asked}: NOT AVAILABLE — planned, not built yet", file=sys.stderr)
+    print("        what this rundesk can do:  rundesk --help", file=sys.stderr)
+    return NOT_AVAILABLE

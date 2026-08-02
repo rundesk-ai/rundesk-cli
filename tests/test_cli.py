@@ -35,6 +35,9 @@ from rundesk import catalog as real_catalog  # noqa: E402
 from rundesk import config  # noqa: E402
 from rundesk import restart_request  # noqa: E402
 from rundesk import standing  # noqa: E402
+from rundesk.commands import backups as backup_commands  # noqa: E402
+from rundesk.commands import history  # noqa: E402
+from rundesk.commands import status as status_commands  # noqa: E402
 from rundesk.commands import update as update_commands  # noqa: E402
 from rundesk import store  # noqa: E402
 from rundesk import update_request  # noqa: E402
@@ -2423,8 +2426,8 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
     def test_status_survives_a_backup_directory_that_does_not_answer(self):
         """R-BKP-28 — backup storage may be cloud-backed or remote. Its outage must not
         take every other install-health answer away with it."""
-        real_every = cli.backups.every
-        real_patience = cli.BACKUP_STATUS_PATIENCE
+        real_every = backup_commands.backups.every
+        real_patience = status_commands.BACKUP_STATUS_PATIENCE
         entered, release = threading.Event(), threading.Event()
 
         def blocked(_where):
@@ -2432,15 +2435,15 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
             release.wait(1)
             return []
 
-        cli.backups.every = blocked
-        cli.BACKUP_STATUS_PATIENCE = 0.02
+        backup_commands.backups.every = blocked
+        status_commands.BACKUP_STATUS_PATIENCE = 0.02
         began = time.monotonic()
         try:
             code, said = drive(["status"])
         finally:
             release.set()
-            cli.backups.every = real_every
-            cli.BACKUP_STATUS_PATIENCE = real_patience
+            backup_commands.backups.every = real_every
+            status_commands.BACKUP_STATUS_PATIENCE = real_patience
         self.assertTrue(entered.wait(0.1), "status never asked after the backups")
         self.assertLess(time.monotonic() - began, 0.2, "status waited on backup storage")
         self.assertEqual(0, code, said)
@@ -2453,8 +2456,8 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
         `status`. `backups` ran the identical enumeration on the main thread with no bound
         at all, and sat for over five minutes at 0.0% CPU with no output and no error —
         the one command that cannot answer without the guard."""
-        real_every = cli.backups.every
-        real_patience = cli.BACKUP_PATIENCE
+        real_every = backup_commands.backups.every
+        real_patience = backup_commands.BACKUP_PATIENCE
         entered, release = threading.Event(), threading.Event()
 
         def blocked(_where):
@@ -2462,15 +2465,15 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
             release.wait(1)
             return []
 
-        cli.backups.every = blocked
-        cli.BACKUP_PATIENCE = 0.02
+        backup_commands.backups.every = blocked
+        backup_commands.BACKUP_PATIENCE = 0.02
         began = time.monotonic()
         try:
             code, said = drive(["backups"])
         finally:
             release.set()
-            cli.backups.every = real_every
-            cli.BACKUP_PATIENCE = real_patience
+            backup_commands.backups.every = real_every
+            backup_commands.BACKUP_PATIENCE = real_patience
         self.assertTrue(entered.wait(0.1), "the listing never asked after the backups")
         self.assertLess(time.monotonic() - began, 0.5, "the listing waited on storage")
         self.assertEqual(1, code, "an unreachable directory was reported as success")
@@ -2480,15 +2483,15 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
         """R-BKP-29 — an empty listing and an unreachable directory must not look the same.
         While the two agree, an owner cannot tell a working daily backup from one that has
         never landed, and only one of the two means their agents are unprotected."""
-        real_every = cli.backups.every
-        real_patience = cli.BACKUP_PATIENCE
-        cli.backups.every = lambda _where: threading.Event().wait(1) or []
-        cli.BACKUP_PATIENCE = 0.02
+        real_every = backup_commands.backups.every
+        real_patience = backup_commands.BACKUP_PATIENCE
+        backup_commands.backups.every = lambda _where: threading.Event().wait(1) or []
+        backup_commands.BACKUP_PATIENCE = 0.02
         try:
             code, said = drive(["backups"])
         finally:
-            cli.backups.every = real_every
-            cli.BACKUP_PATIENCE = real_patience
+            backup_commands.backups.every = real_every
+            backup_commands.BACKUP_PATIENCE = real_patience
         self.assertEqual(1, code)
         self.assertNotIn("no backups", said,
                          "a directory that did not answer was reported as holding none")
@@ -4805,32 +4808,32 @@ class WhoSaidIt(unittest.TestCase):
 
     def test_a_person_is_named_by_what_their_surface_calls_them(self):
         """Discord hands over a display name rather than a number, and it is kept."""
-        self.assertEqual("tim", cli._said_by({"who": "tim", "author": "user"}, "ava"))
+        self.assertEqual("tim", history._said_by({"who": "tim", "author": "user"}, "ava"))
 
     def test_two_people_are_two_names_rather_than_two_rows_saying_user(self):
         """The whole point: one channel, two direct messages, two people."""
-        said = [cli._said_by({"who": one, "author": "user"}, "ava") for one in ("tim", "sam")]
+        said = [history._said_by({"who": one, "author": "user"}, "ava") for one in ("tim", "sam")]
         self.assertEqual(["tim", "sam"], said)
 
     def test_the_agent_is_named_rather_than_called_agent(self):
         """A listing asked for by name that answers `agent` spends a column saying the one
         thing its reader already knew."""
-        self.assertEqual("ava", cli._said_by({"who": None, "author": "agent"}, "ava"))
+        self.assertEqual("ava", history._said_by({"who": None, "author": "agent"}, "ava"))
 
     def test_somebody_a_surface_gave_no_name_for_is_still_told_from_the_agent(self):
         """The terminal reports nobody, and `user` versus the agent's name is still the
         distinction that matters."""
-        self.assertEqual("user", cli._said_by({"who": None, "author": "user"}, "ava"))
+        self.assertEqual("user", history._said_by({"who": None, "author": "user"}, "ava"))
 
     def test_rundesk_is_never_renamed_to_the_agent(self):
         """What rundesk added to a turn is not the agent speaking, and a listing that said it
         was would attribute rundesk's words to somebody who did not write them (R-PRV-5)."""
-        self.assertEqual("rundesk", cli._said_by({"who": None, "author": "rundesk"}, "ava"))
+        self.assertEqual("rundesk", history._said_by({"who": None, "author": "rundesk"}, "ava"))
 
     def test_a_name_a_surface_gave_wins_over_the_kind_of_author(self):
         """Both present is the ordinary case for a channel message, and the name is the more
         specific of the two."""
-        self.assertEqual("sam", cli._said_by({"who": "sam", "author": "user"}, "ava"))
+        self.assertEqual("sam", history._said_by({"who": "sam", "author": "user"}, "ava"))
 
 
 class WhatATurnLooksLikeOnATerminal(unittest.TestCase):
