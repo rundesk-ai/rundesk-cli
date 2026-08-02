@@ -5,10 +5,9 @@ description: Hand heavy work to a Rundesk role and review what comes back. Use w
 
 # Delegating to a role
 
-A role is a specialist your owner installed: its own rules, its own skills, its own project. It
-runs outside your turn, and you are woken later with one report. **It is not you** — no memory,
-no history, none of your rules — and it cannot answer anybody. Everything reaches them through
-you.
+A role runs outside your turn, under its own rules and its own skills, in a project you name.
+You are woken later with one report. **It is not you** — no memory, no history, none of your
+rules — and it cannot answer anybody, so everything it did reaches them through you.
 
 ## Which one
 

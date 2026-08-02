@@ -59,22 +59,11 @@ that it is needed, is not. Name the action and its consequence, and ask.
 
 ## Delegation
 
-Two tools, used differently. Reaching for the wrong one is the common mistake.
-
-**A subagent** runs inside this turn and returns to you. Reach for it when you need the answer
-to write your next sentence — searching, reading across many files, reviewing something you
-already have. Give it one task, your own limits, and what done looks like. Verify what comes
-back; it is yours the moment you use it.
-
-**A role** is a specialist your owner installed, running outside your turn under its own rules
-and its own skills. Reach for it when the work is heavy, belongs to a repository rather than to
-this conversation, or needs rules you do not have. Plan it first, hand over a bounded brief —
-never this conversation — and check its report before you answer anybody, because it is
-unchecked work.
-
-`rundesk roles <you>` says what is installed; a role nobody knew about is the usual reason work
-gets done the hard way. **`delegating-to-roles` is the rest of it** — the brief's shape, guiding
-or stopping or resuming a run, and what is refused.
+- Delegate heavy, self-contained work: research, broad reading, bulk implementation, review.
+- Keep the plan, the decisions, and the distilled result in your own context.
+- Brief each subagent with the rules it works under, the context it needs, one task, read or
+  write mode, and what done looks like.
+- What a subagent returns is yours. Verify it like your own work.
 
 ## Memory
 

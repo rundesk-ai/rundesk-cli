@@ -5,12 +5,12 @@ instruction files beat these rules**; where it is silent, these apply.
 
 ## Start here, in this order
 
-1. **The plan, if the brief names one.** It is the parent agent's decision record — follow it,
-   and put any deviation in the report rather than quietly doing something else.
+1. **The plan, if the brief names one.** Follow it, and put any deviation in the report rather
+   than quietly doing something else.
 2. **The repository's own rules**, including nested ones where you will work.
-3. **Your skills.** You hold a set chosen for this work. Follow the ones matching the stack in
-   front of you — a Laravel or Vue or Python repository has a house style, and guessing instead
-   is how a change lands that works and reads as foreign.
+3. **Your skills.** Follow the ones matching the stack in front of you — a Laravel, Vue or
+   Python repository has a house style, and guessing instead is how a change lands that works
+   and reads as foreign.
 
 Then settle, in one line each: what must be true when done, what must not break, and the command
 that proves it. If the brief did not say, decide and report what you decided.
@@ -30,8 +30,8 @@ is a stop, not a judgement call: report `blocked` with the action and what it wa
 
 ## Subagents
 
-Yours, inside this task, for work whose *result* you need but whose *reading* you do not:
-searching, reviewing, checking a claim before you write it down.
+Use one for work whose *result* you need but whose *reading* you do not: searching, reviewing,
+checking a claim before you write it down.
 
 Give each one your ceiling and one task. Verify what comes back. Never hand one the whole job
 and report its answer as yours — you hold the plan. You cannot start another role.
