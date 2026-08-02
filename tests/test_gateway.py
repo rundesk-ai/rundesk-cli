@@ -33,7 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import activity, config, gateway, process, schedule, store  # noqa: E402
+from rundesk import activity, config, gateway, process, recovery, schedule, store  # noqa: E402
 
 PY = sys.executable
 
@@ -2067,7 +2067,7 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
         self._left_behind()
         gw = self.made()
         gw.claim()
-        said = gateway.what_was_interrupted("gateway", self.logs)
+        said = recovery.what_was_interrupted("gateway", self.logs)
         self.assertIn("turn", said, "work that never finished was dropped in silence")
         self.assertTrue(said["turn"]["ended"], "it is gone, and was not said to be")
         self.assertIn("gone", said["turn"]["why"])
@@ -2081,7 +2081,7 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
         self._left_behind(pgid=os.getpgrp(), since=None)
         gw = self.made()
         gw.claim()
-        said = gateway.what_was_interrupted("gateway", self.logs)
+        said = recovery.what_was_interrupted("gateway", self.logs)
         self.assertFalse(said["turn"]["ended"], "something still running was called gone")
         self.assertIn("ours", said["turn"]["why"])
 
@@ -2091,7 +2091,7 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
             {"name": "gateway", "working": {"turn": {"since": "x"}}}))
         gw = self.made()
         gw.claim()
-        said = gateway.what_was_interrupted("gateway", self.logs)
+        said = recovery.what_was_interrupted("gateway", self.logs)
         self.assertIn("turn", said)
         self.assertIsNone(said["turn"]["pgid"])
 
@@ -2101,8 +2101,8 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
         self._left_behind(name="abandoned", work="its-turn")
         gw = self.made("mine")
         gw.claim()
-        self.assertIn("its-turn", gateway.what_was_interrupted("abandoned", self.logs))
-        self.assertEqual({}, gateway.what_was_interrupted("mine", self.logs),
+        self.assertIn("its-turn", recovery.what_was_interrupted("abandoned", self.logs))
+        self.assertEqual({}, recovery.what_was_interrupted("mine", self.logs),
                          "another gateway's interruption was filed under ours")
 
     async def test_work_a_shutdown_could_not_end_is_answered_for(self):
@@ -2121,7 +2121,7 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
         self.addCleanup(setattr, process, "end_all", stubborn)
         process.end_all = would_not_go
         self.assertFalse(await asyncio.wait_for(gw._go(), 15))
-        said = gateway.what_was_interrupted(gw.name, self.logs)
+        said = recovery.what_was_interrupted(gw.name, self.logs)
         self.assertIn("stubborn", said, "it went with work running and told nothing")
         self.assertFalse(said["stubborn"]["ended"])
         process.end_all = stubborn
@@ -2136,7 +2136,7 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
         gw.claim()
         gw.release()
         self.assertFalse((self.where / "gateway.json").exists())
-        self.assertIn("turn", gateway.what_was_interrupted("gateway", self.logs))
+        self.assertIn("turn", recovery.what_was_interrupted("gateway", self.logs))
 
     async def test_work_a_successor_could_not_end_is_still_named_in_its_record(self):
         """R-GW-16, R-GW-23 — refusing to *claim* it was ended is only half of it.
@@ -2168,20 +2168,20 @@ class WorkThatNeverGotToFinish(WithARunDirectory):
     async def test_interruptions_do_not_pile_up_without_end(self):
         """R-GW-23 — a machine left running for months must not grow a file nobody prunes,
         and the ones worth keeping are the ones that just happened."""
-        self.addCleanup(setattr, gateway, "KEPT_INTERRUPTIONS", gateway.KEPT_INTERRUPTIONS)
-        gateway.KEPT_INTERRUPTIONS = 3
+        self.addCleanup(setattr, recovery, "KEPT_INTERRUPTIONS", recovery.KEPT_INTERRUPTIONS)
+        recovery.KEPT_INTERRUPTIONS = 3
         for n in range(10):
-            gateway._note_interrupted("gateway", self.logs, f"turn-{n}", "because")
-        said = gateway.what_was_interrupted("gateway", self.logs)
+            recovery.note_interrupted("gateway", self.logs, f"turn-{n}", "because")
+        said = recovery.what_was_interrupted("gateway", self.logs)
         self.assertEqual(3, len(said), "it kept every interruption there had ever been")
         self.assertIn("turn-9", said, "it kept the oldest and threw away the newest")
 
     async def test_one_gateway_noting_an_interruption_does_not_erase_anothers(self):
         """R-GW-23 — a gateway sweeping an abandoned name writes into *that* name's file,
         so two writers working from their own snapshots is a real shape here."""
-        gateway._note_interrupted("shared", self.logs, "first", "because")
-        gateway._note_interrupted("shared", self.logs, "second", "because")
-        said = gateway.what_was_interrupted("shared", self.logs)
+        recovery.note_interrupted("shared", self.logs, "first", "because")
+        recovery.note_interrupted("shared", self.logs, "second", "because")
+        said = recovery.what_was_interrupted("shared", self.logs)
         self.assertEqual({"first", "second"}, set(said), "one write erased the other")
 
 
@@ -2542,13 +2542,13 @@ NOTES_INTERRUPTIONS = """
 import sys, time
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-from rundesk import gateway
+from rundesk import recovery
 
 schedules, mine, how_many, start = Path(sys.argv[2]), sys.argv[3], int(sys.argv[4]), Path(sys.argv[5])
 while not start.exists():          # all of them held here, then let go together
     time.sleep(0.002)
 for n in range(how_many):
-    gateway._note_interrupted("shared", schedules, f"{mine}-{n}", "because")
+    recovery.note_interrupted("shared", schedules, f"{mine}-{n}", "because")
 """
 
 
@@ -2586,9 +2586,9 @@ class WhatTwoWritersDoToOneFile(WithARunDirectory):
             _, went_wrong = one.communicate(timeout=60)
             self.assertEqual(0, one.returncode, went_wrong)
 
-        said = gateway.what_was_interrupted("shared", self.logs)
+        said = recovery.what_was_interrupted("shared", self.logs)
         wanted = {f"writer{n}-{m}" for n in range(self.WRITERS) for m in range(self.EACH)}
-        self.assertLessEqual(len(wanted), gateway.KEPT_INTERRUPTIONS,
+        self.assertLessEqual(len(wanted), recovery.KEPT_INTERRUPTIONS,
                              "the case is only about lost writes, so it stays under the cap")
         self.assertEqual(wanted, set(said),
                          f"{len(wanted) - len(said)} of {len(wanted)} interruptions were lost")
@@ -2596,10 +2596,10 @@ class WhatTwoWritersDoToOneFile(WithARunDirectory):
     def test_a_writer_that_cannot_read_the_file_changes_nothing_and_does_not_stop_a_start(self):
         """R-GW-27, R-SCH-17 — the history is worth less than the gateway. It is not worth
         so little that a file nobody can read is replaced with one entry."""
-        target = gateway.interrupted_path("shared", self.logs)
+        target = recovery.interrupted_path("shared", self.logs)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text('{"turn": {"at": "2026-07-25 09:00",,}}')
-        gateway._note_interrupted("shared", self.logs, "new", "because")
+        recovery.note_interrupted("shared", self.logs, "new", "because")
         self.assertEqual('{"turn": {"at": "2026-07-25 09:00",,}}', target.read_text(),
                          "it wrote one entry over a file it could not read")
 
@@ -2612,7 +2612,7 @@ class WhatTwoWritersDoToOneFile(WithARunDirectory):
         real_fsync = os.fsync
         os.fsync = lambda fd: (asked.append(fd), real_fsync(fd))[1]
 
-        gateway._note_interrupted("shared", self.logs, "turn", "because")
+        recovery.note_interrupted("shared", self.logs, "turn", "because")
         self.assertTrue(asked, "what has already happened was written without waiting for it")
 
         asked.clear()
@@ -2794,7 +2794,7 @@ class WhatAGatewaySaysAndWhereItLands(WithARunDirectory):
         never a terminal."""
         gone = io.StringIO()          # a captured stream, which is what launchd hands it
         with contextlib.redirect_stderr(gone):
-            log = gateway._recorder("gateway", self.logs)
+            log = gateway.recorder("gateway", self.logs)
             log.info("something happened")
         self.assertEqual("", gone.getvalue(),
                          "every line was copied into a second store nothing bounds")
@@ -2811,7 +2811,7 @@ class WhatAGatewaySaysAndWhereItLands(WithARunDirectory):
 
         watching = Watched()
         with contextlib.redirect_stderr(watching):
-            gateway._recorder("gateway", self.logs).info("up")
+            gateway.recorder("gateway", self.logs).info("up")
         self.assertIn("up", watching.getvalue(),
                       "a gateway run by hand went quiet")
 
@@ -2831,7 +2831,7 @@ class WhatAGatewaySaysAndWhereItLands(WithARunDirectory):
                 self.warning_lines.append(template % values)
 
         log = Log()
-        gateway._channel_note(log, "discord-dms", "INFO\twrote 262 chars and 0 files")
+        gateway.channel_note(log, "discord-dms", "INFO\twrote 262 chars and 0 files")
         self.assertEqual(
             ["channel 'discord-dms': wrote 262 chars and 0 files"],
             log.info_lines,
@@ -2854,8 +2854,8 @@ class WhatAGatewaySaysAndWhereItLands(WithARunDirectory):
                 self.warning_lines.append(template % values)
 
         log = Log()
-        gateway._channel_note(log, "custom", "could not write")
-        gateway._channel_note(log, "custom", "WARNING\tconnection refused")
+        gateway.channel_note(log, "custom", "could not write")
+        gateway.channel_note(log, "custom", "WARNING\tconnection refused")
         self.assertEqual([], log.info_lines)
         self.assertEqual(
             ["channel 'custom': could not write",
@@ -2873,7 +2873,7 @@ class WhatAGatewaySaysAndWhereItLands(WithARunDirectory):
                 raise ValueError("I/O operation on closed file")
 
         with contextlib.redirect_stderr(Refuses()):
-            log = gateway._recorder("gateway", self.logs)
+            log = gateway.recorder("gateway", self.logs)
         self.assertEqual(1, len(log.handlers),
                          "a stream that would not answer was treated as a terminal")
 
@@ -2932,37 +2932,37 @@ class FindingAGatewayByWhatItLeftBehind(WithARunDirectory):
         an agent keeps, so an agent that is gone takes them with it."""
         (self.logs / "vanished.interrupted.json").write_text('{"turn": {"ended": false}}')
         (self.logs / "also-here.interrupted.json").write_text("{}")
-        self.assertEqual(["also-here", "vanished"], gateway.remembered(self.logs),
+        self.assertEqual(["also-here", "vanished"], recovery.remembered(self.logs),
                          "a gateway with nothing left but its history was invisible")
 
     def test_a_name_nothing_of_ours_wrote_is_passed_over(self):
         """R-GW-38 — the directory may be overridden onto somewhere shared, and a name
         that could never be a gateway's is somebody else's file rather than a gateway."""
         (self.logs / "not a gateway name.json").write_text("{}")
-        self.assertEqual([], gateway.remembered(self.logs),
+        self.assertEqual([], recovery.remembered(self.logs),
                          "it read somebody else's file as a gateway")
 
     async def test_work_that_is_running_again_is_no_longer_unfinished(self):
         """R-GW-40 — entries were keyed by work and never cleared, so work interrupted
         once in March was still listed in July beside work interrupted a minute ago."""
-        gateway._note_interrupted("gateway", self.logs, "schedule:nightly",
+        recovery.note_interrupted("gateway", self.logs, "schedule:nightly",
                                   "the gateway it was running under is gone", ended=True)
         gw = self.made()
         gw.claim()
         await gw.start([PY, "-c", "pass"], as_name="schedule:nightly")
-        self.assertEqual({}, gateway.what_was_interrupted("gateway", self.logs),
+        self.assertEqual({}, recovery.what_was_interrupted("gateway", self.logs),
                          "work that is running again was still reported as unfinished")
 
     async def test_other_work_that_never_finished_is_left_standing(self):
         """R-GW-40 — resolving one entry must not tidy away the rest, which is the whole
         of what anybody is asking this store."""
         for work in ("schedule:nightly", "schedule:weekly"):
-            gateway._note_interrupted("gateway", self.logs, work, "gone", ended=True)
+            recovery.note_interrupted("gateway", self.logs, work, "gone", ended=True)
         gw = self.made()
         gw.claim()
         await gw.start([PY, "-c", "pass"], as_name="schedule:nightly")
         self.assertEqual(["schedule:weekly"],
-                         sorted(gateway.what_was_interrupted("gateway", self.logs)),
+                         sorted(recovery.what_was_interrupted("gateway", self.logs)),
                          "resolving one entry took another with it")
 
 
@@ -3886,7 +3886,7 @@ class WhenTheClockAsksATurn(WithARunDirectory):
         self.assertIn("still out there", said)
         self.assertIn("with work still running", said)
         self.assertIn("schedule:nightly",
-                      json.dumps(gateway.what_was_interrupted("ava", self.logs)),
+                      json.dumps(recovery.what_was_interrupted("ava", self.logs)),
                       "nothing durable named the turn that never finished")
         held.set()
 

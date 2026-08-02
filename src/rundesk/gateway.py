@@ -43,6 +43,15 @@ from typing import Callable, Sequence
 from rundesk import ROOT, __version__, data_home
 from rundesk import activity
 from rundesk import dependencies
+from rundesk.gateway_log import (  # re-exported: every importer reaches these
+    DEFAULT_NAME, EVERY_LOG, GATEWAY_LOG, LOG_BYTES, LOG_KEEP, LOG_SOURCES,
+    MACHINE_LOG, NotAName, WRITTEN_AS, checked, log_path, log_sources, note,
+    channel_note, recorder, logs_home,
+)
+from rundesk.recovery import (  # re-exported: agent.py and the suites reach these
+    KEPT_INTERRUPTIONS, interrupted_path, note_interrupted, remembered,
+    resolve_interruption, what_was_interrupted,
+)
 from rundesk.durable import (
     MISSING, UNREADABLE, WRITTEN, Unreadable, changing, read, read_json,
     written_whole,
@@ -54,43 +63,9 @@ from rundesk import store
 from rundesk import update_request
 from rundesk import updater
 
-#: The gateway that exists before there are agents to name one after.
-DEFAULT_NAME = "gateway"
-
-class NotAName(ValueError):
-    """A gateway name that would not stay inside the directory it belongs in."""
 
 
-def checked(name: str) -> str:
-    """A gateway's name becomes the name of its lock, its record and its log, so one
-    containing a separator would put all three somewhere else entirely."""
-    if not name or not all(ch.isalnum() or ch in "-_." for ch in name) or name.strip(".") == "":
-        raise NotAName(
-            f"'{name}' is not a usable name — letters, digits, dash, dot and underscore"
-        )
-    return name
 
-
-#: How a line in a gateway's log reads. One place, because anything else writing to that
-#: log has to match it, and working the format out by hand somewhere else is how the two
-#: come to differ with nothing to catch it.
-WRITTEN_AS = "%(asctime)s %(levelname)-7s %(message)s"
-
-#: How much a gateway may write before it starts again, and how many it keeps. A gateway
-#: that has been up for a month should not be able to fill a disk, and the thing you want
-#: when something happened at three in the morning is the part just before it.
-LOG_BYTES = 2 * 1024 * 1024
-LOG_KEEP = 3
-
-#: Who wrote a line, for a reader asking one gateway what it has been saying. The gateway
-#: writes its own, bounded and rotated; the machine that keeps the gateway up captures
-#: whatever escaped the logger, which is the only place a start that died before there was
-#: a logger says anything at all. Named for what wrote it rather than for what supervises
-#: this machine — there is no launchd on the one CI runs half the suite on.
-GATEWAY_LOG = "gateway"
-MACHINE_LOG = "machine"
-EVERY_LOG = "all"
-LOG_SOURCES = (GATEWAY_LOG, MACHINE_LOG, EVERY_LOG)
 
 #: What a schedule is doing, in the two words that are not a program's own outcome.
 #: `STARTED` is written before the run begins and means nothing more than that — a
@@ -121,123 +96,6 @@ CHANNEL_AS = "channel:"
 #: How long to leave a channel that stopped before starting it again. Long enough not to
 #: hammer a platform that is refusing us, short enough that an owner does not notice.
 CHANNEL_AGAIN_SECONDS = 10.0
-
-
-def logs_home() -> Path:
-    """Where gateways write what happened. Kept apart from what they are *doing* now, in
-    `home()`: that is state, cleared when a gateway goes, and this is history, which is
-    only worth anything if it outlives the gateway that wrote it (R-GW-18)."""
-    return Path(os.environ.get("RUNDESK_LOG_DIR") or data_home() / "logs")
-
-
-def log_path(name: str, logs: Path | None = None) -> Path:
-    """The file a gateway of this name writes to — what `rundesk logs` reads."""
-    return (logs or logs_home()) / f"{checked(name)}.log"
-
-
-def log_sources(name: str, logs: Path | None = None,
-                source: str = EVERY_LOG) -> list[tuple[str, Path]]:
-    """Every file a gateway of this name has said anything into, oldest first (R-GW-36).
-
-    Two things write about one gateway and only one of them was ever readable. The
-    gateway's own log rotates, so the lines explaining the tail live in `.log.1`; and
-    what never reaches the logger at all — an interpreter traceback, a task nobody
-    awaited, a refusal to start printed before there was a logger — lands only in what
-    the machine captured. `rundesk logs` is what a failed start tells the owner to run,
-    so it has to reach both or it answers the one question it exists for with silence.
-    """
-    where = logs or logs_home()
-    plain = checked(name)
-    found: list[tuple[str, Path]] = []
-    if source in (GATEWAY_LOG, EVERY_LOG):
-        # Oldest first: the rotation numbers count backwards, so reading them in reverse
-        # puts one gateway's account back into the order it was written.
-        for older in range(LOG_KEEP, 0, -1):
-            found.append((GATEWAY_LOG, where / f"{plain}.log.{older}"))
-        found.append((GATEWAY_LOG, where / f"{plain}.log"))
-    if source in (MACHINE_LOG, EVERY_LOG):
-        for ours in (".out", ".err"):
-            found.append((MACHINE_LOG, where / f"{plain}{ours}"))
-    return [(said, path) for said, path in found if path.exists()]
-
-
-def note(name: str, said: str, logs: Path | None = None) -> str | None:
-    """Add a line to a gateway's log from outside the gateway, and say if it could not be.
-
-    Formatted by the same formatter the gateway itself writes through, rather than
-    worked out by hand: a change to how a line reads would otherwise leave these lines
-    looking like something else, in the one account that outlives the gateway.
-
-    The reason comes back rather than being swallowed (R-GW-37). A schedule added in a
-    home nothing had written yet printed ADDED, kept the change, and left no audit line
-    anywhere — a mutation and its history disagreeing, silently, on the first use.
-
-    The directory is made here because this is the first thing to write into a clean
-    home as often as not, and a caller that has to make somewhere for a log before it
-    can be told about a failure has been given the failure twice.
-    """
-    record = logging.LogRecord(f"rundesk.gateway.{name}", logging.INFO, "", 0, said, None, None)
-    target = log_path(name, logs)
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        # Appended by path, from a process that is not the gateway, while the gateway's
-        # own handler rotates by rename. A line written across a rotation lands in
-        # `.log.1` — which is read back, in order, by `log_sources` above, so it is
-        # somewhere else rather than lost.
-        with open(target, "a", encoding="utf-8") as log:
-            log.write(logging.Formatter(WRITTEN_AS).format(record) + "\n")
-    except OSError as why:
-        return str(why)
-    return None
-
-
-def _recorder(name: str, logs: Path) -> logging.Logger:
-    """A log for one gateway, and no other.
-
-    Built rather than fetched from the logging registry: two gateways in one process
-    would otherwise share a name and write each other's lines, and nothing in this module
-    is shared between two gateways.
-    """
-    logs.mkdir(parents=True, exist_ok=True)
-    keeping = logging.Logger(f"rundesk.gateway.{name}", logging.INFO)
-    to_file = logging.handlers.RotatingFileHandler(
-        log_path(name, logs), maxBytes=LOG_BYTES, backupCount=LOG_KEEP, encoding="utf-8"
-    )
-    to_file.setFormatter(logging.Formatter(WRITTEN_AS))
-    keeping.addHandler(to_file)
-    # Also said out loud, but only to a person watching (R-GW-35). A gateway run in a
-    # terminal shows its working; one run by the machine had every line copied into a
-    # file nothing rotated, nothing read and no requirement mentioned — an unbounded
-    # shadow of a log that exists to be bounded. What the machine captures is worth
-    # keeping for what the logger never sees, and worthless as a second copy of what it
-    # does. `isatty` can refuse to answer on a stream somebody has replaced; a stream
-    # that cannot say it is a terminal is not one.
-    try:
-        watched = sys.stderr is not None and sys.stderr.isatty()
-    except (AttributeError, ValueError):
-        watched = False
-    if watched:
-        aloud = logging.StreamHandler(sys.stderr)
-        aloud.setFormatter(logging.Formatter(f"rundesk {name}: %(message)s"))
-        keeping.addHandler(aloud)
-    return keeping
-
-
-def _channel_note(log, name: str, said: str) -> None:
-    """Keep adapter diagnostics at the severity the adapter stated (R-GW-44).
-
-    Unclassified stderr remains a warning for adapters written before the level marker
-    existed. Silently demoting an unknown third-party adapter's failure would be worse
-    than retaining its existing severity.
-    """
-    line = said.rstrip()
-    level, marker, message = line.partition("\t")
-    if marker and level == "INFO":
-        log.info("channel '%s': %s", name, message)
-        return
-    if marker and level == "WARNING":
-        line = message
-    log.warning("channel '%s': %s", name, line)
 
 
 def home() -> Path:
@@ -399,63 +257,6 @@ def started_at(pid: int) -> str | None:
     return said.stdout.strip() or None
 
 
-#: How many interruptions are kept for one gateway (R-GW-23). Bounded for the same reason
-#: the log is: a machine left running for months must not grow a file nobody prunes. The
-#: oldest go, because an interruption nobody has looked at in fifty incidents is history.
-KEPT_INTERRUPTIONS = 50
-
-
-def interrupted_path(name: str, logs: Path | None = None) -> Path:
-    """Where work that never got to finish is written down (R-GW-23).
-
-    With the log, which is the tier that outlives a gateway: stopping one clears what it is
-    *doing* (R-GW-12), and this is the account of what it never finished — worth least at
-    the moment it is written and most much later.
-
-    It stood beside the schedules until those became rows. It is a file rather than a row
-    because it describes work that has no run of its own — a channel held open, a program a
-    predecessor left behind — and because the gateway that answers for it may be one whose
-    agent no longer exists.
-    """
-    return (logs or logs_home()) / f"{checked(name)}.interrupted.json"
-
-
-def what_was_interrupted(name: str = DEFAULT_NAME, logs: Path | None = None) -> dict:
-    """What this gateway never got to finish, and why (R-GW-23).
-
-    Read from a file rather than asked of anything, because whatever wants to know is a
-    different process — and usually a later one, since the gateway that could have
-    answered is the one that went.
-    """
-    said = read_json(interrupted_path(name, logs), {})
-    return {work: how for work, how in said.items() if isinstance(how, dict)} \
-        if isinstance(said, dict) else {}
-
-
-def remembered(logs: Path | None = None) -> list[str]:
-    """Every gateway name that left an account of work it never finished (R-GW-38).
-
-    A gateway is discoverable from its run record, from an agent, or from a job the
-    machine holds — and a name whose record has been cleared, whose agent has been taken
-    away and whose job was never written survives only here. That is precisely the name an
-    owner needs after a crash, and the one every listing left out: they had to already know
-    it before they could ask about it.
-
-    Read from where the logs are, because that is where the account now stands. What it was
-    *scheduled* to do no longer survives a name losing its agent at all — schedules are rows
-    an agent keeps, so an agent that is gone takes them with it.
-    """
-    where = logs or logs_home()
-    if not where.is_dir():
-        return []
-    found = set()
-    for beside in where.glob("*.interrupted.json"):
-        plain = beside.name[: -len(".interrupted.json")]
-        try:
-            found.add(checked(plain))
-        except NotAName:
-            continue  # something else's file, in a directory that is not only ours
-    return sorted(found)
 
 
 #: Where a channel keeps who it has already introduced this agent to (R-CH-33). Beside the
@@ -569,57 +370,6 @@ def remember_welcomed(home: Path, user: str) -> None:
         if not isinstance(known, list):
             return
         kept[_WELCOMED] = sorted({str(one) for one in known} | {str(user)})
-
-
-def _resolve_interruption(name: str, logs: Path | None, work: str) -> None:
-    """Work that is running again is no longer work that never finished (R-GW-40).
-
-    Entries were keyed by work name and never cleared, so a schedule interrupted once in
-    March was still listed in July beside one interrupted a minute ago, with nothing
-    telling outstanding from long since fine — which is a store nobody can act on. Work
-    starting again is the one resolution that is actually knowable here: if it is
-    interrupted a second time, that is a new entry rather than an unresolved old one.
-    """
-    try:
-        with changing(interrupted_path(name, logs), {}, "interruptions", durable=True) as said:
-            said.pop(work, None)
-    except (OSError, Unreadable):
-        pass  # tidying history is never worth refusing to start work over
-
-
-def _note_interrupted(name: str, logs: Path | None, work: str, why: str,
-                      pgid: int | None = None, ended: bool = False) -> None:
-    """Write down that a piece of work was interrupted (R-GW-23).
-
-    Read, added to and written back under one hold (R-GW-27). The thing that writes here is
-    not always the gateway whose file it is: a gateway sweeping what an abandoned name left
-    behind writes into *that* name's file (R-GW-21), so two writers each working from their
-    own snapshot is the ordinary case on a machine bringing several gateways up at once —
-    and half of everything recorded was lost every time it happened. The hold is taken on
-    the file being changed rather than on the gateway doing the changing, which is what
-    makes it cover a sweeper racing the file's own owner as well as two sweepers racing.
-
-    `ended` is the distinction worth keeping. Work rundesk ended and work it could not
-    show was its to end are both interrupted, and only one of them is definitely gone.
-    """
-    from rundesk import schedule
-
-    try:
-        with changing(interrupted_path(name, logs), {}, "interruptions", durable=True) as said:
-            said[work] = {
-                "at": datetime.now().strftime(schedule.A_MINUTE), "why": why,
-                "pgid": pgid, "ended": ended,
-            }
-            if len(said) > KEPT_INTERRUPTIONS:
-                # An entry a hand edit left behind is not a record and has no time to sort
-                # on. `what_was_interrupted` already passes over those, and the cap must
-                # not be the one thing here that falls over on one.
-                oldest = sorted(said, key=lambda one: said[one].get("at", "")
-                                if isinstance(said[one], dict) else "")
-                for one in oldest[: len(said) - KEPT_INTERRUPTIONS]:
-                    said.pop(one, None)
-    except (OSError, Unreadable):
-        pass  # a gateway that cannot write this down still has to get on with starting
 
 
 def _ask_group(pgid: int, sig: int) -> bool:
@@ -783,7 +533,7 @@ def _sweep_strays(where: Path, mine: str, log: logging.Logger,
             # anything asking after it would look (R-GW-21, R-GW-23).
             left = _sweep_predecessor(
                 record, log,
-                lambda work, why, pgid, ended, whose=name: _note_interrupted(
+                lambda work, why, pgid, ended, whose=name: note_interrupted(
                     whose, logs, work, why, pgid, ended),
             )
             if left:
@@ -1148,7 +898,7 @@ class Gateway:
         #: starts, holds its lock, writes its log and ends what it started; the clock simply
         #: has nothing to start for it.
         self.records = records
-        self.log = _recorder(name, self.logs)
+        self.log = recorder(name, self.logs)
         self.root = root or ROOT
         #: What this gateway is running, by the name each was started under. Keyed
         #: rather than collected, because the same work started twice is the failure
@@ -1295,7 +1045,7 @@ class Gateway:
         self._inherited: dict = {}
         self.swept = _sweep_predecessor(
             _record_path(self.name, self.where), self.log,
-            lambda work, why, pgid, ended: _note_interrupted(
+            lambda work, why, pgid, ended: note_interrupted(
                 self.name, self.logs, work, why, pgid, ended),
             self._inherited,
         )
@@ -1431,7 +1181,7 @@ class Gateway:
                     # complained about is never showing it: every failure to post, every
                     # refusal, every reconnection is invisible for as long as the thing
                     # doing it is working (R-GW-18).
-                    on_error=lambda said, name=one.name: _channel_note(
+                    on_error=lambda said, name=one.name: channel_note(
                         self.log, name, said))
             except (AlreadyStarted, Stopping):
                 self._reached.pop(one.name, None)
@@ -1710,7 +1460,7 @@ class Gateway:
         self.running[held] = program
         # Work under this name is going again, so whatever the last gateway wrote about
         # it never finishing has been answered (R-GW-40).
-        _resolve_interruption(self.name, self.logs, held)
+        resolve_interruption(self.name, self.logs, held)
         try:
             await program.start()
             # Asked once, before the record is written, and never asked again (R-GW-30).
@@ -2313,13 +2063,13 @@ class Gateway:
                 # And said where something other than a person can read it (R-GW-23). The
                 # log already carries this, which answers the owner and nothing else.
                 for held, program in self.running.items():
-                    _note_interrupted(
+                    note_interrupted(
                         self.name, self.logs, held,
                         "the gateway went while it was still running", program.pid, False)
                 for held in asked:
                     # No process group to name: what this gateway knows is that a turn under
                     # this name had not finished, which is what a later one has to reckon with.
-                    _note_interrupted(
+                    note_interrupted(
                         self.name, self.logs, held,
                         "the gateway went while a turn it asked for was still going", None, False)
             self.running.clear()
