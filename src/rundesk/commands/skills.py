@@ -14,7 +14,6 @@ import sys
 
 from rundesk import config
 from rundesk import role
-from rundesk import standing
 from rundesk.commands import _as_table
 
 
@@ -152,12 +151,12 @@ def _update_skill_catalog(args: argparse.Namespace, agents, skills, gateways, ca
 def _remove_skill_catalog(args: argparse.Namespace, agents, skills, gateways, catalogs) -> int:
     retired = []
     try:
-        standing = catalogs.installed().get(args.catalog)
-        if standing is None:
+        installed = catalogs.installed().get(args.catalog)
+        if installed is None:
             raise catalogs.Unknown(f"there is no installed catalog called {args.catalog}")
         if not args.yes:
-            print(f"{standing.name} {standing.version} would be removed")
-            for called, _ in standing.manifest.skills:
+            print(f"{installed.name} {installed.version} would be removed")
+            for called, _ in installed.manifest.skills:
                 print(f"  {called}")
             print()
             print(f"remove: rundesk skills remove {args.catalog} --yes")

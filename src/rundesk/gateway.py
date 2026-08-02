@@ -50,7 +50,7 @@ from rundesk.recovery import (  # noqa: F401 — reached as gateway.<name> by ag
     interrupted_path, note_interrupted, remembered, resolve_interruption,
     what_was_interrupted,
 )
-from rundesk.durable import UNREADABLE, Unreadable, changing, read, read_json, written_whole
+from rundesk.durable import UNREADABLE, Unreadable, changing, read, read_json, write_whole
 from rundesk import process
 from rundesk import restart_request
 from rundesk import schedule
@@ -1385,7 +1385,7 @@ class Gateway:
                 },
             },
         }
-        written_whole(_record_path(self.name, self.where), json.dumps(said))
+        write_whole(_record_path(self.name, self.where), json.dumps(said))
 
     # -- what it runs -------------------------------------------------------------
 

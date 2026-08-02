@@ -112,7 +112,6 @@ def note_interrupted(name: str, logs: Path | None, work: str, why: str,
     `ended` is the distinction worth keeping. Work rundesk ended and work it could not
     show was its to end are both interrupted, and only one of them is definitely gone.
     """
-    from rundesk import schedule
 
     try:
         with changing(interrupted_path(name, logs), {}, "interruptions", durable=True) as said:

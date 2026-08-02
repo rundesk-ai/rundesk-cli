@@ -301,7 +301,7 @@ def cmd_remove(args: argparse.Namespace, gateways, machine, agents) -> int:
     # Asked of the gateway rather than of the machine. A gateway started by hand, or one
     # left behind when its job was taken away, has no job for the machine to report — and
     # is exactly the one that must not have its record deleted out from under it.
-    now = gateways.standing(name, whose.run)
+    now = standing.of(name, gateways, agents)
     if now.running:
         print(f"{name}: STILL RUNNING (pid {now.pid}) — nothing was removed", file=sys.stderr)
         print(f"        stop it first: rundesk stop {name}", file=sys.stderr)

@@ -41,9 +41,14 @@ LOOK_AGAIN_SECONDS = 0.2
 def of(name: str, gateways, agents):
     """What this gateway is doing, asked where that gateway actually keeps it.
 
-    The one place the two are put together. A command that resolved the directory itself
-    at each call is how one of them comes to ask the wrong place and report a running
-    agent as stopped.
+    Where the two are put together, for every caller that has both. A command resolving
+    the directory itself at each call is how one of them comes to ask the wrong place and
+    report a running agent as stopped.
+
+    One caller does not go through here: a listing handed an already-resolved agent asks
+    `gateways.standing` with it directly, because threading the agent module through that
+    signature to resolve what it was already given would be the longer way to the same
+    answer. Anything that reaches for the run directory *without* one belongs here.
     """
     return gateways.standing(name, agents.resolved(name).run)
 

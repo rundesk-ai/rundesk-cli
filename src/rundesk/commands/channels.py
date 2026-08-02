@@ -20,6 +20,7 @@ from pathlib import Path
 from rundesk import channel
 from rundesk import gateway as _gateway
 from rundesk import migration
+from rundesk import standing
 from rundesk import store
 from rundesk.commands import _as_table, _note
 
@@ -239,7 +240,7 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         # private conversation usually should not.
         print(f"        {len(named)} channels, one for each kind of place — "
               f"each has its own allowed list and its own instructions")
-    if not gateways.standing(args.name, agents.resolved(args.name).run).running:
+    if not standing.of(args.name, gateways, agents).running:
         # An agent that is not running is not reachable, and saying so here is the
         # difference between a channel that is quiet and one that is deaf (R-CAD-8).
         print(f"        not reachable yet:  rundesk start {args.name}")
@@ -422,8 +423,7 @@ def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
                      or "nothing of its own — rundesk says where it is")),
         ("activity", "shown while it works" if it.get("activity")
                      else "only the answer"),
-        ("reachable", "yes" if gateways.standing(
-            args.name, agents.resolved(args.name).run).running
+        ("reachable", "yes" if standing.of(args.name, gateways, agents).running
             else "no — the agent is not running"),
     ]
     _as_table(("WHAT", "IS"), rows)
@@ -437,7 +437,7 @@ def _list_channels(args: argparse.Namespace, gateways, agents, whose) -> int:
         print(f"        put it on one:  rundesk channels {args.name} add <channel> "
               f"--kind <kind> --allow <user>")
         return 0
-    up = gateways.standing(args.name, agents.resolved(args.name).run).running
+    up = standing.of(args.name, gateways, agents).running
     _as_table(("CHANNEL", "KIND", "POINTS AT", "ALLOWED", "REACHABLE"), [
         (it["name"], str(it.get("kind", "-")), str(it.get("describes") or "-"),
          str(len(it.get("allow") or [])), "yes" if up else "no")

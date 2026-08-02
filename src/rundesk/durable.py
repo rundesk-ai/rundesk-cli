@@ -64,7 +64,7 @@ def changing(target: Path, empty, what: str, durable: bool = False):
         # A writer that decided to change nothing writes nothing (R-SCH-19). Rewriting an
         # unchanged file puts all of it at the mercy of a failure nobody asked to risk.
         if after != before:
-            written_whole(target, after + "\n", durable)
+            write_whole(target, after + "\n", durable)
     finally:
         fcntl.flock(guard, fcntl.LOCK_UN)
         os.close(guard)
@@ -86,7 +86,7 @@ def _understood(target: Path, empty, what: str):
     return said
 
 
-def written_whole(target: Path, text: str, durable: bool = False) -> None:
+def write_whole(target: Path, text: str, durable: bool = False) -> None:
     """Put this where it belongs, whole, in one move.
 
     Beside and then renamed: a reader arriving mid-write would otherwise find half a

@@ -501,6 +501,8 @@ def _list_schedules(args: argparse.Namespace, gateways, kept, whose) -> int:
     # store is reconciled by the next gateway to claim the name (R-SCH-23); until one
     # does, showing the word as written presents dead work as in flight, which is the
     # first question asked after a crash answered wrongly (R-SCH-24).
+    # `whose` is what `standing.of` would resolve, already resolved by the caller; asking
+    # again here would mean threading `agents` through a signature to get the same answer.
     up = gateways.standing(args.name, whose.run).running
     rows = [(
         one.name,
