@@ -1108,10 +1108,12 @@ class FakeAgents:
         self.played.append(name)
         return real_agent.Playing(
             waiting=lambda: [], seen=lambda _run: None,
+            checking_in=lambda _run, _told=0: None,
             stopping=lambda: [], stopped=lambda _run: None,
             carry=None, owed=lambda: [],
             claiming=lambda _run: None, reviewing=lambda _run, _review: None,
-            reviewed=lambda _run: None, sweep=lambda: [], quiet=lambda: [],
+            reviewed=lambda _run: None, giving_up=lambda _run: None,
+            sweep=lambda: [], quiet=lambda: [],
         )
 
     def agents_home(self):
