@@ -62,6 +62,8 @@ the definition of done where they were in the last one:
 
 <what this role answers for, and that the project's own instruction files beat these rules>
 
+## Not this role                 the light work that stays with the parent, and what this is
+                                 heavy enough to be worth an isolated run for
 ## Start here, in this order     the brief and any plan, then the project's rules, then skills —
                                  ending in what the run settles before it starts
 ## While you work                the few rules this specialty gets wrong without being told
@@ -79,6 +81,13 @@ place to be wrong.
 
 Write the specialty instead — the things this kind of work gets wrong. Explain why: `do X,
 because Y tends to cause Z` survives pressure that `ALWAYS DO X` does not.
+
+**Say what the role is not for, in the role.** A run costs a whole context to set up and hands
+back one report a parent has to review, so a role reached for a two-file edit or a lookup is worse
+than no role at all. The `description` is what a parent reads while deciding whether to delegate,
+so make it name the heavy work; `## Not this role` is where the light work that stays with the
+parent is listed by name. Every role this release ships carries both, and one you write should
+too.
 
 ## The definition of done is the point
 

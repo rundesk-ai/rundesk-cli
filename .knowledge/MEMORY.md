@@ -449,6 +449,11 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   adding it — which is the guard working, not a broken test. Add the variable to `describe()`'s
   `EnvironmentVariables` in the same change; a supervised gateway resolving a different place
   from the command that wrote its job is the failure it exists to prevent.
+- **A requirement row is capped at 25 words and `doc-lint` counts them, drafts included.** The
+  message is exact — `R-ROL-38 requirement is 28 words (max 25)` — but nothing says so while you
+  are writing the row, and a requirement written to be unambiguous lands at about thirty. Say the
+  guarantee and drop the justification; the reasoning belongs in the rules or the test docstring,
+  not in the row.
 - **A Markdown link out of `.knowledge` passes `doc-lint` and fails the gate.** `doc-lint
   .knowledge` resolves a catalog link against the real checkout, so
   `[docs/extending/](../../docs/extending/)` in `guides/README.md` is fine — and then
