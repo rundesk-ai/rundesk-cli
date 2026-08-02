@@ -1,6 +1,6 @@
 ---
 name: publishing-github-releases
-description: Cut a GitHub release under each repository's own rules — batching everything merged since the last tag into one release pull request, choosing patch, minor or major, and tagging and publishing once its approval gate clears. Use whenever a version is bumped, a release is prepared, proposed, tagged or published, when deciding what version number a batch of merged work deserves, or when the default branch is ahead of the last tag and nothing has shipped it — even if nobody says the word "release".
+description: Cut a GitHub release under each repository's own rules. Use when a version is bumped, tagged or published, when deciding what version number merged work deserves, or when the default branch is ahead of the last tag — even if nobody says the word "release".
 ---
 
 # Publishing a GitHub release
