@@ -1415,6 +1415,32 @@ class WhatOneTurnLooksLike(unittest.TestCase):
         self.assertEqual("-# 🤖 subagent finished", finished)
         self.assertNotIn("private helper response", finished)
 
+    def test_a_role_is_not_called_a_subagent(self):
+        """R-ROL-27 — both are delegation and only one is a subagent. Naming the wrong
+        mechanism misleads somebody deciding whether to wait."""
+        tools = {}
+        started = discord._activity_line(
+            {"type": "tool", "id": "role:rol-1-aaaa", "name": "role", "did": "delegate",
+             "who": "applicant export"}, tools)
+        finished = discord._activity_line(
+            {"type": "result", "id": "role:rol-1-aaaa", "ok": True,
+             "summary": "applicant export"}, tools)
+        # The shared name sanitiser is not bent for a role: what reaches a surface goes
+        # through the same guard a provider name does.
+        self.assertEqual("-# 🤖 handed to a role: applicant-export", started)
+        self.assertEqual("-# 🤖 role finished: applicant-export", finished)
+        self.assertNotIn("subagent", started)
+        self.assertNotIn("subagent", finished)
+
+    def test_a_role_that_did_not_finish_says_so_rather_than_that_a_subagent_failed(self):
+        tools = {}
+        discord._activity_line(
+            {"type": "tool", "id": "role:rol-1-aaaa", "name": "role", "did": "delegate",
+             "who": "applicant export"}, tools)
+        failed = discord._activity_line(
+            {"type": "result", "id": "role:rol-1-aaaa", "ok": False, "summary": "x"}, tools)
+        self.assertEqual("-# ⚠ 🤖 role did not finish: applicant-export", failed)
+
     def test_a_safe_subagent_name_is_shown_without_its_provider_path(self):
         """R-DIS-20 — one helper may be named without relaying its work or private path."""
         tools = {}
@@ -1770,7 +1796,8 @@ class WhatItOffersAndWhatItIsTold(unittest.TestCase):
 
         queries = {name: query for name, _description, query in discord.QUERY_COMMANDS}
         self.assertEqual(set(channel.QUERIES), set(queries.values()))
-        self.assertEqual({"status", "version", "agents", "skills", "schedules", "help"},
+        self.assertEqual({"status", "version", "agents", "skills", "schedules", "roles",
+                          "help"},
                          set(queries))
         self.assertEqual("skills", queries["skills"])
         self.assertEqual("schedules", queries["schedules"])

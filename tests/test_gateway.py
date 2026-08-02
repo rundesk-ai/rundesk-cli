@@ -4106,6 +4106,9 @@ class Delegating:
     def waiting(self):
         return list(self._waiting)
 
+    def seen(self, run_id):
+        return {"channel": "ops", "conversation": "one", "label": "a task"}
+
     def stopping(self):
         return [one for one in self._waiting if one.get("stop_asked_at")]
 
@@ -4150,6 +4153,21 @@ class Reached:
         if reviewing is not None:
             reviewing("11-rrrr")
         self.told.append((conversation, handoff))
+
+
+class Shown(Reached):
+    """One surface, as far as *showing* a role run is concerned."""
+
+    def __init__(self):
+        super().__init__()
+        self.working: list = []
+        self.settled: list = []
+
+    def told_role_working(self, conversation, run, label):
+        self.working.append((conversation, run, label))
+
+    def told_role_settled(self, conversation, run, ok, summary):
+        self.settled.append((conversation, run, ok, summary))
 
 
 class CarryingWhatAnAgentHandedOn(WithARunDirectory):
@@ -4227,6 +4245,52 @@ class CarryingWhatAnAgentHandedOn(WithARunDirectory):
 
         self.assertEqual(["rol-1-aaaa"], doing.claimed)
         self.assertEqual([], doing.reviewed_runs)
+
+    async def test_handing_work_to_a_role_is_shown_where_it_was_asked_for(self):
+        """R-ROL-27 — a role was invisible: the command admitting it showed as an ordinary
+        shell run, the work said nothing, and the agent answered minutes later with no
+        sign of where the answer came from."""
+        doing = Delegating(waiting=[{"id": "rol-1-aaaa"}])
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+
+        gw._start_admitted_roles()
+        await asyncio.gather(*tuple(gw._role_tasks.values()))
+
+        self.assertEqual(
+            [("one", "rol-1-aaaa", "a task")], surface.working,
+            "nothing marked the work as handed on")
+        self.assertEqual([("one", "rol-1-aaaa")],
+                         [(one[0], one[1]) for one in surface.settled],
+                         "the mark was opened and never closed")
+
+    async def test_a_role_that_could_not_be_carried_still_closes_its_mark(self):
+        """A mark that opens and never closes reads as work still running for ever."""
+        doing = Delegating(waiting=[{"id": "rol-1-aaaa"}])
+
+        async def broke(_run, **_given):
+            raise RuntimeError("the bundle was not there")
+
+        doing.carry = broke
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+
+        gw._start_admitted_roles()
+        await asyncio.gather(*tuple(gw._role_tasks.values()))
+
+        self.assertEqual(1, len(surface.working))
+        self.assertEqual([False], [one[2] for one in surface.settled])
+
+    async def test_a_surface_that_cannot_be_told_never_holds_up_the_work(self):
+        doing = Delegating(waiting=[{"id": "rol-1-aaaa"}])
+        gw = self.one(doing)   # nothing reached: no surface for 'ops' at all
+
+        gw._start_admitted_roles()
+        await asyncio.gather(*tuple(gw._role_tasks.values()))
+
+        self.assertEqual(["rol-1-aaaa"], doing.carried)
 
     async def test_an_undeliverable_review_never_holds_up_the_ones_behind_it(self):
         """R-ROL-15 — a channel the owner has since removed never comes back, and the
