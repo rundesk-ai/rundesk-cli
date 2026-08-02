@@ -18,6 +18,24 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `env -u RUNDESK_DATA_DIR -u RUNDESK_HOME -u RUNDESK_AGENTS_DIR … HOME=/tmp/somewhere` before
   believing it.
 
+- **A teeth probe that runs its suite through a shell variable runs nothing, and prints
+  nothing, which reads exactly like a probe that passed.** This shell is zsh, where
+  `E="env -u RUNDESK_HOME … python3"; $E tests/test_role_run.py` does *not* word-split:
+  zsh looks for one command whose name is the whole string, fails, and the `| grep -E
+  "^(Ran|OK|FAILED)"` that was meant to read the result has nothing to match — so three
+  probes in a row reported no failure while none of them had executed a case. The same
+  trap as `unittest -k "a or b"`, arriving by a different route. Write the `env -u …`
+  prefix out in full at each call, and **read the "Ran N tests" line before believing any
+  probe**: no line at all is not a pass.
+
+- **Adding a section to `config.json` fails `test_config` on a file in `docs/`, not on
+  anything you wrote.** `test_the_documented_fresh_configuration_matches_the_install_seed`
+  parses the JSON block out of `docs/configuration.md` and compares it with
+  `config.INITIAL`, so a new section makes it fail with a dict diff naming the section and
+  no hint that the fix is a documentation edit. That is the guard working — a copied
+  example missing a default is one an update will never add to. Edit the example in the
+  same change.
+
 - **`changing(target, [], …)` cannot tell a file nobody has written from one holding an
   empty list, and for onboarding state those mean opposite things.** `_understood` returns
   the `empty` value for a missing file and refuses anything whose type differs, so `[]`

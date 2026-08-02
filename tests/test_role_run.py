@@ -16,6 +16,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -549,6 +550,15 @@ class WhenCarryingGoesWrong(WithAnAgentThatCanDelegate):
             raise raises
         return agent.playing("elena", self.where, carry=went_wrong)
 
+    def to_the_ceiling(self, playing, run_id):
+        """Carry it as many times as the ceiling allows.
+
+        Nothing sleeps: the backoff decides which runs a gateway is *offered*, and this
+        drives the carry itself, which is what a gateway does once it has been offered one.
+        """
+        for _ in range(role_runs.CARRY_CEILING):
+            asyncio.run(playing.carry(run_id))
+
     def test_a_brain_that_is_no_longer_there_ends_the_run_and_owes_a_review(self):
         """A role run carries on with the brain its parent turn resolved. One that has
         since been removed from the machine raises before anything is started — and the
@@ -561,7 +571,7 @@ class WhenCarryingGoesWrong(WithAnAgentThatCanDelegate):
                                       library=self.library)
         # The real turn, deliberately: it raises `NotRunnable` before it starts anything,
         # so this reaches no provider and no network.
-        asyncio.run(agent.playing("elena", self.where).carry(admitted.id))
+        self.to_the_ceiling(agent.playing("elena", self.where), admitted.id)
         row = self.kept.role_run(admitted.id)
         self.assertEqual(store.FAILED, row["state"])
         self.assertIn("no-such-brain", row["report"])
@@ -570,8 +580,8 @@ class WhenCarryingGoesWrong(WithAnAgentThatCanDelegate):
 
     def test_anything_else_that_goes_wrong_ends_the_run_and_owes_a_review(self):
         admitted = self.admit()
-        asyncio.run(self.carrying(FileNotFoundError("that directory has moved"))
-                    .carry(admitted.id))
+        self.to_the_ceiling(
+            self.carrying(FileNotFoundError("that directory has moved")), admitted.id)
         row = self.kept.role_run(admitted.id)
         self.assertEqual(store.FAILED, row["state"])
         self.assertIn("moved", row["report"])
@@ -587,11 +597,189 @@ class WhenCarryingGoesWrong(WithAnAgentThatCanDelegate):
         self.assertEqual([], self.kept.owed_role_callbacks())
         self.assertEqual([admitted.id],
                          [one["id"] for one in agent.playing("elena", self.where).waiting()])
+        # A cancellation is not a failed attempt: a gateway standing down every night
+        # would otherwise spend a run's whole ceiling on nights nothing went wrong.
+        self.assertEqual(0, self.kept.role_run(admitted.id)["carry_attempts"])
 
     def test_a_failed_run_is_not_carried_again_on_the_next_look(self):
         admitted = self.admit()
-        asyncio.run(self.carrying(RuntimeError("no")).carry(admitted.id))
+        self.to_the_ceiling(self.carrying(RuntimeError("no")), admitted.id)
+        self.assertEqual(store.FAILED, self.kept.role_run(admitted.id)["state"])
         self.assertEqual([], agent.playing("elena", self.where).waiting())
+
+    def test_a_carry_that_threw_once_is_left_alone_and_tried_again(self):
+        """R-ROL-29 — a provider that died and a target directory that moved raise
+        identically here, and settling on the first throw ends a fortnight-resumable run
+        over a blip. Under the ceiling it stays in hand, and nobody is told anything."""
+        admitted = self.admit()
+        asyncio.run(self.carrying(RuntimeError("the network went")).carry(admitted.id))
+
+        row = self.kept.role_run(admitted.id)
+        self.assertEqual(store.WORKING, row["state"])
+        self.assertEqual(1, row["carry_attempts"])
+        self.assertEqual([], self.kept.owed_role_callbacks(),
+                         "a parent was told about a run still in hand")
+
+    def test_a_run_waiting_out_a_backoff_is_not_offered_to_be_carried_yet(self):
+        """R-ROL-29 — something looks every five seconds, so three attempts with nothing
+        between them is a ceiling reached inside fifteen seconds."""
+        admitted = self.admit()
+        asyncio.run(self.carrying(RuntimeError("the network went")).carry(admitted.id))
+
+        self.assertEqual([], agent.playing("elena", self.where).waiting())
+        row = self.kept.role_run(admitted.id)
+        self.assertFalse(role_runs.ready_to_carry(row))
+        self.assertTrue(role_runs.ready_to_carry(
+            row, now=lambda: time.time() + role_runs.backoff_seconds(1) + 1))
+
+    def test_the_ceiling_settles_it_and_says_this_is_rundesk_and_not_the_worker(self):
+        """R-ROL-29, R-ROL-16 — a run that could not be carried reported nothing, so the
+        handoff must not read as a specialist saying the work failed."""
+        admitted = self.admit()
+        self.to_the_ceiling(self.carrying(RuntimeError("the provider is gone")),
+                            admitted.id)
+
+        row = self.kept.role_run(admitted.id)
+        self.assertEqual(store.FAILED, row["state"])
+        self.assertEqual(role_runs.CARRY_CEILING, row["carry_attempts"])
+        self.assertIn("Rundesk could not carry this role run", row["report"])
+        self.assertIn("rather than the role reporting on the work", row["report"])
+        self.assertIn("the provider is gone", row["report"])
+        self.assertEqual([admitted.id],
+                         [one["role_run"] for one in self.kept.owed_role_callbacks()])
+
+    def test_carrying_a_settled_run_on_starts_its_ceiling_again(self):
+        """Three attempts of a fortnight ago are not this task's — a resumed run settled
+        on its first hiccup would be a ceiling that shortens with age."""
+        admitted = self.admit()
+        self.to_the_ceiling(self.carrying(RuntimeError("no")), admitted.id)
+
+        role_runs.resume("elena", admitted.id, "try that again", self.where)
+
+        row = self.kept.role_run(admitted.id)
+        self.assertEqual(0, row["carry_attempts"])
+        self.assertIsNone(row["carry_failed_at"])
+        self.assertEqual([admitted.id],
+                         [one["id"] for one in agent.playing("elena", self.where).waiting()])
+
+
+class WhenARunGoesQuiet(WithAnAgentThatCanDelegate):
+    """R-ROL-30 — a run nobody can hear from is settled, and its parent is told.
+
+    The window is measured on inactivity rather than on total runtime: a specialist
+    execution legitimately takes hours and keeps writing records the whole time, and a
+    ceiling on runtime would end honest work.
+    """
+
+    def working(self, admitted) -> None:
+        """This run picked up and marked as in flight, right now."""
+        self.kept.role_working(admitted.id, store.stamped(), role_runs.retained_until())
+
+    @staticmethod
+    def hours_on(hours: float):
+        """The clock, that many hours later. Passed in, never waited for."""
+        return lambda: time.time() + hours * 3600
+
+    def a_turn_carrying(self, admitted, wrote_at=None) -> str:
+        """One provider turn carrying this run, with a record of its own."""
+        where_it_is = store.conversation_id(turn.ROLE, admitted.id)
+        self.kept.opened(where_it_is, turn.ROLE, turn.ROLE, admitted.id, AT)
+        carrying = self.kept.began(turn.ROLE, "codex", "work", store.stamped(),
+                                   conversation_id=where_it_is, role_run=admitted.id)
+        self.kept.recorded(carrying, 1, store.stamped(wrote_at), "tool",
+                           {"type": "tool", "name": "shell"})
+        return carrying
+
+    def test_a_run_that_has_produced_nothing_for_the_window_is_settled(self):
+        admitted = self.admit()
+        self.working(admitted)
+
+        settled = role_runs.gone_quiet(
+            "elena", self.where, now=self.hours_on(role_runs.QUIET_HOURS + 1))
+
+        self.assertEqual([admitted.id], settled)
+        row = self.kept.role_run(admitted.id)
+        self.assertEqual(store.FAILED, row["state"])
+        self.assertIn("stopped producing any activity", row["report"])
+        self.assertIn("rather than the role reporting on the work", row["report"])
+        self.assertEqual([admitted.id],
+                         [one["role_run"] for one in self.kept.owed_role_callbacks()])
+
+    def test_a_run_still_inside_the_window_is_left_working(self):
+        admitted = self.admit()
+        self.working(admitted)
+
+        self.assertEqual([], role_runs.gone_quiet(
+            "elena", self.where, now=self.hours_on(role_runs.QUIET_HOURS - 1)))
+        self.assertEqual(store.WORKING, self.kept.role_run(admitted.id)["state"])
+
+    def test_a_long_run_that_is_still_writing_records_is_never_settled(self):
+        """The whole reason the window is inactivity: eight hours of honest work keeps
+        producing records, and ending it at six would be worse than the wedged provider
+        this exists for."""
+        admitted = self.admit()
+        self.working(admitted)
+        self.a_turn_carrying(admitted, wrote_at=self.hours_on(5))
+
+        self.assertEqual([], role_runs.gone_quiet(
+            "elena", self.where, now=self.hours_on(role_runs.QUIET_HOURS + 2)))
+        self.assertEqual(store.WORKING, self.kept.role_run(admitted.id)["state"])
+
+    def test_a_run_whose_turn_stopped_writing_records_is_settled(self):
+        """The other half of the same measurement: records that stopped six hours ago are
+        silence, however long the run has legitimately been going."""
+        admitted = self.admit()
+        self.working(admitted)
+        self.a_turn_carrying(admitted, wrote_at=self.hours_on(1))
+
+        self.assertEqual([admitted.id], role_runs.gone_quiet(
+            "elena", self.where, now=self.hours_on(role_runs.QUIET_HOURS + 2)))
+
+    def test_how_long_silence_may_last_is_the_owners_to_state(self):
+        admitted = self.admit()
+        self.working(admitted)
+
+        self.assertEqual([], role_runs.gone_quiet(
+            "elena", self.where, now=self.hours_on(3), after_hours=4))
+        self.assertEqual([admitted.id], role_runs.gone_quiet(
+            "elena", self.where, now=self.hours_on(3), after_hours=2))
+
+    def test_what_the_install_is_configured_with_is_six_hours(self):
+        """The owner's number, and the one the gateway actually reads."""
+        self.assertEqual(6, config.roles(self.before / "data")["quiet_hours"])
+        self.assertEqual(role_runs.QUIET_HOURS,
+                         config.roles(self.before / "data")["quiet_hours"])
+
+    def test_a_run_that_reaches_its_window_unsettled_still_owes_a_review(self):
+        """R-ROL-31 — expiry used to take the bundle and log it, and the agent that
+        handed the work over was told nothing at all."""
+        admitted = self.admit()
+        self.kept.role_working(admitted.id, AT, role_runs.retained_until())
+
+        gone = role_runs.sweep(
+            "elena", self.where,
+            now=lambda: time.time() + (role_runs.RETAINED_DAYS + 1) * 86400)
+
+        self.assertEqual([admitted.id], gone)
+        row = self.kept.role_run(admitted.id)
+        self.assertEqual(store.EXPIRED, row["state"])
+        self.assertEqual(store.FAILED, row["outcome"])
+        self.assertIn("reached the end of its retention window", row["report"])
+        self.assertEqual([admitted.id],
+                         [one["role_run"] for one in self.kept.owed_role_callbacks()])
+
+    def test_a_run_that_finished_properly_expires_with_nothing_new_owed(self):
+        """A settled run's review was owed when it settled; expiry adds no second one."""
+        admitted = self.admit()
+        self.carried(admitted)
+        for one in self.kept.owed_role_callbacks():
+            self.kept.role_reviewed(one["role_run"], store.stamped())
+
+        role_runs.sweep("elena", self.where,
+                        now=lambda: time.time() + (role_runs.RETAINED_DAYS + 1) * 86400)
+
+        self.assertEqual(store.SUCCEEDED, self.kept.role_run(admitted.id)["outcome"])
+        self.assertEqual([], self.kept.owed_role_callbacks())
 
 
 class WhatARunLeavesInTheTargetProject(WithAnAgentThatCanDelegate):

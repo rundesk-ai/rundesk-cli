@@ -121,6 +121,11 @@ def required_grants(where: Path | None = None) -> tuple[str, ...]:
 INITIAL = {
     "backups": {"at": "04:00", "keep_days": 30},
     "updates": {"at": "03:00"},
+    # How long a role run may produce nothing at all before Rundesk settles it and tells
+    # the agent that handed the work over. Inactivity rather than total runtime: a
+    # specialist execution legitimately takes hours and keeps writing records the whole
+    # time, and a ceiling on runtime would end honest work.
+    "roles": {"quiet_hours": 6},
     "skills": {
         "granted": [
             *RUNDESK_REQUIRED_GRANTS,
@@ -186,6 +191,15 @@ def updates(where: Path | None = None) -> dict:
         raise Unreadable(f"{path(where)}: 'updates' holds "
                          f"{type(said).__name__} where it must hold an object")
     return {"at": _at(_value(said, "updates", "at", where), where, "updates")}
+
+
+def roles(where: Path | None = None) -> dict:
+    """How work handed to a role is governed here, read completely from the file."""
+    said = _section("roles", where)
+    if not isinstance(said, dict):
+        raise Unreadable(f"{path(where)}: 'roles' holds "
+                         f"{type(said).__name__} where it must hold an object")
+    return {"quiet_hours": _hours(_value(said, "roles", "quiet_hours", where), where)}
 
 
 def skills(where: Path | None = None) -> dict:
@@ -326,6 +340,20 @@ def _days(said, where) -> int:
     if isinstance(said, bool) or not isinstance(said, int) or said < 1:
         raise Unreadable(f"{path(where)}: 'keep_days' must be a whole number of days "
                          f"of at least one, and is {said!r}")
+    return said
+
+
+def _hours(said, where) -> int:
+    """A whole number of hours, of at least one.
+
+    Zero would settle every role run the moment it started, which is not a way anybody
+    means to configure this — refused rather than clamped, for the reason `keep_days` is.
+    `True` is an `int` in Python and would arrive here as one hour, so the type is asked
+    before the value.
+    """
+    if isinstance(said, bool) or not isinstance(said, int) or said < 1:
+        raise Unreadable(f"{path(where)}: 'roles.quiet_hours' must be a whole number of "
+                         f"hours of at least one, and is {said!r}")
     return said
 
 
