@@ -365,6 +365,33 @@ def thread_name(text: str) -> str:
     return clip(first, THREAD_CHARS) or "rundesk"
 
 
+def _a_direct_message(channel) -> bool:
+    """Whether the room being written into is one person's own.
+
+    Asked by `recipient`, which `discord.DMChannel` has and no other channel this surface
+    ever writes into does — `TextChannel`, `Thread` and `GroupChannel` all lack it. Not asked
+    by `guild`, which every one of them carries and a `DMChannel`'s merely answers `None`, so
+    a stand-in that has never heard of guilds would read as a direct message and every room
+    would quietly lose its mention.
+    """
+    return hasattr(channel, "recipient")
+
+
+def _mentioning(recipient: str, content: str) -> str:
+    """The mention on its own line, under the stats line rather than in front of it.
+
+    `-#` is Discord's subtext and it renders only at the *start* of a line. Putting the
+    mention first therefore turned the provider-and-cost line every answer carries (R-DIS-17,
+    R-DIS-33) into ordinary text with a stray `-#` in it — the one line that is meant to sit
+    quietly out of the way became the loudest thing in the message.
+    """
+    tag = f"<@{recipient}>"
+    if not content.startswith("-# "):
+        return f"{tag} {content}"
+    stats, newline, rest = content.partition("\n")
+    return f"{stats}\n{tag} {rest}" if newline else f"{stats}\n{tag}"
+
+
 def where_to_answer(direct: bool, in_thread: bool, ours: bool, mentioned: bool):
     """Whether this message is for us, and where the answer goes.
 
@@ -1382,11 +1409,19 @@ class Agent(discord.Client):
             # of `quoting` rather than of `anchor` for exactly that: an answer whose question
             # is somewhere else quotes nobody and must therefore mention nobody.
             mention_recipient = mention if isinstance(mention, str) and mention.isdigit() else ""
+            if mention_recipient and _a_direct_message(channel):
+                # Both halves, not only the tag: `mention_author` would otherwise turn back
+                # on here and ping the *notice's* author, which for a schedule is rundesk.
+                # **Nobody needs telling they are the only reader** (R-DIS-31). The tint
+                # exists to pick one message out of a busy room. A direct message has one
+                # human in it and every message in it is already theirs, so the mention buys
+                # no attention there and spends a notification to buy it.
+                mention, mention_recipient = False, ""
             if mention_recipient:
                 # A schedule's anchor is rundesk's own notice, so mentioning the reply author
                 # would ping the bot and leave the owner untinted. The core supplies the one
                 # authorized recipient only where the channel has exactly one (R-SCH-50).
-                content = f"<@{mention_recipient}> {content}"
+                content = _mentioning(mention_recipient, content)
             try:
                 said = await channel.send(
                     content,
