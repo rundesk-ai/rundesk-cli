@@ -62,6 +62,8 @@ so only a running commentary may grow.
 | ✅ | R-DIS-37 | Discord offers the schedules this agent can still run as a read-only bullet list, soonest first | `schedules lists what can still run as bullets soonest first`, `schedules leaves out a schedule whose moment has gone`, `schedules says when this agent has nothing left to run`, `schedules names a schedule nobody could understand`, `read only gateway information is offered as discord commands` |
 | ✅ | R-DIS-38 | Discord sends a notice meant for the owner alone as a direct message to them | `a notice for the owner is sent to them and starts no conversation`, `a notice for the owner too long for one message is split`, `a notice for the owner with nothing in it is not sent` |
 | ✅ | R-DIS-39 | Discord sends a notice meant for one named allowed user to that user, and refuses one naming somebody the channel does not allow | `a notice naming somebody is carried to that person`, `a notice naming somebody this channel does not allow is refused`, `a notice naming an allowed person reaches that person` |
+| ✅ | R-DIS-40 | An answer names its recipient outright only where the room holds more than that one person | `a scheduled final mentions nobody in a direct message` |
+| ✅ | R-DIS-41 | A name written into an answer stands under its completion line rather than in front of it | `a mention sits under the stats line rather than in front of it` |
 
 ## Open questions
 
