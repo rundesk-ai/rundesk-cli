@@ -355,6 +355,17 @@ class WhatAReleaseShips(WithSomewhereToKeepRoles):
                 self.assertIn(one.posture, ("read", "work"))
                 self.assertTrue(one.instructions.strip())
 
+    def test_every_shipped_role_ends_in_a_numbered_definition_of_done(self):
+        """R-ROL-38 — what a parent reviews an unchecked report against. Numbered because
+        a checkable list is reviewed item by item and a paragraph is skimmed."""
+        role.lay_down(self.where)
+        for slug in role.shipped():
+            with self.subTest(role=slug):
+                rules = role.read(slug, self.where, {}).instructions
+                done = rules[rules.index("## Definition of done"):]
+                self.assertIn("\n1. ", done)
+                self.assertIn("\n2. ", done)
+
     def test_laying_down_puts_every_shipped_role_where_it_is_missing(self):
         self.assertEqual(sorted(role.shipped()), sorted(role.lay_down(self.where)))
         for slug in role.shipped():

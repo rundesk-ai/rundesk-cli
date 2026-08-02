@@ -80,6 +80,14 @@ place to be wrong.
 Write the specialty instead — the things this kind of work gets wrong. Explain why: `do X,
 because Y tends to cause Z` survives pressure that `ALWAYS DO X` does not.
 
+**Name the weight of the work, in the opening line.** A run costs a whole context to set up and
+hands back one report a parent has to review, so a role earns its place on work heavy enough that
+the parent could not simply have done it — a change too large to hold, a sweep across hundreds of
+sites, a subsystem that has to be held in view all at once. Say which of those this one is, in the
+`description` a parent reads while deciding whether to delegate and again in the first lines of
+the rules. A role described by its subject rather than its weight is one that will be handed
+two-file edits.
+
 ## The definition of done is the point
 
 A role's report is unchecked work, and Rundesk asserts nothing about it. The definition of done
