@@ -1311,7 +1311,27 @@ class Gateway:
         what it handed over, and this gateway has begun nothing of its own. What *is* still
         turning says so for itself in the activity records, and is left exactly alone —
         settling live work would be the same lie the other way up.
+
+        What those records leave behind is taken away here too, and this is the only place
+        it can be: nothing else in the product removes one.
         """
+        # Swept before anything is read, and here rather than anywhere else — the name's
+        # lock is held, every stray the last gateway left has already been dealt with, and
+        # this gateway has started nothing of its own. Anything still standing under a pid
+        # that is gone, or under one the machine has since handed to somebody else, is
+        # leftover by definition. Above the `records` guard because this is files rather
+        # than rows: a name that is not an agent still owns the directory.
+        try:
+            swept = activity.sweep(self.where)
+        except Exception as why:  # noqa: BLE001 — a filesystem boundary, and see below
+            # The same posture as the records boundary below: a gateway that would not
+            # come up because it could not tidy is a worse outage than what it could not
+            # tidy.
+            self.log.warning("could not sweep what crashed turns left behind: %s", why)
+        else:
+            if swept:
+                self.log.info(
+                    "swept %s turn record(s) left behind by work that is gone", len(swept))
         if self.records is None:
             return
         live = [row["run"] for row in activity.active(self.where)]

@@ -4010,6 +4010,24 @@ class ARunTheGatewayNeverSettled(WithARunDirectory):
         self.assertIsNone(self._row(run)["ended_at"],
                           "a turn that is genuinely running was written off")
 
+    def test_what_a_crashed_turn_left_behind_is_gone_once_a_gateway_claims_the_name(self):
+        """R-GW-23 — the record a turn publishes for itself is removed by exactly one
+        thing, the turn's own `finally`, and a gateway killed outright never reaches it.
+        Nothing swept them afterwards: `release` takes the record file and `forget` takes
+        the record, the lock and the log. So one file per crashed turn stood for the life
+        of the install, cost a liveness check on every look at what an agent is doing, and
+        kept `agent.forget` from ever removing the agent's own `run/` directory."""
+        run = self._left_running()
+        gone = subprocess.Popen([sys.executable, "-c", ""])
+        gone.wait()
+        self._turning(run, pid=gone.pid)
+        self.assertEqual(1, len(list((self.where / "turns").glob("*.json"))))
+        self.made().claim()
+        self.assertEqual([], list((self.where / "turns").glob("*.json")),
+                         "what a crashed turn left behind is still standing")
+        self.assertIsNotNone(self._row(run)["ended_at"],
+                             "and the run it named was left marked as running")
+
     def test_settling_one_stranded_run_does_not_touch_a_run_that_already_ended(self):
         """A settled run keeps what it was settled as — including what it cost."""
         done = self._left_running(provider="claude")

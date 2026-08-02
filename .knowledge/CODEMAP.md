@@ -114,7 +114,13 @@ file with it.
   resolved, run the brain, write down what it said, keep where the conversation got to, write down how it
   ended. Nothing reaches a brain that the account does not show.
 - `src/rundesk/activity.py` — atomic, runtime-only provider-turn identities. Keeps only source,
-  conversation, PID, and start time so status and update safety can see work without seeing prompts.
+  conversation, PID, start time, and **the machine's own answer for when that process began**, so
+  status and update safety can see work without seeing prompts. That last one is what makes a PID
+  an identity: the machine reissues numbers, and reissues them from low ones first after a reboot,
+  which is exactly when a record written before that reboot is read. Missing it keeps a row and
+  mismatching it drops one, the same asymmetry `gateway._end_left_running` holds. **`sweep()` is
+  the only thing that removes what a killed turn left behind** — `ended` runs in the turn's own
+  `finally`, which a SIGKILL never reaches — and a gateway calls it as it claims the name.
 - `src/rundesk/skill.py` — the library of skills on this machine, and what makes one. Everything
   stands in `data/skills/`: required built-ins copied there by the install, catalog links, and an
   owner's own packages beside them. **A grant is a link in the agent's own `skills/`,
