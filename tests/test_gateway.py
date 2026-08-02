@@ -2616,7 +2616,7 @@ class WhatTwoWritersDoToOneFile(WithARunDirectory):
         self.assertTrue(asked, "what has already happened was written without waiting for it")
 
         asked.clear()
-        gateway._written_whole(self.where / "beat.json", "{}")
+        gateway.written_whole(self.where / "beat.json", "{}")
         self.assertEqual([], asked, "the beat pays for a durability it does not need")
 
 

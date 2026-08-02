@@ -43,6 +43,10 @@ from typing import Callable, Sequence
 from rundesk import ROOT, __version__, data_home
 from rundesk import activity
 from rundesk import dependencies
+from rundesk.durable import (
+    MISSING, UNREADABLE, WRITTEN, Unreadable, changing, read, read_json,
+    written_whole,
+)
 from rundesk import process
 from rundesk import restart_request
 from rundesk import schedule
@@ -117,58 +121,6 @@ CHANNEL_AS = "channel:"
 #: How long to leave a channel that stopped before starting it again. Long enough not to
 #: hammer a platform that is refusing us, short enough that an owner does not notice.
 CHANNEL_AGAIN_SECONDS = 10.0
-
-
-@contextlib.contextmanager
-def changing(target: Path, empty, what: str, durable: bool = False):
-    """Read this file, change it, and write it back — alone, and whole.
-
-    The one place a file rundesk keeps is read, decided on and written under a single
-    hold. Writing whole is not the same as changing alone: two writers that each read the
-    same contents and each write theirs back leave one change gone, with both having
-    reported success (R-GW-27). The lock is the one the kernel drops however the process
-    holding it ends, so a writer that dies mid-change blocks nothing.
-
-    `durable` also asks the machine to put it on the disk before this returns. Renaming
-    into place is enough against a reader arriving mid-write and against a process that
-    dies. It is not enough against power loss, which is exactly the moment a run that
-    already happened must not come back looking as though it never did (R-SCH-20). Not
-    paid on what a gateway rewrites every few seconds — only on what records what has
-    already happened.
-    """
-    target.parent.mkdir(parents=True, exist_ok=True)
-    guard = os.open(target.with_suffix(".changing"), os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(guard, fcntl.LOCK_EX)
-        # Read inside the hold, and refused before anything is yielded: a file that could
-        # not be parsed still holds everything in it as recoverable text (R-SCH-17).
-        keeping = _understood(target, empty, what)
-        before = json.dumps(keeping, indent=2)
-        yield keeping
-        after = json.dumps(keeping, indent=2)
-        # A writer that decided to change nothing writes nothing (R-SCH-19). Rewriting an
-        # unchanged file puts all of it at the mercy of a failure nobody asked to risk.
-        if after != before:
-            _written_whole(target, after + "\n", durable)
-    finally:
-        fcntl.flock(guard, fcntl.LOCK_UN)
-        os.close(guard)
-
-
-def _understood(target: Path, empty, what: str):
-    """What is written there, refusing a file that is there and cannot be read.
-
-    The one place that tells "never written" from "written and unreadable" (R-SCH-17).
-    `empty` is what a file nobody has written yet means, and its type is what this file is
-    supposed to be — an interruption file holding a list is as unreadable as one holding a
-    stray character, and replacing either with nothing loses the same thing.
-    """
-    state, said = _read(target)
-    if state == MISSING:
-        return empty  # never written, which is the ordinary case for a new gateway
-    if state == UNREADABLE or not isinstance(said, type(empty)):
-        raise Unreadable(f"{target} could not be read as {what}")
-    return said
 
 
 def logs_home() -> Path:
@@ -297,82 +249,10 @@ def home() -> Path:
     return Path(os.environ.get("RUNDESK_RUN_DIR") or data_home() / "run")
 
 
-def _written_whole(target: Path, text: str, durable: bool = False) -> None:
-    """Put this where it belongs, whole, in one move.
-
-    Beside and then renamed: a reader arriving mid-write would otherwise find half a
-    file, and half a record reads as a gateway that cannot say what version it is, while
-    half a schedules file reads as a gateway with no schedules at all.
-
-    `durable` waits for the machine to say it is really there before returning (R-SCH-20).
-    Both halves are needed and neither implies the other: the contents have to reach the
-    disk, and so does the directory entry naming them, or the rename is the thing that is
-    lost. Not asked for on what is rewritten every few seconds — the cost is real, and a
-    beat that is a moment out of date costs nothing.
-    """
-    target.parent.mkdir(parents=True, exist_ok=True)
-    beside = target.with_suffix(f".{os.getpid()}.writing")
-    if not durable:
-        beside.write_text(text)
-        os.replace(beside, target)
-        return
-    with open(beside, "w", encoding="utf-8") as handle:
-        handle.write(text)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(beside, target)
-    folder = os.open(target.parent, os.O_RDONLY)
-    try:
-        os.fsync(folder)
-    finally:
-        os.close(folder)
-
-
 #: What a file rundesk keeps turned out to be when it went to read it. `MISSING` and
 #: `UNREADABLE` are the same absence and opposite decisions: nothing is lost by writing over
 #: what was never written, and everything is lost by writing over what still holds the
 #: owner's schedules as recoverable text (R-SCH-17).
-MISSING = "missing"
-UNREADABLE = "unreadable"
-WRITTEN = "written"
-
-
-class Unreadable(Exception):
-    """A file that is there and could not be read or understood (R-SCH-17)."""
-
-
-def _read(path: Path) -> tuple[str, object]:
-    """What is written there, and which of three things happened when we looked.
-
-    The one place that decides what an unreadable file means. Four readers each worked it
-    out for themselves, and they disagreed: one reported a broken record as an empty one,
-    one wrote an empty list over a file it could not parse, and one read "I could not tell"
-    as "there is nothing left running" and deleted the record naming it.
-    """
-    try:
-        text = path.read_text()
-    except FileNotFoundError:
-        return MISSING, None
-    except OSError:
-        # There, and the machine would not hand it over — a stalled volume, a permission,
-        # a descriptor limit. Nothing about its contents is known, least of all that it
-        # is empty.
-        return UNREADABLE, None
-    try:
-        return WRITTEN, json.loads(text)
-    except ValueError:
-        return UNREADABLE, None
-
-
-def _read_json(path: Path, missing):
-    """What is written there, or `missing` if there is nothing readable to read.
-
-    For readers that report rather than decide: to them, a file that is not there and one
-    they could not read are the same nothing. Anything about to *write* asks `_read`
-    instead, because to a writer they are opposites.
-    """
-    state, said = _read(path)
-    return said if state == WRITTEN else missing
 
 
 def _lock_path(name: str, where: Path) -> Path:
@@ -547,7 +427,7 @@ def what_was_interrupted(name: str = DEFAULT_NAME, logs: Path | None = None) -> 
     different process — and usually a later one, since the gateway that could have
     answered is the one that went.
     """
-    said = _read_json(interrupted_path(name, logs), {})
+    said = read_json(interrupted_path(name, logs), {})
     return {work: how for work, how in said.items() if isinstance(how, dict)} \
         if isinstance(said, dict) else {}
 
@@ -858,7 +738,7 @@ def _sweep_predecessor(record: Path, log: logging.Logger, noting=None,
     narrow — the group leader must have exited, been reaped, and had its exact number
     reissued to another leader — and it is named in the contract's open questions.
     """
-    left = _read_json(record, None)
+    left = read_json(record, None)
     if not isinstance(left, dict) or not isinstance(left.get("working"), dict):
         return []
     swept = []
@@ -961,7 +841,7 @@ def _anything_left(record: Path) -> bool:
     could not tell" as "there is nothing there" throws away the sole means of ever finding
     it again, and the sweep that could not read it reported having tidied up.
     """
-    state, said = _read(record)
+    state, said = read(record)
     if state == UNREADABLE:
         return True
     working = said.get("working") if isinstance(said, dict) else None
@@ -1108,7 +988,7 @@ def standing(name: str = DEFAULT_NAME, where: Path | None = None) -> Standing:
     """What is true of the gateway of this name right now (R-GW-9, R-GW-10)."""
     where = where or home()
     running = _held(name, where)
-    recorded = _read_json(_record_path(name, where), {})
+    recorded = read_json(_record_path(name, where), {})
     if not isinstance(recorded, dict):
         recorded = {}
     return Standing(
@@ -1133,7 +1013,7 @@ def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list
     # Built first: a name that is not usable is a mistake to report, and `NotAName` is a
     # kind of ValueError, so a reader that swallowed one would swallow the other.
     record = _record_path(name, where or home())
-    said = _read_json(record, None)
+    said = read_json(record, None)
     working = said.get("working") if isinstance(said, dict) else None
     programs = sorted(working) if isinstance(working, dict) else []
     turns = [f"turn:{row['run']}" for row in activity.active(where)]
@@ -1142,7 +1022,7 @@ def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list
 
 def what_is_working(name: str = DEFAULT_NAME, where: Path | None = None) -> dict:
     """Safe process details for persistent work directly owned by a gateway."""
-    said = _read_json(_record_path(name, where or home()), None)
+    said = read_json(_record_path(name, where or home()), None)
     working = said.get("working") if isinstance(said, dict) else None
     return dict(working) if isinstance(working, dict) else {}
 
@@ -1765,7 +1645,7 @@ class Gateway:
                 },
             },
         }
-        _written_whole(_record_path(self.name, self.where), json.dumps(said))
+        written_whole(_record_path(self.name, self.where), json.dumps(said))
 
     # -- what it runs -------------------------------------------------------------
 

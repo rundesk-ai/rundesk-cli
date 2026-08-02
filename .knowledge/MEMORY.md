@@ -8,6 +8,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **Moving a decorated function and leaving its decorator behind silently rebinds the *next*
+  function.** Lifting `changing()` out of `gateway.py` by its `def` line left the
+  `@contextlib.contextmanager` above it, which then wrapped `logs_home()` — so `logs_home()`
+  returned a context manager and every path that builds a log path died with `unsupported
+  operand type(s) for /: '_GeneratorContextManager' and 'str'`, forty tests away from the
+  edit and naming neither function. Nothing failed at import and the module still parsed.
+  **When you move a definition, take it from `min(decorator_list, lineno)`, not from `def`**,
+  and assert the moved text still starts with its decorator.
 - **`test_install` fails three ways at once because of directories git never mentions, and none of
   them is your change.** A `ui/node_modules` (55 MB) and a built `site/` (47 MB) sitting beside `src/`
   are tracked by nothing and ignored by nothing, so **`git status` reports the tree clean** while
