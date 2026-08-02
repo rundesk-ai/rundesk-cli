@@ -47,7 +47,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 31 modules)
+## Backend / Services (src/rundesk/ — 33 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -105,6 +105,14 @@ file with it.
   about one run: **who may be answered**, checked against the record the owner wrote rather than trusted to
   an adapter, and **what state a turn is in**. Writes nothing down — the run's own account already records
   it, and a channel that kept a second copy would become the only place something existed.
+- `src/rundesk/attachment.py` — what an answer declares for delivery, and whether it may be sent.
+  A brain writes an absolute local Markdown link to mean "send this" (R-CH-31); this reads those out
+  of what it wrote and decides, separately, whether one may leave the machine — that it stands where
+  the agent works, that no component of the path is a link out of there, and that it is small enough
+  (R-CH-18). Apart from `answering.py` because none of it is about who may be answered or what state
+  a turn is in, which is that module's whole subject: this is a **security boundary** — containment,
+  symlink refusal through held directory descriptors, and a size ceiling — and it is worth reading on
+  its own. Holds no state and knows nothing of conversations, agents or turns.
 - `src/rundesk/transcript.py` — the two files beside a run, and nothing else: what the brain itself
   printed (`logs/runs/<run>.jsonl`, whose path an adapter is handed, because you cannot give a shell script
   a database handle) and what it said went wrong (`.err`, an operating-system pipe). Both may be destroyed
