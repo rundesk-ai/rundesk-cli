@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
 
 from rundesk import migration
 from rundesk import store

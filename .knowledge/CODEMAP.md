@@ -63,9 +63,11 @@ file with it.
   each handler **by name**, which is why the dispatch chain reads the same as it did when all of it
   lived in one file — and is not an accident of style: a module alias would collide with `main`'s own
   `agents` and `skills` parameters and with cli.py's existing `backups`, `schedules` and `config`
-  aliases. `__init__.py` holds only what more than one group needs and nothing below wants: how a
-  table is printed, how a change reaches an agent's log, and how a call that may block inside the
-  operating system is given up on.
+  aliases. `__init__.py` holds what more than one group needs and nothing below wants: how a table is
+  printed, how a change reaches an agent's log, how a call that may block inside the operating
+  system is given up on, and how a long command says where it has got to. A group may also call
+  another group — `update` refreshes skill catalogs, which is the skills group's job and prints
+  like one — but only one way, never in a cycle.
 - `src/rundesk/agent.py` — the named identity work is run for: its name, its home, and where
   everything of its own stands. Above the gateway and never beside it — it resolves an agent's three
   directories and hands them to a `Gateway`, which is why a gateway goes on knowing nothing of whose work it

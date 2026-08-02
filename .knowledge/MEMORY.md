@@ -8,6 +8,15 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **An import that looks dead can be the seam a collaborator arrives through.** `main` passes the
+  gateway module itself as `gateways` when nothing is injected, so `gateways.remembered()` in
+  `standing.every_name` needs `gateway.remembered` to exist — while every static check says the
+  name is unused, because no line in the file spells `gateway.remembered`. Two reviewers and an
+  AST pass all called it dead; `rundesk agents` then died with `AttributeError` inside a real
+  subprocess. **Before deleting an import from `gateway.py`, `agent.py`, `supervisor.py`,
+  `skill.py`, `script.py` or `catalog.py`, check what commands reach on the matching injected
+  name** (`gateways.`, `agents.`, `machine.`, `skills.`, `scripts.`, `catalogs.`) — those modules
+  are the defaults, so their public surface is an API even where nothing imports it by name.
 - **Moving a decorated function and leaving its decorator behind silently rebinds the *next*
   function.** Lifting `changing()` out of `gateway.py` by its `def` line left the
   `@contextlib.contextmanager` above it, which then wrapped `logs_home()` — so `logs_home()`

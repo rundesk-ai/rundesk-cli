@@ -39,6 +39,7 @@ from rundesk.commands import agents as agent_commands  # noqa: E402
 from rundesk.commands import backups as backup_commands  # noqa: E402
 from rundesk.commands import lifecycle  # noqa: E402
 from rundesk.commands import history  # noqa: E402
+from rundesk.commands import skills as skill_commands  # noqa: E402
 from rundesk.commands import status as status_commands  # noqa: E402
 from rundesk.commands import update as update_commands  # noqa: E402
 from rundesk import store  # noqa: E402
@@ -1462,7 +1463,7 @@ class WhatSkillCatalogsDo(unittest.TestCase):
                             given={"skills": ["python-patterns"]})
 
         with contextlib.redirect_stdout(io.StringIO()) as said:
-            code = cli._refresh_skill_catalogs(agents, skills, FakeGateways(), catalogs)
+            code = skill_commands._refresh_skill_catalogs(agents, skills, FakeGateways(), catalogs)
 
         self.assertEqual(0, code)
         self.assertIn("installed by default", said.getvalue())

@@ -17,11 +17,9 @@ from rundesk import config
 from rundesk import migration
 from rundesk import store
 from rundesk import updater
-from rundesk.commands.update import _out_loud
 from rundesk import backups_home, data_home
-from rundesk import supervisor as _supervisor
 from rundesk import update_worker
-from rundesk.commands import _answered_within, _as_table, cmd_not_available
+from rundesk.commands import _answered_within, _as_table, _out_loud, cmd_not_available
 
 #: How long a command whose whole job is the backups waits for the same directory. Longer
 #: than the glance health takes, because here the listing *is* the answer and a slow disk

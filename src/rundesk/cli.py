@@ -14,49 +14,20 @@ work is run for, what reaches them and what each run became are `PLANNED`.
 from __future__ import annotations
 
 import argparse
-import asyncio
-import contextlib
-import getpass
-import json
-import os
-import queue
-import shutil
-import subprocess
 import sys
-import threading
-import time
-from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from rundesk import __version__, backups_home, data_home  # noqa: E402
+from rundesk import __version__, backups_home  # noqa: E402
 from rundesk import agent as _agent  # noqa: E402
-from rundesk import backup as backups  # noqa: E402
 from rundesk import catalog  # noqa: E402
-from rundesk import channel  # noqa: E402
-from rundesk import config  # noqa: E402
-from rundesk import dependencies  # noqa: E402
 from rundesk import gateway as _gateway  # noqa: E402
-from rundesk import migration  # noqa: E402
-from rundesk import process  # noqa: E402
-from rundesk import role  # noqa: E402
-from rundesk import role_run as role_runs  # noqa: E402
-from rundesk import provider  # noqa: E402
-from rundesk import restart_request  # noqa: E402
-from rundesk import schedule as schedules  # noqa: E402
 from rundesk import script  # noqa: E402
 from rundesk import skill  # noqa: E402
-from rundesk import standing  # noqa: E402
-from rundesk.commands import (  # noqa: E402
-    NOT_AVAILABLE, _answered_within, _as_table, _note, cmd_not_available,
-)
-from rundesk.commands.skills import (  # noqa: E402
-    _refresh_skill_catalogs, cmd_scripts, cmd_skills,
-)
-from rundesk.commands.update import (  # noqa: E402
-    _out_loud, cmd_uninstall, cmd_update, cmd_version,
-)
+from rundesk.commands import NOT_AVAILABLE, cmd_not_available  # noqa: E402
+from rundesk.commands.skills import cmd_scripts, cmd_skills  # noqa: E402
+from rundesk.commands.update import cmd_uninstall, cmd_update, cmd_version  # noqa: E402
 from rundesk.commands import history  # noqa: E402
 from rundesk.commands.history import (  # noqa: E402
     cmd_logs, cmd_messages, cmd_runs, cmd_search, cmd_usage,
@@ -89,8 +60,6 @@ from rundesk import store  # noqa: E402
 from rundesk import supervisor as _supervisor  # noqa: E402
 from rundesk import turn  # noqa: E402
 from rundesk import updater  # noqa: E402
-from rundesk import update_request  # noqa: E402
-from rundesk import update_worker  # noqa: E402
 
 #: Where this checkout lives — the thing an update replaces in place.
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent

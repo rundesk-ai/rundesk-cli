@@ -14,7 +14,6 @@ from rundesk import migration
 from rundesk import role
 from rundesk import role_run as role_runs
 from rundesk import store
-from rundesk.commands import _as_table
 
 
 #: How many of an agent's role runs a listing shows. Enough to cover what is in flight

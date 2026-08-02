@@ -11,7 +11,6 @@ import argparse
 import sys
 
 from rundesk import config
-from rundesk.commands import _as_table
 
 
 def cmd_config(args: argparse.Namespace) -> int:

@@ -28,6 +28,7 @@ from rundesk import store
 from rundesk import update_request
 from rundesk import update_worker
 from rundesk import updater
+from rundesk.commands import _out_loud
 from rundesk.commands.skills import _refresh_skill_catalogs
 
 #: The installer as published, for the one case where this install has lost its own:
@@ -163,11 +164,6 @@ def _carry_every(agents) -> str | None:
     return migration.carry_every_or_put_back(
         agents.agents_home(), store.VERSION, note=_out_loud,
     )
-
-
-def _out_loud(said: str) -> None:
-    """Each agent as it is reached, so a long update is not a silent one."""
-    print(f"        {said}")
 
 
 def cmd_uninstall(args: argparse.Namespace) -> int:

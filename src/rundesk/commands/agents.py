@@ -14,7 +14,6 @@ import json
 import os
 import sys
 import time
-from datetime import datetime
 
 from rundesk import ROOT as REPO_ROOT
 from rundesk import __version__

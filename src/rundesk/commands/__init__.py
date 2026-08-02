@@ -9,9 +9,11 @@ records and process groups and have never heard of a flag.
 What each group acts on — the gateways, the machine, the agents, the skills — arrives as an
 argument from `cli.main`, so every verb is exercised with none of them anywhere near it.
 
-This file holds only what more than one group needs and nothing below the surface wants:
-how a table is printed, how a change is written into an agent's log, and how a call that
-may block inside the operating system is given up on.
+This file holds what more than one group needs and nothing below the surface wants: how a
+table is printed, how a change is written into an agent's log, how a call that may block
+inside the operating system is given up on, and how a long-running command says where it
+has got to. A group may still *call* another group — an update refreshes skill catalogs,
+which is the skills group's job and prints like one — but only one way, never in a cycle.
 """
 
 from __future__ import annotations
@@ -107,3 +109,8 @@ def cmd_not_available(name: str, act: str | None = None) -> int:
     print(f"{asked}: NOT AVAILABLE — planned, not built yet", file=sys.stderr)
     print("        what this rundesk can do:  rundesk --help", file=sys.stderr)
     return NOT_AVAILABLE
+
+
+def _out_loud(said: str) -> None:
+    """Each agent as it is reached, so a long update is not a silent one."""
+    print(f"        {said}")

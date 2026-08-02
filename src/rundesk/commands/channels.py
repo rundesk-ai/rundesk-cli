@@ -12,7 +12,6 @@ import argparse
 import asyncio
 import contextlib
 import getpass
-import json
 import os
 import shutil
 import sys
@@ -21,7 +20,6 @@ from pathlib import Path
 from rundesk import channel
 from rundesk import gateway as _gateway
 from rundesk import migration
-from rundesk import schedule as schedules
 from rundesk import store
 from rundesk.commands import _as_table, _note
 

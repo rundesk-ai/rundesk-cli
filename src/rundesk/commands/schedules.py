@@ -9,14 +9,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
 from datetime import datetime
 
 from rundesk import gateway as _gateway
 from rundesk import migration
 from rundesk import process
-from rundesk import schedule as schedules
 from rundesk import store
 from rundesk.commands import _as_table, _note
 

@@ -13,15 +13,11 @@ import asyncio
 import sys
 import time
 
-from rundesk import ROOT
 from rundesk import migration
 from rundesk import restart_request
 from rundesk import store
 from rundesk import standing
-from rundesk import supervisor as _supervisor
-from rundesk import update_request
 from rundesk import update_worker
-from rundesk.commands import _as_table
 
 
 RESTART_POLL_SECONDS = 1.0

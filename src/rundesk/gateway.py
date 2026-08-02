@@ -24,7 +24,6 @@ import contextlib
 import errno
 import fcntl
 import importlib.util
-import re
 import itertools
 import json
 import logging
@@ -43,28 +42,21 @@ from typing import Callable, Sequence
 from rundesk import ROOT, __version__, data_home
 from rundesk import activity
 from rundesk import dependencies
-from rundesk.gateway_log import (  # re-exported: every importer reaches these
-    DEFAULT_NAME, EVERY_LOG, GATEWAY_LOG, LOG_BYTES, LOG_KEEP, LOG_SOURCES,
-    MACHINE_LOG, NotAName, WRITTEN_AS, checked, log_path, log_sources, note,
-    channel_note, recorder, logs_home,
+from rundesk.gateway_log import (  # noqa: F401 — several are reached as gateway.<name>
+    DEFAULT_NAME, EVERY_LOG, GATEWAY_LOG, LOG_BYTES, LOG_SOURCES, MACHINE_LOG, NotAName,
+    channel_note, checked, log_path, log_sources, logs_home, note, recorder,
 )
-from rundesk.recovery import (  # re-exported: agent.py and the suites reach these
-    KEPT_INTERRUPTIONS, interrupted_path, note_interrupted, remembered,
-    resolve_interruption, what_was_interrupted,
+from rundesk.recovery import (  # noqa: F401 — reached as gateway.<name> by agent.py and the suites
+    interrupted_path, note_interrupted, remembered, resolve_interruption,
+    what_was_interrupted,
 )
-from rundesk.durable import (
-    MISSING, UNREADABLE, WRITTEN, Unreadable, changing, read, read_json,
-    written_whole,
-)
+from rundesk.durable import UNREADABLE, Unreadable, changing, read, read_json, written_whole
 from rundesk import process
 from rundesk import restart_request
 from rundesk import schedule
 from rundesk import store
 from rundesk import update_request
 from rundesk import updater
-
-
-
 
 
 #: What a schedule is doing, in the two words that are not a program's own outcome.
@@ -255,8 +247,6 @@ def started_at(pid: int) -> str | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return said.stdout.strip() or None
-
-
 
 
 #: Where a channel keeps who it has already introduced this agent to (R-CH-33). Beside the

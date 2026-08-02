@@ -108,7 +108,7 @@ The executable owns nothing. `rundesk` resolves its own location, puts `src/` on
 |---|---|---|---|
 | `rundesk` | finding itself and handing off | `src/rundesk/cli.py` | hold any logic |
 | `src/rundesk/cli.py` | the parser, the dispatch, and nothing else | the command groups below | do the work of a command inline |
-| `src/rundesk/commands/*.py` | one command group each: a `Namespace` in, an exit code out | the modules below | hold anything a second group needs |
+| `src/rundesk/commands/*.py` | one command group each: a `Namespace` in, an exit code out | the modules below, and one another **one way** | depend on a group that depends on it |
 | `src/rundesk/*.py` | one concern each, importable and testable alone | the standard library | know how it was invoked |
 | `install.sh` | putting the command on a PATH, and taking it off | nothing in `src/` | contain product behavior |
 
