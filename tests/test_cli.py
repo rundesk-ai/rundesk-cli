@@ -34,6 +34,14 @@ from rundesk import cli  # noqa: E402
 from rundesk import catalog as real_catalog  # noqa: E402
 from rundesk import config  # noqa: E402
 from rundesk import restart_request  # noqa: E402
+from rundesk import standing  # noqa: E402
+from rundesk.commands import agents as agent_commands  # noqa: E402
+from rundesk.commands import backups as backup_commands  # noqa: E402
+from rundesk.commands import lifecycle  # noqa: E402
+from rundesk.commands import history  # noqa: E402
+from rundesk.commands import skills as skill_commands  # noqa: E402
+from rundesk.commands import status as status_commands  # noqa: E402
+from rundesk.commands import update as update_commands  # noqa: E402
 from rundesk import store  # noqa: E402
 from rundesk import update_request  # noqa: E402
 from rundesk import updater  # noqa: E402
@@ -44,10 +52,11 @@ from rundesk import updater  # noqa: E402
 #: answers honestly, never the duration. Set for the whole file rather than per case,
 #: because the ones that spend the whole wait are exactly the ones nobody remembers to
 #: turn down — a gateway that never comes up has no earlier moment to finish at.
-_REAL_PATIENCE = (cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS)
+_REAL_PATIENCE = (standing.START_PATIENCE, standing.CYCLE_PATIENCE,
+                  standing.LOOK_AGAIN_SECONDS)
 
 #: The real removal, put back when the file is done with.
-_REAL_REMOVAL = cli._remove_this_install
+_REAL_REMOVAL = update_commands._remove_this_install
 _REAL_BACKUP_DIR = os.environ.get("RUNDESK_BACKUP_DIR")
 _REAL_DATA_DIR = os.environ.get("RUNDESK_DATA_DIR")
 _TEST_BACKUP_DIR = None
@@ -76,7 +85,7 @@ _asked_of_the_installer: list = []
 
 def setUpModule():
     global _TEST_BACKUP_DIR, _TEST_DATA_DIR
-    cli._remove_this_install = _never_the_real_installer
+    update_commands._remove_this_install = _never_the_real_installer
     # The automatic surface walk invokes every operation, including the real backup
     # listing. Without this boundary it reads the owner's backup directory, and under the
     # aggregate gate that directory can be in use by another suite or a sync service —
@@ -93,12 +102,14 @@ def setUpModule():
     # Both turned down together. Turning the patience down alone left a wait that had room
     # for one look and a fraction of a second's margin on the second — so a case proving a
     # cycle waits passed on a quick machine and reported a failure on a loaded one.
-    cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS = 0.3, 0.3, 0.005
+    standing.START_PATIENCE, standing.CYCLE_PATIENCE, standing.LOOK_AGAIN_SECONDS = (
+        0.3, 0.3, 0.005)
 
 
 def tearDownModule():
-    cli._remove_this_install = _REAL_REMOVAL
-    cli.START_PATIENCE, cli.CYCLE_PATIENCE, cli.LOOK_AGAIN_SECONDS = _REAL_PATIENCE
+    update_commands._remove_this_install = _REAL_REMOVAL
+    (standing.START_PATIENCE, standing.CYCLE_PATIENCE,
+     standing.LOOK_AGAIN_SECONDS) = _REAL_PATIENCE
     if _REAL_BACKUP_DIR is None:
         os.environ.pop("RUNDESK_BACKUP_DIR", None)
     else:
@@ -157,12 +168,12 @@ def taking_the_installer(instead):
     Never the real one: proving that this command runs the removal by running the removal
     would stop the gateways of whoever ran the suite, and delete their install.
     """
-    was = cli._remove_this_install
-    cli._remove_this_install = instead
+    was = update_commands._remove_this_install
+    update_commands._remove_this_install = instead
     try:
         yield
     finally:
-        cli._remove_this_install = was
+        update_commands._remove_this_install = was
 
 
 def _offered(parser) -> dict:
@@ -418,7 +429,7 @@ class BuiltCommandTests(unittest.TestCase):
         `uninstall`, and once that removes rundesk rather than describing it, the case
         proving each verb is wired removed the developer's install: gateways stopped,
         launchd jobs gone. It passed, because a successful removal is what it does."""
-        self.assertIsNot(cli._remove_this_install, _REAL_REMOVAL,
+        self.assertIsNot(update_commands._remove_this_install, _REAL_REMOVAL,
                          "this file can reach the real uninstall")
 
     def test_no_case_in_this_file_can_reach_the_owners_backups(self):
@@ -456,20 +467,20 @@ class BuiltCommandTests(unittest.TestCase):
         def gone(installer, args):
             raise AssertionError("it ran an installer that is not there")
         with taking_the_installer(gone):
-            was = cli.REPO_ROOT
-            cli.REPO_ROOT = pathlib.Path("/nowhere-at-all")
+            was = update_commands.ROOT
+            update_commands.ROOT = pathlib.Path("/nowhere-at-all")
             try:
                 code, _, err = run(["uninstall"])
             finally:
-                cli.REPO_ROOT = was
+                update_commands.ROOT = was
         self.assertEqual(1, code)
         self.assertIn(
-            f"curl -fsSL {cli.PUBLISHED_INSTALLER} | bash -s -- --uninstall",
+            f"curl -fsSL {update_commands.PUBLISHED_INSTALLER} | bash -s -- --uninstall",
             err,
             "it failed and did not give the published removal instruction",
         )
         self.assertEqual(
-            cli.PUBLISHED_INSTALLER,
+            update_commands.PUBLISHED_INSTALLER,
             "https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh",
         )
 
@@ -1455,7 +1466,7 @@ class WhatSkillCatalogsDo(unittest.TestCase):
                             given={"skills": ["python-patterns"]})
 
         with contextlib.redirect_stdout(io.StringIO()) as said:
-            code = cli._refresh_skill_catalogs(agents, skills, FakeGateways(), catalogs)
+            code = skill_commands._refresh_skill_catalogs(agents, skills, FakeGateways(), catalogs)
 
         self.assertEqual(0, code)
         self.assertIn("installed by default", said.getvalue())
@@ -1869,8 +1880,8 @@ class HandingAGatewayToTheMachine(unittest.TestCase):
     def test_starting_says_so_when_no_gateway_results(self):
         """R-GW-13 — a job can be accepted and the gateway then refuse to start, and
         refusing ends cleanly, so nothing else would ever say a word."""
-        self.addCleanup(setattr, cli, "START_PATIENCE", cli.START_PATIENCE)
-        cli.START_PATIENCE = 0.3
+        self.addCleanup(setattr, standing, "START_PATIENCE", standing.START_PATIENCE)
+        standing.START_PATIENCE = 0.3
         code, said = drive(["start", "gateway"], FakeGateways(starts_after=10_000), FakeMachine())
         self.assertEqual(1, code)
         self.assertIn("FAILED", said)
@@ -2037,7 +2048,7 @@ class StandingGatewaysDown(unittest.TestCase):
         args = argparse.Namespace(name=name, all=False, force=False, worker=True)
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = cli._stand_down(
+            code = lifecycle._stand_down(
                 args, gateways, machine, FakeAgents(made=[name]), "restart"
             )
         self.assertEqual(0, code, err.getvalue())
@@ -2103,8 +2114,8 @@ class StandingGatewaysDown(unittest.TestCase):
 
     def test_cycling_says_so_rather_than_starting_one_that_never_stopped(self):
         """R-GW-13 — and does not report having cycled it."""
-        self.addCleanup(setattr, cli, "CYCLE_PATIENCE", cli.CYCLE_PATIENCE)
-        cli.CYCLE_PATIENCE = 0.3
+        self.addCleanup(setattr, standing, "CYCLE_PATIENCE", standing.CYCLE_PATIENCE)
+        standing.CYCLE_PATIENCE = 0.3
         machine = FakeMachine(jobs=["agent-one"])
         gateways = FakeGateways(stops_after=10_000)  # never stops
         code, said = drive(["restart", "agent-one"], gateways, machine)
@@ -2421,8 +2432,8 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
     def test_status_survives_a_backup_directory_that_does_not_answer(self):
         """R-BKP-28 — backup storage may be cloud-backed or remote. Its outage must not
         take every other install-health answer away with it."""
-        real_every = cli.backups.every
-        real_patience = cli.BACKUP_STATUS_PATIENCE
+        real_every = backup_commands.backups.every
+        real_patience = status_commands.BACKUP_STATUS_PATIENCE
         entered, release = threading.Event(), threading.Event()
 
         def blocked(_where):
@@ -2430,15 +2441,15 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
             release.wait(1)
             return []
 
-        cli.backups.every = blocked
-        cli.BACKUP_STATUS_PATIENCE = 0.02
+        backup_commands.backups.every = blocked
+        status_commands.BACKUP_STATUS_PATIENCE = 0.02
         began = time.monotonic()
         try:
             code, said = drive(["status"])
         finally:
             release.set()
-            cli.backups.every = real_every
-            cli.BACKUP_STATUS_PATIENCE = real_patience
+            backup_commands.backups.every = real_every
+            status_commands.BACKUP_STATUS_PATIENCE = real_patience
         self.assertTrue(entered.wait(0.1), "status never asked after the backups")
         self.assertLess(time.monotonic() - began, 0.2, "status waited on backup storage")
         self.assertEqual(0, code, said)
@@ -2451,8 +2462,8 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
         `status`. `backups` ran the identical enumeration on the main thread with no bound
         at all, and sat for over five minutes at 0.0% CPU with no output and no error —
         the one command that cannot answer without the guard."""
-        real_every = cli.backups.every
-        real_patience = cli.BACKUP_PATIENCE
+        real_every = backup_commands.backups.every
+        real_patience = backup_commands.BACKUP_PATIENCE
         entered, release = threading.Event(), threading.Event()
 
         def blocked(_where):
@@ -2460,15 +2471,15 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
             release.wait(1)
             return []
 
-        cli.backups.every = blocked
-        cli.BACKUP_PATIENCE = 0.02
+        backup_commands.backups.every = blocked
+        backup_commands.BACKUP_PATIENCE = 0.02
         began = time.monotonic()
         try:
             code, said = drive(["backups"])
         finally:
             release.set()
-            cli.backups.every = real_every
-            cli.BACKUP_PATIENCE = real_patience
+            backup_commands.backups.every = real_every
+            backup_commands.BACKUP_PATIENCE = real_patience
         self.assertTrue(entered.wait(0.1), "the listing never asked after the backups")
         self.assertLess(time.monotonic() - began, 0.5, "the listing waited on storage")
         self.assertEqual(1, code, "an unreachable directory was reported as success")
@@ -2478,15 +2489,15 @@ class TwoQuestionsTwoCommands(unittest.TestCase):
         """R-BKP-29 — an empty listing and an unreachable directory must not look the same.
         While the two agree, an owner cannot tell a working daily backup from one that has
         never landed, and only one of the two means their agents are unprotected."""
-        real_every = cli.backups.every
-        real_patience = cli.BACKUP_PATIENCE
-        cli.backups.every = lambda _where: threading.Event().wait(1) or []
-        cli.BACKUP_PATIENCE = 0.02
+        real_every = backup_commands.backups.every
+        real_patience = backup_commands.BACKUP_PATIENCE
+        backup_commands.backups.every = lambda _where: threading.Event().wait(1) or []
+        backup_commands.BACKUP_PATIENCE = 0.02
         try:
             code, said = drive(["backups"])
         finally:
-            cli.backups.every = real_every
-            cli.BACKUP_PATIENCE = real_patience
+            backup_commands.backups.every = real_every
+            backup_commands.BACKUP_PATIENCE = real_patience
         self.assertEqual(1, code)
         self.assertNotIn("no backups", said,
                          "a directory that did not answer was reported as holding none")
@@ -2569,6 +2580,54 @@ class RunningOneHere(unittest.TestCase):
         gateways = FakeGateways()
         drive(["serve", "ava"], gateways)
         self.assertEqual(["ava"], gateways.served)
+
+    def test_a_steered_turn_is_handed_what_is_typed_while_it_runs(self):
+        """`ask --steer` reaches the turn with something to read from.
+
+        The flag was declared and nothing drove it, so a second module-level `_typed`
+        shadowed the generator this passes and the whole verb ended in `TypeError` the
+        moment anybody used it. A surface walk cannot catch that — it never types the
+        flag — so the one thing worth asserting is that the turn is handed a source of
+        words rather than a crash.
+        """
+        told = {}
+
+        async def carried(*asked, **how):
+            told.update(how)
+            return _Ended()
+
+        with mock.patch.object(cli.turn, "carry", carried):
+            code, said = drive(["ask", "ava", "what changed?", "--provider", "codex",
+                                "--steer"], agents=FakeAgents(made=("ava",)))
+        self.assertEqual(0, code, said)
+        self.assertTrue(hasattr(told.get("steering"), "__anext__"),
+                        f"nothing to steer with: {told.get('steering')!r}")
+
+    def test_an_unsteered_turn_is_handed_nothing_to_read(self):
+        """The other half of the same seam: without the flag there is no terminal to read,
+        and a turn handed an open generator would wait on one that never closes."""
+        told = {}
+
+        async def carried(*asked, **how):
+            told.update(how)
+            return _Ended()
+
+        with mock.patch.object(cli.turn, "carry", carried):
+            code, said = drive(["ask", "ava", "what changed?", "--provider", "codex"],
+                               agents=FakeAgents(made=("ava",)))
+        self.assertEqual(0, code, said)
+        self.assertIsNone(told.get("steering"))
+
+
+class _Ended:
+    """What a turn hands back, as far as `ask` reads it."""
+
+    run = "0001"
+    tokens: dict = {}
+    ok = True
+    why = None
+    reason = None
+    trouble: list = []
 
 
 class DiagnosingAnAgent(unittest.TestCase):
@@ -4384,298 +4443,6 @@ class EveryExampleIsRealCommand(unittest.TestCase):
         """A command with nothing said about it is a line to copy without understanding."""
         for what, line, means in self.typed():
             self.assertTrue(means.strip(), f"{what}: '{line}' says nothing about itself")
-    def test_what_is_in_flight_is_asked_of_every_gateway_that_is_running(self):
-        """R-UPD-23 — every gateway, not the default one, and named so an owner knows
-        which of several to wait for. A gateway that is stopped has nothing in flight
-        however stale its record is, so it is never asked."""
-
-        class Standing:
-            def __init__(self, name, running):
-                self.name, self.running = name, running
-
-        class Gateways:
-            def remembered(self, where=None):
-                return []   # nothing here is a name that survives only as history
-
-            def every(self):
-                return [Standing("alpha", True), Standing("beta", True),
-                        Standing("gamma", False)]
-
-            def standing(self, name, where=None):
-                return Standing(name, name in ("alpha", "beta"))
-
-            def what_is_working(self, name, where=None):
-                return {"alpha": ["turn-1", "turn-2"], "beta": ["turn-3"],
-                        "gamma": ["stale"]}[name]
-
-            def what_is_turning(self, name, where=None):
-                return []
-
-        self.assertEqual(
-            ["alpha/turn-1", "alpha/turn-2", "beta/turn-3"],
-            cli._in_flight(Gateways(), FakeAgents()),
-        )
-
-    def test_a_machine_with_no_gateways_has_nothing_in_flight(self):
-        """R-UPD-23 — the ordinary case, and the one that must never refuse an update."""
-
-        class Gateways:
-            def remembered(self, where=None):
-                return []   # nothing here is a name that survives only as history
-
-            def every(self):
-                return []
-
-            def standing(self, name, where=None):
-                raise AssertionError("it asked about a gateway that does not exist")
-
-            def what_is_running(self, name, where=None):
-                raise AssertionError("it asked about a gateway that does not exist")
-
-        self.assertEqual([], cli._in_flight(Gateways(), FakeAgents()))
-
-
-class StoppingWhatAnUpdateWouldReplace(unittest.TestCase):
-    """R-UPD-21, R-UPD-22 — which gateways an update may take down, and which it may not."""
-
-    class Standing:
-        def __init__(self, name, running=True, pid=1, version="0.1.0"):
-            self.name, self.running, self.pid, self.version = name, running, pid, version
-
-    def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.run_home = pathlib.Path(self.temporary.name)
-
-    def _machine(self, loaded=(), available=True, stops=True):
-        outer = self
-
-        class Machine:
-            NotOurs = RuntimeError
-            NoSupervisor = RuntimeError
-            asked = []
-
-            def available(self):
-                return available
-
-            def loaded(self, name):
-                return name in loaded
-
-            def described(self, root=None):
-                return []
-
-            def stop(self, name, root=None):
-                Machine.asked.append(("stop", name))
-                Machine.roots.append(("stop", name, root))
-                return type("Spoke", (), {"ok": stops})()
-
-            def start(self, name, root=None):
-                Machine.asked.append(("start", name))
-                Machine.roots.append(("start", name, root))
-                return type("Spoke", (), {"ok": True})()
-
-        Machine.asked = []
-        Machine.roots = []
-        return Machine()
-
-    def _gateways(self, standing, gone_after_stop=True, comes_up=True, working=()):
-        outer = self
-        #: How many times each has been asked after. The first answer is what it was doing
-        #: before anything was asked of it, and the ones after are whether it has gone —
-        #: the same gateway, asked twice, which is what the real one does.
-        asked = {}
-
-        class Gateways:
-            def home(self):
-                return outer.run_home
-
-            def remembered(self, where=None):
-                return []   # nothing here is a name that survives only as history
-
-            def every(self):
-                return standing
-
-            def standing(self, name, where=None):
-                for it in standing:
-                    if it.name == name:
-                        asked[name] = asked.get(name, 0) + 1
-                        if asked[name] == 1 or not gone_after_stop:
-                            return it
-                        return outer.Standing(name, running=False)
-                return outer.Standing(name, running=False)
-
-            def what_is_running(self, name, where=None):
-                return list(working)
-
-            def what_is_working(self, name, where=None):
-                return {one: {"pgid": 1} for one in working}
-
-            def what_is_turning(self, name, where=None):
-                return []
-
-            def fitness(self, root=None):
-                return None
-        return Gateways()
-
-    def test_an_update_stops_every_supervised_gateway_that_is_running(self):
-        """R-UPD-21"""
-        up = [self.Standing("alpha"), self.Standing("beta"), self.Standing("idle", running=False)]
-        machine = self._machine(loaded=("alpha", "beta"))
-        stopped, refused = cli._stand_all_down(self._gateways(up), machine, FakeAgents())
-        self.assertIsNone(refused)
-        self.assertEqual(["alpha", "beta"], stopped)
-        self.assertEqual([("stop", "alpha"), ("stop", "beta")], machine.asked,
-                         "it stopped a gateway that was not running")
-
-    def test_an_update_marks_maintenance_until_the_gateway_is_back(self):
-        """R-UPD-43"""
-        machine = self._machine(loaded=("alpha",))
-        agents = FakeAgents()
-        stopped, refused = cli._stand_all_down(
-            self._gateways([self.Standing("alpha")]), machine, agents
-        )
-        self.assertEqual((["alpha"], None), (stopped, refused))
-        self.assertTrue(
-            update_request.maintaining("alpha", self.run_home),
-            "the shutdown looked like an unexplained outage",
-        )
-
-        cli._bring_all_back(
-            ["alpha"], self._gateways([self.Standing("alpha")]), machine, agents
-        )
-        self.assertTrue(
-            update_request.maintaining("alpha", self.run_home),
-            "the returning channel lost the marker before it could report completion",
-        )
-
-    def test_a_gateway_the_update_could_not_stop_is_not_left_in_maintenance(self):
-        """R-UPD-43"""
-        machine = self._machine(loaded=("alpha",), stops=False)
-        cli._stand_all_down(
-            self._gateways([self.Standing("alpha")]), machine, FakeAgents()
-        )
-        self.assertFalse(update_request.maintaining("alpha", self.run_home))
-
-    def test_a_successor_worker_restores_only_a_gateway_marked_for_maintenance(self):
-        """R-UPD-44"""
-        outer = self
-
-        class Gateways:
-            asked = 0
-
-            def home(self):
-                return outer.run_home
-
-            def every(self):
-                return []
-
-            def remembered(self):
-                return []
-
-            def fitness(self, root=None):
-                return None
-
-            def standing(self, name, where=None):
-                self.asked += 1
-                return outer.Standing(name, running=self.asked > 1)
-
-        machine = self._machine(loaded=("alpha", "deliberately-stopped"))
-        machine.described = lambda root=None: ["alpha", "deliberately-stopped"]
-        update_request.begin_maintenance("alpha", self.run_home)
-
-        self.assertEqual(
-            [], cli._recover_update_gateways(Gateways(), machine, FakeAgents())
-        )
-        self.assertIn(("start", "alpha"), machine.asked)
-        self.assertNotIn(("start", "deliberately-stopped"), machine.asked)
-        self.assertTrue(update_request.maintaining("alpha", self.run_home))
-
-    def test_a_successor_worker_never_starts_a_gateway_on_an_unfit_release(self):
-        """R-UPD-44"""
-        gateways = self._gateways([self.Standing("alpha", running=False)])
-        gateways.fitness = lambda root=None: "dependencies are incomplete"
-        machine = self._machine(loaded=("alpha",))
-        machine.described = lambda root=None: ["alpha"]
-        update_request.begin_maintenance("alpha", self.run_home)
-
-        self.assertEqual(
-            ["alpha"],
-            cli._recover_update_gateways(gateways, machine, FakeAgents()),
-        )
-        self.assertNotIn(("start", "alpha"), machine.asked)
-
-    def test_an_external_update_acts_on_jobs_owned_by_the_target_install(self):
-        """R-UPD-21 — the worker runs from the release checkout while the supervised
-        jobs belong to the older install it is replacing."""
-        target = Path("/target-install")
-        machine = self._machine(loaded=("alpha",))
-        stopped, refused = cli._stand_all_down(
-            self._gateways([self.Standing("alpha")]), machine, FakeAgents(), target
-        )
-        self.assertEqual((["alpha"], None), (stopped, refused))
-        self.assertEqual([("stop", "alpha", target)], machine.roots)
-
-        cli._bring_all_back(
-            ["alpha"], self._gateways([self.Standing("alpha")]),
-            machine, FakeAgents(), target,
-        )
-        self.assertIn(("start", "alpha", target), machine.roots)
-
-    def test_an_update_refuses_rather_than_taking_down_what_it_cannot_start_again(self):
-        """R-UPD-21 — launchctl has no handle on a process it never started, and nothing
-        records the terminal a hand-started gateway came from."""
-        machine = self._machine(loaded=())     # running, but the machine holds no job
-        stopped, refused = cli._stand_all_down(self._gateways([self.Standing("scratch", pid=8812)]), machine, FakeAgents())
-        self.assertEqual([], stopped)
-        self.assertIn("unsupervised", refused)
-        self.assertIn("rundesk start scratch", refused)
-        self.assertEqual([], machine.asked, "it tried to stop one it could not start again")
-
-    def test_an_update_on_a_machine_with_no_supervisor_stops_nothing(self):
-        """R-UPD-21 — nothing to hand a gateway to means nothing to take one from."""
-        stopped, refused = cli._stand_all_down(self._gateways([self.Standing("alpha")]), self._machine(available=False), FakeAgents())
-        self.assertEqual(([], None), (stopped, refused))
-
-    def test_a_gateway_that_will_not_stop_leaves_the_install_untouched(self):
-        """R-UPD-21 — replacing files under something that refused to go is the failure
-        this whole sequence exists to avoid."""
-        machine = self._machine(loaded=("alpha",), stops=False)
-        stopped, refused = cli._stand_all_down(self._gateways([self.Standing("alpha")]), machine, FakeAgents())
-        self.assertEqual([], stopped)
-        self.assertIn("would not stop", refused)
-
-    def test_work_begun_while_the_update_was_starting_is_not_taken_down(self):
-        """R-UPD-23 — what is in flight is asked once, before any of this. A turn that
-        began between that answer and this moment would be killed by the very stop that
-        exists to protect it, so it is asked again with nothing left in between."""
-        machine = self._machine(loaded=("alpha",))
-        stopped, refused = cli._stand_all_down(self._gateways([self.Standing("alpha")], working=("a-turn",)), machine, FakeAgents())
-        self.assertEqual([], stopped)
-        self.assertIn("began work", refused)
-        self.assertEqual([], machine.asked, "it stopped a gateway that had just taken work")
-
-    def test_a_connected_channel_adapter_does_not_block_an_idle_update(self):
-        """R-UPD-39"""
-        machine = self._machine(loaded=("alpha",))
-        stopped, refused = cli._stand_all_down(
-            self._gateways(
-                [self.Standing("alpha")], working=("channel:discord-dms",)
-            ),
-            machine, FakeAgents(),
-        )
-        self.assertIsNone(refused)
-        self.assertEqual(["alpha"], stopped)
-
-    def test_a_gateway_that_does_not_come_back_is_reported_rather_than_passed_over(self):
-        """R-UPD-22 — a release needing something this install does not have starts a
-        gateway that ends *well* so as not to be restarted forever, and the machine calls
-        that a job accepted. Only asking the gateway itself catches it."""
-        self.addCleanup(setattr, cli, "START_PATIENCE", cli.START_PATIENCE)
-        cli.START_PATIENCE = 0.1
-        machine = self._machine(loaded=("alpha",))
-        never = self._gateways([self.Standing("alpha", running=False)], gone_after_stop=False)
-        self.assertEqual(["alpha"], cli._bring_all_back(["alpha"], never, machine, FakeAgents()))
-
 
 class WhichVersionEachGatewayIsActuallyOn(unittest.TestCase):
     def test_status_says_which_version_each_gateway_is_running(self):
@@ -4683,17 +4450,17 @@ class WhichVersionEachGatewayIsActuallyOn(unittest.TestCase):
         apart exactly when it matters."""
         from rundesk import __version__
         it = type("S", (), {"running": True, "version": __version__})()
-        self.assertEqual(__version__, cli._version_of(it))
+        self.assertEqual(__version__, agent_commands._version_of(it))
 
     def test_a_gateway_left_on_an_older_version_is_marked_rather_than_merely_shown(self):
         """R-GW-9 — an update replaces the files while a gateway keeps the code it already
         imported. Two numbers a reader has to compare by eye is a difference nobody sees."""
         it = type("S", (), {"running": True, "version": "0.0.1"})()
-        self.assertIn("old", cli._version_of(it))
+        self.assertIn("old", agent_commands._version_of(it))
 
     def test_a_gateway_that_is_not_running_has_no_version_to_report(self):
         """R-GW-9 — a version read off a record whose process is gone says nothing."""
-        self.assertEqual("-", cli._version_of(type("S", (), {"running": False, "version": "9"})()))
+        self.assertEqual("-", agent_commands._version_of(type("S", (), {"running": False, "version": "9"})()))
 
 
 class WhatAnAgentHasRunAndWhatItCost(unittest.TestCase):
@@ -4991,7 +4758,7 @@ class MovingEveryAgentForwardWhenAnUpdateLands(unittest.TestCase):
         self.an_agent("alpha")
         self.an_agent("beta")
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertIsNone(cli._carry_every(self.agents))
+            self.assertIsNone(update_commands._carry_every(self.agents))
         for name in ("alpha", "beta"):
             kept = store.Store(store.path_for(self.where / name))
             self.assertEqual(store.VERSION, kept.version())
@@ -5004,7 +4771,7 @@ class MovingEveryAgentForwardWhenAnUpdateLands(unittest.TestCase):
         store.path_for(broken).write_bytes(b"this was never a database")
 
         with contextlib.redirect_stdout(io.StringIO()):
-            went_wrong = cli._carry_every(self.agents)
+            went_wrong = update_commands._carry_every(self.agents)
         self.assertIsNotNone(went_wrong, "a database that is not one was carried anyway")
         self.assertIn("beta", went_wrong, "it never said which agent")
         self.assertNotIn("alpha", went_wrong)
@@ -5016,7 +4783,7 @@ class MovingEveryAgentForwardWhenAnUpdateLands(unittest.TestCase):
         store.path_for(broken).write_bytes(b"this was never a database")
 
         with contextlib.redirect_stdout(io.StringIO()):
-            cli._carry_every(self.agents)
+            update_commands._carry_every(self.agents)
         self.assertIn("could not be opened at all",
                       (broken / "logs" / "gateway.log").read_text())
 
@@ -5047,32 +4814,32 @@ class WhoSaidIt(unittest.TestCase):
 
     def test_a_person_is_named_by_what_their_surface_calls_them(self):
         """Discord hands over a display name rather than a number, and it is kept."""
-        self.assertEqual("tim", cli._said_by({"who": "tim", "author": "user"}, "ava"))
+        self.assertEqual("tim", history._said_by({"who": "tim", "author": "user"}, "ava"))
 
     def test_two_people_are_two_names_rather_than_two_rows_saying_user(self):
         """The whole point: one channel, two direct messages, two people."""
-        said = [cli._said_by({"who": one, "author": "user"}, "ava") for one in ("tim", "sam")]
+        said = [history._said_by({"who": one, "author": "user"}, "ava") for one in ("tim", "sam")]
         self.assertEqual(["tim", "sam"], said)
 
     def test_the_agent_is_named_rather_than_called_agent(self):
         """A listing asked for by name that answers `agent` spends a column saying the one
         thing its reader already knew."""
-        self.assertEqual("ava", cli._said_by({"who": None, "author": "agent"}, "ava"))
+        self.assertEqual("ava", history._said_by({"who": None, "author": "agent"}, "ava"))
 
     def test_somebody_a_surface_gave_no_name_for_is_still_told_from_the_agent(self):
         """The terminal reports nobody, and `user` versus the agent's name is still the
         distinction that matters."""
-        self.assertEqual("user", cli._said_by({"who": None, "author": "user"}, "ava"))
+        self.assertEqual("user", history._said_by({"who": None, "author": "user"}, "ava"))
 
     def test_rundesk_is_never_renamed_to_the_agent(self):
         """What rundesk added to a turn is not the agent speaking, and a listing that said it
         was would attribute rundesk's words to somebody who did not write them (R-PRV-5)."""
-        self.assertEqual("rundesk", cli._said_by({"who": None, "author": "rundesk"}, "ava"))
+        self.assertEqual("rundesk", history._said_by({"who": None, "author": "rundesk"}, "ava"))
 
     def test_a_name_a_surface_gave_wins_over_the_kind_of_author(self):
         """Both present is the ordinary case for a channel message, and the name is the more
         specific of the two."""
-        self.assertEqual("sam", cli._said_by({"who": "sam", "author": "user"}, "ava"))
+        self.assertEqual("sam", history._said_by({"who": "sam", "author": "user"}, "ava"))
 
 
 class WhatATurnLooksLikeOnATerminal(unittest.TestCase):
@@ -5081,7 +4848,7 @@ class WhatATurnLooksLikeOnATerminal(unittest.TestCase):
     def _watched(self, said: dict) -> str:
         held = io.StringIO()
         with contextlib.redirect_stderr(held):
-            cli._Shown()(said)
+            agent_commands._Shown()(said)
         return held.getvalue().strip()
 
     def test_a_tool_is_shown_by_its_verb_and_its_brains_name(self):

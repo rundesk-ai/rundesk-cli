@@ -42,12 +42,12 @@ and short: what a brain printed and what it said went wrong stay files, because 
 program that may be a shell script and stderr is a pipe the operating system gives us — so those may be
 destroyed to reclaim space, and nothing a run recorded is recoverable only from them (R-STO-5).
 
-Anything still kept as a small JSON file is written whole and renamed into place, and `gateway.changing()`
+Anything still kept as a small JSON file is written whole and renamed into place, and `durable.changing()`
 holds the read, the decision and the write under one `flock`. Those are what remain to move (see
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 26 modules)
+## Backend / Services (src/rundesk/ — 31 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -56,6 +56,18 @@ file with it.
   rather than reporting a success it did not earn, and rather than argparse's usage code, which would
   make a missing command indistinguishable from a typo. An entry graduates out of that table into a real
   command as it lands.
+- `src/rundesk/commands/` — **one command group per module, and the only layer that may know
+  argparse.** A group takes a `Namespace` and hands back an exit code; what it acts on — the
+  gateways, the machine, the agents, the skills — arrives as an argument from `cli.main`, so every
+  verb is exercised with none of them near it. `cli.py` keeps the parser and the dispatch and imports
+  each handler **by name**, which is why the dispatch chain reads the same as it did when all of it
+  lived in one file — and is not an accident of style: a module alias would collide with `main`'s own
+  `agents` and `skills` parameters and with cli.py's existing `backups`, `schedules` and `config`
+  aliases. `__init__.py` holds what more than one group needs and nothing below wants: how a table is
+  printed, how a change reaches an agent's log, how a call that may block inside the operating
+  system is given up on, and how a long command says where it has got to. A group may also call
+  another group — `update` refreshes skill catalogs, which is the skills group's job and prints
+  like one — but only one way, never in a cycle.
 - `src/rundesk/agent.py` — the named identity work is run for: its name, its home, and where
   everything of its own stands. Above the gateway and never beside it — it resolves an agent's three
   directories and hands them to a `Gateway`, which is why a gateway goes on knowing nothing of whose work it
@@ -182,6 +194,13 @@ file with it.
   until the whole thing is proved, which is the only way back there is. Once the files land the rest
   of the window is handed to the release that just landed, because a step is found on disk and would
   otherwise be run by the runner it replaced.
+- `src/rundesk/update_worker.py` — the process **no gateway owns**, which is the only thing that may
+  stop every gateway on a machine. Claims a durable request, waits for every turn to finish, stands the
+  supervised gateways down, lets `updater.py` replace the files, and puts them back — plus the recovery
+  a successor performs when one died mid-window, off the maintenance marker rather than off a guess.
+  Entered as `rundesk update --worker` from the job `supervisor.describe_update_worker` writes; the
+  surface only adapts what was typed and calls in here. Every collaborator is an argument, so the
+  highest-consequence path in the product is exercised with no gateway and no supervisor near it.
 - `src/rundesk/update_request.py` — the durable handoff from an agent turn to the
   supervisor-owned update worker: one request, its origin, lifecycle, final outcome, and delivery state,
   all changed under one lock and atomically replaced.
@@ -201,10 +220,29 @@ file with it.
   whole records through what is held for a receiver — kept apart from what the program says went wrong,
   written back to while it runs, and never split, so that a slow or failing receiver can neither hold up
   the program nor end it.
+- `src/rundesk/durable.py` — a small file written whole, and changed under a lock nobody else holds.
+  The primitive everything durable here is built on: a value renamed into place so a reader never sees
+  half of one, and `changing()` holding the read, the decision and the write under one `flock`. **What
+  cannot be read is not empty** — a missing file and an unreadable one are different answers, and
+  writing an empty value back over the second is how state is lost. Imports nothing of rundesk's.
+- `src/rundesk/gateway_log.py` — what a gateway is called, and the account it writes under that name.
+  One concern rather than two: a name becomes the name of its lock, its record **and** its log, so what
+  a name may be and where the writing lands are the same decision. History is kept apart from run
+  state, which is cleared when a gateway goes (R-GW-18).
+- `src/rundesk/recovery.py` — what a gateway never got to finish, left for whoever claims the name
+  next. The only record that outlives the process, so it is kept beside the log rather than inside the
+  run state it describes. The `Gateway` methods that *act* on it stay in that class: they are the
+  second half of `claim()` and they write the clock's own state.
 - `src/rundesk/gateway.py` — the part that stays running. One per name from the outset, since a
   gateway per agent is how one agent is cycled without disturbing the rest. Owns every program started
   through it, and proves it is alive with a lock the kernel drops when the process dies. Writes what
   happened to its own log, kept apart from its run state because history has to outlive the gateway.
+- `src/rundesk/standing.py` — how a gateway stands, asked from above it: what one is doing, what
+  gateways there are at all, and waiting for one to come up or go. Above the gateway rather than in it,
+  because answering means putting a gateway together with the agent whose run directory it keeps, and a
+  gateway never reaches for an agent. Below the surface rather than in it, because the update worker
+  that stands every gateway on the machine down asks the same four questions. Every collaborator is an
+  argument, so all four are exercised with no gateway and no supervisor near them.
 - `src/rundesk/schedule.py` — work that starts itself: what a schedule is, when one is next due, and
   which are due now. Knows nothing of gateways or processes, and what a schedule names is carried without
   ever being read — so the day it names an agent rather than a command, nothing here changes. The time is
@@ -217,7 +255,7 @@ file with it.
 
 - No UI. The command line is the whole surface.
 
-## Tests (tests/ — 32 files, ~2100 cases)
+## Tests (tests/ — 33 files, ~2100 cases)
 
 `unittest`, run directly (`python3 tests/test_cli.py`), never touching the network and never running a
 provider. One file per contract, named for it:
@@ -231,6 +269,7 @@ provider. One file per contract, named for it:
 | `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 81 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
 | `test_update_request.py` | 26 | `lifecycle-update` + queued restarts — durable external handoff, duplicate requests, safety waits, and outcome delivery |
+| `test_update_worker.py` | 14 | `lifecycle-update` — the machine-wide stand-down and what a successor worker puts back, driven **without `cli.main`**: no surface fixture, no argparse, every collaborator a stand-in |
 | `test_dependencies.py` | 28 | `lifecycle-update` — what the install is made of: what is declared, what the virtualenv holds, and building one **without pip ever running** |
 | `test_install.py` | 82 | `lifecycle-install` — drives the real `install.sh` in a **copy** of the checkout, so the gate can be run twice |
 | `test_supervisor.py` | 78 | the launchd job — a fake `launchctl`, so it runs where there is none |

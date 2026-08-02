@@ -82,9 +82,12 @@ def checks() -> list[tuple[str, list[str]]]:
     # `src/migrations/` is here because a step is *found* rather than imported by anything
     # at rest: nothing reads one until an update or a new agent runs it, so a step that does
     # not parse is a failure an owner meets mid-update rather than one the gate meets here.
+    # `**` rather than a list of directories: a top-level glob silently stopped covering
+    # `src/rundesk/commands/` the day that package landed, and a parse check that quietly
+    # covers less than it did is worse than one that was never written.
     parses = (
         "import ast, glob, sys\n"
-        "for f in sorted(glob.glob('src/rundesk/*.py') + glob.glob('src/migrations/*.py')\n"
+        "for f in sorted(glob.glob('src/**/*.py', recursive=True)\n"
         "                + glob.glob('tests/*.py')):\n"
         "    ast.parse(open(f).read(), f)\n"
     )

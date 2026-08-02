@@ -8,6 +8,46 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **An import that looks dead can be the seam a collaborator arrives through.** `main` passes the
+  gateway module itself as `gateways` when nothing is injected, so `gateways.remembered()` in
+  `standing.every_name` needs `gateway.remembered` to exist — while every static check says the
+  name is unused, because no line in the file spells `gateway.remembered`. Two reviewers and an
+  AST pass all called it dead; `rundesk agents` then died with `AttributeError` inside a real
+  subprocess. **Before deleting an import from `gateway.py`, `agent.py`, `supervisor.py`,
+  `skill.py`, `script.py` or `catalog.py`, check what commands reach on the matching injected
+  name** (`gateways.`, `agents.`, `machine.`, `skills.`, `scripts.`, `catalogs.`) — those modules
+  are the defaults, so their public surface is an API even where nothing imports it by name.
+- **Moving a decorated function and leaving its decorator behind silently rebinds the *next*
+  function.** Lifting `changing()` out of `gateway.py` by its `def` line left the
+  `@contextlib.contextmanager` above it, which then wrapped `logs_home()` — so `logs_home()`
+  returned a context manager and every path that builds a log path died with `unsupported
+  operand type(s) for /: '_GeneratorContextManager' and 'str'`, forty tests away from the
+  edit and naming neither function. Nothing failed at import and the module still parsed.
+  **When you move a definition, take it from `min(decorator_list, lineno)`, not from `def`**,
+  and assert the moved text still starts with its decorator.
+- **`test_install` fails three ways at once because of directories git never mentions, and none of
+  them is your change.** A `ui/node_modules` (55 MB) and a built `site/` (47 MB) sitting beside `src/`
+  are tracked by nothing and ignored by nothing, so **`git status` reports the tree clean** while
+  `tests/test_install.py:38` and thirteen more `copytree` calls copy both fourteen times, and
+  `OneInstructionTests._published()` walks straight into them. Measured on one commit: **82 cases,
+  75 s, `OK`** against a lean `git archive` extraction, versus **187 s (past the gate's 180 s
+  ceiling) plus two failures** in the checkout — `_published()` finding the install instruction in
+  `site/dist/index.html`, `site/dist/llms-full.txt` and `site/dist/start/install/index.html` as well
+  as in `install.sh`, and reporting `2 != 1` because the built site is older than the instruction it
+  publishes. All three read exactly like a regression in whatever you just touched. **Before
+  believing `FAIL test_install`, run `du -sh */ | sort -rh | head` and re-run the suite against
+  `git archive HEAD | tar -x -C <scratch>`** — that separates the tree from the code in about a
+  minute. The durable fix is `ui`, `site`, `node_modules` and `dist` in that file's
+  `ignore_patterns`, plus a `.gitignore` line so the tree stops lying; both are changes nobody has
+  been asked for yet.
+- **A module-level constant that moves takes every `tests/` rebinding of it with it.** The suite
+  turns `START_PATIENCE`/`CYCLE_PATIENCE`/`LOOK_AGAIN_SECONDS` *down* so waiters do not really wait,
+  and `came_up`/`gone` read them off module globals at call time on purpose. Moving them from `cli`
+  to `standing` while leaving `tests/test_cli.py` setting `cli.START_PATIENCE` would have left the
+  rebinding pointing at nothing — the suite would still pass, just slowly enough to approach the
+  gate's per-suite ceiling, which is the failure shape nobody attributes correctly. It failed loudly
+  here only because nothing re-exported the old name. **Never re-export a moved constant for
+  convenience**, and grep `tests/` for `<module>.<CONST>` in the same commit that moves one.
 - **`_plain_name` in the Discord adapter does not drop a path — it rewrites one into a
   single long name, and every component of it stays readable.** It replaces each
   non-alphanumeric character with `-`, so `/Users/somebody/secret/exporter` comes out as
