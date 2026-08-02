@@ -277,10 +277,14 @@ def _prompt(kept, row: dict, it: dict) -> str:
     part-way, which must still be asked the brief rather than a word somebody steered it
     with. Nothing new is stored to know this, and nothing can drift out of step with it.
     """
-    if not row.get("outcome"):
-        return it["brief"]
     said = kept.words_for_role(row["id"], store.stamped())
-    return "\n\n".join(one for one in said if one.strip()) or CARRY_ON
+    kept_words = [one for one in said if one.strip()]
+    if not row.get("outcome"):
+        # Anything said before this ever started is part of what it is being asked. Folded
+        # in rather than left for the steering seam, because a brain that cannot be sent to
+        # mid-turn would never read it there and the words would simply be lost.
+        return "\n\n".join([it["brief"], *kept_words])
+    return "\n\n".join(kept_words) or CARRY_ON
 
 
 def _steering(name: str, run_id: str, where, now):
@@ -483,11 +487,23 @@ def say(name: str, run_id: str, said: str, where: Path | None = None, now=None) 
         raise NotDelegable(
             f"'{run_id}' is not running — to carry it on with more work, resume it"
         )
+    if not _can_be_sent_to(kept, run_id):
+        # **Said rather than queued behind a brain that will never read it.** Not every
+        # brain can be sent to mid-turn — of the four that ship, two say so plainly — and
+        # a word accepted for one that cannot is a word that sits unread while the command
+        # that took it reported success. Stopping it, or waiting and resuming it, are the
+        # two things that do work.
+        raise NotDelegable(
+            f"the brain carrying '{run_id}' cannot be sent to while it works — stop it, "
+            "or wait for it and resume it with what you wanted to say"
+        )
     try:
         kept.say_to_role(run_id, said, store.stamped(now))
     except store.Refused as why:
         raise NotDelegable(str(why)) from None
-    return run_id
+    if row["state"] == store.WORKING:
+        return "it reaches the work in flight; nothing is answered back here"
+    return "it is added to what this run is asked when it starts"
 
 
 def stop(name: str, run_id: str, where: Path | None = None, now=None) -> bool:
@@ -529,6 +545,22 @@ def resume(name: str, run_id: str, more: str, where: Path | None = None, now=Non
     if not kept.resume_role(run_id, at, retained_until(now)):
         raise NotDelegable(f"'{run_id}' could not be carried on")
     return run_id
+
+
+def _can_be_sent_to(kept, run_id: str) -> bool:
+    """Whether the brain carrying this run reads anything after the prompt.
+
+    Answered from what the turn recorded it could do when it was admitted (R-PRV-15), which
+    is the only thing that knows — and never by asking an adapter again, because what this
+    execution is being carried by is settled and asking twice could disagree with it.
+
+    A run nothing has started yet has no answer, and is allowed: what is said to it is
+    folded into what it is asked when it starts, so nothing is stranded either way.
+    """
+    carried = kept.runs(role_run=run_id, limit=1)
+    if not carried:
+        return True
+    return bool((carried[0].get("can") or {}).get("steer"))
 
 
 def _held(kept, run_id: str) -> dict:

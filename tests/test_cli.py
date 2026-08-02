@@ -4932,6 +4932,10 @@ class WhatATurnLooksLikeOnATerminal(unittest.TestCase):
 class HandingWorkToARole(unittest.TestCase):
     """`rundesk roles <agent> run <role>` — who may ask, and what is refused."""
 
+    def setUp(self):
+        self.where = tempfile.mkdtemp(prefix="rundesk-roles-cli-")
+        self.addCleanup(shutil.rmtree, self.where, True)
+
     def test_handing_work_to_a_role_needs_a_turn_of_this_agents_own(self):
         """R-ROL-4 — a worker acts on a named agent's behalf and answers into that
         agent's conversation, so the run that admits it has to be one of that agent's."""
@@ -4955,6 +4959,21 @@ class HandingWorkToARole(unittest.TestCase):
                                agents=FakeAgents(made=["ava"]))
         self.assertEqual(1, code)
         self.assertIn("cannot start another one", said)
+
+    def test_a_refused_word_says_nothing_on_the_way_out(self):
+        """A line printed on the way in is a line a refusal cannot take back — this
+        command reported that it had said something while it was busy refusing to."""
+        out, err = io.StringIO(), io.StringIO()
+        with feeding("guidance\n"), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            code = cli.main(["roles", "ava", "say", "rol-9-zzzz"],
+                            gateways=FakeGateways(), machine=FakeMachine(),
+                            agents=FakeAgents(made=["ava"], at=self.where),
+                            skills=FakeSkills(), scripts=FakeScripts(),
+                            catalogs=FakeCatalogs())
+        self.assertEqual(1, code)
+        self.assertEqual("", out.getvalue())
+        self.assertIn("NOT DONE", err.getvalue())
 
     def test_asking_after_the_roles_of_an_agent_there_is_none_of_says_so(self):
         code, said = drive(["roles", "nobody"], agents=FakeAgents(made=["ava"]))

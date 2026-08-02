@@ -74,8 +74,11 @@ guessing. `resume` carries a finished run on in the conversation it already has,
 still knows what it did — cheaper and better than handing the same ground to a fresh run.
 All three refuse once the run is past its retention window.
 
-Reach for one when the work is heavy, bounded, and belongs to a repository rather than to the
-conversation. Do not reach for one for something you can answer now. The brief is read from
+**A role and your provider's own subagent are different tools.** A subagent runs inside this
+turn and returns to you, so reach for it when you need the answer to write your next sentence.
+A role runs outside your turn under rules that are not yours, so reach for it when the work is
+heavy, belongs to a repository, and would cost you the conversation to read. Do not reach for
+either for something you can simply answer. The brief is read from
 standard input and is a *brief*, never your conversation: the outcome, the target, the facts
 that matter, what it is allowed to do, and what "done" looks like. It is refused if you are
 not in a turn of your own, if that turn is not on a surface you can be reached on, or if you

@@ -3396,9 +3396,12 @@ def _guide_a_role(args: argparse.Namespace, act: str) -> int:
             print("        it ends as soon as this agent's gateway reaches it")
             return 0
         if act == "say":
-            role_runs.say(args.name, args.run, said)
+            # Said *after* it was taken, never before: a line printed on the way in is a
+            # line a refusal cannot take back, and this one reported success while the
+            # command was busy failing.
+            lands = role_runs.say(args.name, args.run, said)
             print(f"said to {args.run}")
-            print("        it reaches the work in flight; nothing is answered back here")
+            print(f"        {lands}")
             return 0
         role_runs.resume(args.name, args.run, said)
         print(f"{args.run} was carried on")

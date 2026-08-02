@@ -716,6 +716,41 @@ class SayingSomethingToWorkInFlight(WithAnAgentThatCanDelegate):
             role_runs.say("elena", admitted.id, "x" * (role.BRIEF_LIMIT + 1))
         self.assertIn("role run of its own", str(refused.exception))
 
+    def test_a_brain_that_cannot_be_sent_to_refuses_rather_than_queueing_unread(self):
+        """R-ROL-23 — two of the four brains that ship say plainly that nothing reaches
+        them after the prompt. A word taken for one of those is a word that sits unread
+        while the command that took it reported success."""
+        admitted = self.admit()
+        where_it_is = store.conversation_id(turn.ROLE, admitted.id)
+        self.kept.opened(where_it_is, turn.ROLE, turn.ROLE, admitted.id, AT)
+        self.kept.began("role", "grok", "work", AT, conversation_id=where_it_is,
+                        can={"steer": False}, role_run=admitted.id)
+        self.kept.role_working(admitted.id, AT, role_runs.retained_until())
+        with self.assertRaises(role_runs.NotDelegable) as refused:
+            role_runs.say("elena", admitted.id, "also quote every field")
+        self.assertIn("cannot be sent to while it works", str(refused.exception))
+        self.assertEqual(0, self.kept.words_waiting(admitted.id))
+
+    def test_a_brain_that_can_be_sent_to_takes_it(self):
+        admitted = self.admit()
+        where_it_is = store.conversation_id(turn.ROLE, admitted.id)
+        self.kept.opened(where_it_is, turn.ROLE, turn.ROLE, admitted.id, AT)
+        self.kept.began("role", "codex", "work", AT, conversation_id=where_it_is,
+                        can={"steer": True}, role_run=admitted.id)
+        self.kept.role_working(admitted.id, AT, role_runs.retained_until())
+        role_runs.say("elena", admitted.id, "also quote every field")
+        self.assertEqual(1, self.kept.words_waiting(admitted.id))
+
+    def test_what_is_said_before_it_starts_is_part_of_what_it_is_asked(self):
+        """Nothing knows yet what brain will carry it, and one that cannot be sent to
+        would never read this at the steering seam. Folded into the prompt, it reaches
+        every brain."""
+        admitted = self.admit()
+        role_runs.say("elena", admitted.id, "and quote every field")
+        carry, _ = self.carried(admitted)
+        self.assertTrue(carry.given["prompt"].startswith(BRIEF))
+        self.assertIn("and quote every field", carry.given["prompt"])
+
     def test_a_run_carrying_work_is_handed_its_parents_words_by_the_turn(self):
         admitted = self.admit()
         carry, _ = self.carried(admitted)
