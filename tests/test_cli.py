@@ -1100,7 +1100,7 @@ class FakeAgents:
             stopping=lambda: [], stopped=lambda _run: None,
             carry=None, owed=lambda: [],
             claiming=lambda _run: None, reviewing=lambda _run, _review: None,
-            reviewed=lambda _run: None, sweep=lambda: [],
+            reviewed=lambda _run: None, sweep=lambda: [], quiet=lambda: [],
         )
 
     def agents_home(self):

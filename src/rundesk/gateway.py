@@ -2094,6 +2094,13 @@ class Gateway:
                 # removed never comes back. Every later review is still tried, so one
                 # undeliverable handoff cannot hold up the rest (R-ROL-15).
                 continue
+            if answering.answering_somebody(owed["conversation"]):
+                # **A parent mid-turn is not an attempt.** The handoff waits, which is
+                # correct and is retried every few seconds — but counting each look would
+                # put seven hundred attempts on an agent that was simply busy for an hour,
+                # and that count is the one thing an owner has for spotting a surface that
+                # is never coming back (R-ROL-32).
+                continue
             self.roles.claiming(owed["role_run"])
             await answering.told_role_finished(
                 owed["conversation"], owed["handoff"],
@@ -2104,11 +2111,34 @@ class Gateway:
             return
 
     def _sweep_roles(self) -> None:
-        """Take away every role execution context whose window has passed (R-ROL-12)."""
+        """Settle what has gone quiet, then take away what has expired (R-ROL-12).
+
+        Two things on one timer, and each is tried even where the other raised: how long
+        silence is allowed to last is read from the owner's configuration, and a file
+        somebody has broken must not also stop bundles being cleared.
+        """
         if self.roles is None:
             return
+        try:
+            self._end_the_roles_that_went_quiet()
+        except Exception as why:  # noqa: BLE001 — the sweep below still runs
+            self.log.warning("could not settle role runs that went quiet: %s", why)
         for run_id in self.roles.sweep():
             self.log.info("role run %s is past its retention window", run_id)
+
+    def _end_the_roles_that_went_quiet(self) -> None:
+        """Settle every run that stopped producing anything, and let go of it (R-ROL-30).
+
+        Cancelling is the second half and not an afterthought: a run settled while a task
+        here is still awaiting a wedged provider is a run reported finished with somebody
+        still paying for it.
+        """
+        for run_id in self.roles.quiet():
+            task = self._role_tasks.get(run_id)
+            if task is not None and not task.done():
+                task.cancel()
+            self.log.warning(
+                "role run %s stopped producing activity and was settled", run_id)
 
     async def _deliver_update_notices(self) -> None:
         """Deliver a completed self-update once the originating channel is connected."""

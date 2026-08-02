@@ -60,6 +60,7 @@ class WhatInstallingWrites(WithADataDirectory):
         written = json.loads(self.at.read_text())
         self.assertEqual({"at", "keep_days"}, set(written["backups"]))
         self.assertEqual({"at"}, set(written["updates"]))
+        self.assertEqual({"quiet_hours"}, set(written["roles"]))
         self.assertEqual({"granted"}, set(written["skills"]))
         self.assertEqual(tuple(written["skills"]["granted"]),
                          config.skills(self.where)["granted"])
@@ -81,6 +82,51 @@ class WhatInstallingWrites(WithADataDirectory):
         config.ensure(self.where)
 
         self.assertEqual(400, config.backups(self.where)["keep_days"])
+
+
+class HowLongARoleRunMayGoQuiet(WithADataDirectory):
+    """R-ROL-30 — the window is the owner's to state, and is read from their file."""
+
+    def test_a_fresh_install_states_six_hours(self):
+        config.ensure(self.where)
+
+        self.assertEqual(6, config.roles(self.where)["quiet_hours"])
+
+    def test_an_older_install_gains_the_section_without_losing_a_choice(self):
+        self.at.write_text('{"backups": {"keep_days": 400}}\n', encoding="utf-8")
+
+        self.assertIn("roles", config.ensure(self.where))
+
+        self.assertEqual(6, config.roles(self.where)["quiet_hours"])
+        self.assertEqual(400, config.backups(self.where)["keep_days"])
+
+    def test_an_owners_own_window_is_what_governs(self):
+        self.at.write_text('{"roles": {"quiet_hours": 12}}\n', encoding="utf-8")
+
+        self.assertEqual(12, config.roles(self.where)["quiet_hours"])
+
+    def test_a_window_that_would_settle_every_run_at_once_is_refused(self):
+        """Zero settles a run the moment it starts, which nobody configures on purpose —
+        and clamping it quietly would make the file untrue about what governs the
+        install."""
+        self.at.write_text('{"roles": {"quiet_hours": 0}}\n', encoding="utf-8")
+
+        with self.assertRaises(config.Unreadable):
+            config.roles(self.where)
+
+    def test_something_that_is_not_a_number_of_hours_is_refused(self):
+        for said in ('"6"', "true", "1.5", "null"):
+            with self.subTest(said):
+                self.at.write_text('{"roles": {"quiet_hours": %s}}\n' % said,
+                                   encoding="utf-8")
+                with self.assertRaises(config.Unreadable):
+                    config.roles(self.where)
+
+    def test_a_missing_window_is_refused_rather_than_defaulted_outside_the_file(self):
+        self.at.write_text('{"roles": {}}\n', encoding="utf-8")
+
+        with self.assertRaises(config.Unreadable):
+            config.roles(self.where)
 
 
 class WhatAnUpdateAdds(WithADataDirectory):

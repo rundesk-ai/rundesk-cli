@@ -736,6 +736,134 @@ def settle(name: str, run_id: str, outcome: turn.Outcome, where: Path | None = N
     )
 
 
+#: How many times carrying one run may throw before it is settled rather than tried again.
+#: Three, because the fault this is a ceiling on is the one that happens every time: a
+#: provider that has gone, a target directory somebody moved, a bundle nobody can vouch
+#: for. Two more goes is enough for a blip to pass and few enough that a fault which costs
+#: a real turn costs three of them and stops.
+CARRY_CEILING = 3
+
+#: How long after a throw the same run is left alone. Doubled per attempt, so three
+#: attempts are spread over minutes rather than over the fifteen seconds a five-second
+#: look would otherwise take — a ceiling on attempts is only a ceiling on cost if
+#: something puts time between them.
+CARRY_BACKOFF_SECONDS = 60.0
+
+#: How long a run may produce nothing at all before Rundesk settles it. The owner's
+#: number, and measured on inactivity rather than on total runtime: a legitimately long
+#: job keeps writing records, and ending one at six hours of honest work would be worse
+#: than the wedged provider this exists for. Written into `config.json` by the install,
+#: which is what an owner changes; this is the value that is written.
+QUIET_HOURS = 6
+
+#: What a parent is told when Rundesk could not carry the run at all.
+#:
+#: **Rundesk reporting on the run, never on the work** (R-ROL-16). Nothing was verified
+#: and no worker said anything, so the one thing that must not happen is a parent reading
+#: this as a specialist's report of a failed job — those are different claims and only one
+#: of them is being made here.
+COULD_NOT_CARRY = (
+    "Rundesk could not carry this role run, and this is Rundesk reporting on the run "
+    "rather than the role reporting on the work. Nothing was checked and the worker said "
+    "nothing. It was attempted {attempts} times and each attempt ended the same way:\n\n"
+    "{why}"
+)
+
+#: What a parent is told when a run stopped producing anything. Again about the run: the
+#: work may have been half done or not started, and Rundesk does not know which.
+WENT_QUIET = (
+    "Rundesk settled this role run because it stopped producing any activity, and this is "
+    "Rundesk reporting on the run rather than the role reporting on the work. Nothing was "
+    "checked and the worker never reported. Its latest activity was at {seen}, more than "
+    "{hours} hours before it was settled."
+)
+
+#: What a parent is told when a run reached the end of its retention window unsettled.
+EXPIRED_UNSETTLED = (
+    "Rundesk settled this role run because it reached the end of its retention window "
+    "without ever finishing, and this is Rundesk reporting on the run rather than the "
+    "role reporting on the work. Nothing was checked and the worker never reported."
+)
+
+
+def backoff_seconds(attempts: int) -> float:
+    """How long to leave a run alone after this many failed attempts at carrying it."""
+    return CARRY_BACKOFF_SECONDS * (2 ** max(0, int(attempts) - 1))
+
+
+def ready_to_carry(row: dict, now=None) -> bool:
+    """Whether enough time has passed since this run's latest failed carry.
+
+    Wall time on both sides, and deliberately: the gateway deciding this is usually not
+    the gateway that failed, so there is no monotonic clock the two share — the same
+    reason a retention window is a durable stamp rather than an elapsed count.
+    """
+    failed = store.moment(row.get("carry_failed_at"))
+    if failed is None:
+        return True
+    waited = backoff_seconds(row.get("carry_attempts") or 0)
+    return (now or time.time)() - failed.timestamp() >= waited
+
+
+def carry_failed(name: str, run_id: str, why: str, where: Path | None = None,
+                 now=None) -> dict:
+    """Count one attempt at carrying this run that threw, and settle it at the ceiling.
+
+    Under the ceiling the run is left exactly as it was, so the next look picks it up
+    again once the backoff has passed and a transient fault heals itself without anybody
+    hearing about it. At the ceiling it is settled `failed` with what actually went wrong,
+    which owes its parent the one review it is owed however a run ends (R-ROL-15).
+
+    Answers how many attempts there have been and whether this one settled it.
+    """
+    kept = agents.records(name, where)
+    at = store.stamped(now)
+    attempts = kept.role_carry_failed(run_id, at)
+    if attempts < CARRY_CEILING:
+        return {"attempts": attempts, "settled": False}
+    settled = kept.finish_role(
+        run_id, at, store.FAILED,
+        COULD_NOT_CARRY.format(attempts=attempts, why=why or "it gave no reason"),
+        retained_until(now),
+    )
+    return {"attempts": attempts, "settled": settled}
+
+
+def gone_quiet(name: str, where: Path | None = None, now=None,
+               after_hours: int | None = None) -> list:
+    """Settle every run that has produced nothing for the configured window.
+
+    A run nobody can hear from is not a run that is going to report. Left alone it sits
+    `working` until its retention window closes a fortnight later, and the parent that
+    handed the work over is told nothing for the whole of it (R-ROL-15).
+
+    Answers the runs this settled, so whatever is still carrying one can let it go.
+    """
+    kept = agents.records(name, where)
+    hours = QUIET_HOURS if after_hours is None else int(after_hours)
+    at = store.moment(store.stamped(now))
+    quiet_before = store.stamped(lambda: (at - timedelta(hours=hours)).timestamp())
+    settled = []
+    for row in kept.role_runs_gone_quiet(quiet_before):
+        if kept.finish_role(
+            row["id"], store.stamped(now), store.FAILED,
+            WENT_QUIET.format(seen=_latest_seen(row), hours=hours),
+            retained_until(now),
+        ):
+            settled.append(row["id"])
+    return settled
+
+
+def _latest_seen(row: dict) -> str:
+    """When this run was last heard from, as the handoff says it.
+
+    What the records computed, never worked out again here: the moment that decided this
+    run had gone quiet and the moment its parent is told about are the same moment.
+    """
+    return (row.get("latest_activity_at") or row.get("latest_at")
+            or row.get("admitted_at") or "an unrecorded moment")
+
+
 def owed_review(name: str, run_id: str, where: Path | None = None) -> dict:
     """Whether this run's parent has been told, and how often it has been tried.
 
@@ -801,7 +929,11 @@ def sweep(name: str, where: Path | None = None, now=None) -> list:
     """
     kept = agents.records(name, where)
     gone = []
-    for row in kept.expired_roles(store.stamped(now)):
+    # One moment for both halves. Read twice, a run could settle against one second and be
+    # expired against an earlier one, which is a run finished and never taken away.
+    at = store.stamped(now)
+    _settle_the_unfinished(kept, at)
+    for row in kept.expired_roles(at):
         # A run its gateway never got to finish still stood links in somebody's project.
         unpresent(row.get("target"), paths(name, row["id"], where)["skills"])
         with_it = bundle(name, row["id"], where)
@@ -813,6 +945,30 @@ def sweep(name: str, where: Path | None = None, now=None) -> list:
         gone.append(row["id"])
     _tidy(home(name, where))
     return gone
+
+
+def _settle_the_unfinished(kept, at: str) -> list:
+    """Settle every run reaching the end of its window without ever having finished.
+
+    **Expiry used to be silent.** A run whose gateway died, or whose provider never came
+    back, reached day fourteen `working`, had its bundle taken away, and the agent that
+    handed the work over was never told anything — the one outcome R-ROL-15 exists to
+    make impossible, arriving by the one route nothing was watching.
+
+    Settled *before* the window is applied, so the run is finished with a report and its
+    parent is owed a review, and then expires the way a finished one does. Its own
+    `retained_until` is kept rather than moved on: this is a run ending, not one being
+    given more time.
+    """
+    settled = []
+    for state in store.UNFINISHED_ROLES:
+        for row in kept.role_runs(state=state, limit=200):
+            if row["retained_until"] > at:
+                continue
+            if kept.finish_role(row["id"], at, store.FAILED, EXPIRED_UNSETTLED,
+                                row["retained_until"]):
+                settled.append(row["id"])
+    return settled
 
 
 def _tidy(root: Path) -> None:

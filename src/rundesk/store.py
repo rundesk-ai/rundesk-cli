@@ -1705,6 +1705,57 @@ class Store:
                 (at, retained_until, role_run_id),
             )
 
+    def role_runs_gone_quiet(self, before: str) -> list:
+        """Every unfinished role run that has produced nothing since `before`.
+
+        **Activity, not runtime.** A role run legitimately takes hours, and a window
+        counted from when it started would settle honest work — so what is asked is when
+        this run last produced anything: its own latest mark, or the newest record any
+        turn carrying it wrote, whichever is later. A brain that is still working is
+        writing records the whole time; a wedged one writes nothing at all.
+
+        Each row carries `latest_activity_at`, which is that answer — computed once here
+        rather than worked out again by whoever reports it, because a handoff saying when
+        a run went quiet and the decision to settle it must be the same moment.
+
+        A read, and only a read. What a run that has gone quiet is *settled* as is a
+        decision with prose attached to it, and that belongs where every other terminal
+        outcome is written rather than inside a query.
+        """
+        with self._reading() as conn:
+            rows = conn.execute(
+                "SELECT * FROM ("
+                "  SELECT *, MAX(latest_at, COALESCE((SELECT MAX(record.at) FROM record"
+                "    JOIN run ON run.id = record.run_id WHERE run.role_run = role_run.id),"
+                "   '')) AS latest_activity_at"
+                "  FROM role_run WHERE state IN (?, ?)"
+                ") WHERE latest_activity_at <= ? ORDER BY n",
+                (ADMITTED, WORKING, before),
+            ).fetchall()
+        return [self._role(row) for row in rows]
+
+    def role_carry_failed(self, role_run_id: str, at: str) -> int:
+        """Count one attempt at carrying this run that threw, and answer how many there are.
+
+        **Durable, because the counter is needed exactly when the process holding it
+        died.** A gateway that keeps this in memory forgets it on every restart, and a
+        fault that kills the gateway is the ordinary way that happens — so the run would
+        be started again from a count of nothing, for ever.
+
+        Counted only while the run is unfinished: an outcome already settled is not
+        something a further attempt can add to.
+        """
+        with self._writing() as conn:
+            conn.execute(
+                "UPDATE role_run SET carry_attempts = carry_attempts + 1,"
+                " carry_failed_at = ? WHERE id = ? AND state IN (?, ?)",
+                (at, role_run_id, ADMITTED, WORKING),
+            )
+            row = conn.execute(
+                "SELECT carry_attempts FROM role_run WHERE id = ?", (role_run_id,)
+            ).fetchone()
+        return int(row["carry_attempts"]) if row else 0
+
     def finish_role(self, role_run_id: str, at: str, outcome: str,
                        report: str, retained_until: str) -> bool:
         """Settle the root of this role run, and owe its parent exactly one review.
@@ -1877,9 +1928,13 @@ class Store:
                 raise Refused(f"there is no role run called '{role_run_id}'")
             if row["state"] not in FINISHED_ROLES:
                 return False
+            # The carry count goes with the outcome it belonged to. A run put back in hand
+            # is being asked to do something new, and starting it against a ceiling three
+            # attempts of a fortnight ago reached would settle it on its first hiccup.
             conn.execute(
                 "UPDATE role_run SET state = ?, stop_asked_at = NULL, latest_at = ?,"
-                " retained_until = ? WHERE id = ?",
+                " retained_until = ?, carry_attempts = 0, carry_failed_at = NULL"
+                " WHERE id = ?",
                 (ADMITTED, at, retained_until, role_run_id),
             )
             return True

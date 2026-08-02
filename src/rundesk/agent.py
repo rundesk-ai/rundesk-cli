@@ -1499,6 +1499,7 @@ class Playing:
     reviewing: object
     reviewed: object
     sweep: object
+    quiet: object
 
 
 def playing(name: str, where: Path | None = None, carry=None) -> Playing:
@@ -1513,17 +1514,25 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
 
     from rundesk import role_run as role_runs
 
-    def waiting() -> list:
-        """Runs that were admitted and are not finished — oldest first.
-
-        A run left `working` by a gateway that died is here too, and is carried on rather
-        than started again: its provider session is the conversation's, so resuming is
-        what the ordinary turn machinery already does with one (R-ROL-11).
-        """
+    def _unfinished() -> list:
+        """Every run that was admitted and has not finished — oldest first."""
         kept = reading(name, where)
         found = [one for state in store.UNFINISHED_ROLES
                  for one in kept.role_runs(state=state, limit=200)]
         return sorted(found, key=lambda one: one["admitted_at"])
+
+    def waiting() -> list:
+        """Runs that are ready to be carried now — oldest first.
+
+        A run left `working` by a gateway that died is here too, and is carried on rather
+        than started again: its provider session is the conversation's, so resuming is
+        what the ordinary turn machinery already does with one (R-ROL-11).
+
+        **One whose last attempt threw is not ready yet.** Something is looking every five
+        seconds, so a fault that raises every time would be three attempts inside fifteen
+        seconds and a ceiling that bounded nothing worth bounding (R-ROL-29).
+        """
+        return [one for one in _unfinished() if role_runs.ready_to_carry(one)]
 
     def seen(run_id: str):
         """Where a run's activity is shown, and what to call it there.
@@ -1542,8 +1551,13 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
                 "label": row["label"] or row["role"]}
 
     def stopping() -> list:
-        """Every unfinished run somebody has asked to end."""
-        return [one for one in waiting() if one.get("stop_asked_at")]
+        """Every unfinished run somebody has asked to end.
+
+        Asked of every unfinished run rather than of the ones ready to be carried: a
+        person who asked for a run to end wants it ended now, and a run waiting out a
+        backoff is exactly one nobody should have to wait for (R-ROL-24).
+        """
+        return [one for one in _unfinished() if one.get("stop_asked_at")]
 
     def stopped(run_id: str) -> None:
         """Settle a run that was asked to end and that nothing was carrying.
@@ -1581,16 +1595,15 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
             )
             return None
         except BaseException as why:  # noqa: BLE001 — a boundary, and see below
-            # **Every other way this can fail ends the execution truthfully.** A corrupt
-            # bundle, a brain the agent no longer has, a target directory somebody moved —
-            # each of them raises something different, and one left unsettled is picked up
-            # again on the next look for ever while nobody is ever told. Caught broadly
-            # because *what* went wrong matters far less than the parent hearing that it
-            # did (R-ROL-15).
-            records(name, where).finish_role(
-                run_id, store.stamped(), store.FAILED, str(why) or why.__class__.__name__,
-                role_runs.retained_until(),
-            )
+            # **Every other way this can fail ends the execution truthfully — after a
+            # ceiling.** A corrupt bundle, a brain the agent no longer has, a target
+            # directory somebody moved: each raises something different, and *what* went
+            # wrong matters far less than the parent eventually hearing that it did
+            # (R-ROL-15). But a blip and a fault raise identically here, so the attempt is
+            # counted and the run left alone until three of them have been spent — then it
+            # is settled with the reason, which owes the parent its one review (R-ROL-29).
+            role_runs.carry_failed(
+                name, run_id, str(why) or why.__class__.__name__, where=where)
             return None
 
     def owed() -> list:
@@ -1628,10 +1641,20 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
     def sweep() -> list:
         return role_runs.sweep(name, where)
 
+    def quiet() -> list:
+        """Settle every run that has stopped producing anything (R-ROL-30).
+
+        How long is the owner's to state and is read from `config.json` completely, the
+        way every other configured value is: a reader that quietly fell back to a number
+        in Python would make the file untrue about what governs the install.
+        """
+        return role_runs.gone_quiet(
+            name, where, after_hours=config.roles()["quiet_hours"])
+
     return Playing(waiting=waiting, seen=seen, stopping=stopping, stopped=stopped,
                    carry=carrying,
                    owed=owed, claiming=claiming, reviewing=reviewing, reviewed=reviewed,
-                   sweep=sweep)
+                   sweep=sweep, quiet=quiet)
 
 
 def unrunnable_channels(name: str, where: Path | None = None) -> list:

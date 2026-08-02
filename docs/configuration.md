@@ -13,6 +13,9 @@ skills every agent must receive:
   "updates": {
     "at": "03:00"
   },
+  "roles": {
+    "quiet_hours": 6
+  },
   "skills": {
     "granted": [
       "managing-rundesk",
@@ -28,6 +31,12 @@ skills every agent must receive:
 ```
 
 Change `updates.at` and run `rundesk update` to reschedule automatic updates.
+
+`roles.quiet_hours` is how long work handed to a role may produce nothing at all before
+Rundesk settles the run and tells the agent that handed it over. It measures inactivity
+rather than total runtime — a specialist execution legitimately takes hours and keeps
+writing records the whole time — so raise it only if a brain here goes genuinely silent
+for longer than that while still working.
 
 A skill in `skills.granted` is attached to every new and existing agent and cannot be
 revoked until it is removed from this list. Updates and reinstalls restore missing
