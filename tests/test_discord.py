@@ -332,9 +332,13 @@ class _Wrote:
     `channel` and `to_reference` — because a schedule's start notice is held and then
     quoted by the report that follows it."""
 
-    def __init__(self, id=4242, refusing=False):
+    def __init__(self, id=4242, refusing=False, recipient=None):
         self.id, self.refusing = id, refusing
         self.wrote = []          # (content, whether it quoted, whether it mentioned)
+        # Only `discord.DMChannel` carries a recipient, so setting one is how a room here
+        # says it is one person's own — the same question `_a_direct_message` asks.
+        if recipient is not None:
+            self.recipient = recipient
 
     async def send(self, content, reference=None, mention_author=False, files=None):
         if self.refusing:
@@ -352,7 +356,9 @@ class _Wrote:
 
     @property
     def mentioned(self):
-        return [one or content.startswith("<@")
+        # Any line may open with the tag, not only the first: the mention sits under the
+        # stats line, because `-#` renders as subtext only at the start of a line.
+        return [one or any(line.startswith("<@") for line in content.splitlines())
                 for content, _quoted, one in self.wrote]
 
 
@@ -508,11 +514,51 @@ class TheAnswerMentionsWhoAsked(unittest.TestCase):
         self.assertFalse(notice_quoted, "the notice quoted something of its own")
         self.assertTrue(report_quoted, "the report stopped replying to its notice")
         self.assertEqual(
-            "<@2207> -# a-brain · 122k session · 837 output · 2m elapsed\n"
-            "nothing broke overnight",
+            "-# a-brain · 122k session · 837 output · 2m elapsed\n"
+            "<@2207> nothing broke overnight",
             found,
         )
         self.assertEqual([False, True], room.mentioned)
+
+    def test_a_scheduled_final_mentions_nobody_in_a_direct_message(self):
+        """R-DIS-31 — the tint picks one message out of a busy room, and a direct message is
+        not one. Every message there is already the owner's, so the mention buys no attention
+        and spends a notification to buy it. The report still replies to its own notice."""
+        room = _Wrote(recipient=SimpleNamespace(id=2207))
+        surface = _writing_surface(room)
+
+        async def carry():
+            for one in (
+                    {"type": "said", "schedule": "nightly", "began": True,
+                     "text": "💻 Working on 'nightly' …"},
+                    {"type": "answer", "schedule": "nightly", "recipient": "2207",
+                     "provider": "a-brain", "elapsed": 120,
+                     "text": "nothing broke overnight"}):
+                await discord.Agent.told(
+                    surface, dict({"conversation": "4242"}, **one))
+            await asyncio.sleep(0)
+
+        asyncio.run(carry())
+        (_notice, _nq, _nm), (found, report_quoted, _rm) = room.wrote
+        self.assertTrue(report_quoted, "the report stopped replying to its notice")
+        self.assertNotIn("<@", found, "a direct message was still mentioned")
+        self.assertEqual(
+            "-# a-brain · 2m elapsed\nnothing broke overnight", found)
+        self.assertEqual([False, False], room.mentioned)
+
+    def test_a_mention_sits_under_the_stats_line_rather_than_in_front_of_it(self):
+        """R-DIS-17, R-DIS-31, R-DIS-33 — `-#` is Discord's subtext and renders only at the
+        start of a line. In front of it the mention turned the provider-and-cost line into
+        ordinary text with a stray `-#` in it, which is the opposite of what that line is
+        for."""
+        self.assertEqual(
+            "-# a-brain · 2m elapsed\n<@2207> nothing broke overnight",
+            discord._mentioning(
+                "2207", "-# a-brain · 2m elapsed\nnothing broke overnight"))
+        self.assertEqual(
+            "<@2207> nothing broke overnight",
+            discord._mentioning("2207", "nothing broke overnight"),
+            "an answer with no stats line lost its mention")
 
     def test_a_scheduled_final_does_not_consume_a_newer_turn_in_its_room(self):
         """R-DIS-35, R-SCH-50 — unattended usage and presentation have their own state;

@@ -124,9 +124,12 @@ file with it.
   adapter's, told through `RUNDESK_SKILLS`.
 - `src/rundesk/role.py` — a shared specialist definition an agent may hand work to, and what
   makes one usable. Two maintained files below `agents_home()/.roles/` — a description, a
-  skill set and a posture, plus the rules one execution follows — and everything else derived:
+  skill set, a posture and optionally the brain and model its runs use, plus the rules one
+  execution follows — and everything else derived:
   the slug is the directory, the label is the slug read aloud, and the revision is a digest of
   the manifest, the rules and every resolved skill package, so nobody increments a version. A
+  role naming no brain is absent from that digest rather than empty in it, so pinning one moves
+  a revision and every role written before the field existed keeps the one it had. A
   shipped role is laid down where one is missing and **never over one that is there**: a
   role is what an owner writes their specialists as, not a thing a release keeps true.
 - `src/rundesk/role_run.py` — one isolated specialist execution, from admission to expiry.
@@ -138,7 +141,10 @@ file with it.
   a bundle swept a fortnight later. Vendor-neutral — it removes only a link resolving inside
   this run's own snapshot, and only a directory that removal emptied. **Knows nothing of channels or
   gateways**: what carries it and what tells its parent are `agent.playing`'s, handed to a
-  gateway already made the way `agent.asking` already is.
+  gateway already made the way `agent.asking` already is. **Which brain carries it is settled
+  when it is admitted** and written down, rather than resolved again by whatever picks it up:
+  a run has to be able to say afterwards what it ran on, a role edited in between must not
+  change that answer, and a resumption continues a provider session that is one brain's.
 - `src/rundesk/catalog.py` — repository manifests, catalog provenance, and atomic installation,
   update, adoption, and removal below `data/catalogs/`. Exposes complete packages through links in
   the existing skill library; never imports or executes catalog content.
@@ -256,9 +262,9 @@ provider. One file per contract, named for it:
 
 | File | Cases | Covers |
 |---|---|---|
-| `test_gateway.py` | 246 | `platform-gateway` — real processes, real signals, waits turned down |
+| `test_gateway.py` | 252 | `platform-gateway` — real processes, real signals, waits turned down |
 | `test_agent.py` | 133 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
-| `test_cli.py` | 308 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
+| `test_cli.py` | 325 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
 | `test_catalog.py` | 27 | `lifecycle-skill-catalog` — manifests, provenance, default seeding, inert integration packages, lifecycle refresh, ownership, atomic updates, drift replacement, removal, and unsafe archives, all offline |
 | `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 81 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
@@ -280,8 +286,8 @@ provider. One file per contract, named for it:
 | `test_answering.py` | 123 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
 | `test_discord.py` | 192 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
 | `test_instructions.py` | 20 | Rundesk's core and trigger prompts, standard variables, the additive builder, and the separate role floor |
-| `test_role.py` | 32 | `agent-role` — what a role is, what makes one usable, and what its revision is computed from, against a scratch library |
-| `test_role_run.py` | 83 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
+| `test_role.py` | 43 | `agent-role` — what a role is, what makes one usable, and what its revision is computed from, against a scratch library |
+| `test_role_run.py` | 114 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
 | `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 
 Counts drift; what must not is one file per contract. Every `prd/` row names the tests that prove it, and
@@ -316,7 +322,10 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
 - `src/templates/roles/` — **the roles this release ships.** Two files each, laid down where
   one of that name is missing and never over one an owner has: unlike a built-in skill, a role is
   what somebody writes their specialists as, and bringing one "forward" would rewrite what every future
-  run of an edited role is allowed to do (R-ROL-18). `development` is the only one so far.
+  run of an edited role is allowed to do (R-ROL-18). Two so far: `development` implements a
+  bounded change, and `research` answers a bounded question under a `read` posture and changes
+  nothing. Both use one section skeleton ending in a numbered definition of done, because that is
+  what a parent reviews an unchecked report against; `managing-rundesk` carries how to write one.
 - `src/templates/skills/` — **the required and remaining release-owned skills.** Copied into the
   owner's library by the install and brought forward by an update, so a built-in is always the version installed
   (R-AGT-30). `managing-rundesk` is how to operate rundesk, written for **an agent running inside

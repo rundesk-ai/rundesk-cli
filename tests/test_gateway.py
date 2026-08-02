@@ -4093,9 +4093,10 @@ class Delegating:
     the seam being an argument.
     """
 
-    def __init__(self, waiting=(), owed=(), carried=None):
+    def __init__(self, waiting=(), owed=(), carried=None, quiet=()):
         self._waiting = list(waiting)
         self._owed = list(owed)
+        self._quiet = list(quiet)
         self.carried = carried if carried is not None else []
         self.claimed: list = []
         self.settled: list = []
@@ -4138,14 +4139,23 @@ class Delegating:
         self.swept += 1
         return []
 
+    def quiet(self):
+        gone, self._quiet = list(self._quiet), []
+        self._waiting = [one for one in self._waiting if one["id"] not in gone]
+        return gone
+
 
 class Reached:
     """One surface, as far as delivering a role handoff is concerned."""
 
-    def __init__(self, connected: bool = True, raises=None):
+    def __init__(self, connected: bool = True, raises=None, busy: bool = False):
         self.connected = connected
         self.told: list = []
         self._raises = raises
+        self._busy = busy
+
+    def answering_somebody(self, conversation):
+        return self._busy
 
     async def told_role_finished(self, conversation, handoff, reviewing=None):
         if self._raises is not None:
@@ -4310,6 +4320,108 @@ class CarryingWhatAnAgentHandedOn(WithARunDirectory):
 
         self.assertEqual([("two", {"report": "done"})], surface.told)
         self.assertEqual(["rol-2-bbbb"], doing.reviewed_runs)
+
+    async def test_a_parent_mid_turn_adds_nothing_to_the_attempt_count(self):
+        """R-ROL-32 — the handoff waiting for a busy parent is correct and is retried
+        every five seconds, so counting each look put seven hundred attempts on an agent
+        that was simply answering somebody. That count is the only thing an owner has for
+        spotting a surface that is never coming back, and a busy parent looked identical
+        to a dead channel."""
+        doing = Delegating(owed=[{"role_run": "rol-1-aaaa", "channel": "ops",
+                                  "conversation": "one", "handoff": {"report": "done"}}])
+        gw = self.one(doing)
+        gw._reached["ops"] = Reached(busy=True)
+
+        for _ in range(5):
+            await gw._deliver_one_role_review()
+
+        self.assertEqual([], doing.claimed, "a busy parent was counted as an attempt")
+        self.assertEqual([], doing.reviewed_runs)
+
+    async def test_the_handoff_still_arrives_once_the_busy_parent_goes_idle(self):
+        """The other half: waiting is not losing it."""
+        doing = Delegating(owed=[{"role_run": "rol-1-aaaa", "channel": "ops",
+                                  "conversation": "one", "handoff": {"report": "done"}}])
+        gw = self.one(doing)
+        surface = Reached(busy=True)
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_role_review()
+        surface._busy = False
+        await gw._deliver_one_role_review()
+
+        self.assertEqual([("one", {"report": "done"})], surface.told)
+        self.assertEqual(["rol-1-aaaa"], doing.claimed)
+        self.assertEqual(["rol-1-aaaa"], doing.reviewed_runs)
+
+    async def test_a_busy_parent_never_holds_up_the_handoffs_behind_it(self):
+        doing = Delegating(owed=[
+            {"role_run": "rol-1-aaaa", "channel": "busy", "conversation": "one",
+             "handoff": {}},
+            {"role_run": "rol-2-bbbb", "channel": "ops", "conversation": "two",
+             "handoff": {"report": "done"}},
+        ])
+        gw = self.one(doing)
+        gw._reached["busy"] = Reached(busy=True)
+        surface = Reached()
+        gw._reached["ops"] = surface
+
+        await gw._deliver_one_role_review()
+
+        self.assertEqual([("two", {"report": "done"})], surface.told)
+        self.assertEqual(["rol-2-bbbb"], doing.claimed)
+
+    def test_a_run_that_went_quiet_is_settled_on_the_sweep(self):
+        """R-ROL-30 — nothing checked for silence at all, so a wedged provider sat
+        `working` until its retention window closed a fortnight later."""
+        doing = Delegating(waiting=[{"id": "rol-1-aaaa"}], quiet=["rol-1-aaaa"])
+        gw = self.one(doing)
+
+        gw._sweep_roles()
+
+        self.assertEqual([], doing.waiting())
+        self.assertEqual(1, doing.swept, "the expiry sweep was skipped")
+
+    async def test_settling_a_quiet_run_lets_go_of_what_was_carrying_it(self):
+        """A run reported finished while a task here still awaits a wedged provider is a
+        run somebody is still paying for."""
+        held = asyncio.Event()
+        doing = Delegating(waiting=[{"id": "rol-1-aaaa"}], quiet=["rol-1-aaaa"])
+
+        async def carrying(run_id, **_given):
+            doing.carried.append(run_id)
+            await held.wait()
+
+        doing.carry = carrying
+        gw = self.one(doing)
+        gw._start_admitted_roles()
+        task = gw._role_tasks["rol-1-aaaa"]
+        for _ in range(200):
+            if doing.carried:
+                break
+            await asyncio.sleep(0.005)
+
+        gw._sweep_roles()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        self.assertTrue(task.cancelled(), "the wedged turn was left running")
+        held.set()
+
+    def test_a_broken_configuration_never_stops_expired_bundles_being_cleared(self):
+        """How long silence may last is the owner's to state, in a file they edit by hand.
+        One they have broken must not also keep a fortnight of bundles on disk."""
+        doing = Delegating()
+
+        def unreadable():
+            raise RuntimeError("config.json: 'roles.quiet_hours' is missing")
+
+        doing.quiet = unreadable
+        gw = self.one(doing)
+
+        gw._sweep_roles()
+
+        self.assertEqual(1, doing.swept)
 
     def test_a_gateway_with_no_agent_behind_it_carries_no_role_run_at_all(self):
         gw = gateway.Gateway("ava", where=self.where, logs=self.logs, root=self.root)

@@ -649,6 +649,15 @@ def build_parser() -> argparse.ArgumentParser:
     handed.add_argument("--label", metavar="<text>",
                         help="a short safe name for the task, shown where other people can "
                              "read it — never a path and never the brief")
+    # This one run's brain, beating what the role says and what this turn is running on
+    # (R-ROL-34). Not a list of brains, here or anywhere: a shipped adapter's name and the
+    # path of a program somebody wrote are the same kind of thing to the seam that runs it.
+    handed.add_argument("--provider", metavar="<provider>",
+                        help="which brain runs it, beating the role's own and this turn's "
+                             "— one that ships, or the path of a program that speaks yours")
+    handed.add_argument("--model", metavar="<model>",
+                        help="which model on that brain, beating the role's own — what the "
+                             "brain itself calls it")
     guided = handing.add_parser(
         "say", help="say something to a role that is working — read from standard input")
     guided.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")

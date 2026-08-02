@@ -67,20 +67,30 @@ class WithSomewhereToKeepRoles(unittest.TestCase):
 
 
 class WhatARoleIsMadeOf(WithSomewhereToKeepRoles):
-    """R-ROL-2 — a description, a skill set and a posture, and nothing else."""
+    """R-ROL-2 — a description, a skill set, a posture and a brain, and nothing else."""
 
-    def test_a_role_is_two_files_and_the_manifest_holds_three_fields(self):
+    def test_a_role_is_two_files_and_the_manifest_holds_five_fields(self):
         self.wrote()
         one = self.read()
-        self.assertEqual(("description", "skills", "posture"), role.FIELDS)
+        self.assertEqual(("description", "skills", "posture", "provider", "model"),
+                         role.FIELDS)
         self.assertEqual({"description", "skills", "posture"}, set(one.manifest()))
         self.assertEqual(RULES, one.instructions)
 
+    def test_a_role_that_pins_a_brain_carries_it_in_its_manifest(self):
+        """R-ROL-33 — what is written is what is locked, and nothing is invented."""
+        self.wrote(provider="codex", model="gpt-5-codex")
+        one = self.read()
+        self.assertEqual(("codex", "gpt-5-codex"), (one.provider, one.model))
+        self.assertEqual({"description", "skills", "posture", "provider", "model"},
+                         set(one.manifest()))
+        self.assertEqual("codex", one.manifest()["provider"])
+
     def test_a_manifest_field_this_release_does_not_know_is_refused(self):
-        self.wrote(version=3, model="gpt-5")
+        self.wrote(version=3, brain="gpt-5")
         with self.assertRaises(role.NotARole) as refused:
             self.read()
-        self.assertIn("model", str(refused.exception))
+        self.assertIn("brain", str(refused.exception))
         self.assertIn("version", str(refused.exception))
 
     def test_a_role_that_says_nothing_about_what_it_is_for_is_refused(self):
@@ -235,24 +245,128 @@ class WhatARolesRevisionIsComputedFrom(WithSomewhereToKeepRoles):
         self.wrote(skills=["writing-plans", "python-testing"])
         self.assertNotEqual(one, self.read().revision)
 
+    def test_pinning_a_brain_makes_a_new_revision(self):
+        """R-ROL-33 — which brain a role runs on is part of what the role is."""
+        self.wrote()
+        one = self.read().revision
+        shutil.rmtree(role.home(self.where) / "development")
+        self.wrote(provider="codex")
+        pinned = self.read().revision
+        self.assertNotEqual(one, pinned)
+        shutil.rmtree(role.home(self.where) / "development")
+        self.wrote(provider="claude")
+        self.assertNotEqual(pinned, self.read().revision)
+
+    def test_naming_a_model_makes_a_new_revision(self):
+        """R-ROL-33 — and it is its own field, not folded into the brain's."""
+        self.wrote(provider="codex")
+        one = self.read().revision
+        shutil.rmtree(role.home(self.where) / "development")
+        self.wrote(provider="codex", model="gpt-5-codex")
+        self.assertNotEqual(one, self.read().revision)
+
+    #: What a role naming neither a brain nor a model digests to, written down rather than
+    #: computed. **This is the whole of the back-compatibility claim** (R-ROL-33): the
+    #: revision is what makes a locked role reproducible, so a release that moved it for a
+    #: role nobody edited would make every installed role read as edited — and a test that
+    #: computed the expected value with the same code it is checking could never see that.
+    UNPINNED = "297d6e9ff17c5a338b99d9c267e571322712a9a6970a83fdd382764bf265cd04"
+
+    #: And the same for the role this release actually ships, read against a machine with
+    #: none of the skills it names — which is the answer that does not depend on what any
+    #: one library happens to hold.
+    #: Moved once, deliberately: #275 reshaped `development/AGENTS.md` into the one shape
+    #: every role is written in. `lay_down` never writes over a role that is already there
+    #: (R-ROL-18), so no installed role re-revisions — this is the digest of what a *fresh*
+    #: install now gets, and moving it is the reason this constant is written by hand.
+    SHIPPED_DEVELOPMENT = (
+        "d9968a0556646d5218eded7030759bcc67e7b4cf272288de381a78892d3c346e")
+
+    def test_a_role_naming_neither_keeps_the_revision_it_already_had(self):
+        self.wrote()
+        self.assertEqual(self.UNPINNED, self.read().revision)
+
+    def test_the_shipped_role_keeps_the_revision_it_already_had(self):
+        role.lay_down(self.where)
+        self.assertEqual(self.SHIPPED_DEVELOPMENT,
+                         role.read("development", self.where, {}).revision)
+
+
+class WhichBrainARoleRunsOn(WithSomewhereToKeepRoles):
+    """R-ROL-33 — a role may name the brain its runs use, and most name none."""
+
+    def test_a_role_that_names_neither_pins_nothing(self):
+        self.wrote()
+        one = self.read()
+        self.assertEqual(("", ""), (one.provider, one.model))
+
+    def test_a_brain_this_release_has_never_heard_of_is_read_like_any_other(self):
+        """There is no list of brains to check against, and there never will be."""
+        self.wrote(provider="/opt/my-brain", model="whatever-it-calls-it")
+        one = self.read()
+        self.assertEqual(("/opt/my-brain", "whatever-it-calls-it"),
+                         (one.provider, one.model))
+
+    def test_a_brain_field_that_names_nothing_is_refused(self):
+        for said in ("", "   ", None, 3, ["codex"]):
+            with self.subTest(said=said):
+                shutil.rmtree(role.home(self.where) / "development", ignore_errors=True)
+                self.wrote(provider=said)
+                with self.assertRaises(role.NotARole) as refused:
+                    self.read()
+                self.assertIn("provider", str(refused.exception))
+
+    def test_a_model_field_that_names_nothing_is_refused(self):
+        self.wrote(model="")
+        with self.assertRaises(role.NotARole) as refused:
+            self.read()
+        self.assertIn("model", str(refused.exception))
+
+    def test_a_brain_that_could_not_be_one_is_refused_when_the_role_is_read(self):
+        for said in ("codex\nclaude", "x" * (role.PINNED_LIMIT + 1)):
+            with self.subTest(said=said[:20]):
+                shutil.rmtree(role.home(self.where) / "development", ignore_errors=True)
+                self.wrote(provider=said)
+                with self.assertRaises(role.NotARole):
+                    self.read()
+
+    def test_what_is_written_is_kept_without_its_surrounding_space(self):
+        self.wrote(provider="  codex  ")
+        self.assertEqual("codex", self.read().provider)
+
 
 class WhatAReleaseShips(WithSomewhereToKeepRoles):
     """R-ROL-18 — laid down where missing, and never over what an owner has."""
 
     def test_the_shipped_roles_are_read_off_the_directory(self):
         self.assertIn("development", role.shipped())
+        self.assertIn("research", role.shipped())
 
-    def test_laying_down_puts_a_shipped_role_where_it_is_missing(self):
-        self.assertEqual(["development"], role.lay_down(self.where))
-        at = role.home(self.where) / "development"
-        self.assertTrue((at / role.MANIFEST).is_file())
-        self.assertTrue((at / role.INSTRUCTIONS).is_file())
+    def test_every_shipped_role_reads_as_a_usable_role(self):
+        """A role template ships as somebody's starting point, so a broken one is not
+        found until they try to delegate. Read each here instead, against a library that
+        has none of what they name — every reason a definition is unusable is a reason
+        that holds whatever this machine's skills are."""
+        role.lay_down(self.where)
+        for slug in role.shipped():
+            with self.subTest(role=slug):
+                one = role.read(slug, self.where, {})
+                self.assertTrue(one.description)
+                self.assertIn(one.posture, ("read", "work"))
+                self.assertTrue(one.instructions.strip())
+
+    def test_laying_down_puts_every_shipped_role_where_it_is_missing(self):
+        self.assertEqual(sorted(role.shipped()), sorted(role.lay_down(self.where)))
+        for slug in role.shipped():
+            at = role.home(self.where) / slug
+            self.assertTrue((at / role.MANIFEST).is_file())
+            self.assertTrue((at / role.INSTRUCTIONS).is_file())
 
     def test_taking_back_removes_a_shipped_role_nobody_has_touched(self):
         """R-RM-7 — what the release laid down goes with the release, and an install
         directory left standing after an uninstall is what forgetting this looks like."""
         role.lay_down(self.where)
-        self.assertEqual(["development"], role.take_back(self.where))
+        self.assertEqual(sorted(role.shipped()), sorted(role.take_back(self.where)))
         self.assertFalse(role.home(self.where).exists())
 
     def test_taking_back_leaves_no_empty_directory_where_agents_are_kept(self):
@@ -265,7 +379,8 @@ class WhatAReleaseShips(WithSomewhereToKeepRoles):
     def test_taking_back_keeps_the_directory_an_owners_agents_stand_in(self):
         (self.where / "agents" / "ava" / "home").mkdir(parents=True)
         role.lay_down(self.where / "agents")
-        self.assertEqual(["development"], role.take_back(self.where / "agents"))
+        self.assertEqual(sorted(role.shipped()),
+                         sorted(role.take_back(self.where / "agents")))
         self.assertTrue((self.where / "agents" / "ava" / "home").is_dir())
 
     def test_taking_back_leaves_a_shipped_role_an_owner_has_edited(self):
@@ -273,17 +388,19 @@ class WhatAReleaseShips(WithSomewhereToKeepRoles):
         role.lay_down(self.where)
         at = role.home(self.where) / "development" / role.INSTRUCTIONS
         at.write_text("# Development\n\nMy own rules.\n", encoding="utf-8")
-        self.assertEqual([], role.take_back(self.where))
+        self.assertNotIn("development", role.take_back(self.where))
         self.assertTrue(at.is_file())
 
     def test_taking_back_never_touches_a_role_the_owner_wrote(self):
-        self.wrote(slug="research")
+        """A slug this release has never shipped, so what is proved here is ownership
+        rather than the byte comparison an edited shipped role would go through."""
+        self.wrote(slug="archaeology")
         self.assertEqual([], role.take_back(self.where))
-        self.assertEqual(["research"], role.known(self.where))
+        self.assertEqual(["archaeology"], role.known(self.where))
 
     def test_laying_down_never_replaces_a_role_that_is_already_there(self):
         at = self.wrote(slug="development", rules="# Mine\n\nMy own rules.\n")
-        self.assertEqual([], role.lay_down(self.where))
+        self.assertNotIn("development", role.lay_down(self.where))
         self.assertEqual("# Mine\n\nMy own rules.\n",
                          (at / role.INSTRUCTIONS).read_text(encoding="utf-8"))
 

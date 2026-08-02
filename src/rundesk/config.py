@@ -119,8 +119,13 @@ def required_grants(where: Path | None = None) -> tuple[str, ...]:
 #: runtime fallback: once written, `config.json` is what governs the install. Not every
 #: shipped skill belongs here — these are the common operating and collaboration baseline.
 INITIAL = {
-    "backups": {"at": "04:00", "keep_days": 30},
+    "backups": {"at": "04:00", "keep_last": 14},
     "updates": {"at": "03:00"},
+    # How long a role run may produce nothing at all before Rundesk settles it and tells
+    # the agent that handed the work over. Inactivity rather than total runtime: a
+    # specialist execution legitimately takes hours and keeps writing records the whole
+    # time, and a ceiling on runtime would end honest work.
+    "roles": {"quiet_hours": 6},
     "skills": {
         "granted": [
             *RUNDESK_REQUIRED_GRANTS,
@@ -174,7 +179,7 @@ def backups(where: Path | None = None) -> dict:
         raise Unreadable(f"{path(where)}: 'backups' holds "
                          f"{type(said).__name__} where it must hold an object")
     return {
-        "keep_days": _days(_value(said, "backups", "keep_days", where), where),
+        "keep_last": _copies(_value(said, "backups", "keep_last", where), where),
         "at": _at(_value(said, "backups", "at", where), where, "backups"),
     }
 
@@ -186,6 +191,15 @@ def updates(where: Path | None = None) -> dict:
         raise Unreadable(f"{path(where)}: 'updates' holds "
                          f"{type(said).__name__} where it must hold an object")
     return {"at": _at(_value(said, "updates", "at", where), where, "updates")}
+
+
+def roles(where: Path | None = None) -> dict:
+    """How work handed to a role is governed here, read completely from the file."""
+    said = _section("roles", where)
+    if not isinstance(said, dict):
+        raise Unreadable(f"{path(where)}: 'roles' holds "
+                         f"{type(said).__name__} where it must hold an object")
+    return {"quiet_hours": _hours(_value(said, "roles", "quiet_hours", where), where)}
 
 
 def skills(where: Path | None = None) -> dict:
@@ -315,17 +329,31 @@ def take_back(where: Path | None = None) -> bool:
     return True
 
 
-def _days(said, where) -> int:
-    """A number of days — never one that would delete everything.
+def _copies(said, where) -> int:
+    """A number of copies — never one that would delete everything.
 
-    `True` is an `int` in Python and would arrive here as one day, so the type is asked
+    `True` is an `int` in Python and would arrive here as one copy, so the type is asked
     before the value. Zero and negatives are refused rather than clamped: an owner who wrote
-    one meant something, and quietly turning it into the default keeps every backup for ever
-    while quietly turning it into a day deletes their history.
+    one meant something, and quietly turning it into the default keeps fourteen backups for
+    ever while quietly turning it into one deletes their history.
     """
     if isinstance(said, bool) or not isinstance(said, int) or said < 1:
-        raise Unreadable(f"{path(where)}: 'keep_days' must be a whole number of days "
+        raise Unreadable(f"{path(where)}: 'keep_last' must be a whole number of copies "
                          f"of at least one, and is {said!r}")
+    return said
+
+
+def _hours(said, where) -> int:
+    """A whole number of hours, of at least one.
+
+    Zero would settle every role run the moment it started, which is not a way anybody
+    means to configure this — refused rather than clamped, for the reason `keep_last` is.
+    `True` is an `int` in Python and would arrive here as one hour, so the type is asked
+    before the value.
+    """
+    if isinstance(said, bool) or not isinstance(said, int) or said < 1:
+        raise Unreadable(f"{path(where)}: 'roles.quiet_hours' must be a whole number of "
+                         f"hours of at least one, and is {said!r}")
     return said
 
 

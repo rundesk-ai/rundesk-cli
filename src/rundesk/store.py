@@ -441,8 +441,8 @@ class Store:
     def _made(self, want: int, fresh_home: bool = False) -> None:
         conn = self._open(writing=True)
         try:
-            found = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if found == 0 and not self._anything(conn):
+            found, empty = self._looked(conn)
+            if found == 0 and empty:
                 conn.close()
                 conn = None
                 # Built by walking the same steps an update walks, rather than by a second
@@ -459,6 +459,30 @@ class Store:
         finally:
             if conn is not None:
                 conn.close()
+
+    def _looked(self, conn) -> tuple[int, bool]:
+        """What version these records are on, and whether they hold anything — one answer.
+
+        Two statements on an autocommit connection are two snapshots of the write-ahead log,
+        so a build committing between them is read as **tables standing at version 0** — the
+        one shape `_refused` calls written partway, reported for a database that is healthy a
+        millisecond later. `_settled` absorbs the sibling race and cannot absorb this one: it
+        is reached only once a builder has stamped a version, and here it is the version read
+        that is the stale half, so neither branch matches and the refusal is the fall-through.
+
+        Taken under the write lock, so the pair is one snapshot: a builder is wholly before it
+        or wholly after it, and there is no moment either half of the answer can come from.
+        """
+        self._boundary(conn, "BEGIN IMMEDIATE")
+        try:
+            found = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            empty = not self._anything(conn)
+        except BaseException:
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute("ROLLBACK")
+            raise
+        self._boundary(conn, "COMMIT")
+        return found, empty
 
     def understood(self) -> None:
         """Check the records already there are ones we know, and never build any.
@@ -513,9 +537,10 @@ class Store:
         """
         for _ in range(TRIES):
             # Waited *before* the first look, never after it. The version read on the way in
-            # here was taken without the lock and a builder may simply not have reached its
-            # next step yet, so concluding from it that nothing is moving is concluding from
-            # no evidence at all.
+            # here was taken between a builder's steps — it holds the lock for each one and
+            # lets it go in between — so a builder may simply not have reached its next step
+            # yet, and concluding from that one read that nothing is moving is concluding
+            # from no evidence at all.
             self._wait(random.uniform(WAIT_LEAST, WAIT_MOST))
             self._boundary(conn, "BEGIN IMMEDIATE")
             moved = int(conn.execute("PRAGMA user_version").fetchone()[0])
@@ -1579,6 +1604,7 @@ class Store:
     def admit_role(self, role: str, revision: str, skills, locked, label: str,
                       posture: str, parent_run: str, parent_conversation: str,
                       target: str | None, at: str, retained_until: str,
+                      provider: str | None = None, model: str | None = None,
                       pick=None) -> str:
         """Admit one role run, and name it — everything here is final (R-ROL-4).
 
@@ -1591,6 +1617,11 @@ class Store:
 
         The number is the database's and is never handed out twice, allocated inside the
         same transaction that writes the row — the same reason a run's is.
+
+        `provider` and `model` are the brain this run was admitted to run on and the model
+        on it, already resolved by the caller (R-ROL-34). Nothing is left NULL by anything
+        that admits a run today; NULL is what a run admitted by an older release says, and
+        it means what it meant then — carry this on whatever the parent turn resolved.
         """
         with self._writing() as conn:
             # **Every reason a turn may not delegate, in one place and in one order.**
@@ -1649,13 +1680,13 @@ class Store:
             conn.execute(
                 "INSERT INTO role_run (n, id, role, revision, skills, locked,"
                 " label, posture, parent_run, parent_conversation, target, admitted_at,"
-                " latest_at, retained_until, state)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " latest_at, retained_until, state, provider, model)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (number, named, role, revision,
                  json.dumps(list(skills or []), sort_keys=True),
                  json.dumps(dict(locked or {}), sort_keys=True), label, posture,
                  parent_run, parent_conversation, target, at, at, retained_until,
-                 ADMITTED),
+                 ADMITTED, provider or None, model or None),
             )
             return named
 
@@ -1704,6 +1735,57 @@ class Store:
                 "UPDATE role_run SET latest_at = ?, retained_until = ? WHERE id = ?",
                 (at, retained_until, role_run_id),
             )
+
+    def role_runs_gone_quiet(self, before: str) -> list:
+        """Every unfinished role run that has produced nothing since `before`.
+
+        **Activity, not runtime.** A role run legitimately takes hours, and a window
+        counted from when it started would settle honest work — so what is asked is when
+        this run last produced anything: its own latest mark, or the newest record any
+        turn carrying it wrote, whichever is later. A brain that is still working is
+        writing records the whole time; a wedged one writes nothing at all.
+
+        Each row carries `latest_activity_at`, which is that answer — computed once here
+        rather than worked out again by whoever reports it, because a handoff saying when
+        a run went quiet and the decision to settle it must be the same moment.
+
+        A read, and only a read. What a run that has gone quiet is *settled* as is a
+        decision with prose attached to it, and that belongs where every other terminal
+        outcome is written rather than inside a query.
+        """
+        with self._reading() as conn:
+            rows = conn.execute(
+                "SELECT * FROM ("
+                "  SELECT *, MAX(latest_at, COALESCE((SELECT MAX(record.at) FROM record"
+                "    JOIN run ON run.id = record.run_id WHERE run.role_run = role_run.id),"
+                "   '')) AS latest_activity_at"
+                "  FROM role_run WHERE state IN (?, ?)"
+                ") WHERE latest_activity_at <= ? ORDER BY n",
+                (ADMITTED, WORKING, before),
+            ).fetchall()
+        return [self._role(row) for row in rows]
+
+    def role_carry_failed(self, role_run_id: str, at: str) -> int:
+        """Count one attempt at carrying this run that threw, and answer how many there are.
+
+        **Durable, because the counter is needed exactly when the process holding it
+        died.** A gateway that keeps this in memory forgets it on every restart, and a
+        fault that kills the gateway is the ordinary way that happens — so the run would
+        be started again from a count of nothing, for ever.
+
+        Counted only while the run is unfinished: an outcome already settled is not
+        something a further attempt can add to.
+        """
+        with self._writing() as conn:
+            conn.execute(
+                "UPDATE role_run SET carry_attempts = carry_attempts + 1,"
+                " carry_failed_at = ? WHERE id = ? AND state IN (?, ?)",
+                (at, role_run_id, ADMITTED, WORKING),
+            )
+            row = conn.execute(
+                "SELECT carry_attempts FROM role_run WHERE id = ?", (role_run_id,)
+            ).fetchone()
+        return int(row["carry_attempts"]) if row else 0
 
     def finish_role(self, role_run_id: str, at: str, outcome: str,
                        report: str, retained_until: str) -> bool:
@@ -1877,9 +1959,13 @@ class Store:
                 raise Refused(f"there is no role run called '{role_run_id}'")
             if row["state"] not in FINISHED_ROLES:
                 return False
+            # The carry count goes with the outcome it belonged to. A run put back in hand
+            # is being asked to do something new, and starting it against a ceiling three
+            # attempts of a fortnight ago reached would settle it on its first hiccup.
             conn.execute(
                 "UPDATE role_run SET state = ?, stop_asked_at = NULL, latest_at = ?,"
-                " retained_until = ? WHERE id = ?",
+                " retained_until = ?, carry_attempts = 0, carry_failed_at = NULL"
+                " WHERE id = ?",
                 (ADMITTED, at, retained_until, role_run_id),
             )
             return True

@@ -58,8 +58,9 @@ class WhatInstallingWrites(WithADataDirectory):
         config.ensure(self.where)
 
         written = json.loads(self.at.read_text())
-        self.assertEqual({"at", "keep_days"}, set(written["backups"]))
+        self.assertEqual({"at", "keep_last"}, set(written["backups"]))
         self.assertEqual({"at"}, set(written["updates"]))
+        self.assertEqual({"quiet_hours"}, set(written["roles"]))
         self.assertEqual({"granted"}, set(written["skills"]))
         self.assertEqual(tuple(written["skills"]["granted"]),
                          config.skills(self.where)["granted"])
@@ -76,11 +77,56 @@ class WhatInstallingWrites(WithADataDirectory):
     def test_installing_again_changes_nothing_an_owner_configured(self):
         """R-INS-19, R-AGT-4 — running the installer again is a repair, and it must not be
         how somebody loses what they set."""
-        self.at.write_text('{"backups": {"keep_days": 400}}\n', encoding="utf-8")
+        self.at.write_text('{"backups": {"keep_last": 400}}\n', encoding="utf-8")
 
         config.ensure(self.where)
 
-        self.assertEqual(400, config.backups(self.where)["keep_days"])
+        self.assertEqual(400, config.backups(self.where)["keep_last"])
+
+
+class HowLongARoleRunMayGoQuiet(WithADataDirectory):
+    """R-ROL-30 — the window is the owner's to state, and is read from their file."""
+
+    def test_a_fresh_install_states_six_hours(self):
+        config.ensure(self.where)
+
+        self.assertEqual(6, config.roles(self.where)["quiet_hours"])
+
+    def test_an_older_install_gains_the_section_without_losing_a_choice(self):
+        self.at.write_text('{"backups": {"keep_last": 400}}\n', encoding="utf-8")
+
+        self.assertIn("roles", config.ensure(self.where))
+
+        self.assertEqual(6, config.roles(self.where)["quiet_hours"])
+        self.assertEqual(400, config.backups(self.where)["keep_last"])
+
+    def test_an_owners_own_window_is_what_governs(self):
+        self.at.write_text('{"roles": {"quiet_hours": 12}}\n', encoding="utf-8")
+
+        self.assertEqual(12, config.roles(self.where)["quiet_hours"])
+
+    def test_a_window_that_would_settle_every_run_at_once_is_refused(self):
+        """Zero settles a run the moment it starts, which nobody configures on purpose —
+        and clamping it quietly would make the file untrue about what governs the
+        install."""
+        self.at.write_text('{"roles": {"quiet_hours": 0}}\n', encoding="utf-8")
+
+        with self.assertRaises(config.Unreadable):
+            config.roles(self.where)
+
+    def test_something_that_is_not_a_number_of_hours_is_refused(self):
+        for said in ('"6"', "true", "1.5", "null"):
+            with self.subTest(said):
+                self.at.write_text('{"roles": {"quiet_hours": %s}}\n' % said,
+                                   encoding="utf-8")
+                with self.assertRaises(config.Unreadable):
+                    config.roles(self.where)
+
+    def test_a_missing_window_is_refused_rather_than_defaulted_outside_the_file(self):
+        self.at.write_text('{"roles": {}}\n', encoding="utf-8")
+
+        with self.assertRaises(config.Unreadable):
+            config.roles(self.where)
 
 
 class WhatAnUpdateAdds(WithADataDirectory):
@@ -98,11 +144,11 @@ class WhatAnUpdateAdds(WithADataDirectory):
     def test_a_value_already_stated_survives_the_section_being_added(self):
         """R-UPD-48 — an update that rewrote the file would be an owner's configuration
         lost by a command that reported success."""
-        self.at.write_text('{"backups": {"at": "23:30", "keep_days": 7}}\n', encoding="utf-8")
+        self.at.write_text('{"backups": {"at": "23:30", "keep_last": 7}}\n', encoding="utf-8")
 
         config.ensure(self.where)
 
-        self.assertEqual({"at": "23:30", "keep_days": 7},
+        self.assertEqual({"at": "23:30", "keep_last": 7},
                          json.loads(self.at.read_text())["backups"])
 
     def test_a_missing_value_is_added_without_touching_one_already_stated(self):
@@ -113,8 +159,32 @@ class WhatAnUpdateAdds(WithADataDirectory):
         config.ensure(self.where)
 
         self.assertEqual(
-            {"at": "23:30", "keep_days": config.INITIAL["backups"]["keep_days"]},
+            {"at": "23:30", "keep_last": config.INITIAL["backups"]["keep_last"]},
             json.loads(self.at.read_text())["backups"],
+        )
+
+    def test_a_file_written_before_the_count_comes_forward_and_still_reads_back(self):
+        """R-UPD-48, R-BKP-13 — every install updating from a release that bounded backups by
+        age holds a `backups` section with no `keep_last` in it, and `_value` refuses a
+        missing key outright. Without this the first read after the update is `Unreadable`
+        and the daily backup stops, on every install rather than on an unusual one.
+
+        The dead `keep_days` is left exactly where the owner's file has it: taking a key out
+        is editing what they wrote, `ensure` only ever adds, and `rundesk config` already
+        says which keys nothing on this machine reads (R-CMD-11)."""
+        self.at.write_text('{"backups": {"at": "23:30", "keep_days": 30}}\n',
+                           encoding="utf-8")
+
+        self.assertIn("backups", config.ensure(self.where))
+
+        self.assertEqual(
+            {"at": "23:30", "keep_days": 30,
+             "keep_last": config.INITIAL["backups"]["keep_last"]},
+            json.loads(self.at.read_text())["backups"],
+        )
+        self.assertEqual(
+            {"keep_last": config.INITIAL["backups"]["keep_last"], "at": "23:30"},
+            config.backups(self.where),
         )
 
     def test_the_previous_unchanged_skill_default_is_brought_forward(self):

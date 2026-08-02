@@ -1,6 +1,6 @@
 ---
 name: managing-rundesk
-description: Operate and inspect the Rundesk installation running this agent. Use for agent history, runs and costs, logs, channels, configuration, skills, catalogs, backups, agent lifecycle, or changes to how an agent runs — and whenever somebody refers to work this agent has no memory of. Use the dedicated schedule or role skill for those domains.
+description: Operate and inspect the Rundesk installation running this agent. Use for agent history, runs and costs, logs, channels, configuration, skills, catalogs, backups, agent lifecycle, or changes to how an agent runs — and whenever somebody refers to work this agent has no memory of. Use for writing or changing a role definition too, including what a new specialist is for and what its rules say. Use the dedicated schedule skill for schedules, and the role skill for handing work over.
 ---
 
 # Managing rundesk
@@ -32,9 +32,14 @@ These list. **Read the reference before changing anything in that area.**
 | Agents, gateways, channels, the install, skills | `agents` · `doctor` · `channels` · `status` · `config` · `skills` | `references/operating.md` |
 | Your gateway's own account | `logs <you>` | `references/operating.md` |
 | Copies of everything your owner keeps | `backups` | `references/backups.md` |
+| The specialists work is handed to | `roles <you>` | `references/writing-a-role.md` |
 
 Three are a job rather than a listing and have a skill each: **`managing-schedules`**,
 **`delegating-to-roles`**, **`writing-skills`**. Not given one? Say so.
+
+**Writing or changing a role is here, not in `delegating-to-roles`** — that one hands work to a
+role that exists. Read `references/writing-a-role.md` before creating or editing one; no command
+makes a role, and a manifest field nobody reads is refused rather than ignored.
 
 ## Work you cannot remember
 

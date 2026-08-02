@@ -30,7 +30,7 @@ def cmd_config(args: argparse.Namespace) -> int:
     try:
         stated = config.read()
         now = {"backups": config.backups(), "updates": config.updates(),
-               "skills": config.skills()}
+               "roles": config.roles(), "skills": config.skills()}
     except config.Unreadable as why:
         print(f"config: UNREADABLE — {why}", file=sys.stderr)
         print("        every value below it is refused rather than guessed",

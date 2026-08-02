@@ -436,6 +436,19 @@ class Answering:
         await held.task
         raise RuntimeError("the post-update continuation was not admitted")
 
+    def answering_somebody(self, conversation: str) -> bool:
+        """Whether a turn is already in flight in this room.
+
+        Asked here and nowhere else, because two places asking it would eventually
+        disagree about one conversation. What it is for is not only the refusal below: a
+        caller that counts how often it has tried to wake this agent has to be able to
+        tell "tried and could not get through" from "did not try, because the agent was
+        mid-sentence" — those look identical from outside and only one of them says a
+        surface is not coming back (R-ROL-32).
+        """
+        held = self.exchanges.get(conversation)
+        return held is not None and held.task is not None and not held.task.done()
+
     async def told_role_finished(self, conversation: str, handoff: dict,
                                     reviewing=None) -> None:
         """Wake the named parent to review one role handoff (R-ROL-15).
@@ -451,11 +464,11 @@ class Answering:
         """
         if not self.connected:
             raise RuntimeError(f"channel '{self.channel}' is not connected")
-        held = self.exchanges.get(conversation)
-        if held is not None and held.task is not None and not held.task.done():
+        if self.answering_somebody(conversation):
             # Somebody is already being answered in this room. Two turns in one
             # conversation are two brains on one session, and the review can wait.
             raise RuntimeError("the parent conversation is already answering somebody")
+        held = self.exchanges.get(conversation)
         if held is None:
             self._make_room()
             held = self.exchanges.setdefault(conversation, Exchange(conversation))

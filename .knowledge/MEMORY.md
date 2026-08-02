@@ -58,6 +58,24 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `env -u RUNDESK_DATA_DIR -u RUNDESK_HOME -u RUNDESK_AGENTS_DIR … HOME=/tmp/somewhere` before
   believing it.
 
+- **A teeth probe that runs its suite through a shell variable runs nothing, and prints
+  nothing, which reads exactly like a probe that passed.** This shell is zsh, where
+  `E="env -u RUNDESK_HOME … python3"; $E tests/test_role_run.py` does *not* word-split:
+  zsh looks for one command whose name is the whole string, fails, and the `| grep -E
+  "^(Ran|OK|FAILED)"` that was meant to read the result has nothing to match — so three
+  probes in a row reported no failure while none of them had executed a case. The same
+  trap as `unittest -k "a or b"`, arriving by a different route. Write the `env -u …`
+  prefix out in full at each call, and **read the "Ran N tests" line before believing any
+  probe**: no line at all is not a pass.
+
+- **Adding a section to `config.json` fails `test_config` on a file in `docs/`, not on
+  anything you wrote.** `test_the_documented_fresh_configuration_matches_the_install_seed`
+  parses the JSON block out of `docs/configuration.md` and compares it with
+  `config.INITIAL`, so a new section makes it fail with a dict diff naming the section and
+  no hint that the fix is a documentation edit. That is the guard working — a copied
+  example missing a default is one an update will never add to. Edit the example in the
+  same change.
+
 - **`changing(target, [], …)` cannot tell a file nobody has written from one holding an
   empty list, and for onboarding state those mean opposite things.** `_understood` returns
   the `empty` value for a missing file and refuses anything whose type differs, so `[]`
@@ -171,6 +189,13 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   than the worktree it was invoked from.** Run both installer directions from the target
   worktree directly with the same fully redirected station environment and job prefix;
   otherwise the wrong source is tested or the temporary automatic-update job stays loaded.
+- **A scratch data root that no install has ever run against has no `config.json`, so the
+  first `add` fails with `NOT MADE — <data>/config.json: 'skills' is missing` and names
+  nothing you did.** `install.sh` is what seeds it, and in a disposable station installing
+  is exactly what is blocked, because the shared launchd labels are per user. Seed it
+  instead: with the station's environment exported, `python3 -c "import sys;
+  sys.path.insert(0, 'src'); from rundesk import config; config.ensure()"` answers
+  `['backups', 'updates', 'roles', 'skills']` once and the same `add` then succeeds.
 - **A fresh worktree has no `.venv`, so its Discord regression test skips and looks green.**
   Run the worktree's test path with the main checkout's `.venv/bin/python`; the interpreter
   supplies `discord.py` while the working directory and imported adapter remain the worktree's.
@@ -894,6 +919,20 @@ re-checked since, so treat these as true-when-found rather than as current.*
   `took="$(python3 - ... <<'SKILLS' ... SKILLS)"`, and a Python comment reading `the owner's`
   in there is reported as a syntax error dozens of lines later, at whatever line happens to
   hold an unbalanced parenthesis. Write those comments without an apostrophe.
+
+- **`run.provider` is `NOT NULL`, so a turn with no brain cannot be written.** A case
+  exercising "nothing said which brain, so the agent's own default answered" naturally reaches
+  for `kept.began("channel", None, ...)` and gets `IntegrityError: NOT NULL constraint failed:
+  run.provider` from inside the store rather than a refusal saying what a run needs. The empty
+  string is what a run with no brain looks like in these records, and `or` chains treat it the
+  same way — write `kept.began("channel", "", ...)`.
+- **A station install stops before it ever lays down skills or roles**, so `./install.sh` under a
+  redirected root is not evidence that either landed. The launchd bootstrap fails in that
+  environment (`Bootstrap failed: 5: Input/output error`) and line 678's `die` ends the script —
+  the skills step is line 682 and the roles step line 694, both after it. Prove those two by
+  running what the installer runs: `rundesk skills --lay-down` from the station's `bin`, and
+  `role.lay_down(<data>/agents)` / `role.take_back(<data>/agents)` in `python3` with the
+  checkout's `src` on the path, all under the station environment.
 
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

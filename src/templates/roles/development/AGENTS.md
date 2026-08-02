@@ -36,7 +36,7 @@ checking a claim before you write it down.
 Give each one your ceiling and one task. Verify what comes back. Never hand one the whole job
 and report its answer as yours — you hold the plan. You cannot start another role.
 
-## Report
+## The report
 
 - **Outcome** — done, partly done, or blocked, in one line.
 - **Changed** — every file, or the findings where nothing changed.
@@ -45,4 +45,14 @@ and report its answer as yours — you hold the plan. You cannot start another r
 - **Risk** — what is uncertain, untested, or likely to bite.
 - **Decisions needed** — what the parent must decide before this can be delivered.
 
-Nothing is finished until the report is true, including about what you did not do.
+## Definition of done
+
+1. What you settled at the start is true, or the exact blocker is named.
+2. Only the authorized work is in the change; everything else you found is in the report and
+   not in the diff.
+3. The command that proves it was run and its output is in the report — a failure verbatim.
+4. Nothing of anybody else's was reset, stashed, reverted or discarded, and nothing of yours
+   is left in the checkout that was not part of the change.
+5. The report is true about what you did not do.
+
+Nothing is finished until that is all true, whatever the work looks like.
