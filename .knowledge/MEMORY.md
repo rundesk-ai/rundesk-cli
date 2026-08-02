@@ -873,5 +873,13 @@ re-checked since, so treat these as true-when-found rather than as current.*
   in there is reported as a syntax error dozens of lines later, at whatever line happens to
   hold an unbalanced parenthesis. Write those comments without an apostrophe.
 
+- **A station install stops before it ever lays down skills or roles**, so `./install.sh` under a
+  redirected root is not evidence that either landed. The launchd bootstrap fails in that
+  environment (`Bootstrap failed: 5: Input/output error`) and line 678's `die` ends the script —
+  the skills step is line 682 and the roles step line 694, both after it. Prove those two by
+  running what the installer runs: `rundesk skills --lay-down` from the station's `bin`, and
+  `role.lay_down(<data>/agents)` / `role.take_back(<data>/agents)` in `python3` with the
+  checkout's `src` on the path, all under the station environment.
+
 ---
 *Editing this file? Follow the standard first: [`guides/docs-memory.md`](./guides/docs-memory.md).*

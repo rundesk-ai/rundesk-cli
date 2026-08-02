@@ -241,18 +241,33 @@ class WhatAReleaseShips(WithSomewhereToKeepRoles):
 
     def test_the_shipped_roles_are_read_off_the_directory(self):
         self.assertIn("development", role.shipped())
+        self.assertIn("research", role.shipped())
 
-    def test_laying_down_puts_a_shipped_role_where_it_is_missing(self):
-        self.assertEqual(["development"], role.lay_down(self.where))
-        at = role.home(self.where) / "development"
-        self.assertTrue((at / role.MANIFEST).is_file())
-        self.assertTrue((at / role.INSTRUCTIONS).is_file())
+    def test_every_shipped_role_reads_as_a_usable_role(self):
+        """A role template ships as somebody's starting point, so a broken one is not
+        found until they try to delegate. Read each here instead, against a library that
+        has none of what they name — every reason a definition is unusable is a reason
+        that holds whatever this machine's skills are."""
+        role.lay_down(self.where)
+        for slug in role.shipped():
+            with self.subTest(role=slug):
+                one = role.read(slug, self.where, {})
+                self.assertTrue(one.description)
+                self.assertIn(one.posture, ("read", "work"))
+                self.assertTrue(one.instructions.strip())
+
+    def test_laying_down_puts_every_shipped_role_where_it_is_missing(self):
+        self.assertEqual(sorted(role.shipped()), sorted(role.lay_down(self.where)))
+        for slug in role.shipped():
+            at = role.home(self.where) / slug
+            self.assertTrue((at / role.MANIFEST).is_file())
+            self.assertTrue((at / role.INSTRUCTIONS).is_file())
 
     def test_taking_back_removes_a_shipped_role_nobody_has_touched(self):
         """R-RM-7 — what the release laid down goes with the release, and an install
         directory left standing after an uninstall is what forgetting this looks like."""
         role.lay_down(self.where)
-        self.assertEqual(["development"], role.take_back(self.where))
+        self.assertEqual(sorted(role.shipped()), sorted(role.take_back(self.where)))
         self.assertFalse(role.home(self.where).exists())
 
     def test_taking_back_leaves_no_empty_directory_where_agents_are_kept(self):
@@ -265,7 +280,8 @@ class WhatAReleaseShips(WithSomewhereToKeepRoles):
     def test_taking_back_keeps_the_directory_an_owners_agents_stand_in(self):
         (self.where / "agents" / "ava" / "home").mkdir(parents=True)
         role.lay_down(self.where / "agents")
-        self.assertEqual(["development"], role.take_back(self.where / "agents"))
+        self.assertEqual(sorted(role.shipped()),
+                         sorted(role.take_back(self.where / "agents")))
         self.assertTrue((self.where / "agents" / "ava" / "home").is_dir())
 
     def test_taking_back_leaves_a_shipped_role_an_owner_has_edited(self):
@@ -273,17 +289,19 @@ class WhatAReleaseShips(WithSomewhereToKeepRoles):
         role.lay_down(self.where)
         at = role.home(self.where) / "development" / role.INSTRUCTIONS
         at.write_text("# Development\n\nMy own rules.\n", encoding="utf-8")
-        self.assertEqual([], role.take_back(self.where))
+        self.assertNotIn("development", role.take_back(self.where))
         self.assertTrue(at.is_file())
 
     def test_taking_back_never_touches_a_role_the_owner_wrote(self):
-        self.wrote(slug="research")
+        """A slug this release has never shipped, so what is proved here is ownership
+        rather than the byte comparison an edited shipped role would go through."""
+        self.wrote(slug="archaeology")
         self.assertEqual([], role.take_back(self.where))
-        self.assertEqual(["research"], role.known(self.where))
+        self.assertEqual(["archaeology"], role.known(self.where))
 
     def test_laying_down_never_replaces_a_role_that_is_already_there(self):
         at = self.wrote(slug="development", rules="# Mine\n\nMy own rules.\n")
-        self.assertEqual([], role.lay_down(self.where))
+        self.assertNotIn("development", role.lay_down(self.where))
         self.assertEqual("# Mine\n\nMy own rules.\n",
                          (at / role.INSTRUCTIONS).read_text(encoding="utf-8"))
 
