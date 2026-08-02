@@ -234,7 +234,12 @@ file with it.
 - `src/rundesk/gateway_log.py` — what a gateway is called, and the account it writes under that name.
   One concern rather than two: a name becomes the name of its lock, its record **and** its log, so what
   a name may be and where the writing lands are the same decision. History is kept apart from run
-  state, which is cleared when a gateway goes (R-GW-18).
+  state, which is cleared when a gateway goes (R-GW-18). **Everything written about an agent goes
+  through `note()`** — a migration and the store included, which used to spell a filename of their
+  own and so put every line about an agent's records where `rundesk logs <agent>` structurally
+  could not reach it, and where nothing rotated it (R-STO-20). It also reads back what those
+  releases left behind, from an agent's own log directory and never from the shared one, where
+  that same name is the default gateway's own current account.
 - `src/rundesk/recovery.py` — what a gateway never got to finish, left for whoever claims the name
   next. The only record that outlives the process, so it is kept beside the log rather than inside the
   run state it describes. The `Gateway` methods that *act* on it stay in that class: they are the

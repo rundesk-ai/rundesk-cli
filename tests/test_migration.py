@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from rundesk import migration, store  # noqa: E402
+from rundesk import gateway_log, migration, store  # noqa: E402
 
 AT = "2026-07-26T09:00:00Z"
 LATER = "2026-07-26T10:00:00Z"
@@ -902,7 +902,9 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
         return home, at, conn
 
     def said(self, home) -> str:
-        at = Path(home) / migration.LOG
+        # Asked of the reader `rundesk logs` uses rather than of a path spelled here, so a
+        # line written where nothing reads it fails this instead of passing it (R-STO-20).
+        at = gateway_log.log_path(Path(home).name, Path(home) / "logs")
         return at.read_text() if at.exists() else ""
 
     def nothing_open(self, made: tuple) -> None:
@@ -1145,7 +1147,7 @@ class WalkingEveryAgent(WithStepsOfThisCasesOwn):
         self.wrote(MINE, "def up(conn, home):\n    return []\n")
         # A directory where the log file goes: appending to it raises, which is the shape of
         # a log that cannot be written without inventing a permission the suite cannot rely on.
-        at = home / migration.LOG
+        at = gateway_log.log_path(home.name, home / "logs")
         if at.exists():
             at.unlink()
         at.mkdir(parents=True)
@@ -1200,7 +1202,8 @@ class WhatAnUpdateMustNotCost(WithStepsOfThisCasesOwn):
                                                               one["tokens_in"]))
         self.assertEqual({"effort": "high"}, one["settings"])
         self.assertEqual([(1, "tool")], [(r["seq"], r["kind"]) for r in kept.records(named)])
-        self.assertIn("this agent was up", (self.home / migration.LOG).read_text())
+        self.assertIn("this agent was up",
+                      gateway_log.log_path(self.home.name, self.home / "logs").read_text())
 
     def test_records_moved_forward_are_never_moved_back(self):
         """R-MIG-18 — going backwards is refusing to go forwards. A rundesk that has been

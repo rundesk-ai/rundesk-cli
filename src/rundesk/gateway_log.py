@@ -47,6 +47,11 @@ EVERY_LOG = "all"
 
 LOG_SOURCES = (GATEWAY_LOG, MACHINE_LOG, EVERY_LOG)
 
+#: The words a line may be written at, and what each is to the logging module. Named here
+#: rather than reached for with `getattr`, which would take any attribute of that module
+#: that happened to share a caller's spelling.
+_AT = {"INFO": logging.INFO, "WARNING": logging.WARNING, "ERROR": logging.ERROR}
+
 class NotAName(ValueError):
     """A gateway name that would not stay inside the directory it belongs in."""
 
@@ -73,6 +78,25 @@ def log_path(name: str, logs: Path | None = None) -> Path:
     return (logs or logs_home()) / f"{checked(name)}.log"
 
 
+def _also_written_before(name: str, where: Path) -> bool:
+    """Whether a `gateway.log` standing beside this one holds *this* name's history.
+
+    Releases before this one wrote everything a migration and the store had to say about
+    an agent's records into a file named for no gateway at all — so the one explanation of
+    why an agent would not start sat on disk in the very directory `rundesk logs` reads,
+    and this reader never looked at it (R-STO-20). Those files stand in an agent's own log
+    directory, which is what tells them apart from the shared one, where `gateway.log` is
+    the default gateway's own current account: merging that into some other name's would
+    invent history that never happened.
+    """
+    if name == DEFAULT_NAME:
+        return False          # there, that file is this gateway's own and already read
+    try:
+        return where.resolve() != logs_home().resolve()
+    except OSError:
+        return False
+
+
 def log_sources(name: str, logs: Path | None = None,
                 source: str = EVERY_LOG) -> list[tuple[str, Path]]:
     """Every file a gateway of this name has said anything into, oldest first (R-GW-36).
@@ -88,6 +112,12 @@ def log_sources(name: str, logs: Path | None = None,
     plain = checked(name)
     found: list[tuple[str, Path]] = []
     if source in (GATEWAY_LOG, EVERY_LOG):
+        # Older than anything in this name's own file, so it is read first: every release
+        # before this one wrote an agent's migration and store lines here.
+        if _also_written_before(plain, where):
+            for older in range(LOG_KEEP, 0, -1):
+                found.append((GATEWAY_LOG, where / f"{DEFAULT_NAME}.log.{older}"))
+            found.append((GATEWAY_LOG, where / f"{DEFAULT_NAME}.log"))
         # Oldest first: the rotation numbers count backwards, so reading them in reverse
         # puts one gateway's account back into the order it was written.
         for older in range(LOG_KEEP, 0, -1):
@@ -99,12 +129,22 @@ def log_sources(name: str, logs: Path | None = None,
     return [(said, path) for said, path in found if path.exists()]
 
 
-def note(name: str, said: str, logs: Path | None = None) -> str | None:
+def note(name: str, said: str, logs: Path | None = None,
+         level: str = "INFO", clock=None) -> str | None:
     """Add a line to a gateway's log from outside the gateway, and say if it could not be.
 
     Formatted by the same formatter the gateway itself writes through, rather than
     worked out by hand: a change to how a line reads would otherwise leave these lines
     looking like something else, in the one account that outlives the gateway.
+
+    `level` is the word the line carries. Not every writer here is reporting something
+    ordinary — a migration that could not open an agent's records at all is the whole
+    reason somebody is reading this file.
+
+    `clock` replaces where the moment comes from. A caller carrying an agent forward has
+    already decided what time it is stating, and a line that read back a different one
+    would be an account of the same event under two moments. Only the moment moves;
+    `WRITTEN_AS` stays the one place a line's shape is decided.
 
     The reason comes back rather than being swallowed (R-GW-37). A schedule added in a
     home nothing had written yet printed ADDED, kept the change, and left no audit line
@@ -114,7 +154,12 @@ def note(name: str, said: str, logs: Path | None = None) -> str | None:
     home as often as not, and a caller that has to make somewhere for a log before it
     can be told about a failure has been given the failure twice.
     """
-    record = logging.LogRecord(f"rundesk.gateway.{name}", logging.INFO, "", 0, said, None, None)
+    record = logging.LogRecord(
+        f"rundesk.gateway.{name}", _AT.get(level.upper(), logging.INFO),
+        "", 0, said, None, None)
+    formatter = logging.Formatter(WRITTEN_AS)
+    if clock is not None:
+        formatter.formatTime = lambda _record, _datefmt=None: clock()
     target = log_path(name, logs)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -123,7 +168,7 @@ def note(name: str, said: str, logs: Path | None = None) -> str | None:
         # `.log.1` — which is read back, in order, by `log_sources` above, so it is
         # somewhere else rather than lost.
         with open(target, "a", encoding="utf-8") as log:
-            log.write(logging.Formatter(WRITTEN_AS).format(record) + "\n")
+            log.write(formatter.format(record) + "\n")
     except OSError as why:
         return str(why)
     return None

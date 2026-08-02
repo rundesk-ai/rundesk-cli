@@ -4805,16 +4805,35 @@ class MovingEveryAgentForwardWhenAnUpdateLands(unittest.TestCase):
         self.assertIn("beta", went_wrong, "it never said which agent")
         self.assertNotIn("alpha", went_wrong)
 
-    def test_what_went_wrong_is_left_in_that_agents_own_log(self):
+    def test_what_went_wrong_is_left_where_rundesk_logs_will_find_it(self):
         """R-STO-20 — an update that failed at three in the morning is read afterwards
-        rather than watched, and the one place an owner looks is the agent's own log."""
+        rather than watched, and the one place an owner looks is the agent's own log.
+
+        Asked through `log_sources`, which is what `rundesk logs <agent>` reads, rather
+        than through a path this case picks. It used to name `logs/gateway.log` directly
+        and passed for years while that file was one the command could not reach: for
+        every agent not itself called `gateway`, the reader looks for `<agent>.log`. The
+        line was on disk, in the very directory the command reads, and unreachable from
+        it — and this case said so was fine.
+        """
         broken = self.an_agent("beta")
         store.path_for(broken).write_bytes(b"this was never a database")
 
         with contextlib.redirect_stdout(io.StringIO()):
             update_commands._carry_every(self.agents)
+        readable = "".join(
+            path.read_text()
+            for _, path in real_gateway.log_sources("beta", broken / "logs"))
+        self.assertIn("could not be opened at all", readable,
+                      "the reason is written where `rundesk logs beta` cannot reach it")
+        # And in the agent's own file, not only reachable through the fallback that reads
+        # what earlier releases left. Without this the case passes against a writer still
+        # putting every line in `gateway.log` — proved by breaking exactly that and
+        # watching this case stay green.
+        own = real_gateway.log_path("beta", broken / "logs")
         self.assertIn("could not be opened at all",
-                      (broken / "logs" / "gateway.log").read_text())
+                      own.read_text() if own.exists() else "",
+                      "it landed somewhere the agent's own log is not")
 
 
 class MakingAnAgentNeedsABrain(unittest.TestCase):
