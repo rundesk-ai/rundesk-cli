@@ -275,8 +275,12 @@ class WhatARolesRevisionIsComputedFrom(WithSomewhereToKeepRoles):
     #: And the same for the role this release actually ships, read against a machine with
     #: none of the skills it names — which is the answer that does not depend on what any
     #: one library happens to hold.
+    #: Moved once, deliberately: #275 reshaped `development/AGENTS.md` into the one shape
+    #: every role is written in. `lay_down` never writes over a role that is already there
+    #: (R-ROL-18), so no installed role re-revisions — this is the digest of what a *fresh*
+    #: install now gets, and moving it is the reason this constant is written by hand.
     SHIPPED_DEVELOPMENT = (
-        "f23c08b4c49dbc0284dbc72c2a45673f19432dd0deb02f6a4f5412074df4eb35")
+        "d9968a0556646d5218eded7030759bcc67e7b4cf272288de381a78892d3c346e")
 
     def test_a_role_naming_neither_keeps_the_revision_it_already_had(self):
         self.wrote()
