@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from rundesk import activity, config, gateway, process, schedule, store  # noqa: E402
+from rundesk import role_run as role_runs  # noqa: E402
 
 PY = sys.executable
 
@@ -4103,12 +4104,24 @@ class Delegating:
         self.reviewing_runs: list = []
         self.reviewed_runs: list = []
         self.swept = 0
+        #: Where each run this stand-in knows about is shown, and how long it has been.
+        self.check_ins: dict = {}
 
     def waiting(self):
         return list(self._waiting)
 
     def seen(self, run_id):
-        return {"channel": "ops", "conversation": "one", "label": "a task"}
+        return {"channel": "ops", "conversation": "one", "label": "a task",
+                "role": "development", "elapsed": 0}
+
+    def checking_in(self, run_id, told=0):
+        """Exactly what `agent.playing` answers, off the same arithmetic — a stand-in
+        more generous than the real thing hides whole features."""
+        where = self.check_ins.get(run_id)
+        if where is None:
+            return None
+        due = role_runs.check_in_due(where["elapsed"], told)
+        return None if not due else {**where, "due": due}
 
     def stopping(self):
         return [one for one in self._waiting if one.get("stop_asked_at")]
@@ -4171,13 +4184,17 @@ class Shown(Reached):
     def __init__(self):
         super().__init__()
         self.working: list = []
+        self.checked_in: list = []
         self.settled: list = []
 
-    def told_role_working(self, conversation, run, label):
-        self.working.append((conversation, run, label))
+    def told_role_working(self, conversation, run, label, role="", elapsed=0):
+        self.working.append((conversation, run, label, role, elapsed))
 
-    def told_role_settled(self, conversation, run, ok, summary):
-        self.settled.append((conversation, run, ok, summary))
+    def told_role_checking_in(self, conversation, run, label, role="", elapsed=0):
+        self.checked_in.append((conversation, run, label, role, elapsed))
+
+    def told_role_settled(self, conversation, run, ok, summary, role="", elapsed=0):
+        self.settled.append((conversation, run, ok, summary, role, elapsed))
 
 
 class CarryingWhatAnAgentHandedOn(WithARunDirectory):
@@ -4269,14 +4286,14 @@ class CarryingWhatAnAgentHandedOn(WithARunDirectory):
         await asyncio.gather(*tuple(gw._role_tasks.values()))
 
         self.assertEqual(
-            [("one", "rol-1-aaaa", "a task")], surface.working,
-            "nothing marked the work as handed on")
+            [("one", "rol-1-aaaa", "a task", "development", 0)], surface.working,
+            "nothing said the work had been handed on")
         self.assertEqual([("one", "rol-1-aaaa")],
                          [(one[0], one[1]) for one in surface.settled],
-                         "the mark was opened and never closed")
+                         "nothing said what came of it")
 
-    async def test_a_role_that_could_not_be_carried_still_closes_its_mark(self):
-        """A mark that opens and never closes reads as work still running for ever."""
+    async def test_a_role_that_could_not_be_carried_still_says_how_it_went(self):
+        """Work handed over and never heard of again reads as still running for ever."""
         doing = Delegating(waiting=[{"id": "rol-1-aaaa"}])
 
         async def broke(_run, **_given):
@@ -4292,6 +4309,114 @@ class CarryingWhatAnAgentHandedOn(WithARunDirectory):
 
         self.assertEqual(1, len(surface.working))
         self.assertEqual([False], [one[2] for one in surface.settled])
+
+    async def test_a_run_still_working_says_so_once_per_window(self):
+        """R-ROL-36 — a run somebody asked for goes quiet for an hour otherwise, and a
+        room cannot tell that from a run that is gone."""
+        doing = Delegating()
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+        gw._role_tasks["rol-1-aaaa"] = None
+        doing.check_ins = {"rol-1-aaaa": {
+            "channel": "ops", "conversation": "one", "label": "a task",
+            "role": "development", "elapsed": 1300}}
+
+        gw._check_in_on_roles()
+        gw._check_in_on_roles()   # the same window, a second look
+
+        self.assertEqual([("one", "rol-1-aaaa", "a task", "development", 1300)],
+                         surface.checked_in,
+                         "a run still working was said twice, or never")
+        self.assertEqual({"rol-1-aaaa": 1}, gw._role_checked)
+
+    async def test_a_run_inside_its_window_is_never_checked_in_on(self):
+        doing = Delegating()
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+        gw._role_tasks["rol-1-aaaa"] = None
+        doing.check_ins = {"rol-1-aaaa": {
+            "channel": "ops", "conversation": "one", "label": "a task",
+            "role": "development", "elapsed": 60}}
+
+        gw._check_in_on_roles()
+
+        self.assertEqual([], surface.checked_in)
+        self.assertEqual({}, gw._role_checked)
+
+    async def test_a_run_this_gateway_is_not_carrying_is_never_checked_in_on(self):
+        """A check-in that outlived the work it describes is a room being told a run is
+        going by the one process that would know it is not."""
+        doing = Delegating()
+        gw = self.one(doing)
+        surface = Shown()
+        gw._reached["ops"] = surface
+        doing.check_ins = {"rol-1-aaaa": {
+            "channel": "ops", "conversation": "one", "label": "a task",
+            "role": "development", "elapsed": 1300}}
+
+        gw._check_in_on_roles()
+
+        self.assertEqual([], surface.checked_in)
+
+    async def test_a_check_in_a_surface_cannot_take_is_never_said_again(self):
+        """Set before the record is queued: a surface that throws costs one skipped line
+        rather than a line every five seconds for the rest of the run."""
+        doing = Delegating()
+        gw = self.one(doing)
+
+        class Refuses(Shown):
+            def told_role_checking_in(self, *given, **also):
+                raise RuntimeError("the platform would not take it")
+
+        gw._reached["ops"] = Refuses()
+        gw._role_tasks["rol-1-aaaa"] = None
+        doing.check_ins = {"rol-1-aaaa": {
+            "channel": "ops", "conversation": "one", "label": "a task",
+            "role": "development", "elapsed": 1300}}
+
+        with mock.patch.object(gw.log, "warning") as warned:
+            gw._check_in_on_roles()
+            gw._check_in_on_roles()
+
+        self.assertEqual({"rol-1-aaaa": 1}, gw._role_checked)
+        self.assertEqual(1, warned.call_count, "a refused check-in was retried every look")
+
+    async def test_a_surface_that_is_down_is_skipped_without_raising(self):
+        doing = Delegating()
+        gw = self.one(doing)
+        surface = Shown()
+        surface.connected = False
+        gw._reached["ops"] = surface
+        gw._role_tasks["rol-1-aaaa"] = None
+        gw._role_tasks["rol-2-bbbb"] = None
+        doing.check_ins = {
+            "rol-1-aaaa": {"channel": "ops", "conversation": "one", "label": "a task",
+                           "role": "development", "elapsed": 1300},
+            # A run whose parent conversation nothing ever recorded.
+            "rol-2-bbbb": {"channel": "ops", "conversation": "", "label": "a task",
+                           "role": "development", "elapsed": 1300},
+        }
+
+        gw._check_in_on_roles()
+
+        self.assertEqual([], surface.checked_in)
+        self.assertEqual({}, gw._role_checked,
+                         "a run nothing was told about was written down as told")
+
+    async def test_a_settled_run_stops_being_checked_in_on(self):
+        """The bookkeeping goes with the work: a process that runs for weeks must not
+        keep a number for every run it ever carried."""
+        doing = Delegating(waiting=[{"id": "rol-1-aaaa"}])
+        gw = self.one(doing)
+        gw._reached["ops"] = Shown()
+        gw._role_checked["rol-1-aaaa"] = 3
+
+        gw._start_admitted_roles()
+        await asyncio.gather(*tuple(gw._role_tasks.values()))
+
+        self.assertEqual({}, gw._role_checked)
 
     async def test_a_surface_that_cannot_be_told_never_holds_up_the_work(self):
         doing = Delegating(waiting=[{"id": "rol-1-aaaa"}])

@@ -776,6 +776,25 @@ CARRY_ON = (
 STEER_SECONDS = 3.0
 
 
+#: How often a run that is still working says so where the work was asked for. Twenty
+#: minutes: long enough that an hour's job is four lines rather than forty, short enough
+#: that somebody who came back to the room can tell a run that is going from one that is
+#: gone. Counted from admission, which is what `shown` already reports as `elapsed`, so
+#: the line and the listing can never disagree about how long it has been.
+CHECK_IN_SECONDS = 1200.0
+
+
+def check_in_due(elapsed: float, told: int = 0) -> int:
+    """Which check-in this run has reached, or 0 when it owes none.
+
+    A bucket number rather than a timestamp, so a gateway that restarted mid-run resumes
+    the cadence from where the clock is rather than immediately saying something — and so
+    two looks a second apart cannot produce two lines.
+    """
+    reached = int(max(0.0, float(elapsed)) // CHECK_IN_SECONDS)
+    return reached if reached > max(0, int(told)) else 0
+
+
 #: How deep into a target project a presented skill may have been placed. Every adapter
 #: measured puts them one or two components down — `.agents/skills/<name>`,
 #: `.claude/skills/<name>`, `.grok/skills/<name>` — so three is the shape plus room, and a

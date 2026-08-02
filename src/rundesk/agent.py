@@ -1491,6 +1491,7 @@ class Playing:
 
     waiting: object
     seen: object
+    checking_in: object
     stopping: object
     stopped: object
     carry: object
@@ -1539,6 +1540,10 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
 
         The parent's own conversation, because that is where somebody asked for the work
         and where they are waiting for it — the same place the review lands.
+
+        Which role it is and how long it has been going come from `shown`, which is what
+        `rundesk roles` already prints, so a line in a room and a listing in a terminal
+        can never disagree about the same run.
         """
         kept = reading(name, where)
         row = kept.role_run(run_id)
@@ -1548,7 +1553,22 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
         if room is None:
             return None
         return {"channel": room.get("channel"), "conversation": room.get("space"),
-                "label": row["label"] or row["role"]}
+                "label": row["label"] or row["role"], "role": row["role"],
+                "elapsed": role_runs.shown(row)["elapsed"]}
+
+    def checking_in(run_id: str, told: int = 0):
+        """Whether this run owes a check-in now, and what to say in it.
+
+        Answered here rather than in the gateway for the reason `seen` is: how long a run
+        has been going and how often that is worth saying are facts about role runs, and a
+        gateway that worked them out itself would be a second place they could be worked
+        out differently.
+        """
+        where_it_shows = seen(run_id)
+        if where_it_shows is None:
+            return None
+        due = role_runs.check_in_due(where_it_shows["elapsed"], told)
+        return None if not due else {**where_it_shows, "due": due}
 
     def stopping() -> list:
         """Every unfinished run somebody has asked to end.
@@ -1651,7 +1671,8 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
         return role_runs.gone_quiet(
             name, where, after_hours=config.roles()["quiet_hours"])
 
-    return Playing(waiting=waiting, seen=seen, stopping=stopping, stopped=stopped,
+    return Playing(waiting=waiting, seen=seen, checking_in=checking_in,
+                   stopping=stopping, stopped=stopped,
                    carry=carrying,
                    owed=owed, claiming=claiming, reviewing=reviewing, reviewed=reviewed,
                    sweep=sweep, quiet=quiet)

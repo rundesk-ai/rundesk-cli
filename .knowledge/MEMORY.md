@@ -8,6 +8,25 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **`_plain_name` in the Discord adapter does not drop a path — it rewrites one into a
+  single long name, and every component of it stays readable.** It replaces each
+  non-alphanumeric character with `-`, so `/Users/somebody/secret/exporter` comes out as
+  `Users-somebody-secret-exporter` and passes an eyeball check for "no slashes in it"
+  while publishing the whole path into a room (R-ROL-17). The guard that actually drops
+  components is `_helper_name`, which takes the last one first and then calls
+  `_plain_name`. Sanitise anything that might be a path with `_helper_name`, and assert
+  the *middle* components are gone rather than only the separators. `_plain_name` also
+  answers `attachment` when it is left with no characters at all — right for a file, and
+  it will happily name something else after one.
+
+- **Adding a field to `agent.Playing` fails `test_cli`, not the suite you are working
+  in.** It is a frozen dataclass with every field required, and `tests/test_cli.py`'s
+  fake agents build a real `Playing` by keyword — so a new field lands as
+  `TypeError: __init__() missing 1 required positional argument` inside `cmd_serve`,
+  in a suite with nothing to do with the change. Add it to that stand-in in the same
+  commit; the same is true of the `Delegating`/`Shown` stand-ins in `tests/test_gateway.py`
+  for anything new a gateway calls on it.
+
 - **The gate passes locally on a developer's machine for cases that fail on a runner, because
   the suite inherits `RUNDESK_DATA_DIR` too.** An agent's shell is a gateway's child, so a case
   that calls `agent.add` reads the *owner's* configured skill baseline through `config.skills()`

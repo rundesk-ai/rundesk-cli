@@ -248,14 +248,12 @@ SHOWN = {"read": "read file", "search": "searched", "run": "ran command",
 DELEGATED = f"{DID['delegate']} {SHOWN['delegate']}"
 FINISHED_HELPER = f"{DID['delegate']} subagent finished"
 
-#: A role is delegation too, and is not a subagent: it runs outside the turn, under rules
-#: of its own, and reports back for review. Saying "delegated to subagent" for one would
-#: name the wrong mechanism to somebody deciding whether to wait. Told apart by the tool's
-#: own name, which is the only thing in the record that differs.
-ROLE_TOOL = "role"
-HANDED_ON = f"{DID['delegate']} handed to a role"
-ROLE_FINISHED = f"{DID['delegate']} role finished"
-ROLE_FAILED = f"{DID['delegate']} role did not finish"
+#: What a role run is called on the wire, and the three things one can be. Rendered from
+#: the record and nothing else: a run lasts hours, this program does not necessarily, and
+#: a mark that could only be closed by a process that remembered opening it was a mark that
+#: silently never closed.
+ROLE_RECORD = "role"
+HANDED, WORKING, SETTLED = "handed", "working", "settled"
 
 #: What a failed tool says without relaying its arguments or result. Those remain in the
 #: run account; Discord activity is broad, because a command or path may be private
@@ -453,6 +451,7 @@ class Live:
         self.pending = []           # what has happened since it was last written
         self.tools = {}             # tool id -> broad verb/name, until its result arrives
         self.posted = None          # the message it is growing into, while it is the last
+        self.checked_in = {}        # role run -> its check-in, while it is the last thing
         self.typing = None
         self.pacing = None
         self.marked = False
@@ -962,6 +961,8 @@ class Agent(discord.Client):
                 held.typing = held.typing or asyncio.ensure_future(self._typing(it))
             else:
                 self.live.pop(str(it.get("conversation")), None)
+        elif kind == ROLE_RECORD:
+            await self._role(it, held)
         elif kind in ("think", "tool", "result", "usage"):
             await self._doing(it, held)
 
@@ -1087,6 +1088,43 @@ class Agent(discord.Client):
             with contextlib.suppress(Exception):
                 await message.remove_reaction(instead_of, self.user)
 
+    async def _role(self, it: dict, held: Live) -> None:
+        """A role run, in a message of its own (R-ROL-27, R-ROL-36).
+
+        Its own message and not a line of commentary. A commentary line is edited into
+        whatever turn is running, so handing work over and getting it back landed inside
+        an unrelated conversation's subtext and neither was ever a thing anybody was told.
+        This is news about work somebody asked for, hours after they asked.
+
+        A check-in is the exception and is edited in place while it is still the last
+        thing here: four lines saying the same run is still going is a room filling up to
+        say nothing has changed.
+
+        **The activity switch is not consulted.** Turning activity off silences the
+        running commentary of a turn, and a role coming back is not commentary — it is
+        the only sign there is that work somebody asked for happened at all.
+        """
+        line = role_line(it)
+        if not line:
+            return
+        run = str(it.get("role_run") or "")
+        if it.get("state") == WORKING:
+            posted = held.checked_in.get(run)
+            if posted is not None:
+                try:
+                    await posted.edit(content=line)
+                    return
+                except Exception as why:  # noqa: BLE001 — a platform boundary
+                    note(f"could not update the check-in: {why}")
+            said = await self._post(it, line)
+            self._no_longer_last(held)
+            if said is not None:
+                held.checked_in[run] = said
+            return
+        held.checked_in.pop(run, None)
+        await self._post(it, line)
+        self._no_longer_last(held)
+
     async def _doing(self, it: dict, held: Live) -> None:
         """What the agent did, shown as the owner asked for it to be (R-DIS-20).
 
@@ -1166,6 +1204,9 @@ class Agent(discord.Client):
         held.posted = None
         held.activity = ""
         held.activity_groups = []
+        # A check-in posted under something else is one the reader has scrolled past, so
+        # the next one starts a message of its own rather than rewriting history.
+        held.checked_in = {}
         if held.pending and held.pending[-1] is not None:
             # Activity already waiting to be written belongs before this visible message.
             # It may still be posted afterwards, but what follows must start a new count.
@@ -1675,29 +1716,56 @@ def _activity_line(it: dict, tools: dict) -> str:
     if kind == "tool":
         did = it.get("did")
         who = _helper_name(it.get("who")) if did == "delegate" else ""
-        role = it.get("name") == ROLE_TOOL
         if at:
-            tools[at] = {"did": did, "who": who, "role": role}
+            tools[at] = {"did": did, "who": who}
         if did == "delegate":
-            opened = HANDED_ON if role else DELEGATED
-            return f"-# {opened}{': ' + who if who else ''}"
+            return f"-# {DELEGATED}{': ' + who if who else ''}"
         return commentary(it)
     if kind == "result":
         remembered = tools.pop(at, None) if at else None
-        role = False
         if isinstance(remembered, dict):
             did, who = remembered.get("did"), remembered.get("who") or ""
-            role = bool(remembered.get("role"))
         else:  # an in-memory turn begun by an older adapter shape during an update
             did, who = remembered, ""
         if it.get("ok") is False:
-            if role:
-                return f"-# ⚠ {ROLE_FAILED}{': ' + who if who else ''}"
             return f"-# ⚠ {FAILED.get(did, 'tool failed')}"
         if did == "delegate" and it.get("ok") is True:
-            closed = ROLE_FINISHED if role else FINISHED_HELPER
-            return f"-# {closed}{': ' + who if who else ''}"
+            return f"-# {FINISHED_HELPER}{': ' + who if who else ''}"
     return commentary(it)
+
+
+def _role_words(said) -> str:
+    """One safe word out of a role record — the guard a helper's name already goes through.
+
+    `_helper_name` and not `_plain_name` directly: the second rewrites a path into one long
+    name rather than dropping it, so a label somebody wrote as an absolute path would have
+    been posted with every component of it still readable.
+
+    Nothing stays nothing, because underneath them `_plain_name` answers `attachment` when
+    it is left with no characters at all — right for a file, and a record carrying no role
+    would have been shown as *the attachment role*.
+    """
+    text = str(said or "").strip()
+    return _helper_name(text) if any(ch.isalnum() for ch in text) else ""
+
+
+def role_line(it: dict) -> str:
+    """One role run, as its own message. Empty for a record this does not understand."""
+    mark = DID["delegate"]
+    label = _role_words(it.get("label")) or "work"
+    named = _role_words(it.get("role"))
+    state = it.get("state")
+    if state == HANDED:
+        return (f"{mark} Handed **{label}** to the *{named}* role."
+                if named else f"{mark} Handed **{label}** to a role.")
+    if state == WORKING:
+        return f"-# {mark} **{label}** — {_duration(it.get('elapsed') or 0)}, still working"
+    if state == SETTLED:
+        if it.get("ok") is True:
+            return (f"✅ {mark} **{label}** is back from the *{named}* role — reviewing it."
+                    if named else f"✅ {mark} **{label}** is back from a role — reviewing it.")
+        return f"⚠️ {mark} **{label}** did not finish — reviewing what came back."
+    return ""
 
 
 def _group_activity(groups: list, lines: list) -> list:

@@ -1300,5 +1300,28 @@ class WhatAPersonIsShown(WithAnAgentThatCanDelegate):
              "state": store.ADMITTED})["provider"])
 
 
+class HowOftenARunSaysItIsStillWorking(unittest.TestCase):
+    """R-ROL-36 — a bucket rather than a moment, so a gateway looking every five seconds
+    says it once per window and a gateway that restarted mid-run does not say it at once."""
+
+    def test_a_run_inside_its_first_window_owes_nothing(self):
+        self.assertEqual(0, role_runs.check_in_due(0))
+        self.assertEqual(0, role_runs.check_in_due(role_runs.CHECK_IN_SECONDS - 1))
+
+    def test_a_run_past_the_window_owes_that_check_in(self):
+        self.assertEqual(1, role_runs.check_in_due(role_runs.CHECK_IN_SECONDS))
+
+    def test_a_second_look_inside_the_same_window_owes_nothing_more(self):
+        self.assertEqual(0, role_runs.check_in_due(role_runs.CHECK_IN_SECONDS, 1))
+
+    def test_a_gateway_that_restarted_mid_run_resumes_where_the_clock_is(self):
+        """Not one line per window it missed: what is owed is the window it is in now."""
+        self.assertEqual(3, role_runs.check_in_due(3 * role_runs.CHECK_IN_SECONDS + 100, 1))
+
+    def test_an_elapsed_that_could_not_be_answers_nothing_rather_than_raising(self):
+        """Showing is never worth a run, so the arithmetic behind it refuses nothing."""
+        self.assertEqual(0, role_runs.check_in_due(-90))
+
+
 if __name__ == "__main__":
     unittest.main()

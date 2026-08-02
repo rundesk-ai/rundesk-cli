@@ -579,30 +579,53 @@ class Answering:
         await self._sending(
             channel.spoken(type="owner-notice", text=text, user=user))
 
-    #: What a role run is called in the activity a surface shows. One id for the whole of
-    #: it, so the mark saying it started and the one saying how it went are the same piece
-    #: of work rather than two unrelated lines.
-    ROLE_MARK = "role:"
+    #: What a role run is called on the wire. One record type for the whole of it, so a
+    #: surface renders it from the record alone rather than by remembering a mark it saw
+    #: hours earlier — a run lasts hours and an adapter process does not.
+    ROLE = "role"
+    HANDED, WORKING, SETTLED = "handed", "working", "settled"
 
-    def told_role_working(self, conversation: str, run: str, label: str) -> None:
-        """Mark that work was handed to a role, where the person who asked can see it.
+    def told_role_working(self, conversation: str, run: str, label: str,
+                          role: str = "", elapsed: int = 0) -> None:
+        """Say that work was handed to a role, where the person who asked can see it
+        (R-ROL-27).
 
-        **The same record a provider's own subagent already produces** (R-PRV-8): a `tool`
-        that `did` delegate. Nothing is added to what a surface understands, so a platform
-        showing one shows the other without being taught anything.
+        **A record of its own, and self-contained on purpose.** A role run outlives the
+        process showing it: it is admitted inside one turn, works for hours outside every
+        turn, and comes back to a surface that may have been restarted twice in between.
+        So everything a surface needs to render this line is in the line — nothing here is
+        correlated against anything a surface was told earlier.
 
         Without this a role was invisible: the command that admitted it showed as an
         ordinary shell run, the work itself said nothing at all, and the agent answered
         some minutes later with no sign of where the answer had come from.
         """
-        self._tell(type="tool", conversation=conversation, run=run,
-                   id=self.ROLE_MARK + run, name="role", did="delegate", who=label)
+        self._tell(type=self.ROLE, conversation=conversation, role_run=run,
+                   state=self.HANDED, role=role, label=label, elapsed=int(elapsed))
+
+    def told_role_checking_in(self, conversation: str, run: str, label: str,
+                              role: str = "", elapsed: int = 0) -> None:
+        """Say that a run still working is still working (R-ROL-36).
+
+        The same record as the other two and only its `state` differs, so a surface that
+        can show one can show all three. How long it has been is carried rather than
+        worked out from when a surface first heard about it, which is a thing no surface
+        reliably knows.
+        """
+        self._tell(type=self.ROLE, conversation=conversation, role_run=run,
+                   state=self.WORKING, role=role, label=label, elapsed=int(elapsed))
 
     def told_role_settled(self, conversation: str, run: str, ok: bool,
-                          summary: str) -> None:
-        """Close that mark with how it went, the way a result closes a tool call."""
-        self._tell(type="result", conversation=conversation, run=run,
-                   id=self.ROLE_MARK + run, ok=bool(ok), summary=summary)
+                          summary: str, role: str = "", elapsed: int = 0) -> None:
+        """Say how the work went, wherever it was handed over (R-ROL-27).
+
+        Complete in itself for the reason handing it over is: a surface that never saw
+        the run start still shows what came back, rather than showing nothing because it
+        has nothing to close.
+        """
+        self._tell(type=self.ROLE, conversation=conversation, role_run=run,
+                   state=self.SETTLED, role=role, label=summary, ok=bool(ok),
+                   elapsed=int(elapsed))
 
     async def told_restart_finished(self, conversation: str, text: str) -> None:
         """Deliver one queued restart outcome after reconnect (R-GW-43)."""

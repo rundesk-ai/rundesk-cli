@@ -2172,6 +2172,88 @@ class WhatAChannelDoesNotWriteDown(CarriesAConversation):
         self.assertNotIn("conversations.json", beside)
 
 
+class WhatARoleRunSays(CarriesAConversation):
+    """R-ROL-27, R-ROL-36 — a role run is one record type from end to end, carrying
+    everything a surface needs to render it and nothing a surface has to remember."""
+
+    async def shown(self, held, surface) -> list:
+        await self._settled(held)
+        return surface.of("role")
+
+    async def test_handing_work_to_a_role_is_one_self_contained_record(self):
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+
+        held.told_role_working("one", "rol-1-aaaa", "a task", "development", 0)
+
+        said = await self.shown(held, surface)
+        self.assertEqual(1, len(said), "handing work over was not shown")
+        self.assertEqual(
+            {"type": "role", "conversation": "one", "role_run": "rol-1-aaaa",
+             "state": "handed", "role": "development", "label": "a task", "elapsed": 0},
+            said[0])
+
+    async def test_a_run_still_working_says_how_long_it_has_been(self):
+        """R-ROL-36 — the elapsed seconds are carried, because a surface that restarted
+        mid-run has no way of working out when this started."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+
+        held.told_role_checking_in("one", "rol-1-aaaa", "a task", "development", 2400)
+
+        said = await self.shown(held, surface)
+        self.assertEqual("working", said[0]["state"])
+        self.assertEqual(2400, said[0]["elapsed"])
+        self.assertEqual("rol-1-aaaa", said[0]["role_run"])
+
+    async def test_a_run_that_settled_says_whether_it_worked(self):
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+
+        held.told_role_settled("one", "rol-1-aaaa", True, "a task", "development", 60)
+        held.told_role_settled("one", "rol-2-bbbb", False, "a task", "development", 60)
+
+        said = await self.shown(held, surface)
+        self.assertEqual(["settled", "settled"], [one["state"] for one in said])
+        self.assertEqual([True, False], [one["ok"] for one in said])
+
+    async def test_a_role_record_carries_no_path_no_brief_and_no_report(self):
+        """R-ROL-17 — a room is read by other people, and what a worker was asked and
+        what it wrote back are neither of theirs."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+
+        held.told_role_working("one", "rol-1-aaaa", "a task", "development", 0)
+        held.told_role_checking_in("one", "rol-1-aaaa", "a task", "development", 1200)
+        held.told_role_settled("one", "rol-1-aaaa", True, "a task", "development", 1800)
+
+        said = await self.shown(held, surface)
+        self.assertEqual(3, len(said))
+        for one in said:
+            self.assertEqual(
+                {"type", "conversation", "role_run", "state", "role", "label", "elapsed"},
+                set(one) - {"ok"},
+                "a role record carries a field nothing here decided to send")
+
+    async def test_what_a_role_run_says_is_not_written_down_as_the_agents_words(self):
+        """Rundesk's bookkeeping about a run, exactly as the schedule notice is: a brain
+        that never wrote the line must not find it in its own record."""
+        brain, surface = Brain(), Surface()
+        held = self.answering(surface, brain)
+        where_it_is = store.conversation_id("ops", "one")
+        agents.records("ava", self.where).opened(
+            where_it_is, "ops", "somewhere", "one", AT)
+
+        held.told_role_working("one", "rol-1-aaaa", "a task", "development", 0)
+        held.told_role_checking_in("one", "rol-1-aaaa", "a task", "development", 1200)
+        held.told_role_settled("one", "rol-1-aaaa", True, "a task", "development", 1800)
+        await self.shown(held, surface)
+
+        self.assertEqual(
+            [], agents.reading("ava", self.where).messages(where_it_is),
+            "rundesk's own bookkeeping was written down as something the agent said")
+
+
 class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.data = Path(tempfile.mkdtemp(prefix="rundesk-update-data-"))
