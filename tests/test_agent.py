@@ -1495,7 +1495,7 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
     def test_help_names_read_only_conversation_and_agent_commands(self):
         self.made()
         said = agent._queried("ava", "help", self.where)
-        self.assertIn("status, version, agents, skills, schedules, help", said)
+        self.assertIn("status, version, agents, skills, schedules, roles, help", said)
         self.assertIn("stop, forget", said)
         self.assertIn("restart", said)
         self.assertNotIn("/", said, "the agent layer invented a platform's command syntax")
@@ -1598,6 +1598,60 @@ class WhatARoleIsNot(WithSomewhereToKeepAgents):
         self.assertEqual([], [one for one in agent.diagnosed("ava", self.where,
                                                              root=self.root)
                               if one.about.startswith("rol-")])
+
+
+class WhatItHasHandedToARole(WithSomewhereToKeepAgents):
+    """R-ROL-28 — a listing narrow enough to read on a phone, saying what is happening."""
+
+    def a_run(self, state, label="a task", target=None, at="2026-08-01T09:00:00Z"):
+        kept = agent.records("ava", self.where)
+        where_it_is = store.conversation_id("discord", "general")
+        kept.opened(where_it_is, "discord", "discord", "general", at)
+        kept.remember_channel("discord", "discord", ["2207"], at)
+        parent = kept.began("channel", "codex", "work", at, conversation_id=where_it_is)
+        run = kept.admit_role("development", "rev", ["writing-plans"], {}, label, "work",
+                              parent, where_it_is, target, at, "2026-08-15T09:00:00Z")
+        if state != store.ADMITTED:
+            kept.role_working(run, at, "2026-08-15T09:00:00Z")
+        return kept, run
+
+    def test_nothing_handed_on_says_so_rather_than_answering_with_nothing(self):
+        self.made("ava")
+        self.assertEqual("nothing handed to a role right now",
+                         agent._queried("ava", "roles", self.where))
+
+    def test_work_in_flight_says_the_role_the_task_and_how_long(self):
+        self.made("ava")
+        self.a_run(store.WORKING, label="applicant export", target="/private/tmp/exporter")
+        said = agent._queried("ava", "roles", self.where)
+        self.assertIn("development", said)
+        self.assertIn("applicant export", said)
+        self.assertIn("working", said)
+        self.assertIn("in exporter", said)
+
+    def test_a_local_path_is_never_shown_where_other_people_read(self):
+        """R-ROL-17 — this is answered into a room."""
+        self.made("ava")
+        self.a_run(store.WORKING, target="/private/tmp/somebodys-secret/exporter")
+        said = agent._queried("ava", "roles", self.where)
+        self.assertNotIn("/private/tmp", said)
+        self.assertNotIn("somebodys-secret", said)
+
+    def test_a_run_that_finished_and_was_answered_for_is_over(self):
+        """A list of finished work pushes what is happening off the bottom of a phone."""
+        self.made("ava")
+        kept, run = self.a_run(store.WORKING)
+        kept.finish_role(run, "2026-08-01T10:00:00Z", store.SUCCEEDED, "done",
+                         "2026-08-15T09:00:00Z")
+        self.assertIn("awaiting review", agent._queried("ava", "roles", self.where))
+        kept.role_reviewed(run, "2026-08-01T10:05:00Z")
+        self.assertEqual("nothing handed to a role right now",
+                         agent._queried("ava", "roles", self.where))
+
+    def test_how_long_reads_in_the_largest_unit_that_is_not_a_lie(self):
+        self.assertEqual("45s", agent._for_how_long(45))
+        self.assertEqual("3m", agent._for_how_long(200))
+        self.assertEqual("2h05m", agent._for_how_long(7500))
 
 
 if __name__ == "__main__":

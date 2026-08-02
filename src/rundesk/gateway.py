@@ -2043,14 +2043,42 @@ class Gateway:
         it; nothing about one reaches this gateway, and none of them settles this run
         (R-ROL-14).
         """
+        outcome = None
+        self._mark_role(run_id, working=True)
         try:
-            await self.roles.carry(run_id)
+            outcome = await self.roles.carry(run_id)
         except asyncio.CancelledError:
             raise
         except BaseException as why:  # noqa: BLE001 — a boundary, reported truthfully
             self.log.warning("role run %s could not be carried: %s", run_id, why)
         finally:
             self._role_tasks.pop(run_id, None)
+            # Closed however it went, including the ways it can go wrong: a mark that
+            # opens and never closes reads as work still running for ever.
+            self._mark_role(run_id, working=False, outcome=outcome)
+
+    def _mark_role(self, run_id: str, working: bool, outcome=None) -> None:
+        """Show the work where the person who asked for it is waiting (R-ROL-27).
+
+        The same activity a provider's own subagent produces, so a surface needs to know
+        nothing new. Never allowed to interrupt the work: a platform that cannot be told
+        is a platform that shows less, and the run carries on either way.
+        """
+        try:
+            where = self.roles.seen(run_id)
+            answering = self._reached.get((where or {}).get("channel"))
+            if where is None or answering is None or not answering.connected:
+                return
+            if working:
+                answering.told_role_working(where["conversation"], run_id, where["label"])
+                return
+            answering.told_role_settled(
+                where["conversation"], run_id,
+                bool(outcome is not None and getattr(outcome, "ok", False)),
+                where["label"],
+            )
+        except Exception as why:  # noqa: BLE001 — showing is never worth a run
+            self.log.warning("could not show role run %s: %s", run_id, why)
 
     async def _deliver_one_role_review(self) -> None:
         """Wake the parent for the oldest handoff it is still owed, if it can be woken.
