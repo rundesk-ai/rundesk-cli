@@ -315,7 +315,19 @@ def _end_left_running(name: str, was, log: logging.Logger, present=None, started
         # Still there, and still unfinished. Kept for the same reason as one that would not
         # go: the record we are about to write replaces the only thing naming it.
         return Left(False, False, "the record could not prove it was ours to end", True)
-    if started(pgid) != since:
+    now = started(pgid)
+    if now is None:
+        # **Asked, and not told — which is not "it is a stranger".** `started_at` answers
+        # None for a `ps` that timed out or a fork that failed, and a loaded machine at
+        # boot is both when that happens and when work gets left behind. Read as a
+        # mismatch it took the branch below: the group was left running *and* the record
+        # naming it dropped, so nothing could ever find it again — the very loss
+        # `_anything_left` refuses one function up. Kept for the same reason a record with
+        # no fingerprint at all is kept.
+        log.warning("left '%s' (group %s) alone: the machine would not say when it started",
+                    name, pgid)
+        return Left(False, False, "the machine would not say whether it is ours", True)
+    if now != since:
         # The number now belongs to something that is not ours. Leaving a stray program
         # running is bad; a tree-kill aimed at a stranger because a number came round again
         # is very much worse, and has happened to others. Not kept, either — naming a

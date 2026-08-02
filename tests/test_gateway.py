@@ -1049,6 +1049,44 @@ class WhoseProcessIsItAnyway(WithARunDirectory):
         self.assertIsNone(stranger.returncode)
         self.assertIn("cannot prove it is ours", gateway.log_path("orphaned", self.logs).read_text())
 
+    def test_a_machine_that_will_not_say_when_a_group_started_keeps_the_record(self):
+        """R-GW-16, R-GW-26 — asked and not told is not "it is a stranger". `started_at`
+        answers None for a `ps` that timed out or a fork that failed, and a loaded machine
+        at boot is both when that happens and when work gets left behind.
+
+        Read as a mismatch it took the branch below: the group left running *and* the only
+        record naming it dropped, so nothing could ever find it again — the loss
+        `_anything_left` refuses one function up. Kept, exactly as a record carrying no
+        fingerprint at all is kept."""
+        asked = []
+        became = gateway._end_left_running(
+            "a-conversation", {"pgid": 4242, "since": "when ours started"},
+            self.made("orphaned").log,
+            present=lambda pgid: True,
+            started=lambda pgid: None,          # the machine would not answer
+            ask=lambda pgid, sig: asked.append((pgid, sig)) or True,
+            gone_within=lambda pgid, patience: False,
+        )
+        self.assertTrue(became.keep, "it dropped the only record naming live work")
+        self.assertFalse(became.swept)
+        self.assertEqual([], asked, "it signalled a group it could not prove was ours")
+
+    def test_a_group_the_machine_says_began_elsewhere_is_not_kept(self):
+        """R-GW-16 — the other half, so the fix above cannot swallow it: a real, different
+        answer still proves the number came round again, and naming a stranger in our
+        record is how the next start comes to aim at it."""
+        asked = []
+        became = gateway._end_left_running(
+            "a-conversation", {"pgid": 4242, "since": "when ours started"},
+            self.made("orphaned").log,
+            present=lambda pgid: True,
+            started=lambda pgid: "when a stranger started",
+            ask=lambda pgid, sig: asked.append((pgid, sig)) or True,
+            gone_within=lambda pgid, patience: False,
+        )
+        self.assertFalse(became.keep)
+        self.assertEqual([], asked, "it signalled a stranger's process group")
+
     async def test_a_record_that_does_not_say_what_was_running_is_left_alone(self):
         """R-GW-19 — a record whose entries are not numbers at all says nothing about
         what to end, and guessing is how the wrong thing gets ended."""
