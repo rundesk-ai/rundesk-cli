@@ -4085,5 +4085,168 @@ class LifecycleOutcomesWaitForReachability(WithARunDirectory):
                          "an expected wait state was logged as a delivery failure")
 
 
+class TellsTheOwnerWhatItsAgentMayDo(WithARunDirectory):
+    """R-CH-32 — an agent gaining or losing a skill reaches its owner."""
+
+    class Surface:
+        """One channel, as the gateway reaches it."""
+
+        def __init__(self, connected: bool = True, refuses: bool = False):
+            self.connected = connected
+            self.refuses = refuses
+            self.told: list = []
+
+        async def told_the_owner(self, text):
+            if self.refuses:
+                raise OSError("the platform is busy")
+            self.told.append(text)
+
+    def watching(self, *granted, reachable=("ops",), name="ava"):
+        """A gateway holding one agent whose grants a case moves under it."""
+        gw = self.made(name)
+        gw.reachable = list(reachable)
+        self.grants = list(granted)
+        gw.granted = lambda: list(self.grants)
+        return gw
+
+    def look(self, gw):
+        """One pass of the loop, without its wait."""
+        gw._look_at_skills()
+        return gw._say_skill_changes()
+
+    async def test_a_first_look_says_nothing_and_writes_down_what_is_there(self):
+        """An install where this never ran holds skills that were never newly granted."""
+        gw = self.watching("alpha", "beta")
+        surface = self.Surface()
+        gw._reached["ops"] = surface
+        await self.look(gw)
+        self.assertEqual([], surface.told, "grants already held were announced as new")
+        self.assertEqual(("alpha", "beta"), gw._skills_seen())
+
+    async def test_a_skill_the_agent_gained_is_told_to_its_owner(self):
+        gw = self.watching("alpha")
+        surface = self.Surface()
+        gw._reached["ops"] = surface
+        await self.look(gw)
+        self.grants.append("beta")
+        await self.look(gw)
+        self.assertEqual(["🧩 **Skill added** — `beta`"], surface.told)
+
+    async def test_a_skill_the_agent_lost_is_told_to_its_owner(self):
+        gw = self.watching("alpha", "beta")
+        surface = self.Surface()
+        gw._reached["ops"] = surface
+        await self.look(gw)
+        self.grants.remove("alpha")
+        await self.look(gw)
+        self.assertEqual(["🗑️ **Skill removed** — `alpha`"], surface.told)
+
+    async def test_several_changes_at_once_are_one_message(self):
+        """A catalog brings several skills and takes several away in one go, and an owner
+        reading a phone wants one notice rather than a page of them."""
+        gw = self.watching("alpha", "beta")
+        surface = self.Surface()
+        gw._reached["ops"] = surface
+        await self.look(gw)
+        self.grants = ["beta", "gamma", "delta"]
+        await self.look(gw)
+        self.assertEqual(
+            ["🧩 **Skill added** — `gamma`\n"
+             "🧩 **Skill added** — `delta`\n"
+             "🗑️ **Skill removed** — `alpha`"],
+            surface.told)
+
+    async def test_a_change_is_told_once_however_often_it_is_looked_at(self):
+        gw = self.watching("alpha")
+        surface = self.Surface()
+        gw._reached["ops"] = surface
+        await self.look(gw)
+        self.grants.append("beta")
+        await self.look(gw)
+        await self.look(gw)
+        await self.look(gw)
+        self.assertEqual(1, len(surface.told), "the same change was told more than once")
+
+    async def test_an_agent_reached_on_two_surfaces_is_told_on_one(self):
+        """Two surfaces are one owner, and the same news twice reads as two changes."""
+        gw = self.watching("alpha", reachable=("ops", "away"))
+        first, second = self.Surface(), self.Surface()
+        gw._reached["away"], gw._reached["ops"] = first, second
+        await self.look(gw)
+        self.grants.append("beta")
+        await self.look(gw)
+        self.assertEqual(1, len(first.told), "the first surface by name was not the one told")
+        self.assertEqual([], second.told, "one change was told on two surfaces")
+
+    async def test_a_change_waits_for_a_surface_rather_than_being_lost(self):
+        gw = self.watching("alpha")
+        surface = self.Surface(connected=False)
+        gw._reached["ops"] = surface
+        await self.look(gw)
+        self.grants.append("beta")
+        await self.look(gw)
+        self.assertEqual([], surface.told)
+        surface.connected = True
+        await self.look(gw)
+        self.assertEqual(["🧩 **Skill added** — `beta`"], surface.told)
+
+    async def test_a_change_a_surface_refused_is_told_again(self):
+        """A delivery that failed is not a delivery, so nothing is written down for it."""
+        gw = self.watching("alpha")
+        surface = self.Surface(refuses=True)
+        gw._reached["ops"] = surface
+        await self.look(gw)
+        self.grants.append("beta")
+        await self.look(gw)
+        surface.refuses = False
+        await self.look(gw)
+        self.assertEqual(["🧩 **Skill added** — `beta`"], surface.told)
+
+    async def test_a_change_made_while_the_agent_was_stopped_is_still_told(self):
+        """Taking a skill away is exactly what an owner does with the gateway down."""
+        gw = self.watching("alpha", "beta")
+        await self.look(gw)                       # what it could do when it last ran
+        after = self.watching("alpha", name="ava")
+        surface = self.Surface()
+        after._reached["ops"] = surface
+        await self.look(after)
+        self.assertEqual(["🗑️ **Skill removed** — `beta`"], surface.told)
+
+    async def test_an_agent_reached_on_nothing_is_owed_no_notice(self):
+        """Otherwise an owner adding their first channel months later is greeted by every
+        grant they ever made."""
+        gw = self.watching("alpha", reachable=())
+        await self.look(gw)
+        self.grants.append("beta")
+        await self.look(gw)
+        self.assertEqual(("alpha", "beta"), gw._skills_seen())
+        self.assertIsNone(gw._skills_owed)
+
+    async def test_a_name_that_is_not_an_agent_is_not_watched(self):
+        """A gateway of a name nothing was made for holds no grants, and still runs."""
+        gw = self.made("ava")
+        gw._stopping = True
+        await gw._tell_about_skills()             # returns rather than asking None()
+
+    async def test_grants_that_cannot_be_read_are_said_once(self):
+        gw = self.watching("alpha")
+        gw.granted = mock.Mock(side_effect=OSError("no such directory"))
+        gw._stopping = False
+        rounds = 0
+
+        async def advance(_seconds):
+            nonlocal rounds
+            rounds += 1
+            if rounds == 3:
+                gw._stopping = True
+
+        with (mock.patch.object(gateway.asyncio, "sleep", new=advance),
+              mock.patch.object(gw.log, "warning") as warning):
+            await gw._tell_about_skills()
+        self.assertEqual(3, gw.granted.call_count)
+        self.assertEqual(1, warning.call_count,
+                         "an unreadable grant directory was said on every look")
+
+
 if __name__ == "__main__":
     unittest.main()

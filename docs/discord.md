@@ -203,6 +203,25 @@ where those are read. Global slash commands can take
 up to an hour to appear. When the channel was added with `--server`, Rundesk also syncs
 a server-scoped copy that normally appears sooner.
 
+## What arrives in your direct messages
+
+The first user in a channel's allow-list is the owner, and Rundesk sends that person a
+direct message — never the room — when something about the agent itself changes:
+
+- the gateway came up or went down, and when it came back from an update;
+- the agent gained or lost a skill, one line per change:
+
+  ```text
+  🧩 **Skill added** — `research`
+  🗑️ **Skill removed** — `stripe`
+  ```
+
+Skill changes are noticed wherever they were made — `rundesk skills grant`, a catalog
+update or removal, a configured baseline, or a link changed by hand — because the running
+gateway watches what its agent may do rather than waiting to be told. A change made while
+the agent was stopped is sent when it next starts. An agent reached on more than one
+channel is told on one of them, so the same change never arrives twice.
+
 ## Troubleshooting
 
 ### The bot is online but ignores messages

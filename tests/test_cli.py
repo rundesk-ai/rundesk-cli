@@ -698,13 +698,14 @@ class FakeGateways:
         return self._written if self._written is not None else pathlib.Path("/nowhere/x.log")
 
     def Gateway(self, name, where=None, logs=None, reachable=(),
-                agents=None, records=None, asking=None):
+                agents=None, records=None, asking=None, granted=None):
         gateways = self
         # Kept, because what the command hands a gateway is the command's to get right:
         # a gateway told nothing about where agents are starts programs that cannot find
         # one (R-SCH-27), and only this side of the seam can be asked whether it was told.
         self.made_with.append({"name": name, "where": where, "logs": logs,
-                               "agents": agents, "records": records, "asking": asking})
+                               "agents": agents, "records": records, "asking": asking,
+                               "granted": granted})
 
         class One:
             async def serve(inner):
@@ -1775,6 +1776,29 @@ class ServingAGateway(unittest.TestCase):
         self.assertEqual([at], [one["agents"] for one in gateways.made_with])
         self.assertIsNotNone(gateways.made_with[0]["records"],
                             "a gateway was left with nowhere to read its schedules from")
+
+    def test_a_gateway_is_told_how_to_ask_what_its_agent_may_do(self):
+        """R-CH-32 — a grant is a link anything may change while the gateway runs, so what
+        is handed over is the question and never an answer taken once at startup."""
+        gateways = FakeGateways()
+        at = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-grants-"))
+        self.addCleanup(shutil.rmtree, at, True)
+        agents = FakeAgents(made=["ava"], at=at)
+        skills = FakeSkills(given={"ava": ["alpha"]})
+        code, _ = drive(["serve", "ava"], gateways, agents=agents, skills=skills)
+        self.assertEqual(0, code)
+        asking = gateways.made_with[0]["granted"]
+        self.assertEqual(["alpha"], asking())
+        skills._given["ava"] = ["alpha", "beta"]
+        self.assertEqual(["alpha", "beta"], asking(),
+                         "a gateway was handed an answer rather than a question")
+
+    def test_a_gateway_of_a_name_that_is_not_an_agent_is_told_of_no_grants(self):
+        """A name nothing was made for holds no skills, and still runs (R-GW-13)."""
+        gateways = FakeGateways()
+        code, _ = drive(["serve", "nobody"], gateways, agents=FakeAgents())
+        self.assertEqual(0, code)
+        self.assertIsNone(gateways.made_with[0]["granted"])
 
     def test_serving_without_a_name_is_a_usage_error(self):
         """R-CMD-5 — a verb says what and the next word says whose. There is no longer one
