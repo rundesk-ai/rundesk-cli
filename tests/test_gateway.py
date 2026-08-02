@@ -4415,5 +4415,227 @@ class TellsTheOwnerWhatItsAgentMayDo(WithARunDirectory):
                          "an unreadable grant directory was said on every look")
 
 
+class IntroducesTheAgentToSomebodyNewlyAllowed(WithARunDirectory):
+    """R-CH-33 — a person newly allowed to reach an agent is greeted, once, by the agent.
+
+    Every other private notice here has a fixed wording rundesk wrote. This one is a whole
+    turn against the agent's own brain, so what it costs and how often it is attempted are
+    part of the contract rather than details.
+    """
+
+    class Surface:
+        """One channel, as the gateway reaches it: what it allows, and who it greeted."""
+
+        def __init__(self, allow=("2207",), connected: bool = True, refuses: bool = False):
+            self.connected = connected
+            self.refuses = refuses
+            self.record = {"allow": list(allow)}
+            self.greeted: list = []
+
+        async def welcomed(self, user):
+            if self.refuses:
+                raise OSError("the platform is busy")
+            self.greeted.append(user)
+
+    class Reached:
+        """What `agent.reachable` hands a gateway, as far as this loop is concerned."""
+
+        def __init__(self, name, home):
+            self.name, self.home = name, home
+
+    def setUp(self):
+        super().setUp()
+        # Channel homes stand under the agent, never in the run directory: the run
+        # directory's `*.json` entries are the list of gateways there are.
+        self.homes = Path(tempfile.mkdtemp(prefix="rundesk-channels-"))
+        self.addCleanup(shutil.rmtree, self.homes, True)
+
+    def greeting(self, *channels, name="ava"):
+        """A gateway holding channels a case can move who they allow under it."""
+        gw = self.made(name)
+        gw.reachable = list(channels)
+        return gw
+
+    def channel(self, named, allow=("2207",), connected=True, refuses=False, new=True):
+        """One reachable channel with a home of its own, and the surface holding it."""
+        home = self.homes / named
+        home.mkdir(parents=True, exist_ok=True)
+        if new:
+            gateway.remember_no_one_welcomed(home)
+        return (self.Reached(named, home),
+                self.Surface(allow=allow, connected=connected, refuses=refuses))
+
+    def welcomed_in(self, one) -> list:
+        return json.loads(
+            gateway.welcomed_path(one.home).read_text(encoding="utf-8"))["welcomed"]
+
+    async def test_somebody_newly_allowed_is_greeted_and_written_down(self):
+        """R-CH-33"""
+        one, surface = self.channel("ops")
+        gw = self.greeting(one)
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        self.assertEqual(["2207"], surface.greeted)
+        self.assertEqual(["2207"], self.welcomed_in(one))
+
+    async def test_somebody_already_greeted_is_not_greeted_again(self):
+        """R-CH-33 — a reconnect, a restart and an update all come back through here."""
+        one, surface = self.channel("ops")
+        gw = self.greeting(one)
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        after = self.greeting(one, name="ava")          # the gateway that comes back
+        after._reached["ops"] = surface
+        await after._welcome_anyone_owed()
+        self.assertEqual(["2207"], surface.greeted, "the same person was greeted twice")
+
+    async def test_a_channel_from_before_this_existed_greets_nobody(self):
+        """R-CH-33 — updating rundesk must not greet people who have been reaching the
+        agent for months. A channel with no record at all is one an older release wrote."""
+        one, surface = self.channel("ops", new=False)
+        gw = self.greeting(one)
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        self.assertEqual([], surface.greeted)
+        self.assertEqual(["2207"], self.welcomed_in(one),
+                         "who is already there was not written down as known")
+
+    async def test_only_the_person_newly_added_is_greeted(self):
+        """R-CH-33 — adding a second owner, and replacing one with another, both reach
+        exactly the person who has just arrived."""
+        one, surface = self.channel("ops")
+        gw = self.greeting(one)
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        surface.record["allow"] = ["2207", "1180"]
+        after = self.greeting(one, name="ava")
+        after._reached["ops"] = surface
+        await after._welcome_anyone_owed()
+        self.assertEqual(["2207", "1180"], surface.greeted)
+
+    async def test_somebody_taken_off_and_added_again_is_greeted_again(self):
+        """R-CH-33 — a new membership is a new introduction."""
+        one, surface = self.channel("ops")
+        gw = self.greeting(one)
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        surface.record["allow"] = ["1180"]              # 2207 taken off
+        gw = self.greeting(one, name="ava")
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        surface.record["allow"] = ["1180", "2207"]      # and put back
+        gw = self.greeting(one, name="ava")
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        self.assertEqual(["2207", "1180", "2207"], surface.greeted)
+
+    async def test_an_agent_reached_on_two_channels_greets_one_person_once(self):
+        """R-CH-33 — two surfaces are one agent, and two hellos a minute apart read as
+        two agents."""
+        first, first_surface = self.channel("away")
+        second, second_surface = self.channel("ops")
+        gw = self.greeting(first, second)
+        gw._reached["away"], gw._reached["ops"] = first_surface, second_surface
+        await gw._welcome_anyone_owed()
+        self.assertEqual(["2207"], first_surface.greeted,
+                         "the first channel by name was not the one that greeted them")
+        self.assertEqual([], second_surface.greeted, "one person was greeted twice")
+        self.assertEqual(["2207"], self.welcomed_in(second),
+                         "the other channel still owes a greeting already delivered")
+
+    async def test_a_greeting_waits_for_a_surface_rather_than_being_lost(self):
+        """R-CH-33"""
+        one, surface = self.channel("ops", connected=False)
+        gw = self.greeting(one)
+        gw._reached["ops"] = surface
+        await gw._welcome_anyone_owed()
+        self.assertEqual([], surface.greeted)
+        surface.connected = True
+        await gw._welcome_anyone_owed()
+        self.assertEqual(["2207"], surface.greeted)
+
+    async def test_a_greeting_that_failed_is_not_written_down_as_delivered(self):
+        """R-CH-33 — and is tried again by the next gateway that comes up well, rather
+        than every ten seconds against a brain that cannot run."""
+        one, surface = self.channel("ops", refuses=True)
+        gw = self.greeting(one)
+        gw._reached["ops"] = surface
+        with mock.patch.object(gw.log, "warning") as warning:
+            await gw._welcome_anyone_owed()
+            await gw._welcome_anyone_owed()
+        self.assertEqual([], self.welcomed_in(one))
+        self.assertEqual(1, warning.call_count,
+                         "a whole turn was asked for again inside one gateway's life")
+        surface.refuses = False
+        after = self.greeting(one, name="ava")
+        after._reached["ops"] = surface
+        await after._welcome_anyone_owed()
+        self.assertEqual(["2207"], surface.greeted)
+
+    async def test_a_channel_that_is_not_up_greets_nobody(self):
+        """R-CH-33 — a record with nobody holding it open is not a surface."""
+        one, _surface = self.channel("ops")
+        gw = self.greeting(one)
+        await gw._welcome_anyone_owed()
+        self.assertEqual([], self.welcomed_in(one))
+
+    async def test_a_gateway_with_no_channels_watches_nothing(self):
+        """R-CH-33 — including a gateway of a name nothing was made for."""
+        gw = self.made("ava")
+        gw._stopping = True
+        await gw._welcome_new_owners()               # returns rather than reaching for one
+
+
+class WhatAChannelHasWrittenDownAboutWhoItGreeted(WithARunDirectory):
+    """R-CH-33 — the file itself: three answers, and the difference is the feature."""
+
+    def home(self):
+        at = self.where / "channels" / "ops"
+        at.mkdir(parents=True, exist_ok=True)
+        return at
+
+    def test_nothing_written_owes_nobody_and_writes_down_who_is_there(self):
+        at = self.home()
+        self.assertEqual([], gateway.owed_a_welcome(at, ["2207", "1180"]))
+        self.assertEqual(["1180", "2207"],
+                         json.loads(gateway.welcomed_path(at).read_text())["welcomed"])
+
+    def test_a_channel_just_added_owes_everybody_it_allows(self):
+        at = self.home()
+        gateway.remember_no_one_welcomed(at)
+        self.assertEqual(["2207", "1180"], gateway.owed_a_welcome(at, ["2207", "1180"]))
+
+    def test_somebody_no_longer_allowed_is_dropped_rather_than_kept(self):
+        at = self.home()
+        gateway.remember_no_one_welcomed(at)
+        gateway.remember_welcomed(at, "2207")
+        self.assertEqual(["1180"], gateway.owed_a_welcome(at, ["1180"]))
+        self.assertEqual([], json.loads(
+            gateway.welcomed_path(at).read_text())["welcomed"])
+
+    def test_somebody_forgotten_by_hand_is_owed_a_greeting_again(self):
+        at = self.home()
+        gateway.remember_no_one_welcomed(at)
+        gateway.remember_welcomed(at, "2207")
+        gateway.forget_welcomed(at, ["2207"])
+        self.assertEqual(["2207"], gateway.owed_a_welcome(at, ["2207"]))
+
+    def test_forgetting_writes_no_record_where_there_was_none(self):
+        """A channel an older release wrote must not be turned into a new one by somebody
+        being taken off it."""
+        at = self.home()
+        gateway.forget_welcomed(at, ["2207"])
+        self.assertFalse(gateway.welcomed_path(at).exists())
+
+    def test_writing_down_a_greeting_starts_no_record_of_its_own(self):
+        """Same trap from the other side: a greeting delivered on one channel is written
+        against every channel of that agent, and a channel from before this existed must
+        not become a new one — everybody else on it would then be greeted too."""
+        at = self.home()
+        gateway.remember_welcomed(at, "2207")
+        self.assertFalse(gateway.welcomed_path(at).exists())
+        self.assertEqual([], gateway.owed_a_welcome(at, ["2207", "1180"]))
+
+
 if __name__ == "__main__":
     unittest.main()

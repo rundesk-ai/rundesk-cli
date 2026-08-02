@@ -18,6 +18,17 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   `env -u RUNDESK_DATA_DIR -u RUNDESK_HOME -u RUNDESK_AGENTS_DIR … HOME=/tmp/somewhere` before
   believing it.
 
+- **`changing(target, [], …)` cannot tell a file nobody has written from one holding an
+  empty list, and for onboarding state those mean opposite things.** `_understood` returns
+  the `empty` value for a missing file and refuses anything whose type differs, so `[]`
+  collapses "this channel is new, greet everybody on it" into "this channel has greeted
+  everybody already" — a feature that silently never fires, on exactly the installs that
+  most need it. Measured while building `owed_a_welcome`: with `empty=[]` a channel added
+  a minute ago and a channel from three releases back read back identically. Use a mapping
+  (`empty={}`) and put the list under a key, so a *missing key* is the third answer;
+  `gateway._NEVER_LOOKED` is that. The same trap is waiting for anything else where "never
+  written" is not "written and empty".
+
 - **The run directory's `*.json` entries *are* the list of gateways, so anything else you
   keep there under that suffix invents one.** `gateway.every` unions the stems of `*.lock`
   and `*.json`, and `sweep` walks the same glob. Measured: dropping `ava.skills.json` into a

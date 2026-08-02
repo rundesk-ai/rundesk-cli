@@ -292,6 +292,32 @@ class InstructionBuilder(unittest.TestCase):
         )
         self.assertLess(built.index("# Role execution"), built.index("# Mine"))
         self.assertLess(built.index("# Mine"), built.index("## This execution"))
+    def test_the_onboarding_layer_names_the_agent_and_invents_no_work(self):
+        """R-CH-33 — a new agent has no projects, no goals and no focus, and this is the
+        one turn where a brain has nothing but rundesk's words to go on."""
+        built = instructions.build(
+            variables={"agent": "Ava", "agent_home": "/agents/ava/home"},
+            trigger=instructions.ONBOARDING)
+        self.assertIn("you are Ava", built)
+        self.assertIn("very short", built)
+        self.assertIn("Invite them to reach out", built)
+        self.assertIn("Never invent, assume, or offer a project, goal, focus, or "
+                      "specialty", built)
+        self.assertIn("Write only the message itself", built)
+        self.assertNotIn("{agent}", built)
+
+    def test_the_onboarding_layer_never_displaces_rundesks_own_rules(self):
+        """R-AGT-38 — nothing replaces the core layer, and a trigger is one layer."""
+        built = instructions.build(variables={"agent": "Ava"},
+                                   trigger=instructions.ONBOARDING,
+                                   append="Owner addition.")
+        self.assertTrue(built.startswith(
+            instructions.render(instructions.RUNDESK_INSTRUCTIONS,
+                                {"agent": "Ava"}).strip().splitlines()[0]))
+        self.assertLess(built.index("First message to a new owner"),
+                        built.index("Owner addition."))
+        self.assertNotIn("First message to a new owner",
+                         instructions.build(variables={"agent": "Ava"}))
 
     def test_only_trigger_prompt_text_lives_in_this_module(self):
         for use_case in (

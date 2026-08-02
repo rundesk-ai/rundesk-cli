@@ -578,6 +578,119 @@ def remembered(logs: Path | None = None) -> list[str]:
     return sorted(found)
 
 
+#: Where a channel keeps who it has already introduced this agent to (R-CH-33). Beside the
+#: credential, in the private home that channel is given for this agent and for no other,
+#: because that directory is what a channel *is* on disk: it outlives every restart and
+#: every update, it goes away when the channel does, and no other channel can reach it.
+#:
+#: A dotfile, so an adapter listing its own home is not handed a file it did not write.
+WELCOMED = ".welcomed.json"
+
+#: What a channel that has never been looked at holds. **A mapping and not a list**, and
+#: that is the whole of why anybody is ever welcomed: `changing` hands back exactly this
+#: for a file nobody has written, so an empty list as the empty value would be
+#: indistinguishable from a channel that has welcomed nobody yet — and those two mean
+#: opposite things. A missing key is a channel from before any of this existed.
+_NEVER_LOOKED: dict = {}
+
+#: The key inside it. Sorted, and only ever user ids this channel allows.
+_WELCOMED = "welcomed"
+
+
+def welcomed_path(home: Path) -> Path:
+    """Where this channel's record of who it has introduced the agent to stands."""
+    return Path(home) / WELCOMED
+
+
+def remember_no_one_welcomed(home: Path) -> None:
+    """Write down that this channel is new and has introduced the agent to nobody.
+
+    Written when the channel is *added*, and that is what tells a new channel from one an
+    older release wrote. Without it, the first gateway to run this code would read no file
+    at all for both and have no way to tell "everybody here is new" from "everybody here
+    has been talking to this agent for months" — and the second of those must never be
+    greeted (R-CH-33).
+    """
+    with changing(welcomed_path(home), dict(_NEVER_LOOKED), "who a channel has welcomed",
+                  durable=True) as kept:
+        kept[_WELCOMED] = []
+
+
+def forget_welcomed(home: Path, users) -> None:
+    """Drop these people from what this channel has written down.
+
+    Called where somebody is taken off a channel's allowed list, so that adding them again
+    later is a new introduction (R-CH-33). The gateway prunes the same names the next time
+    it looks — this is for the case where nothing is running, which is exactly when an
+    owner rearranges who may reach an agent.
+
+    A channel nobody has written a record for is left alone: seeding one here would claim
+    an older release's channel is new.
+    """
+    dropping = {str(one) for one in users}
+    if not dropping:
+        return
+    with changing(welcomed_path(home), dict(_NEVER_LOOKED), "who a channel has welcomed",
+                  durable=True) as kept:
+        known = kept.get(_WELCOMED)
+        if not isinstance(known, list):
+            return
+        kept[_WELCOMED] = sorted(one for one in known if one not in dropping)
+
+
+def owed_a_welcome(home: Path, allow) -> list[str]:
+    """Who this channel allows and has never introduced the agent to (R-CH-33).
+
+    Three answers out of one file, and the difference between them is the whole feature:
+
+    - **Nothing written** — a channel an older release added. What it allows now is written
+      in and nobody is owed, so updating rundesk never greets people who have been using
+      the agent for months.
+    - **Written and empty** — a channel just added. Everybody it allows is owed one.
+    - **Written with names in it** — anybody it allows who is not among them is owed one,
+      and anybody among them it no longer allows is dropped in the same hold. That is what
+      makes taking somebody off and putting them back a new introduction rather than
+      silence.
+
+    Read, decided and written under one hold, because the command that changes the allowed
+    list writes here too and two writers that each read the same file lose one change.
+    """
+    allowed = [str(one) for one in (allow or [])]
+    owed: list[str] = []
+    with changing(welcomed_path(home), dict(_NEVER_LOOKED),
+                  "who a channel has welcomed") as kept:
+        known = kept.get(_WELCOMED)
+        if not isinstance(known, list):
+            kept[_WELCOMED] = sorted(set(allowed))
+            return []
+        keeping = sorted({str(one) for one in known} & set(allowed))
+        if keeping != list(known):
+            kept[_WELCOMED] = keeping
+        owed = [one for one in allowed if one not in keeping]
+    return owed
+
+
+def remember_welcomed(home: Path, user: str) -> None:
+    """Write down that this channel has now introduced the agent to somebody.
+
+    **Only once it has actually happened.** A welcome written down before it was delivered
+    is a person who is never greeted at all, and this is the one message that cannot be
+    asked for again by whoever missed it.
+
+    A channel nothing has been written for is left alone, the way forgetting leaves it:
+    starting a record here would turn a channel an older release wrote into a new one,
+    and every other person on it would then be greeted as though they had just arrived.
+    Anything actually being greeted has been looked at first, and looking is what writes
+    the record.
+    """
+    with changing(welcomed_path(home), dict(_NEVER_LOOKED), "who a channel has welcomed",
+                  durable=True) as kept:
+        known = kept.get(_WELCOMED)
+        if not isinstance(known, list):
+            return
+        kept[_WELCOMED] = sorted({str(one) for one in known} | {str(user)})
+
+
 def _resolve_interruption(name: str, logs: Path | None, work: str) -> None:
     """Work that is running again is no longer work that never finished (R-GW-40).
 
@@ -900,6 +1013,12 @@ STOP_SECONDS = 15.0
 #: should already have been said.
 SKILLS_SECONDS = 10.0
 
+#: How often who a channel allows is looked at, so somebody newly allowed is greeted
+#: (R-CH-33). The same unhurried pace as the skills look and for the same reason — this is
+#: one small file per channel — but what it may *start* is a whole turn, which is why each
+#: person is attempted only once for as long as one gateway is up.
+WELCOME_SECONDS = 10.0
+
 
 class AlreadyRunning(Exception):
     """A gateway of this name is already up (R-GW-4, R-GW-5)."""
@@ -1211,6 +1330,15 @@ class Gateway:
         #: The last complaint about looking at them, so a directory that cannot be read
         #: is said once rather than every ten seconds for as long as the gateway is up.
         self._skills_complaint: str | None = None
+        #: Everybody this gateway has asked the agent to greet, whether or not it worked
+        #: (R-CH-33). Held for this process's lifetime and never written down: what is
+        #: written down is what was actually *delivered*, and this is what stops a brain
+        #: that cannot run being asked for the same turn every ten seconds until somebody
+        #: notices. A gateway that starts again tries each of them once more.
+        self._welcome_attempted: set[str] = set()
+        #: The last complaint about reading one of those records, said once for the same
+        #: reason the skills one is.
+        self._welcome_complaint: str | None = None
         #: Which schedules have a turn in flight. Kept apart from `running`, which holds
         #: programs a shutdown ends: a turn's brain is not a program this gateway started.
         self._asked_for: set[str] = set()
@@ -1804,6 +1932,7 @@ class Gateway:
             ROLE_SWEEP_SECONDS, self._sweep_roles,
             "could not sweep expired role runs: %s", at_once=True))
         watching = asyncio.ensure_future(self._tell_about_skills())
+        greeting = asyncio.ensure_future(self._welcome_new_owners())
         try:
             await self._stopped.wait()
         finally:
@@ -1814,6 +1943,7 @@ class Gateway:
             specialists.cancel()
             sweeping.cancel()
             watching.cancel()
+            greeting.cancel()
             for task in self._update_turn_tasks.values():
                 task.cancel()
             for task in self._role_tasks.values():
@@ -1828,6 +1958,8 @@ class Gateway:
                 await sweeping
             with contextlib.suppress(BaseException):
                 await watching
+            with contextlib.suppress(BaseException):
+                await greeting
             if self._update_turn_tasks:
                 await asyncio.gather(
                     *tuple(self._update_turn_tasks.values()), return_exceptions=True)
@@ -2125,6 +2257,109 @@ class Gateway:
             self._remember_skills(now)
             self._skills_owed = None
             return
+
+    # -- who has just been allowed to reach it -------------------------------------------
+
+    async def _welcome_new_owners(self) -> None:
+        """Introduce this agent, once, to everybody newly allowed to reach it (R-CH-33).
+
+        A loop rather than something the command tells us, for the reason the skills one
+        is: what a channel allows is changed by a command that may run while nothing is
+        up, and by the time a gateway starts there is nobody left to have told it. What
+        the record says is the whole truth about who may reach this agent, so that is what
+        is looked at — and the introduction waits for the surface rather than being lost
+        with it.
+        """
+        while not self._stopping:
+            try:
+                await self._welcome_anyone_owed()
+            except asyncio.CancelledError:
+                # The gateway is going. Swallowed, this would sleep and start the same
+                # turn again after the surface it was for had been reported gone.
+                raise
+            except Exception as why:  # noqa: BLE001 — a loop nobody awaits
+                self.log.warning("could not see who is owed an introduction: %s", why)
+            await asyncio.sleep(WELCOME_SECONDS)
+
+    def _owed_a_welcome(self) -> dict:
+        """Who is owed an introduction, and on which of this agent's connected channels.
+
+        One entry per person and not per channel: an agent reachable both by direct
+        message and in rooms is *one* agent with one owner, and two greetings a minute
+        apart read as two agents. The channel is the first by name that both allows them
+        and is actually up, so which one it is does not depend on the order surfaces
+        happened to connect in.
+        """
+        owed: dict = {}
+        for one in self.reachable or ():
+            home = getattr(one, "home", None)
+            answering = self._reached.get(one.name)
+            if home is None or answering is None or not answering.connected:
+                continue
+            allow = (getattr(answering, "record", None) or {}).get("allow") or []
+            try:
+                for user in owed_a_welcome(Path(home), allow):
+                    owed.setdefault(user, one.name)
+            except (OSError, Unreadable) as why:
+                if self._welcome_complaint != str(why):
+                    self.log.warning("could not see who channel '%s' has welcomed: %s",
+                                     one.name, why)
+                    self._welcome_complaint = str(why)
+                continue
+            self._welcome_complaint = None
+        return owed
+
+    async def _welcome_anyone_owed(self) -> None:
+        """Ask the agent to greet each of them, and write it down once it has gone.
+
+        **Attempted once for each person while this gateway is up, whatever comes of it.**
+        Every other loop here is free to try again in ten seconds; this one asks a brain
+        for a whole turn, so a provider that cannot run would spend an owner's tokens over
+        and over for as long as the gateway lives. A failure is said in the log and left
+        unwritten, so the next gateway that comes up well tries it again — which is the
+        one retry that costs nothing when the reason is still there.
+        """
+        for user, named in sorted(self._owed_a_welcome().items()):
+            if user in self._welcome_attempted:
+                continue
+            answering = self._reached.get(named)
+            if answering is None or not answering.connected:
+                continue
+            # Before the turn, so a welcome that raises after the brain has already
+            # written to somebody is not asked for a second time.
+            self._welcome_attempted.add(user)
+            try:
+                await answering.welcomed(user)
+            except asyncio.CancelledError:
+                raise
+            except Exception as why:  # noqa: BLE001 — a delivery boundary, retried later
+                self.log.warning("channel '%s': could not introduce this agent to %s: %s",
+                                 named, user, why)
+                continue
+            self.log.info("channel '%s': introduced this agent to %s", named, user)
+            self._remember_welcomed_everywhere(user)
+
+    def _remember_welcomed_everywhere(self, user: str) -> None:
+        """Write one delivered introduction down against every channel of this agent.
+
+        Against every one, not only the surface it went out on: the person has now been
+        greeted by this agent, and a second channel still owing them would greet them
+        again the moment this one went quiet — or on the next gateway, which is where a
+        marker held only in memory stops helping.
+
+        Written even where that channel does not allow them, which costs nothing and is
+        the simpler rule: the next look prunes anybody a channel no longer allows, so a
+        name written somewhere it does not belong takes itself back out.
+        """
+        for one in self.reachable or ():
+            home = getattr(one, "home", None)
+            if home is None:
+                continue
+            try:
+                remember_welcomed(Path(home), user)
+            except (OSError, Unreadable) as why:
+                self.log.warning("channel '%s': could not write down that %s was "
+                                 "introduced: %s", one.name, user, why)
 
     def ask_to_stop(self, come_back: bool = False) -> None:
         """Take no more work, and begin going away (R-GW-6).

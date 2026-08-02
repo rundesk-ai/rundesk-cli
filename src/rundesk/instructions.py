@@ -28,6 +28,7 @@ STANDARD_VARIABLES = (
 SCHEDULE = "schedule"
 DIRECT = "direct_message"
 PUBLIC = "public_room"
+ONBOARDING = "onboarding"
 
 # Supplied as Rundesk's core standing instructions on every run.
 RUNDESK_INSTRUCTIONS = """# Rundesk agent operating rules
@@ -69,9 +70,31 @@ Anyone in that room can read what you write. Keep replies short
 enough to read on a phone, and never paste a credential, a private path, or anything
 said to you in confidence or other direct messages."""
 
+# What the onboarding turn is asked. Rundesk's own words and never an owner's: nobody has
+# spoken to this agent yet, so there is no request to carry and something has to be the
+# turn's prompt (R-CH-33).
+ONBOARDING_PROMPT = "Write your first message to this new owner."
+
+# Appended when the run exists only to introduce this agent to somebody newly allowed to
+# reach it. Deliberately empty of purpose: a new agent has no projects, no goals and no
+# focus, and inventing one here is how an owner is told what they wanted before they have
+# said it.
+ONBOARDING_INSTRUCTIONS = """## First message to a new owner
+
+Someone has just been allowed to reach you, and nobody has said anything to you yet. Write the single message they will receive.
+
+- Keep it very short. Two or three sentences at most.
+- Introduce yourself by name: you are {agent}.
+- Say generally that you are here to help with their needs, projects, and goals.
+- Invite them to reach out.
+- You know nothing about this person, their work, or what you will be used for. Never invent, assume, or offer a project, goal, focus, or specialty, and never refer to work as though it already exists. They decide all of that by replying.
+- Write only the message itself. No preamble, no sign-off, no explanation of what you are doing.
+"""
+
 _TRIGGERS = {
     DIRECT: DIRECT_MESSAGE,
     PUBLIC: PUBLIC_ROOM,
+    ONBOARDING: ONBOARDING_INSTRUCTIONS,
 }
 
 # The whole of what Rundesk itself says to a role execution, and deliberately small
