@@ -35,6 +35,7 @@ from rundesk import catalog as real_catalog  # noqa: E402
 from rundesk import config  # noqa: E402
 from rundesk import restart_request  # noqa: E402
 from rundesk import standing  # noqa: E402
+from rundesk.commands import update as update_commands  # noqa: E402
 from rundesk import store  # noqa: E402
 from rundesk import update_request  # noqa: E402
 from rundesk import updater  # noqa: E402
@@ -49,7 +50,7 @@ _REAL_PATIENCE = (standing.START_PATIENCE, standing.CYCLE_PATIENCE,
                   standing.LOOK_AGAIN_SECONDS)
 
 #: The real removal, put back when the file is done with.
-_REAL_REMOVAL = cli._remove_this_install
+_REAL_REMOVAL = update_commands._remove_this_install
 _REAL_BACKUP_DIR = os.environ.get("RUNDESK_BACKUP_DIR")
 _REAL_DATA_DIR = os.environ.get("RUNDESK_DATA_DIR")
 _TEST_BACKUP_DIR = None
@@ -78,7 +79,7 @@ _asked_of_the_installer: list = []
 
 def setUpModule():
     global _TEST_BACKUP_DIR, _TEST_DATA_DIR
-    cli._remove_this_install = _never_the_real_installer
+    update_commands._remove_this_install = _never_the_real_installer
     # The automatic surface walk invokes every operation, including the real backup
     # listing. Without this boundary it reads the owner's backup directory, and under the
     # aggregate gate that directory can be in use by another suite or a sync service —
@@ -100,7 +101,7 @@ def setUpModule():
 
 
 def tearDownModule():
-    cli._remove_this_install = _REAL_REMOVAL
+    update_commands._remove_this_install = _REAL_REMOVAL
     (standing.START_PATIENCE, standing.CYCLE_PATIENCE,
      standing.LOOK_AGAIN_SECONDS) = _REAL_PATIENCE
     if _REAL_BACKUP_DIR is None:
@@ -161,12 +162,12 @@ def taking_the_installer(instead):
     Never the real one: proving that this command runs the removal by running the removal
     would stop the gateways of whoever ran the suite, and delete their install.
     """
-    was = cli._remove_this_install
-    cli._remove_this_install = instead
+    was = update_commands._remove_this_install
+    update_commands._remove_this_install = instead
     try:
         yield
     finally:
-        cli._remove_this_install = was
+        update_commands._remove_this_install = was
 
 
 def _offered(parser) -> dict:
@@ -422,7 +423,7 @@ class BuiltCommandTests(unittest.TestCase):
         `uninstall`, and once that removes rundesk rather than describing it, the case
         proving each verb is wired removed the developer's install: gateways stopped,
         launchd jobs gone. It passed, because a successful removal is what it does."""
-        self.assertIsNot(cli._remove_this_install, _REAL_REMOVAL,
+        self.assertIsNot(update_commands._remove_this_install, _REAL_REMOVAL,
                          "this file can reach the real uninstall")
 
     def test_no_case_in_this_file_can_reach_the_owners_backups(self):
@@ -460,20 +461,20 @@ class BuiltCommandTests(unittest.TestCase):
         def gone(installer, args):
             raise AssertionError("it ran an installer that is not there")
         with taking_the_installer(gone):
-            was = cli.REPO_ROOT
-            cli.REPO_ROOT = pathlib.Path("/nowhere-at-all")
+            was = update_commands.ROOT
+            update_commands.ROOT = pathlib.Path("/nowhere-at-all")
             try:
                 code, _, err = run(["uninstall"])
             finally:
-                cli.REPO_ROOT = was
+                update_commands.ROOT = was
         self.assertEqual(1, code)
         self.assertIn(
-            f"curl -fsSL {cli.PUBLISHED_INSTALLER} | bash -s -- --uninstall",
+            f"curl -fsSL {update_commands.PUBLISHED_INSTALLER} | bash -s -- --uninstall",
             err,
             "it failed and did not give the published removal instruction",
         )
         self.assertEqual(
-            cli.PUBLISHED_INSTALLER,
+            update_commands.PUBLISHED_INSTALLER,
             "https://raw.githubusercontent.com/rundesk-ai/rundesk-cli/main/install.sh",
         )
 
@@ -4544,7 +4545,7 @@ class MovingEveryAgentForwardWhenAnUpdateLands(unittest.TestCase):
         self.an_agent("alpha")
         self.an_agent("beta")
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertIsNone(cli._carry_every(self.agents))
+            self.assertIsNone(update_commands._carry_every(self.agents))
         for name in ("alpha", "beta"):
             kept = store.Store(store.path_for(self.where / name))
             self.assertEqual(store.VERSION, kept.version())
@@ -4557,7 +4558,7 @@ class MovingEveryAgentForwardWhenAnUpdateLands(unittest.TestCase):
         store.path_for(broken).write_bytes(b"this was never a database")
 
         with contextlib.redirect_stdout(io.StringIO()):
-            went_wrong = cli._carry_every(self.agents)
+            went_wrong = update_commands._carry_every(self.agents)
         self.assertIsNotNone(went_wrong, "a database that is not one was carried anyway")
         self.assertIn("beta", went_wrong, "it never said which agent")
         self.assertNotIn("alpha", went_wrong)
@@ -4569,7 +4570,7 @@ class MovingEveryAgentForwardWhenAnUpdateLands(unittest.TestCase):
         store.path_for(broken).write_bytes(b"this was never a database")
 
         with contextlib.redirect_stdout(io.StringIO()):
-            cli._carry_every(self.agents)
+            update_commands._carry_every(self.agents)
         self.assertIn("could not be opened at all",
                       (broken / "logs" / "gateway.log").read_text())
 
