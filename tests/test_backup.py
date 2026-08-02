@@ -113,7 +113,7 @@ class WhatABackupHolds(WithSomethingToBackUp):
         self.an_agent()
         (self.data / "skills" / "tidying").mkdir(parents=True)
         (self.data / "skills" / "tidying" / "SKILL.md").write_text("---\nname: tidying\n---\n")
-        (self.data / config.NAMED).write_text('{"backups": {"keep_days": 90}}')
+        (self.data / config.NAMED).write_text('{"backups": {"keep_last": 90}}')
         held = self.inside(self.taken())
         self.assertIn("data/skills/tidying/SKILL.md", held)
         self.assertIn(f"data/{config.NAMED}", held)
@@ -903,55 +903,71 @@ class TwoAtOnce(WithSomethingToBackUp):
 
 
 class KeepingOnlySoMany(WithSomethingToBackUp):
-    """Pruning by age, and the one copy age may never take."""
+    """Pruning by the number kept, and the one copy the count may never take."""
 
     def older(self, days: int, why: str = "daily") -> Path:
+        """One copy, taken this long before the newest — the clock is only how order is set
+        up here, because the name is what pruning reads (R-BKP-7)."""
         return self.taken(why=why, now=AT - datetime.timedelta(days=days))
 
-    def test_copies_past_the_stated_age_are_taken_away(self):
-        """R-BKP-22 — a directory that only ever grows is a disk that fills, and the whole
-        point of stating an age is that something acts on it."""
+    def test_copies_beyond_the_stated_number_are_taken_away(self):
+        """R-BKP-22 — a directory that only ever grows is a disk that fills, and here every
+        copy is the whole of what an owner keeps, so the pile grows with them. The whole
+        point of stating a number is that something acts on it."""
         self.an_agent()
-        old = self.older(90)
-        recent = self.older(2)
+        first = self.older(90)
+        second = self.older(2)
         newest = self.taken()
-        gone = backup.prune(self.into, days=30, now=AT)
-        self.assertEqual([old.name], gone)
-        self.assertEqual([recent.name, newest.name],
+        gone = backup.prune(self.into, 2)
+        self.assertEqual([first.name], gone)
+        self.assertEqual([second.name, newest.name],
                          [one.at.name for one in backup.every(self.into)])
 
-    def test_the_only_copy_there_is_is_never_taken_away_by_age(self):
-        """R-BKP-23 — a machine off for a month has nothing recent, and pruning it to nothing
-        would leave an owner with no copy at all on the day they most need one.
+    def test_the_only_copy_there_is_is_never_taken_away_by_the_count(self):
+        """R-BKP-23 — an owner who lowers the number is not asking to be left with nothing,
+        and the one copy there is is the one they reach for on the day it matters.
 
-        Named for what it proves: with one copy there is nothing to compare, and the case is
-        answered before any age is looked at. The newest-of-several rule is the one below —
-        keeping both, because they are different code and the first hid the second."""
+        Named for what it proves: with one copy there is nothing to spare whatever the
+        number says. The newest-of-several rule is the one below — keeping both, because
+        one hid the other when this was bounded by age."""
         self.an_agent()
         only = self.older(400)
-        self.assertEqual([], backup.prune(self.into, days=30, now=AT))
+        self.assertEqual([], backup.prune(self.into, 1))
         self.assertEqual([only.name], [one.at.name for one in backup.every(self.into)])
 
-    def test_every_copy_being_old_still_leaves_the_newest_one(self):
-        """R-BKP-23 — the case that empties the directory if the newest is exempted by date
-        rather than by being the newest: a machine left off for a year has nothing recent."""
+    def test_a_count_already_exceeded_still_leaves_the_newest_one(self):
+        """R-BKP-23 — the case that empties the directory if the newest is exempted by the
+        arithmetic rather than by being the newest. Three copies where one is kept is the
+        ordinary shape the day somebody lowers the number; a number that would keep none of
+        them is refused by `config` long before it arrives (R-BKP-14) and is held out again
+        here, because this is the module that does the deleting."""
         self.an_agent()
         self.older(400)
         self.older(380)
         newest = self.older(360)
-        backup.prune(self.into, days=30, now=AT)
+        backup.prune(self.into, 1)
         self.assertEqual([newest.name], [one.at.name for one in backup.every(self.into)])
+        backup.prune(self.into, 0)
+        self.assertEqual([newest.name], [one.at.name for one in backup.every(self.into)],
+                         "a number that would keep nothing emptied the directory")
 
-    def test_a_copy_whose_age_cannot_be_read_is_never_the_one_removed(self):
+    def test_a_copy_whose_identity_cannot_be_read_is_never_the_one_removed(self):
         """R-BKP-22 — deciding to delete something on the strength of not understanding it is
-        the one thing pruning must not do."""
+        the one thing pruning must not do, and counting it as one of the copies kept is the
+        same mistake spending a real one. It is the oldest thing in the directory, so both
+        readings reach for it first."""
         self.an_agent()
-        self.taken()
         self.into.mkdir(parents=True, exist_ok=True)
         odd = self.into / "rundesk-data-1999-01-01-000000Z.zip"
         odd.write_bytes(b"not a zip at all")
-        self.assertEqual([], backup.prune(self.into, days=30, now=AT))
-        self.assertTrue(odd.exists(), "something unreadable was deleted by age")
+        older = self.older(2)
+        newest = self.taken()
+
+        self.assertEqual([], backup.prune(self.into, 2),
+                         "something unreadable was counted as one of the copies kept")
+        self.assertEqual([older.name], backup.prune(self.into, 1))
+        self.assertTrue(odd.exists(), "something unreadable was deleted to meet the count")
+        self.assertTrue(newest.exists(), "the newest copy went instead of the surplus one")
 
 
 class TakingOneAway(WithSomethingToBackUp):
@@ -1014,10 +1030,10 @@ class HowThisInstallIsConfigured(unittest.TestCase):
         self.assertEqual(config.INITIAL["backups"],
                          config.backups(self.where))
 
-    def test_how_long_backups_are_kept_is_the_owners_to_state(self):
+    def test_how_many_backups_are_kept_is_the_owners_to_state(self):
         """R-BKP-13 — the default is a default and not a law."""
-        self.wrote({"backups": {"keep_days": 90}})
-        self.assertEqual(90, config.backups(self.where)["keep_days"])
+        self.wrote({"backups": {"keep_last": 90}})
+        self.assertEqual(90, config.backups(self.where)["keep_last"])
 
     def test_configuration_that_cannot_be_understood_is_refused_rather_than_ignored(self):
         """R-BKP-14 — treating it as absent means running on defaults an owner believes they
@@ -1026,11 +1042,11 @@ class HowThisInstallIsConfigured(unittest.TestCase):
         with self.assertRaises(config.Unreadable):
             config.backups(self.where)
 
-    def test_a_length_of_time_that_would_keep_nothing_is_refused(self):
+    def test_a_count_that_would_keep_nothing_is_refused(self):
         """R-BKP-14 — an owner who wrote zero meant something, and neither reading it as the
-        default nor as a single day is what they meant."""
-        for said in (0, -1, "thirty", True, 1.5):
-            self.wrote({"backups": {"keep_days": said}})
+        default nor as a single copy is what they meant."""
+        for said in (0, -1, "fourteen", True, 1.5):
+            self.wrote({"backups": {"keep_last": said}})
             with self.assertRaises(config.Unreadable, msg=f"{said!r} was accepted"):
                 config.backups(self.where)
 

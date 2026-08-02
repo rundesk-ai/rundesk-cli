@@ -46,6 +46,10 @@ Expected handoff       what the report must contain
 
 The command prints a run id and returns. Acknowledge briefly and carry on.
 
+**Which brain it runs on** is the role's own where the role names one, and yours otherwise.
+`--provider <brain> --model <model>` overrides both for one run. The listing says which brain a
+role pins, and `show` says which one a run actually used.
+
 ## While it runs
 
 ```sh
@@ -69,7 +73,10 @@ checked, and `resume` it with a correction rather than passing a gap on.
 - **One level.** Neither a role nor the turn reviewing one may start another. Refused.
 - **You must be in your own turn, on a surface you can be reached on** — from a terminal or a
   schedule it is refused, because there would be nowhere to report back to.
-- **Some brains cannot be sent to mid-turn.** `say` refuses and names it; stop, or resume.
+- **Some brains cannot be sent to mid-turn.** `say` refuses and names it; stop, or resume. A
+  role pinned to one of those can never be steered, on any run of it.
+- **A brain this machine has not got is refused as you hand the work over**, naming it — never
+  discovered after the run has started.
 - **Not your own home** as a target — refused, because standing there hands it your identity.
 - **A skill the machine has not got is simply not given.** The listing names it. The role still
   runs, with less than its description implies.

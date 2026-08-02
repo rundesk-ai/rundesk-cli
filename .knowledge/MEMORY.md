@@ -880,6 +880,12 @@ re-checked since, so treat these as true-when-found rather than as current.*
   in there is reported as a syntax error dozens of lines later, at whatever line happens to
   hold an unbalanced parenthesis. Write those comments without an apostrophe.
 
+- **`run.provider` is `NOT NULL`, so a turn with no brain cannot be written.** A case
+  exercising "nothing said which brain, so the agent's own default answered" naturally reaches
+  for `kept.began("channel", None, ...)` and gets `IntegrityError: NOT NULL constraint failed:
+  run.provider` from inside the store rather than a refusal saying what a run needs. The empty
+  string is what a run with no brain looks like in these records, and `or` chains treat it the
+  same way — write `kept.began("channel", "", ...)`.
 - **A station install stops before it ever lays down skills or roles**, so `./install.sh` under a
   redirected root is not evidence that either landed. The launchd bootstrap fails in that
   environment (`Bootstrap failed: 5: Input/output error`) and line 678's `die` ends the script —

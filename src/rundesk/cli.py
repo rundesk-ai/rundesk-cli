@@ -695,6 +695,15 @@ def build_parser() -> argparse.ArgumentParser:
     handed.add_argument("--label", metavar="<text>",
                         help="a short safe name for the task, shown where other people can "
                              "read it — never a path and never the brief")
+    # This one run's brain, beating what the role says and what this turn is running on
+    # (R-ROL-34). Not a list of brains, here or anywhere: a shipped adapter's name and the
+    # path of a program somebody wrote are the same kind of thing to the seam that runs it.
+    handed.add_argument("--provider", metavar="<provider>",
+                        help="which brain runs it, beating the role's own and this turn's "
+                             "— one that ships, or the path of a program that speaks yours")
+    handed.add_argument("--model", metavar="<model>",
+                        help="which model on that brain, beating the role's own — what the "
+                             "brain itself calls it")
     guided = handing.add_parser(
         "say", help="say something to a role that is working — read from standard input")
     guided.add_argument("run", metavar="<run>", help="which role run — the id `roles` lists")
@@ -2251,7 +2260,7 @@ def _daily_backups(act: str, machine) -> int:
         print(f"backups on: FAILED — {said.why}", file=sys.stderr)
         return 1
     print(f"the machine will take a backup every day at {at}")
-    print(f"        kept for {config.backups()['keep_days']} days, in {backups_home()}")
+    print(f"        the last {config.backups()['keep_last']} are kept, in {backups_home()}")
     return 0
 
 
@@ -2341,16 +2350,16 @@ def _take_a_backup() -> int:
         for one in said["copied_whole"]:
             print(f"        WARNING: {one} could not be copied consistently and is in the "
                   f"backup exactly as it is on disk", file=sys.stderr)
-    # Pruned here rather than on a second schedule of its own: the thing that makes an old
-    # copy old is a newer one arriving, so this is the moment the question has a new answer,
-    # and a machine that has stopped taking backups stops deleting them too.
+    # Pruned here rather than on a second schedule of its own: the only thing that puts a
+    # copy past the last few is a newer one arriving, so this is the moment the question has
+    # a new answer, and a machine that has stopped taking backups stops deleting them too.
     # Bounded like every other reading of this directory: the copy is already written and
     # safe, so a directory that stops answering costs the tidying and never the backup
     # itself, and the command says which of the two happened (R-BKP-29).
-    keep_days = config.backups()["keep_days"]
+    keep_last = config.backups()["keep_last"]
     reached, gone = _answered_within(
         BACKUP_PATIENCE,
-        lambda: backups.prune(backups_home(), keep_days, note=_out_loud),
+        lambda: backups.prune(backups_home(), keep_last, note=_out_loud),
         "rundesk-backups-prune",
     )
     if not reached:
@@ -2358,7 +2367,7 @@ def _take_a_backup() -> int:
               f"{BACKUP_PATIENCE:.0f}s, so older copies were left as they are",
               file=sys.stderr)
     elif gone:
-        print(f"        {len(gone)} older than {keep_days} days were removed")
+        print(f"        {len(gone)} beyond the last {keep_last} were removed")
     return 0
 
 
@@ -3318,6 +3327,14 @@ def _list_roles(args: argparse.Namespace, whose) -> int:
         print(f"{one.label}  {one.slug}  {one.revision[:12]}  "
               f"{one.posture}  [{' '.join(one.skills)}]")
         print(f"        {one.description}")
+        if one.provider or one.model:
+            # Said before anybody hands it work, because a pinned brain decides what this
+            # role can do: not every brain can be sent to mid-turn, so a role pinned to
+            # one that cannot is a role no `say` will ever reach (R-ROL-34).
+            print("        it runs on "
+                  + (provider.label(one.provider) if one.provider
+                     else "whatever this turn is on")
+                  + (f", model {one.model}" if one.model else ""))
         if one.missing:
             # Said every time it is listed. A set quietly smaller than its manifest is the
             # kind of difference nobody notices until the work comes back thin.
@@ -3345,6 +3362,13 @@ def _show_role_run(args: argparse.Namespace, whose) -> int:
     for what in ("id", "role", "label", "revision", "posture", "state", "outcome",
                  "parent_run", "target", "retained_until"):
         print(f"{what:16}{it[what]}")
+    # The brain it actually ran on, which is a question only the run can answer: the role
+    # may have been edited since, and the agent reconfigured (R-ROL-34). Said only where
+    # one was recorded — a run admitted by an older release ran on whatever its parent
+    # turn resolved and nothing wrote down which that was.
+    if it["provider"]:
+        print(f"{'brain':16}{it['provider']}"
+              + (f"  {it['model']}" if it["model"] else ""))
     print(f"{'skills':16}{' '.join(it['skills'])}")
     print(f"{'elapsed':16}{it['elapsed']}s")
     print(f"{'reviewed':16}{'yes' if it['reviewed'] else 'no'}")
@@ -3389,6 +3413,7 @@ def _hand_to_a_role(args: argparse.Namespace, agents) -> int:
         admitted = role_runs.admit(
             args.name, args.role, brief, parent,
             target=getattr(args, "target", None), label=getattr(args, "label", None),
+            named=getattr(args, "provider", None), model=getattr(args, "model", None),
         )
     except role_runs.NotDelegable as why:
         print(f"{args.name}: NOT ADMITTED — {why}", file=sys.stderr)

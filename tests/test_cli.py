@@ -1330,7 +1330,7 @@ class WhatThisInstallIsConfiguredWith(unittest.TestCase):
         self.assertEqual(0, code)
         for section in config.SECTIONS:
             self.assertIn(section, said)
-        self.assertIn("keep_days", said)
+        self.assertIn("keep_last", said)
         self.assertIn("granted", said)
 
     def test_every_value_reported_is_stated_in_the_file(self):
@@ -1362,7 +1362,7 @@ class WhatThisInstallIsConfiguredWith(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertIn("backups.keepDays", said)
         self.assertIn("backupz", said)
-        self.assertIn("keep_days  30", said)
+        self.assertIn("keep_last  14", said)
         self.assertNotIn("(default)", said)
 
     def test_an_unreadable_configuration_is_refused_rather_than_reported_as_defaults(self):
@@ -5158,6 +5158,44 @@ class HandingWorkToARole(unittest.TestCase):
         code, said = drive(["roles", "nobody"], agents=FakeAgents(made=["ava"]))
         self.assertEqual(1, code)
         self.assertIn("NO SUCH AGENT", said)
+
+    def test_which_brain_a_run_uses_is_asked_for_on_the_way_in(self):
+        """R-ROL-34 — the flag is this one run's, and it beats what the role says."""
+        handed = cli.build_parser().parse_args(
+            ["roles", "ava", "run", "development", "--provider", "codex",
+             "--model", "gpt-5-codex"])
+        self.assertEqual(("codex", "gpt-5-codex"), (handed.provider, handed.model))
+
+    def _a_run_on(self, named, model):
+        """One role run of ava's, admitted on a brain, through the records themselves."""
+        os.environ["RUNDESK_AGENTS_DIR"] = self.where
+        self.addCleanup(os.environ.pop, "RUNDESK_AGENTS_DIR", None)
+        agents = FakeAgents(made=["ava"], at=self.where)
+        pathlib.Path(self.where, "ava").mkdir(parents=True, exist_ok=True)
+        kept = agents.records("ava")
+        at = "2026-08-01T09:00:00Z"
+        where_it_is = store.conversation_id("discord", "general")
+        kept.opened(where_it_is, "discord", "discord", "general", at)
+        kept.remember_channel("discord", "discord", ["2207"], at)
+        parent = kept.began("channel", "codex", "work", at, conversation_id=where_it_is)
+        return agents, kept.admit_role(
+            "development", "rev", ["writing-plans"], {}, "a task", "work", parent,
+            where_it_is, None, at, "2026-08-15T09:00:00Z", provider=named, model=model)
+
+    def test_showing_a_run_says_which_brain_it_actually_used(self):
+        """R-ROL-34 — the run's own answer. The role may have been edited and the agent
+        reconfigured since, so nothing else on this machine still knows."""
+        agents, run = self._a_run_on("claude", "its-own")
+        code, said = drive(["roles", "ava", "show", run], agents=agents)
+        self.assertEqual(0, code)
+        self.assertIn("claude", said)
+        self.assertIn("its-own", said)
+
+    def test_a_run_admitted_before_a_brain_was_recorded_says_nothing_about_one(self):
+        agents, run = self._a_run_on(None, None)
+        code, said = drive(["roles", "ava", "show", run], agents=agents)
+        self.assertEqual(0, code)
+        self.assertNotIn("brain", said)
 
 
 if __name__ == "__main__":
