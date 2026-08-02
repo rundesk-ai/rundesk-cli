@@ -2247,5 +2247,73 @@ class CompletedUpdateOutcome(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], brain.asked)
 
 
+class WhatIsForTheOwnerAlone(unittest.IsolatedAsyncioTestCase):
+    """R-CH-32 — bookkeeping about the agent, told to the owner and to nobody else."""
+
+    def setUp(self):
+        # An install of this case's own. Without it, making an agent reads the *owner's*
+        # configured skill baseline — which is there on a developer's machine, whose shell
+        # is a gateway's child, and is not there on a runner.
+        self.data = Path(tempfile.mkdtemp(prefix="rundesk-owner-notice-data-"))
+        self.addCleanup(shutil.rmtree, self.data, True)
+        before = os.environ.get("RUNDESK_DATA_DIR")
+        os.environ["RUNDESK_DATA_DIR"] = str(self.data)
+        self.addCleanup(lambda: os.environ.__setitem__("RUNDESK_DATA_DIR", before)
+                        if before is not None
+                        else os.environ.pop("RUNDESK_DATA_DIR", None))
+        config.ensure(self.data)
+
+    def channel(self, where):
+        agents.add("ava", where)
+        agents.remember("ava", where, provider="a-brain")
+        surface = Surface()
+        held = answering.Answering(
+            "ava", "ops", {"kind": "somewhere", "allow": ["2207"]},
+            surface, where=where, carry=Brain(),
+        )
+        held.connected = True
+        return held, surface
+
+    def somewhere(self):
+        where = Path(tempfile.mkdtemp(prefix="rundesk-owner-notice-"))
+        self.addCleanup(shutil.rmtree, where, True)
+        return where
+
+    async def test_a_notice_for_the_owner_names_no_conversation(self):
+        """Where an owner is reached privately is the surface's own answer."""
+        where = self.somewhere()
+        held, surface = self.channel(where)
+
+        await held.told_the_owner("🧩 **Skill added** — `alpha`")
+
+        sent = surface.of("owner-notice")
+        self.assertEqual(1, len(sent))
+        self.assertEqual("🧩 **Skill added** — `alpha`", sent[0]["text"])
+        self.assertIsNone(sent[0].get("conversation"))
+        self.assertEqual([], surface.of("said"), "it was said as the agent's own speech")
+
+    async def test_a_notice_for_the_owner_is_not_written_down_as_the_agent_speaking(self):
+        """A brain that never wrote the line must not find it in its own record."""
+        where = self.somewhere()
+        held, _surface = self.channel(where)
+        records = agents.records("ava", where)
+        records.opened(store.conversation_id("ops", "one"), "ops", "somewhere", "one", AT)
+
+        await held.told_the_owner("🗑️ **Skill removed** — `alpha`")
+
+        kept = records.messages(store.conversation_id("ops", "one"))
+        self.assertEqual([], [one for one in kept if "Skill removed" in str(one)])
+
+    async def test_a_notice_is_not_offered_to_a_channel_that_is_not_connected(self):
+        """A wait, and never a delivery: what is owed is told when the surface returns."""
+        where = self.somewhere()
+        held, surface = self.channel(where)
+        held.connected = False
+
+        with self.assertRaises(RuntimeError):
+            await held.told_the_owner("🧩 **Skill added** — `alpha`")
+        self.assertEqual([], surface.shown)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -422,6 +422,25 @@ class Answering:
         await held.task
         raise RuntimeError("the post-update continuation was not admitted")
 
+    async def told_the_owner(self, text: str) -> None:
+        """Say something to this agent's owner alone, wherever this surface reaches them
+        (R-CH-32).
+
+        **No conversation, on purpose.** This is rundesk's own bookkeeping about the agent
+        rather than anything the agent said in a room, and where an owner is reached
+        privately is the surface's own answer — a room, a thread and a direct message are
+        one platform's words for a place, and this file has never heard of any of them
+        (R-CAD-13). A surface with no private way to reach anybody shows nothing, which is
+        the same freedom it has over everything else it is told.
+
+        Not written into what the agent has said, for the reason the schedule notice is
+        not: a brain that never wrote the line would find it in its own record and take it
+        for something it had said.
+        """
+        if not self.connected:
+            raise RuntimeError(f"channel '{self.channel}' is not connected")
+        await self._sending(channel.spoken(type="owner-notice", text=text))
+
     async def told_restart_finished(self, conversation: str, text: str) -> None:
         """Deliver one queued restart outcome after reconnect (R-GW-43)."""
         if not self.connected:
