@@ -8,7 +8,7 @@ skills every agent must receive:
 {
   "backups": {
     "at": "04:00",
-    "keep_days": 30
+    "keep_last": 14
   },
   "updates": {
     "at": "03:00"
@@ -41,6 +41,13 @@ for longer than that while still working.
 A skill in `skills.granted` is attached to every new and existing agent and cannot be
 revoked until it is removed from this list. Updates and reinstalls restore missing
 required grants without removing optional skills an owner added.
+
+`backups.keep_last` is how many copies are kept: taking one takes the copies beyond that
+number away, oldest first, and never the newest. It bounds what the directory costs, which
+an age cannot — each copy grows with the data in it. An install configured by an older
+release keeps whatever `backups.keep_days` it stated, and nothing reads it any more;
+`rundesk config` lists it under what nothing on this machine reads, and removing that line
+is the owner's to do.
 
 Backups are kept outside the program and agent data, so an update, uninstall, or data
 purge cannot remove them. The backup directory may also be a symlink to a synced folder:

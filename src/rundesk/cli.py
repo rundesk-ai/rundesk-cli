@@ -2260,7 +2260,7 @@ def _daily_backups(act: str, machine) -> int:
         print(f"backups on: FAILED — {said.why}", file=sys.stderr)
         return 1
     print(f"the machine will take a backup every day at {at}")
-    print(f"        kept for {config.backups()['keep_days']} days, in {backups_home()}")
+    print(f"        the last {config.backups()['keep_last']} are kept, in {backups_home()}")
     return 0
 
 
@@ -2350,16 +2350,16 @@ def _take_a_backup() -> int:
         for one in said["copied_whole"]:
             print(f"        WARNING: {one} could not be copied consistently and is in the "
                   f"backup exactly as it is on disk", file=sys.stderr)
-    # Pruned here rather than on a second schedule of its own: the thing that makes an old
-    # copy old is a newer one arriving, so this is the moment the question has a new answer,
-    # and a machine that has stopped taking backups stops deleting them too.
+    # Pruned here rather than on a second schedule of its own: the only thing that puts a
+    # copy past the last few is a newer one arriving, so this is the moment the question has
+    # a new answer, and a machine that has stopped taking backups stops deleting them too.
     # Bounded like every other reading of this directory: the copy is already written and
     # safe, so a directory that stops answering costs the tidying and never the backup
     # itself, and the command says which of the two happened (R-BKP-29).
-    keep_days = config.backups()["keep_days"]
+    keep_last = config.backups()["keep_last"]
     reached, gone = _answered_within(
         BACKUP_PATIENCE,
-        lambda: backups.prune(backups_home(), keep_days, note=_out_loud),
+        lambda: backups.prune(backups_home(), keep_last, note=_out_loud),
         "rundesk-backups-prune",
     )
     if not reached:
@@ -2367,7 +2367,7 @@ def _take_a_backup() -> int:
               f"{BACKUP_PATIENCE:.0f}s, so older copies were left as they are",
               file=sys.stderr)
     elif gone:
-        print(f"        {len(gone)} older than {keep_days} days were removed")
+        print(f"        {len(gone)} beyond the last {keep_last} were removed")
     return 0
 
 
