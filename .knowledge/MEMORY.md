@@ -25,21 +25,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   edit and naming neither function. Nothing failed at import and the module still parsed.
   **When you move a definition, take it from `min(decorator_list, lineno)`, not from `def`**,
   and assert the moved text still starts with its decorator.
-- **`test_install` fails three ways at once because of directories git never mentions, and none of
-  them is your change.** A `ui/node_modules` (55 MB) and a built `site/` (47 MB) sitting beside `src/`
-  are tracked by nothing and ignored by nothing, so **`git status` reports the tree clean** while
-  `tests/test_install.py:38` and thirteen more `copytree` calls copy both fourteen times, and
-  `OneInstructionTests._published()` walks straight into them. Measured on one commit: **82 cases,
-  75 s, `OK`** against a lean `git archive` extraction, versus **187 s (past the gate's 180 s
-  ceiling) plus two failures** in the checkout — `_published()` finding the install instruction in
-  `site/dist/index.html`, `site/dist/llms-full.txt` and `site/dist/start/install/index.html` as well
-  as in `install.sh`, and reporting `2 != 1` because the built site is older than the instruction it
-  publishes. All three read exactly like a regression in whatever you just touched. **Before
-  believing `FAIL test_install`, run `du -sh */ | sort -rh | head` and re-run the suite against
-  `git archive HEAD | tar -x -C <scratch>`** — that separates the tree from the code in about a
-  minute. The durable fix is `ui`, `site`, `node_modules` and `dist` in that file's
-  `ignore_patterns`, plus a `.gitignore` line so the tree stops lying; both are changes nobody has
-  been asked for yet.
+- **Only `tests/test_install.py:38` copies the *checkout*; every other `copytree` in that file
+  copies `REPO`.** So whatever that one line lets through is carried by all eighteen of them, and
+  whatever it excludes is excluded everywhere. Untracked `ui/` and `site/` trees (~100 MB) beside
+  `src/` once took the suite from 92 s to past the gate's 180 s ceiling, which reads exactly like a
+  regression in whatever you just touched. Both are excluded there and in `.gitignore` now — the
+  point that outlives them is **where to make the change**: add to line 38, never to the other
+  seventeen. If that suite ever slows again, `du -sh */ | sort -rh | head` names the cause in
+  seconds.
 - **A module-level constant that moves takes every `tests/` rebinding of it with it.** The suite
   turns `START_PATIENCE`/`CYCLE_PATIENCE`/`LOOK_AGAIN_SECONDS` *down* so waiters do not really wait,
   and `came_up`/`gone` read them off module globals at call time on purpose. Moving them from `cli`
@@ -766,10 +759,6 @@ re-checked since, so treat these as true-when-found rather than as current.*
   switching back in a shared worktree would disrupt whoever is working in it. A red suite can
   be theirs and not yours — prove it in a scratch **copy** of the checkout rather than by
   changing anything in the tree they are working in.
-- **`SUGGESTIONS.md` finding numbers are taken while you are writing.** Numbers are never
-  reused, so two agents filing at once both reach for the next one — 41 and 42 were claimed
-  by another round mid-review. Re-read the file's tail immediately before you number
-  anything, and append rather than editing near somebody else's section.
 - **A stand-in that is more generous than the real thing hides whole features.** Twice
   here: a fake `turn.carry` volunteered what the brain could do, which the real one never
   passed on, so steering was dead behind a green suite; and a fake `Outcome` was missing an
