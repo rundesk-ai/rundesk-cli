@@ -1273,7 +1273,7 @@ def _queried(name: str, asked: str, where: Path | None = None) -> str:
     """
     if asked == "help":
         return (
-            "Read-only queries: status, version, agents, skills, schedules, help\n"
+            "Read-only queries: status, version, agents, skills, schedules, roles, help\n"
             "Conversation controls: stop, forget\n"
             "Agent control: restart"
         )
@@ -1315,7 +1315,58 @@ def _queried(name: str, asked: str, where: Path | None = None) -> str:
         return "\n".join(f"- {called}" for called in granted)
     if asked == "schedules":
         return _query_schedules(name, datetime.now(), where)
+    if asked == "roles":
+        return _query_roles(name, where)
     raise ValueError(f"unknown read-only query: {asked}")
+
+
+#: How many role runs a surface is shown. Enough to cover what is happening and what has
+#: just happened; the records hold the rest, and a phone is not where a month is read.
+ROLES_SHOWN = 10
+
+
+def _query_roles(name: str, where: Path | None = None, now=None) -> str:
+    """What this agent has handed to a role, newest first (R-ROL-28).
+
+    **What is still going, and what has not been reviewed yet.** A run that finished and
+    was answered for is over, and on a surface this narrow a list of finished work pushes
+    what is actually happening off the bottom of it.
+
+    Never a local path: this is read where other people can see it, so a target is its own
+    last component and nothing more (R-ROL-17).
+    """
+    from rundesk import role_run as role_runs
+    from rundesk import store as records
+
+    try:
+        kept = reading(name, where)
+        runs = kept.role_runs(limit=200)
+        owed = {one["role_run"] for one in kept.owed_role_callbacks()}
+    except (store.Unreadable, store.TooNew, store.Behind, migration.Failed) as why:
+        return f"could not read what {name} has handed on: {why}"
+    live = [one for one in runs
+            if one["state"] in records.UNFINISHED_ROLES or one["id"] in owed]
+    if not live:
+        return "nothing handed to a role right now"
+    lines = []
+    for row in live[:ROLES_SHOWN]:
+        it = role_runs.shown(row, now=now)
+        became = "awaiting review" if row["id"] in owed else it["state"]
+        where_it_is = f" in {it['target']}" if it["target"] else ""
+        lines.append(f"{it['role']} — {it['label']}{where_it_is} — {became}, "
+                     f"{_for_how_long(it['elapsed'])}")
+    if len(live) > ROLES_SHOWN:
+        lines.append(f"and {len(live) - ROLES_SHOWN} more")
+    return "\n".join(lines)
+
+
+def _for_how_long(seconds: int) -> str:
+    """How long something has been going, in the largest unit that is not a lie."""
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
 
 
 def _query_schedules(name: str, now: datetime, where: Path | None = None) -> str:
@@ -1439,6 +1490,7 @@ class Playing:
     """
 
     waiting: object
+    seen: object
     stopping: object
     stopped: object
     carry: object
@@ -1472,6 +1524,22 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
         found = [one for state in store.UNFINISHED_ROLES
                  for one in kept.role_runs(state=state, limit=200)]
         return sorted(found, key=lambda one: one["admitted_at"])
+
+    def seen(run_id: str):
+        """Where a run's activity is shown, and what to call it there.
+
+        The parent's own conversation, because that is where somebody asked for the work
+        and where they are waiting for it — the same place the review lands.
+        """
+        kept = reading(name, where)
+        row = kept.role_run(run_id)
+        if row is None:
+            return None
+        room = kept.conversation_of(row["parent_conversation"])
+        if room is None:
+            return None
+        return {"channel": room.get("channel"), "conversation": room.get("space"),
+                "label": row["label"] or row["role"]}
 
     def stopping() -> list:
         """Every unfinished run somebody has asked to end."""
@@ -1560,7 +1628,8 @@ def playing(name: str, where: Path | None = None, carry=None) -> Playing:
     def sweep() -> list:
         return role_runs.sweep(name, where)
 
-    return Playing(waiting=waiting, stopping=stopping, stopped=stopped, carry=carrying,
+    return Playing(waiting=waiting, seen=seen, stopping=stopping, stopped=stopped,
+                   carry=carrying,
                    owed=owed, claiming=claiming, reviewing=reviewing, reviewed=reviewed,
                    sweep=sweep)
 

@@ -256,8 +256,8 @@ provider. One file per contract, named for it:
 
 | File | Cases | Covers |
 |---|---|---|
-| `test_gateway.py` | 215 | `platform-gateway` — real processes, real signals, waits turned down |
-| `test_agent.py` | 124 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
+| `test_gateway.py` | 246 | `platform-gateway` — real processes, real signals, waits turned down |
+| `test_agent.py` | 133 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
 | `test_cli.py` | 308 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
 | `test_catalog.py` | 27 | `lifecycle-skill-catalog` — manifests, provenance, default seeding, inert integration packages, lifecycle refresh, ownership, atomic updates, drift replacement, removal, and unsafe archives, all offline |
 | `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
@@ -278,7 +278,7 @@ provider. One file per contract, named for it:
 | `test_store.py` | 124 | `agent-store` — a database in a temp directory and nothing else: a reader that cannot write, two writers that cannot lose a change, two agents that never wait on each other, and the proof that no statement or connection escapes the one module |
 | `test_channel.py` | 73 | `channel-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate reaches no platform and needs no token, and one adapter in `strangers/` that this code never saw being written |
 | `test_answering.py` | 123 | `channel-messaging` — both edges are arguments, so a routing failure and a platform failure can never be confused |
-| `test_discord.py` | 168 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
+| `test_discord.py` | 192 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
 | `test_instructions.py` | 20 | Rundesk's core and trigger prompts, standard variables, the additive builder, and the separate role floor |
 | `test_role.py` | 32 | `agent-role` — what a role is, what makes one usable, and what its revision is computed from, against a scratch library |
 | `test_role_run.py` | 83 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |

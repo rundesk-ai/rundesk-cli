@@ -566,6 +566,31 @@ class Answering:
         await self._sending(
             channel.spoken(type="owner-notice", text=text, user=user))
 
+    #: What a role run is called in the activity a surface shows. One id for the whole of
+    #: it, so the mark saying it started and the one saying how it went are the same piece
+    #: of work rather than two unrelated lines.
+    ROLE_MARK = "role:"
+
+    def told_role_working(self, conversation: str, run: str, label: str) -> None:
+        """Mark that work was handed to a role, where the person who asked can see it.
+
+        **The same record a provider's own subagent already produces** (R-PRV-8): a `tool`
+        that `did` delegate. Nothing is added to what a surface understands, so a platform
+        showing one shows the other without being taught anything.
+
+        Without this a role was invisible: the command that admitted it showed as an
+        ordinary shell run, the work itself said nothing at all, and the agent answered
+        some minutes later with no sign of where the answer had come from.
+        """
+        self._tell(type="tool", conversation=conversation, run=run,
+                   id=self.ROLE_MARK + run, name="role", did="delegate", who=label)
+
+    def told_role_settled(self, conversation: str, run: str, ok: bool,
+                          summary: str) -> None:
+        """Close that mark with how it went, the way a result closes a tool call."""
+        self._tell(type="result", conversation=conversation, run=run,
+                   id=self.ROLE_MARK + run, ok=bool(ok), summary=summary)
+
     async def told_restart_finished(self, conversation: str, text: str) -> None:
         """Deliver one queued restart outcome after reconnect (R-GW-43)."""
         if not self.connected:
