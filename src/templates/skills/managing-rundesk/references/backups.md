@@ -1,9 +1,7 @@
----
-name: managing-backups
-description: Manage Rundesk backups safely. Use to list, create, remove, or restore backups, recover agents or history, or protect data before destructive work.
----
+# Backups
 
-# Managing backups
+Read this before taking a copy, and **before putting one back** — a restore replaces
+everything the owner keeps, not only the part that looks wrong.
 
 There are two acts here and they are not the same size. **Taking a copy is safe, quick, and
 never interrupts anything.** **Putting one back replaces everything your owner keeps** — and

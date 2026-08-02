@@ -285,7 +285,8 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   and the pointer named a path that existed on neither kind of install. As a skill it is handed
   to the agent instead. The operating baseline in `config.RUNDESK_REQUIRED_GRANTS` reaches every
   new and existing agent and cannot be configured away or revoked (R-AGT-36, R-AGT-37).
-- `docs/extending/` — the adapter and integration guides. They were built-in skills, laid down in
+- `docs/extending/` — the adapter and integration guides, including `integration-clis/`, which
+  is where building one is documented rather than in a skill every agent carries. They were built-in skills, laid down in
   every owner's library and granted to every agent, for a task almost none of them will ever do.
   A person building an adapter reads these against the repository; an agent does not need them in
   front of it on every turn (#95).

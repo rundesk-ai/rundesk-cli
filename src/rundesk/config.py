@@ -82,7 +82,7 @@ PREVIOUS_DEFAULT_GRANTS = (
 RUNDESK_REQUIRED_GRANTS = (
     "managing-rundesk",
     "managing-schedules",
-    "managing-backups",
+    "delegating-to-roles",
     "filing-github-issues",
     "writing-github-pull-requests",
 )
