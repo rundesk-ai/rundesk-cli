@@ -198,6 +198,20 @@ class WhatARunIsAdmittedWith(WithAnAgentThatCanDelegate):
                          sorted(one.name for one in at["skills"].iterdir()))
         self.assertEqual(["writing-plans"], self.kept.role_run(admitted.id)["skills"])
 
+    def test_the_locked_manifest_holds_the_brain_the_role_named(self):
+        """R-ROL-33 — and holds no field the role did not name, so a role that pins
+        nothing locks exactly the bytes it locked before this field existed."""
+        self.wrote(provider="claude")
+        admitted = self.admit()
+        at = role_runs.paths("elena", admitted.id, self.where)
+        self.assertEqual(
+            {"description": "Implement and verify a bounded change.",
+             "skills": ["writing-plans"], "posture": "work", "provider": "claude"},
+            json.loads(at["manifest"].read_text(encoding="utf-8")))
+        row = self.kept.role_run(admitted.id)
+        self.assertEqual({"rules", "manifest", "brief", "skills"}, set(row["locked"]))
+        role_runs.verified("elena", row, self.where)
+
     def test_editing_the_shared_role_afterwards_leaves_this_run_alone(self):
         admitted = self.admit()
         self.wrote(rules="# Different\n\nDo something else entirely.\n")
@@ -205,6 +219,129 @@ class WhatARunIsAdmittedWith(WithAnAgentThatCanDelegate):
         self.assertEqual(RULES, at["rules"].read_text(encoding="utf-8"))
         row = self.kept.role_run(admitted.id)
         self.assertEqual(RULES, role_runs.verified("elena", row, self.where)["rules"])
+
+
+class WhichBrainARunIsAdmittedOn(WithAnAgentThatCanDelegate):
+    """R-ROL-33, R-ROL-34, R-ROL-35 — resolved once, recorded, and refused early.
+
+    The parent turn in every case here is running on `codex`, which is what a role naming
+    nothing inherits — so each case that names something is naming something else.
+    """
+
+    def test_a_role_that_names_a_brain_runs_on_it_whatever_the_parent_is_on(self):
+        self.wrote(provider="claude")
+        admitted = self.admit()
+        self.assertEqual("claude", admitted.provider)
+        self.assertEqual("claude", self.kept.role_run(admitted.id)["provider"])
+        carry, _ = self.carried(admitted)
+        self.assertEqual("claude", carry.given["provider"])
+
+    def test_a_role_that_names_neither_runs_on_what_the_parent_turn_resolved(self):
+        admitted = self.admit()
+        self.assertEqual("codex", admitted.provider)
+        carry, _ = self.carried(admitted)
+        self.assertEqual("codex", carry.given["provider"])
+
+    def test_the_flag_beats_the_role(self):
+        self.wrote(provider="claude", model="its-own")
+        admitted = self.admit(named="grok", model="asked-for")
+        self.assertEqual(("grok", "asked-for"), (admitted.provider, admitted.model))
+        carry, _ = self.carried(admitted)
+        self.assertEqual(("grok", "asked-for"),
+                         (carry.given["provider"], carry.given["model"]))
+
+    def test_the_role_beats_the_parent_turn(self):
+        self.wrote(provider="claude", model="its-own")
+        admitted = self.admit()
+        self.assertEqual(("claude", "its-own"), (admitted.provider, admitted.model))
+
+    def test_the_parent_turn_beats_the_agents_own_default(self):
+        agent.remember("elena", self.where, provider="grok", replace_brain=True)
+        admitted = self.admit()
+        self.assertEqual("codex", admitted.provider)
+
+    def test_the_agents_own_default_answers_where_the_parent_turn_did_not(self):
+        where_it_is = store.conversation_id("discord", "general")
+        quiet = self.kept.began("channel", "", "work", AT,
+                                conversation_id=where_it_is)
+        admitted = role_runs.admit("elena", "development", BRIEF, quiet,
+                                      where=self.where, library=self.library)
+        self.assertEqual("codex", admitted.provider)
+
+    def test_a_model_of_another_brains_never_crosses_to_the_one_named(self):
+        """The parent turn's model belongs to the parent turn's brain. Carried across, it
+        is a turn that fails on a name the owner never typed."""
+        agent.remember("elena", self.where, provider="codex", model="gpt-5-codex")
+        self.wrote(provider="claude")
+        admitted = self.admit()
+        self.assertEqual(("claude", ""), (admitted.provider, admitted.model))
+        carry, _ = self.carried(admitted)
+        self.assertIsNone(carry.given["model"])
+        self.assertIsNone(carry.given["settings"])
+
+    def test_a_run_staying_on_the_inherited_brain_keeps_what_that_brain_was_given(self):
+        agent.remember("elena", self.where, provider="codex", model="gpt-5-codex",
+                       settings={"reasoning": "high"})
+        admitted = self.admit()
+        self.assertEqual(("codex", "gpt-5-codex"), (admitted.provider, admitted.model))
+        carry, _ = self.carried(admitted)
+        self.assertEqual({"reasoning": "high"}, carry.given["settings"])
+
+    def test_a_brain_this_agent_has_not_got_is_refused_at_admission(self):
+        """R-ROL-35 — naming both, because neither alone is the fix."""
+        self.wrote(provider="reading-minds")
+        with self.assertRaises(role_runs.NotDelegable) as refused:
+            self.admit()
+        self.assertIn("reading-minds", str(refused.exception))
+        self.assertIn("elena", str(refused.exception))
+        self.assertEqual([], self.kept.role_runs())
+        self.assertFalse(role_runs.home("elena", self.where).is_dir())
+
+    def test_an_agent_with_no_brain_at_all_is_refused_at_admission(self):
+        agent.remember("elena", self.where, provider="", replace_brain=True)
+        where_it_is = store.conversation_id("discord", "general")
+        quiet = self.kept.began("channel", "", "work", AT,
+                                conversation_id=where_it_is)
+        with self.assertRaises(role_runs.NotDelegable) as refused:
+            role_runs.admit("elena", "development", BRIEF, quiet,
+                               where=self.where, library=self.library)
+        self.assertIn("elena", str(refused.exception))
+        self.assertEqual([], self.kept.role_runs())
+
+    def test_which_brain_it_runs_on_is_asked_of_the_machine_it_would_run_on(self):
+        """The seam enumerates nothing, so what is checked is that the program is there.
+        Passed in, so a role naming a brain this checkout does not ship is still testable."""
+        asked = []
+        admitted = self.admit(named="/opt/my-brain", runnable=asked.append)
+        self.assertEqual(["/opt/my-brain"], asked)
+        self.assertEqual("/opt/my-brain", admitted.provider)
+
+    def test_a_role_edited_after_admission_does_not_move_the_brain_it_started_on(self):
+        """R-ROL-34 — and a resumption carries a provider session that is one brain's."""
+        admitted = self.admit()
+        self.carried(admitted)
+        self.wrote(provider="claude")
+        role_runs.resume("elena", admitted.id, "one more thing", self.where)
+        carry, _ = self.carried(admitted)
+        self.assertEqual("codex", carry.given["provider"])
+
+    def test_a_run_admitted_before_a_run_recorded_its_brain_is_carried_as_it_was(self):
+        """Nothing is back-filled. A row with no brain on it is one an older release
+        admitted, and it means what it meant then: whatever the parent turn resolved,
+        read again when the run is picked up."""
+        self.assertEqual(
+            ("codex", "gpt-5-codex", {"reasoning": "high"}),
+            role_runs.carried_with(
+                {}, {"provider": "codex", "model": "gpt-5-codex",
+                     "settings": {"reasoning": "high"}}, {}))
+
+    def test_a_run_recorded_on_another_brain_is_given_none_of_the_parents(self):
+        self.assertEqual(
+            ("claude", None, None),
+            role_runs.carried_with(
+                {"provider": "claude"},
+                {"provider": "codex", "model": "gpt-5-codex",
+                 "settings": {"reasoning": "high"}}, {}))
 
 
 class OneRoleLevelAndNoMore(WithAnAgentThatCanDelegate):
@@ -560,15 +697,23 @@ class WhenCarryingGoesWrong(WithAnAgentThatCanDelegate):
             asyncio.run(playing.carry(run_id))
 
     def test_a_brain_that_is_no_longer_there_ends_the_run_and_owes_a_review(self):
-        """A role run carries on with the brain its parent turn resolved. One that has
-        since been removed from the machine raises before anything is started — and the
-        run must not be left `working` for a gateway to pick up again for ever."""
+        """A role run is carried on the brain recorded when it was admitted. One taken
+        off the machine since then raises before anything is started — and the run must
+        not be left `working` for a gateway to pick up again for ever.
+
+        Taken away *after* admission deliberately: admission itself refuses a brain this
+        machine has not got (R-ROL-35), so the fault this ceiling exists for is the one
+        that happens between being admitted and being carried."""
         where_it_is = store.conversation_id("discord", "general")
-        gone = self.kept.began("channel", str(self.where / "no-such-brain"), "work", AT,
+        brain = self.where / "no-such-brain"
+        brain.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        os.chmod(brain, 0o755)
+        gone = self.kept.began("channel", str(brain), "work", AT,
                                conversation_id=where_it_is)
         admitted = role_runs.admit("elena", "development", BRIEF, gone,
                                       target=str(self.target), where=self.where,
                                       library=self.library)
+        brain.unlink()
         # The real turn, deliberately: it raises `NotRunnable` before it starts anything,
         # so this reaches no provider and no network.
         self.to_the_ceiling(agent.playing("elena", self.where), admitted.id)
@@ -930,6 +1075,19 @@ class SayingSomethingToWorkInFlight(WithAnAgentThatCanDelegate):
         self.assertIn("cannot be sent to while it works", str(refused.exception))
         self.assertEqual(0, self.kept.words_waiting(admitted.id))
 
+    def test_the_refusal_names_the_brain_that_cannot_be_sent_to(self):
+        """R-ROL-34 — now that a role may pin one, "this cannot be steered" is a property
+        of the role, and an owner needs to know which brain to stop pinning."""
+        admitted = self.admit(named="grok")
+        where_it_is = store.conversation_id(turn.ROLE, admitted.id)
+        self.kept.opened(where_it_is, turn.ROLE, turn.ROLE, admitted.id, AT)
+        self.kept.began("role", "grok", "work", AT, conversation_id=where_it_is,
+                        can={"steer": False}, role_run=admitted.id)
+        self.kept.role_working(admitted.id, AT, role_runs.retained_until())
+        with self.assertRaises(role_runs.NotDelegable) as refused:
+            role_runs.say("elena", admitted.id, "also quote every field")
+        self.assertIn("grok", str(refused.exception))
+
     def test_a_brain_that_can_be_sent_to_takes_it(self):
         admitted = self.admit()
         where_it_is = store.conversation_id(turn.ROLE, admitted.id)
@@ -1119,6 +1277,27 @@ class WhatAPersonIsShown(WithAnAgentThatCanDelegate):
         shown = role_runs.shown(self.kept.role_run(admitted.id))
         self.assertEqual(admitted.revision[:12], shown["revision"])
         self.assertEqual(["writing-plans"], shown["skills"])
+
+    def test_a_listing_says_which_brain_a_run_actually_used(self):
+        """R-ROL-34 — the run's own answer, which nothing else can give: the role may
+        have been edited and the agent reconfigured since it was admitted."""
+        admitted = self.admit(named="claude", model="its-own")
+        self.wrote(provider="grok")
+        agent.remember("elena", self.where, provider="grok", replace_brain=True)
+        shown = role_runs.shown(self.kept.role_run(admitted.id))
+        self.assertEqual(("claude", "its-own"), (shown["provider"], shown["model"]))
+
+    def test_which_brain_a_run_used_is_never_a_local_path(self):
+        """A brain may be a program somebody wrote, and its path is that person's."""
+        admitted = self.admit(named=str(self.target / "my-brain"), runnable=lambda one: None)
+        shown = role_runs.shown(self.kept.role_run(admitted.id))
+        self.assertNotIn(str(self.target), json.dumps(shown))
+        self.assertTrue(shown["provider"].startswith("my-brain-"))
+
+    def test_a_run_admitted_before_a_brain_was_recorded_shows_none(self):
+        self.assertEqual("", role_runs.shown(
+            {"id": "rol-1-aaaa", "role": "development", "label": "x", "parent_run": "1-a",
+             "state": store.ADMITTED})["provider"])
 
 
 if __name__ == "__main__":

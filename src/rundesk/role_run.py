@@ -24,11 +24,16 @@ The layout is:
     │   └── workspace/     non-project artifacts only
     ├── skills/            the locked copy of the complete configured set
     ├── brief.md           the bounded task the parent handed over
-    └── role.json       the locked three-field manifest
+    └── role.json       the locked manifest
 
 Nothing mutable lives in it. Where the run got to, how long it stays resumable, which
 provider session carries it and whether its parent has been told are all rows, because
 those change while the locked bytes must not.
+
+**Which brain carries it is settled at admission and recorded** (R-ROL-34), rather than
+resolved again by whatever picks the run up. A run has to be able to say afterwards what
+it actually ran on; a role edited in between must not change that answer; and a resumption
+carries on a provider session that belongs to one brain and cannot be moved to another.
 """
 
 from __future__ import annotations
@@ -86,6 +91,11 @@ class Admitted:
     revision: str
     skills: tuple
     posture: str
+    #: The brain this run was admitted to run on, and the model on it. Resolved once, from
+    #: the flag, the role and the parent turn in that order, and recorded — so every turn
+    #: of this run reaches the same brain however long afterwards it is carried on.
+    provider: str
+    model: str
     parent_run: str
     parent_conversation: str
     target: str | None
@@ -187,6 +197,34 @@ def narrowed(parent: str | None, wanted: str) -> str:
     return provider.WORK
 
 
+def brain(asked: str | None, asked_model: str | None, wanted, parent: dict,
+          chose: dict) -> tuple:
+    """Which brain this run is admitted to run on, and the model on it.
+
+    **Most specific first** (R-ROL-34): what the parent asked for on this one run, then
+    what the role says every run of it uses, then whatever the parent turn itself resolved
+    — the agent's own default being the last of those, exactly as it is for an ordinary
+    turn. A role that names neither resolves to what it resolved before this field
+    existed, which is what makes every installed role keep working untouched.
+
+    **What belongs to one brain never crosses to another.** A model and a set of provider
+    settings are a particular brain's, so where a role or a flag moves this run off the
+    brain the parent turn was on, neither comes with it: a codex model handed to claude is
+    a turn that fails on a name the owner never typed. Where the brain is the inherited
+    one, the whole chain is exactly today's.
+
+    Settings are not settled here: they are how this agent is configured for that brain
+    now rather than part of what the run was admitted with, so `carried_with` reads them
+    when the run is carried.
+    """
+    inherited = parent.get("provider") or chose.get("provider") or ""
+    named = str(asked or "").strip() or wanted.provider or inherited
+    model = str(asked_model or "").strip() or wanted.model
+    if named == inherited:
+        model = model or parent.get("model") or chose.get("model") or ""
+    return named, model
+
+
 def safe_label(said: str | None, fallback: str) -> str:
     """A short task label safe to show where other people are reading (R-ROL-17).
 
@@ -202,13 +240,20 @@ def safe_label(said: str | None, fallback: str) -> str:
 def admit(name: str, slug: str, brief: str, parent_run: str,
           target: str | None = None, label: str | None = None,
           where: Path | None = None, library: dict | None = None,
-          now=None, pick=None) -> Admitted:
+          now=None, pick=None, named: str | None = None, model: str | None = None,
+          runnable=None) -> Admitted:
     """Admit one role run for this agent, and seal everything it will run with.
 
     The order is the whole of the safety here. Everything refusable is refused first and
     costs nothing; the durable record is written next, so a gateway that died a moment
     later still owes this parent a review rather than losing the request; the bundle is
     assembled last and atomically, so a run is either completely locked or is not there.
+
+    `named` and `model` are this one run's brain, beating the role's own (R-ROL-34).
+    `runnable` is asked whether this machine has the brain that was resolved, and is passed
+    in rather than imported for the reason every other collaborator here is: what is being
+    asked is a question about the machine, and a decision that reached for it itself could
+    not be exercised against a machine that has a different one.
     """
     if not str(brief or "").strip():
         raise NotDelegable("a role run needs a task brief, and none was given")
@@ -225,6 +270,8 @@ def admit(name: str, slug: str, brief: str, parent_run: str,
     kept = agents.records(name, where)
     parent, owed_to = _parent(kept, parent_run)
     posture = narrowed(parent.get("posture"), wanted.posture)
+    on, model_named = brain(named, model, wanted, parent, kept.agent())
+    _has_a_brain(name, on, runnable)
     at = store.stamped(now)
     until = retained_until(now)
     named_label = safe_label(label, wanted.label)
@@ -232,7 +279,8 @@ def admit(name: str, slug: str, brief: str, parent_run: str,
         run_id = kept.admit_role(
             wanted.slug, wanted.revision, list(wanted.skills),
             _locks(wanted, brief, posture, library), named_label, posture,
-            parent_run, owed_to, stands, at, until, pick=pick,
+            parent_run, owed_to, stands, at, until,
+            provider=on, model=model_named, pick=pick,
         )
     except store.Refused as why:
         raise NotDelegable(str(why)) from None
@@ -240,9 +288,35 @@ def admit(name: str, slug: str, brief: str, parent_run: str,
     return Admitted(
         id=run_id, role=wanted.slug, label=named_label,
         revision=wanted.revision, skills=wanted.skills, posture=posture,
+        provider=on, model=model_named,
         parent_run=parent_run, parent_conversation=owed_to,
         target=stands, retained_until=until,
     )
+
+
+def _has_a_brain(name: str, on: str, runnable=None) -> None:
+    """Prove this machine has the brain this run resolved, before anything is written.
+
+    **At admission and never mid-carry** (R-ROL-35). A role pinned to a brain this install
+    has not got is knowable from the manifest and the machine, and a run admitted on it
+    costs an owner an assembled bundle, a gateway attempt and a handoff saying Rundesk
+    could not carry the work — six seconds later, for something answerable up front.
+
+    The refusal names the brain *and* the agent, because neither alone is the fix: which
+    brain was asked for is in the role or the flag, and which agent has not got it is what
+    decides whether the answer is to install one or to hand the work somewhere else.
+    """
+    if not on:
+        raise NotDelegable(
+            f"nothing says which brain answers for '{name}', so there is none to run this "
+            f"with — rundesk configure {name} --provider <provider>"
+        )
+    try:
+        (runnable or provider.program)(on)
+    except provider.NotRunnable as why:
+        raise NotDelegable(
+            f"'{name}' has no brain called '{on}' to run this with: {why}"
+        ) from None
 
 
 def _locks(wanted, brief: str, posture: str, library: dict | None) -> dict:
@@ -493,9 +567,13 @@ def say(name: str, run_id: str, said: str, where: Path | None = None, now=None) 
         # a word accepted for one that cannot is a word that sits unread while the command
         # that took it reported success. Stopping it, or waiting and resuming it, are the
         # two things that do work.
+        #
+        # **Which brain, by name.** Now that a role may pin one, "cannot be steered" is a
+        # property of the role rather than of whichever brain the parent happened to be on
+        # — and an owner reading this needs to know which one to stop pinning.
         raise NotDelegable(
-            f"the brain carrying '{run_id}' cannot be sent to while it works — stop it, "
-            "or wait for it and resume it with what you wanted to say"
+            f"{_which_brain(kept, run_id)} cannot be sent to while it works — stop "
+            "it, or wait for it and resume it with what you wanted to say"
         )
     try:
         kept.say_to_role(run_id, said, store.stamped(now))
@@ -545,6 +623,25 @@ def resume(name: str, run_id: str, more: str, where: Path | None = None, now=Non
     if not kept.resume_role(run_id, at, retained_until(now)):
         raise NotDelegable(f"'{run_id}' could not be carried on")
     return run_id
+
+
+def _which_brain(kept, run_id: str) -> str:
+    """The brain carrying this run, as a refusal names it.
+
+    **Read off the turn actually carrying it**, which is the same row that answered
+    whether it may be sent to at all: two rows would eventually name one brain and
+    describe another's. A run nothing has started has no answer here and never reaches
+    this — what is said to one is folded into what it is asked when it starts — and the
+    sentence still reads without one, because a refusal saying `'' cannot be sent to`
+    would be worse than one that named nothing.
+
+    Never the raw name (R-ROL-17): a brain may be a path to a program somebody wrote, and
+    this sentence is read wherever the agent is reached.
+    """
+    carried = kept.runs(role_run=run_id, limit=1)
+    named = (carried[0].get("provider") or "") if carried else ""
+    return f"{provider.label(named)}, the brain carrying '{run_id}'," if named else (
+        f"the brain carrying '{run_id}'")
 
 
 def _can_be_sent_to(kept, run_id: str) -> bool:
@@ -598,7 +695,7 @@ async def carry(name: str, run_id: str, where: Path | None = None, carrying=None
     bundled = paths(name, run_id, where)
     parent = kept.run(row["parent_run"]) or {}
     chose = kept.agent()
-    named = parent.get("provider") or chose.get("provider") or ""
+    named, model, settings = carried_with(row, parent, chose)
     if not named:
         raise NotDelegable(f"'{name}' has no brain to run '{run_id}' with")
     at = store.stamped(now)
@@ -606,8 +703,8 @@ async def carry(name: str, run_id: str, where: Path | None = None, carrying=None
     outcome = await (carrying or turn.carry)(
         name, _prompt(kept, row, it), named,
         where=where,
-        model=parent.get("model") or chose.get("model"),
-        settings=parent.get("settings") or chose.get("settings"),
+        model=model,
+        settings=settings,
         posture=row["posture"],
         conversation=run_id,
         on=turn.ROLE,
@@ -637,6 +734,32 @@ async def carry(name: str, run_id: str, where: Path | None = None, carrying=None
     unpresent(row.get("target"), bundled["skills"])
     settle(name, run_id, outcome, where=where, now=now)
     return outcome
+
+
+def carried_with(row: dict, parent: dict, chose: dict) -> tuple:
+    """The brain this turn of the run reaches, the model on it, and how it is configured.
+
+    **Read back, never resolved again** (R-ROL-34). The run recorded which brain it was
+    admitted on, and every turn of it — the first, and a resumption a fortnight later —
+    goes to that one: the provider session a resumption carries on belongs to that brain
+    and cannot be moved to another, and a role edited in between must not change what a
+    run that has already started is running on.
+
+    Settings are the exception and deliberately: they are how this agent is configured for
+    that brain *now*, not part of what the run was admitted with, so they are read here.
+    They belong to one brain, so a run moved off the brain the parent turn was on is given
+    none of them rather than another brain's.
+
+    A run admitted before a run recorded its own brain has none, and NULL means what it
+    meant then: carry it on whatever the parent turn resolved.
+    """
+    inherited = parent.get("provider") or chose.get("provider") or ""
+    settings = parent.get("settings") or chose.get("settings")
+    if not row.get("provider"):
+        return (inherited, parent.get("model") or chose.get("model"), settings)
+    named = row["provider"]
+    return (named, row.get("model") or None,
+            settings if named == inherited else None)
 
 
 #: What a resumed execution is asked when its parent moved it back into hand and said
@@ -1000,6 +1123,12 @@ def shown(row: dict, now=None) -> dict:
         "outcome": row.get("outcome") or "",
         "skills": list(row.get("skills") or []),
         "posture": row.get("posture") or provider.WORK,
+        # Which brain this run actually ran on, as a person may safely read it: a brain
+        # may be the path of a program somebody wrote, and a listing is read where other
+        # people can see it (R-ROL-17). Empty for a run admitted before one was recorded,
+        # which is the truth about it — nothing wrote down what it ran on.
+        "provider": provider.label(row["provider"]) if row.get("provider") else "",
+        "model": row.get("model") or "",
         "reviewed": bool(row.get("reviewed_at")),
         "retained_until": row.get("retained_until") or "",
         "elapsed": int(max(0, (now or time.time)() - began.timestamp())) if began else 0,
