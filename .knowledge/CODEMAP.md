@@ -47,7 +47,7 @@ holds the read, the decision and the write under one `flock`. Those are what rem
 [`guides/moving-onto-the-store.md`](guides/moving-onto-the-store.md)); each one that goes takes its lock
 file with it.
 
-## Backend / Services (src/rundesk/ — 34 modules)
+## Backend / Services (src/rundesk/ — 35 modules)
 
 - `src/rundesk/cli.py` — the command surface: every verb the finished product will have, registered
   from the outset. What the gateway verbs act on is passed in rather than imported, so the surface knows
@@ -105,6 +105,13 @@ file with it.
   about one run: **who may be answered**, checked against the record the owner wrote rather than trusted to
   an adapter, and **what state a turn is in**. Writes nothing down — the run's own account already records
   it, and a channel that kept a second copy would become the only place something existed.
+- `src/rundesk/query.py` — the read-only answers a channel may ask for, composed for a surface to
+  show: status, version, agents, skills, schedules, roles, help, and nothing that changes anything
+  (R-CAD-17). Apart from `agent.py` because composing what somebody reads in a chat room is not what
+  that module is for — its subject is a named identity, and none of `gateway`, `schedule`, `store`
+  or `role_run` is needed to resolve one. It imports `agent`, so `agent` imports **it** lazily, from
+  inside `_answering` where the `querying=` seam is built; a module-level import either way closes a
+  cycle. Written for a narrow surface throughout: what is over gives way to what is happening.
 - `src/rundesk/attachment.py` — what an answer declares for delivery, and whether it may be sent.
   A brain writes an absolute local Markdown link to mean "send this" (R-CH-31); this reads those out
   of what it wrote and decides, separately, whether one may leave the machine — that it stands where

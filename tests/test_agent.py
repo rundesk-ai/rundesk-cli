@@ -28,7 +28,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from rundesk import agent, config, gateway, skill, store, updater  # noqa: E402
+from rundesk import agent, config, gateway, query, skill, store, updater  # noqa: E402
 from rundesk import role_run as role_runs  # noqa: E402
 
 
@@ -1367,7 +1367,7 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
 
     def test_status_names_the_agent_and_its_gateway_state(self):
         self.made()
-        said = agent._queried("ava", "status", self.where)
+        said = query.answered("ava", "status", self.where)
         self.assertIn("ava: STOPPED", said)
         self.assertIn("active turns: 0", said)
 
@@ -1377,19 +1377,19 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
         package = install / "src" / "rundesk"
         package.mkdir(parents=True)
         (package / "__init__.py").write_text('__version__ = "8.7.6"\n')
-        original = agent.ROOT
-        agent.ROOT = install
+        original = query.ROOT
+        query.ROOT = install
         try:
-            said = agent._queried("ava", "version", self.where)
+            said = query.answered("ava", "version", self.where)
         finally:
-            agent.ROOT = original
+            query.ROOT = original
         self.assertIn("Rundesk installed: 8.7.6", said)
         self.assertIn("ava gateway: not running", said)
 
     def test_agents_lists_every_configured_agent_in_name_order(self):
         self.made("zebra")
         self.made("ava")
-        said = agent._queried("ava", "agents", self.where).splitlines()
+        said = query.answered("ava", "agents", self.where).splitlines()
         self.assertEqual(["ava: STOPPED (-)", "zebra: STOPPED (-)"], said)
 
     def test_skills_lists_only_this_agents_grants_as_sorted_bullets(self):
@@ -1409,7 +1409,7 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
         skill.grant(agent.skills("ava", self.where), "alpha", library)
         skill.grant(agent.skills("zebra", self.where), "only-zebra", library)
 
-        said = agent._queried("ava", "skills", self.where).splitlines()
+        said = query.answered("ava", "skills", self.where).splitlines()
 
         self.assertEqual(["- alpha", "- zulu"], said)
 
@@ -1417,7 +1417,7 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
         """R-DIS-36 — an empty answer is not an unexplained blank interaction."""
         self.made()
         self.assertEqual("No skills granted.",
-                         agent._queried("ava", "skills", self.where))
+                         query.answered("ava", "skills", self.where))
 
     def test_schedules_lists_what_can_still_run_as_bullets_soonest_first(self):
         """R-DIS-37 — the question is what is coming, so what is coming first is read
@@ -1433,7 +1433,7 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
         kept.remember_schedule("paused", "0 4 * * *", store.stamped(),
                                command=["/bin/echo", "hi"], enabled=False)
 
-        said = agent._query_schedules(
+        said = query._query_schedules(
             "ava", datetime(2026, 8, 1, 12, 0), self.where).splitlines()
 
         self.assertEqual([
@@ -1453,7 +1453,7 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
         kept.remember_schedule("waiting", "0 3 * * *", store.stamped(),
                                command=["/bin/echo", "hi"])
 
-        said = agent._query_schedules(
+        said = query._query_schedules(
             "ava", datetime(2026, 8, 1, 12, 0), self.where).splitlines()
 
         self.assertEqual(["- 2026-08-02 03:00 — waiting"], said)
@@ -1463,14 +1463,14 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
         having scheduled anything is a different answer from having nothing left."""
         self.made()
         self.assertEqual("No schedules.",
-                         agent._queried("ava", "schedules", self.where))
+                         query.answered("ava", "schedules", self.where))
 
         agent.records("ava", self.where).remember_schedule(
             "over", created_at=store.stamped(), at="2026-07-01T09:00",
             command=["/bin/echo", "hi"])
         self.assertEqual(
             "No schedules that can still run.",
-            agent._query_schedules("ava", datetime(2026, 8, 1, 12, 0), self.where))
+            query._query_schedules("ava", datetime(2026, 8, 1, 12, 0), self.where))
 
     def test_schedules_names_a_schedule_nobody_could_understand(self):
         """R-DIS-37, R-SCH-10 — one that cannot be read looks exactly like one that was
@@ -1482,7 +1482,7 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
         kept.remember_schedule("waiting", "0 3 * * *", store.stamped(),
                                command=["/bin/echo", "hi"])
 
-        said = agent._query_schedules(
+        said = query._query_schedules(
             "ava", datetime(2026, 8, 1, 12, 0), self.where).splitlines()
 
         self.assertEqual(["- 2026-08-02 03:00 — waiting",
@@ -1491,12 +1491,12 @@ class WhatAChannelMayInspect(WithSomewhereToKeepAgents):
         kept.forget_schedule("waiting")
         self.assertEqual(
             "could not be understood: gibberish",
-            agent._query_schedules("ava", datetime(2026, 8, 1, 12, 0), self.where),
+            query._query_schedules("ava", datetime(2026, 8, 1, 12, 0), self.where),
             "an agent whose only schedule cannot be read was told it has none")
 
     def test_help_names_read_only_conversation_and_agent_commands(self):
         self.made()
-        said = agent._queried("ava", "help", self.where)
+        said = query.answered("ava", "help", self.where)
         self.assertIn("status, version, agents, skills, schedules, roles, help", said)
         self.assertIn("stop, forget", said)
         self.assertIn("restart", said)
@@ -1625,12 +1625,12 @@ class WhatItHasHandedToARole(HasARoleRun):
     def test_nothing_handed_on_says_so_rather_than_answering_with_nothing(self):
         self.made("ava")
         self.assertEqual("nothing handed to a role right now",
-                         agent._queried("ava", "roles", self.where))
+                         query.answered("ava", "roles", self.where))
 
     def test_work_in_flight_says_the_role_the_task_and_how_long(self):
         self.made("ava")
         self.a_run(store.WORKING, label="applicant export", target="/private/tmp/exporter")
-        said = agent._queried("ava", "roles", self.where)
+        said = query.answered("ava", "roles", self.where)
         self.assertIn("development", said)
         self.assertIn("applicant export", said)
         self.assertIn("working", said)
@@ -1640,7 +1640,7 @@ class WhatItHasHandedToARole(HasARoleRun):
         """R-ROL-17 — this is answered into a room."""
         self.made("ava")
         self.a_run(store.WORKING, target="/private/tmp/somebodys-secret/exporter")
-        said = agent._queried("ava", "roles", self.where)
+        said = query.answered("ava", "roles", self.where)
         self.assertNotIn("/private/tmp", said)
         self.assertNotIn("somebodys-secret", said)
 
@@ -1650,15 +1650,15 @@ class WhatItHasHandedToARole(HasARoleRun):
         kept, run = self.a_run(store.WORKING)
         kept.finish_role(run, "2026-08-01T10:00:00Z", store.SUCCEEDED, "done",
                          "2026-08-15T09:00:00Z")
-        self.assertIn("awaiting review", agent._queried("ava", "roles", self.where))
+        self.assertIn("awaiting review", query.answered("ava", "roles", self.where))
         kept.role_reviewed(run, "2026-08-01T10:05:00Z")
         self.assertEqual("nothing handed to a role right now",
-                         agent._queried("ava", "roles", self.where))
+                         query.answered("ava", "roles", self.where))
 
     def test_how_long_reads_in_the_largest_unit_that_is_not_a_lie(self):
-        self.assertEqual("45s", agent._for_how_long(45))
-        self.assertEqual("3m", agent._for_how_long(200))
-        self.assertEqual("2h05m", agent._for_how_long(7500))
+        self.assertEqual("45s", query._for_how_long(45))
+        self.assertEqual("3m", query._for_how_long(200))
+        self.assertEqual("2h05m", query._for_how_long(7500))
 
 
 class WhereARoleRunIsShown(HasARoleRun):
