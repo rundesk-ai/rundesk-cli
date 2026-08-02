@@ -1288,11 +1288,14 @@ def _queried(name: str, asked: str, where: Path | None = None) -> str:
             if standing.running else {}
         turning = gateway.what_is_turning(name, resolved(name, where).run)
         uptime = _query_uptime(standing.started) if standing.running else "-"
+        # "?" where the record could not be read: this is answered into a chat room, and a
+        # number somebody acts on has to be one we actually know.
+        processes = "?" if gateway.could_not_be_read(working) else len(working)
         return (
             f"{name}: {state}\n"
             f"version: {standing.version or '-'}\n"
             f"uptime: {uptime}\n"
-            f"processes: {len(working)}\n"
+            f"processes: {processes}\n"
             f"active turns: {len(turning)}"
         )
     if asked == "agents":

@@ -670,6 +670,12 @@ class FakeGateways:
         self.asked_where.append(where)
         return list(self._turning.get(name, []))
 
+    def could_not_be_read(self, working):
+        """The real predicate rather than a second opinion. A stand-in that decided this
+        for itself would agree with a caller here and disagree with the module it stands
+        for, which is how a surface passes its suite and reports a count it cannot know."""
+        return real_gateway.could_not_be_read(working)
+
     @contextlib.contextmanager
     def holding(self, name, where=None):
         """Stand in for the kernel lock around a stopped-only mutation."""
@@ -2023,6 +2029,29 @@ class StandingGatewaysDown(unittest.TestCase):
         self.assertIn("automatically after active work finishes", said)
         self.assertIn(("install_restart_worker", None), machine.did)
         self.assertNotIn(("stop", name), machine.did)
+
+    def test_a_restart_is_refused_while_a_gateways_record_cannot_be_read(self):
+        """R-UPD-23 — a record nobody can read is exactly when stopping is unsafe, and it
+        used to read as "nothing is running". Proves the marker reaches the *decision* and
+        not only the display: what the reader answers has to survive all the way to here,
+        or the fix is a nicer-looking table in front of the same outage."""
+        name = "unreadable-agent"
+        self.addCleanup(restart_request.path(name).unlink, missing_ok=True)
+        self.addCleanup(
+            restart_request.path(name).with_suffix(".lock").unlink, missing_ok=True)
+        machine = FakeMachine(jobs=[name])
+        gateways = FakeGateways(
+            standing=[FakeGateways.Standing(name, running=True, pid=9)],
+            working={name: [real_gateway.CANNOT_BE_READ]},
+        )
+        with mock.patch.dict(os.environ, {"RUNDESK_RUN": ""}, clear=False):
+            code, said = drive(
+                ["restart", name], gateways, machine, agents=FakeAgents(made=[name])
+            )
+        self.assertEqual(0, code)
+        self.assertIn("RESTART QUEUED", said)
+        self.assertNotIn(("stop", name), machine.did,
+                         "it stopped a gateway whose record it could not read")
 
     def test_force_restarts_a_busy_gateway_immediately(self):
         """R-GW-43"""

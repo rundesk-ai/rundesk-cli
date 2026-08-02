@@ -2778,6 +2778,41 @@ class WhatCannotBeReadIsNotEmpty(WithARunDirectory):
         self.assertEqual([], swept, "it claimed to have swept a record it could not read")
         self.assertTrue(record.exists(), "it deleted the only record naming abandoned work")
 
+    #: A record that is there and holds nothing anything can parse — a truncated write, or a
+    #: volume that stalled mid-flush. Not a missing record, which is a gateway that has
+    #: simply not written one yet.
+    def garbled_record_for(self, name: str = "gateway") -> Path:
+        target = self.where / f"{name}.json"
+        target.write_text('{"working": {"a-turn": {"pgid": 4242,,}}}')
+        return target
+
+    def test_a_record_that_cannot_be_read_is_not_reported_as_a_gateway_doing_nothing(self):
+        """R-UPD-23 — five callers decide on this answer: a queued restart and an
+        interactive one stop the gateway, an update replaces this install, and a restore
+        swaps the owner's whole data tree. `read_json` cannot tell a record nobody wrote
+        from one nobody could read, so an unreadable one answered "idle" and every one of
+        those went ahead while work was genuinely in flight."""
+        self.garbled_record_for()
+        doing = gateway.what_is_working("gateway", self.where)
+        self.assertNotEqual({}, doing, "an unreadable record was reported as an idle gateway")
+        self.assertTrue(gateway.could_not_be_read(doing),
+                        "it answered something, but not that it could not tell")
+
+    def test_a_record_that_cannot_be_read_is_not_reported_as_nothing_running(self):
+        """The same answer through the other reader, because `_in_flight` reaches both."""
+        self.garbled_record_for()
+        self.assertTrue(
+            gateway.could_not_be_read(gateway.what_is_running("gateway", self.where)))
+
+    def test_a_gateway_that_has_written_no_record_is_still_a_gateway_doing_nothing(self):
+        """The other half, and the one that keeps the fix from swallowing the product: a
+        record nobody has written yet is an idle gateway, not an unreadable one. Answering
+        "I could not tell" here would refuse every update on a machine that is perfectly
+        healthy — the same outage as the defect, arrived at from the other side."""
+        self.assertEqual({}, gateway.what_is_working("never-wrote-one", self.where))
+        self.assertFalse(gateway.could_not_be_read(
+            gateway.what_is_running("never-wrote-one", self.where)))
+
 
 class WhatAGatewaySaysAndWhereItLands(WithARunDirectory):
     """R-GW-35, R-GW-36 — one bounded account of a gateway, and all of it readable.

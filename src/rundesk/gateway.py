@@ -744,6 +744,26 @@ def standing(name: str = DEFAULT_NAME, where: Path | None = None) -> Standing:
     )
 
 
+#: What the two readers below answer with when the record is there and could not be read.
+#: **Named rather than left empty**, because `read_json` cannot tell "no record" from "a
+#: record nobody could read" and five callers *decide* on that answer: a queued restart and
+#: an interactive one stop the gateway, an update replaces this install, and a restore swaps
+#: the owner's whole data tree (R-UPD-23). Every one of them treats a non-empty answer as
+#: "refuse", so saying this is what makes an unreadable record safe. `_anything_left` below
+#: has taken the same position since work could be interrupted at all.
+CANNOT_BE_READ = "(the record could not be read)"
+
+
+def could_not_be_read(working) -> bool:
+    """Is this answer a record nobody could read, rather than a gateway doing nothing?
+
+    Asked where a count is about to be printed. A caller that renders `len()` would
+    otherwise report one process that may not exist, which is the same untruth the empty
+    answer was — just the other way up.
+    """
+    return CANNOT_BE_READ in (working or ())
+
+
 def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list[str]:
     """What this gateway says it has in flight, by the name each was started under.
 
@@ -752,17 +772,29 @@ def what_is_running(name: str = DEFAULT_NAME, where: Path | None = None) -> list
     """
     # Built first: a name that is not usable is a mistake to report, and `NotAName` is a
     # kind of ValueError, so a reader that swallowed one would swallow the other.
-    record = _record_path(name, where or home())
-    said = read_json(record, None)
+    where = where or home()
+    record = _record_path(name, where)
+    state, said = read(record)
+    # Resolved once, above: this used to be handed the caller's unresolved `where`, and
+    # `activity.active(None)` answers `[]` — so asking the ordinary way reported no turns
+    # however many were running.
+    turns = [f"turn:{row['run']}" for row in activity.active(where)]
+    if state == UNREADABLE:
+        return [CANNOT_BE_READ, *turns]
     working = said.get("working") if isinstance(said, dict) else None
     programs = sorted(working) if isinstance(working, dict) else []
-    turns = [f"turn:{row['run']}" for row in activity.active(where)]
     return programs + turns
 
 
 def what_is_working(name: str = DEFAULT_NAME, where: Path | None = None) -> dict:
-    """Safe process details for persistent work directly owned by a gateway."""
-    said = read_json(_record_path(name, where or home()), None)
+    """Safe process details for persistent work directly owned by a gateway.
+
+    A record that cannot be read says so rather than answering with nothing: whether it is
+    safe to stop this gateway is decided on this, and "I could not tell" is not "idle".
+    """
+    state, said = read(_record_path(name, where or home()))
+    if state == UNREADABLE:
+        return {CANNOT_BE_READ: {"pgid": None, "since": None}}
     working = said.get("working") if isinstance(said, dict) else None
     return dict(working) if isinstance(working, dict) else {}
 
