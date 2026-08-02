@@ -1810,13 +1810,14 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
         told it went out. Asserted against `role_line`, which has no memory to have."""
         back = discord.role_line(self.handed(state="settled", ok=True, elapsed=4000))
         self.assertEqual(
-            "✅ 🤖 **applicant-export** is back from the *development* role — reviewing it.",
-            back)
+            "✅ 🤖 **applicant-export** is back from the *development* role"
+            " — not reviewed yet.", back)
 
     def test_a_role_that_did_not_finish_says_so_rather_than_that_a_subagent_failed(self):
         line = discord.role_line(self.handed(state="settled", ok=False, elapsed=4000))
         self.assertEqual(
-            "⚠️ 🤖 **applicant-export** did not finish — reviewing what came back.", line)
+            "⚠️ 🤖 **applicant-export** did not finish — what came back is not reviewed yet.",
+            line)
         self.assertNotIn("subagent", line)
 
     def test_a_check_in_says_how_long_the_run_has_been_going(self):
@@ -1910,6 +1911,61 @@ class HowARoleRunReachesTheRoom(unittest.IsolatedAsyncioTestCase):
         await discord.Agent.told(turn, self.record())
 
         self.assertEqual(["🤖 Handed **a-task** to the *development* role."], turn.posted)
+
+    async def test_a_settled_run_is_posted_after_the_admitting_turn_was_cleared(self):
+        """**The defect, through the real dispatch.** `_state` ends its terminal branch
+        with `self.live.pop(...)`, so the whole `Live` — including `held.tools`, which
+        held the `role:<run>` correlation written seconds earlier — is discarded the
+        moment the turn that admitted the run reaches `finished`. A role run always
+        outlives that turn, so the correlation was always gone by the time the run came
+        back: `_activity_line` fell through, a successful `result` rendered as `""`, and
+        `_doing` dropped it. The return therefore never rendered for any role run, not
+        merely after a restart.
+
+        Measured on `rol-1-964h` (2026-08-02): admitted 10:41:44, the admitting turn
+        finished 10:41:56, the run settled 11:23:48, and nothing was written to that
+        conversation between 10:41:56 and 11:24:13.
+        """
+        posted: list = []
+
+        class Turn:
+            def __init__(self):
+                self.live: dict = {}
+                self.chose = type("Choice", (), {"activity": discord.GROWS})()
+
+            async def _post(self, it, content, **kw):
+                posted.append(content)
+                return None
+
+            async def _react(self, it, held, mark, instead_of=None):
+                pass
+
+            async def _flush(self, it, held):
+                pass
+
+            def _no_longer_last(self, held):
+                discord.Agent._no_longer_last(self, held)
+
+            async def _state(self, it, held):
+                await discord.Agent._state(self, it, held)
+
+            async def _role(self, it, held):
+                await discord.Agent._role(self, it, held)
+
+        turn = Turn()
+        await discord.Agent.told(turn, self.record())
+        await discord.Agent.told(turn, {"type": "state", "conversation": "1180",
+                                        "run": "7-a3f1", "state": "finished"})
+        self.assertNotIn("1180", turn.live,
+                         "the admitting turn's state was not cleared, so this case would "
+                         "have passed against the defect it exists for")
+
+        await discord.Agent.told(turn, self.record(state="settled", ok=True, elapsed=2524))
+
+        self.assertEqual(
+            ["🤖 Handed **a-task** to the *development* role.",
+             "✅ 🤖 **a-task** is back from the *development* role — not reviewed yet."],
+            posted, "what came back was never posted")
 
     async def test_a_role_run_still_shows_when_activity_is_off(self):
         """Turning activity off silences a turn's running commentary. A role coming back

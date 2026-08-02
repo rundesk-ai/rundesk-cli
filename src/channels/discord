@@ -1761,10 +1761,16 @@ def role_line(it: dict) -> str:
     if state == WORKING:
         return f"-# {mark} **{label}** — {_duration(it.get('elapsed') or 0)}, still working"
     if state == SETTLED:
+        # **What is true at this moment, and no more.** The record is sent the instant the
+        # run settles, and the review may not start for many minutes — the parent's own
+        # conversation has to be idle first, measured at ten. "Reviewing it" would promise
+        # something that has not begun; "not reviewed yet" is the state anybody reading
+        # this is actually in.
         if it.get("ok") is True:
-            return (f"✅ {mark} **{label}** is back from the *{named}* role — reviewing it."
-                    if named else f"✅ {mark} **{label}** is back from a role — reviewing it.")
-        return f"⚠️ {mark} **{label}** did not finish — reviewing what came back."
+            return (f"✅ {mark} **{label}** is back from the *{named}* role — not reviewed yet."
+                    if named else
+                    f"✅ {mark} **{label}** is back from a role — not reviewed yet.")
+        return f"⚠️ {mark} **{label}** did not finish — what came back is not reviewed yet."
     return ""
 
 

@@ -1680,12 +1680,22 @@ class WhereARoleRunIsShown(HasARoleRun):
 
     def test_how_long_it_has_been_is_what_the_listing_says_it_is(self):
         """One place works it out. A line in a room and a listing in a terminal
-        disagreeing about the same run is worse than either being absent."""
+        disagreeing about the same run is worse than either being absent.
+
+        Proved by replacing the listing rather than by comparing two live readings:
+        those cross a second boundary between them often enough to fail on a runner,
+        and agreeing to within a second is what two separate computations would do too.
+        """
         self.made("ava")
-        kept, run = self.a_run(store.WORKING, at=self.since(3000))
-        self.assertEqual(
-            role_runs.shown(kept.role_run(run))["elapsed"],
-            agent.playing("ava", self.where).seen(run)["elapsed"])
+        _kept, run = self.a_run(store.WORKING, at=self.since(3000))
+
+        with mock.patch.object(role_runs, "shown",
+                               return_value={"elapsed": 4242}) as listing:
+            where = agent.playing("ava", self.where).seen(run)
+
+        self.assertEqual(4242, where["elapsed"],
+                         "how long it has been was worked out a second time")
+        self.assertEqual(1, listing.call_count)
 
     def test_a_run_inside_its_first_window_is_not_checked_in_on(self):
         self.made("ava")
