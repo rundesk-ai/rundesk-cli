@@ -572,6 +572,12 @@ class FakeGateways:
     MACHINE_LOG = real_gateway.MACHINE_LOG
     EVERY_LOG = real_gateway.EVERY_LOG
     LOG_SOURCES = real_gateway.LOG_SOURCES
+    # Borrowed rather than stubbed. What a channel owes the people it allows is one rule
+    # with one answer, and a stand-in that quietly did nothing would let `add` stop
+    # seeding it with nothing here to catch it. Both write inside the channel's own home,
+    # which every case below puts under a scratch agents directory.
+    remember_no_one_welcomed = staticmethod(real_gateway.remember_no_one_welcomed)
+    forget_welcomed = staticmethod(real_gateway.forget_welcomed)
 
     class AlreadyRunning(Exception):
         pass
@@ -4050,6 +4056,155 @@ print(json.dumps({"ok": True, "describes": "a room", "settings": {},
                           "--instructions", "nobody is watching"], tail)
         self.assertEqual("", parser.parse_args(rest).says,
                          "an option inside the tail was read as the schedule's own")
+
+
+class WhoMayReachAnAgentThroughAChannel(unittest.TestCase):
+    """R-CAD-19 — changing who is allowed, on the channel that is already there.
+
+    The people responsible for an agent change over its life. Saying so used to mean
+    taking the agent off the surface and adding it again, which throws away its
+    instructions, its settings and whatever the adapter kept for it, to change one line.
+    """
+
+    #: Says it can see what it was pointed at, so a channel can be added to change.
+    WORKS = TheSurfacesAnAgentIsReachableOn.WORKS
+
+    def setUp(self):
+        self.at = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-cli-allow-"))
+        self.addCleanup(shutil.rmtree, self.at, True)
+        self.written = self.at / "logs" / "ava.log"
+        self.agents = FakeAgents(made=["ava"], at=self.at)
+        (self.at / "ava").mkdir(parents=True, exist_ok=True)
+        at = self.at / "a-channel"
+        at.write_text("#!%s\n%s" % (sys.executable, self.WORKS), encoding="utf-8")
+        at.chmod(0o755)
+        self.kind = str(at)
+
+    def _gateways(self, **kw):
+        return FakeGateways(written=self.written, **kw)
+
+    def _added(self, *allow: str) -> None:
+        code, said = drive(["channels", "ava", "add", "ops", "--kind", self.kind,
+                            *[word for one in allow for word in ("--allow", one)]],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+
+    def allowed(self) -> list:
+        return self.agents.reading("ava").channel("ops")["allow"]
+
+    def welcomed(self) -> list:
+        kept = real_gateway.welcomed_path(self.agents.channel_home("ava", "ops"))
+        return json.loads(kept.read_text(encoding="utf-8"))["welcomed"]
+
+    def test_who_is_allowed_is_shown_one_to_a_line(self):
+        """R-CAD-19 — script-readable, because the answer is a list of ids and a table is
+        something a person has to take apart again."""
+        self._added("2207", "1180")
+        code, said = drive(["channels", "ava", "allow", "ops"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["1180", "2207"],
+                         [line for line in said.splitlines() if line.strip()])
+
+    def test_somebody_is_added_to_a_channel_that_already_exists(self):
+        """R-CAD-19"""
+        self._added("2207")
+        code, said = drive(["channels", "ava", "allow", "ops", "--add", "1180"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("ALLOWED", said)
+        self.assertEqual(["1180", "2207"], self.allowed())
+
+    def test_somebody_is_taken_off_a_channel_that_already_exists(self):
+        """R-CAD-19"""
+        self._added("2207", "1180")
+        code, said = drive(["channels", "ava", "allow", "ops", "--remove", "1180"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["2207"], self.allowed())
+
+    def test_one_person_is_replaced_by_another_in_one_change(self):
+        """R-CAD-19 — one command, so there is never a moment with nobody allowed in it
+        and never two writers who can lose each other's half."""
+        self._added("2207")
+        code, said = drive(["channels", "ava", "allow", "ops",
+                            "--add", "1180", "--remove", "2207"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertEqual(["1180"], self.allowed())
+
+    def test_the_last_person_allowed_cannot_be_taken_off(self):
+        """R-CAD-10, R-CAD-19 — a channel nobody may use answers whoever speaks to it,
+        which is a misconfiguration and never a mode."""
+        self._added("2207")
+        code, said = drive(["channels", "ava", "allow", "ops", "--remove", "2207"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT CHANGED", said)
+        self.assertEqual(["2207"], self.allowed(), "the last owner was taken off anyway")
+
+    def test_taking_off_somebody_who_was_never_allowed_is_refused(self):
+        """R-CAD-19 — a mistyped id that quietly succeeds leaves the person the owner
+        meant to remove still allowed, and says the opposite."""
+        self._added("2207", "1180")
+        code, said = drive(["channels", "ava", "allow", "ops", "--remove", "9999"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT CHANGED", said)
+        self.assertEqual(["1180", "2207"], self.allowed())
+
+    def test_a_user_id_with_nothing_in_it_allows_nobody(self):
+        """R-CAD-10, R-CAD-19"""
+        self._added("2207")
+        code, said = drive(["channels", "ava", "allow", "ops", "--add", "  "],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT CHANGED", said)
+        self.assertEqual(["2207"], self.allowed())
+
+    def test_a_change_that_changes_nothing_says_so(self):
+        """R-CAD-19"""
+        self._added("2207")
+        code, said = drive(["channels", "ava", "allow", "ops", "--add", "2207"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(0, code, said)
+        self.assertIn("UNCHANGED", said)
+
+    def test_a_channel_that_is_not_there_is_told_from_one_that_is(self):
+        """R-CAD-19"""
+        self._added("2207")
+        code, said = drive(["channels", "ava", "allow", "nope", "--add", "1180"],
+                           self._gateways(), agents=self.agents)
+        self.assertEqual(1, code)
+        self.assertIn("NOT FOUND", said)
+
+    def test_adding_somebody_says_the_surface_hears_of_it_when_it_next_starts(self):
+        """R-CAD-19 — a surface is handed who it may listen to when it starts, so a new
+        owner messaging an agent that ignores them has no way to know why."""
+        self._added("2207")
+        _, said = drive(["channels", "ava", "allow", "ops", "--add", "1180"],
+                        self._gateways(), agents=self.agents)
+        self.assertIn("rundesk restart ava", said)
+
+    def test_a_new_channel_has_introduced_the_agent_to_nobody(self):
+        """R-CH-33 — which is what makes everybody on a channel added today owed one, and
+        nobody on a channel an older release wrote."""
+        self._added("2207")
+        self.assertEqual([], self.welcomed())
+
+    def test_somebody_taken_off_is_no_longer_written_down_as_introduced(self):
+        """R-CH-33 — rearranging who may reach an agent is exactly what an owner does with
+        nothing running, so the command forgets them rather than leaving it to a gateway
+        that is not there. Otherwise adding them back is a person who is never greeted."""
+        self._added("2207", "1180")
+        real_gateway.remember_welcomed(self.agents.channel_home("ava", "ops"), "1180")
+        drive(["channels", "ava", "allow", "ops", "--remove", "1180"],
+              self._gateways(), agents=self.agents)
+        self.assertEqual([], self.welcomed())
+        drive(["channels", "ava", "allow", "ops", "--add", "1180"],
+              self._gateways(), agents=self.agents)
+        self.assertEqual([], self.welcomed(),
+                         "somebody added again was still written down as introduced")
 
 
 class WhatNeverFinished(unittest.TestCase):

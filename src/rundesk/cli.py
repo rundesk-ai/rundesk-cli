@@ -749,6 +749,22 @@ def build_parser() -> argparse.ArgumentParser:
         one = on.add_parser(act, help=what)
         one.add_argument("channel", metavar="<channel>",
                          help="which channel, by the name it was added under")
+    # Who may reach the agent here, changed on a channel that already exists. A separate
+    # action for the same reason instructions are one: the people responsible for an agent
+    # change over its life, and changing one of them should not mean taking the agent off
+    # the channel, proving it again and rewriting everything else about it (R-CAD-19).
+    allowing = on.add_parser("allow",
+                             help="who may reach this agent through one channel")
+    allowing.add_argument("channel", metavar="<channel>",
+                          help="which channel, by the name it was added under")
+    # Both repeatable, and both optional: with neither, this shows who is allowed. One
+    # command doing both is how one person is replaced by another — read, decided and
+    # written once, so a replacement is never a moment with nobody allowed in it.
+    allowing.add_argument("--add", action="append", default=[], metavar="<user>",
+                          help="allow this person too — repeatable")
+    allowing.add_argument("--remove", action="append", default=[], metavar="<user>",
+                          help="stop allowing this person — repeatable, and never the "
+                               "last one")
     # Standing instructions, by the situation they hold in. A separate action rather than
     # flags on `add`, because these are the part an owner rewrites — a wording that reads
     # well in a room is found by trying it, and finding it should not mean taking the
@@ -3245,6 +3261,7 @@ def cmd_channels(args: argparse.Namespace, gateways, agents) -> int:
         return 1
     act = getattr(args, "act", None)
     doing = {"add": _add_channel, "remove": _remove_channel, "show": _show_channel,
+             "allow": _allow_channel,
              "instructions": _channel_instructions}.get(act, _list_channels)
     try:
         return doing(args, gateways, agents, whose)
@@ -3565,6 +3582,13 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         if kept_secret.is_file() and beside != home:
             shutil.copy2(kept_secret, beside / SECRET_FILE)
             os.chmod(beside / SECRET_FILE, 0o600)
+        # **A new channel has introduced this agent to nobody**, written down before the
+        # record exists so that everybody in the list that follows is owed one (R-CH-33).
+        # This is also what tells a channel added today from one an older release wrote:
+        # no record at all means the people on it have been reaching this agent for
+        # months, and greeting them after an update would be rundesk claiming something
+        # happened that did not.
+        gateways.remember_no_one_welcomed(beside)
         whose.remember_channel(one, args.kind, args.allow, store.stamped(),
                                settings=shape["settings"], secret=said["secret"],
                                describes=shape["describes"],
@@ -3629,6 +3653,76 @@ def _remove_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     unlogged = _note(gateways, args.name, f"channel '{args.channel}' removed",
                      agents.resolved(args.name))
     print(f"{args.name}/{args.channel}: REMOVED")
+    return unlogged
+
+
+def _allow_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
+    """Who may reach this agent here — shown, or changed (R-CAD-19).
+
+    **Changed on the channel that is already there.** Who is responsible for an agent
+    changes over its life, and the only way to say so was to take the agent off the
+    surface and add it again — which throws away its instructions, its settings and
+    whatever the adapter had kept for it, to change one line.
+
+    With nothing to change this shows the list, one id to a line, so a script reads it
+    without parsing a table. What is added and what is removed are decided in one hold
+    below this, so replacing one person with another is never a moment with nobody
+    allowed in it and never a change two owners can lose between them.
+    """
+    it = whose.channel(args.channel)
+    if it is None:
+        print(f"{args.name}/{args.channel}: NOT FOUND — no channel by that name",
+              file=sys.stderr)
+        return 1
+    adding = [one for one in (args.add or []) if one is not None]
+    removing = [one for one in (args.remove or []) if one is not None]
+    if not adding and not removing:
+        allowed = it.get("allow") or []
+        if not allowed:
+            # Nothing writes this and nothing should ever read it as a mode. Said rather
+            # than printed as an empty list, which reads as a command that did nothing.
+            print(f"{args.name}/{args.channel}: NO ONE ALLOWED")
+            return 0
+        for one in allowed:
+            print(one)
+        return 0
+    was = list(it.get("allow") or [])
+    try:
+        resulting = whose.allow_channel(args.channel, add=adding, remove=removing)
+    except ValueError as why:
+        print(f"{args.name}/{args.channel}: NOT CHANGED — {why}", file=sys.stderr)
+        print(f"        who is allowed now:  rundesk channels {args.name} allow "
+              f"{args.channel}", file=sys.stderr)
+        return 1
+    if resulting == sorted(was):
+        print(f"{args.name}/{args.channel}: UNCHANGED — {', '.join(resulting)}")
+        return 0
+    gone = [one for one in was if one not in resulting]
+    if gone:
+        # Forgotten here as well as by the gateway, because the gateway is exactly what is
+        # *not* running while somebody rearranges who may reach an agent. Without it,
+        # taking a person off and putting them back while nothing was up would leave them
+        # written down as already introduced, and they would never be greeted (R-CH-33).
+        try:
+            gateways.forget_welcomed(
+                agents.channel_home(args.name, args.channel), gone)
+        except (OSError, _gateway.Unreadable) as why:
+            # The change itself is written and stands. Only the note of who has already
+            # been introduced could not be brought up to date, and the worst it costs is
+            # one greeting somebody has had before.
+            print(f"        who has been introduced could not be updated: {why}")
+    print(f"{args.name}/{args.channel}: ALLOWED — {', '.join(resulting)}")
+    unlogged = _note(gateways, args.name,
+                     f"channel '{args.channel}' now allows {', '.join(resulting)}",
+                     agents.resolved(args.name))
+    if [one for one in resulting if one not in was]:
+        # **What is written down is not what the adapter is holding.** A surface is handed
+        # who it may listen to when it starts, so somebody added while the agent is running
+        # is allowed by the record and still unknown to the program — and the introduction
+        # rundesk owes them waits for the same moment. Said, because a new owner messaging
+        # an agent that ignores them has no way to know why.
+        print(f"        in effect when the channel next starts:  "
+              f"rundesk restart {args.name}")
     return unlogged
 
 

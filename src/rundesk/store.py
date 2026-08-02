@@ -740,6 +740,45 @@ class Store:
                 ),
             )
 
+    def allow_channel(self, name: str, add=(), remove=()) -> list:
+        """Change who may reach this agent through one channel, never down to nobody.
+
+        **The read, the decision and the write are one hold** (R-CAD-19). Working the new
+        list out above this and handing it down would let two owners each read the same
+        list, each write theirs back, and one of the two changes disappear with both
+        commands reporting success. So what is asked for is *what to change*, and what it
+        is changed from is read here.
+
+        A `remove` naming somebody this channel does not allow is refused rather than
+        passed over. A mistyped id that quietly succeeds leaves the person the owner meant
+        to take off still allowed, and says the opposite.
+
+        Down to nobody is refused here as well as at the command, for the reason adding
+        one is: a channel nobody may use answers whoever speaks to it, which is a
+        misconfiguration and never a mode (R-CAD-10).
+        """
+        adding = [str(one) for one in add]
+        removing = [str(one) for one in remove]
+        if any(not one.strip() for one in adding + removing):
+            raise ValueError("a user id with nothing in it allows and removes nobody")
+        with self._writing() as conn:
+            row = conn.execute(
+                "SELECT allow FROM channel WHERE name = ?", (name,)).fetchone()
+            if row is None:
+                raise ValueError(f"no channel called '{name}'")
+            allowed = set(json.loads(row["allow"]))
+            unknown = sorted(one for one in removing if one not in allowed)
+            if unknown:
+                raise ValueError(
+                    f"{', '.join(repr(one) for one in unknown)} "
+                    f"{'is' if len(unknown) == 1 else 'are'} not allowed here already")
+            resulting = sorted((allowed - set(removing)) | set(adding))
+            if not resulting:
+                raise ValueError("a channel nobody may use is refused rather than defaulted")
+            conn.execute("UPDATE channel SET allow = ? WHERE name = ?",
+                         (json.dumps(resulting), name))
+        return resulting
+
     def tell_channel(self, name: str, instructions) -> None:
         """What the agent is told about being here. Empty takes it off rather than storing it."""
         with self._writing() as conn:

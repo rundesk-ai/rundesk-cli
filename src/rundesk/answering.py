@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rundesk import agent as agents
-from rundesk import channel, migration, provider, store, turn
+from rundesk import channel, instructions, migration, provider, store, turn
 
 #: How many messages may be waiting for a conversation whose brain cannot be steered.
 #: Small on purpose: somebody typing while an agent works is answering the conversation,
@@ -64,6 +64,10 @@ CONTINUE = (
     "Continue the interrupted work from where the previous gateway stopped. "
     "Do not repeat actions already completed. Finish the original request."
 )
+
+#: What the conversation an introduction happens in is called, in front of the user id it
+#: is for. Its own, so a greeting never lands in a room somebody is talking in (R-CH-33).
+WELCOME = "welcome-"
 
 AFTER_UPDATE = (
     "The external Rundesk update attempt has finished and the gateway is back online. "
@@ -502,6 +506,65 @@ class Answering:
         if not self.connected:
             raise RuntimeError(f"channel '{self.channel}' is not connected")
         await self._sending(channel.spoken(type="owner-notice", text=text))
+
+    async def welcomed(self, user: str) -> None:
+        """Introduce this agent to somebody newly allowed to reach it (R-CH-33).
+
+        **The agent's own words, not rundesk's.** Every other thing this module sends
+        privately is bookkeeping with a fixed wording — a gateway came up, a skill changed
+        — and this one is the agent saying hello, so it is a real turn against the agent's
+        own brain with rundesk's onboarding layer in front of it (R-AGT-38). What the
+        person then replies to is something the agent actually wrote.
+
+        **Nothing is invented about them.** A new agent has no projects, no goals and no
+        focus, and the instructions say so in the plainest words there are; the owner
+        decides all of that by answering.
+
+        Refused for anybody this channel does not allow, which is the same question asked
+        of the same record as every message that arrives (R-CH-4). A turn that failed or
+        said nothing raises, so whoever asked for this does not write the person down as
+        greeted and try again later against nothing.
+        """
+        if not self.connected:
+            raise RuntimeError(f"channel '{self.channel}' is not connected")
+        if not channel.allowed(self.record, user):
+            raise RuntimeError(
+                f"channel '{self.channel}' does not allow '{user}'")
+        chose = agents.chosen(self.name, self._where)
+        named = chose.get("provider") or ""
+        if not named:
+            raise RuntimeError(f"agent '{self.name}' names no brain")
+        outcome = await self._carry(
+            self.name, instructions.ONBOARDING_PROMPT, named,
+            where=self._where,
+            model=chose.get("model"),
+            settings=chose.get("settings"),
+            # Its own conversation, and a fresh one. A greeting must not resume the
+            # session somebody else's room is in the middle of, and the instructions in
+            # front of it are read where a conversation is opened rather than on resume.
+            conversation=f"{WELCOME}{user}",
+            on=self.channel,
+            kind=str(self.record.get("kind") or ""),
+            fresh=True,
+            asked_by={"channel": self.channel, "on": f"{WELCOME}{user}", "user": user},
+            preface=instructions.build(
+                variables=agents.instruction_variables(self.name, self._where),
+                trigger=instructions.ONBOARDING,
+                append=agents.added_instructions(self.name, self._where)),
+            # Nobody typed this, so it is not written down as though somebody had
+            # (R-RUN-16). The run's source stays what it is — this happened on a channel.
+            prompt_author="rundesk",
+        )
+        text = (outcome.text or "").strip()
+        if not outcome.ok:
+            raise RuntimeError(_why(outcome))
+        if not text:
+            raise RuntimeError(turn.NOTHING_SAID)
+        # The one place a private notice names *which* allowed person it is for. Every
+        # other one is for whoever the surface considers the owner; this one is for the
+        # person who has just arrived, and no other (R-CH-33).
+        await self._sending(
+            channel.spoken(type="owner-notice", text=text, user=user))
 
     async def told_restart_finished(self, conversation: str, text: str) -> None:
         """Deliver one queued restart outcome after reconnect (R-GW-43)."""
