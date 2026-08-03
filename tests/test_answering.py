@@ -291,7 +291,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
         three in the morning is no use in an account nobody opens until they think to.
 
         Said as a remark: there is no message to reply to and no reaction to put on one."""
-        where_it_is = self.spoken_on()
+        self.spoken_on()
         self.a_schedule()
         surface = Surface()
         held = self.answering(surface, Brain())
@@ -301,7 +301,9 @@ class WhereABrainIsAnswering(CarriesAConversation):
         self.assertEqual(1, len(said), f"nothing was said on the surface: {surface.shown}")
         self.assertIn("nightly", said[0]["text"])
         self.assertIn("finished", said[0]["text"])
-        self.assertEqual(where_it_is, said[0]["conversation"],
+        # Named the way the surface named it, which is the only way it can find the room
+        # again (R-CAD-20).
+        self.assertEqual("one", said[0]["conversation"],
                          "it was said somewhere other than where this surface has been used")
 
     async def test_what_the_turn_answered_is_said_with_what_it_came_to(self):
@@ -350,7 +352,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
         await self._settled(held)
 
         self.assertEqual([{
-            "type": "usage", "conversation": self.spoken_on(), "run": run,
+            "type": "usage", "conversation": "one", "run": run,
             "schedule": "nightly",
             "input": 2, "output": 837, "cached": 121446, "session": 122435,
         }], surface.of("usage"))
@@ -453,29 +455,74 @@ class WhereABrainIsAnswering(CarriesAConversation):
         conversation is whichever somebody last spoke in. An owner naming one is the only
         thing that makes a daily report land where they meant."""
         self.spoken_on("one")
-        wanted = self.spoken_on("two")
+        self.spoken_on("two")
         self.a_schedule(place="two")
         surface = Surface()
         held = self.answering(surface, Brain())
         await held.told_what_a_schedule_did("nightly", "finished")
         await self._settled(held)
         said = surface.of("said")[0]
-        self.assertEqual(wanted, said["conversation"],
+        self.assertEqual("two", said["conversation"],
                          "it followed the conversation instead of the place it was given")
         self.assertEqual("two", said["place"], "the surface was not told which place")
 
     async def test_a_schedule_naming_no_place_follows_the_conversation(self):
         """R-SCH-32 — the older behaviour, kept: a channel that reaches one place has one
         place to report in, so requiring a word for it would be asking for nothing."""
-        where_it_is = self.spoken_on()
+        self.spoken_on()
         self.a_schedule()
         surface = Surface()
         held = self.answering(surface, Brain())
         await held.told_what_a_schedule_did("nightly", "finished")
         await self._settled(held)
         said = surface.of("said")[0]
-        self.assertEqual(where_it_is, said["conversation"])
+        self.assertEqual("one", said["conversation"])
         self.assertIsNone(said["place"], "a place nobody named was invented")
+
+    async def test_what_a_schedule_hands_a_surface_is_the_platforms_own_conversation(self):
+        """R-CAD-20 — `conversation` on a record is the platform's own identifier for that
+        room, which is the one value an adapter can act on. Schedule delivery handed over
+        the store's internal id instead, so the Discord adapter — which reads that field as
+        a snowflake — could only fail on it, and two owner-facing reports were lost (#304).
+
+        Both messages, because the notice resolves once for the pair (R-SCH-46), and the
+        report is still written down under the store's own id (R-SCH-33)."""
+        where_it_is = self.spoken_on("1409919820242489375")
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        began, handed_back = await held.told_a_schedule_started("nightly")
+        self.assertTrue(began)
+        await held.told_what_a_schedule_did("nightly", "finished", where=handed_back)
+        await self._settled(held)
+        notice, report = surface.of("said")
+        self.assertEqual("1409919820242489375", notice["conversation"],
+                         "the notice named a room in words this platform never used")
+        self.assertEqual("1409919820242489375", report["conversation"],
+                         "the report named a room in words this platform never used")
+        self.assertNotEqual(where_it_is, report["conversation"],
+                            "the surface was handed rundesk's own conversation id")
+        kept = agents.records("ava", self.where)
+        self.assertEqual([report["text"]],
+                         [one["text"] for one in kept.messages(where_it_is)
+                          if one["author"] == "agent"],
+                         "what was delivered was not written down where it went")
+
+    async def test_a_conversation_that_has_gone_is_nowhere_to_report(self):
+        """R-SCH-31, R-CAD-20 — a conversation resolved and then gone leaves no platform
+        identifier to send, which is the same case as nothing having been said on this
+        surface: said out loud, rather than a record naming nowhere at all."""
+        self.spoken_on()
+        self.a_schedule()
+        surface = Surface()
+        held = self.answering(surface, Brain())
+        with mock.patch.object(store, "announces_into",
+                               return_value="a-conversation-that-has-gone"):
+            await held.told_what_a_schedule_did("nightly", "finished")
+        await self._settled(held)
+        self.assertEqual([], surface.of("said"), "it sent a record naming nowhere at all")
+        self.assertTrue(any("nowhere to say" in one for one in self.told),
+                        f"it said nothing about having nowhere: {self.told}")
 
     async def test_what_a_place_is_called_is_never_read_on_the_way_past(self):
         """R-SCH-32, R-CAD-16 — the core does not know this platform has rooms. A place it has
@@ -543,6 +590,8 @@ class WhereABrainIsAnswering(CarriesAConversation):
         self.a_schedule()
         surface = Surface()
         held = self.answering(surface, Brain())
+        # Handed back in rundesk's own namespace, because that is what the report is
+        # written down against and what the caller passes back here (R-CAD-20).
         self.assertEqual((True, where_it_is), await held.told_a_schedule_started("nightly"),
                          "it did not hand back where the notice went")
         await self._settled(held)
@@ -550,7 +599,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
         self.assertEqual(1, len(said), f"nothing was said on the surface: {surface.shown}")
         self.assertEqual("💻 Working on 'nightly' — I will report back when it is done.",
                          said[0]["text"])
-        self.assertEqual(where_it_is, said[0]["conversation"])
+        self.assertEqual("one", said[0]["conversation"])
         self.assertEqual("nightly", said[0]["schedule"])
         self.assertTrue(said[0]["began"], "the surface cannot tell a notice from a report")
 
@@ -575,14 +624,14 @@ class WhereABrainIsAnswering(CarriesAConversation):
         """R-SCH-32, R-SCH-46 — an owner naming a room is what makes a daily report land where
         they meant, and a notice that ignored it would stand in a room the report never reaches."""
         self.spoken_on("one")
-        wanted = self.spoken_on("two")
+        self.spoken_on("two")
         self.a_schedule(place="two")
         surface = Surface()
         held = self.answering(surface, Brain())
         await held.told_a_schedule_started("nightly")
         await self._settled(held)
         said = surface.of("said")[0]
-        self.assertEqual(wanted, said["conversation"])
+        self.assertEqual("two", said["conversation"])
         self.assertEqual("two", said["place"], "the surface was not told which place")
 
     async def test_a_report_is_delivered_where_the_notice_went(self):
@@ -607,8 +656,8 @@ class WhereABrainIsAnswering(CarriesAConversation):
         await held.told_what_a_schedule_did("nightly", "finished", where=where)
         await self._settled(held)
         notice, report = surface.of("said")
-        self.assertEqual(began_in, notice["conversation"])
-        self.assertEqual(began_in, report["conversation"],
+        self.assertEqual("general", notice["conversation"])
+        self.assertEqual("general", report["conversation"],
                          "the report went to whichever room was newest, not to its notice")
         wrote = [one["text"] for one in kept.messages(began_in) if one["author"] == "agent"]
         self.assertEqual([report["text"]], wrote,
@@ -619,7 +668,7 @@ class WhereABrainIsAnswering(CarriesAConversation):
         both messages, so there is nothing for the pair to disagree about and nothing to carry
         over from the notice. The word wins over anything handed in beside it."""
         self.spoken_on("one")
-        wanted = self.spoken_on("two")
+        self.spoken_on("two")
         self.a_schedule(place="two")
         surface = Surface()
         held = self.answering(surface, Brain())
@@ -627,8 +676,8 @@ class WhereABrainIsAnswering(CarriesAConversation):
         await held.told_what_a_schedule_did("nightly", "finished", where="somewhere-else")
         await self._settled(held)
         notice, report = surface.of("said")
-        self.assertEqual((wanted, "two"), (notice["conversation"], notice["place"]))
-        self.assertEqual((wanted, "two"), (report["conversation"], report["place"]),
+        self.assertEqual(("two", "two"), (notice["conversation"], notice["place"]))
+        self.assertEqual(("two", "two"), (report["conversation"], report["place"]),
                          "the report left the place its owner named")
 
     async def test_a_surface_with_nowhere_to_deliver_says_nothing_when_a_run_starts(self):

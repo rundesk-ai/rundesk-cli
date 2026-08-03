@@ -302,6 +302,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 - **A fresh worktree has no `.venv`, so its Discord regression test skips and looks green.**
   Run the worktree's test path with the main checkout's `.venv/bin/python`; the interpreter
   supplies `discord.py` while the working directory and imported adapter remain the worktree's.
+  **And that borrowed virtualenv is only as new as the last `install.sh` run in it** — the
+  canonical checkout's held `discord.py` and no `slack_sdk`, which is a dependency added
+  later, so `test_slack` reported `OK (skipped=2)` on a case written to fail. A borrowed
+  `.venv` skips whatever was pinned after it was built, and a skip and a pass are the same
+  word. `ls .venv/lib/*/site-packages | grep -i <package>` before believing a green adapter
+  suite, or give the worktree a real `.venv` by installing it into a disposable station
+  (`.knowledge/guides/testing-against-a-station.md` — `install.sh` builds `${SCRIPT_DIR}/.venv`,
+  so the station's install is what puts *every* pinned dependency beside the code under test).
 - **And that same missing `.venv` adds a *second*, different failure to the conformance
   harness, which reads like part of whatever you are reproducing.** Both shipped adapters
   resolve the virtualenv from their own file (`parents[2]`), not from the interpreter running
@@ -311,6 +319,14 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   missing dependency, not the harness: build the worktree's own `.venv` (`python3 -m venv .venv
   && .venv/bin/python -m pip install -r requirements.txt`) before believing a second failure is
   real. #295 was filed carrying one of these as an untraced extra.
+- **Driving the adapters' `_read` from a pipe makes asyncio log `OSError: [Errno 9] Bad file
+  descriptor` from a case that has already passed.** `connect_read_pipe` hands the descriptor
+  to a transport that goes on reading until it sees the end of the pipe and then closes the
+  file object itself, so a `with os.fdopen(read_at, "rb")` around the call closes it
+  underneath — and the traceback names `_read_ready`, which reads exactly like the adapter
+  failing. Wait for `reading.closed` (bounded, yielding with `await asyncio.sleep(0)`) instead
+  of closing it yourself. Worst in the cancellation case, where the loop leaves before the
+  transport has seen the end at all.
 - **A test class appended to the end of a suite file lands *after* the `__main__` guard and
   never runs — and the suite still says `OK`.** `tests/test_gateway.py` reported the same 184
   cases with a new four-case class in it, which reads exactly like a class that passed. Insert

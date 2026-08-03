@@ -1350,10 +1350,20 @@ class Agent(discord.Client):
         at = it.get("conversation")
         if at is None:
             return None
-        channel = self.get_channel(int(at))
+        try:
+            snowflake = int(at)
+        except (TypeError, ValueError):
+            # **An id this platform cannot name a room with is an unresolvable room, not an
+            # exception.** `int()` was reached unguarded, so a conversation from any other
+            # namespace raised out of `told()` before `_post`'s `nowhere to write` branch
+            # could run — a report was lost and the log said nothing at all (R-CH-12).
+            # Every record carries the platform's own identifier now (R-CAD-20); this is
+            # what makes the next one that does not a line somebody can read.
+            return None
+        channel = self.get_channel(snowflake)
         if channel is None:
             with contextlib.suppress(Exception):
-                channel = await self.fetch_channel(int(at))
+                channel = await self.fetch_channel(snowflake)
         return channel
 
     async def _room_named(self, said: str):
@@ -2130,8 +2140,15 @@ async def _read(client: Agent) -> None:
         except ValueError:
             continue
         if isinstance(it, dict):
-            with contextlib.suppress(Exception):
+            try:
                 await client.told(it)
+            except Exception as why:  # noqa: BLE001 — a delivery boundary (R-CH-12)
+                # **Said, and then read on.** This was `suppress(Exception)`, which discarded
+                # every failure under `told()` without a word — so a report that never
+                # arrived left no trace at all, unlike a room that could not be found. The
+                # loop must not end either: one record nobody could act on is not a channel
+                # going away.
+                note(f"could not act on {it.get('type')}: {type(why).__name__}: {why}")
 
 
 #: What is taken from what rundesk wrote down about this channel when it was not given on

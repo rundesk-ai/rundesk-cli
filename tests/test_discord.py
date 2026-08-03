@@ -2628,6 +2628,33 @@ class WhichRoomAWordMeans(unittest.TestCase):
         self.assertIn("could not find '#no-such-room'", said.getvalue())
         self.assertNotIn("allowed list", said.getvalue())
 
+    def test_a_conversation_that_is_no_snowflake_is_nowhere_rather_than_a_crash(self):
+        """R-CH-12, R-CAD-20 — every record carries the platform's own identifier, so one
+        from any other namespace names a room that cannot be found. That is an answer, not
+        an exception: `int()` was reached unguarded and raised `ValueError` out of `told()`
+        before `_post`'s `nowhere to write` branch could run, so schedule delivery with no
+        place left no trace at all — the exact digest below is the one from #304.
+
+        Defence rather than the fix: no such id is sent any more. It exists so the next
+        record from a namespace nobody expected is a logged line instead of a silent drop.
+        """
+        surface = _Surface(dm=True, allow=["2207"])
+        with contextlib.redirect_stderr(io.StringIO()):
+            where = asyncio.run(discord.Agent._where_to_write(
+                surface, {"conversation": "ec9e26e33c863975"}))
+        self.assertIsNone(where, "an id this platform cannot name a room resolved to one")
+        self.assertEqual([], surface.channels_asked,
+                         "Discord was asked for a room named in another namespace")
+
+    def test_a_conversation_that_is_a_snowflake_still_resolves(self):
+        """The control for the guard above: the ordinary record still finds its room, so a
+        guard that answered `None` for everything could not pass both of these."""
+        surface = _Surface(dm=True, allow=["2207"])
+        with contextlib.redirect_stderr(io.StringIO()):
+            where = asyncio.run(discord.Agent._where_to_write(
+                surface, {"conversation": "1409919820242489375"}))
+        self.assertEqual("the-conversation", where)
+
 
 @unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
 class WhatTheOwnerIsTold(unittest.TestCase):
@@ -3318,6 +3345,74 @@ class MakingRoomForOneMoreConversation(unittest.TestCase):
         self.assertFalse(discord.Agent._make_room(it, "newest"),
                          "it would have dropped the conversation it was making room for")
         self.assertIn("newest", it.live)
+
+
+@unittest.skipIf(discord is None, "discord.py is not installed — run ./install.sh")
+class WhenARecordCannotBeActedOn(unittest.IsolatedAsyncioTestCase):
+    """R-CH-12 — a delivery that fails is a delivery that failed, and it is written down.
+
+    The read loop wrapped every record in `contextlib.suppress(Exception)`, so anything
+    raised anywhere under `told()` was discarded without a word — which is why a lost
+    schedule report left no trace at all, where #161 at least left `nowhere to write`.
+    """
+
+    class Refuses:
+        """A client that cannot act on one kind of record, and remembers every one."""
+
+        def __init__(self):
+            self.seen: list = []
+
+        async def told(self, it):
+            self.seen.append(it)
+            if it.get("type") == "said":
+                raise RuntimeError("the room went away")
+
+    async def _read(self, client, *records) -> str:
+        """Drive the real loop over these records, and hand back what it wrote down."""
+        read_at, write_at = os.pipe()
+        os.write(write_at, b"".join(json.dumps(one).encode("utf-8") + b"\n"
+                                    for one in records))
+        os.close(write_at)
+        reading, said = os.fdopen(read_at, "rb"), io.StringIO()
+        try:
+            with mock.patch.object(sys, "stdin", reading), \
+                    contextlib.redirect_stderr(said):
+                await discord._read(client)
+        finally:
+            # **The loop's own transport owns that descriptor until it has seen the end of
+            # the pipe, and closes it itself.** Closing it underneath makes asyncio log a
+            # read error against a case that has already finished, which reads exactly like
+            # the adapter failing. Bounded, so a transport that never closes fails here
+            # rather than hanging.
+            for _ in range(1000):
+                if reading.closed:
+                    break
+                await asyncio.sleep(0)
+            else:  # pragma: no cover - the transport has always closed by here
+                reading.close()
+        return said.getvalue()
+
+    async def test_a_record_that_could_not_be_acted_on_is_written_down(self):
+        client = self.Refuses()
+        said = await self._read(client,
+                                {"type": "said", "conversation": "ec9e26e33c863975"},
+                                {"type": "answer", "conversation": "1409919820242489375"})
+        self.assertIn("could not act on said", said,
+                      f"the failure was swallowed without a word: {said!r}")
+        self.assertIn("the room went away", said, "it did not say what went wrong")
+        self.assertEqual(["said", "answer"], [one["type"] for one in client.seen],
+                         "the loop stopped reading at the record it could not act on")
+
+    async def test_the_loop_going_away_is_not_a_delivery_that_failed(self):
+        """Cancellation ends the loop and is never written down as a platform refusing:
+        a catch wide enough to hold it would leave a channel reading after its gateway
+        had gone."""
+        class Cancelled:
+            async def told(self, _it):
+                raise asyncio.CancelledError()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await self._read(Cancelled(), {"type": "said", "conversation": "x"})
 
 
 if __name__ == "__main__":
