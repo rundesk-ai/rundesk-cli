@@ -657,13 +657,23 @@ class WritingARole(WithSomewhereToKeepRoles):
         other = self.wrote_one("etymology", description="Something else entirely.")
         self.assertNotEqual(one.revision, other.revision)
 
+    def skeleton_headings(self):
+        """Every heading the shipped skeleton names, read off the file.
+
+        Listed here instead, it is a second place to be wrong the day somebody rewords
+        the skeleton — and the thing worth proving is that what `add` writes is that
+        file, not that either says one particular sentence.
+        """
+        said = role.SKELETON.read_text(encoding="utf-8")
+        return [one.strip() for one in said.splitlines() if one.startswith("## ")]
+
     def test_the_rules_a_new_role_gets_hold_every_heading_a_role_uses(self):
         """The shape a parent finds the ceiling and the definition of done in, whichever
         role it is reading."""
         made = self.wrote_one()
-        for heading in ("## Start here, in this order", "## While you work",
-                        "## The ceiling", "## Subagents", "## The report",
-                        "## Definition of done"):
+        headings = self.skeleton_headings()
+        self.assertTrue(headings, "the shipped skeleton names no sections at all")
+        for heading in headings:
             self.assertIn(heading, made.instructions)
         self.assertIn("# Archaeology", made.instructions)
         self.assertIn(self.DESCRIBED, made.instructions)
@@ -672,9 +682,7 @@ class WritingARole(WithSomewhereToKeepRoles):
         """A skeleton that read as finished prose is one nobody rewrites, and a role run
         on it returns a report that reads well and is about nothing."""
         made = self.wrote_one()
-        for heading in ("## Start here, in this order", "## While you work",
-                        "## The ceiling", "## Subagents", "## The report",
-                        "## Definition of done"):
+        for heading in self.skeleton_headings():
             section = made.instructions.split(heading, 1)[1].split("\n## ", 1)[0]
             self.assertIn("TODO", section, heading)
 

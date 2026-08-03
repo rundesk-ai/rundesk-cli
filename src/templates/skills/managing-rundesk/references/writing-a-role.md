@@ -98,9 +98,9 @@ file, not a second description of it:
 
 ## Start here, in this order     the brief and any plan, then the project's rules, then skills —
                                  ending in what the run settles before it starts
-## While you work                the few rules this specialty gets wrong without being told
-## The ceiling                   what is a stop rather than a judgement call
-## Subagents                     what to use one for, and what may never be delegated to one
+## While you work                the few rules this specialty gets wrong without being told,
+                                 ending in two bullets every role holds — the ceiling this one
+                                 narrows to, and what a subagent is worth here
 ## The report                    the named sections the parent is owed
 ## Definition of done            numbered, checkable, and last
 ```

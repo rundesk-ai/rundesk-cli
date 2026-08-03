@@ -34,6 +34,7 @@ from rundesk import cli  # noqa: E402
 from rundesk import catalog as real_catalog  # noqa: E402
 from rundesk import config  # noqa: E402
 from rundesk import restart_request  # noqa: E402
+from rundesk import role  # noqa: E402
 from rundesk import standing  # noqa: E402
 from rundesk.commands import agents as agent_commands  # noqa: E402
 from rundesk.commands import backups as backup_commands  # noqa: E402
@@ -5113,8 +5114,14 @@ class WritingARoleFromTheCommandLine(unittest.TestCase):
         self.assertTrue(pathlib.Path(str(rules)).is_absolute())
         self.assertIn("rewrite it", said)
         self.assertIn("not yet about this specialty", said)
-        for heading in ("Start here, in this order", "While you work", "The ceiling",
-                        "Subagents", "The report", "Definition of done"):
+        # Read off the skeleton rather than listed here. The command builds this line
+        # from the file it just wrote, so a list in the test proves only that somebody
+        # kept two copies in step — and stops proving anything the day one is reworded.
+        skeleton = role.SKELETON.read_text(encoding="utf-8")
+        headings = [one.strip()[3:] for one in skeleton.splitlines()
+                    if one.startswith("## ")]
+        self.assertTrue(headings, "the shipped skeleton names no sections at all")
+        for heading in headings:
             self.assertIn(heading, said)
 
     def test_what_a_new_role_is_says_the_same_words_a_listing_says(self):
