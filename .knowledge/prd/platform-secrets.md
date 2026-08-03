@@ -1,6 +1,7 @@
 ---
 id: SEC
 name: The values every program is given
+last_verified: 2026-08-02
 ---
 
 ## What this is

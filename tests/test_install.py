@@ -557,6 +557,46 @@ class RemovalTests(Sandbox):
         self.assertEqual(purged.returncode, 0, purged.stderr)
         self.assertFalse(settings.exists(), "--purge left the settings behind")
 
+    def test_removing_rundesk_keeps_the_values_every_program_was_given_unless_asked(self):
+        """R-RM-16, R-SEC-26 — no backup holds these, so a purge that took them without
+        saying so would be the one deletion an owner has no copy of anywhere. And an
+        uninstall that left them while reporting everything gone would leave credentials
+        on a machine somebody believes rundesk is off."""
+        kept_at = self.home / ".config" / "rundesk" / "secrets"
+        (kept_at / "values").mkdir(parents=True)
+        (kept_at / "registry.json").write_text('{"version": 1, "secrets": {}}\n')
+        (kept_at / "values" / "GITHUB_TOKEN").write_text("gh-secret\n")
+
+        self.install()
+        kept = self.uninstall()
+
+        self.assertEqual(kept.returncode, 0, kept.stderr)
+        self.assertTrue((kept_at / "values" / "GITHUB_TOKEN").exists(),
+                        "an ordinary uninstall took the owner's credentials")
+        self.assertIn("--purge", kept.stdout, "it never said how to take them")
+
+        self.install()
+        purged = self.uninstall("--purge")
+
+        self.assertEqual(purged.returncode, 0, purged.stderr)
+        self.assertFalse(kept_at.exists(), "--purge left the credentials behind")
+
+    def test_a_purge_refuses_a_secrets_directory_it_did_not_write(self):
+        """R-RM-16 — a purge deletes what it is pointed at outright, so a variable left at
+        a home directory or a typo is somebody's whole tree. Recognised by what rundesk
+        puts there rather than by the name, which anybody may choose."""
+        somewhere = self.home / "not-rundesks"
+        somewhere.mkdir(parents=True)
+        (somewhere / "important.txt").write_text("mine\n")
+
+        self.install()
+        said = self.uninstall("--purge",
+                              extra_env={"RUNDESK_SECRETS_DIR": str(somewhere)})
+
+        self.assertNotEqual(0, said.returncode, "it purged a directory it never wrote")
+        self.assertTrue((somewhere / "important.txt").exists())
+        self.assertIn("Nothing has been removed", said.stdout + said.stderr)
+
     def test_removing_rundesk_keeps_what_the_gateways_wrote_unless_asked_to_take_it(self):
         """R-RM-10 — `rm -rf` on the install directory took the whole audit trail with the
         program, at the one moment an owner is most likely to want it: a reinstall after

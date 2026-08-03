@@ -8,6 +8,42 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
 
 *One bullet each: the trap, and the workaround. Delete when it's genuinely solved.*
 
+- **`test_the_job_carries_every_place_rundesk_can_be_pointed_at` names its modules by
+  hand, so a *new* module reading a `RUNDESK_*_DIR` is invisible to the guard that
+  exists to catch exactly that.** It scrapes `inspect.getsource` of `gateway`, `agent`
+  and the package `__init__` only. `secret.py` was a fourth, reading
+  `RUNDESK_SECRETS_DIR`, and the case stayed green while a supervised gateway would
+  have resolved a different directory from the command that wrote its job — because
+  launchd forwards neither `XDG_CONFIG_HOME` nor anything else of the owner's shell.
+  **Add your module to that scrape in the same commit you add the resolver**, and note
+  the asymmetry with `RUNDESK_JOB_PREFIX`: that one is written into `describe()` only
+  when set, because unset resolves the same answer through the same code — which is
+  false for anything whose default is built from a variable a job never receives.
+
+- **A command that reads standard input because it is "not a terminal" hangs the gate,
+  and the failure names nothing.** `sys.stdin.readline()` on an *open pipe with nothing
+  in it* blocks until the far end closes, which may be never — and that is exactly what
+  a brain's tool shell hands its children and what `tests/test_cli.py` hands the surface
+  walk. Measured: `tests/test_cli.py` ran 12 seconds with `< /dev/null` and never
+  finished without it, with no output naming the verb. **Reading stdin is asked for and
+  never inferred** (`--stdin`, the shape `--token-stdin` already has); infer it and an
+  agent hangs its own turn. If a suite that passed suddenly never ends, run it with
+  `< /dev/null` before looking at anything else — finishing then is the whole diagnosis.
+
+- **`doc-lint` fails a ratified `prd/` contract that cites a `prd-drafts/` id, so a new
+  contract has to be ratified *before* the rows that cite it land.** Adding
+  `(R-SEC-26)` to `lifecycle-removal.md` while `platform-secrets.md` was still a draft
+  failed with "cites R-SEC-26 which is a prd-drafts/ proposal", naming the citing file
+  rather than the draft. `git mv` the draft into `prd/` first, then add the citations —
+  and remember the layer rule bites the other way: `platform-` (rank three) may never
+  cite `channel-` (rank six), so the dependency runs from `channel-adapter.md` to
+  `R-SEC-n` and never back.
+
+- **`doc-lint`'s `NUMERIC` rule rejects any bare digits in a requirement row**, so
+  `0600`, `600` and `4` all fail with a message about naming the tunable rather than
+  about the number. Spell it — "readable only by the owner", "the last few characters" —
+  and put the figure in the module constant where it belongs.
+
 - **"I could not tell" reaches this codebase from a subprocess as readily as from a file, and the
   rule was only ever applied to files.** `durable.read` tells `MISSING` from `UNREADABLE`,
   `_anything_left` answers "still there" when it cannot read, and `_end_left_running` keeps a record
