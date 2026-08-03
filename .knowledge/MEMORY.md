@@ -66,6 +66,17 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   Run the gate as **`<a checkout's>/.venv/bin/python .knowledge/scripts/gate`** while you are
   there: `gate` uses `sys.executable`, and a worktree with no `.venv` of its own otherwise
   skips all 208 Discord cases while printing `ok test_discord`.
+  **And it is not only `test_install` that the ceiling catches — `test_gateway` does it too,
+  from much further down.** The gate runs six suites at a time, so a loaded machine stretches
+  whichever suite happens to share a slot with the expensive ones. Measured here in one
+  sitting, on one unchanged tree: run one `FAIL test_install (180.0s)` with `test_gateway` at
+  37.4s; run two `ok test_install (171.7s)` and `FAIL test_gateway (180.0s)`; run three
+  `gate: OK` with both at 38.0s and 175.1s. `test_gateway` alone was 31.5s throughout. A suite
+  that normally finishes in a fifth of the ceiling reading `180.0s` is **the timeout, not the
+  suite** — run that one on its own and read its own "Ran N tests in Ns" line before believing
+  it is yours. `pgrep -f "/private/tmp/rundesk-<n>/tests/"` also finds another agent's gate
+  running in a copy of the checkout, which is the ordinary case here; wait it out rather than
+  killing it.
 - **Only `tests/test_install.py:38` copies the *checkout*; every other `copytree` in that file
   copies `REPO`.** So whatever that one line lets through is carried by all eighteen of them, and
   whatever it excludes is excluded everywhere. Untracked `ui/` and `site/` trees (~100 MB) beside
@@ -566,8 +577,31 @@ re-checked since, so treat these as true-when-found rather than as current.*
   `session/new`.** The root flag works in one-shot mode and is silently accepted by `agent stdio`,
   but a live ACP marker disappeared there. The session metadata field returned the exact marker
   and the indirect attachment protocol on 0.2.112. Do not send it on `session/load`: rules bind
-  when the conversation is created. Root `--tools` is also ignored by ACP and remains tracked in
-  issue #250 rather than being mistaken for a working read boundary.
+  when the conversation is created.
+- **Nothing on Grok's root command line scopes an ACP turn's tools — not `--tools`, and not the
+  `--allow`/`--deny` permission rules either.** All three are accepted in silence and the turn gets
+  every built-in: measured on 0.2.112, a session opened with `--tools read_file,list_dir,grep`
+  listed all 31 tools and ran `pwd` (#250). The one that holds is `session/new._meta.agentProfile`,
+  and unlike `_meta.rules` it **also binds on `session/load`**, so a resumed turn is narrowed by
+  the posture the owner holds now. Its `tools` is an allowlist only with
+  `injectDefaultTools: false`, and `search_tool`/`use_tool` survive it — take those out through
+  `disallowedTools` by their built-in ids, because `MCPTool` is a permission-rule class and
+  permission rules are the row above. Re-probe with
+  `python3 .knowledge/scripts/probe-grok --acp-tools` on every version bump.
+- **A `_meta.agentProfile` Grok cannot parse is not refused — the conversation quietly gets every
+  tool there is.** `session/new` returns a perfectly ordinary session id, and the only thing said
+  is one line on **stderr**: `ERROR Failed to parse _meta.agentProfile JSON object, falling back to
+  default agent`. Nothing in the ACP responses names which agent resolved, so there is no way to
+  confirm the boundary from the protocol — read the run's stderr, not the result.
+- **Grok's agent-definition field names are in the binary and in no document.** The installed
+  `docs/user-guide/15-agent-mode.md` says `_meta.agentProfile` takes an "Agent profile name or JSON
+  object" and stops there, and the bundled `~/.grok/bundled/agents/*.md` show only five snake_case
+  frontmatter keys — so a JSON object built from those is missing the ones that matter. The real
+  list is camelCase and comes out of
+  `LC_ALL=C grep -ao '.\{300\}disallowedToolseffort' ~/.grok/downloads/grok-macos-aarch64`:
+  `description promptMode toolConfig capabilityMode permissionMode skills discoverSkills
+  inheritSkills injectDefaultTools tools disallowedTools …`, 27 in all. Mine the binary before
+  guessing a field name here; a wrong one is the silent fallback above.
 - **Claude reports `loggedIn: false` on a signed-in machine when `USER` is unset.** Its
   sign-in is in the macOS login keychain (`Claude Code-credentials`, `acct=<username>`), and
   the lookup is keyed on the account name — so under the environment rundesk *builds*
@@ -694,6 +728,16 @@ re-checked since, so treat these as true-when-found rather than as current.*
   the subcommand choices: `rundesk agents ava` dies with `invalid choice: 'ava'`. That is why
   what an agent is told is written by `add --instructions` rather than by `agents ava
   instructions …`, and why any new per-agent action has to go somewhere else.
+- **`roles` is the one verb whose first word argparse never sees, so a test that calls
+  `cli.build_parser().parse_args(["roles", "ava", …])` no longer parses what a person
+  types.** Its actions are split — `add` and `edit` name nobody, the five about a run keep
+  their agent — which argparse cannot express (the trap above), so `cli._whose_role` takes
+  the agent out of the words in `main` before the parser is handed them. Two cases were
+  parsing directly and failed with `argument <action>: invalid choice: 'ava'`, which reads
+  exactly like the parser being wrong rather than like the test skipping a step. **Go
+  through the same door `main` does** — `_handed_on`, then `_whose_role`, then
+  `parse_args` — and pass a stand-in with `exists`, because the split asks whether an agent
+  answers to that name before reading it as an action.
 - **`store` runs with `PRAGMA foreign_keys=ON`, so a test writing a row that references another
   must write that one first.** A schedule with `channel="ops"` on an agent with no such channel
   is `sqlite3.IntegrityError: FOREIGN KEY constraint failed`, from the writer and not from
