@@ -1179,18 +1179,28 @@ def environment(home: Path, path: str | None = None, agents: Path | None = None,
     prefix = os.environ.get("RUNDESK_JOB_PREFIX")
     if prefix:
         said["RUNDESK_JOB_PREFIX"] = prefix
-    # **The owner's own environment, merged last and never over one of rundesk's own**
-    # (R-SEC-14). The refusal is `name in said` rather than a list consulted here: whatever
-    # rundesk just decided a program is told is exactly what a value may not be called, so
-    # the two cannot come apart however this function grows — and a name added above this
-    # line is refused from the moment it lands, with nobody re-running a command.
-    #
-    # `secret.checked` says the same thing at a terminal, in words, before anything is
-    # written, and `secret.resolve` says it again over what is already kept. This is the
-    # one that is true whatever is in that file, including after a hand-edit.
-    #
-    # Sorted, so the same set is the same bytes every spawn and one transcript can be
-    # compared with another (R-PRV-16).
+    return told(said, secrets)
+
+
+def told(said: dict[str, str], secrets: Mapping[str, str] | None) -> dict[str, str]:
+    """A built environment, plus the owner's own values — **never over one of rundesk's**.
+
+    The rule is `name in said` rather than a list consulted here (R-SEC-14): whatever
+    rundesk just decided a program is told is exactly what a value may not be called, so
+    the two cannot come apart however the builder above grows — and a name added to it is
+    refused from the moment it lands, with nobody re-running a command.
+
+    `secret.checked` says the same thing at a terminal, in words, before anything is
+    written, and `secret.resolve` says it again over what is already kept. This is the one
+    that is true whatever is in that file, including after somebody edits it by hand.
+
+    Apart from `environment` because a gateway adds what belongs to its own lifetime to an
+    environment that was built earlier, and has to merge into *that* — one rule, asked in
+    both places, rather than a second copy of it that agrees today.
+
+    Sorted, so the same set is the same bytes every spawn and one transcript can be
+    compared with another (R-PRV-16).
+    """
     for name in sorted(secrets or {}):
         if name not in said:
             said[name] = secrets[name]

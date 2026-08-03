@@ -22,7 +22,7 @@ again each time a program starts. Nothing rundesk shows ever gives a whole value
 
 |  | ID | Requirement | Evidence |
 |:--:|---|---|---|
-| ✅ | R-SEC-1 | Every program rundesk starts is given every value this install keeps (R-PROC-1) | `every program is given every value this install keeps`, `a program is given nothing of its own when this install keeps nothing` |
+| ✅ | R-SEC-1 | Every program rundesk starts is given every value this install keeps (R-PROC-1) | `every program is given every value this install keeps`, `a brain and every command it runs is given them`, `every adapter is given the values this install keeps` |
 | ✅ | R-SEC-2 | The values are the install's, resolved from where it keeps them rather than from any agent | `every kept value is produced`, `its own variable says where things are kept` |
 | ✅ | R-SEC-3 | A value is either held by this install or fetched by a command rundesk runs | `a held value is kept where nothing else can read it`, `the command is kept and what it printed is not` |
 | ✅ | R-SEC-4 | What this install records about a value never holds the value | `what is kept holds no value` |
@@ -35,7 +35,7 @@ again each time a program starts. Nothing rundesk shows ever gives a whole value
 | ✅ | R-SEC-11 | A name rundesk itself decides for the programs it starts is refused | `every name rundesk decides for a program is refused` |
 | ✅ | R-SEC-12 | A name that would change what code a program loads or runs is refused | `a name that changes which code a program loads is refused` |
 | ✅ | R-SEC-13 | A name that could reach outside where values are kept is refused | `a name that could reach outside where values are kept is refused` |
-| ✅ | R-SEC-14 | A value rundesk was not allowed to keep is left out of what a program is given | `a value rundesk was not allowed to keep is left out` |
+| ✅ | R-SEC-14 | A value rundesk was not allowed to keep is left out of what a program is given | `a value rundesk was not allowed to keep is left out`, `what a gateway already decided survives a value claiming its name` |
 | ✅ | R-SEC-15 | A command that gives nothing back leaves nothing kept under that name | `a command that gives nothing back keeps nothing` |
 | ✅ | R-SEC-16 | A value that cannot be produced when a program starts is left out rather than emptied | `a value that cannot be fetched is left out rather than emptied`, `a held value whose file went missing is said rather than passed over` |
 | ✅ | R-SEC-17 | A command that could not answer is told apart from one that answered that there is no value | `a command that will not answer is not a command that said no`, `a command that is not there is a definite answer` |
@@ -50,7 +50,7 @@ again each time a program starts. Nothing rundesk shows ever gives a whole value
 | ✅ | R-SEC-26 | What is kept stands outside everything a copy of this install holds | `what is kept stands outside everything a copy of this install holds`, `the default stands outside the installs own data` |
 | ✅ | R-SEC-27 | What is kept and cannot be read is refused rather than read as nothing being kept | `what is kept and cannot be read is said rather than taken as nothing` |
 | ✅ | R-SEC-28 | What is kept cannot grow past what a program can be started with | `what is kept cannot grow past what a program can be started with` |
-| ✅ | R-SEC-29 | A value a caller already has its own answer for is left out of what it is given | `what the caller already has an answer for is left out` |
+| ✅ | R-SEC-29 | A value a caller already has its own answer for is left out of what it is given | `what the caller already has an answer for is left out`, `a surface is never given the value it reads its own credential from` |
 | ✅ | R-SEC-30 | Producing the values never runs a fetching command on the loop a gateway is carrying work on | `the same answer is given off the event loop` |
 | ✅ | R-SEC-31 | Where values are kept stands where an integration command already looks for its own | `it stands where every integration command already looks`, `a relative configuration home is ignored rather than resolved`, `where values are kept is printed and nothing else` |
 

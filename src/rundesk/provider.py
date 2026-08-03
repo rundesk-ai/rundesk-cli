@@ -237,6 +237,7 @@ def environment(
     path: str | None = None,
     preface: str | None = None,
     role_run: str | None = None,
+    secrets: dict | None = None,
 ) -> dict[str, str]:
     """Everything an adapter is told, and the whole of it (R-PRV-3).
 
@@ -251,7 +252,15 @@ def environment(
     """
     if posture not in POSTURES:
         raise ValueError(f"'{posture}' is not how much of a machine a turn may touch")
-    said = process.environment(home, path=path)
+    # **The install's own values arrive already produced** (R-SEC-1). They are merged by
+    # the builder below rather than here, so they can never take a name rundesk decided —
+    # and they are handed in rather than looked up, because producing one may run a
+    # program somebody else wrote and this is called from inside a turn's event loop.
+    #
+    # This is what carries a credential to an *integration command*: a brain's tool shell
+    # is a child of the program started with this, so `cf-cli` finds `CLOUDFLARE_API_TOKEN`
+    # as an ordinary variable with nobody having exported anything.
+    said = process.environment(home, path=path, secrets=secrets)
     said["RUNDESK_CWD"] = str(cwd)
     # **Where this agent's skills stand, not which brain looks where** (R-PRV-24). Every
     # brain measured discovers skills by itself, and each reads a directory of its own —

@@ -57,6 +57,7 @@ from rundesk.welcome import (  # noqa: F401 — reached as gateway.<name> by com
 from rundesk.durable import UNREADABLE, Unreadable, read, read_json, write_whole
 from rundesk import process
 from rundesk import restart_request
+from rundesk import secret
 from rundesk import schedule
 from rundesk import store
 from rundesk import update_request
@@ -804,7 +805,13 @@ class Gateway:
         asking=None,
         roles=None,
         granted=None,
+        secrets_resolving=None,
     ):
+        #: How the values every program this gateway starts is given are produced. An
+        #: argument, and resolved at call time rather than bound here, so a suite drives
+        #: the whole of this with no vault, no keeper and no store on the machine — and so
+        #: a gateway that keeps none still asks the same question the same way.
+        self._secrets_resolving = secrets_resolving
         self.name = checked(name)
         self.where = where or home()
         self.logs = logs or logs_home()
@@ -1102,7 +1109,7 @@ class Gateway:
                 # hours by design, and a clock that ends one is a clock that ends the
                 # thing a held-open surface exists for (R-PROC-6).
                 outcome = await self.start(
-                    [str(one.program)], as_name=held, env=self._for_a_channel(one),
+                    [str(one.program)], as_name=held, env=await self._for_a_channel(one),
                     silence=None, ceiling=None, takes_input=True,
                     sink=answering.heard,
                     # As it is said, not when the program ends. A channel is held open
@@ -1134,7 +1141,30 @@ class Gateway:
                              one.name, outcome.reason, int(CHANNEL_AGAIN_SECONDS))
             await asyncio.sleep(CHANNEL_AGAIN_SECONDS)
 
-    def _for_a_channel(self, one) -> dict[str, str]:
+    async def _kept(self, exclude=()) -> dict:
+        """The values every program started from here is given, produced now.
+
+        **Produced per spawn and never held**, which is what makes replacing one take
+        effect without restarting anything: a brain gets the new value on its next turn,
+        and an adapter on its next start.
+
+        A value that could not be produced is left out and **said in this gateway's own
+        log** — the account that outlives the gateway. What is said is the name, which kind
+        of not-given it was, and rundesk's own words for it. Never the keeper's own output,
+        which routinely holds the thing it was reading, and never the value.
+        """
+        resolving = self._secrets_resolving or secret.resolved
+        said = await resolving(exclude=exclude)
+        if said.unreadable:
+            self.log.warning("the values this install keeps could not be read (%s) — "
+                             "no program started now is given any of them", said.unreadable)
+        for one in said.trouble:
+            self.log.warning(
+                "value '%s' was not given to what is starting — %s", one.name,
+                one.why if one.answered else f"could not answer: {one.why}")
+        return said.values
+
+    async def _for_a_channel(self, one) -> dict[str, str]:
         """What one adapter is told that belongs to this gateway lifetime."""
         said = dict(one.env)
         said["RUNDESK_GATEWAY"] = self._instance
@@ -1153,7 +1183,18 @@ class Gateway:
         where = updater.release_url(__version__)
         if where:
             said["RUNDESK_RELEASE_URL"] = where
-        return said
+        # **Merged here rather than where the rest of this adapter's environment was
+        # built**, and that is not tidiness. What an agent resolved is built once, when
+        # this gateway took its channels; this runs on every adapter start, including
+        # every restart after a crash — so a value replaced an hour ago reaches the
+        # adapter the next time it comes up rather than the next time the machine
+        # restarts the whole gateway (R-SEC-1).
+        #
+        # **Never what this surface reads its own credential from** (R-SEC-29). The
+        # adapter reads its variable before the file beside it, and two agents may hold
+        # two different bots — one install-wide value would make them the same bot,
+        # silently, with each record still naming a file nobody read.
+        return process.told(said, await self._kept(exclude=one.channel_secrets))
 
     async def _write_to(self, held: str, record: bytes) -> None:
         """Say something to a channel that is running, or say why it could not be said."""
@@ -2333,7 +2374,7 @@ class Gateway:
                     one, held, admitted=lambda: self._told_the_surface_it_started(one))
             else:
                 ran = await self.start(list(one.run), as_name=held,
-                                       env=self._for_a_schedule(one.name))
+                                       env=await self._for_a_schedule(one.name))
                 result = ran.reason
         except AlreadyStarted:
             # R-SCH-7: said, not passed over. A schedule quietly skipping every time
@@ -2483,7 +2524,7 @@ class Gateway:
             self.log.warning("channel '%s': could not say what '%s' did: %s",
                              one.channel, one.name, why)
 
-    def _for_a_schedule(self, named: str) -> dict[str, str]:
+    async def _for_a_schedule(self, named: str) -> dict[str, str]:
         """The environment a scheduled program is given: the ordinary one, and which schedule.
 
         One variable more than anything else this gateway starts, and it is here for the
@@ -2495,7 +2536,9 @@ class Gateway:
         """
         said = process.environment(self.where, agents=self.agents)
         said[SCHEDULE_IS] = named
-        return said
+        # The install's own values, produced now rather than when this gateway came up, so
+        # a schedule firing tonight uses the credential replaced this afternoon (R-SEC-1).
+        return process.told(said, await self._kept())
 
     async def _asked(self, one, held: str, admitted=None):
         """Admit a turn for a schedule that asks one, and hand back how it ended.

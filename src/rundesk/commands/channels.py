@@ -13,13 +13,13 @@ import asyncio
 import contextlib
 import getpass
 import os
-import shutil
 import sys
 from pathlib import Path
 
 from rundesk import channel
 from rundesk import gateway as _gateway
 from rundesk import migration
+from rundesk import secret
 from rundesk import standing
 from rundesk import store
 from rundesk.commands import _as_table, _note
@@ -102,11 +102,12 @@ def _took_a_secret(args: argparse.Namespace, said: dict, home: Path) -> bool:
     if not given:
         return False
     home.mkdir(parents=True, exist_ok=True)
-    at = home / SECRET_FILE
-    at.write_text(given + "\n", encoding="utf-8")
-    # Nobody else's to read. What is kept about a channel says a credential is present and
-    # never what it is (R-CAD-12); this file is the credential, so the mode is the guard.
-    os.chmod(at, 0o600)
+    # Nobody else's to read, **from the moment it exists**. What is kept about a channel says
+    # a credential is present and never what it is (R-CAD-12); this file is the credential, so
+    # the mode is the guard — and a `write_text` narrowed by a `chmod` afterwards leaves a
+    # window in which anybody on the machine can read it. `secret.write_private` is the shared
+    # form that opens with the mode and refuses to follow a link planted at the path.
+    secret.write_private(home / SECRET_FILE, given + "\n")
     return True
 
 
@@ -204,8 +205,12 @@ def _add_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
         # channel that proved itself at the terminal and cannot sign in at start-up.
         kept_secret = home / SECRET_FILE
         if kept_secret.is_file() and beside != home:
-            shutil.copy2(kept_secret, beside / SECRET_FILE)
-            os.chmod(beside / SECRET_FILE, 0o600)
+            # Written rather than copied, for the reason above: `copy2` creates at the
+            # umask and the mode arrives afterwards, so the value is briefly readable by
+            # anybody on the machine — on a path a person never typed and would not think
+            # to look at.
+            secret.write_private(
+                beside / SECRET_FILE, kept_secret.read_text(encoding="utf-8"))
         # **A new channel has introduced this agent to nobody**, written down before the
         # record exists so that everybody in the list that follows is owed one (R-CH-33).
         # This is also what tells a channel added today from one an older release wrote:
@@ -410,14 +415,36 @@ def _show_channel(args: argparse.Namespace, gateways, agents, whose) -> int:
     # However many a surface needs — one that opens a connection with one credential and
     # calls its API with another names both, and an owner has to be told which of them is
     # missing rather than that "the secret" is.
-    named = (it.get("secret") or {}).get("env") or []
-    named = [named] if isinstance(named, str) else named
+    kept = channel.named(it.get("secret")) or {}
+    named = kept.get("env") or []
+    home = agents.channel_home(args.name, args.channel)
+
+    def stands(one: str) -> str:
+        """Whether this credential is really there — **asked of both places it may be**.
+
+        The flow the documentation recommends never exports anything: `--token-stdin`
+        writes the value beside the channel, which is where the adapter reads it. Asked
+        only of this command's own shell, a channel that signs in perfectly reported
+        `not set` and sent an owner to fix something that was not wrong.
+
+        **What this install keeps is deliberately not consulted** (R-SEC-29). A value of
+        the same name is never given to this adapter — two agents may hold two different
+        bots — so counting one here would report a credential that does not arrive.
+        """
+        if os.environ.get(one):
+            return "present"
+        # Looked for and never opened: what is kept about a channel says a credential is
+        # present and never what it is (R-CAD-12).
+        with contextlib.suppress(OSError):
+            if (home / SECRET_FILE).is_file():
+                return "present"
+        return "not set"
+
     rows = [
         ("kind", str(it.get("kind", "-"))),
         ("points at", str(it.get("describes") or "-")),
         ("allowed", ", ".join(it.get("allow") or []) or "nobody"),
-        ("secret", ", ".join(
-            f"{one} — {'present' if os.environ.get(one) else 'not set'}" for one in named)
+        ("secret", ", ".join(f"{one} — {stands(one)}" for one in named)
             or "none needed"),
         ("instructions", str(it.get(channel.INSTRUCTIONS)
                      or "nothing of its own — rundesk says where it is")),

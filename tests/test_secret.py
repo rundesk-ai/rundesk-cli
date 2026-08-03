@@ -426,6 +426,19 @@ class WhatEveryProgramIsGiven(WithSomewhereToKeepThings):
 
         self.assertFalse(marker.exists())
 
+    def test_a_brain_and_every_command_it_runs_is_given_them(self):
+        """R-SEC-1 — the delivery for an integration command, end to end at the seam: a
+        brain's tool shell is a child of the program started with this environment, so
+        `cf-cli` finds its credential as an ordinary variable with nothing exported."""
+        from rundesk import provider
+
+        built = provider.environment(
+            home=self.where, cwd=self.where, provider_home=self.where,
+            skills=self.where, run="a-run", secrets={"CLOUDFLARE_API_TOKEN": "cf-x"})
+
+        self.assertEqual("cf-x", built["CLOUDFLARE_API_TOKEN"])
+        self.assertNotEqual("cf-x", built["PATH"], "a value took a name rundesk decided")
+
     def test_the_same_answer_is_given_off_the_event_loop(self):
         """A keeper is a program somebody else wrote and may take seconds; run on the loop
         it would hold every other turn and channel the gateway is carrying."""
@@ -489,6 +502,34 @@ class WhereThingsAreKept(unittest.TestCase):
         self.assertNotEqual(kept, data_home().resolve())
         self.assertNotIn(data_home().resolve(), kept.parents)
         self.assertNotIn(backups_home().resolve(), kept.parents)
+
+    def test_the_installer_and_this_module_resolve_the_same_place(self):
+        """The one rule this feature writes down twice, and the guard on it.
+
+        A purge runs while the command is being taken off the machine, so the installer
+        cannot ask `rundesk env --where` for the answer — it works the directory out in
+        shell. Two copies of a rule is two rules, and the day they disagree is the day a
+        purge reports removing credentials it left behind, or deletes a directory nobody
+        pointed it at. Asserted by running the installer's own lines.
+        """
+        import subprocess
+
+        script = (Path(__file__).resolve().parent.parent / "install.sh").read_text()
+        lines = [one for one in script.splitlines()
+                 if one.startswith(("CONFIG_DIR=", "SECRETS_DIR="))]
+        self.assertEqual(2, len(lines), "the installer no longer resolves it this way")
+
+        for pointed in ({"XDG_CONFIG_HOME": str(self.where / "config")},
+                        {"RUNDESK_SECRETS_DIR": str(self.where / "elsewhere")},
+                        {}):
+            with self.subTest(pointed=pointed):
+                self.point(**pointed)
+                os.environ["HOME"] = str(self.where)
+                said = subprocess.run(
+                    ["/bin/bash", "-c", "\n".join(lines) + '\nprintf %s "$SECRETS_DIR"'],
+                    stdout=subprocess.PIPE, check=True,
+                    env={**os.environ, "HOME": str(self.where)}).stdout.decode()
+                self.assertEqual(str(secret.home()), said)
 
     def test_the_default_stands_outside_the_installs_own_data(self):
         """The one that matters, because it is the one nobody redirects."""
