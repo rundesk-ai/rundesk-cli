@@ -6,3 +6,9 @@
 # no websocket client, so a Discord gateway cannot be reached without one. Pinned exactly,
 # because an install that resolves differently on two machines is two different products.
 discord.py==2.7.1
+
+# slack_sdk is here for the same reason and on the same terms. Its *built-in* Socket Mode
+# client implements the websocket protocol itself, so this line adds exactly one package
+# and nothing behind it — the aiohttp, websockets and websocket-client variants are all
+# optional extras and none of them is installed.
+slack_sdk==3.43.0
