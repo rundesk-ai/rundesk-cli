@@ -321,20 +321,19 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
         else:
             os.environ["RUNDESK_PREFACE"] = self.was
 
-    def opening(self, posture="work", model=None, extra=None, preface=None):
+    def opening(self, model=None, extra=None, preface=None):
         if preface is None:
             os.environ.pop("RUNDESK_PREFACE", None)
         else:
             os.environ["RUNDESK_PREFACE"] = preface
-        return grok.opening(posture, model, extra or {})
+        return grok.opening(model, extra or {})
 
     def test_tools_are_approved_headlessly_without_the_ignored_mode(self):
-        for posture in ("read", "work"):
-            argv = self.opening(posture=posture)
-            self.assertNotIn("dontAsk", argv)
-            self.assertEqual("bypassPermissions",
-                             argv[argv.index("--permission-mode") + 1])
-            self.assertEqual(["agent", "--always-approve", "stdio"], argv[-3:])
+        argv = self.opening()
+        self.assertNotIn("dontAsk", argv)
+        self.assertEqual("bypassPermissions",
+                         argv[argv.index("--permission-mode") + 1])
+        self.assertEqual(["agent", "--always-approve", "stdio"], argv[-3:])
 
     def test_cross_session_memory_and_background_updates_are_off(self):
         argv = self.opening()
@@ -342,21 +341,37 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
         self.assertIn("--no-auto-update", argv)
 
     def test_a_flag_that_enforces_nothing_is_never_passed(self):
-        for posture in ("read", "work"):
-            self.assertNotIn("--sandbox", self.opening(posture=posture))
+        self.assertNotIn("--sandbox", self.opening())
         passing = re.findall(r"^[^#\n]*[\"']--sandbox[\"']", AT.read_text(), re.M)
         self.assertEqual([], passing)
 
-    def test_a_read_turn_gets_only_the_measured_read_tools(self):
-        argv = self.opening(posture="read")
-        self.assertEqual(
-            ["read_file", "list_dir", "grep"],
-            argv[argv.index("--tools") + 1].split(","),
-        )
-        self.assertNotIn("run_terminal_command", argv[argv.index("--tools") + 1])
+    def test_a_posture_is_never_claimed_on_a_flag_acp_does_not_read(self):
+        """R-PRV-18 — the root tool and permission flags are headless-only (#250).
+
+        `grok agent stdio` accepts every one of them and hands the turn each built-in
+        anyway, so passing one would read as a boundary and be none. The command line is
+        asked, and so is the file: a flag reintroduced anywhere in it fails here.
+        """
+        argv = self.opening()
+        for flag in ("--tools", "--disallowed-tools", "--allow", "--deny"):
+            self.assertNotIn(flag, argv)
+            self.assertEqual(
+                [], re.findall(rf"^[^#\n]*[\"']{flag}[\"']", AT.read_text(), re.M), flag)
+
+    def test_a_read_turn_is_scoped_to_only_the_measured_read_tools(self):
+        """R-PRV-18 — what the conversation is opened as, not what the argv says."""
+        profile = grok.scoped("read")
+        self.assertEqual(["read_file", "list_dir", "grep"], profile["tools"])
+        self.assertNotIn("run_terminal_command", profile["tools"])
+        # An allowlist alone leaves the MCP meta-tools standing, which is the route an
+        # owner's own configured server would still be reachable through.
+        self.assertEqual(["search_tool", "use_tool"], profile["disallowedTools"])
+        self.assertIs(False, profile["injectDefaultTools"])
+        # Added to what this brain was built with, never in place of it.
+        self.assertEqual("extend", profile["promptMode"])
 
     def test_a_work_turn_gets_every_builtin(self):
-        self.assertNotIn("--tools", self.opening())
+        self.assertIsNone(grok.scoped("work"))
 
     def test_standing_instructions_are_not_left_on_the_ignored_root_command(self):
         argv = self.opening(preface="Public room.")
@@ -392,10 +407,16 @@ class WhatTheAdapterDecidesOnItsOwn(unittest.TestCase):
         self.assertEqual("a-model", argv[argv.index("-m") + 1])
 
 
+#: An ACP stand-in that honours the tool scoping the way the measured CLI does — the
+#: session's agent profile decides the toolset, and nothing on the command line does
+#: (#250). So a turn admitted to `read` reaches a shell here only if the adapter failed
+#: to narrow the conversation, which is the defect itself rather than a restatement of
+#: the argv the adapter built.
 FAKE_GROK = r'''#!/usr/bin/env python3
 import json, os, sys
 
 log = os.environ["FAKE_GROK_LOG"]
+allowed = None                       # None is this vendor's "every built-in"
 
 def send(message):
     sys.stdout.write(json.dumps(message) + "\n")
@@ -405,6 +426,17 @@ def note(kind, **fields):
     send({"jsonrpc":"2.0", "method":"session/update",
           "params":{"sessionId":"new-session",
                     "update":{"sessionUpdate":kind, **fields}}})
+
+def scope(params):
+    global allowed
+    profile = (params.get("_meta") or {}).get("agentProfile")
+    if not isinstance(profile, dict):
+        return
+    refused = profile.get("disallowedTools") or []
+    allowed = [one for one in (profile.get("tools") or []) if one not in refused]
+    if not profile.get("injectDefaultTools", True):
+        return
+    allowed = None                   # a stock profile injects its optional tools first
 
 for line in sys.stdin:
     request = json.loads(line)
@@ -419,8 +451,10 @@ for line in sys.stdin:
     elif method == "authenticate":
         result = {}
     elif method == "session/new":
+        scope(request["params"])
         result = {"sessionId":"new-session"}
     elif method == "session/load":
+        scope(request["params"])
         note("agent_message_chunk", content={"type":"text","text":"old reply"})
         send({"jsonrpc":"2.0", "method":"_x.ai/session_notification",
               "params":{"sessionId":"new-session",
@@ -431,10 +465,11 @@ for line in sys.stdin:
         result = {}
     elif method == "session/prompt":
         note("agent_thought_chunk", content={"type":"text","text":"working"})
-        note("tool_call", toolCallId="tool-1", title="run_terminal_command",
-             rawInput={"command":"true"})
-        note("tool_call_update", toolCallId="tool-1", status="completed",
-             rawOutput={"exitCode":0})
+        if allowed is None or "run_terminal_command" in allowed:
+            note("tool_call", toolCallId="tool-1", title="run_terminal_command",
+                 rawInput={"command":"true"})
+            note("tool_call_update", toolCallId="tool-1", status="completed",
+                 rawOutput={"exitCode":0})
         note("agent_message_chunk", content={"type":"text","text":"done"})
         send({"jsonrpc":"2.0", "method":"_x.ai/session_notification",
               "params":{"sessionId":"new-session",
@@ -469,13 +504,13 @@ class TheWholeACPConversation(unittest.TestCase):
                 path.rmdir()
         self.where.rmdir()
 
-    def run_adapter(self, resume=None, preface="Standing rule."):
+    def run_adapter(self, resume=None, preface="Standing rule.", posture="work"):
         env = dict(os.environ)
         env.update({
             "RUNDESK_GROK_BIN": str(self.fake),
             "RUNDESK_CWD": str(self.where),
             "RUNDESK_PROVIDER_HOME": str(self.where / "provider"),
-            "RUNDESK_POSTURE": "work",
+            "RUNDESK_POSTURE": posture,
             "RUNDESK_RUN": "one",
             "FAKE_GROK_LOG": str(self.log),
         })
@@ -545,6 +580,47 @@ class TheWholeACPConversation(unittest.TestCase):
         _, _, protocol = self.run_adapter()
         prompted = next(one for one in protocol if one["method"] == "session/prompt")
         self.assertEqual("do one thing", prompted["params"]["prompt"][0]["text"])
+
+    def test_a_read_conversation_is_opened_as_an_agent_that_only_has_the_read_tools(self):
+        """R-PRV-18 — the boundary, proved where Grok actually applies one (#250).
+
+        Asserted on the turn rather than on the argv: what the adapter builds before ACP
+        starts is exactly what this defect was, so a command-line assertion agreed with
+        the broken build. The stand-in scopes itself from `session/new` the way the
+        measured CLI does, so a shell reaching this turn's records means the conversation
+        was never narrowed.
+        """
+        done, said, protocol = self.run_adapter(posture="read")
+        self.assertEqual(0, done.returncode, done.stderr)
+        self.assertEqual([], only(said, "tool"), "a shell reached a turn admitted to read")
+        self.assertNotIn("run_terminal_command", done.stdout)
+        self.assertEqual(["think", "text", "usage", "done"],
+                         [one["type"] for one in said])
+        created = next(one for one in protocol if one["method"] == "session/new")
+        self.assertEqual(grok.scoped("read"),
+                         (created["params"].get("_meta") or {}).get("agentProfile"))
+
+    def test_a_read_conversation_is_narrowed_again_each_time_it_is_carried_on(self):
+        """R-PRV-18 — a posture is the owner's current answer, not the conversation's.
+
+        Measured on 0.2.112: `_meta.agentProfile` binds on `session/load` as well, unlike
+        the standing rules beside it. Without sending it again, an agent narrowed to
+        `read` after a working conversation was opened keeps that conversation's whole
+        tool set for as long as it is resumed.
+        """
+        done, said, protocol = self.run_adapter(resume="old-session", posture="read")
+        self.assertEqual(0, done.returncode, done.stderr)
+        self.assertEqual([], only(said, "tool"), "a shell reached a turn admitted to read")
+        loaded = next(one for one in protocol if one["method"] == "session/load")
+        self.assertEqual({"agentProfile": grok.scoped("read")},
+                         loaded["params"].get("_meta"))
+
+    def test_a_work_conversation_is_opened_as_no_agent_of_ours(self):
+        """R-PRV-18 — `work` is every built-in, and a list of names cannot stay complete."""
+        _, said, protocol = self.run_adapter()
+        created = next(one for one in protocol if one["method"] == "session/new")
+        self.assertNotIn("agentProfile", created["params"]["_meta"])
+        self.assertEqual("run", only(said, "tool")[0]["did"])
 
 
 class WhatThisBrainCanDo(unittest.TestCase):

@@ -14,13 +14,22 @@ updates carried `tool_call` and `tool_call_update` records with a stable id, inp
 and output. `grok agent stdio` is the vendor's documented integration surface and preserves
 those records while keeping the prompt off the process list.
 
-Three flags decide whether this adapter is honest, and two of them are traps:
+Four flags decide whether this adapter is honest, and three of them are traps:
 
 **`--permission-mode dontAsk` is accepted and silently ignored.** It shipped once in the
 build this replaces: an agent given every write tool was then denied all of them, wrote
 nothing, explained itself in prose, and the turn reported success. Nothing in a test suite
-could see it. The tool list scopes what the CLI may do; `bypassPermissions` lets those tools
-run headlessly instead of cancelling when nobody is there to approve them.
+could see it. `session/new._meta.agentProfile` scopes what the CLI may do;
+`bypassPermissions` lets those tools run headlessly instead of cancelling when nobody is
+there to approve them.
+
+**`--tools` is accepted by this process and reaches no ACP turn.** The vendor documents it
+as headless-only; `grok agent stdio` prints no warning and hands the turn every built-in.
+It shipped that way, so a read-posture turn ran `run_terminal_command` and returned the
+working directory while the argv looked deliberate (#250) — the `dontAsk` failure exactly,
+on the flag that had been the fix for it. The same is true of the `--allow` / `--deny`
+permission rules, measured in the same run. What holds is an agent profile handed over
+where the conversation is created, which is `scoped` below.
 
 **`--sandbox` is a no-op headless.** Under `read-only` it created a file through its own
 tool and through a shell redirect; under `strict` it read a planted marker well outside the
@@ -75,22 +84,36 @@ DID = {
     "create_file": "make",
 }
 
-#: Which tools a turn may reach for, per posture (R-PRV-18). The tool list is the only
-#: thing measured to scope this CLI, so this is the whole of how a posture is honoured.
+#: Which tools a turn may reach for, per posture (R-PRV-18).
 #:
 #: `run_terminal_command` is deliberately absent from `read`: it is the only shell this CLI
 #: offers and it cannot be scoped to a command prefix the way another brain scopes its
 #: shell, so there is no partial version of it to grant — and the sandbox that would have
 #: contained it does not hold.
+#:
+#: **Delivered through ACP, never through the root command line.** Root `--tools` is this
+#: CLI's own documented headless-only flag: `grok agent stdio` accepts it, says nothing,
+#: and hands the turn every built-in anyway. Measured 2026-08-02 against 0.2.112 — a read
+#: turn opened with `--tools read_file,list_dir,grep` listed all 31 built-ins, called
+#: `run_terminal_command` and returned the working directory (#250). What holds is
+#: `session/new._meta.agentProfile`, below.
 ALLOWED = {
     "read": ("read_file", "list_dir", "grep"),
 }
 
-#: The posture that is not a list. `work` passes no `--tools` at all, which is this CLI's
-#: way of saying "every built-in": measured 2026-07-27 against 0.2.112 — with the flag left
-#: off entirely a turn created a file, and with the read list it could not. A list of six
-#: names cannot stay complete, and a tool this CLI gains next release would be one a working
-#: turn was silently refused.
+#: The two an allowlist alone leaves standing. Documented as the always-on MCP meta-tools
+#: and measured to survive `tools`: a scoped turn came back naming `read_file, list_dir,
+#: grep, search_tool, use_tool`. They are the route an owner's globally configured MCP
+#: server would still be reachable through, so they are named to `disallowedTools` — which
+#: this vendor documents as winning over the allowlist — and the same turn then named
+#: exactly the three. They are asked for by their built-in ids: `MCPTool` is a
+#: permission-rule class, and permission rules do not reach this transport either.
+BESIDES = ("search_tool", "use_tool")
+
+#: The posture that is not a list. `work` opens its conversation as no agent of ours at
+#: all, which is this CLI's way of saying "every built-in". A list of names cannot stay
+#: complete, and a tool this CLI gains next release would be one a working turn was
+#: silently refused.
 FULLY = "work"
 
 #: What this CLI says when the home it was given has no login in it. Measured against a
@@ -149,12 +172,15 @@ def _flags(extra: dict) -> list:
     return list(given)
 
 
-def opening(posture: str, model, extra: dict) -> list:
+def opening(model, extra: dict) -> list:
     """Everything after the program's name, and why each part of it is there.
 
     Kept in one function with no side effects so a test can read the whole command line
     without starting anything — which is what holds the two silent traps above to what was
     measured rather than to what somebody remembered.
+
+    **The posture is deliberately not an argument.** Nothing this command line can carry
+    scopes an ACP turn, so a parameter here would read like a boundary and be none.
     """
     argv = ["--no-auto-update"]
 
@@ -166,18 +192,12 @@ def opening(posture: str, model, extra: dict) -> list:
     # Headless means there is nobody at a terminal to approve a tool. Without this, Grok
     # emits `stopReason: Cancelled` with exit 0 as soon as a turn reaches one — a working
     # posture that cannot inspect a file. This mode is measured to apply; `dontAsk` is not.
-    # What the turn may touch remains the tool list below: read gets three read tools and
-    # work deliberately gets every built-in.
+    # What the turn may touch is decided where the conversation is created, by `scoped`
+    # below, because nothing on this command line reaches ACP to decide it.
     argv += ["--permission-mode", "bypassPermissions"]
 
     if model:
         argv += ["-m", model]
-
-    # The posture, as the only thing measured to hold it. `--allow` takes one rule per flag
-    # and rejects a space-separated list; `--tools` takes the comma-separated built-in
-    # names, which is what this is.
-    if posture != FULLY:
-        argv += ["--tools", ",".join(ALLOWED[posture])]
 
     argv += _flags(extra)
     # ACP is the vendor's integration surface. `--always-approve` belongs after `agent`
@@ -185,6 +205,45 @@ def opening(posture: str, model, extra: dict) -> list:
     # the exact headless policy measured to prevent a tool turn ending as Cancelled.
     argv += ["agent", "--always-approve", "stdio"]
     return argv
+
+
+def scoped(posture: str):
+    """The agent an ACP conversation is opened as, when its posture is narrower than
+    every built-in — or nothing at all, which is how `work` says "every built-in".
+
+    This is the whole of how a posture is honoured on this brain (R-PRV-18). ACP resolves
+    a session's agent definition when the conversation is made, and `_meta.agentProfile`
+    is where a client hands one over — the same seam standing rules already arrive by
+    (R-PRV-23), and for the same reason: the root command line does not reach this
+    transport. Measured 2026-08-02 against 0.2.112, on both `session/new` and
+    `session/load`.
+
+    `injectDefaultTools` is what makes `tools` an allowlist rather than an addition: this
+    vendor documents a stock profile as injecting its optional tools *before* the
+    allowlist is applied, and only a curated one as staying strict.
+
+    Pure and side-effect free, so the exact object crossing the seam is readable offline.
+
+    **Its one drift signal is on stderr and nowhere else.** A profile this vendor cannot
+    parse is not refused — `session/new` succeeds and the conversation quietly gets the
+    default agent, which is every tool there is. The only thing said is
+    `Failed to parse _meta.agentProfile JSON object, falling back to default agent`, on
+    the stream `_drained` passes straight on. Re-probe with
+    `.knowledge/scripts/probe-grok --acp-tools` when this CLI's version moves.
+    """
+    if posture not in ALLOWED:
+        return None
+    return {
+        "name": f"rundesk-{posture}",
+        "description": f"A Rundesk turn admitted to {posture} only.",
+        # Added to what this brain was built with, never in place of it. The neighbouring
+        # trap on Codex — an instruction field that silently replaced the vendor's own
+        # prompt and left the model looking broken — is the same shape.
+        "promptMode": "extend",
+        "injectDefaultTools": False,
+        "tools": list(ALLOWED[posture]),
+        "disallowedTools": list(BESIDES),
+    }
 
 
 def records(line: str, seen: dict) -> list:
@@ -446,7 +505,7 @@ def carry() -> int:
         say(type="done", ok=False, why="nothing was asked")
         return 1
 
-    argv = [GROK] + opening(posture, os.environ.get("RUNDESK_MODEL"), _settings())
+    argv = [GROK] + opening(os.environ.get("RUNDESK_MODEL"), _settings())
 
     # **`GROK_HOME` is deliberately not set, and the working directory is why.** Measured:
     # this brain files its conversations under the directory a turn was run in —
@@ -463,6 +522,7 @@ def carry() -> int:
     preface = (os.environ.get("RUNDESK_PREFACE") or "").strip()
     return _turn(
         argv, where, dict(os.environ), asked, os.environ.get("RUNDESK_RESUME"), preface,
+        scoped(posture),
     )
 
 
@@ -514,7 +574,8 @@ class _ACP:
         self.brain.stdin.flush()
 
 
-def _turn(argv: list, where: str, env: dict, asked: str, resume, preface: str) -> int:
+def _turn(argv: list, where: str, env: dict, asked: str, resume, preface: str,
+          profile) -> int:
     """Run one ACP session, and report what it said as it says it."""
     raw = _raw()
     seen = {"session": str(resume or ""), "ended": False}
@@ -541,7 +602,7 @@ def _turn(argv: list, where: str, env: dict, asked: str, resume, preface: str) -
             "protocolVersion": 1,
             # Advertising client filesystem or terminal services makes Grok send requests
             # back and wait for us to execute them. Rundesk wants Grok's own scoped tools,
-            # which are what `--tools` above controls, so the client offers none.
+            # which are what `scoped` above controls, so the client offers none.
             "clientCapabilities": {},
         })
         _authenticate(acp, initialized)
@@ -549,6 +610,14 @@ def _turn(argv: list, where: str, env: dict, asked: str, resume, preface: str) -
         session_params = {"cwd": where, "mcpServers": []}
         if resume:
             session_params["sessionId"] = str(resume)
+            # R-PRV-18 — and unlike the rules below, this is sent again. A posture is the
+            # owner's current answer about the machine, not the conversation's: an agent
+            # narrowed to `read` after a working conversation was opened would otherwise
+            # carry that conversation's whole tool set for as long as it is resumed.
+            # Measured on `session/load`: a conversation created with no agent of ours came
+            # back naming exactly the three read tools and could not run a shell command.
+            if profile:
+                session_params["_meta"] = {"agentProfile": profile}
             # Loading replays the saved turn as ordinary session updates, including its
             # text and `turn_completed`. They belong in the raw evidence, not in this new
             # turn's live records; emitting them repeats the prior reply and marks this
@@ -562,8 +631,13 @@ def _turn(argv: list, where: str, env: dict, asked: str, resume, preface: str) -
             # `_meta.rules` appends to the built-in system prompt; the replacement field
             # is deliberately never used. A resumed conversation already keeps the rules
             # it was opened with and therefore receives none again.
+            meta = {}
             if preface:
-                session_params["_meta"] = {"rules": preface}
+                meta["rules"] = preface
+            if profile:
+                meta["agentProfile"] = profile
+            if meta:
+                session_params["_meta"] = meta
             made = acp.request("session/new", session_params)
             session = str(made.get("sessionId") or "")
             if not session:

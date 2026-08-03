@@ -331,7 +331,7 @@ provider. One file per contract, named for it:
 | `test_schedule.py` | 49 | `platform-schedule` — pure time arithmetic, the clock passed in |
 | `test_provider.py` | 41 | `provider-adapter` — **takes the adapter as an argument**; stand-ins it writes itself, so the gate needs no account, and one adapter in `strangers/` that this code never saw being written |
 | `test_claude.py` | 65 | `provider-adapter` — the arithmetic and the postures one shipped brain decides on its own, driven against 184 captured lines rather than an account |
-| `test_grok.py` | 35 | `provider-adapter` — a brain that reports no tools, and the two flags of its that are accepted and enforce nothing |
+| `test_grok.py` | 45 | `provider-adapter` — a brain that reports no tools, the flags of its that are accepted and enforce nothing, and an ACP stand-in that scopes itself from the session the way the real one does |
 | `test_antigravity.py` | 18 | `provider-adapter` — piped prompt privacy, stream mapping, cumulative-resume usage, posture, skills and native-keyring environment, all offline |
 | `test_turn.py` | 113 | `agent-run` — one whole turn, and `rundesk ask` end to end |
 | `test_activity.py` | 3 | live-turn concurrency, safe persisted fields, and update visibility |
