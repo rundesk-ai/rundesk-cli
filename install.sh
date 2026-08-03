@@ -51,7 +51,16 @@ BACKUPS_DIR="${RUNDESK_BACKUP_DIR:-$INSTALL_DIR/backups}"
 # The fallback is written out rather than asked of the command, because a purge runs while the
 # command is being taken off the machine and must not depend on it answering. It has to agree
 # with `secret.home()`, and a case in `test_secret.py` asserts that the two do.
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rundesk"
+#
+# **A relative `XDG_CONFIG_HOME` is ignored rather than resolved**, which the specification
+# requires and which `secret.home()` does — and getting this wrong here is not cosmetic:
+# the purge below acts only `if [[ -d "$SECRETS_DIR" ]]`, so a relative path that does not
+# exist under whatever directory this script was run from makes the whole block silently
+# do nothing. A purge would then report success while leaving every credential on disk.
+case "${XDG_CONFIG_HOME:-}" in
+  /*) CONFIG_DIR="$XDG_CONFIG_HOME/rundesk" ;;
+  *)  CONFIG_DIR="$HOME/.config/rundesk" ;;
+esac
 SECRETS_DIR="${RUNDESK_SECRETS_DIR:-$CONFIG_DIR/secrets}"
 MIN_PYTHON_MINOR=9
 # The first release whose install and update paths share one counted release asset.

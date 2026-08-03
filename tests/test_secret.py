@@ -515,11 +515,24 @@ class WhereThingsAreKept(unittest.TestCase):
         import subprocess
 
         script = (Path(__file__).resolve().parent.parent / "install.sh").read_text()
-        lines = [one for one in script.splitlines()
-                 if one.startswith(("CONFIG_DIR=", "SECRETS_DIR="))]
-        self.assertEqual(2, len(lines), "the installer no longer resolves it this way")
+        opens = 'case "${XDG_CONFIG_HOME:-}" in'
+        after = script.split(opens, 1)[1].splitlines()
+        ends = next(at for at, one in enumerate(after)
+                    if one.startswith("SECRETS_DIR="))
+        lines = [opens] + after[:ends + 1]
+        self.assertTrue(any(one.startswith("CONFIG_DIR=") or "CONFIG_DIR=" in one
+                            for one in lines),
+                        "the installer no longer resolves it this way")
 
+        # **The relative one is here because it is what the two came apart on.** The
+        # specification says an `XDG_CONFIG_HOME` that is not absolute is ignored, and the
+        # module obeys it while the installer, written separately, did not — so a purge
+        # resolved a path relative to wherever it was run from, found no directory there,
+        # and silently left every credential on disk while reporting success. A matrix
+        # that covers only the inputs both sides happen to agree on proves nothing.
         for pointed in ({"XDG_CONFIG_HOME": str(self.where / "config")},
+                        {"XDG_CONFIG_HOME": "relative/config"},
+                        {"XDG_CONFIG_HOME": ""},
                         {"RUNDESK_SECRETS_DIR": str(self.where / "elsewhere")},
                         {}):
             with self.subTest(pointed=pointed):
