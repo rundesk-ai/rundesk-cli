@@ -20,7 +20,8 @@ worked around.
 2. **The repository's own rules**, including nested ones wherever the work will land. They decide
    the shape of the plan — its house style, its test command, its review gates.
 3. **Your skills.** A task list that fights the house patterns is a plan somebody will quietly
-   rewrite.
+   rewrite — and the plan's own shape is a skill, as is the form of anything else this run ends
+   in. Open the one governing what you are producing before you produce it.
 
 Then map the files before writing a single task: for each, whether it is created, modified or
 tested, and what it is responsible for.
