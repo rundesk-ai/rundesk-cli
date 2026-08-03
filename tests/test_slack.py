@@ -982,6 +982,41 @@ class TheDialectProseIsIn(unittest.TestCase):
         self.assertIn("<https://x|here>", wrote)
         self.assertNotIn("**", wrote)
 
+    def test_slacks_reserved_characters_are_escaped_wherever_they_appear(self):
+        """R-SLK-45 — `<…>` is Slack's own syntax for a link, a mention and a broadcast,
+        and it is read as that in a fence and in inline code as much as in prose. So an
+        ordinary answer carrying a generic, a comparison or a shell redirect arrived with
+        the angle-bracketed part eaten."""
+        self.assertEqual("Map&lt;string, int&gt;", slack.to_mrkdwn("Map<string, int>"))
+        self.assertEqual("a &amp;&amp; b", slack.to_mrkdwn("a && b"))
+        # A fence is not a shelter: Slack reads its reserved characters inside one too.
+        self.assertEqual("```\nif (a &lt; b) {}\n```",
+                         slack.to_mrkdwn("```\nif (a < b) {}\n```"))
+        self.assertEqual("`List&lt;int&gt;`", slack.to_mrkdwn("`List<int>`"))
+
+    def test_a_broadcast_an_agent_only_mentioned_does_not_notify_the_room(self):
+        """R-SLK-45 — the one that is worse than garbled. An agent quoting Slack's own
+        syntax, or reporting a string it found, sent a notification to everybody in the
+        room; nothing in the turn asked for it and nobody there could tell."""
+        for shouting in ("<!channel>", "<!here>", "<!everyone>"):
+            said = slack.to_mrkdwn(f"the log line was {shouting}")
+            self.assertNotIn(shouting, said, "an answer addressed the whole room")
+            self.assertIn("&lt;!", said)
+
+    def test_what_the_translation_builds_is_not_escaped_a_second_time(self):
+        """R-SLK-45 — escaping is done on the way *in*, because everything the translation
+        builds is ours: a link Slack must read as a link, with the ampersand inside its
+        own URL still escaped the way Slack asks for."""
+        said = slack.to_mrkdwn("see [docs](https://x.com/a?b=1&c=2)")
+        self.assertEqual("see <https://x.com/a?b=1&amp;c=2|docs>", said)
+        client = an_agent(FakeSlack(), dm=True)
+        said_by(client, client.told({"type": "answer", "conversation": "D1",
+                                     "text": "use Map<string, int>", "provider": "claude"}))
+        wrote = client.web.named("chat_postMessage")[0]["text"]
+        self.assertIn("Map&lt;string, int&gt;", wrote)
+        # The mention this adapter writes itself is Slack's syntax and stays intact.
+        self.assertNotIn("&lt;@", wrote)
+
 
 # -- Slack's own commands -------------------------------------------------------------------
 

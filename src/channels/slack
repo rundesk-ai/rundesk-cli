@@ -394,6 +394,32 @@ def thread_name(text: str) -> str:
 #: one rule that matters when translating is that nothing inside a fence is translated.
 _FENCE = re.compile(r"^\s*```")
 
+#: The three characters Slack reserves in message text, in the order they must be replaced
+#: — the ampersand first, or the entities written after it are escaped a second time.
+RESERVED = (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"))
+
+
+def escaped(said: str) -> str:
+    """A brain's own words, made safe to hand to Slack (R-SLK-45).
+
+    **Slack does not do this for you, and a fence does not protect it.** `<…>` is Slack's
+    own syntax for a link, a mention and a broadcast, and it is read as that wherever it
+    appears — inside inline code and inside a fenced block as much as in prose. So an
+    ordinary answer carrying a generic (`Map<string, int>`), a comparison, a shell
+    redirect or a snippet of XML arrived garbled, with the angle-bracketed part eaten.
+
+    The one that is worse than garbled: an agent that writes `<!channel>` — explaining
+    Slack's own syntax, quoting a message, or reporting a string it found — sends a
+    broadcast notification to everybody in the room. Nothing in the turn asked for that
+    and nothing in the room can tell it was not meant.
+
+    Done on the way in to the translation rather than on the way out, because everything
+    the translation *builds* — `<url|text>` for a link — is ours and must survive intact.
+    """
+    for character, entity in RESERVED:
+        said = said.replace(character, entity)
+    return said
+
 
 def to_mrkdwn(text: str) -> str:
     """Markdown as an agent writes it, in the dialect Slack renders.
@@ -412,7 +438,9 @@ def to_mrkdwn(text: str) -> str:
     with a hash renders as a literal hash, which reads as noise rather than as structure.
     """
     out, fenced = [], False
-    for line in text.split("\n"):
+    # **Escaped whole, before a line of it is read as markup** — including what is fenced,
+    # which Slack's own reserved syntax reaches into (R-SLK-45).
+    for line in escaped(text).split("\n"):
         if _FENCE.match(line):
             fenced = not fenced
             out.append(line)
