@@ -66,6 +66,17 @@ a long MEMORY means something was solved and never pruned.** This codebase only.
   Run the gate as **`<a checkout's>/.venv/bin/python .knowledge/scripts/gate`** while you are
   there: `gate` uses `sys.executable`, and a worktree with no `.venv` of its own otherwise
   skips all 208 Discord cases while printing `ok test_discord`.
+  **And it is not only `test_install` that the ceiling catches — `test_gateway` does it too,
+  from much further down.** The gate runs six suites at a time, so a loaded machine stretches
+  whichever suite happens to share a slot with the expensive ones. Measured here in one
+  sitting, on one unchanged tree: run one `FAIL test_install (180.0s)` with `test_gateway` at
+  37.4s; run two `ok test_install (171.7s)` and `FAIL test_gateway (180.0s)`; run three
+  `gate: OK` with both at 38.0s and 175.1s. `test_gateway` alone was 31.5s throughout. A suite
+  that normally finishes in a fifth of the ceiling reading `180.0s` is **the timeout, not the
+  suite** — run that one on its own and read its own "Ran N tests in Ns" line before believing
+  it is yours. `pgrep -f "/private/tmp/rundesk-<n>/tests/"` also finds another agent's gate
+  running in a copy of the checkout, which is the ordinary case here; wait it out rather than
+  killing it.
 - **Only `tests/test_install.py:38` copies the *checkout*; every other `copytree` in that file
   copies `REPO`.** So whatever that one line lets through is carried by all eighteen of them, and
   whatever it excludes is excluded everywhere. Untracked `ui/` and `site/` trees (~100 MB) beside

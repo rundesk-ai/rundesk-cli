@@ -345,6 +345,65 @@ def _nothing_standing(slug: str, stands: Path) -> None:
                    f"{INSTRUCTIONS} in it — {changed}")
 
 
+def edit(slug: str, where: Path | None = None, library: dict | None = None,
+         **named) -> tuple:
+    """Change what a role says about itself, whole or not at all (R-ROL-40).
+
+    Hands back the role as it was and as it now is, because what a caller needs to say
+    is what *moved* — and neither half can answer that on its own.
+
+    **The manifest is the whole of what this changes.** A role's rules are prose their
+    author wrote, and a command that rewrote them would throw that work away; a
+    specialty that has moved is theirs to bring in line afterwards.
+
+    **A field no flag named keeps what is there, and an empty one is a decision.** Those
+    are different answers rather than two spellings of one: `provider=""` unpins a brain,
+    because a field the role does not name is absent rather than empty (R-ROL-33), so
+    there is nothing for a clearing flag of its own to do.
+
+    The order is the guarantee, exactly as `write()`'s is. A manifest holding a field
+    this release does not know is **refused rather than overlaid** — the owner put it
+    there, and rewriting the file would discard it in silence. Everything refusable is
+    then refused by `_asked`, which is the same proof `write` gets and the same one
+    `read` will apply afterwards, so nothing here validates anything of its own. Only
+    then is a whole manifest written beside the old one and renamed onto it: a truncated
+    `role.json` is worse than the half-written directory `add` refuses, because
+    `AGENTS.md` still stands, so `known()` goes on listing the role and every `read()`
+    of it fails.
+    """
+    unknown = sorted(set(named) - set(FIELDS))
+    if unknown:
+        raise NotARole(f"'{slug}' has no such thing as {', '.join(unknown)} — a role "
+                       f"holds only {', '.join(FIELDS)}")
+    if not named:
+        # An edit that changes nothing is a command that did nothing, and answering as
+        # though it succeeded is the kind of quiet lie that gets believed.
+        raise NotARole(f"nothing was named to change about '{slug}' — an edit names at "
+                       f"least one of {', '.join(FIELDS)}")
+    stands = _directory(slug, where)
+    said = _manifest(stands)
+    before = read(slug, where, library)
+    overlaid = dict(said)
+    overlaid.update(named)
+    # Off the manifest rather than off what was resolved: a skill this machine has not
+    # got is carried in the file and absent from `Role.skills` (R-ROL-8), so an overlay
+    # taken from the role would quietly drop every name this library happens not to hold.
+    written = _asked(slug, overlaid.get("description"), overlaid.get("skills"),
+                     overlaid.get("posture"), overlaid.get("provider") or "",
+                     overlaid.get("model") or "")
+    coming = stands / f"{MANIFEST}.coming"
+    try:
+        coming.write_text(json.dumps(written, indent=2) + "\n", encoding="utf-8")
+        os.replace(coming, stands / MANIFEST)
+    except OSError:
+        # The manifest that was there is still there and still reads. What must never be
+        # left is a partial file under either name.
+        with contextlib.suppress(OSError):
+            coming.unlink()
+        raise
+    return before, read(slug, where, library)
+
+
 def _asked(slug: str, description: str, skills, posture: str, provider_named: str,
            model: str) -> dict:
     """The manifest this role would have, proved to be one a run could be admitted on.

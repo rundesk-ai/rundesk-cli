@@ -131,18 +131,53 @@ than the task.
 
 ## Editing one
 
+The manifest is a command. The rules are a file you open yourself.
+
+```sh
+rundesk roles <you> edit <slug> \
+  --description "<what it answers for>" \
+  --skills <a,b,c> \
+  --posture read|work \
+  --provider <provider> \
+  --model <model>
+```
+
+Every flag is optional, and **a field no flag names keeps exactly what it says now**. Three
+things about that are worth knowing before you type it:
+
+- **`--skills` replaces the whole set.** There is no add and no remove — name every skill the
+  role is to have. Passing the one you meant to add leaves the role holding only that one.
+- **An empty value is a decision, not a spelling of "left out".** `--provider ""` unpins a
+  brain and takes the field out of the file, so the role goes back to running on whatever its
+  parent turn resolved — and back to the revision it had before anybody pinned one.
+- **Naming no field at all is refused.** An edit that changed nothing would otherwise report
+  success for a command that did nothing.
+
+It changes the manifest **whole or not at all**, and **refuses a manifest it cannot read**
+rather than rewriting it: a field this release has never heard of is one you put there, and
+overlaying onto it would discard it in silence. What it answers with is what actually *moved*,
+field by field, and the revision it moved from and to — which is the word a run's locked bytes
+are identified by afterwards.
+
+**It never touches `AGENTS.md`.** The rules are prose you wrote, and a specialty that has moved
+is yours to bring in line — open the file the answer names. Both files are equally editable by
+hand; the command is the shorter route to one of them, and writing the manifest yourself is
+still fine as long as you write the whole of it.
+
 An edit lands on the **next** run. Every run locks its own copy of the rules, the manifest and
 every skill package before the brain starts, so a run in flight and a run resumed a fortnight
 later both keep the bytes they were admitted with, and the revision recorded against them says
 which. Edit freely while work is running; nothing in flight changes under it.
 
-Two gotchas about the roles this release ships:
+Two gotchas about the roles this release ships, and `edit` is now the easiest way to trip the
+second of them:
 
 - **An update never replaces a role that is already there**, edited or not. A new release's
   version of a shipped role reaches only an install that has not got one of that name.
 - **One character different and the role is yours.** What proves a role is still Rundesk's is
   that it is still byte for byte what Rundesk wrote, so an uninstall leaves an edited one
   standing. Copy a shipped role to a new slug rather than editing it in place when you want both.
+  Editing one says so where you can read it, once, and it is not reversible by editing it back.
 
 ## Proving it works
 

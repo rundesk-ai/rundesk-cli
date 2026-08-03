@@ -673,6 +673,31 @@ def build_parser() -> argparse.ArgumentParser:
                               "— left out, a run continues on whatever its parent is on")
     written.add_argument("--model", metavar="<model>",
                          help="which model on that brain — what the brain itself calls it")
+    # The mirror of `add`, where all but the brain fields are required: here every one is
+    # optional, because what a flag does not name is what the role goes on saying. An
+    # empty value is a decision rather than a spelling of "left out" — `--provider ""`
+    # unpins a brain, which is the shape `schedules edit --instructions ""` already uses.
+    changed = handing.add_parser(
+        "edit", help="change what a role says about itself — never its rules")
+    changed.add_argument("role", metavar="<role>",
+                         help="which role — one this install has, by its own name")
+    changed.add_argument("--description", metavar="<text>",
+                         help="what it answers for and how heavy the work is, in one "
+                              "sentence — replacing what it says now")
+    # Said in these words because a reader who assumes it appends will silently narrow a
+    # role: the set they meant to add one name to comes out holding only that name.
+    changed.add_argument("--skills", metavar="<a,b,c>",
+                         help="the skills every run of it is given, comma separated — "
+                              "this replaces the whole set rather than adding to it, so "
+                              "name every skill the role is to have")
+    changed.add_argument("--posture", metavar="read|work",
+                         help="how far a run of it may reach — `read` changes nothing, "
+                              "and on some brains has no shell in it at all")
+    changed.add_argument("--provider", metavar="<provider>",
+                         help="the brain every run of it uses — an empty value unpins "
+                              "one, and a run then continues on whatever its parent is on")
+    changed.add_argument("--model", metavar="<model>",
+                         help="which model on that brain — an empty value unpins one")
     handed = handing.add_parser(
         "run", help="hand one bounded task to a role — the brief is read from standard input")
     handed.add_argument("role", metavar="<role>",
