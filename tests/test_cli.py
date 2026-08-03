@@ -3868,7 +3868,11 @@ raise SystemExit(1)
         drive(["channels", "ava", "add", "ops", "--kind", self._adapter(self.WORKS),
                "--allow", "2207"], self._gateways(), agents=self.agents)
         kept = self.kept()
-        self.assertEqual({"env": ["A_CHANNEL_TOKEN"]}, kept["secret"])
+        self.assertEqual(["A_CHANNEL_TOKEN"], kept["secret"]["env"])
+        # Where it is taken into, as well as where it is read from — one file for one
+        # credential, which is the name every adapter written before a surface needed two
+        # already looks for.
+        self.assertEqual(["token"], kept["secret"]["files"])
         was = os.environ.get("A_CHANNEL_TOKEN")
         os.environ["A_CHANNEL_TOKEN"] = "not for printing"
         self.addCleanup(lambda: os.environ.pop("A_CHANNEL_TOKEN", None)
@@ -3877,6 +3881,29 @@ raise SystemExit(1)
         self.assertIn("A_CHANNEL_TOKEN", said)
         self.assertIn("present", said)
         self.assertNotIn("not for printing", said, "a channel's secret was printed")
+
+    def test_a_credential_taken_at_the_terminal_is_reported_as_present(self):
+        """R-CAD-11, R-CAD-12 — the flow the documentation recommends never exports
+        anything, so a channel that signs in perfectly reported its credential `not set`
+        and sent an owner to fix something that was not wrong."""
+        kind = self._adapter(self.NEEDS_A_TOKEN)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            sys.stdin = io.StringIO("a credential nobody exported\n")
+            try:
+                cli.main(["channels", "ava", "add", "ops", "--kind", kind,
+                          "--allow", "2207", "--token-stdin"],
+                         gateways=self._gateways(), machine=FakeMachine(), agents=self.agents)
+            finally:
+                sys.stdin = sys.__stdin__
+        # The variable is deliberately *not* set: this is the state a supervised gateway
+        # spends its whole life in, and the state `show` used to be wrong about.
+        self.assertIsNone(os.environ.get("A_CHANNEL_TOKEN"),
+                          "this case proves nothing while the variable is set")
+        _, said = drive(["channels", "ava", "show", "ops"], self._gateways(),
+                        agents=self.agents)
+        self.assertIn("present", said, "a credential kept in its file was reported missing")
+        self.assertNotIn("a credential nobody exported", said,
+                         "a channel's secret was printed")
 
     def test_what_an_agent_is_told_is_written_and_read_back(self):
         """R-CH-22 — a wording that reads well in a room is found by trying it, so it is

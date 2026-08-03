@@ -2235,6 +2235,57 @@ class WhatItOffersAndWhatItIsTold(unittest.TestCase):
         self.assertEqual({"91": first}, client.queries)
         self.assertFalse(hasattr(first, "content"))
 
+    def test_a_gesture_from_somebody_not_allowed_is_refused_before_it_is_reported(self):
+        """R-DIS-12 — somebody this channel does not allow typed `/restart` in a shared
+        room and was told the agent was restarting: a promise nothing kept, and a
+        confirmation to a stranger that the agent is listening. Advisory, exactly as
+        `_query_command` and `_provider_command` already are — rundesk checks again and
+        drops the gesture in silence."""
+        class Response:
+            async def send_message(self, text, ephemeral):
+                self.text, self.ephemeral = text, ephemeral
+
+        for gesture in ("stop", "forget", "restart"):
+            interaction = SimpleNamespace(
+                id=92, channel_id=44, user=SimpleNamespace(id=9999), response=Response()
+            )
+            client = SimpleNamespace(
+                chose=SimpleNamespace(allow=["2207"]), _owns=lambda _interaction: True,
+            )
+            said = []
+            was, discord.sys.stdout = discord.sys.stdout, _Collects(said)
+            try:
+                asyncio.run(discord.Agent._control_command(client, gesture)(interaction))
+            finally:
+                discord.sys.stdout = was
+            self.assertIn("not available", interaction.response.text)
+            self.assertEqual([], said, f"'{gesture}' from a stranger reached rundesk")
+
+    def test_a_control_says_it_was_heard_and_never_what_it_did(self):
+        """R-DIS-12 — rundesk drops a `stop` where no turn is running, so an
+        acknowledgement claiming the turn is stopping is a promise nothing kept in one of
+        the two ordinary cases. What a control did arrives as the turn's own outcome."""
+        class Response:
+            async def send_message(self, text, ephemeral):
+                self.text, self.ephemeral = text, ephemeral
+
+        interaction = SimpleNamespace(
+            id=92, channel_id=44, user=SimpleNamespace(id=2207), response=Response()
+        )
+        client = SimpleNamespace(
+            chose=SimpleNamespace(allow=["2207"]), _owns=lambda _interaction: True,
+        )
+        said = []
+        was, discord.sys.stdout = discord.sys.stdout, _Collects(said)
+        try:
+            asyncio.run(discord.Agent._control_command(client, "stop")(interaction))
+        finally:
+            discord.sys.stdout = was
+        self.assertIn("asked to stop", interaction.response.text)
+        self.assertNotIn("stopping", interaction.response.text,
+                         "the acknowledgement claimed an effect rundesk had not reported")
+        self.assertEqual("stop", json.loads("".join(said))["control"])
+
     def test_shared_channel_provider_command_is_privately_refused_before_reporting(self):
         """R-DIS-25 — room access is not authority over the agent-wide default."""
         class Response:
