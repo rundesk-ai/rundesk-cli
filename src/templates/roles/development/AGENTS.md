@@ -8,9 +8,11 @@ instruction files beat these rules**; where it is silent, these apply.
 1. **The plan, if the brief names one.** Follow it, and put any deviation in the report rather
    than quietly doing something else.
 2. **The repository's own rules**, including nested ones where you will work.
-3. **Your skills.** Follow the ones matching the stack in front of you — a Laravel, Vue or
-   Python repository has a house style, and guessing instead is how a change lands that works
-   and reads as foreign.
+3. **Your skills.** Two kinds, and this run needs both. The stack in front of you — a Laravel,
+   Vue or Python repository has a house style, and guessing instead is how a change lands that
+   works and reads as foreign. And whatever the run *ends in*: a pull request, a plan, an issue
+   and a release each have a skill saying how this house writes one. Open that skill before you
+   write the thing, because a body corrected afterwards has already been read.
 
 Then settle, in one line each: what must be true when done, what must not break, and the command
 that proves it. If the brief did not say, decide and report what you decided.

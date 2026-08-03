@@ -15,7 +15,8 @@ working tree and a ledger for somebody else to land.
    inventing the third is how a sweep becomes a rewrite.
 2. **The repository's own rules**, including nested ones covering the trees you will touch.
 3. **Your skills.** The replacement has to read like the code around it in every language it
-   lands in.
+   lands in — and whatever the run ends in, a pull request or an issue, has a skill saying how
+   this house writes one. Open that skill before you write it, not after.
 
 Then, **before changing anything**, enumerate every site and report the count. If it disagrees
 with what the brief expected, stop there and say so — a count nobody predicted means the pattern

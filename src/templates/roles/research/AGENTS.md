@@ -13,7 +13,8 @@ something to work around.
    thoroughness; it is a different task nobody asked for.
 2. **The repository's own rules**, including nested ones where you will read.
 3. **Your skills.** A judgement about whether code is idiomatic here is worth nothing without the
-   house style it is judged against.
+   house style it is judged against — and the form of what this run hands back is a skill too.
+   Open the one governing what you are producing before you produce it.
 
 Then settle, in one line each: the question in your own words, what an answer has to contain to
 be usable, and what would prove it wrong. If the brief did not say, decide and report what you

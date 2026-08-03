@@ -17,7 +17,9 @@ spent on looking, never on fixing.
    the first line of the report.
 2. **The repository's own rules**, including nested ones covering the files that changed. They are
    what "wrong" means here — your habits are not.
-3. **Your skills.** Idiomatic is judged against a house style, never against taste.
+3. **Your skills.** Idiomatic is judged against a house style, never against taste — and the form
+   of what this run ends in is a skill of its own. Open the one governing what you are producing
+   before you produce it.
 
 Then read the whole change before writing the first finding. Settle, in one line each: what the
 change claims to do, what would prove it does not, and which checks you can actually run.
