@@ -1810,14 +1810,11 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
         told it went out. Asserted against `role_line`, which has no memory to have."""
         back = discord.role_line(self.handed(state="settled", ok=True, elapsed=4000))
         self.assertEqual(
-            "✅ 🤖 **applicant-export** is back from the *development* role"
-            " — not reviewed yet.", back)
+            "✅ 🤖 **applicant-export** is back from the *development* role.", back)
 
     def test_a_role_that_did_not_finish_says_so_rather_than_that_a_subagent_failed(self):
         line = discord.role_line(self.handed(state="settled", ok=False, elapsed=4000))
-        self.assertEqual(
-            "⚠️ 🤖 **applicant-export** did not finish — what came back is not reviewed yet.",
-            line)
+        self.assertEqual("⚠️ 🤖 **applicant-export** did not finish.", line)
         self.assertNotIn("subagent", line)
 
     def settled(self, **also) -> str:
@@ -1829,15 +1826,13 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
         purpose after taking the work over was posted as ⚠️ work that did not finish."""
         line = self.settled(became="stopped", stopped_by="agent")
         self.assertEqual(
-            "✋ 🤖 **applicant-export** was stopped by the agent"
-            " — what came back is not reviewed yet.", line)
+            "✋ 🤖 **applicant-export** was stopped by the agent.", line)
         self.assertNotIn("⚠️", line)
         self.assertNotIn("did not finish", line)
 
     def test_a_stop_says_which_of_the_two_it_was(self):
         self.assertEqual(
-            "✋ 🤖 **applicant-export** was stopped from a terminal"
-            " — what came back is not reviewed yet.",
+            "✋ 🤖 **applicant-export** was stopped from a terminal.",
             self.settled(became="stopped", stopped_by="terminal"))
 
     def test_a_stop_nobody_was_written_down_for_names_nobody(self):
@@ -1847,8 +1842,7 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
             with self.subTest(**record):
                 line = self.settled(became="stopped", **record)
                 self.assertEqual(
-                    "✋ 🤖 **applicant-export** was stopped"
-                    " — what came back is not reviewed yet.", line)
+                    "✋ 🤖 **applicant-export** was stopped.", line)
 
     def test_a_settled_record_from_a_rundesk_that_names_no_ending_still_renders(self):
         """`ok` is the fall-through and goes on meaning what it always meant, so a
@@ -2006,7 +2000,7 @@ class HowARoleRunReachesTheRoom(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             ["🤖 Handed **a-task** to the *development* role.",
-             "✅ 🤖 **a-task** is back from the *development* role — not reviewed yet."],
+             "✅ 🤖 **a-task** is back from the *development* role."],
             posted, "what came back was never posted")
 
     async def test_a_role_run_still_shows_when_activity_is_off(self):

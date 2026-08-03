@@ -1884,10 +1884,6 @@ def role_line(it: dict) -> str:
     if state == WORKING:
         return f"{SUB}{mark} *{label}* — {_duration(it.get('elapsed') or 0)}, still working"
     if state == SETTLED:
-        # **What is true at this moment, and no more.** The record is sent the instant the
-        # run settles, and the review may not start for many minutes. "Reviewing it" would
-        # promise something that has not begun.
-        #
         # **Three endings, and only one of them is a fault.** A stop is somebody's
         # decision — the agent's, having taken the work over, or an owner's at a terminal
         # — so it carries the stopped mark rather than the warning beside it, and says who
@@ -1896,13 +1892,12 @@ def role_line(it: dict) -> str:
         # nothing has settled yet, both still render the two endings there have always been.
         if it.get("became") == ROLE_STOPPED:
             said = STOPPED_BY.get(it.get("stopped_by"), STOPPED_BY_NOBODY_NAMED)
-            return (f"{STOPPED_MARK} {mark} *{label}* {said} — what came back is "
-                    "not reviewed yet.")
+            return f"{STOPPED_MARK} {mark} *{label}* {said}."
         if it.get("ok") is True:
-            return (f"✅ {mark} *{label}* is back from the _{named}_ role — not reviewed yet."
+            return (f"✅ {mark} *{label}* is back from the _{named}_ role."
                     if named else
-                    f"✅ {mark} *{label}* is back from a role — not reviewed yet.")
-        return f"⚠️ {mark} *{label}* did not finish — what came back is not reviewed yet."
+                    f"✅ {mark} *{label}* is back from a role.")
+        return f"⚠️ {mark} *{label}* did not finish."
     return ""
 
 

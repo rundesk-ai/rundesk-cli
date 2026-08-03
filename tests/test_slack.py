@@ -1735,15 +1735,12 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
 
     def test_a_settled_role_run_shows_in_full_with_no_prior_handed_ever_seen(self):
         self.assertEqual(
-            "✅ 🤖 *applicant-export* is back from the _development_ role"
-            " — not reviewed yet.",
+            "✅ 🤖 *applicant-export* is back from the _development_ role.",
             slack.role_line(self.handed(state="settled", ok=True, elapsed=4000)))
 
     def test_a_role_that_did_not_finish_says_so_rather_than_that_a_subagent_failed(self):
         line = self.settled()
-        self.assertEqual(
-            "⚠️ 🤖 *applicant-export* did not finish — what came back is not reviewed yet.",
-            line)
+        self.assertEqual("⚠️ 🤖 *applicant-export* did not finish.", line)
         self.assertNotIn("subagent", line)
 
     def test_a_run_somebody_stopped_reads_as_a_decision_rather_than_a_fault(self):
@@ -1751,15 +1748,13 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
         purpose after taking the work over was posted as ⚠️ work that did not finish."""
         line = self.settled(became="stopped", stopped_by="agent")
         self.assertEqual(
-            "✋ 🤖 *applicant-export* was stopped by the agent"
-            " — what came back is not reviewed yet.", line)
+            "✋ 🤖 *applicant-export* was stopped by the agent.", line)
         self.assertNotIn("⚠️", line)
         self.assertNotIn("did not finish", line)
 
     def test_a_stop_says_which_of_the_two_it_was(self):
         self.assertEqual(
-            "✋ 🤖 *applicant-export* was stopped from a terminal"
-            " — what came back is not reviewed yet.",
+            "✋ 🤖 *applicant-export* was stopped from a terminal.",
             self.settled(became="stopped", stopped_by="terminal"))
 
     def test_a_stop_nobody_was_written_down_for_names_nobody(self):
@@ -1768,8 +1763,7 @@ class WhatARoleRunLooksLikeHere(unittest.TestCase):
         for record in ({}, {"stopped_by": ""}, {"stopped_by": "the night shift"}):
             with self.subTest(**record):
                 self.assertEqual(
-                    "✋ 🤖 *applicant-export* was stopped"
-                    " — what came back is not reviewed yet.",
+                    "✋ 🤖 *applicant-export* was stopped.",
                     self.settled(became="stopped", **record))
 
     def test_the_stopped_mark_is_a_glyph_and_never_slacks_name_for_a_reaction(self):
