@@ -35,7 +35,7 @@ from pathlib import Path
 
 from rundesk import ROOT
 from rundesk import agent as agents
-from rundesk import provider, skill
+from rundesk import instructions, provider, skill
 
 #: Where shared role definitions stand, below wherever agents are kept. Dotted, so it
 #: stands among the agents without being one: what makes a directory an agent is a `home/`
@@ -47,6 +47,13 @@ ROLES = ".roles"
 #: rule the skill library holds to, and for the same reason: a list in code disagrees with
 #: the directory the day somebody adds one and forgets it.
 SHIPPED = ROOT / "src" / "templates" / "roles"
+
+#: The rules a role a command wrote starts life with. A file rather than a string in this
+#: module, and standing among the roles it is the skeleton for: it is prose somebody edits,
+#: and prose kept in source is prose nobody reads before changing the code around it.
+#: Dotted and a file rather than a directory, so `shipped()` — which asks for a directory
+#: holding both of a role's files — cannot mistake it for a role this release ships.
+SKELETON = SHIPPED / ".skeleton.md"
 
 #: The two files a role is made of. `AGENTS.md` is fixed by convention rather than
 #: named in the manifest, because a filename an owner may choose is one every reader has
@@ -264,6 +271,125 @@ def lay_down(where: Path | None = None) -> list:
     return laid
 
 
+def write(slug: str, description: str, skills, posture: str, provider_named: str = "",
+          model: str = "", where: Path | None = None,
+          library: dict | None = None) -> Role:
+    """Write one new role, and hand back what this install resolved it to (R-ROL-39).
+
+    **Everything refusable is refused before anything is written.** A refusal after a
+    partial write leaves a directory that reads as half a role, and half a role shadows
+    the role of that name in silence — so the order here is the whole of the guarantee:
+    validate, build whole under a hidden name, move it into place, and only then read the
+    finished pair back through the same `read()` every run is admitted through. Nothing
+    here validates a manifest of its own; what refuses is what already refuses.
+
+    The rules written are the generic skeleton, which is **not** about this specialty and
+    says so in every section. What makes that safe is the answer the caller gives its
+    reader: the path of the file, and that it is unwritten work.
+    """
+    root = home(where)
+    stands = root / checked(slug)
+    _nothing_standing(slug, stands)
+    said = _asked(slug, description, skills, posture, provider_named, model)
+    coming = root / f".{slug}.coming"
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(coming, ignore_errors=True)
+        coming.mkdir()
+        (coming / MANIFEST).write_text(json.dumps(said, indent=2) + "\n",
+                                       encoding="utf-8")
+        (coming / INSTRUCTIONS).write_text(_skeleton(slug, said["description"]),
+                                           encoding="utf-8")
+        os.replace(coming, stands)
+    except OSError:
+        # Neither a role nor half of one is left standing under either name. A hidden
+        # directory left behind is the next `add` of that slug refusing for a reason
+        # nobody can see.
+        shutil.rmtree(coming, ignore_errors=True)
+        raise
+    return read(slug, where, library)
+
+
+def _nothing_standing(slug: str, stands: Path) -> None:
+    """Refuse whatever is already standing under this name, and say what it is.
+
+    **Never over a role that is already there** (R-ROL-18): a role is what an owner
+    writes their specialists as, so an existing slug is a refusal and never an overwrite
+    or a merge.
+
+    The half-written case is the one that matters beyond this command. A directory
+    holding one of the two files is not listed by `known()` and is skipped by
+    `lay_down`, which asks only whether the directory is there — so it shadows the
+    shipped role of that name in silence, and nothing else in the product says so. This
+    is where the words get said.
+    """
+    if not stands.exists() and not stands.is_symlink():
+        return
+    changed = "nothing was changed"
+    if stands.is_symlink() or not stands.is_dir():
+        raise NotARole(f"{stands} is already there and is not a role directory — "
+                       f"{changed}")
+    manifest = (stands / MANIFEST).is_file()
+    rules = (stands / INSTRUCTIONS).is_file()
+    if manifest and rules:
+        raise NotARole(
+            f"'{slug}' is already a role, standing at {stands} — {changed}. A role is "
+            f"what an owner writes their specialists as, so it is never written over: "
+            f"edit that one, or write a new one under another name")
+    if manifest or rules:
+        raise NotARole(
+            f"{stands} is half a role: it has no {INSTRUCTIONS if manifest else MANIFEST} "
+            f"in it, which is why no role called '{slug}' is usable and why none of that "
+            f"name is listed — {changed}. Finish that directory or take it away")
+    raise NotARole(f"{stands} is already there with neither {MANIFEST} nor "
+                   f"{INSTRUCTIONS} in it — {changed}")
+
+
+def _asked(slug: str, description: str, skills, posture: str, provider_named: str,
+           model: str) -> dict:
+    """The manifest this role would have, proved to be one a run could be admitted on.
+
+    Built and checked with exactly the helpers `read` uses, so a definition this command
+    writes can never be one the product then refuses to read — and so a rule about what a
+    manifest may say goes on being decided in one place.
+
+    **A field the role does not name is absent rather than empty** (R-ROL-33). Writing
+    `"provider": ""` would put a decision in the file its author never made, and would
+    move the revision of a role that pins nothing.
+    """
+    said = {"description": description,
+            "skills": list(skills) if isinstance(skills, tuple) else skills,
+            "posture": posture}
+    if provider_named:
+        said["provider"] = provider_named
+    if model:
+        said["model"] = model
+    written = {"description": _described(slug, said),
+               "skills": sorted(set(_named(slug, said.get("skills")))),
+               "posture": _posture(slug, said)}
+    for field in ("provider", "model"):
+        pinned = _pinned(slug, said, field)
+        if pinned:
+            written[field] = pinned
+    return written
+
+
+def _skeleton(slug: str, description: str) -> str:
+    """The rules a new role starts life with, which are not yet about its specialty.
+
+    A file beside the roles it is the skeleton for rather than a string in this module:
+    it is prose an owner reads and edits, and prose kept in source is prose nobody looks
+    at before changing the code around it.
+    """
+    try:
+        skeleton = SKELETON.read_text(encoding="utf-8")
+    except OSError as why:
+        raise NotARole(
+            f"this install has no role skeleton at {SKELETON} — {why}") from None
+    return instructions.render(skeleton,
+                               {"label": label(slug), "description": description})
+
+
 def take_back(where: Path | None = None) -> list:
     """Take back the roles this release laid down and nobody has touched (R-RM-7).
 
@@ -330,19 +456,8 @@ def read(slug: str, where: Path | None = None, library: dict | None = None) -> R
     """
     stands = _directory(slug, where)
     said = _manifest(stands)
-    described = said.get("description")
-    if not isinstance(described, str) or not described.strip():
-        raise NotARole(f"'{slug}' says nothing about what it is for")
-    if len(described) > DESCRIBED_LIMIT:
-        raise NotARole(
-            f"'{slug}' describes itself in more than {DESCRIBED_LIMIT} characters"
-        )
-    posture = said.get("posture")
-    if posture not in provider.POSTURES:
-        raise NotARole(
-            f"'{slug}' asks for a posture of '{posture}' — it must be one of "
-            f"{', '.join(provider.POSTURES)}"
-        )
+    described = _described(slug, said)
+    posture = _posture(slug, said)
     # Refused here, with everything else refusable about a definition, rather than found
     # out mid-carry: a role pinned to a brain nobody can name is a run admitted, assembled
     # and then failed for something the manifest said on the first line.
@@ -352,10 +467,10 @@ def read(slug: str, where: Path | None = None, library: dict | None = None) -> R
     skills, missing = _skills(slug, said.get("skills"), resolved)
     rules = _instructions(slug, stands)
     return Role(
-        slug=slug, label=label(slug), description=described.strip(),
+        slug=slug, label=label(slug), description=described,
         skills=skills, missing=missing, posture=posture, provider=named, model=model,
         instructions=rules, at=stands,
-        revision=_revision(described.strip(), skills, missing, posture, named, model,
+        revision=_revision(described, skills, missing, posture, named, model,
                            rules, resolved),
     )
 
@@ -419,6 +534,36 @@ def _manifest(stands: Path) -> dict:
             f"no such thing as — it holds only {', '.join(FIELDS)}"
         )
     return said
+
+
+def _described(slug: str, said: dict) -> str:
+    """What this role is for, without its surrounding space, or why it says nothing.
+
+    Asked of a manifest read off disk and of one a command is about to write, so what a
+    description may be is decided here and never twice.
+    """
+    described = said.get("description")
+    if not isinstance(described, str) or not described.strip():
+        raise NotARole(f"'{slug}' says nothing about what it is for")
+    if len(described) > DESCRIBED_LIMIT:
+        # The length as well as the limit: a description trimmed to fit is an owner
+        # counting characters, and the number they need is the one they wrote.
+        raise NotARole(
+            f"'{slug}' describes itself in {len(described)} characters, and a "
+            f"description is {DESCRIBED_LIMIT} at most"
+        )
+    return described.strip()
+
+
+def _posture(slug: str, said: dict) -> str:
+    """How far a run of this role may reach, or why what is written is not a posture."""
+    posture = said.get("posture")
+    if posture not in provider.POSTURES:
+        raise NotARole(
+            f"'{slug}' asks for a posture of '{posture}' — it must be one of "
+            f"{', '.join(provider.POSTURES)}"
+        )
+    return posture
 
 
 def _instructions(slug: str, stands: Path) -> str:
@@ -492,6 +637,18 @@ def _skills(slug: str, said: object, resolved: dict) -> tuple:
     unusable here for a capability the work in front of it may never need. What is missing
     is carried back rather than swallowed, so a listing and a diagnosis can name it.
     """
+    names = _named(slug, said)
+    return (tuple(sorted(one for one in names if one in resolved)),
+            tuple(sorted(one for one in names if one not in resolved)))
+
+
+def _named(slug: str, said: object) -> list:
+    """The skill names this role asks for, proved to be a set of names.
+
+    Split from the resolving above it because writing a role has to ask this question
+    with no library in hand at all: what the machine happens to have decides what a run
+    is *given*, and never whether the definition is one.
+    """
     if not isinstance(said, list) or not said:
         raise NotARole(f"'{slug}' names no skills — a role exposes at least one")
     names = []
@@ -502,8 +659,7 @@ def _skills(slug: str, said: object, resolved: dict) -> tuple:
     duplicated = sorted({one for one in names if names.count(one) > 1})
     if duplicated:
         raise NotARole(f"'{slug}' names {', '.join(duplicated)} more than once")
-    return (tuple(sorted(one for one in names if one in resolved)),
-            tuple(sorted(one for one in names if one not in resolved)))
+    return names
 
 
 def _revision(description: str, skills: tuple, missing: tuple, posture: str,

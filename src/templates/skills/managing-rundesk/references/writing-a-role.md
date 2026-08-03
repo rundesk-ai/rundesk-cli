@@ -1,13 +1,37 @@
 # Writing a role
 
 A role is a specialist execution definition: what the specialty is, and the rules one run of it
-follows. Every named agent on this install may put it on. **No command makes one** — there is no
-`rundesk roles add`. You write two files into a directory, and it is a role the moment both are
-there.
+follows. Every named agent on this install may put it on. **A role is two files in a directory**,
+and it is a role the moment both are there — `rundesk roles add` writes that pair for you.
+
+## Making one
+
+```sh
+rundesk roles <you> add <slug> \
+  --description "<one sentence naming what it answers for and how heavy the work is>" \
+  --skills <a,b,c> \
+  --posture read|work
+```
+
+`--description`, `--skills` and `--posture` are all required. Posture especially: it is a real
+safety narrowing, so nothing here picks the widest boundary on your behalf. `--provider` and
+`--model` are the optional pair, and a role that names neither runs on whatever its parent turn
+resolved.
+
+It **refuses rather than overwriting**. A slug that is already a role, a directory holding only
+one of the two files, a posture that is not one, a skill named twice, a description past the
+limit — each is a refusal that changes nothing on disk, and each says the whole reason.
+
+Then read what it answered with. It prints the absolute path of the `AGENTS.md` it wrote, and
+that file is **a generic skeleton and is not yet about your specialty**: every section in it is a
+`TODO` addressed to whoever is writing the role. Rewrite it before the role is handed real work.
+A role run against the unedited skeleton does not fail loudly; it returns a report that reads
+well and is about nothing.
 
 ## Where they stand
 
-Beside the agents rather than beside the program, so ask rather than writing a path down:
+Beside the agents rather than beside the program, so ask rather than writing a path down — which
+is what `add` is doing for you, and worth knowing when you are reading an unfamiliar install:
 
 ```sh
 roles="$(dirname "$(rundesk agents <you> | awk '$1=="agent"{print $2}')")/.roles"
@@ -15,7 +39,9 @@ mkdir -p "$roles/<slug>"
 ```
 
 `rundesk roles <you>` lists what is installed. A directory missing either file is not listed and
-has broken nothing — half a role is invisible, not fatal.
+has broken nothing — half a role is invisible, not fatal. `add` is the one place that says so out
+loud: asked for a slug standing as half a role, it names the file that is missing and why nothing
+of that name is usable.
 
 ## The two files
 
@@ -55,7 +81,9 @@ reads is one somebody believes is deciding what an isolated execution may do.
 ## The rules file, in this order
 
 Every role uses the same skeleton, so a parent reading an unfamiliar one finds the ceiling and
-the definition of done where they were in the last one:
+the definition of done where they were in the last one. This is the same skeleton `add` writes,
+and a test holds the two to the same headings — so what is below is what you will find in the
+file, not a second description of it:
 
 ```markdown
 # <Label>

@@ -161,6 +161,10 @@ file with it.
   a revision and every role written before the field existed keeps the one it had. A
   shipped role is laid down where one is missing and **never over one that is there**: a
   role is what an owner writes their specialists as, not a thing a release keeps true.
+  Writing one is the same rule from the other side — a whole pair or nothing, an
+  existing slug refused rather than merged, and a half-written directory named out loud
+  as the reason no role of that name works, which is the only place in the product that
+  says so.
 - `src/rundesk/role_run.py` — one isolated specialist execution, from admission to expiry.
   Assembles a bundle of locked bytes under the agent's own directory and moves it into place
   whole, hands `turn.py` an execution context standing in the target project, and settles the
@@ -308,7 +312,7 @@ provider. One file per contract, named for it:
 |---|---|---|
 | `test_gateway.py` | 264 | `platform-gateway` — real processes, real signals, waits turned down |
 | `test_agent.py` | 142 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
-| `test_cli.py` | 325 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
+| `test_cli.py` | 322 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
 | `test_catalog.py` | 27 | `lifecycle-skill-catalog` — manifests, provenance, default seeding, inert integration packages, lifecycle refresh, ownership, atomic updates, drift replacement, removal, and unsafe archives, all offline |
 | `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 81 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
@@ -331,7 +335,7 @@ provider. One file per contract, named for it:
 | `test_slack.py` | 140 | `channel-slack` — the same policy on a platform with fewer registers: one slash command because a name is unique per workspace, a thread rooted at the message that named it, and ordinary Markdown translated into Slack's own dialect |
 | `test_discord.py` | 208 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
 | `test_instructions.py` | 29 | Rundesk's core and trigger prompts, standard variables, the additive builder, the roles layer, and the separate role floor |
-| `test_role.py` | 51 | `agent-role` — what a role is, what makes one usable, what its revision is computed from, and how the install's roles are offered, against a scratch library |
+| `test_role.py` | 72 | `agent-role` — what a role is, what makes one usable, what its revision is computed from, how the install's roles are offered, and what writing one refuses, against a scratch library |
 | `test_role_run.py` | 128 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
 | `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 
@@ -374,7 +378,11 @@ thing, and it is the direction to keep: never a gateway that reaches for an agen
   executable plan — the last two under a `read` posture, which on some brains has no shell in it
   at all. Each opens by naming the weight of work it is for, and all six use one section skeleton
   ending in a numbered definition of done, because that is what a parent reviews an unchecked
-  report against (R-ROL-38). `managing-rundesk` carries how to write one.
+  report against (R-ROL-38). `.skeleton.md` beside them is that same section skeleton with a
+  `TODO` in every position, and is what `rundesk roles add` writes: a file rather than a string
+  in `role.py` because it is prose somebody edits, and dotted and a file rather than a directory
+  so the walk that finds the shipped roles cannot read it as one.
+  `managing-rundesk` carries how to write one.
 - `src/templates/skills/` — **the required and remaining release-owned skills.** Copied into the
   owner's library by the install and brought forward by an update, so a built-in is always the version installed
   (R-AGT-30). `managing-rundesk` is how to operate rundesk, written for **an agent running inside
