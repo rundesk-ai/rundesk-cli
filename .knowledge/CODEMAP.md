@@ -164,7 +164,11 @@ file with it.
   Writing one is the same rule from the other side — a whole pair or nothing, an
   existing slug refused rather than merged, and a half-written directory named out loud
   as the reason no role of that name works, which is the only place in the product that
-  says so.
+  says so. **Editing one owns the manifest and nothing else**: the rules are prose their
+  author wrote, a manifest holding a field this release cannot read is refused rather
+  than overlaid, and the new file is written beside the old one and renamed onto it —
+  because a truncated `role.json` leaves `AGENTS.md` standing, so the role goes on being
+  listed while every read of it fails.
 - `src/rundesk/role_run.py` — one isolated specialist execution, from admission to expiry.
   Assembles a bundle of locked bytes under the agent's own directory and moves it into place
   whole, hands `turn.py` an execution context standing in the target project, and settles the
@@ -312,7 +316,7 @@ provider. One file per contract, named for it:
 |---|---|---|
 | `test_gateway.py` | 264 | `platform-gateway` — real processes, real signals, waits turned down |
 | `test_agent.py` | 142 | `agent-home` + `agent-gateway` — one scratch machine per case, no provider |
-| `test_cli.py` | 322 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
+| `test_cli.py` | 335 | `command-surface` — walks every verb off the parser without reaching the owner's backups or uninstall, so one wired nowhere is caught |
 | `test_catalog.py` | 27 | `lifecycle-skill-catalog` — manifests, provenance, default seeding, inert integration packages, lifecycle refresh, ownership, atomic updates, drift replacement, removal, and unsafe archives, all offline |
 | `test_process.py` | 101 | `platform-process` — real process groups, grandchildren, drains and ceilings |
 | `test_updater.py` | 81 | `lifecycle-update` — behind, current, could-not-ask; and an archive that cannot escape |
@@ -335,7 +339,7 @@ provider. One file per contract, named for it:
 | `test_slack.py` | 140 | `channel-slack` — the same policy on a platform with fewer registers: one slash command because a name is unique per workspace, a thread rooted at the message that named it, and ordinary Markdown translated into Slack's own dialect |
 | `test_discord.py` | 208 | `channel-discord` — the policy and never the wire: who it answers, what a mark means, how a long answer is broken up, and which single message of a turn mentions anybody |
 | `test_instructions.py` | 29 | Rundesk's core and trigger prompts, standard variables, the additive builder, the roles layer, and the separate role floor |
-| `test_role.py` | 72 | `agent-role` — what a role is, what makes one usable, what its revision is computed from, how the install's roles are offered, and what writing one refuses, against a scratch library |
+| `test_role.py` | 87 | `agent-role` — what a role is, what makes one usable, what its revision is computed from, how the install's roles are offered, and what writing or editing one refuses, against a scratch library |
 | `test_role_run.py` | 128 | `agent-role` — **takes the turn as an argument**, so what an execution is told, where it stands and what it is presented are asserted with no brain anywhere near it |
 | `test_ci.py` | 17 | the build topology — one PR run, bounded local and CI discovery, retained timeout diagnostics, process-tree cleanup, deterministic install catalogs, and the supported matrix |
 

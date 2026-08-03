@@ -126,6 +126,7 @@ from rundesk import agent as real_agent  # noqa: E402
 from rundesk import skill as real_skill  # noqa: E402
 from rundesk import channel  # noqa: E402
 from rundesk import gateway as real_gateway  # noqa: E402
+from rundesk import role as real_role  # noqa: E402
 
 
 def run(argv: list[str], published: str | None = None,
@@ -5150,6 +5151,167 @@ class WritingARoleFromTheCommandLine(unittest.TestCase):
         self.assertEqual(0, code)
         for flag in ("--description", "--skills", "--posture", "--provider", "--model"):
             self.assertIn(flag, said)
+
+
+class EditingARoleFromTheCommandLine(unittest.TestCase):
+    """`rundesk roles <agent> edit <role>` — what moves, and what the answer says moved."""
+
+    DESCRIBED = ("Trace one behaviour back through the whole history of a repository — "
+                 "a subsystem held in view all at once.")
+
+    def setUp(self):
+        self.where = pathlib.Path(tempfile.mkdtemp(prefix="rundesk-roles-edit-"))
+        self.addCleanup(shutil.rmtree, self.where, True)
+        self.library = self.where / "skills"
+        for name in ("python-testing", "writing-plans"):
+            made = self.library / name
+            made.mkdir(parents=True)
+            (made / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: what it is for\n---\n",
+                encoding="utf-8")
+        # Both, and not only the agents root: `skill.home()` falls back to the *owner's*
+        # own library when its variable is unset.
+        pointed = mock.patch.dict(os.environ, {
+            "RUNDESK_AGENTS_DIR": str(self.where / "agents"),
+            "RUNDESK_SKILL_LIBRARY": str(self.library)})
+        pointed.start()
+        self.addCleanup(pointed.stop)
+        code, said = drive(["roles", "ava", "add", "archaeology",
+                            "--description", self.DESCRIBED,
+                            "--skills", "python-testing,writing-plans",
+                            "--posture", "work"],
+                           agents=FakeAgents(made=["ava"]))
+        self.assertEqual(0, code, said)
+
+    def at(self, slug: str = "archaeology") -> pathlib.Path:
+        return self.where / "agents" / ".roles" / slug
+
+    def edit(self, *more, slug="archaeology"):
+        return drive(["roles", "ava", "edit", slug, *more],
+                     agents=FakeAgents(made=["ava"]))
+
+    def test_the_answer_names_both_revisions_and_only_the_fields_that_moved(self):
+        """R-ROL-40 — what moved is the answer. A caller who asked for one field and
+        reads back a whole role cannot tell what their command did from what was already
+        true."""
+        was = json.loads((self.at() / "role.json").read_text(encoding="utf-8"))
+        stood_at = real_role.read("archaeology", self.where / "agents").revision
+        code, said = self.edit("--posture", "read")
+        self.assertEqual(0, code, said)
+        now = json.loads((self.at() / "role.json").read_text(encoding="utf-8"))
+        self.assertEqual("read", now["posture"])
+        self.assertIn("posture: work → read", said)
+        self.assertNotIn("description:", said)
+        self.assertNotIn("skills:", said)
+        stands_at = real_role.read("archaeology", self.where / "agents").revision
+        self.assertNotEqual(stood_at, stands_at)
+        self.assertIn(f"revision {stood_at[:12]} → {stands_at[:12]}", said)
+        self.assertEqual(was["description"], now["description"])
+
+    def test_what_a_role_now_is_says_the_same_words_a_listing_says(self):
+        code, said = self.edit("--posture", "read")
+        self.assertEqual(0, code, said)
+        self.assertIn("Archaeology  archaeology", said)
+        self.assertIn("read  [python-testing writing-plans]", said)
+
+    def test_the_answer_says_the_change_lands_on_the_next_run(self):
+        """R-ROL-10 — every run locks its own copy before the brain starts, so nothing
+        in flight changes under an edit. A caller who did not know that would wait."""
+        _, said = self.edit("--posture", "read")
+        self.assertIn("next run", said)
+        self.assertIn("in flight", said)
+
+    def test_the_answer_says_the_rules_were_not_touched_and_where_they_stand(self):
+        rules = self.at() / "AGENTS.md"
+        was = rules.read_bytes()
+        _, said = self.edit("--description", "Something else entirely.")
+        self.assertIn(str(rules), said)
+        self.assertTrue(pathlib.Path(str(rules)).is_absolute())
+        self.assertIn("did not touch them", said)
+        self.assertEqual(was, rules.read_bytes())
+
+    def test_the_skills_given_replace_the_whole_set_rather_than_joining_it(self):
+        """The owner's decision, said in the flag's own help for the same reason it is
+        proven here: a reader who assumes it appends silently narrows a role."""
+        code, said = self.edit("--skills", "python-testing")
+        self.assertEqual(0, code, said)
+        self.assertEqual(["python-testing"], json.loads(
+            (self.at() / "role.json").read_text(encoding="utf-8"))["skills"])
+        self.assertIn("skills: python-testing writing-plans → python-testing", said)
+
+    def test_editing_a_role_this_release_ships_says_what_it_costs(self):
+        """R-ROL-18 — not a refusal, a consequence: what proves a role is still
+        Rundesk's is that it is byte for byte what Rundesk wrote."""
+        real_role.lay_down(self.where / "agents")
+        code, said = self.edit("--posture", "read", slug="development")
+        self.assertEqual(0, code, said)
+        self.assertIn("this release ships", said)
+        self.assertIn("uninstall", said)
+
+    def test_editing_a_role_somebody_wrote_says_nothing_about_a_release(self):
+        _, said = self.edit("--posture", "read")
+        self.assertNotIn("this release ships", said)
+        self.assertNotIn("uninstall", said)
+
+    def test_an_empty_brain_unpins_one_rather_than_naming_nothing(self):
+        """R-ROL-33 — omitted and empty are different answers, which is why there is no
+        clearing flag of its own."""
+        code, said = self.edit("--provider", "codex", "--model", "gpt-5-codex")
+        self.assertEqual(0, code, said)
+        self.assertIn("provider: nothing → codex", said)
+        code, said = self.edit("--provider", "")
+        self.assertEqual(0, code, said)
+        self.assertIn("provider: codex → nothing", said)
+        said_now = json.loads((self.at() / "role.json").read_text(encoding="utf-8"))
+        self.assertNotIn("provider", said_now)
+        self.assertEqual("gpt-5-codex", said_now["model"])
+
+    def test_an_edit_that_asked_for_what_was_already_true_says_nothing_moved(self):
+        """Naming a field is a command that ran; naming the value it already had is not
+        a refusal. What must not happen is a list of changes with nothing in it, read as
+        though something happened."""
+        was = (self.at() / "role.json").read_text(encoding="utf-8")
+        code, said = self.edit("--posture", "work")
+        self.assertEqual(0, code, said)
+        self.assertIn("nothing moved", said)
+        self.assertEqual(was, (self.at() / "role.json").read_text(encoding="utf-8"))
+
+    def test_an_edit_that_names_no_field_is_refused_rather_than_reported_as_done(self):
+        code, said = self.edit()
+        self.assertEqual(1, code, said)
+        self.assertIn("NOT CHANGED", said)
+        self.assertNotIn("Traceback", said)
+
+    def test_every_refusal_an_edit_has_reaches_the_exit_status(self):
+        """Every one of them through the message and the status, never a traceback —
+        and none of them having written half a manifest on the way."""
+        for more in (["--posture", "excavate"], ["--skills", ""], ["--skills", "a,a"],
+                     ["--description", " "],
+                     ["--description", "x" * (real_role.DESCRIBED_LIMIT + 1)]):
+            with self.subTest(more=more):
+                was = (self.at() / "role.json").read_text(encoding="utf-8")
+                code, said = self.edit(*more)
+                self.assertEqual(1, code, said)
+                self.assertIn("NOT CHANGED", said)
+                self.assertNotIn("Traceback", said)
+                self.assertEqual(was,
+                                 (self.at() / "role.json").read_text(encoding="utf-8"))
+
+    def test_a_role_this_install_has_not_got_is_refused_rather_than_written(self):
+        code, said = self.edit("--posture", "read", slug="etymology")
+        self.assertEqual(1, code, said)
+        self.assertIn("no role called 'etymology'", said)
+        self.assertNotIn("Traceback", said)
+        self.assertFalse(self.at("etymology").exists())
+
+    def test_editing_a_role_renders_its_own_help_and_says_skills_replaces_the_set(self):
+        code, said = drive(["roles", "ava", "edit", "--help"],
+                           agents=FakeAgents(made=["ava"]))
+        self.assertEqual(0, code)
+        for flag in ("--description", "--skills", "--posture", "--provider", "--model"):
+            self.assertIn(flag, said)
+        self.assertIn("replaces the whole set", " ".join(said.split()))
+        self.assertNotIn("required", said)
 
 
 if __name__ == "__main__":

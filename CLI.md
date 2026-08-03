@@ -47,6 +47,7 @@ rundesk usage <agent>                                                           
 
 # handing work on
 rundesk roles <agent> add --description <text> --skills <a,b,c> --posture read|work [--provider <provider>] [--model <model>] <role>                                                                                    write a new role — a generic skeleton to rewrite for the specialty
+rundesk roles <agent> edit [--description <text>] [--skills <a,b,c>] [--posture read|work] [--provider <provider>] [--model <model>] <role>                                                                             change what a role says about itself — never its rules
 rundesk roles <agent> resume <run>                                                                                                                                                                                      carry a finished role run on — the further task is read from standard input
 rundesk roles <agent> run [--target <directory>] [--label <text>] [--provider <provider>] [--model <model>] <role>                                                                                                      hand one bounded task to a role — the brief is read from standard input
 rundesk roles <agent> say <run>                                                                                                                                                                                         say something to a role that is working — read from standard input

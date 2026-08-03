@@ -719,5 +719,191 @@ class WritingARole(WithSomewhereToKeepRoles):
         self.assertEqual(documented, written)
 
 
+class EditingARole(WithSomewhereToKeepRoles):
+    """R-ROL-40 — a command changes a role's manifest whole or not at all.
+
+    The manifest is the whole of what this owns. The rules are prose their author
+    edits, and a command that rewrote them would throw that work away — so every case
+    here that changes anything also asks what happened to `AGENTS.md`.
+    """
+
+    DESCRIBED = "Trace one behaviour back through the whole history of a repository."
+
+    def wrote_one(self, slug: str = "archaeology", **asked):
+        """One role as `add` writes one, which is what an edit lands on."""
+        said = {"description": self.DESCRIBED, "skills": ["writing-plans"],
+                "posture": "work"}
+        said.update(asked)
+        return role.write(slug, where=self.where, library=self.library, **said)
+
+    def edited(self, slug: str = "archaeology", **named):
+        return role.edit(slug, where=self.where, library=self.library, **named)
+
+    def manifest_of(self, slug: str = "archaeology") -> str:
+        return (role.home(self.where) / slug / role.MANIFEST).read_text(
+            encoding="utf-8")
+
+    def rules_of(self, slug: str = "archaeology") -> bytes:
+        return (role.home(self.where) / slug / role.INSTRUCTIONS).read_bytes()
+
+    def refused(self, slug: str = "archaeology", **named) -> str:
+        """The whole reason this was not changed, and that nothing on disk moved."""
+        was = self.manifest_of(slug) if (role.home(self.where) / slug
+                                         / role.MANIFEST).is_file() else None
+        with self.assertRaises(role.NotARole) as why:
+            self.edited(slug, **named)
+        if was is not None:
+            self.assertEqual(was, self.manifest_of(slug),
+                             "a refusal rewrote the manifest")
+        return str(why.exception)
+
+    def test_an_edit_answers_with_the_role_as_it_was_and_as_it_now_is(self):
+        """Both halves, because saying what moved is what the caller needs and neither
+        one on its own can say it."""
+        self.wrote_one()
+        before, after = self.edited(posture="read")
+        self.assertEqual(("work", "read"), (before.posture, after.posture))
+        self.assertNotEqual(before.revision, after.revision)
+        self.assertEqual(self.DESCRIBED, after.description)
+
+    def test_naming_no_field_at_all_is_refused_rather_than_reported_as_done(self):
+        """An edit that changes nothing is a command that did nothing, and answering as
+        though it succeeded is the kind of quiet lie that gets believed."""
+        self.wrote_one()
+        why = self.refused()
+        for field in role.FIELDS:
+            self.assertIn(field, why)
+
+    def test_a_role_this_install_has_not_got_is_refused_in_the_existing_words(self):
+        """`_directory` already says this, and says it the same way everywhere a role is
+        asked for. A second wording here would be a second thing to keep true."""
+        self.assertIn("there is no role called 'archaeology'",
+                      self.refused(posture="read"))
+
+    def test_a_manifest_this_release_cannot_read_is_refused_rather_than_rewritten(self):
+        """The field the owner put there is theirs. Overlaying onto a manifest holding
+        something this release has never heard of would discard it silently, so the
+        answer names it exactly as reading the role already does."""
+        self.wrote(slug="etymology", version=3)
+        why = self.refused("etymology", posture="read")
+        self.assertIn("version", why)
+        self.assertIn("no such thing as", why)
+        self.assertIn('"version": 3', self.manifest_of("etymology"))
+
+    def test_a_field_a_role_has_no_such_thing_as_is_refused_before_anything_moves(self):
+        self.wrote_one()
+        why = self.refused(brain="gpt-5")
+        self.assertIn("brain", why)
+
+    def test_the_skills_given_replace_the_whole_set_rather_than_joining_it(self):
+        """The owner's decision, and the one an assuming reader gets wrong in the
+        direction that silently narrows a role."""
+        self.wrote_one(skills=["writing-plans", "python-testing"])
+        _, after = self.edited(skills=["python-testing"])
+        self.assertEqual(("python-testing",), after.skills)
+        self.assertEqual(["python-testing"],
+                         json.loads(self.manifest_of())["skills"])
+
+    def test_a_field_no_flag_named_is_left_exactly_as_it_was_written(self):
+        """Byte-identical, not merely equal: a rewrite that re-rendered every field
+        would move the revision of a role whose author changed one thing."""
+        self.wrote_one()
+        was = self.manifest_of().splitlines()
+        self.edited(posture="read")
+        now = self.manifest_of().splitlines()
+        self.assertEqual(len(was), len(now))
+        self.assertEqual(['  "posture": "read"'],
+                         [line for line, then in zip(now, was) if line != then])
+
+    def test_a_skill_this_machine_has_not_got_survives_an_edit_of_something_else(self):
+        """R-ROL-8 — what the manifest asks for and what this machine resolved are
+        different things, and an overlay taken off the resolved set would quietly drop
+        every name the library here happens not to hold."""
+        self.wrote_one(skills=["writing-plans", "reading-minds"])
+        _, after = self.edited(description="Something else entirely.")
+        self.assertEqual(("reading-minds",), after.missing)
+        self.assertEqual(["reading-minds", "writing-plans"],
+                         json.loads(self.manifest_of())["skills"])
+
+    def test_an_empty_brain_unpins_one_by_taking_the_field_out_of_the_file(self):
+        """R-ROL-33 — absent is the answer, so unpinning writes no field rather than an
+        empty one, which would move the revision of a role that pins nothing."""
+        self.wrote_one(provider_named="codex", model="gpt-5-codex")
+        _, after = self.edited(provider="", model="")
+        said = json.loads(self.manifest_of())
+        self.assertNotIn("provider", said)
+        self.assertNotIn("model", said)
+        self.assertEqual(("", ""), (after.provider, after.model))
+
+    def test_unpinning_a_brain_puts_the_role_back_at_the_revision_it_had(self):
+        """The proof that an unpinned field really is absent rather than empty: the
+        digest a role that never named one has is the digest it comes back to."""
+        plain = self.wrote_one()
+        _, pinned = self.edited(provider="codex")
+        self.assertNotEqual(plain.revision, pinned.revision)
+        _, back = self.edited(provider="")
+        self.assertEqual(plain.revision, back.revision)
+
+    def test_every_refusal_a_manifest_has_is_refused_here_too(self):
+        self.wrote_one()
+        for named, expected in (({"posture": "excavate"}, "read"),
+                                ({"skills": []}, "at least one"),
+                                ({"skills": ["writing-plans", "writing-plans"]},
+                                 "more than once"),
+                                ({"description": "  "}, "says nothing about"),
+                                ({"description": "x" * (role.DESCRIBED_LIMIT + 1)},
+                                 str(role.DESCRIBED_LIMIT)),
+                                ({"provider": "a" * (role.PINNED_LIMIT + 1)},
+                                 "longer than"),
+                                ({"model": "one\ntwo"}, "cannot be one"),
+                                ({"skills": ["Writing Plans"]}, "cannot be one")):
+            with self.subTest(**named):
+                self.refused(**named)
+
+    def test_a_slug_that_could_not_be_one_says_the_shape_a_slug_takes(self):
+        for said in ("../escape", "Archaeology", "dig_site", ""):
+            with self.subTest(slug=said):
+                with self.assertRaises(role.NotARole):
+                    self.edited(said, posture="read")
+
+    def test_a_replace_that_could_not_finish_leaves_the_manifest_it_landed_on(self):
+        """Not a refusal but a failure — a full disk, a directory that will not take a
+        rename. What must never be left is a truncated manifest: `AGENTS.md` still
+        stands, so the role goes on being listed and every read of it fails."""
+        self.wrote_one()
+        was = self.manifest_of()
+        with mock.patch.object(role.os, "replace",
+                               side_effect=OSError("no room on the device")):
+            with self.assertRaises(OSError):
+                self.edited(posture="read")
+        self.assertEqual(was, self.manifest_of())
+        self.assertEqual("work", role.read("archaeology", self.where,
+                                           self.library).posture)
+        self.assertFalse(
+            (role.home(self.where) / "archaeology" / f"{role.MANIFEST}.coming").exists())
+
+    def test_no_edit_of_any_kind_touches_the_rules(self):
+        """A role's rules are prose its author wrote. This command owns the manifest and
+        nothing else, and a specialty that moved is theirs to bring in line."""
+        self.wrote_one()
+        was = self.rules_of()
+        for named in ({"posture": "read"}, {"description": "Something else."},
+                      {"skills": ["python-testing"]}, {"provider": "codex"},
+                      {"model": "gpt-5-codex"}, {"provider": ""}):
+            with self.subTest(**named):
+                self.edited(**named)
+                self.assertEqual(was, self.rules_of())
+
+    def test_editing_a_role_this_release_ships_is_allowed_and_detaches_it(self):
+        """R-ROL-18 and R-RM-7 from the other side. There is no ownership marker: what
+        proves a role is still Rundesk's is that it is byte for byte what Rundesk wrote,
+        so an edit is what makes one the owner's — permanently."""
+        role.lay_down(self.where)
+        self.assertIn("development", role.shipped())
+        self.edited("development", posture="read")
+        self.assertNotIn("development", role.take_back(self.where))
+        self.assertEqual(["development"], role.known(self.where))
+
+
 if __name__ == "__main__":
     unittest.main()
