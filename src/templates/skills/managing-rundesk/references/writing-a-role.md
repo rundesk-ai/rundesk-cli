@@ -7,11 +7,16 @@ and it is a role the moment both are there — `rundesk roles add` writes that p
 ## Making one
 
 ```sh
-rundesk roles <you> add <slug> \
+rundesk roles add <slug> \
   --description "<one sentence naming what it answers for and how heavy the work is>" \
   --skills <a,b,c> \
   --posture read|work
 ```
+
+**It names no agent, and that is the point.** A role is the install's — written once, and every
+named agent on it may put it on — so there is nobody to name. The agent stays where it means
+something: `rundesk roles <you> run <slug>` and the other four verbs about a *run*, which
+belongs to the agent that admitted it.
 
 `--description`, `--skills` and `--posture` are all required. Posture especially: it is a real
 safety narrowing, so nothing here picks the widest boundary on your behalf. `--provider` and
@@ -38,7 +43,8 @@ roles="$(dirname "$(rundesk agents <you> | awk '$1=="agent"{print $2}')")/.roles
 mkdir -p "$roles/<slug>"
 ```
 
-`rundesk roles <you>` lists what is installed. A directory missing either file is not listed and
+`rundesk roles` lists what is installed, and `rundesk roles <you>` lists the same with your own
+role runs beneath it. A directory missing either file is not listed and
 has broken nothing — half a role is invisible, not fatal. `add` is the one place that says so out
 loud: asked for a slug standing as half a role, it names the file that is missing and why nothing
 of that name is usable.
@@ -134,7 +140,7 @@ than the task.
 The manifest is a command. The rules are a file you open yourself.
 
 ```sh
-rundesk roles <you> edit <slug> \
+rundesk roles edit <slug> \
   --description "<what it answers for>" \
   --skills <a,b,c> \
   --posture read|work \

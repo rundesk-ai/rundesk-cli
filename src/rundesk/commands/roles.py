@@ -22,19 +22,28 @@ from rundesk import store
 ROLE_RUNS_SHOWN = 20
 
 def cmd_roles(args: argparse.Namespace, agents) -> int:
-    """What an agent can hand heavy execution to, and what it has handed over."""
+    """The specialists this install has, and what one agent has handed to them.
+
+    **The library is the install's and the runs are one agent's**, which is why only half
+    of this needs a name: writing or changing a role names nobody, and a listing shows the
+    library whether or not an agent was named. Every verb about a *run* names one, because
+    a run belongs to the agent that admitted it.
+    """
+    act = getattr(args, "act", None)
+    if act == "add":
+        # Before any agent is resolved and any records are opened: a role is the install's,
+        # and neither an agent that does not exist nor one whose database will not read is
+        # a reason this install cannot have a specialist written for it.
+        return _write_a_role(args)
+    if act == "edit":
+        return _edit_a_role(args)
+    if args.name is None:
+        # Nobody named, so nothing whose: the library, and no runs.
+        return _list_roles()
     if not agents.exists(args.name):
         print(f"{args.name}: NO SUCH AGENT", file=sys.stderr)
         print("        what there is:  rundesk agents", file=sys.stderr)
         return 1
-    act = getattr(args, "act", None)
-    if act == "add":
-        # Before the records are opened: writing a role touches none of them, and an
-        # agent whose database will not read is not a reason this install cannot have
-        # a specialist written for it.
-        return _write_a_role(args)
-    if act == "edit":
-        return _edit_a_role(args)
     if act == "run":
         return _hand_to_a_role(args, agents)
     if act in ("say", "stop", "resume"):
@@ -46,7 +55,7 @@ def cmd_roles(args: argparse.Namespace, agents) -> int:
         return 1
     if act == "show":
         return _show_role_run(args, whose)
-    return _list_roles(args, whose)
+    return _list_roles(whose)
 
 
 def _a_role_reads_as(one: role.Role) -> list:
@@ -92,16 +101,13 @@ def _write_a_role(args: argparse.Namespace) -> int:
         )
     except role.NotARole as why:
         print(f"{args.role}: NOT WRITTEN — {why}", file=sys.stderr)
-        print(f"        what there already is:  rundesk roles {args.name}",
-              file=sys.stderr)
+        print("        what there already is:  rundesk roles", file=sys.stderr)
         return 1
     except OSError as why:
         print(f"{args.role}: NOT WRITTEN — {why}", file=sys.stderr)
         return 1
     for line in _a_role_reads_as(made):
         print(line)
-    print("        written for this whole install — every named agent on it may put "
-          "it on")
     rules = made.at / role.INSTRUCTIONS
     print(f"        its rules stand at {rules}")
     headings = [one.strip()[3:] for one in made.instructions.splitlines()
@@ -109,8 +115,10 @@ def _write_a_role(args: argparse.Namespace) -> int:
     print(f"        that file is the generic skeleton and is not yet about this "
           f"specialty — rewrite it before {made.slug} is handed real work, filling in "
           f"{'; '.join(headings)}")
-    print(f"        then:  rundesk roles {args.name} run {made.slug} "
-          f"--target <directory>")
+    # Named `<agent>` rather than filled in, because nothing here knows one: a role is
+    # written for the install, and which of its agents hands the first task to this one is
+    # not a question this command was asked.
+    print(f"        then:  rundesk roles <agent> run {made.slug} --target <directory>")
     return 0
 
 
@@ -136,7 +144,7 @@ def _edit_a_role(args: argparse.Namespace) -> int:
         before, after = role.edit(args.role, **named)
     except role.NotARole as why:
         print(f"{args.role}: NOT CHANGED — {why}", file=sys.stderr)
-        print(f"        what there is:  rundesk roles {args.name}", file=sys.stderr)
+        print("        what there is:  rundesk roles", file=sys.stderr)
         return 1
     except OSError as why:
         print(f"{args.role}: NOT CHANGED — {why}", file=sys.stderr)
@@ -182,8 +190,12 @@ def _what_moved(before: role.Role, after: role.Role) -> list:
     return lines
 
 
-def _list_roles(args: argparse.Namespace, whose) -> int:
-    """The roles this agent may reach for, and the runs it has already admitted."""
+def _list_roles(whose=None) -> int:
+    """The roles this install has, and the runs one agent has already admitted.
+
+    The library is shown either way, because it is the install's; the runs are shown only
+    where an agent was named, because there is nobody to have admitted one otherwise.
+    """
     installed = role.known()
     if not installed:
         print("no roles installed")
@@ -195,6 +207,8 @@ def _list_roles(args: argparse.Namespace, whose) -> int:
             continue
         for line in _a_role_reads_as(one):
             print(line)
+    if whose is None:
+        return 0
     runs = whose.role_runs(limit=ROLE_RUNS_SHOWN)
     if not runs:
         return 0
